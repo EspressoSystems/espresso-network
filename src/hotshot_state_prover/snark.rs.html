@@ -6,24 +6,24 @@
 <a href=#6 id=6 data-nosnippet>6</a>    rand::{CryptoRng, RngCore},
 <a href=#7 id=7 data-nosnippet>7</a>};
 <a href=#8 id=8 data-nosnippet>8</a><span class="doccomment">/// BLS verification key, base field and Schnorr verification key
-<a href=#9 id=9 data-nosnippet>9</a></span><span class="kw">use </span>hotshot_types::light_client::{
-<a href=#10 id=10 data-nosnippet>10</a>    CircuitField, LightClientState, PublicInput, StakeTableState, StateVerKey,
-<a href=#11 id=11 data-nosnippet>11</a>};
-<a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>jf_plonk::{
-<a href=#13 id=13 data-nosnippet>13</a>    errors::PlonkError,
-<a href=#14 id=14 data-nosnippet>14</a>    proof_system::{PlonkKzgSnark, UniversalSNARK},
-<a href=#15 id=15 data-nosnippet>15</a>    transcript::SolidityTranscript,
-<a href=#16 id=16 data-nosnippet>16</a>};
-<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>jf_relation::Circuit;
-<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>jf_signature::schnorr::Signature;
-<a href=#19 id=19 data-nosnippet>19</a><span class="doccomment">/// Proving key
-<a href=#20 id=20 data-nosnippet>20</a></span><span class="kw">pub type </span>ProvingKey = jf_plonk::proof_system::structs::ProvingKey&lt;Bn254&gt;;
-<a href=#21 id=21 data-nosnippet>21</a><span class="doccomment">/// Verifying key
-<a href=#22 id=22 data-nosnippet>22</a></span><span class="kw">pub type </span>VerifyingKey = jf_plonk::proof_system::structs::VerifyingKey&lt;Bn254&gt;;
-<a href=#23 id=23 data-nosnippet>23</a><span class="doccomment">/// Proof
-<a href=#24 id=24 data-nosnippet>24</a></span><span class="kw">pub type </span>Proof = jf_plonk::proof_system::structs::Proof&lt;Bn254&gt;;
-<a href=#25 id=25 data-nosnippet>25</a><span class="doccomment">/// Universal SRS
-<a href=#26 id=26 data-nosnippet>26</a></span><span class="kw">pub type </span>UniversalSrs = jf_plonk::proof_system::structs::UniversalSrs&lt;Bn254&gt;;
+<a href=#9 id=9 data-nosnippet>9</a></span><span class="kw">use </span>hotshot_types::light_client::{CircuitField, LightClientState, StakeTableState, StateVerKey};
+<a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>jf_plonk::{
+<a href=#11 id=11 data-nosnippet>11</a>    errors::PlonkError,
+<a href=#12 id=12 data-nosnippet>12</a>    proof_system::{PlonkKzgSnark, UniversalSNARK},
+<a href=#13 id=13 data-nosnippet>13</a>    transcript::SolidityTranscript,
+<a href=#14 id=14 data-nosnippet>14</a>};
+<a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>jf_relation::Circuit;
+<a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>jf_signature::schnorr::Signature;
+<a href=#17 id=17 data-nosnippet>17</a><span class="doccomment">/// Proving key
+<a href=#18 id=18 data-nosnippet>18</a></span><span class="kw">pub type </span>ProvingKey = jf_plonk::proof_system::structs::ProvingKey&lt;Bn254&gt;;
+<a href=#19 id=19 data-nosnippet>19</a><span class="doccomment">/// Verifying key
+<a href=#20 id=20 data-nosnippet>20</a></span><span class="kw">pub type </span>VerifyingKey = jf_plonk::proof_system::structs::VerifyingKey&lt;Bn254&gt;;
+<a href=#21 id=21 data-nosnippet>21</a><span class="doccomment">/// Proof
+<a href=#22 id=22 data-nosnippet>22</a></span><span class="kw">pub type </span>Proof = jf_plonk::proof_system::structs::Proof&lt;Bn254&gt;;
+<a href=#23 id=23 data-nosnippet>23</a><span class="doccomment">/// Universal SRS
+<a href=#24 id=24 data-nosnippet>24</a></span><span class="kw">pub type </span>UniversalSrs = jf_plonk::proof_system::structs::UniversalSrs&lt;Bn254&gt;;
+<a href=#25 id=25 data-nosnippet>25</a><span class="doccomment">/// Public input to the light client state prover service
+<a href=#26 id=26 data-nosnippet>26</a></span><span class="kw">pub type </span>PublicInput = <span class="kw">crate</span>::circuit::GenericPublicInput&lt;CircuitField&gt;;
 <a href=#27 id=27 data-nosnippet>27</a>
 <a href=#28 id=28 data-nosnippet>28</a><span class="doccomment">/// Given a SRS, returns the proving key and verifying key for state update
 <a href=#29 id=29 data-nosnippet>29</a>/// # Errors

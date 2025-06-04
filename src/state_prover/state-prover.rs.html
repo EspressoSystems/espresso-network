@@ -94,83 +94,91 @@
 <a href=#94 id=94 data-nosnippet>94</a>    </span><span class="attr">#[clap(short, long, env = <span class="string">"ESPRESSO_STATE_PROVER_MAX_GAS_PRICE_IN_GWEI"</span>)]
 <a href=#95 id=95 data-nosnippet>95</a>    </span><span class="kw">pub </span>max_gas_price: <span class="prelude-ty">Option</span>&lt;String&gt;,
 <a href=#96 id=96 data-nosnippet>96</a>
-<a href=#97 id=97 data-nosnippet>97</a>    <span class="attr">#[clap(flatten)]
-<a href=#98 id=98 data-nosnippet>98</a>    </span>logging: logging::Config,
-<a href=#99 id=99 data-nosnippet>99</a>}
-<a href=#100 id=100 data-nosnippet>100</a>
-<a href=#101 id=101 data-nosnippet>101</a><span class="attr">#[tokio::main]
-<a href=#102 id=102 data-nosnippet>102</a></span><span class="kw">async fn </span>main() {
-<a href=#103 id=103 data-nosnippet>103</a>    <span class="kw">let </span>args = Args::parse();
-<a href=#104 id=104 data-nosnippet>104</a>    args.logging.init();
-<a href=#105 id=105 data-nosnippet>105</a>
-<a href=#106 id=106 data-nosnippet>106</a>    <span class="comment">// prepare config for state prover from user options
-<a href=#107 id=107 data-nosnippet>107</a>    </span><span class="kw">let </span>l1_provider = ProviderBuilder::new().on_http(args.l1_provider.clone());
-<a href=#108 id=108 data-nosnippet>108</a>    <span class="kw">let </span>chain_id = l1_provider.get_chain_id().<span class="kw">await</span>.unwrap();
-<a href=#109 id=109 data-nosnippet>109</a>    <span class="kw">let </span>signer = MnemonicBuilder::&lt;English&gt;::default()
-<a href=#110 id=110 data-nosnippet>110</a>        .phrase(args.eth_mnemonic)
-<a href=#111 id=111 data-nosnippet>111</a>        .index(args.eth_account_index)
-<a href=#112 id=112 data-nosnippet>112</a>        .expect(<span class="string">"wrong mnemonic or index"</span>)
-<a href=#113 id=113 data-nosnippet>113</a>        .build()
-<a href=#114 id=114 data-nosnippet>114</a>        .expect(<span class="string">"fail to build signer"</span>)
-<a href=#115 id=115 data-nosnippet>115</a>        .with_chain_id(<span class="prelude-val">Some</span>(chain_id));
-<a href=#116 id=116 data-nosnippet>116</a>
-<a href=#117 id=117 data-nosnippet>117</a>    <span class="kw">let </span>(blocks_per_epoch, epoch_start_block) =
-<a href=#118 id=118 data-nosnippet>118</a>        fetch_epoch_config_from_sequencer(<span class="kw-2">&amp;</span>args.sequencer_url)
-<a href=#119 id=119 data-nosnippet>119</a>            .<span class="kw">await
-<a href=#120 id=120 data-nosnippet>120</a>            </span>.unwrap_or((u64::MAX, u64::MAX));
-<a href=#121 id=121 data-nosnippet>121</a>
-<a href=#122 id=122 data-nosnippet>122</a>    <span class="comment">// If the sequencer returns 0 for pre-epoch configuration.
-<a href=#123 id=123 data-nosnippet>123</a>    </span><span class="kw">let </span>blocks_per_epoch = <span class="kw">if </span>blocks_per_epoch == <span class="number">0 </span>{
-<a href=#124 id=124 data-nosnippet>124</a>        u64::MAX
-<a href=#125 id=125 data-nosnippet>125</a>    } <span class="kw">else </span>{
-<a href=#126 id=126 data-nosnippet>126</a>        blocks_per_epoch
-<a href=#127 id=127 data-nosnippet>127</a>    };
-<a href=#128 id=128 data-nosnippet>128</a>    <span class="kw">let </span>epoch_start_block = <span class="kw">if </span>epoch_start_block == <span class="number">0 </span>{
-<a href=#129 id=129 data-nosnippet>129</a>        u64::MAX
-<a href=#130 id=130 data-nosnippet>130</a>    } <span class="kw">else </span>{
-<a href=#131 id=131 data-nosnippet>131</a>        epoch_start_block
-<a href=#132 id=132 data-nosnippet>132</a>    };
-<a href=#133 id=133 data-nosnippet>133</a>
-<a href=#134 id=134 data-nosnippet>134</a>    <span class="macro">tracing::info!</span>(
-<a href=#135 id=135 data-nosnippet>135</a>        <span class="string">"Epoch config fetched from sequencer: blocks_per_epoch = {}, epoch_start_block = {}"</span>,
-<a href=#136 id=136 data-nosnippet>136</a>        blocks_per_epoch,
-<a href=#137 id=137 data-nosnippet>137</a>        epoch_start_block
-<a href=#138 id=138 data-nosnippet>138</a>    );
-<a href=#139 id=139 data-nosnippet>139</a>    <span class="kw">let </span>max_gas_price = args.max_gas_price.map(|v| {
-<a href=#140 id=140 data-nosnippet>140</a>        parse_units(<span class="kw-2">&amp;</span>v, <span class="string">"gwei"</span>)
-<a href=#141 id=141 data-nosnippet>141</a>            .expect(<span class="string">"parse_unit on max_gas_price in GWEI failed"</span>)
-<a href=#142 id=142 data-nosnippet>142</a>            .try_into()
-<a href=#143 id=143 data-nosnippet>143</a>            .expect(<span class="string">"fail to convert gas price to u128"</span>)
-<a href=#144 id=144 data-nosnippet>144</a>    });
-<a href=#145 id=145 data-nosnippet>145</a>
-<a href=#146 id=146 data-nosnippet>146</a>    <span class="kw">let </span>config = StateProverConfig {
-<a href=#147 id=147 data-nosnippet>147</a>        relay_server: args.relay_server,
-<a href=#148 id=148 data-nosnippet>148</a>        update_interval: args.update_interval,
-<a href=#149 id=149 data-nosnippet>149</a>        retry_interval: args.retry_interval,
-<a href=#150 id=150 data-nosnippet>150</a>        provider_endpoint: args.l1_provider,
-<a href=#151 id=151 data-nosnippet>151</a>        light_client_address: args.light_client_address,
-<a href=#152 id=152 data-nosnippet>152</a>        signer,
-<a href=#153 id=153 data-nosnippet>153</a>        sequencer_url: args.sequencer_url,
-<a href=#154 id=154 data-nosnippet>154</a>        port: args.port,
-<a href=#155 id=155 data-nosnippet>155</a>        stake_table_capacity: args.stake_table_capacity,
-<a href=#156 id=156 data-nosnippet>156</a>        blocks_per_epoch,
-<a href=#157 id=157 data-nosnippet>157</a>        epoch_start_block,
-<a href=#158 id=158 data-nosnippet>158</a>        max_retries: args.max_retries,
-<a href=#159 id=159 data-nosnippet>159</a>        max_gas_price,
-<a href=#160 id=160 data-nosnippet>160</a>    };
-<a href=#161 id=161 data-nosnippet>161</a>
-<a href=#162 id=162 data-nosnippet>162</a>    <span class="comment">// validate that the light client contract is a proxy, panics otherwise
-<a href=#163 id=163 data-nosnippet>163</a>    </span>config.validate_light_client_contract().<span class="kw">await</span>.unwrap();
-<a href=#164 id=164 data-nosnippet>164</a>
-<a href=#165 id=165 data-nosnippet>165</a>    <span class="kw">if </span>args.daemon {
-<a href=#166 id=166 data-nosnippet>166</a>        <span class="comment">// Launching the prover service daemon
-<a href=#167 id=167 data-nosnippet>167</a>        </span><span class="kw">if let </span><span class="prelude-val">Err</span>(err) = run_prover_service(config, StaticVersion::&lt;<span class="number">0</span>, <span class="number">1</span>&gt; {}).<span class="kw">await </span>{
-<a href=#168 id=168 data-nosnippet>168</a>            <span class="macro">tracing::error!</span>(<span class="string">"Error running prover service: {:?}"</span>, err);
-<a href=#169 id=169 data-nosnippet>169</a>        };
-<a href=#170 id=170 data-nosnippet>170</a>    } <span class="kw">else </span>{
-<a href=#171 id=171 data-nosnippet>171</a>        <span class="comment">// Run light client state update once
-<a href=#172 id=172 data-nosnippet>172</a>        </span><span class="kw">if let </span><span class="prelude-val">Err</span>(err) = run_prover_once(config, StaticVersion::&lt;<span class="number">0</span>, <span class="number">1</span>&gt; {}).<span class="kw">await </span>{
-<a href=#173 id=173 data-nosnippet>173</a>            <span class="macro">tracing::error!</span>(<span class="string">"Error running prover once: {:?}"</span>, err);
-<a href=#174 id=174 data-nosnippet>174</a>        };
-<a href=#175 id=175 data-nosnippet>175</a>    }
-<a href=#176 id=176 data-nosnippet>176</a>}</code></pre></div></section></main></body></html>
+<a href=#97 id=97 data-nosnippet>97</a>    <span class="doccomment">/// Indicated if the prover is using the old V1 LightClient contract
+<a href=#98 id=98 data-nosnippet>98</a>    </span><span class="attr">#[clap(
+<a href=#99 id=99 data-nosnippet>99</a>        long = <span class="string">"v1-contract"</span>,
+<a href=#100 id=100 data-nosnippet>100</a>        env = <span class="string">"ESPRESSO_STATE_PROVER_V1_CONTRACT"</span>,
+<a href=#101 id=101 data-nosnippet>101</a>        default_value = <span class="string">"false"
+<a href=#102 id=102 data-nosnippet>102</a>    </span>)]
+<a href=#103 id=103 data-nosnippet>103</a>    </span><span class="kw">pub </span>v1_contract: bool,
+<a href=#104 id=104 data-nosnippet>104</a>
+<a href=#105 id=105 data-nosnippet>105</a>    <span class="attr">#[clap(flatten)]
+<a href=#106 id=106 data-nosnippet>106</a>    </span>logging: logging::Config,
+<a href=#107 id=107 data-nosnippet>107</a>}
+<a href=#108 id=108 data-nosnippet>108</a>
+<a href=#109 id=109 data-nosnippet>109</a><span class="attr">#[tokio::main]
+<a href=#110 id=110 data-nosnippet>110</a></span><span class="kw">async fn </span>main() {
+<a href=#111 id=111 data-nosnippet>111</a>    <span class="kw">let </span>args = Args::parse();
+<a href=#112 id=112 data-nosnippet>112</a>    args.logging.init();
+<a href=#113 id=113 data-nosnippet>113</a>
+<a href=#114 id=114 data-nosnippet>114</a>    <span class="comment">// prepare config for state prover from user options
+<a href=#115 id=115 data-nosnippet>115</a>    </span><span class="kw">let </span>l1_provider = ProviderBuilder::new().on_http(args.l1_provider.clone());
+<a href=#116 id=116 data-nosnippet>116</a>    <span class="kw">let </span>chain_id = l1_provider.get_chain_id().<span class="kw">await</span>.unwrap();
+<a href=#117 id=117 data-nosnippet>117</a>    <span class="kw">let </span>signer = MnemonicBuilder::&lt;English&gt;::default()
+<a href=#118 id=118 data-nosnippet>118</a>        .phrase(args.eth_mnemonic)
+<a href=#119 id=119 data-nosnippet>119</a>        .index(args.eth_account_index)
+<a href=#120 id=120 data-nosnippet>120</a>        .expect(<span class="string">"wrong mnemonic or index"</span>)
+<a href=#121 id=121 data-nosnippet>121</a>        .build()
+<a href=#122 id=122 data-nosnippet>122</a>        .expect(<span class="string">"fail to build signer"</span>)
+<a href=#123 id=123 data-nosnippet>123</a>        .with_chain_id(<span class="prelude-val">Some</span>(chain_id));
+<a href=#124 id=124 data-nosnippet>124</a>
+<a href=#125 id=125 data-nosnippet>125</a>    <span class="kw">let </span>(blocks_per_epoch, epoch_start_block) =
+<a href=#126 id=126 data-nosnippet>126</a>        fetch_epoch_config_from_sequencer(<span class="kw-2">&amp;</span>args.sequencer_url)
+<a href=#127 id=127 data-nosnippet>127</a>            .<span class="kw">await
+<a href=#128 id=128 data-nosnippet>128</a>            </span>.unwrap_or((u64::MAX, u64::MAX));
+<a href=#129 id=129 data-nosnippet>129</a>
+<a href=#130 id=130 data-nosnippet>130</a>    <span class="comment">// If the sequencer returns 0 for pre-epoch configuration.
+<a href=#131 id=131 data-nosnippet>131</a>    </span><span class="kw">let </span>blocks_per_epoch = <span class="kw">if </span>blocks_per_epoch == <span class="number">0 </span>{
+<a href=#132 id=132 data-nosnippet>132</a>        u64::MAX
+<a href=#133 id=133 data-nosnippet>133</a>    } <span class="kw">else </span>{
+<a href=#134 id=134 data-nosnippet>134</a>        blocks_per_epoch
+<a href=#135 id=135 data-nosnippet>135</a>    };
+<a href=#136 id=136 data-nosnippet>136</a>    <span class="kw">let </span>epoch_start_block = <span class="kw">if </span>epoch_start_block == <span class="number">0 </span>{
+<a href=#137 id=137 data-nosnippet>137</a>        u64::MAX
+<a href=#138 id=138 data-nosnippet>138</a>    } <span class="kw">else </span>{
+<a href=#139 id=139 data-nosnippet>139</a>        epoch_start_block
+<a href=#140 id=140 data-nosnippet>140</a>    };
+<a href=#141 id=141 data-nosnippet>141</a>
+<a href=#142 id=142 data-nosnippet>142</a>    <span class="macro">tracing::info!</span>(
+<a href=#143 id=143 data-nosnippet>143</a>        <span class="string">"Epoch config fetched from sequencer: blocks_per_epoch = {}, epoch_start_block = {}"</span>,
+<a href=#144 id=144 data-nosnippet>144</a>        blocks_per_epoch,
+<a href=#145 id=145 data-nosnippet>145</a>        epoch_start_block
+<a href=#146 id=146 data-nosnippet>146</a>    );
+<a href=#147 id=147 data-nosnippet>147</a>    <span class="kw">let </span>max_gas_price = args.max_gas_price.map(|v| {
+<a href=#148 id=148 data-nosnippet>148</a>        parse_units(<span class="kw-2">&amp;</span>v, <span class="string">"gwei"</span>)
+<a href=#149 id=149 data-nosnippet>149</a>            .expect(<span class="string">"parse_unit on max_gas_price in GWEI failed"</span>)
+<a href=#150 id=150 data-nosnippet>150</a>            .try_into()
+<a href=#151 id=151 data-nosnippet>151</a>            .expect(<span class="string">"fail to convert gas price to u128"</span>)
+<a href=#152 id=152 data-nosnippet>152</a>    });
+<a href=#153 id=153 data-nosnippet>153</a>
+<a href=#154 id=154 data-nosnippet>154</a>    <span class="kw">let </span>config = StateProverConfig {
+<a href=#155 id=155 data-nosnippet>155</a>        relay_server: args.relay_server,
+<a href=#156 id=156 data-nosnippet>156</a>        update_interval: args.update_interval,
+<a href=#157 id=157 data-nosnippet>157</a>        retry_interval: args.retry_interval,
+<a href=#158 id=158 data-nosnippet>158</a>        provider_endpoint: args.l1_provider,
+<a href=#159 id=159 data-nosnippet>159</a>        light_client_address: args.light_client_address,
+<a href=#160 id=160 data-nosnippet>160</a>        signer,
+<a href=#161 id=161 data-nosnippet>161</a>        sequencer_url: args.sequencer_url,
+<a href=#162 id=162 data-nosnippet>162</a>        port: args.port,
+<a href=#163 id=163 data-nosnippet>163</a>        stake_table_capacity: args.stake_table_capacity,
+<a href=#164 id=164 data-nosnippet>164</a>        blocks_per_epoch,
+<a href=#165 id=165 data-nosnippet>165</a>        epoch_start_block,
+<a href=#166 id=166 data-nosnippet>166</a>        max_retries: args.max_retries,
+<a href=#167 id=167 data-nosnippet>167</a>        max_gas_price,
+<a href=#168 id=168 data-nosnippet>168</a>    };
+<a href=#169 id=169 data-nosnippet>169</a>
+<a href=#170 id=170 data-nosnippet>170</a>    <span class="comment">// validate that the light client contract is a proxy, panics otherwise
+<a href=#171 id=171 data-nosnippet>171</a>    </span>config.validate_light_client_contract().<span class="kw">await</span>.unwrap();
+<a href=#172 id=172 data-nosnippet>172</a>
+<a href=#173 id=173 data-nosnippet>173</a>    <span class="kw">if </span>args.daemon {
+<a href=#174 id=174 data-nosnippet>174</a>        <span class="comment">// Launching the prover service daemon
+<a href=#175 id=175 data-nosnippet>175</a>        </span><span class="kw">if let </span><span class="prelude-val">Err</span>(err) = run_prover_service(config, StaticVersion::&lt;<span class="number">0</span>, <span class="number">1</span>&gt; {}).<span class="kw">await </span>{
+<a href=#176 id=176 data-nosnippet>176</a>            <span class="macro">tracing::error!</span>(<span class="string">"Error running prover service: {:?}"</span>, err);
+<a href=#177 id=177 data-nosnippet>177</a>        };
+<a href=#178 id=178 data-nosnippet>178</a>    } <span class="kw">else </span>{
+<a href=#179 id=179 data-nosnippet>179</a>        <span class="comment">// Run light client state update once
+<a href=#180 id=180 data-nosnippet>180</a>        </span><span class="kw">if let </span><span class="prelude-val">Err</span>(err) = run_prover_once(config, StaticVersion::&lt;<span class="number">0</span>, <span class="number">1</span>&gt; {}).<span class="kw">await </span>{
+<a href=#181 id=181 data-nosnippet>181</a>            <span class="macro">tracing::error!</span>(<span class="string">"Error running prover once: {:?}"</span>, err);
+<a href=#182 id=182 data-nosnippet>182</a>        };
+<a href=#183 id=183 data-nosnippet>183</a>    }
+<a href=#184 id=184 data-nosnippet>184</a>}</code></pre></div></section></main></body></html>

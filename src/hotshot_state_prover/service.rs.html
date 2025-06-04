@@ -28,8 +28,8 @@
 <a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span>hotshot_types::{
 <a href=#29 id=29 data-nosnippet>29</a>    data::EpochNumber,
 <a href=#30 id=30 data-nosnippet>30</a>    light_client::{
-<a href=#31 id=31 data-nosnippet>31</a>        CircuitField, LightClientState, PublicInput, StakeTableState, StateSignature,
-<a href=#32 id=32 data-nosnippet>32</a>        StateSignaturesBundle, StateVerKey,
+<a href=#31 id=31 data-nosnippet>31</a>        CircuitField, LightClientState, StakeTableState, StateSignature, StateSignaturesBundle,
+<a href=#32 id=32 data-nosnippet>32</a>        StateVerKey,
 <a href=#33 id=33 data-nosnippet>33</a>    },
 <a href=#34 id=34 data-nosnippet>34</a>    simple_certificate::LightClientStateUpdateCertificate,
 <a href=#35 id=35 data-nosnippet>35</a>    stake_table::HSStakeTable,
@@ -51,7 +51,7 @@
 <a href=#51 id=51 data-nosnippet>51</a><span class="kw">use </span>url::Url;
 <a href=#52 id=52 data-nosnippet>52</a><span class="kw">use </span>vbs::version::{StaticVersion, StaticVersionType};
 <a href=#53 id=53 data-nosnippet>53</a>
-<a href=#54 id=54 data-nosnippet>54</a><span class="kw">use </span><span class="kw">crate</span>::snark::{generate_state_update_proof, Proof, ProvingKey};
+<a href=#54 id=54 data-nosnippet>54</a><span class="kw">use </span><span class="kw">crate</span>::snark::{Proof, ProvingKey, PublicInput};
 <a href=#55 id=55 data-nosnippet>55</a>
 <a href=#56 id=56 data-nosnippet>56</a><span class="doccomment">/// Configuration/Parameters used for hotshot state prover
 <a href=#57 id=57 data-nosnippet>57</a></span><span class="attr">#[derive(Debug, Clone)]
@@ -324,7 +324,7 @@
 <a href=#324 id=324 data-nosnippet>324</a>    <span class="kw">let </span>proving_key_clone = proving_key.clone();
 <a href=#325 id=325 data-nosnippet>325</a>    <span class="kw">let </span>stake_table_capacity = state.config.stake_table_capacity;
 <a href=#326 id=326 data-nosnippet>326</a>    <span class="kw">let </span>(proof, public_input) = spawn_blocking(<span class="kw">move </span>|| {
-<a href=#327 id=327 data-nosnippet>327</a>        generate_state_update_proof(
+<a href=#327 id=327 data-nosnippet>327</a>        <span class="kw">crate</span>::snark::generate_state_update_proof(
 <a href=#328 id=328 data-nosnippet>328</a>            <span class="kw-2">&amp;mut </span>ark_std::rand::thread_rng(),
 <a href=#329 id=329 data-nosnippet>329</a>            <span class="kw-2">&amp;</span>proving_key_clone,
 <a href=#330 id=330 data-nosnippet>330</a>            entries,

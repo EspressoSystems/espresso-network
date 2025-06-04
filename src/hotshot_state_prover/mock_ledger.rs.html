@@ -12,28 +12,28 @@
 <a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>espresso_types::SeqTypes;
 <a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>hotshot_contract_adapter::{field_to_u256, jellyfish::open_key};
 <a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>hotshot_types::{
-<a href=#15 id=15 data-nosnippet>15</a>    light_client::{
-<a href=#16 id=16 data-nosnippet>16</a>        GenericLightClientState, GenericPublicInput, GenericStakeTableState, LightClientState,
-<a href=#17 id=17 data-nosnippet>17</a>    },
-<a href=#18 id=18 data-nosnippet>18</a>    stake_table::{HSStakeTable, StakeTableEntry},
-<a href=#19 id=19 data-nosnippet>19</a>    utils::{epoch_from_block_number, is_epoch_root, is_ge_epoch_root, is_last_block},
-<a href=#20 id=20 data-nosnippet>20</a>    PeerConfig,
-<a href=#21 id=21 data-nosnippet>21</a>};
-<a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>itertools::izip;
-<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>jf_pcs::prelude::UnivariateUniversalParams;
-<a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>jf_plonk::{
-<a href=#25 id=25 data-nosnippet>25</a>    proof_system::{PlonkKzgSnark, UniversalSNARK},
-<a href=#26 id=26 data-nosnippet>26</a>    transcript::SolidityTranscript,
-<a href=#27 id=27 data-nosnippet>27</a>};
-<a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span>jf_relation::{Arithmetization, Circuit, PlonkCircuit};
-<a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span>jf_signature::{
-<a href=#30 id=30 data-nosnippet>30</a>    bls_over_bn254::{BLSOverBN254CurveSignatureScheme, VerKey <span class="kw">as </span>BLSVerKey},
-<a href=#31 id=31 data-nosnippet>31</a>    schnorr::{SchnorrSignatureScheme, Signature},
-<a href=#32 id=32 data-nosnippet>32</a>    SignatureScheme,
-<a href=#33 id=33 data-nosnippet>33</a>};
-<a href=#34 id=34 data-nosnippet>34</a><span class="kw">use </span>jf_utils::test_rng;
-<a href=#35 id=35 data-nosnippet>35</a>
-<a href=#36 id=36 data-nosnippet>36</a><span class="kw">use crate</span>::{generate_state_update_proof, preprocess, Proof, VerifyingKey};
+<a href=#15 id=15 data-nosnippet>15</a>    light_client::{GenericLightClientState, GenericStakeTableState, LightClientState},
+<a href=#16 id=16 data-nosnippet>16</a>    stake_table::{HSStakeTable, StakeTableEntry},
+<a href=#17 id=17 data-nosnippet>17</a>    utils::{epoch_from_block_number, is_epoch_root, is_ge_epoch_root, is_last_block},
+<a href=#18 id=18 data-nosnippet>18</a>    PeerConfig,
+<a href=#19 id=19 data-nosnippet>19</a>};
+<a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>itertools::izip;
+<a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>jf_pcs::prelude::UnivariateUniversalParams;
+<a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>jf_plonk::{
+<a href=#23 id=23 data-nosnippet>23</a>    proof_system::{PlonkKzgSnark, UniversalSNARK},
+<a href=#24 id=24 data-nosnippet>24</a>    transcript::SolidityTranscript,
+<a href=#25 id=25 data-nosnippet>25</a>};
+<a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>jf_relation::{Arithmetization, Circuit, PlonkCircuit};
+<a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span>jf_signature::{
+<a href=#28 id=28 data-nosnippet>28</a>    bls_over_bn254::{BLSOverBN254CurveSignatureScheme, VerKey <span class="kw">as </span>BLSVerKey},
+<a href=#29 id=29 data-nosnippet>29</a>    schnorr::{SchnorrSignatureScheme, Signature},
+<a href=#30 id=30 data-nosnippet>30</a>    SignatureScheme,
+<a href=#31 id=31 data-nosnippet>31</a>};
+<a href=#32 id=32 data-nosnippet>32</a><span class="kw">use </span>jf_utils::test_rng;
+<a href=#33 id=33 data-nosnippet>33</a>
+<a href=#34 id=34 data-nosnippet>34</a><span class="kw">use crate</span>::{
+<a href=#35 id=35 data-nosnippet>35</a>    circuit::GenericPublicInput, generate_state_update_proof, preprocess, Proof, VerifyingKey,
+<a href=#36 id=36 data-nosnippet>36</a>};
 <a href=#37 id=37 data-nosnippet>37</a>
 <a href=#38 id=38 data-nosnippet>38</a><span class="kw">type </span>F = ark_ed_on_bn254::Fq;
 <a href=#39 id=39 data-nosnippet>39</a><span class="kw">type </span>SchnorrVerKey = jf_signature::schnorr::VerKey&lt;EdwardsConfig&gt;;
@@ -321,8 +321,8 @@
 <a href=#321 id=321 data-nosnippet>321</a>                powers_of_h: <span class="macro">vec!</span>[srs.h, srs.beta_h],
 <a href=#322 id=322 data-nosnippet>322</a>            }
 <a href=#323 id=323 data-nosnippet>323</a>        };
-<a href=#324 id=324 data-nosnippet>324</a>        <span class="kw">let </span>(pk, <span class="kw">_</span>) = preprocess(<span class="kw-2">&amp;</span>srs, STAKE_TABLE_CAPACITY_FOR_TEST)
-<a href=#325 id=325 data-nosnippet>325</a>            .expect(<span class="string">"Fail to preprocess state prover circuit"</span>);
+<a href=#324 id=324 data-nosnippet>324</a>        <span class="kw">let </span>(pk, <span class="kw">_</span>) =
+<a href=#325 id=325 data-nosnippet>325</a>            preprocess(<span class="kw-2">&amp;</span>srs, <span class="self">self</span>.pp.st_cap).expect(<span class="string">"Fail to preprocess state prover circuit"</span>);
 <a href=#326 id=326 data-nosnippet>326</a>        <span class="kw">let </span>stake_table_entries = st
 <a href=#327 id=327 data-nosnippet>327</a>            .into_iter()
 <a href=#328 id=328 data-nosnippet>328</a>            .map(|(<span class="kw">_</span>, stake_amount, schnorr_key)| (schnorr_key, stake_amount))
@@ -335,7 +335,7 @@
 <a href=#335 id=335 data-nosnippet>335</a>            <span class="kw-2">&amp;</span>sigs,
 <a href=#336 id=336 data-nosnippet>336</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.state,
 <a href=#337 id=337 data-nosnippet>337</a>            <span class="kw-2">&amp;</span>voting_st_state,
-<a href=#338 id=338 data-nosnippet>338</a>            STAKE_TABLE_CAPACITY_FOR_TEST,
+<a href=#338 id=338 data-nosnippet>338</a>            <span class="self">self</span>.pp.st_cap,
 <a href=#339 id=339 data-nosnippet>339</a>            <span class="kw-2">&amp;</span>next_st_state,
 <a href=#340 id=340 data-nosnippet>340</a>        )
 <a href=#341 id=341 data-nosnippet>341</a>        .expect(<span class="string">"Fail to generate state proof"</span>);
@@ -351,242 +351,241 @@
 <a href=#351 id=351 data-nosnippet>351</a>    ) -&gt; (GenericPublicInput&lt;F&gt;, Proof, GenericStakeTableState&lt;F&gt;) {
 <a href=#352 id=352 data-nosnippet>352</a>        <span class="kw">let </span>new_state = <span class="self">self</span>.state;
 <a href=#353 id=353 data-nosnippet>353</a>
-<a href=#354 id=354 data-nosnippet>354</a>        <span class="kw">let </span>(adv_qc_keys, adv_state_keys) =
-<a href=#355 id=355 data-nosnippet>355</a>            key_pairs_for_testing(STAKE_TABLE_CAPACITY_FOR_TEST, <span class="kw-2">&amp;mut </span><span class="self">self</span>.rng);
-<a href=#356 id=356 data-nosnippet>356</a>        <span class="kw">let </span>adv_st = stake_table_for_testing(<span class="kw-2">&amp;</span>adv_qc_keys, <span class="kw-2">&amp;</span>adv_state_keys);
-<a href=#357 id=357 data-nosnippet>357</a>        <span class="kw">let </span>adv_st_state = adv_st.commitment(STAKE_TABLE_CAPACITY_FOR_TEST).unwrap();
-<a href=#358 id=358 data-nosnippet>358</a>
-<a href=#359 id=359 data-nosnippet>359</a>        <span class="comment">// replace new state with adversarial stake table commitment
-<a href=#360 id=360 data-nosnippet>360</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>msg = Vec::with_capacity(<span class="number">7</span>);
-<a href=#361 id=361 data-nosnippet>361</a>        <span class="kw">let </span>state_msg: [F; <span class="number">3</span>] = new_state.into();
-<a href=#362 id=362 data-nosnippet>362</a>        msg.extend_from_slice(<span class="kw-2">&amp;</span>state_msg);
-<a href=#363 id=363 data-nosnippet>363</a>        <span class="kw">let </span>adv_st_state_msg: [F; <span class="number">4</span>] = adv_st_state.into();
-<a href=#364 id=364 data-nosnippet>364</a>        msg.extend_from_slice(<span class="kw-2">&amp;</span>adv_st_state_msg);
-<a href=#365 id=365 data-nosnippet>365</a>
-<a href=#366 id=366 data-nosnippet>366</a>        <span class="comment">// every fake stakers sign on the adverarial new state
-<a href=#367 id=367 data-nosnippet>367</a>        </span><span class="kw">let </span>bit_vec = <span class="macro">vec!</span>[<span class="bool-val">true</span>; STAKE_TABLE_CAPACITY_FOR_TEST];
-<a href=#368 id=368 data-nosnippet>368</a>        <span class="kw">let </span>sigs = adv_state_keys
-<a href=#369 id=369 data-nosnippet>369</a>            .iter()
-<a href=#370 id=370 data-nosnippet>370</a>            .map(|(sk, <span class="kw">_</span>)| {
-<a href=#371 id=371 data-nosnippet>371</a>                SchnorrSignatureScheme::&lt;EdwardsConfig&gt;::sign(<span class="kw-2">&amp;</span>(), sk, <span class="kw-2">&amp;</span>msg, <span class="kw-2">&amp;mut </span><span class="self">self</span>.rng)
-<a href=#372 id=372 data-nosnippet>372</a>            })
-<a href=#373 id=373 data-nosnippet>373</a>            .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="kw">_</span>&gt;, <span class="kw">_</span>&gt;&gt;()
-<a href=#374 id=374 data-nosnippet>374</a>            .unwrap();
-<a href=#375 id=375 data-nosnippet>375</a>
-<a href=#376 id=376 data-nosnippet>376</a>        <span class="kw">let </span>srs = {
-<a href=#377 id=377 data-nosnippet>377</a>            <span class="comment">// load SRS from Aztec's ceremony
-<a href=#378 id=378 data-nosnippet>378</a>            </span><span class="kw">let </span>srs = ark_srs::kzg10::aztec20::setup(<span class="number">2u64</span>.pow(<span class="number">16</span>) <span class="kw">as </span>usize + <span class="number">2</span>)
-<a href=#379 id=379 data-nosnippet>379</a>                .expect(<span class="string">"Aztec SRS fail to load"</span>);
-<a href=#380 id=380 data-nosnippet>380</a>            <span class="comment">// convert to Jellyfish type
-<a href=#381 id=381 data-nosnippet>381</a>            // TODO: (alex) use constructor instead https://github.com/EspressoSystems/jellyfish/issues/440
-<a href=#382 id=382 data-nosnippet>382</a>            </span>UnivariateUniversalParams {
-<a href=#383 id=383 data-nosnippet>383</a>                powers_of_g: srs.powers_of_g,
-<a href=#384 id=384 data-nosnippet>384</a>                h: srs.h,
-<a href=#385 id=385 data-nosnippet>385</a>                beta_h: srs.beta_h,
-<a href=#386 id=386 data-nosnippet>386</a>                powers_of_h: <span class="macro">vec!</span>[srs.h, srs.beta_h],
-<a href=#387 id=387 data-nosnippet>387</a>            }
-<a href=#388 id=388 data-nosnippet>388</a>        };
-<a href=#389 id=389 data-nosnippet>389</a>        <span class="kw">let </span>(pk, <span class="kw">_</span>) = preprocess(<span class="kw-2">&amp;</span>srs, STAKE_TABLE_CAPACITY_FOR_TEST)
-<a href=#390 id=390 data-nosnippet>390</a>            .expect(<span class="string">"Fail to preprocess state prover circuit"</span>);
-<a href=#391 id=391 data-nosnippet>391</a>        <span class="kw">let </span>stake_table_entries = adv_st
-<a href=#392 id=392 data-nosnippet>392</a>            .<span class="number">0
-<a href=#393 id=393 data-nosnippet>393</a>            </span>.into_iter()
-<a href=#394 id=394 data-nosnippet>394</a>            .map(|config| (config.state_ver_key, config.stake_table_entry.stake_amount))
-<a href=#395 id=395 data-nosnippet>395</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-<a href=#396 id=396 data-nosnippet>396</a>        <span class="kw">let </span>(proof, pi) = generate_state_update_proof::&lt;<span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>&gt;(
-<a href=#397 id=397 data-nosnippet>397</a>            <span class="kw-2">&amp;mut </span><span class="self">self</span>.rng,
-<a href=#398 id=398 data-nosnippet>398</a>            <span class="kw-2">&amp;</span>pk,
-<a href=#399 id=399 data-nosnippet>399</a>            <span class="kw-2">&amp;</span>stake_table_entries,
-<a href=#400 id=400 data-nosnippet>400</a>            <span class="kw-2">&amp;</span>bit_vec,
-<a href=#401 id=401 data-nosnippet>401</a>            <span class="kw-2">&amp;</span>sigs,
-<a href=#402 id=402 data-nosnippet>402</a>            <span class="kw-2">&amp;</span>new_state,
-<a href=#403 id=403 data-nosnippet>403</a>            <span class="kw-2">&amp;</span>adv_st_state,
-<a href=#404 id=404 data-nosnippet>404</a>            STAKE_TABLE_CAPACITY_FOR_TEST,
-<a href=#405 id=405 data-nosnippet>405</a>            <span class="kw-2">&amp;</span>adv_st_state,
-<a href=#406 id=406 data-nosnippet>406</a>        )
-<a href=#407 id=407 data-nosnippet>407</a>        .expect(<span class="string">"Fail to generate state proof"</span>);
-<a href=#408 id=408 data-nosnippet>408</a>
-<a href=#409 id=409 data-nosnippet>409</a>        (pi, proof, adv_st_state)
-<a href=#410 id=410 data-nosnippet>410</a>    }
-<a href=#411 id=411 data-nosnippet>411</a>
-<a href=#412 id=412 data-nosnippet>412</a>    <span class="doccomment">/// Returns the stake table state for current voting
-<a href=#413 id=413 data-nosnippet>413</a>    </span><span class="kw">pub fn </span>voting_stake_table_state(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; GenericStakeTableState&lt;F&gt; {
-<a href=#414 id=414 data-nosnippet>414</a>        <span class="self">self</span>.voting_st
-<a href=#415 id=415 data-nosnippet>415</a>            .commitment(STAKE_TABLE_CAPACITY_FOR_TEST)
-<a href=#416 id=416 data-nosnippet>416</a>            .expect(<span class="string">"Failed to compute stake table commitment"</span>)
-<a href=#417 id=417 data-nosnippet>417</a>    }
-<a href=#418 id=418 data-nosnippet>418</a>
-<a href=#419 id=419 data-nosnippet>419</a>    <span class="doccomment">/// Returns epoch-aware stake table state for the next block.
-<a href=#420 id=420 data-nosnippet>420</a>    /// This will be the same most of the time as `self.voting_st_state()` except during epoch change
-<a href=#421 id=421 data-nosnippet>421</a>    </span><span class="kw">pub fn </span>next_stake_table_state(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; GenericStakeTableState&lt;F&gt; {
-<a href=#422 id=422 data-nosnippet>422</a>        <span class="kw">if </span><span class="self">self</span>.epoch_activated() &amp;&amp; <span class="self">self</span>.is_ge_epoch_root() {
-<a href=#423 id=423 data-nosnippet>423</a>            <span class="self">self</span>.next_voting_st
-<a href=#424 id=424 data-nosnippet>424</a>                .commitment(STAKE_TABLE_CAPACITY_FOR_TEST)
-<a href=#425 id=425 data-nosnippet>425</a>                .expect(<span class="string">"Failed to compute stake table commitment"</span>)
-<a href=#426 id=426 data-nosnippet>426</a>        } <span class="kw">else </span>{
-<a href=#427 id=427 data-nosnippet>427</a>            <span class="self">self</span>.voting_stake_table_state()
-<a href=#428 id=428 data-nosnippet>428</a>        }
-<a href=#429 id=429 data-nosnippet>429</a>    }
-<a href=#430 id=430 data-nosnippet>430</a>
-<a href=#431 id=431 data-nosnippet>431</a>    <span class="doccomment">/// Returns the light client state
-<a href=#432 id=432 data-nosnippet>432</a>    </span><span class="kw">pub fn </span>light_client_state(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; GenericLightClientState&lt;F&gt; {
-<a href=#433 id=433 data-nosnippet>433</a>        <span class="self">self</span>.state
-<a href=#434 id=434 data-nosnippet>434</a>    }
-<a href=#435 id=435 data-nosnippet>435</a>
-<a href=#436 id=436 data-nosnippet>436</a>    <span class="comment">// return a dummy commitment value
-<a href=#437 id=437 data-nosnippet>437</a>    </span><span class="kw">fn </span>new_dummy_comm(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; F {
-<a href=#438 id=438 data-nosnippet>438</a>        F::rand(<span class="kw-2">&amp;mut </span><span class="self">self</span>.rng)
-<a href=#439 id=439 data-nosnippet>439</a>    }
-<a href=#440 id=440 data-nosnippet>440</a>}
-<a href=#441 id=441 data-nosnippet>441</a>
-<a href=#442 id=442 data-nosnippet>442</a><span class="doccomment">/// Helper function for test
-<a href=#443 id=443 data-nosnippet>443</a></span><span class="kw">fn </span>key_pairs_for_testing&lt;R: CryptoRng + RngCore&gt;(
-<a href=#444 id=444 data-nosnippet>444</a>    num_validators: usize,
-<a href=#445 id=445 data-nosnippet>445</a>    prng: <span class="kw-2">&amp;mut </span>R,
-<a href=#446 id=446 data-nosnippet>446</a>) -&gt; (Vec&lt;BLSVerKey&gt;, Vec&lt;(SchnorrSignKey, SchnorrVerKey)&gt;) {
-<a href=#447 id=447 data-nosnippet>447</a>    <span class="kw">let </span>bls_keys = (<span class="number">0</span>..num_validators)
-<a href=#448 id=448 data-nosnippet>448</a>        .map(|<span class="kw">_</span>| {
-<a href=#449 id=449 data-nosnippet>449</a>            BLSOverBN254CurveSignatureScheme::key_gen(<span class="kw-2">&amp;</span>(), prng)
-<a href=#450 id=450 data-nosnippet>450</a>                .unwrap()
-<a href=#451 id=451 data-nosnippet>451</a>                .<span class="number">1
-<a href=#452 id=452 data-nosnippet>452</a>        </span>})
-<a href=#453 id=453 data-nosnippet>453</a>        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-<a href=#454 id=454 data-nosnippet>454</a>    <span class="kw">let </span>schnorr_keys = (<span class="number">0</span>..num_validators)
-<a href=#455 id=455 data-nosnippet>455</a>        .map(|<span class="kw">_</span>| SchnorrSignatureScheme::key_gen(<span class="kw-2">&amp;</span>(), prng).unwrap())
-<a href=#456 id=456 data-nosnippet>456</a>        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-<a href=#457 id=457 data-nosnippet>457</a>    (bls_keys, schnorr_keys)
-<a href=#458 id=458 data-nosnippet>458</a>}
-<a href=#459 id=459 data-nosnippet>459</a>
-<a href=#460 id=460 data-nosnippet>460</a><span class="doccomment">/// Helper function for test
-<a href=#461 id=461 data-nosnippet>461</a></span><span class="kw">fn </span>stake_table_for_testing(
-<a href=#462 id=462 data-nosnippet>462</a>    bls_keys: <span class="kw-2">&amp;</span>[BLSVerKey],
-<a href=#463 id=463 data-nosnippet>463</a>    schnorr_keys: <span class="kw-2">&amp;</span>[(SchnorrSignKey, SchnorrVerKey)],
-<a href=#464 id=464 data-nosnippet>464</a>) -&gt; HSStakeTable&lt;SeqTypes&gt; {
-<a href=#465 id=465 data-nosnippet>465</a>    bls_keys
-<a href=#466 id=466 data-nosnippet>466</a>        .iter()
-<a href=#467 id=467 data-nosnippet>467</a>        .enumerate()
-<a href=#468 id=468 data-nosnippet>468</a>        .zip(schnorr_keys)
-<a href=#469 id=469 data-nosnippet>469</a>        .map(|((i, bls_key), (<span class="kw">_</span>, schnorr_key))| PeerConfig {
-<a href=#470 id=470 data-nosnippet>470</a>            stake_table_entry: StakeTableEntry {
-<a href=#471 id=471 data-nosnippet>471</a>                stake_key: <span class="kw-2">*</span>bls_key,
-<a href=#472 id=472 data-nosnippet>472</a>                stake_amount: U256::from((i + <span class="number">1</span>) <span class="kw">as </span>u32),
-<a href=#473 id=473 data-nosnippet>473</a>            },
-<a href=#474 id=474 data-nosnippet>474</a>            state_ver_key: schnorr_key.clone(),
-<a href=#475 id=475 data-nosnippet>475</a>        })
-<a href=#476 id=476 data-nosnippet>476</a>        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-<a href=#477 id=477 data-nosnippet>477</a>        .into()
-<a href=#478 id=478 data-nosnippet>478</a>}
-<a href=#479 id=479 data-nosnippet>479</a>
-<a href=#480 id=480 data-nosnippet>480</a><span class="comment">// modify from &lt;https://github.com/EspressoSystems/cape/blob/main/contracts/rust/src/plonk_verifier/helpers.rs&gt;
-<a href=#481 id=481 data-nosnippet>481</a></span><span class="doccomment">/// return list of (proof, ver_key, public_input, extra_msg, domain_size)
-<a href=#482 id=482 data-nosnippet>482</a></span><span class="attr">#[allow(clippy::type_complexity)]
-<a href=#483 id=483 data-nosnippet>483</a></span><span class="kw">pub fn </span>gen_plonk_proof_for_test(
-<a href=#484 id=484 data-nosnippet>484</a>    num_proof: usize,
-<a href=#485 id=485 data-nosnippet>485</a>) -&gt; Vec&lt;(Proof, VerifyingKey, Vec&lt;F&gt;, <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt;, usize)&gt; {
-<a href=#486 id=486 data-nosnippet>486</a>    <span class="comment">// 1. Simulate universal setup
-<a href=#487 id=487 data-nosnippet>487</a>    </span><span class="kw">let </span>rng = <span class="kw-2">&amp;mut </span>jf_utils::test_rng();
-<a href=#488 id=488 data-nosnippet>488</a>    <span class="kw">let </span>srs = {
-<a href=#489 id=489 data-nosnippet>489</a>        <span class="kw">let </span>aztec_srs = ark_srs::kzg10::aztec20::setup(<span class="number">1024</span>).expect(<span class="string">"Aztec SRS fail to load"</span>);
-<a href=#490 id=490 data-nosnippet>490</a>
-<a href=#491 id=491 data-nosnippet>491</a>        UnivariateUniversalParams {
-<a href=#492 id=492 data-nosnippet>492</a>            powers_of_g: aztec_srs.powers_of_g,
-<a href=#493 id=493 data-nosnippet>493</a>            h: aztec_srs.h,
-<a href=#494 id=494 data-nosnippet>494</a>            beta_h: aztec_srs.beta_h,
-<a href=#495 id=495 data-nosnippet>495</a>            powers_of_h: <span class="macro">vec!</span>[aztec_srs.h, aztec_srs.beta_h],
-<a href=#496 id=496 data-nosnippet>496</a>        }
-<a href=#497 id=497 data-nosnippet>497</a>    };
-<a href=#498 id=498 data-nosnippet>498</a>    <span class="kw">let </span>open_key = open_key();
-<a href=#499 id=499 data-nosnippet>499</a>    <span class="macro">assert_eq!</span>(srs.h, open_key.h);
-<a href=#500 id=500 data-nosnippet>500</a>    <span class="macro">assert_eq!</span>(srs.beta_h, open_key.beta_h);
-<a href=#501 id=501 data-nosnippet>501</a>    <span class="macro">assert_eq!</span>(srs.powers_of_g[<span class="number">0</span>], open_key.g);
-<a href=#502 id=502 data-nosnippet>502</a>
-<a href=#503 id=503 data-nosnippet>503</a>    <span class="comment">// 2. Create circuits
-<a href=#504 id=504 data-nosnippet>504</a>    </span><span class="kw">let </span>circuits = (<span class="number">0</span>..num_proof)
-<a href=#505 id=505 data-nosnippet>505</a>        .map(|i| {
-<a href=#506 id=506 data-nosnippet>506</a>            <span class="kw">let </span>m = <span class="number">2 </span>+ i / <span class="number">3</span>;
-<a href=#507 id=507 data-nosnippet>507</a>            <span class="kw">let </span>a0 = <span class="number">1 </span>+ i % <span class="number">3</span>;
-<a href=#508 id=508 data-nosnippet>508</a>            gen_circuit_for_test::&lt;F&gt;(m, a0)
-<a href=#509 id=509 data-nosnippet>509</a>        })
-<a href=#510 id=510 data-nosnippet>510</a>        .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()
-<a href=#511 id=511 data-nosnippet>511</a>        .expect(<span class="string">"Test circuits fail to create"</span>);
-<a href=#512 id=512 data-nosnippet>512</a>    <span class="kw">let </span>domain_sizes: Vec&lt;usize&gt; = circuits
-<a href=#513 id=513 data-nosnippet>513</a>        .iter()
-<a href=#514 id=514 data-nosnippet>514</a>        .map(|c| c.eval_domain_size().unwrap())
-<a href=#515 id=515 data-nosnippet>515</a>        .collect();
-<a href=#516 id=516 data-nosnippet>516</a>
-<a href=#517 id=517 data-nosnippet>517</a>    <span class="comment">// 3. Preprocessing
-<a href=#518 id=518 data-nosnippet>518</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>prove_keys = <span class="macro">vec!</span>[];
-<a href=#519 id=519 data-nosnippet>519</a>    <span class="kw">let </span><span class="kw-2">mut </span>ver_keys = <span class="macro">vec!</span>[];
-<a href=#520 id=520 data-nosnippet>520</a>    <span class="kw">for </span>c <span class="kw">in </span>circuits.iter() {
-<a href=#521 id=521 data-nosnippet>521</a>        <span class="kw">let </span>(pk, vk) =
-<a href=#522 id=522 data-nosnippet>522</a>            PlonkKzgSnark::&lt;Bn254&gt;::preprocess(<span class="kw-2">&amp;</span>srs, c).expect(<span class="string">"Circuit preprocessing failed"</span>);
-<a href=#523 id=523 data-nosnippet>523</a>        prove_keys.push(pk);
-<a href=#524 id=524 data-nosnippet>524</a>        ver_keys.push(vk);
-<a href=#525 id=525 data-nosnippet>525</a>    }
-<a href=#526 id=526 data-nosnippet>526</a>
-<a href=#527 id=527 data-nosnippet>527</a>    <span class="comment">// 4. Proving
-<a href=#528 id=528 data-nosnippet>528</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>proofs = <span class="macro">vec!</span>[];
-<a href=#529 id=529 data-nosnippet>529</a>    <span class="kw">let </span><span class="kw-2">mut </span>extra_msgs = <span class="macro">vec!</span>[];
-<a href=#530 id=530 data-nosnippet>530</a>
-<a href=#531 id=531 data-nosnippet>531</a>    circuits.iter().zip(prove_keys.iter()).for_each(|(cs, pk)| {
-<a href=#532 id=532 data-nosnippet>532</a>        <span class="kw">let </span>extra_msg = <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[]); <span class="comment">// We set extra_msg="" for the contract tests to pass
-<a href=#533 id=533 data-nosnippet>533</a>        </span>proofs.push(
-<a href=#534 id=534 data-nosnippet>534</a>            PlonkKzgSnark::&lt;Bn254&gt;::prove::&lt;<span class="kw">_</span>, <span class="kw">_</span>, SolidityTranscript&gt;(
-<a href=#535 id=535 data-nosnippet>535</a>                rng,
-<a href=#536 id=536 data-nosnippet>536</a>                cs,
-<a href=#537 id=537 data-nosnippet>537</a>                pk,
-<a href=#538 id=538 data-nosnippet>538</a>                extra_msg.clone(),
-<a href=#539 id=539 data-nosnippet>539</a>            )
-<a href=#540 id=540 data-nosnippet>540</a>            .unwrap(),
-<a href=#541 id=541 data-nosnippet>541</a>        );
-<a href=#542 id=542 data-nosnippet>542</a>        extra_msgs.push(extra_msg);
-<a href=#543 id=543 data-nosnippet>543</a>    });
-<a href=#544 id=544 data-nosnippet>544</a>
-<a href=#545 id=545 data-nosnippet>545</a>    <span class="kw">let </span>public_inputs: Vec&lt;Vec&lt;F&gt;&gt; = circuits
-<a href=#546 id=546 data-nosnippet>546</a>        .iter()
-<a href=#547 id=547 data-nosnippet>547</a>        .map(|cs| cs.public_input().unwrap())
-<a href=#548 id=548 data-nosnippet>548</a>        .collect();
-<a href=#549 id=549 data-nosnippet>549</a>
-<a href=#550 id=550 data-nosnippet>550</a>    <span class="macro">izip!</span>(proofs, ver_keys, public_inputs, extra_msgs, domain_sizes).collect()
-<a href=#551 id=551 data-nosnippet>551</a>}
-<a href=#552 id=552 data-nosnippet>552</a>
-<a href=#553 id=553 data-nosnippet>553</a><span class="comment">// Different `m`s lead to different circuits.
-<a href=#554 id=554 data-nosnippet>554</a>// Different `a0`s lead to different witness values.
-<a href=#555 id=555 data-nosnippet>555</a></span><span class="kw">pub fn </span>gen_circuit_for_test&lt;F: PrimeField&gt;(m: usize, a0: usize) -&gt; <span class="prelude-ty">Result</span>&lt;PlonkCircuit&lt;F&gt;&gt; {
-<a href=#556 id=556 data-nosnippet>556</a>    <span class="kw">let </span><span class="kw-2">mut </span>cs: PlonkCircuit&lt;F&gt; = PlonkCircuit::new_turbo_plonk();
-<a href=#557 id=557 data-nosnippet>557</a>    <span class="comment">// Create variables
-<a href=#558 id=558 data-nosnippet>558</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>a = <span class="macro">vec!</span>[];
-<a href=#559 id=559 data-nosnippet>559</a>    <span class="kw">for </span>i <span class="kw">in </span>a0..(a0 + <span class="number">4 </span>* m) {
-<a href=#560 id=560 data-nosnippet>560</a>        a.push(cs.create_variable(F::from(i <span class="kw">as </span>u64))<span class="question-mark">?</span>);
-<a href=#561 id=561 data-nosnippet>561</a>    }
-<a href=#562 id=562 data-nosnippet>562</a>    <span class="kw">let </span>b = [
-<a href=#563 id=563 data-nosnippet>563</a>        cs.create_public_variable(F::from(m <span class="kw">as </span>u64 * <span class="number">2</span>))<span class="question-mark">?</span>,
-<a href=#564 id=564 data-nosnippet>564</a>        cs.create_public_variable(F::from(a0 <span class="kw">as </span>u64 * <span class="number">2 </span>+ m <span class="kw">as </span>u64 * <span class="number">4 </span>- <span class="number">1</span>))<span class="question-mark">?</span>,
-<a href=#565 id=565 data-nosnippet>565</a>    ];
-<a href=#566 id=566 data-nosnippet>566</a>    <span class="kw">let </span>c = cs.create_public_variable(
-<a href=#567 id=567 data-nosnippet>567</a>        (cs.witness(b[<span class="number">1</span>])<span class="question-mark">? </span>+ cs.witness(a[<span class="number">0</span>])<span class="question-mark">?</span>) * (cs.witness(b[<span class="number">1</span>])<span class="question-mark">? </span>- cs.witness(a[<span class="number">0</span>])<span class="question-mark">?</span>),
-<a href=#568 id=568 data-nosnippet>568</a>    )<span class="question-mark">?</span>;
-<a href=#569 id=569 data-nosnippet>569</a>
-<a href=#570 id=570 data-nosnippet>570</a>    <span class="comment">// Create other public variables so that the number of public inputs is 11
-<a href=#571 id=571 data-nosnippet>571</a>    </span><span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..<span class="number">8u32 </span>{
-<a href=#572 id=572 data-nosnippet>572</a>        cs.create_public_variable(F::from(i))<span class="question-mark">?</span>;
-<a href=#573 id=573 data-nosnippet>573</a>    }
-<a href=#574 id=574 data-nosnippet>574</a>
-<a href=#575 id=575 data-nosnippet>575</a>    <span class="comment">// Create gates:
-<a href=#576 id=576 data-nosnippet>576</a>    // 1. a0 + ... + a_{4*m-1} = b0 * b1
-<a href=#577 id=577 data-nosnippet>577</a>    // 2. (b1 + a0) * (b1 - a0) = c
-<a href=#578 id=578 data-nosnippet>578</a>    // 3. b0 = 2 * m
-<a href=#579 id=579 data-nosnippet>579</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>acc = cs.zero();
-<a href=#580 id=580 data-nosnippet>580</a>    a.iter().for_each(|<span class="kw-2">&amp;</span>elem| acc = cs.add(acc, elem).unwrap());
-<a href=#581 id=581 data-nosnippet>581</a>    <span class="kw">let </span>b_mul = cs.mul(b[<span class="number">0</span>], b[<span class="number">1</span>])<span class="question-mark">?</span>;
-<a href=#582 id=582 data-nosnippet>582</a>    cs.enforce_equal(acc, b_mul)<span class="question-mark">?</span>;
-<a href=#583 id=583 data-nosnippet>583</a>    <span class="kw">let </span>b1_plus_a0 = cs.add(b[<span class="number">1</span>], a[<span class="number">0</span>])<span class="question-mark">?</span>;
-<a href=#584 id=584 data-nosnippet>584</a>    <span class="kw">let </span>b1_minus_a0 = cs.sub(b[<span class="number">1</span>], a[<span class="number">0</span>])<span class="question-mark">?</span>;
-<a href=#585 id=585 data-nosnippet>585</a>    cs.mul_gate(b1_plus_a0, b1_minus_a0, c)<span class="question-mark">?</span>;
-<a href=#586 id=586 data-nosnippet>586</a>    cs.enforce_constant(b[<span class="number">0</span>], F::from(m <span class="kw">as </span>u64 * <span class="number">2</span>))<span class="question-mark">?</span>;
-<a href=#587 id=587 data-nosnippet>587</a>
-<a href=#588 id=588 data-nosnippet>588</a>    <span class="comment">// Finalize the circuit.
-<a href=#589 id=589 data-nosnippet>589</a>    </span>cs.finalize_for_arithmetization()<span class="question-mark">?</span>;
-<a href=#590 id=590 data-nosnippet>590</a>
-<a href=#591 id=591 data-nosnippet>591</a>    <span class="prelude-val">Ok</span>(cs)
-<a href=#592 id=592 data-nosnippet>592</a>}</code></pre></div></section></main></body></html>
+<a href=#354 id=354 data-nosnippet>354</a>        <span class="kw">let </span>(adv_qc_keys, adv_state_keys) = key_pairs_for_testing(<span class="self">self</span>.pp.st_cap, <span class="kw-2">&amp;mut </span><span class="self">self</span>.rng);
+<a href=#355 id=355 data-nosnippet>355</a>        <span class="kw">let </span>adv_st = stake_table_for_testing(<span class="kw-2">&amp;</span>adv_qc_keys, <span class="kw-2">&amp;</span>adv_state_keys);
+<a href=#356 id=356 data-nosnippet>356</a>        <span class="kw">let </span>adv_st_state = adv_st.commitment(<span class="self">self</span>.pp.st_cap).unwrap();
+<a href=#357 id=357 data-nosnippet>357</a>
+<a href=#358 id=358 data-nosnippet>358</a>        <span class="comment">// replace new state with adversarial stake table commitment
+<a href=#359 id=359 data-nosnippet>359</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>msg = Vec::with_capacity(<span class="number">7</span>);
+<a href=#360 id=360 data-nosnippet>360</a>        <span class="kw">let </span>state_msg: [F; <span class="number">3</span>] = new_state.into();
+<a href=#361 id=361 data-nosnippet>361</a>        msg.extend_from_slice(<span class="kw-2">&amp;</span>state_msg);
+<a href=#362 id=362 data-nosnippet>362</a>        <span class="kw">let </span>adv_st_state_msg: [F; <span class="number">4</span>] = adv_st_state.into();
+<a href=#363 id=363 data-nosnippet>363</a>        msg.extend_from_slice(<span class="kw-2">&amp;</span>adv_st_state_msg);
+<a href=#364 id=364 data-nosnippet>364</a>
+<a href=#365 id=365 data-nosnippet>365</a>        <span class="comment">// every fake stakers sign on the adverarial new state
+<a href=#366 id=366 data-nosnippet>366</a>        </span><span class="kw">let </span>bit_vec = <span class="macro">vec!</span>[<span class="bool-val">true</span>; <span class="self">self</span>.pp.st_cap];
+<a href=#367 id=367 data-nosnippet>367</a>        <span class="kw">let </span>sigs = adv_state_keys
+<a href=#368 id=368 data-nosnippet>368</a>            .iter()
+<a href=#369 id=369 data-nosnippet>369</a>            .map(|(sk, <span class="kw">_</span>)| {
+<a href=#370 id=370 data-nosnippet>370</a>                SchnorrSignatureScheme::&lt;EdwardsConfig&gt;::sign(<span class="kw-2">&amp;</span>(), sk, <span class="kw-2">&amp;</span>msg, <span class="kw-2">&amp;mut </span><span class="self">self</span>.rng)
+<a href=#371 id=371 data-nosnippet>371</a>            })
+<a href=#372 id=372 data-nosnippet>372</a>            .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="kw">_</span>&gt;, <span class="kw">_</span>&gt;&gt;()
+<a href=#373 id=373 data-nosnippet>373</a>            .unwrap();
+<a href=#374 id=374 data-nosnippet>374</a>
+<a href=#375 id=375 data-nosnippet>375</a>        <span class="kw">let </span>srs = {
+<a href=#376 id=376 data-nosnippet>376</a>            <span class="comment">// load SRS from Aztec's ceremony
+<a href=#377 id=377 data-nosnippet>377</a>            </span><span class="kw">let </span>srs = ark_srs::kzg10::aztec20::setup(<span class="number">2u64</span>.pow(<span class="number">16</span>) <span class="kw">as </span>usize + <span class="number">2</span>)
+<a href=#378 id=378 data-nosnippet>378</a>                .expect(<span class="string">"Aztec SRS fail to load"</span>);
+<a href=#379 id=379 data-nosnippet>379</a>            <span class="comment">// convert to Jellyfish type
+<a href=#380 id=380 data-nosnippet>380</a>            // TODO: (alex) use constructor instead https://github.com/EspressoSystems/jellyfish/issues/440
+<a href=#381 id=381 data-nosnippet>381</a>            </span>UnivariateUniversalParams {
+<a href=#382 id=382 data-nosnippet>382</a>                powers_of_g: srs.powers_of_g,
+<a href=#383 id=383 data-nosnippet>383</a>                h: srs.h,
+<a href=#384 id=384 data-nosnippet>384</a>                beta_h: srs.beta_h,
+<a href=#385 id=385 data-nosnippet>385</a>                powers_of_h: <span class="macro">vec!</span>[srs.h, srs.beta_h],
+<a href=#386 id=386 data-nosnippet>386</a>            }
+<a href=#387 id=387 data-nosnippet>387</a>        };
+<a href=#388 id=388 data-nosnippet>388</a>        <span class="kw">let </span>(pk, <span class="kw">_</span>) =
+<a href=#389 id=389 data-nosnippet>389</a>            preprocess(<span class="kw-2">&amp;</span>srs, <span class="self">self</span>.pp.st_cap).expect(<span class="string">"Fail to preprocess state prover circuit"</span>);
+<a href=#390 id=390 data-nosnippet>390</a>        <span class="kw">let </span>stake_table_entries = adv_st
+<a href=#391 id=391 data-nosnippet>391</a>            .<span class="number">0
+<a href=#392 id=392 data-nosnippet>392</a>            </span>.into_iter()
+<a href=#393 id=393 data-nosnippet>393</a>            .map(|config| (config.state_ver_key, config.stake_table_entry.stake_amount))
+<a href=#394 id=394 data-nosnippet>394</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#395 id=395 data-nosnippet>395</a>        <span class="kw">let </span>(proof, pi) = generate_state_update_proof::&lt;<span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>&gt;(
+<a href=#396 id=396 data-nosnippet>396</a>            <span class="kw-2">&amp;mut </span><span class="self">self</span>.rng,
+<a href=#397 id=397 data-nosnippet>397</a>            <span class="kw-2">&amp;</span>pk,
+<a href=#398 id=398 data-nosnippet>398</a>            <span class="kw-2">&amp;</span>stake_table_entries,
+<a href=#399 id=399 data-nosnippet>399</a>            <span class="kw-2">&amp;</span>bit_vec,
+<a href=#400 id=400 data-nosnippet>400</a>            <span class="kw-2">&amp;</span>sigs,
+<a href=#401 id=401 data-nosnippet>401</a>            <span class="kw-2">&amp;</span>new_state,
+<a href=#402 id=402 data-nosnippet>402</a>            <span class="kw-2">&amp;</span>adv_st_state,
+<a href=#403 id=403 data-nosnippet>403</a>            <span class="self">self</span>.pp.st_cap,
+<a href=#404 id=404 data-nosnippet>404</a>            <span class="kw-2">&amp;</span>adv_st_state,
+<a href=#405 id=405 data-nosnippet>405</a>        )
+<a href=#406 id=406 data-nosnippet>406</a>        .expect(<span class="string">"Fail to generate state proof"</span>);
+<a href=#407 id=407 data-nosnippet>407</a>
+<a href=#408 id=408 data-nosnippet>408</a>        (pi, proof, adv_st_state)
+<a href=#409 id=409 data-nosnippet>409</a>    }
+<a href=#410 id=410 data-nosnippet>410</a>
+<a href=#411 id=411 data-nosnippet>411</a>    <span class="doccomment">/// Returns the stake table state for current voting
+<a href=#412 id=412 data-nosnippet>412</a>    </span><span class="kw">pub fn </span>voting_stake_table_state(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; GenericStakeTableState&lt;F&gt; {
+<a href=#413 id=413 data-nosnippet>413</a>        <span class="self">self</span>.voting_st
+<a href=#414 id=414 data-nosnippet>414</a>            .commitment(<span class="self">self</span>.pp.st_cap)
+<a href=#415 id=415 data-nosnippet>415</a>            .expect(<span class="string">"Failed to compute stake table commitment"</span>)
+<a href=#416 id=416 data-nosnippet>416</a>    }
+<a href=#417 id=417 data-nosnippet>417</a>
+<a href=#418 id=418 data-nosnippet>418</a>    <span class="doccomment">/// Returns epoch-aware stake table state for the next block.
+<a href=#419 id=419 data-nosnippet>419</a>    /// This will be the same most of the time as `self.voting_st_state()` except during epoch change
+<a href=#420 id=420 data-nosnippet>420</a>    </span><span class="kw">pub fn </span>next_stake_table_state(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; GenericStakeTableState&lt;F&gt; {
+<a href=#421 id=421 data-nosnippet>421</a>        <span class="kw">if </span><span class="self">self</span>.epoch_activated() &amp;&amp; <span class="self">self</span>.is_ge_epoch_root() {
+<a href=#422 id=422 data-nosnippet>422</a>            <span class="self">self</span>.next_voting_st
+<a href=#423 id=423 data-nosnippet>423</a>                .commitment(<span class="self">self</span>.pp.st_cap)
+<a href=#424 id=424 data-nosnippet>424</a>                .expect(<span class="string">"Failed to compute stake table commitment"</span>)
+<a href=#425 id=425 data-nosnippet>425</a>        } <span class="kw">else </span>{
+<a href=#426 id=426 data-nosnippet>426</a>            <span class="self">self</span>.voting_stake_table_state()
+<a href=#427 id=427 data-nosnippet>427</a>        }
+<a href=#428 id=428 data-nosnippet>428</a>    }
+<a href=#429 id=429 data-nosnippet>429</a>
+<a href=#430 id=430 data-nosnippet>430</a>    <span class="doccomment">/// Returns the light client state
+<a href=#431 id=431 data-nosnippet>431</a>    </span><span class="kw">pub fn </span>light_client_state(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; GenericLightClientState&lt;F&gt; {
+<a href=#432 id=432 data-nosnippet>432</a>        <span class="self">self</span>.state
+<a href=#433 id=433 data-nosnippet>433</a>    }
+<a href=#434 id=434 data-nosnippet>434</a>
+<a href=#435 id=435 data-nosnippet>435</a>    <span class="comment">// return a dummy commitment value
+<a href=#436 id=436 data-nosnippet>436</a>    </span><span class="kw">fn </span>new_dummy_comm(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; F {
+<a href=#437 id=437 data-nosnippet>437</a>        F::rand(<span class="kw-2">&amp;mut </span><span class="self">self</span>.rng)
+<a href=#438 id=438 data-nosnippet>438</a>    }
+<a href=#439 id=439 data-nosnippet>439</a>}
+<a href=#440 id=440 data-nosnippet>440</a>
+<a href=#441 id=441 data-nosnippet>441</a><span class="doccomment">/// Helper function for test
+<a href=#442 id=442 data-nosnippet>442</a></span><span class="kw">fn </span>key_pairs_for_testing&lt;R: CryptoRng + RngCore&gt;(
+<a href=#443 id=443 data-nosnippet>443</a>    num_validators: usize,
+<a href=#444 id=444 data-nosnippet>444</a>    prng: <span class="kw-2">&amp;mut </span>R,
+<a href=#445 id=445 data-nosnippet>445</a>) -&gt; (Vec&lt;BLSVerKey&gt;, Vec&lt;(SchnorrSignKey, SchnorrVerKey)&gt;) {
+<a href=#446 id=446 data-nosnippet>446</a>    <span class="kw">let </span>bls_keys = (<span class="number">0</span>..num_validators)
+<a href=#447 id=447 data-nosnippet>447</a>        .map(|<span class="kw">_</span>| {
+<a href=#448 id=448 data-nosnippet>448</a>            BLSOverBN254CurveSignatureScheme::key_gen(<span class="kw-2">&amp;</span>(), prng)
+<a href=#449 id=449 data-nosnippet>449</a>                .unwrap()
+<a href=#450 id=450 data-nosnippet>450</a>                .<span class="number">1
+<a href=#451 id=451 data-nosnippet>451</a>        </span>})
+<a href=#452 id=452 data-nosnippet>452</a>        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#453 id=453 data-nosnippet>453</a>    <span class="kw">let </span>schnorr_keys = (<span class="number">0</span>..num_validators)
+<a href=#454 id=454 data-nosnippet>454</a>        .map(|<span class="kw">_</span>| SchnorrSignatureScheme::key_gen(<span class="kw-2">&amp;</span>(), prng).unwrap())
+<a href=#455 id=455 data-nosnippet>455</a>        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#456 id=456 data-nosnippet>456</a>    (bls_keys, schnorr_keys)
+<a href=#457 id=457 data-nosnippet>457</a>}
+<a href=#458 id=458 data-nosnippet>458</a>
+<a href=#459 id=459 data-nosnippet>459</a><span class="doccomment">/// Helper function for test
+<a href=#460 id=460 data-nosnippet>460</a></span><span class="kw">fn </span>stake_table_for_testing(
+<a href=#461 id=461 data-nosnippet>461</a>    bls_keys: <span class="kw-2">&amp;</span>[BLSVerKey],
+<a href=#462 id=462 data-nosnippet>462</a>    schnorr_keys: <span class="kw-2">&amp;</span>[(SchnorrSignKey, SchnorrVerKey)],
+<a href=#463 id=463 data-nosnippet>463</a>) -&gt; HSStakeTable&lt;SeqTypes&gt; {
+<a href=#464 id=464 data-nosnippet>464</a>    bls_keys
+<a href=#465 id=465 data-nosnippet>465</a>        .iter()
+<a href=#466 id=466 data-nosnippet>466</a>        .enumerate()
+<a href=#467 id=467 data-nosnippet>467</a>        .zip(schnorr_keys)
+<a href=#468 id=468 data-nosnippet>468</a>        .map(|((i, bls_key), (<span class="kw">_</span>, schnorr_key))| PeerConfig {
+<a href=#469 id=469 data-nosnippet>469</a>            stake_table_entry: StakeTableEntry {
+<a href=#470 id=470 data-nosnippet>470</a>                stake_key: <span class="kw-2">*</span>bls_key,
+<a href=#471 id=471 data-nosnippet>471</a>                stake_amount: U256::from((i + <span class="number">1</span>) <span class="kw">as </span>u32),
+<a href=#472 id=472 data-nosnippet>472</a>            },
+<a href=#473 id=473 data-nosnippet>473</a>            state_ver_key: schnorr_key.clone(),
+<a href=#474 id=474 data-nosnippet>474</a>        })
+<a href=#475 id=475 data-nosnippet>475</a>        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+<a href=#476 id=476 data-nosnippet>476</a>        .into()
+<a href=#477 id=477 data-nosnippet>477</a>}
+<a href=#478 id=478 data-nosnippet>478</a>
+<a href=#479 id=479 data-nosnippet>479</a><span class="comment">// modify from &lt;https://github.com/EspressoSystems/cape/blob/main/contracts/rust/src/plonk_verifier/helpers.rs&gt;
+<a href=#480 id=480 data-nosnippet>480</a></span><span class="doccomment">/// return list of (proof, ver_key, public_input, extra_msg, domain_size)
+<a href=#481 id=481 data-nosnippet>481</a></span><span class="attr">#[allow(clippy::type_complexity)]
+<a href=#482 id=482 data-nosnippet>482</a></span><span class="kw">pub fn </span>gen_plonk_proof_for_test(
+<a href=#483 id=483 data-nosnippet>483</a>    num_proof: usize,
+<a href=#484 id=484 data-nosnippet>484</a>) -&gt; Vec&lt;(Proof, VerifyingKey, Vec&lt;F&gt;, <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt;, usize)&gt; {
+<a href=#485 id=485 data-nosnippet>485</a>    <span class="comment">// 1. Simulate universal setup
+<a href=#486 id=486 data-nosnippet>486</a>    </span><span class="kw">let </span>rng = <span class="kw-2">&amp;mut </span>jf_utils::test_rng();
+<a href=#487 id=487 data-nosnippet>487</a>    <span class="kw">let </span>srs = {
+<a href=#488 id=488 data-nosnippet>488</a>        <span class="kw">let </span>aztec_srs = ark_srs::kzg10::aztec20::setup(<span class="number">1024</span>).expect(<span class="string">"Aztec SRS fail to load"</span>);
+<a href=#489 id=489 data-nosnippet>489</a>
+<a href=#490 id=490 data-nosnippet>490</a>        UnivariateUniversalParams {
+<a href=#491 id=491 data-nosnippet>491</a>            powers_of_g: aztec_srs.powers_of_g,
+<a href=#492 id=492 data-nosnippet>492</a>            h: aztec_srs.h,
+<a href=#493 id=493 data-nosnippet>493</a>            beta_h: aztec_srs.beta_h,
+<a href=#494 id=494 data-nosnippet>494</a>            powers_of_h: <span class="macro">vec!</span>[aztec_srs.h, aztec_srs.beta_h],
+<a href=#495 id=495 data-nosnippet>495</a>        }
+<a href=#496 id=496 data-nosnippet>496</a>    };
+<a href=#497 id=497 data-nosnippet>497</a>    <span class="kw">let </span>open_key = open_key();
+<a href=#498 id=498 data-nosnippet>498</a>    <span class="macro">assert_eq!</span>(srs.h, open_key.h);
+<a href=#499 id=499 data-nosnippet>499</a>    <span class="macro">assert_eq!</span>(srs.beta_h, open_key.beta_h);
+<a href=#500 id=500 data-nosnippet>500</a>    <span class="macro">assert_eq!</span>(srs.powers_of_g[<span class="number">0</span>], open_key.g);
+<a href=#501 id=501 data-nosnippet>501</a>
+<a href=#502 id=502 data-nosnippet>502</a>    <span class="comment">// 2. Create circuits
+<a href=#503 id=503 data-nosnippet>503</a>    </span><span class="kw">let </span>circuits = (<span class="number">0</span>..num_proof)
+<a href=#504 id=504 data-nosnippet>504</a>        .map(|i| {
+<a href=#505 id=505 data-nosnippet>505</a>            <span class="kw">let </span>m = <span class="number">2 </span>+ i / <span class="number">3</span>;
+<a href=#506 id=506 data-nosnippet>506</a>            <span class="kw">let </span>a0 = <span class="number">1 </span>+ i % <span class="number">3</span>;
+<a href=#507 id=507 data-nosnippet>507</a>            gen_circuit_for_test::&lt;F&gt;(m, a0)
+<a href=#508 id=508 data-nosnippet>508</a>        })
+<a href=#509 id=509 data-nosnippet>509</a>        .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()
+<a href=#510 id=510 data-nosnippet>510</a>        .expect(<span class="string">"Test circuits fail to create"</span>);
+<a href=#511 id=511 data-nosnippet>511</a>    <span class="kw">let </span>domain_sizes: Vec&lt;usize&gt; = circuits
+<a href=#512 id=512 data-nosnippet>512</a>        .iter()
+<a href=#513 id=513 data-nosnippet>513</a>        .map(|c| c.eval_domain_size().unwrap())
+<a href=#514 id=514 data-nosnippet>514</a>        .collect();
+<a href=#515 id=515 data-nosnippet>515</a>
+<a href=#516 id=516 data-nosnippet>516</a>    <span class="comment">// 3. Preprocessing
+<a href=#517 id=517 data-nosnippet>517</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>prove_keys = <span class="macro">vec!</span>[];
+<a href=#518 id=518 data-nosnippet>518</a>    <span class="kw">let </span><span class="kw-2">mut </span>ver_keys = <span class="macro">vec!</span>[];
+<a href=#519 id=519 data-nosnippet>519</a>    <span class="kw">for </span>c <span class="kw">in </span>circuits.iter() {
+<a href=#520 id=520 data-nosnippet>520</a>        <span class="kw">let </span>(pk, vk) =
+<a href=#521 id=521 data-nosnippet>521</a>            PlonkKzgSnark::&lt;Bn254&gt;::preprocess(<span class="kw-2">&amp;</span>srs, c).expect(<span class="string">"Circuit preprocessing failed"</span>);
+<a href=#522 id=522 data-nosnippet>522</a>        prove_keys.push(pk);
+<a href=#523 id=523 data-nosnippet>523</a>        ver_keys.push(vk);
+<a href=#524 id=524 data-nosnippet>524</a>    }
+<a href=#525 id=525 data-nosnippet>525</a>
+<a href=#526 id=526 data-nosnippet>526</a>    <span class="comment">// 4. Proving
+<a href=#527 id=527 data-nosnippet>527</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>proofs = <span class="macro">vec!</span>[];
+<a href=#528 id=528 data-nosnippet>528</a>    <span class="kw">let </span><span class="kw-2">mut </span>extra_msgs = <span class="macro">vec!</span>[];
+<a href=#529 id=529 data-nosnippet>529</a>
+<a href=#530 id=530 data-nosnippet>530</a>    circuits.iter().zip(prove_keys.iter()).for_each(|(cs, pk)| {
+<a href=#531 id=531 data-nosnippet>531</a>        <span class="kw">let </span>extra_msg = <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[]); <span class="comment">// We set extra_msg="" for the contract tests to pass
+<a href=#532 id=532 data-nosnippet>532</a>        </span>proofs.push(
+<a href=#533 id=533 data-nosnippet>533</a>            PlonkKzgSnark::&lt;Bn254&gt;::prove::&lt;<span class="kw">_</span>, <span class="kw">_</span>, SolidityTranscript&gt;(
+<a href=#534 id=534 data-nosnippet>534</a>                rng,
+<a href=#535 id=535 data-nosnippet>535</a>                cs,
+<a href=#536 id=536 data-nosnippet>536</a>                pk,
+<a href=#537 id=537 data-nosnippet>537</a>                extra_msg.clone(),
+<a href=#538 id=538 data-nosnippet>538</a>            )
+<a href=#539 id=539 data-nosnippet>539</a>            .unwrap(),
+<a href=#540 id=540 data-nosnippet>540</a>        );
+<a href=#541 id=541 data-nosnippet>541</a>        extra_msgs.push(extra_msg);
+<a href=#542 id=542 data-nosnippet>542</a>    });
+<a href=#543 id=543 data-nosnippet>543</a>
+<a href=#544 id=544 data-nosnippet>544</a>    <span class="kw">let </span>public_inputs: Vec&lt;Vec&lt;F&gt;&gt; = circuits
+<a href=#545 id=545 data-nosnippet>545</a>        .iter()
+<a href=#546 id=546 data-nosnippet>546</a>        .map(|cs| cs.public_input().unwrap())
+<a href=#547 id=547 data-nosnippet>547</a>        .collect();
+<a href=#548 id=548 data-nosnippet>548</a>
+<a href=#549 id=549 data-nosnippet>549</a>    <span class="macro">izip!</span>(proofs, ver_keys, public_inputs, extra_msgs, domain_sizes).collect()
+<a href=#550 id=550 data-nosnippet>550</a>}
+<a href=#551 id=551 data-nosnippet>551</a>
+<a href=#552 id=552 data-nosnippet>552</a><span class="comment">// Different `m`s lead to different circuits.
+<a href=#553 id=553 data-nosnippet>553</a>// Different `a0`s lead to different witness values.
+<a href=#554 id=554 data-nosnippet>554</a></span><span class="kw">pub fn </span>gen_circuit_for_test&lt;F: PrimeField&gt;(m: usize, a0: usize) -&gt; <span class="prelude-ty">Result</span>&lt;PlonkCircuit&lt;F&gt;&gt; {
+<a href=#555 id=555 data-nosnippet>555</a>    <span class="kw">let </span><span class="kw-2">mut </span>cs: PlonkCircuit&lt;F&gt; = PlonkCircuit::new_turbo_plonk();
+<a href=#556 id=556 data-nosnippet>556</a>    <span class="comment">// Create variables
+<a href=#557 id=557 data-nosnippet>557</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>a = <span class="macro">vec!</span>[];
+<a href=#558 id=558 data-nosnippet>558</a>    <span class="kw">for </span>i <span class="kw">in </span>a0..(a0 + <span class="number">4 </span>* m) {
+<a href=#559 id=559 data-nosnippet>559</a>        a.push(cs.create_variable(F::from(i <span class="kw">as </span>u64))<span class="question-mark">?</span>);
+<a href=#560 id=560 data-nosnippet>560</a>    }
+<a href=#561 id=561 data-nosnippet>561</a>    <span class="kw">let </span>b = [
+<a href=#562 id=562 data-nosnippet>562</a>        cs.create_public_variable(F::from(m <span class="kw">as </span>u64 * <span class="number">2</span>))<span class="question-mark">?</span>,
+<a href=#563 id=563 data-nosnippet>563</a>        cs.create_public_variable(F::from(a0 <span class="kw">as </span>u64 * <span class="number">2 </span>+ m <span class="kw">as </span>u64 * <span class="number">4 </span>- <span class="number">1</span>))<span class="question-mark">?</span>,
+<a href=#564 id=564 data-nosnippet>564</a>    ];
+<a href=#565 id=565 data-nosnippet>565</a>    <span class="kw">let </span>c = cs.create_public_variable(
+<a href=#566 id=566 data-nosnippet>566</a>        (cs.witness(b[<span class="number">1</span>])<span class="question-mark">? </span>+ cs.witness(a[<span class="number">0</span>])<span class="question-mark">?</span>) * (cs.witness(b[<span class="number">1</span>])<span class="question-mark">? </span>- cs.witness(a[<span class="number">0</span>])<span class="question-mark">?</span>),
+<a href=#567 id=567 data-nosnippet>567</a>    )<span class="question-mark">?</span>;
+<a href=#568 id=568 data-nosnippet>568</a>
+<a href=#569 id=569 data-nosnippet>569</a>    <span class="comment">// Create other public variables so that the number of public inputs is 11
+<a href=#570 id=570 data-nosnippet>570</a>    </span><span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..<span class="number">8u32 </span>{
+<a href=#571 id=571 data-nosnippet>571</a>        cs.create_public_variable(F::from(i))<span class="question-mark">?</span>;
+<a href=#572 id=572 data-nosnippet>572</a>    }
+<a href=#573 id=573 data-nosnippet>573</a>
+<a href=#574 id=574 data-nosnippet>574</a>    <span class="comment">// Create gates:
+<a href=#575 id=575 data-nosnippet>575</a>    // 1. a0 + ... + a_{4*m-1} = b0 * b1
+<a href=#576 id=576 data-nosnippet>576</a>    // 2. (b1 + a0) * (b1 - a0) = c
+<a href=#577 id=577 data-nosnippet>577</a>    // 3. b0 = 2 * m
+<a href=#578 id=578 data-nosnippet>578</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>acc = cs.zero();
+<a href=#579 id=579 data-nosnippet>579</a>    a.iter().for_each(|<span class="kw-2">&amp;</span>elem| acc = cs.add(acc, elem).unwrap());
+<a href=#580 id=580 data-nosnippet>580</a>    <span class="kw">let </span>b_mul = cs.mul(b[<span class="number">0</span>], b[<span class="number">1</span>])<span class="question-mark">?</span>;
+<a href=#581 id=581 data-nosnippet>581</a>    cs.enforce_equal(acc, b_mul)<span class="question-mark">?</span>;
+<a href=#582 id=582 data-nosnippet>582</a>    <span class="kw">let </span>b1_plus_a0 = cs.add(b[<span class="number">1</span>], a[<span class="number">0</span>])<span class="question-mark">?</span>;
+<a href=#583 id=583 data-nosnippet>583</a>    <span class="kw">let </span>b1_minus_a0 = cs.sub(b[<span class="number">1</span>], a[<span class="number">0</span>])<span class="question-mark">?</span>;
+<a href=#584 id=584 data-nosnippet>584</a>    cs.mul_gate(b1_plus_a0, b1_minus_a0, c)<span class="question-mark">?</span>;
+<a href=#585 id=585 data-nosnippet>585</a>    cs.enforce_constant(b[<span class="number">0</span>], F::from(m <span class="kw">as </span>u64 * <span class="number">2</span>))<span class="question-mark">?</span>;
+<a href=#586 id=586 data-nosnippet>586</a>
+<a href=#587 id=587 data-nosnippet>587</a>    <span class="comment">// Finalize the circuit.
+<a href=#588 id=588 data-nosnippet>588</a>    </span>cs.finalize_for_arithmetization()<span class="question-mark">?</span>;
+<a href=#589 id=589 data-nosnippet>589</a>
+<a href=#590 id=590 data-nosnippet>590</a>    <span class="prelude-val">Ok</span>(cs)
+<a href=#591 id=591 data-nosnippet>591</a>}</code></pre></div></section></main></body></html>
