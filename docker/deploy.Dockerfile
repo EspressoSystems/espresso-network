@@ -5,6 +5,11 @@ ARG TARGETARCH
 WORKDIR /app
 COPY package.json yarn.lock ./
 
+# TODO: if this works, install make in base image
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends make \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN yarn && rm -rf /usr/local/share/.cache
 
 COPY target/$TARGETARCH/release/deploy /bin/deploy
