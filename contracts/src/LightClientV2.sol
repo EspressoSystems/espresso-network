@@ -238,7 +238,8 @@ contract LightClientV2 is LightClient {
             return false;
         } else {
             // it's safe to assume -5 won't underflow in practice
-            return blockHeight % blocksPerEpoch > blocksPerEpoch - 5;
+            return blockHeight % blocksPerEpoch == 0
+                || blockHeight % blocksPerEpoch > blocksPerEpoch - 5;
         }
     }
 }

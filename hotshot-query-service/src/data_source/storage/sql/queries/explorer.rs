@@ -19,7 +19,7 @@ use committable::{Commitment, Committable};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use hotshot_types::traits::node_implementation::NodeType;
 use itertools::Itertools;
-use sqlx::{types::Json, FromRow, Row};
+use sqlx::{FromRow, Row};
 use tagged_base64::{Tagged, TaggedBase64};
 
 use super::{
@@ -27,7 +27,7 @@ use super::{
     Database, Db, DecodeError, BLOCK_COLUMNS,
 };
 use crate::{
-    availability::{BlockQueryData, QueryableHeader, QueryablePayload, TransactionIndex},
+    availability::{BlockQueryData, QueryableHeader, QueryablePayload},
     data_source::storage::{ExplorerStorage, NodeStorage},
     explorer::{
         self,
@@ -187,10 +187,9 @@ lazy_static::lazy_static! {
                     SELECT t.block_height
                         FROM transactions AS t
                         WHERE
-                            (t.block_height = $1 AND t.idx <= $2)
-                            OR t.block_height < $1
-                        ORDER BY t.block_height DESC, t.idx DESC
-                        LIMIT $3
+                            (t.block_height, t.namespace, t.position) <= ($1, $2, $3)
+                        ORDER BY t.block_height DESC, t.namespace DESC, t.position DESC
+                        LIMIT $4
                 )
                 ORDER BY h.height DESC"
         )
@@ -228,7 +227,7 @@ lazy_static::lazy_static! {
                     SELECT t1.block_height
                         FROM transactions AS t1
                         WHERE t1.block_height = $1
-                        ORDER BY t1.block_height, t1.idx
+                        ORDER BY t1.block_height, t1.namespace, t1.position
                         OFFSET $2
                         LIMIT 1
                 )
@@ -245,7 +244,7 @@ lazy_static::lazy_static! {
                     SELECT t1.block_height
                         FROM transactions AS t1
                         WHERE t1.hash = $1
-                        ORDER BY t1.block_height DESC, t1.idx DESC
+                        ORDER BY t1.block_height DESC, t1.namespace DESC, t1.position DESC
                         LIMIT 1
                 )
                 ORDER BY h.height DESC"
@@ -331,14 +330,14 @@ where
         // returned results based on.
         let transaction_target_query = match target {
             TransactionIdentifier::Latest => query(
-                "SELECT t.block_height AS height, t.idx AS \"index\" FROM transactions AS t ORDER BY t.block_height DESC, t.idx DESC LIMIT 1",
+                "SELECT block_height AS height, namespace, position FROM transactions ORDER BY block_height DESC, namespace DESC, position DESC LIMIT 1",
             ),
             TransactionIdentifier::HeightAndOffset(height, _) => query(
-                "SELECT t.block_height AS height, t.idx AS \"index\" FROM transactions AS t WHERE t.block_height = $1 ORDER BY t.block_height DESC, t.idx DESC LIMIT 1",
+                "SELECT block_height AS height, namespace, position FROM transactions WHERE block_height = $1 ORDER BY namespace DESC, position DESC LIMIT 1",
             )
             .bind(*height as i64),
             TransactionIdentifier::Hash(hash) => query(
-                "SELECT t.block_height AS height, t.idx AS \"index\" FROM transactions AS t WHERE t.hash = $1 ORDER BY t.block_height DESC, t.idx DESC LIMIT 1",
+                "SELECT block_height AS height, namespace, position FROM transactions WHERE hash = $1 ORDER BY block_height DESC, namespace DESC, position DESC LIMIT 1",
             )
             .bind(hash.to_string()),
         };
@@ -352,8 +351,8 @@ where
         };
 
         let block_height = transaction_target.get::<i64, _>("height") as usize;
-        let transaction_index =
-            transaction_target.get_unchecked::<Json<TransactionIndex<Types>>, _>("index");
+        let namespace = transaction_target.get::<i64, _>("namespace");
+        let position = transaction_target.get::<i64, _>("position");
         let offset = if let TransactionIdentifier::HeightAndOffset(_, offset) = target {
             *offset
         } else {
@@ -363,7 +362,7 @@ where
         // Our block_stream is more-or-less always the same, the only difference
         // is a an additional filter on the identified transactions being found
         // In general, we use our `transaction_target` to identify the starting
-        // `block_height` and `transaction_index`, and we grab up to `limit`
+        // `block_height` and `namespace`, and `position`, and we grab up to `limit`
         // transactions from that point.  We then grab only the blocks for those
         // identified transactions, as only those blocks are needed to pull all
         // of the relevant transactions.
@@ -372,7 +371,8 @@ where
 
             TransactionSummaryFilter::None => query(&GET_TRANSACTION_SUMMARIES_QUERY_FOR_NO_FILTER)
                 .bind(block_height as i64)
-                .bind(transaction_index)
+                .bind(namespace)
+                .bind(position)
                 .bind((range.num_transactions.get() + offset) as i64),
 
             TransactionSummaryFilter::Block(block) => {

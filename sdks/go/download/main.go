@@ -3,13 +3,17 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -145,9 +149,23 @@ func download(version string, specifiedUrl string, destination string) {
 		fmt.Printf("Using specified url to download the library: %s\n", specifiedUrl)
 		url = specifiedUrl
 	} else {
+		if version == "latest" {
+			latestTag, err := FetchLatestGoSDKTag()
+			if err != nil {
+				fmt.Printf("Failed to fetch latest Espresso Go SDK release tag: %s\n", err)
+				os.Exit(1)
+			}
+			version = latestTag
+			fmt.Printf("Using latest version %s to download the library\n", version)
+		} else {
+			if strings.HasPrefix(version, "v") {
+				version = fmt.Sprintf("sdks/go/%s", version)
+			}
+		}
 		url = fmt.Sprintf("%s/download/%s/%s", baseURL, version, fileName)
 	}
 
+	fmt.Printf("Downloading library from %s\n", url)
 	resp, err := http.Get(url)
 	if err != nil {
 		fmt.Printf("Failed to download static library: %s\n", err)
@@ -175,10 +193,10 @@ func clean() {
 	fileDir := getFileDir()
 	err := os.RemoveAll(fileDir)
 	if err != nil {
-		fmt.Printf("Failed to clean files: %s\n", err)
+		fmt.Printf("Failed to clean this symlink: %s\n", err)
 		os.Exit(1)
 	}
-	fmt.Println("Cleaned downloaded files.")
+	fmt.Println("Cleaned the symlink.")
 }
 
 func getFileName() string {
@@ -229,4 +247,38 @@ func getFileDir() string {
 	}
 
 	return filepath.Join(path.Dir(filename), targetLib)
+}
+
+// FetchLatestGoSDKTag fetches the latest Go SDK release tag from GitHub.
+func FetchLatestGoSDKTag() (string, error) {
+	resp, err := http.Get("https://api.github.com/repos/EspressoSystems/espresso-network/releases")
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch releases: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read body: %w", err)
+	}
+
+	var releases []map[string]interface{}
+	if err := json.Unmarshal(body, &releases); err != nil {
+		return "", fmt.Errorf("failed to parse JSON: %w", err)
+	}
+
+	re := regexp.MustCompile(`sdks/go/v[0-9.]*`)
+	for _, release := range releases {
+		if tag, ok := release["tag_name"].(string); ok {
+			if re.MatchString(tag) {
+				return re.FindString(tag), nil
+			}
+		}
+	}
+
+	return "", errors.New("could not fetch latest Espresso Go SDK release tag")
 }

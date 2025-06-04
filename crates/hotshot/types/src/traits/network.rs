@@ -104,9 +104,9 @@ pub enum NetworkError {
     #[error("The request was cancelled before it could be fulfilled")]
     RequestCancelled,
 
-    /// The network was not ready yet
-    #[error("The network was not ready yet")]
-    NotReadyYet,
+    /// This node does not have any peers yet
+    #[error("This node does not have any peers yet")]
+    NoPeersYet,
 
     /// Failed to look up a node on the network
     #[error("Node lookup failed: {0}")]

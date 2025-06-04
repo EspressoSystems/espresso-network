@@ -127,6 +127,8 @@ where
             if proposal.data.justify_qc().view_number() > self.high_qc.view_number() {
                 self.high_qc = proposal.data.justify_qc().clone();
             }
+        } else if let EventType::ViewTimeout { view_number } = event {
+            tracing::error!("View timeout for view {}", view_number);
         }
 
         let mut new_nodes = vec![];
@@ -154,7 +156,6 @@ where
                                     // Node not initialized. Initialize it
                                     // based on the received leaf.
                                     LateNodeContext::UninitializedContext(late_context_params) => {
-                                        // We'll deconstruct the individual terms here.
                                         let LateNodeContextParameters {
                                             storage,
                                             memberships,
@@ -172,6 +173,7 @@ where
                                                 genesis_epoch_from_version::<V, TYPES>(),
                                             ),
                                             (self.high_qc.clone(), self.next_epoch_high_qc.clone()),
+                                            TYPES::View::genesis(),
                                             BTreeMap::new(),
                                             BTreeMap::new(),
                                             None,
@@ -220,14 +222,22 @@ where
                         },
                         NodeAction::Down => {
                             if let Some(node) = self.handles.write().await.get_mut(idx) {
-                                tracing::error!("Node {} shutting down", idx);
+                                tracing::error!(
+                                    "Node {} shutting down in view {}",
+                                    idx,
+                                    view_number
+                                );
                                 node.handle.shut_down().await;
                             }
                         },
                         NodeAction::RestartDown(delay_views) => {
                             let node_id = idx.try_into().unwrap();
                             if let Some(node) = self.handles.write().await.get_mut(idx) {
-                                tracing::error!("Node {} shutting down", idx);
+                                tracing::error!(
+                                    "Node {} shutting down in view {}",
+                                    idx,
+                                    view_number
+                                );
                                 node.handle.shut_down().await;
                                 // For restarted nodes generate the network on correct view
                                 let generated_network = (self.channel_generator)(node_id).await;
@@ -245,7 +255,8 @@ where
                                 let config = node.handle.hotshot.config.clone();
 
                                 let next_epoch_high_qc = storage.next_epoch_high_qc_cloned().await;
-                                let start_view = storage.last_actioned_view().await;
+                                let start_view = storage.restart_view().await;
+                                let last_actioned_view = storage.last_actioned_view().await;
                                 let start_epoch = storage.last_actioned_epoch().await;
                                 let high_qc = storage.high_qc_cloned().await.unwrap_or(
                                     QuorumCertificate2::genesis::<V>(
@@ -281,6 +292,7 @@ where
                                     self.last_decided_leaf.clone(),
                                     (start_view, start_epoch),
                                     (high_qc, next_epoch_high_qc),
+                                    last_actioned_view,
                                     saved_proposals,
                                     vid_shares,
                                     decided_upgrade_certificate,
@@ -311,6 +323,12 @@ where
                                         ),
                                     )
                                     .await;
+                                tracing::info!(
+                                    "Node {} restarting in view {} with start view {}",
+                                    idx,
+                                    view_number + delay_views,
+                                    start_view
+                                );
                                 if delay_views == 0 {
                                     new_nodes.push((context, idx));
                                     new_networks.push(generated_network.clone());

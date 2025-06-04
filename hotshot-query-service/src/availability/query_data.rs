@@ -10,7 +10,7 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use std::fmt::Debug;
+use std::{collections::HashMap, fmt::Debug};
 
 use committable::{Commitment, Committable};
 use derive_more::derive::From;
@@ -43,7 +43,6 @@ pub type QcHash<Types> = Commitment<QuorumCertificate2<Types>>;
 /// payload, so we can commit to the entire block simply by hashing the header.
 pub type BlockHash<Types> = Commitment<Header<Types>>;
 pub type TransactionHash<Types> = Commitment<Transaction<Types>>;
-pub type TransactionIndex<Types> = <Payload<Types> as QueryablePayload<Types>>::TransactionIndex;
 pub type TransactionInclusionProof<Types> =
     <Payload<Types> as QueryablePayload<Types>>::InclusionProof;
 
@@ -51,6 +50,15 @@ pub type Timestamp = time::OffsetDateTime;
 
 pub trait QueryableHeader<Types: NodeType>: BlockHeader<Types> {
     fn timestamp(&self) -> u64;
+    fn namespace_size(&self, id: u32, payload_size: usize) -> u64;
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TransactionIndex {
+    /// Identifier of the namespace this transaction belongs to.
+    pub namespace: u32,
+    /// Index of the transaction within its namespace in its block.
+    pub position: u32,
 }
 
 /// A block payload whose contents (e.g. individual transactions) can be examined.
@@ -62,24 +70,8 @@ pub trait QueryableHeader<Types: NodeType>: BlockHeader<Types> {
 /// unnecessary inclusion proof). It is good practice to override these default implementations if
 /// your block type supports more efficient implementations (e.g. sublinear indexing by hash).
 pub trait QueryablePayload<Types: NodeType>: traits::BlockPayload<Types> {
-    /// An index which can be used to efficiently retrieve a transaction for the block.
-    ///
-    /// This is left abstract so that different block implementations can index transactions
-    /// internally however they want (e.g. by position or by hash). Meanwhile, many high-level
-    /// functions for querying transactions by different means can be implemented by returning a
-    /// `TransactionIndex` and then finally using it to retrieve the desired transaction.
-    type TransactionIndex: Clone
-        + Debug
-        + PartialEq
-        + Eq
-        + Ord
-        + Serialize
-        + DeserializeOwned
-        + Send
-        + Sync;
-
     /// Enumerate the transactions in this block.
-    type Iter<'a>: Iterator<Item = Self::TransactionIndex>
+    type Iter<'a>: Iterator<Item = TransactionIndex>
     where
         Self: 'a;
 
@@ -108,7 +100,7 @@ pub trait QueryablePayload<Types: NodeType>: traits::BlockPayload<Types> {
     fn enumerate<'a>(
         &'a self,
         meta: &'a Self::Metadata,
-    ) -> Box<dyn 'a + Iterator<Item = (Self::TransactionIndex, Self::Transaction)>> {
+    ) -> Box<dyn 'a + Iterator<Item = (TransactionIndex, Self::Transaction)>> {
         Box::new(self.iter(meta).map(|ix| {
             // `self.transaction` should always return `Some` if we are using an index which was
             // yielded by `self.iter`.
@@ -121,14 +113,14 @@ pub trait QueryablePayload<Types: NodeType>: traits::BlockPayload<Types> {
     fn transaction_with_proof(
         &self,
         meta: &Self::Metadata,
-        index: &Self::TransactionIndex,
+        index: &TransactionIndex,
     ) -> Option<(Self::Transaction, Self::InclusionProof)>;
 
     /// Get a transaction by its block-specific index.
     fn transaction(
         &self,
         meta: &Self::Metadata,
-        index: &Self::TransactionIndex,
+        index: &TransactionIndex,
     ) -> Option<Self::Transaction> {
         Some(self.transaction_with_proof(meta, index)?.0)
     }
@@ -137,13 +129,13 @@ pub trait QueryablePayload<Types: NodeType>: traits::BlockPayload<Types> {
     fn proof(
         &self,
         meta: &Self::Metadata,
-        index: &Self::TransactionIndex,
+        index: &TransactionIndex,
     ) -> Option<Self::InclusionProof> {
         Some(self.transaction_with_proof(meta, index)?.1)
     }
 
     /// Get the index of the `nth` transaction.
-    fn nth(&self, meta: &Self::Metadata, n: usize) -> Option<Self::TransactionIndex> {
+    fn nth(&self, meta: &Self::Metadata, n: usize) -> Option<TransactionIndex> {
         self.iter(meta).nth(n)
     }
 
@@ -166,7 +158,7 @@ pub trait QueryablePayload<Types: NodeType>: traits::BlockPayload<Types> {
         &self,
         meta: &Self::Metadata,
         hash: Commitment<Self::Transaction>,
-    ) -> Option<Self::TransactionIndex> {
+    ) -> Option<TransactionIndex> {
         self.iter(meta).find(|i| {
             if let Some(tx) = self.transaction(meta, i) {
                 tx.commit() == hash
@@ -460,20 +452,31 @@ impl<Types: NodeType> BlockQueryData<Types> {
     pub fn num_transactions(&self) -> u64 {
         self.num_transactions
     }
+
+    pub fn namespace_info(&self) -> HashMap<u32, NamespaceInfo>
+    where
+        Payload<Types>: QueryablePayload<Types>,
+    {
+        let mut map = HashMap::<u32, NamespaceInfo>::new();
+        for tx in self.payload.iter(self.header.metadata()) {
+            map.entry(tx.namespace).or_default().num_transactions += 1;
+        }
+        map
+    }
 }
 
 impl<Types: NodeType> BlockQueryData<Types>
 where
     Payload<Types>: QueryablePayload<Types>,
 {
-    pub fn transaction(&self, ix: &TransactionIndex<Types>) -> Option<Transaction<Types>> {
+    pub fn transaction(&self, ix: &TransactionIndex) -> Option<Transaction<Types>> {
         self.payload().transaction(self.metadata(), ix)
     }
 
     pub fn transaction_by_hash(
         &self,
         hash: Commitment<Transaction<Types>>,
-    ) -> Option<TransactionIndex<Types>> {
+    ) -> Option<TransactionIndex> {
         self.payload().by_hash(self.metadata(), hash)
     }
 
@@ -485,9 +488,7 @@ where
         self.len() == 0
     }
 
-    pub fn enumerate(
-        &self,
-    ) -> impl '_ + Iterator<Item = (TransactionIndex<Types>, Transaction<Types>)> {
+    pub fn enumerate(&self) -> impl '_ + Iterator<Item = (TransactionIndex, Transaction<Types>)> {
         self.payload.enumerate(self.metadata())
     }
 }
@@ -712,6 +713,8 @@ where
     proof: TransactionInclusionProof<Types>,
     block_hash: BlockHash<Types>,
     block_height: u64,
+    namespace: u32,
+    pos_in_namespace: u32,
 }
 
 impl<Types: NodeType> TransactionQueryData<Types>
@@ -720,7 +723,7 @@ where
 {
     pub(crate) fn new(
         block: &BlockQueryData<Types>,
-        i: TransactionIndex<Types>,
+        i: TransactionIndex,
         index: u64,
     ) -> Option<Self> {
         let (transaction, proof) = block
@@ -733,6 +736,8 @@ where
             proof,
             block_hash: block.hash(),
             block_height: block.height(),
+            namespace: i.namespace,
+            pos_in_namespace: i.position,
         })
     }
 
@@ -795,6 +800,7 @@ pub struct BlockSummaryQueryData<Types: NodeType> {
     pub(crate) hash: BlockHash<Types>,
     pub(crate) size: u64,
     pub(crate) num_transactions: u64,
+    pub(crate) namespaces: HashMap<u32, NamespaceInfo>,
 }
 
 // Add some basic getters to the BlockSummaryQueryData type.
@@ -813,6 +819,10 @@ impl<Types: NodeType> BlockSummaryQueryData<Types> {
 
     pub fn num_transactions(&self) -> u64 {
         self.num_transactions
+    }
+
+    pub fn namespaces(&self) -> &HashMap<u32, NamespaceInfo> {
+        &self.namespaces
     }
 }
 
@@ -842,6 +852,7 @@ where
 {
     fn from(value: BlockQueryData<Types>) -> Self {
         BlockSummaryQueryData {
+            namespaces: value.namespace_info(),
             header: value.header,
             hash: value.hash,
             size: value.size,
@@ -850,11 +861,17 @@ where
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct NamespaceInfo {
+    pub num_transactions: u64,
+    pub size: u64,
+}
+
 /// A summary of a payload without all the data.
 ///
 /// This type is useful when you only want information about a payload, such as its size or
 /// transaction count, but you don't want to load the entire payload, which might be very large.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PayloadMetadata<Types>
 where
     Types: NodeType,
@@ -864,6 +881,7 @@ where
     pub hash: VidCommitment,
     pub size: u64,
     pub num_transactions: u64,
+    pub namespaces: HashMap<u32, NamespaceInfo>,
 }
 
 impl<Types> HeightIndexed for PayloadMetadata<Types>
@@ -878,6 +896,7 @@ where
 impl<Types> From<BlockQueryData<Types>> for PayloadMetadata<Types>
 where
     Types: NodeType,
+    Payload<Types>: QueryablePayload<Types>,
 {
     fn from(block: BlockQueryData<Types>) -> Self {
         Self {
@@ -886,6 +905,7 @@ where
             hash: block.payload_hash(),
             size: block.size(),
             num_transactions: block.num_transactions(),
+            namespaces: block.namespace_info(),
         }
     }
 }

@@ -336,6 +336,9 @@ pub struct Consensus<TYPES: NodeType> {
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
 
+    /// Number of iterations for the DRB calculation, taken from HotShotConfig
+    pub drb_difficulty: u64,
+
     /// Tables for the DRB seeds and results.
     pub drb_results: DrbResults<TYPES>,
 
@@ -451,6 +454,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         metrics: Arc<ConsensusMetricsValue>,
         epoch_height: u64,
         state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
+        drb_difficulty: u64,
     ) -> Self {
         let transition_qc = if let Some(ref next_epoch_high_qc) = next_epoch_high_qc {
             if high_qc
@@ -490,6 +494,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             transition_qc,
             highest_block: 0,
             state_cert,
+            drb_difficulty,
         }
     }
 

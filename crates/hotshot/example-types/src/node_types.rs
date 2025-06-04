@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::marker::PhantomData;
+use std::{hash::Hash, marker::PhantomData};
 
 pub use hotshot::traits::election::helpers::{
     RandomOverlapQuorumFilterConfig, StableQuorumFilterConfig,
@@ -113,8 +113,10 @@ impl NodeType for TestTypesRandomizedLeader {
     serde::Serialize,
     serde::Deserialize,
 )]
-pub struct TestTypesEpochCatchupTypes;
-impl NodeType for TestTypesEpochCatchupTypes {
+pub struct TestTypesEpochCatchupTypes<V: Versions> {
+    _ph: PhantomData<V>,
+}
+impl<V: Versions + Default + Ord + Hash> NodeType for TestTypesEpochCatchupTypes<V> {
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
     type View = ViewNumber;
@@ -125,7 +127,7 @@ impl NodeType for TestTypesEpochCatchupTypes {
     type Transaction = TestTransaction;
     type ValidatedState = TestValidatedState;
     type InstanceState = TestInstanceState;
-    type Membership = DummyCatchupCommittee<TestTypesEpochCatchupTypes>;
+    type Membership = DummyCatchupCommittee<TestTypesEpochCatchupTypes<V>, V>;
     type BuilderSignatureKey = BuilderKey;
     type StateSignatureKey = SchnorrPubKey;
 }
@@ -287,7 +289,7 @@ impl Versions for TestVersions {
     type Epochs = StaticVersion<0, 4>;
 }
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug, Copy, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EpochsTestVersions {}
 
 impl Versions for EpochsTestVersions {

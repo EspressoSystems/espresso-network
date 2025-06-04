@@ -8,7 +8,7 @@ use async_broadcast::{broadcast, InactiveReceiver, Sender};
 use async_lock::{Mutex, RwLock};
 use hotshot_utils::{
     anytrace::{self, Error, Level, Result, Wrap, DEFAULT_LOG_LEVEL},
-    ensure, line_info, log, warn,
+    ensure, error, line_info, log, warn,
 };
 
 use crate::{
@@ -55,6 +55,9 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
 
     /// Callback function to store a drb result in storage when one is calculated during catchup
     store_drb_result_fn: StoreDrbResultFn<TYPES>,
+
+    /// difficulty level for the DRB calculation, taken from HotShotConfig
+    drb_difficulty: u64,
 }
 
 impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
@@ -66,6 +69,7 @@ impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
             store_drb_progress_fn: Arc::clone(&self.store_drb_progress_fn),
             load_drb_progress_fn: Arc::clone(&self.load_drb_progress_fn),
             store_drb_result_fn: self.store_drb_result_fn.clone(),
+            drb_difficulty: self.drb_difficulty,
         }
     }
 }
@@ -79,6 +83,7 @@ where
         membership: Arc<RwLock<TYPES::Membership>>,
         epoch_height: u64,
         storage: &S,
+        drb_difficulty: u64,
     ) -> Self {
         Self {
             membership,
@@ -87,6 +92,7 @@ where
             store_drb_progress_fn: store_drb_progress_fn(storage.clone()),
             load_drb_progress_fn: load_drb_progress_fn(storage.clone()),
             store_drb_result_fn: store_drb_result_fn(storage.clone()),
+            drb_difficulty,
         }
     }
 
@@ -114,6 +120,12 @@ where
             .read()
             .await
             .has_randomized_stake_table(epoch)
+            .map_err(|e| {
+                error!(
+                    "membership_for_epoch failed while called with maybe_epoch {:?} : {}",
+                    maybe_epoch, e
+                )
+            })?
         {
             return Ok(ret_val);
         }
@@ -380,7 +392,7 @@ where
                 .await
         };
 
-        if let Some(updater) = add_epoch_root_updater {
+        if let Ok(Some(updater)) = add_epoch_root_updater {
             let mut membership_write = self.membership.write().await;
             updater(&mut *(membership_write));
         };
@@ -448,6 +460,7 @@ where
                 epoch: *epoch,
                 iteration: 0,
                 value: drb_seed_input,
+                difficulty_level: self.drb_difficulty,
             };
 
             let store_drb_progress_fn = self.store_drb_progress_fn.clone();

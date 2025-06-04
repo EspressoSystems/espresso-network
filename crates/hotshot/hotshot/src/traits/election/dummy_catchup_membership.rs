@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{collections::HashSet, marker::PhantomData, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use anyhow::Ok;
@@ -7,26 +7,30 @@ use hotshot_types::{
     data::Leaf2,
     drb::DrbResult,
     stake_table::HSStakeTable,
-    traits::{election::Membership, node_implementation::NodeType},
+    traits::{
+        election::Membership,
+        node_implementation::{NodeType, Versions},
+    },
 };
 
 use super::static_committee::StaticCommittee;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DummyCatchupCommittee<TYPES: NodeType> {
+pub struct DummyCatchupCommittee<TYPES: NodeType, V: Versions> {
     inner: StaticCommittee<TYPES>,
     epochs: HashSet<TYPES::Epoch>,
     drbs: HashSet<TYPES::Epoch>,
+    _phantom: PhantomData<V>,
 }
 
-impl<TYPES: NodeType> DummyCatchupCommittee<TYPES> {
+impl<TYPES: NodeType, V: Versions> DummyCatchupCommittee<TYPES, V> {
     fn assert_has_stake_table(&self, epoch: Option<TYPES::Epoch>) {
         let Some(epoch) = epoch else {
             return;
         };
         assert!(
             self.epochs.contains(&epoch),
-            "Failed epoch check for epoch {epoch}"
+            "Failed stake table check for epoch {epoch}"
         );
     }
     fn assert_has_randomized_stake_table(&self, epoch: Option<TYPES::Epoch>) {
@@ -35,14 +39,15 @@ impl<TYPES: NodeType> DummyCatchupCommittee<TYPES> {
         };
         assert!(
             self.drbs.contains(&epoch),
-            "Failed epoch check for epoch {epoch}"
+            "Failed drb check for epoch {epoch}"
         );
     }
 }
 
-impl<TYPES: NodeType> Membership<TYPES> for DummyCatchupCommittee<TYPES>
+impl<TYPES: NodeType, V: Versions> Membership<TYPES> for DummyCatchupCommittee<TYPES, V>
 where
     TYPES::BlockHeader: Default,
+    TYPES::InstanceState: Default,
 {
     type Error = hotshot_utils::anytrace::Error;
 
@@ -56,6 +61,7 @@ where
             inner: StaticCommittee::new(stake_committee_members, da_committee_members),
             epochs: HashSet::new(),
             drbs: HashSet::new(),
+            _phantom: PhantomData,
         }
     }
 
@@ -155,13 +161,11 @@ where
     }
 
     fn has_stake_table(&self, epoch: TYPES::Epoch) -> bool {
-        self.assert_has_stake_table(Some(epoch));
         self.epochs.contains(&epoch)
     }
 
-    fn has_randomized_stake_table(&self, epoch: TYPES::Epoch) -> bool {
-        self.assert_has_randomized_stake_table(Some(epoch));
-        self.drbs.contains(&epoch)
+    fn has_randomized_stake_table(&self, epoch: TYPES::Epoch) -> anyhow::Result<bool> {
+        Ok(self.drbs.contains(&epoch))
     }
 
     async fn get_epoch_root(
@@ -169,8 +173,13 @@ where
         _block_height: u64,
         _epoch: TYPES::Epoch,
     ) -> anyhow::Result<Leaf2<TYPES>> {
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        anyhow::bail!("Not implemented");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let leaf = Leaf2::genesis::<V>(
+            &TYPES::ValidatedState::default(),
+            &TYPES::InstanceState::default(),
+        )
+        .await;
+        Ok(leaf)
     }
 
     async fn get_epoch_drb(
@@ -178,7 +187,7 @@ where
         _block_height: u64,
         _epoch: TYPES::Epoch,
     ) -> anyhow::Result<DrbResult> {
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
         Ok(DrbResult::default())
     }
 
@@ -204,11 +213,11 @@ where
         &self,
         epoch: TYPES::Epoch,
         _block_header: TYPES::BlockHeader,
-    ) -> Option<Box<dyn FnOnce(&mut Self) + Send>> {
-        Some(Box::new(move |mem: &mut Self| {
+    ) -> anyhow::Result<Option<Box<dyn FnOnce(&mut Self) + Send>>> {
+        Ok(Some(Box::new(move |mem: &mut Self| {
             tracing::error!("Adding epoch root for {epoch}");
             mem.epochs.insert(epoch);
-        }))
+        })))
     }
 
     fn first_epoch(&self) -> Option<TYPES::Epoch> {

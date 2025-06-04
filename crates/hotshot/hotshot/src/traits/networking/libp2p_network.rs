@@ -65,7 +65,6 @@ use libp2p_identity::{
     ed25519::{self, SecretKey},
     Keypair, PeerId,
 };
-use rand::{rngs::StdRng, seq::IteratorRandom, SeedableRng};
 use serde::Serialize;
 use tokio::{
     select, spawn,
@@ -455,12 +454,8 @@ impl<T: NodeType> Libp2pNetwork<T> {
             .replication_factor(replication_factor)
             .bind_address(Some(bind_address.clone()));
 
-        // Choose `mesh_n` random nodes to connect to for bootstrap
-        let bootstrap_nodes = libp2p_config
-            .bootstrap_nodes
-            .into_iter()
-            .choose_multiple(&mut StdRng::from_entropy(), gossip_config.mesh_n);
-        config_builder.to_connect_addrs(HashSet::from_iter(bootstrap_nodes.clone()));
+        // Connect to the provided bootstrap nodes
+        config_builder.to_connect_addrs(HashSet::from_iter(libp2p_config.bootstrap_nodes.clone()));
 
         // Build the node's configuration
         let node_config = config_builder.build()?;
@@ -479,7 +474,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
             node_config,
             pub_key.clone(),
             lookup_record_value,
-            Arc::new(RwLock::new(bootstrap_nodes)),
+            Arc::new(RwLock::new(libp2p_config.bootstrap_nodes)),
             usize::try_from(config.node_index)?,
             #[cfg(feature = "hotshot-testing")]
             None,
@@ -487,16 +482,16 @@ impl<T: NodeType> Libp2pNetwork<T> {
         .await?)
     }
 
-    /// Returns whether or not the network is currently ready.
+    /// Returns whether or not the network has any peers.
     #[must_use]
-    pub fn is_ready(&self) -> bool {
+    pub fn has_peers(&self) -> bool {
         self.inner.is_ready.load(Ordering::Relaxed)
     }
 
     /// Returns only when the network is ready.
-    pub async fn wait_for_ready(&self) {
+    pub async fn wait_for_peers(&self) {
         loop {
-            if self.is_ready() {
+            if self.has_peers() {
                 break;
             }
             sleep(Duration::from_secs(1)).await;
@@ -655,8 +650,8 @@ impl<T: NodeType> Libp2pNetwork<T> {
                     sleep(Duration::from_secs(1)).await;
                 }
 
-                // Wait for the network to connect to the required number of peers
-                if let Err(e) = handle.wait_to_connect(4, id).await {
+                // Wait for the network to connect to at least 1 peer
+                if let Err(e) = handle.wait_to_connect(1, id).await {
                     error!("Failed to connect to peers: {:?}", e);
                     return Err::<(), NetworkError>(e);
                 }
@@ -762,7 +757,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
 impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
     #[instrument(name = "Libp2pNetwork::ready_blocking", skip_all)]
     async fn wait_for_ready(&self) {
-        self.wait_for_ready().await;
+        self.wait_for_peers().await;
     }
 
     fn pause(&self) {
@@ -794,10 +789,10 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         topic: Topic,
         _broadcast_delay: BroadcastDelay,
     ) -> Result<(), NetworkError> {
-        // If we're not ready, return an error
-        if !self.is_ready() {
+        // If we're not ready yet (we don't have any peers, error)
+        if !self.has_peers() {
             self.inner.metrics.num_failed_messages.add(1);
-            return Err(NetworkError::NotReadyYet);
+            return Err(NetworkError::NoPeersYet);
         };
 
         // If we are subscribed to the topic,
@@ -851,10 +846,10 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         recipients: Vec<T::SignatureKey>,
         _broadcast_delay: BroadcastDelay,
     ) -> Result<(), NetworkError> {
-        // If we're not ready, return an error
-        if !self.is_ready() {
+        // If we're not ready yet (we don't have any peers, error)
+        if !self.has_peers() {
             self.inner.metrics.num_failed_messages.add(1);
-            return Err(NetworkError::NotReadyYet);
+            return Err(NetworkError::NoPeersYet);
         };
 
         let future_results = recipients
@@ -877,10 +872,10 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         message: Vec<u8>,
         recipient: T::SignatureKey,
     ) -> Result<(), NetworkError> {
-        // If we're not ready, return an error
-        if !self.is_ready() {
+        // If we're not ready yet (we don't have any peers, error)
+        if !self.has_peers() {
             self.inner.metrics.num_failed_messages.add(1);
-            return Err(NetworkError::NotReadyYet);
+            return Err(NetworkError::NoPeersYet);
         };
 
         // short circuit if we're dming ourselves

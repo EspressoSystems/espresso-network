@@ -23,7 +23,7 @@ pub async fn main() -> anyhow::Result<()> {
     tracing::warn!(?modules, "sequencer starting up");
 
     let genesis = Genesis::from_file(&opt.genesis_file)?;
-    tracing::info!(?genesis, "genesis");
+    tracing::warn!(?genesis, "genesis");
 
     let base = genesis.base_version;
     let upgrade = genesis.upgrade_version;
@@ -289,6 +289,7 @@ mod test {
             base_version: Version { major: 0, minor: 1 },
             upgrade_version: Version { major: 0, minor: 2 },
             epoch_height: None,
+            drb_difficulty: None,
             epoch_start_block: None,
             stake_table_capacity: None,
         };

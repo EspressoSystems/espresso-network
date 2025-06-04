@@ -19,3 +19,6 @@ tide-disco = { workspace = true }
 tokio = { workspace = true }
 tracing = "0.1.37"
 vbs = { workspace = true }
+
+[dev-dependencies]
+sequencer-utils = { version = "0.1.0", path = "../../../utils" }

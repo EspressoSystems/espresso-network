@@ -90,6 +90,7 @@ pub fn default_hotshot_config<TYPES: NodeType>(
         epoch_height,
         epoch_start_block,
         stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
+        drb_difficulty: 10,
     }
 }
 
@@ -259,8 +260,12 @@ pub async fn create_test_handle<
     let private_key = validator_config.private_key.clone();
     let public_key = validator_config.public_key.clone();
     let state_private_key = validator_config.state_private_key.clone();
-    let membership_coordinator =
-        EpochMembershipCoordinator::new(memberships, config.epoch_height, &storage.clone());
+    let membership_coordinator = EpochMembershipCoordinator::new(
+        memberships,
+        config.epoch_height,
+        &storage.clone(),
+        config.drb_difficulty,
+    );
 
     let behaviour = (metadata.behaviour)(node_id);
     match behaviour {
