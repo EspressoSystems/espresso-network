@@ -235,8 +235,8 @@ cleanup(){
 }
 
 # Copy data files to Docker context.
-mkdir -p ${workdir}/data
-cp -rv data/genesis ${workdir}/data/
+mkdir -p "${workdir}/data"
+cp -rv data/genesis "${workdir}/data/"
 
 # find all the binaries built
 mapfile -t binaries < <(
@@ -265,5 +265,5 @@ cp -v scripts/sequencer-entrypoint "${workdir}/scripts/"
 export DOCKER_BUILDKIT=1
 
 for image in "${images[@]}"; do
-  docker build --platform $platform -t ghcr.io/espressosystems/espresso-sequencer/$image:main -f docker/$image.Dockerfile "$workdir"
+  docker build --platform $platform -t "ghcr.io/espressosystems/espresso-sequencer/$image:main" -f "docker/$image.Dockerfile" "$workdir"
 done
