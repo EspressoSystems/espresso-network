@@ -961,13 +961,20 @@ impl BlockHeader<SeqTypes> for Header {
 }
 
 impl QueryableHeader<SeqTypes> for Header {
+    type NamespaceId = NamespaceId;
+    type NamespaceIndex = NsIndex;
+
     fn timestamp(&self) -> u64 {
         self.timestamp()
     }
 
-    fn namespace_size(&self, id: u32, payload_size: usize) -> u64 {
+    fn namespace_id(&self, i: &NsIndex) -> Option<NamespaceId> {
+        self.ns_table().read_ns_id(i)
+    }
+
+    fn namespace_size(&self, i: &NsIndex, payload_size: usize) -> u64 {
         self.ns_table()
-            .ns_range(&NsIndex(id as usize), &PayloadByteLen(payload_size))
+            .ns_range(i, &PayloadByteLen(payload_size))
             .byte_len()
             .0 as u64
     }
@@ -977,7 +984,6 @@ impl ExplorerHeader<SeqTypes> for Header {
     type BalanceAmount = FeeAmount;
     type WalletAddress = Vec<FeeAccount>;
     type ProposerId = Vec<FeeAccount>;
-    type NamespaceId = NamespaceId;
 
     // TODO what are these expected values w/ multiple Fees
     fn proposer_id(&self) -> Self::ProposerId {
@@ -1002,7 +1008,7 @@ impl ExplorerHeader<SeqTypes> for Header {
         FeeAmount::from(0)
     }
 
-    fn namespace_ids(&self) -> Vec<Self::NamespaceId> {
+    fn namespace_ids(&self) -> Vec<NamespaceId> {
         self.ns_table()
             .iter()
             .map(|i| self.ns_table().read_ns_id_unchecked(&i))

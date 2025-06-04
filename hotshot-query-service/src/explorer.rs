@@ -152,7 +152,7 @@ impl<Types: NodeType> From<query_data::TransactionDetailResponse<Types>>
 pub struct TransactionSummariesResponse<Types: NodeType>
 where
     Header<Types>: ExplorerHeader<Types>,
-    Transaction<Types>: ExplorerTransaction,
+    Transaction<Types>: ExplorerTransaction<Types>,
 {
     pub transaction_summaries: Vec<TransactionSummary<Types>>,
 }
@@ -160,7 +160,7 @@ where
 impl<Types: NodeType> From<Vec<TransactionSummary<Types>>> for TransactionSummariesResponse<Types>
 where
     Header<Types>: ExplorerHeader<Types>,
-    Transaction<Types>: ExplorerTransaction,
+    Transaction<Types>: ExplorerTransaction<Types>,
 {
     fn from(transaction_summaries: Vec<TransactionSummary<Types>>) -> Self {
         Self {
@@ -176,7 +176,7 @@ where
 pub struct ExplorerSummaryResponse<Types: NodeType>
 where
     Header<Types>: ExplorerHeader<Types>,
-    Transaction<Types>: ExplorerTransaction,
+    Transaction<Types>: ExplorerTransaction<Types>,
 {
     pub explorer_summary: ExplorerSummary<Types>,
 }
@@ -184,7 +184,7 @@ where
 impl<Types: NodeType> From<ExplorerSummary<Types>> for ExplorerSummaryResponse<Types>
 where
     Header<Types>: ExplorerHeader<Types>,
-    Transaction<Types>: ExplorerTransaction,
+    Transaction<Types>: ExplorerTransaction<Types>,
 {
     fn from(explorer_summary: ExplorerSummary<Types>) -> Self {
         Self { explorer_summary }
@@ -198,7 +198,7 @@ where
 pub struct SearchResultResponse<Types: NodeType>
 where
     Header<Types>: ExplorerHeader<Types>,
-    Transaction<Types>: ExplorerTransaction,
+    Transaction<Types>: ExplorerTransaction<Types>,
 {
     pub search_results: SearchResult<Types>,
 }
@@ -206,7 +206,7 @@ where
 impl<Types: NodeType> From<SearchResult<Types>> for SearchResultResponse<Types>
 where
     Header<Types>: ExplorerHeader<Types>,
-    Transaction<Types>: ExplorerTransaction,
+    Transaction<Types>: ExplorerTransaction<Types>,
 {
     fn from(search_results: SearchResult<Types>) -> Self {
         Self { search_results }
@@ -243,7 +243,7 @@ pub fn define_api<State, Types: NodeType, Ver: StaticVersionType + 'static>(
 where
     State: 'static + Send + Sync + ReadState,
     Header<Types>: ExplorerHeader<Types> + QueryableHeader<Types>,
-    Transaction<Types>: ExplorerTransaction,
+    Transaction<Types>: ExplorerTransaction<Types>,
     Payload<Types>: QueryablePayload<Types>,
     <State as ReadState>::State: ExplorerDataSource<Types> + Send + Sync,
 {
@@ -329,10 +329,10 @@ where
 
                 let filter = match (
                     req.opt_integer_param("block"),
-                    req.opt_integer_param("namespace"),
+                    req.opt_integer_param::<_, i64>("namespace"),
                 ) {
                     (Ok(Some(block)), _) => TransactionSummaryFilter::Block(block),
-                    (_, Ok(Some(namespace))) => TransactionSummaryFilter::RollUp(namespace),
+                    (_, Ok(Some(namespace))) => TransactionSummaryFilter::RollUp(namespace.into()),
                     _ => TransactionSummaryFilter::None,
                 };
 

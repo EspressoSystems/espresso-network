@@ -43,7 +43,7 @@ pub trait ExplorerDataSource<Types>
 where
     Types: NodeType,
     Header<Types>: ExplorerHeader<Types> + QueryableHeader<Types>,
-    Transaction<Types>: ExplorerTransaction,
+    Transaction<Types>: ExplorerTransaction<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     /// `get_block_detail` is a method that retrieves the details of a specific

@@ -8,7 +8,7 @@ use jf_vid::{
 };
 
 use crate::{
-    Index, NsIndex, NsTable, NumTxs, NumTxsRange, Payload, PayloadByteLen, Transaction, TxIndex,
+    Index, NsTable, NumTxs, NumTxsRange, Payload, PayloadByteLen, Transaction, TxIndex,
     TxPayloadRange, TxProof, TxTableEntriesRange,
 };
 
@@ -20,7 +20,7 @@ impl TxProof {
         payload: &Payload,
         common: &ADVZCommon,
     ) -> Option<(Transaction, Self)> {
-        let ns_index = &NsIndex(index.namespace as usize);
+        let ns_index = &index.ns_index;
         let tx_index = &TxIndex(index.position as usize);
 
         let payload_byte_len = payload.byte_len();

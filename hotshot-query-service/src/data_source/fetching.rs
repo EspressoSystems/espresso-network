@@ -448,6 +448,7 @@ where
 impl<Types, S> Pruner<Types, S>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
     S: PruneStorage + Send + Sync + 'static,
 {
@@ -636,6 +637,7 @@ where
 impl<Types, S, P> AvailabilityDataSource<Types> for FetchingDataSource<Types, S, P>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
@@ -813,6 +815,7 @@ where
 impl<Types, S, P> UpdateAvailabilityData<Types> for FetchingDataSource<Types, S, P>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
@@ -972,6 +975,7 @@ where
 impl<Types, S, P> Fetcher<Types, S, P>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
@@ -1586,6 +1590,7 @@ where
 impl<Types, S, P> Fetcher<Types, S, P>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types> + UpdateAggregatesStorage<Types>,
@@ -1821,6 +1826,7 @@ where
 impl<Types, S, P> MerklizedStateHeightPersistence for FetchingDataSource<Types, S, P>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
     for<'a> S::ReadOnly<'a>: MerklizedStateHeightStorage,
@@ -1905,7 +1911,7 @@ where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types> + explorer::traits::ExplorerHeader<Types>,
-    crate::Transaction<Types>: explorer::traits::ExplorerTransaction,
+    crate::Transaction<Types>: explorer::traits::ExplorerTransaction<Types>,
     S: VersionedDataSource + 'static,
     for<'a> S::ReadOnly<'a>: ExplorerStorage<Types>,
     P: Send + Sync,
@@ -2029,6 +2035,7 @@ trait FetchRequest: Copy + Debug + Send + Sync + 'static {
 trait Fetchable<Types>: Clone + Send + Sync + 'static
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     /// A succinct specification of the object to be fetched.
@@ -2085,6 +2092,7 @@ type PassiveFetch<T> = BoxFuture<'static, Option<T>>;
 trait RangedFetchable<Types>: Fetchable<Types, Request = Self::RangedRequest> + HeightIndexed
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     type RangedRequest: FetchRequest + From<usize> + Send;

@@ -29,7 +29,7 @@ use super::{
     Notifiers, RangedFetchable, Storable,
 };
 use crate::{
-    availability::{LeafId, LeafQueryData, QueryablePayload},
+    availability::{LeafId, LeafQueryData, QueryableHeader, QueryablePayload},
     data_source::{
         storage::{
             pruning::PrunedHeightStorage, AvailabilityStorage, NodeStorage,
@@ -39,7 +39,7 @@ use crate::{
     },
     fetching::{self, request, Callback},
     types::HeightIndexed,
-    Payload, QueryError, QueryResult,
+    Header, Payload, QueryError, QueryResult,
 };
 
 pub(super) type LeafFetcher<Types, S, P> =
@@ -62,6 +62,7 @@ where
 impl<Types> Fetchable<Types> for LeafQueryData<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     type Request = LeafId<Types>;
@@ -116,6 +117,7 @@ pub(super) async fn fetch_leaf_with_callbacks<Types, S, P, I>(
 ) -> anyhow::Result<()>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
@@ -224,6 +226,7 @@ pub(super) fn trigger_fetch_for_parent<Types, S, P>(
     leaf: &LeafQueryData<Types>,
 ) where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
@@ -304,6 +307,7 @@ pub(super) fn trigger_fetch_for_parent<Types, S, P>(
 impl<Types> RangedFetchable<Types> for LeafQueryData<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     type RangedRequest = LeafId<Types>;
@@ -384,6 +388,7 @@ impl<Types: NodeType, S, P> PartialOrd for LeafCallback<Types, S, P> {
 
 impl<Types: NodeType, S, P> Callback<LeafQueryData<Types>> for LeafCallback<Types, S, P>
 where
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,

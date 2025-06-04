@@ -25,7 +25,7 @@ impl Iterator for Iter<'_> {
                 .next()
             {
                 break Some(Index {
-                    namespace: ns_index.0 as u32,
+                    ns_index: ns_index.clone(),
                     position: tx_index.0 as u32,
                 });
             }
