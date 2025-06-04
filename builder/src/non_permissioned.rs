@@ -71,7 +71,6 @@ pub fn build_instance_state<V: Versions>(
         ))),
         100,
         &Arc::new(sequencer::persistence::no_storage::NoStorage),
-        10,
     );
 
     NodeState::new(

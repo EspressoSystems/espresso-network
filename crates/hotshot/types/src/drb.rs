@@ -4,14 +4,20 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
+use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use vbs::version::StaticVersionType;
 
-use crate::traits::{
-    node_implementation::{ConsensusTime, NodeType},
-    storage::{LoadDrbProgressFn, StoreDrbProgressFn},
+use crate::{
+    message::UpgradeLock,
+    traits::{
+        node_implementation::{ConsensusTime, NodeType, Versions},
+        storage::{LoadDrbProgressFn, StoreDrbProgressFn},
+    },
+    HotShotConfig,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -24,6 +30,27 @@ pub struct DrbInput {
     pub value: [u8; 32],
     /// difficulty value for the DRB calculation
     pub difficulty_level: u64,
+}
+
+pub type DrbDifficultySelectorFn<TYPES> =
+    Arc<dyn Fn(<TYPES as NodeType>::View) -> BoxFuture<'static, u64> + Send + Sync + 'static>;
+
+pub fn drb_difficulty_selector<TYPES: NodeType, V: Versions>(
+    upgrade_lock: UpgradeLock<TYPES, V>,
+    config: &HotShotConfig<TYPES>,
+) -> DrbDifficultySelectorFn<TYPES> {
+    let base_difficulty = config.drb_difficulty;
+    let upgrade_difficulty = config.drb_upgrade_difficulty;
+    Arc::new(move |view| {
+        let upgrade_lock = upgrade_lock.clone();
+        Box::pin(async move {
+            if upgrade_lock.version_infallible(view).await >= V::DrbDifficultyUpgrade::VERSION {
+                upgrade_difficulty
+            } else {
+                base_difficulty
+            }
+        })
+    })
 }
 
 // TODO: Add the following consts once we bench the hash time.

@@ -227,6 +227,8 @@ pub struct HotShotConfig<TYPES: NodeType> {
     pub stake_table_capacity: usize,
     /// number of iterations in the DRB calculation
     pub drb_difficulty: u64,
+    /// number of iterations in the DRB calculation
+    pub drb_upgrade_difficulty: u64,
 }
 
 fn default_epoch_start_block() -> u64 {

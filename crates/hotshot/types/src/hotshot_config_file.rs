@@ -25,6 +25,11 @@ fn default_drb_difficulty() -> u64 {
     0
 }
 
+/// Default DRB upgrade difficulty, set to 0 (intended to be overwritten)
+fn default_drb_upgrade_difficulty() -> u64 {
+    0
+}
+
 /// Holds configuration for a `HotShot`
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(bound(deserialize = ""))]
@@ -69,6 +74,9 @@ pub struct HotShotConfigFile<TYPES: NodeType> {
     #[serde(default = "default_drb_difficulty")]
     /// number of iterations for DRB calculation
     pub drb_difficulty: u64,
+    #[serde(default = "default_drb_upgrade_difficulty")]
+    /// number of iterations for DRB calculation
+    pub drb_upgrade_difficulty: u64,
 }
 
 fn default_stake_table_capacity() -> usize {
@@ -104,6 +112,7 @@ impl<TYPES: NodeType> From<HotShotConfigFile<TYPES>> for HotShotConfig<TYPES> {
             epoch_start_block: val.epoch_start_block,
             stake_table_capacity: val.stake_table_capacity,
             drb_difficulty: val.drb_difficulty,
+            drb_upgrade_difficulty: val.drb_upgrade_difficulty,
         }
     }
 }
@@ -157,6 +166,7 @@ impl<TYPES: NodeType> HotShotConfigFile<TYPES> {
             epoch_start_block: 0,
             stake_table_capacity: crate::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
             drb_difficulty: 10,
+            drb_upgrade_difficulty: 20,
         }
     }
 }
