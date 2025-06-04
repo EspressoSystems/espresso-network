@@ -7,7 +7,7 @@ COPY package.json yarn.lock ./
 
 # TODO: if this works, install make in base image
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends make \
+    && apt-get install -y --no-install-recommends gcc make \
     && rm -rf /var/lib/apt/lists/*
 
 RUN yarn && rm -rf /usr/local/share/.cache
