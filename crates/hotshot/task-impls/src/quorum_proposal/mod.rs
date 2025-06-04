@@ -419,6 +419,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 *new_view
             );
 
+            println!(
+                "Number of proposal dependencies: {}",
+                self.proposal_dependencies.len()
+            );
+
             // Cancel the old dependency tasks.
             for view in (*self.latest_proposed_view + 1)..=(*new_view) {
                 if let Some(dependency) = self.proposal_dependencies.remove(&TYPES::View::new(view))
