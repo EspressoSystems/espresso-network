@@ -1335,14 +1335,24 @@ mod tests {
         setup_test();
         test_upgrade_light_client_to_v2_helper(true).await
     }
+    #[derive(Debug, Clone, Copy)]
+    pub enum RunMode {
+        DryRun,
+        RealRun,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub enum UpgradeCount {
+        Once,
+        Twice,
+    }
 
     #[derive(Debug, Clone, Copy)]
     pub struct UpgradeTestOptions {
         pub is_mock: bool,
-        pub dry_run: bool,
-        pub upgrade_twice: bool,
+        pub run_mode: RunMode,
+        pub upgrade_count: UpgradeCount,
     }
-
     // This test is used to test the upgrade of the LightClientProxy via the multisig wallet
     // It only tests the upgrade proposal via the typescript script and thus requires the upgrade proposal to be sent to a real network
     // However, the contracts are deployed on anvil, so the test will pass even if the upgrade proposal is not executed
@@ -1361,7 +1371,8 @@ mod tests {
             "test test test test test test test test test test test junk".to_string();
         let mut account_index = 0;
         let anvil = Anvil::default().spawn();
-        if !options.dry_run {
+        let dry_run = matches!(options.run_mode, RunMode::DryRun);
+        if !dry_run {
             dotenvy::from_filename_override(".env.deployer.rs.test").ok();
 
             for item in dotenvy::from_filename_iter(".env.deployer.rs.test")
@@ -1393,7 +1404,7 @@ mod tests {
             .expect("wrong mnemonic or index")
             .build()?;
         let admin = admin_signer.address();
-        let provider = if !options.dry_run {
+        let provider = if !dry_run {
             ProviderBuilder::new()
                 .wallet(admin_signer)
                 .connect(&sepolia_rpc_url)
@@ -1422,7 +1433,7 @@ mod tests {
             Some(prover),
         )
         .await?;
-        if options.upgrade_twice {
+        if matches!(options.upgrade_count, UpgradeCount::Twice) {
             // upgrade to v2
             upgrade_light_client_v2(
                 &provider,
@@ -1454,7 +1465,7 @@ mod tests {
                 blocks_per_epoch,
                 epoch_start_block,
                 rpc_url: sepolia_rpc_url.clone(),
-                dry_run: Some(options.dry_run),
+                dry_run: Some(dry_run),
             },
         )
         .await?;
@@ -1463,13 +1474,13 @@ mod tests {
             result
         );
         assert!(success);
-        if options.dry_run {
+        if dry_run {
             let data: serde_json::Value = serde_json::from_str(&result)?;
             assert_eq!(data["rpcUrl"], sepolia_rpc_url);
             assert_eq!(data["safeAddress"], multisig_admin.to_string());
             assert_eq!(data["proxyAddress"], lc_proxy_addr.to_string());
 
-            let expected_init_data = if options.upgrade_twice {
+            let expected_init_data = if matches!(options.upgrade_count, UpgradeCount::Twice) {
                 "0x" // no init data for the second upgrade because the proxy was already initialized
             } else {
                 &LightClientV2::new(lc_proxy_addr, &provider)
@@ -1492,8 +1503,8 @@ mod tests {
     async fn test_upgrade_light_client_to_v2_multisig_owner_dry_run() -> Result<()> {
         test_upgrade_light_client_to_v2_multisig_owner_helper(UpgradeTestOptions {
             is_mock: false,
-            dry_run: true,
-            upgrade_twice: false,
+            run_mode: RunMode::DryRun,
+            upgrade_count: UpgradeCount::Once,
         })
         .await
     }
@@ -1503,8 +1514,8 @@ mod tests {
     async fn test_upgrade_light_client_to_v2_twice_multisig_owner_dry_run() -> Result<()> {
         test_upgrade_light_client_to_v2_multisig_owner_helper(UpgradeTestOptions {
             is_mock: false,
-            dry_run: true,
-            upgrade_twice: true,
+            run_mode: RunMode::DryRun,
+            upgrade_count: UpgradeCount::Twice,
         })
         .await
     }
@@ -1514,8 +1525,8 @@ mod tests {
     async fn test_upgrade_light_client_to_v2_multisig_owner_live_eth_network() -> Result<()> {
         test_upgrade_light_client_to_v2_multisig_owner_helper(UpgradeTestOptions {
             is_mock: false,
-            dry_run: false,
-            upgrade_twice: false,
+            run_mode: RunMode::RealRun,
+            upgrade_count: UpgradeCount::Once,
         })
         .await
     }
