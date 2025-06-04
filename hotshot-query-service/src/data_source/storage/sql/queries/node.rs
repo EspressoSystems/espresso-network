@@ -370,7 +370,14 @@ impl<Types: NodeType> UpdateAggregatesStorage<Types> for Transaction<Write> {
                     *tx_count.entry(None).or_insert(0) += block.num_transactions as usize;
                     *size.entry(None).or_insert(0) += block.size as usize;
 
-                    rows.push((*height as i64, -1, tx_count[&None] as i64, size[&None] as i64));
+                    // None represents the total of all the namespaces
+                    // and is represented as -1 in databasr
+                    rows.push((
+                        *height as i64,
+                        -1,
+                        tx_count[&None] as i64,
+                        size[&None] as i64,
+                    ));
 
                     for (&ns_id, info) in &block.namespaces {
                         let key = Some(ns_id);
