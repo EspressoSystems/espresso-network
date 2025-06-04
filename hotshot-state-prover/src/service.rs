@@ -28,8 +28,8 @@ use hotshot_query_service::availability::StateCertQueryData;
 use hotshot_types::{
     data::EpochNumber,
     light_client::{
-        CircuitField, LightClientState, PublicInput, StakeTableState, StateSignature,
-        StateSignaturesBundle, StateVerKey,
+        CircuitField, LightClientState, StakeTableState, StateSignature, StateSignaturesBundle,
+        StateVerKey,
     },
     simple_certificate::LightClientStateUpdateCertificate,
     stake_table::HSStakeTable,
@@ -51,7 +51,7 @@ use tokio::{io, spawn, task::spawn_blocking, time::sleep};
 use url::Url;
 use vbs::version::{StaticVersion, StaticVersionType};
 
-use crate::snark::{generate_state_update_proof, Proof, ProvingKey};
+use crate::snark::{Proof, ProvingKey, PublicInput};
 
 /// Configuration/Parameters used for hotshot state prover
 #[derive(Debug, Clone)]
@@ -324,7 +324,7 @@ async fn generate_proof(
     let proving_key_clone = proving_key.clone();
     let stake_table_capacity = state.config.stake_table_capacity;
     let (proof, public_input) = spawn_blocking(move || {
-        generate_state_update_proof(
+        crate::snark::generate_state_update_proof(
             &mut ark_std::rand::thread_rng(),
             &proving_key_clone,
             entries,

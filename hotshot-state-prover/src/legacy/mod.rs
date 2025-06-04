@@ -1,4 +1,4 @@
-//! SNARK-assisted `HotShot` light client state update verification
+//! Legacy prover
 
 /// State verifier circuit builder
 pub mod circuit;
@@ -8,11 +8,5 @@ pub mod mock_ledger;
 pub mod service;
 /// SNARK proof generation
 pub mod snark;
-
-/// Legacy prover
-pub mod legacy;
-
-#[cfg(test)]
-mod test_utils;
 
 pub use snark::*;
