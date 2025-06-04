@@ -173,7 +173,7 @@ variables (see the code for the full list `sequencer/src/bin/deploy.rs`). Common
 - `ESPRESSO_SEQUENCER_ETH_MNEMONIC` — Mnemonic for the deployer wallet
 - `ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS` — Multisig admin address
 - `ESPRESSO_DEPLOYER_ACCOUNT_INDEX` — Account index in the wallet
-- `ESPRESSO_SEQUENCER_URL` — Sequencer node URL for HotShot config 
+- `ESPRESSO_SEQUENCER_URL` — Sequencer node URL for HotShot config
 
 You can use a `.env` file and load it with:
 
@@ -185,11 +185,27 @@ set +a
 
 #### Deployment via Docker
 
-You can run the deployer in a container:
+You can run the deployer in a container but you need to stand up all services via docker compose
 
 ```bash
-docker run --env-file .env --rm ghcr.io/espressosystems/espresso-sequencer/deploy:main /bin/deploy --deploy-light-client-v1 ...
+just pull
+just demo
+docker compose run --rm upgrade-prover-contracts /bin/deploy --deploy-light-client-v1
 ```
+
+If making dev changes locally run, `./scripts/build-docker-images-native` instead of `just pull`.
+
+#### Dry run upgrades via Docker
+
+You can only run a dry run for multisig upgrades but you need to stand up all services via docker compose Example:
+
+```bash
+just pull
+just demo
+docker compose run --rm upgrade-prover-contracts /bin/deploy --upgrade-light-client-v2 --dry-run --use-multisig
+```
+
+If making dev changes locally run, `./scripts/build-docker-images-native` instead of `just pull`.
 
 For AWS ECS, ensure all required environment variables and secrets are set in your task definition.
 
@@ -207,6 +223,8 @@ For Docker:
 ```bash
 docker run --env-file .env.docker -e RUST_LOG=debug ...
 ```
+
+(see .env.docker.example for the vars required for .env.docker)
 
 ### Folder Structure Rationale
 
