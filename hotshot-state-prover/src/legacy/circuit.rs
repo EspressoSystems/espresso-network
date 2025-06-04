@@ -1,4 +1,5 @@
 //! Legacy circuit implementation for verifying light client state update
+//! Circuit implementation is copied from commit 5d0baf07cbb27f4ac63df116bc3ff78545554cdb.
 
 use alloy::primitives::U256;
 use ark_ec::twisted_edwards::TECurveConfig;
