@@ -1336,15 +1336,20 @@ mod tests {
         test_upgrade_light_client_to_v2_helper(true).await
     }
 
+    #[derive(Debug, Clone, Copy)]
+    pub struct UpgradeTestOptions {
+        pub is_mock: bool,
+        pub dry_run: bool,
+        pub upgrade_twice: bool,
+    }
+
     // This test is used to test the upgrade of the LightClientProxy via the multisig wallet
     // It only tests the upgrade proposal via the typescript script and thus requires the upgrade proposal to be sent to a real network
     // However, the contracts are deployed on anvil, so the test will pass even if the upgrade proposal is not executed
     // The test assumes that there is a file .env.deployer.rs.test in the root directory:
     // Ensure that the private key has proposal rights on the Safe Multisig Wallet and the SDK supports the network
     async fn test_upgrade_light_client_to_v2_multisig_owner_helper(
-        is_mock: bool,
-        dry_run: bool,
-        upgrade_twice: bool,
+        options: UpgradeTestOptions,
     ) -> Result<()> {
         assert!(
             std::path::Path::new("../../../scripts/multisig-upgrade-entrypoint").exists(),
@@ -1356,7 +1361,7 @@ mod tests {
             "test test test test test test test test test test test junk".to_string();
         let mut account_index = 0;
         let anvil = Anvil::default().spawn();
-        if !dry_run {
+        if !options.dry_run {
             dotenvy::from_filename_override(".env.deployer.rs.test").ok();
 
             for item in dotenvy::from_filename_iter(".env.deployer.rs.test")
@@ -1388,7 +1393,7 @@ mod tests {
             .expect("wrong mnemonic or index")
             .build()?;
         let admin = admin_signer.address();
-        let provider = if !dry_run {
+        let provider = if !options.dry_run {
             ProviderBuilder::new()
                 .wallet(admin_signer)
                 .connect(&sepolia_rpc_url)
@@ -1417,12 +1422,12 @@ mod tests {
             Some(prover),
         )
         .await?;
-        if upgrade_twice {
+        if options.upgrade_twice {
             // upgrade to v2
             upgrade_light_client_v2(
                 &provider,
                 &mut contracts,
-                is_mock,
+                options.is_mock,
                 blocks_per_epoch,
                 epoch_start_block,
             )
@@ -1445,11 +1450,11 @@ mod tests {
             &provider,
             &mut contracts,
             LightClientV2UpgradeParams {
-                is_mock,
+                is_mock: options.is_mock,
                 blocks_per_epoch,
                 epoch_start_block,
                 rpc_url: sepolia_rpc_url.clone(),
-                dry_run: Some(dry_run),
+                dry_run: Some(options.dry_run),
             },
         )
         .await?;
@@ -1458,13 +1463,13 @@ mod tests {
             result
         );
         assert!(success);
-        if dry_run {
+        if options.dry_run {
             let data: serde_json::Value = serde_json::from_str(&result)?;
             assert_eq!(data["rpcUrl"], sepolia_rpc_url);
             assert_eq!(data["safeAddress"], multisig_admin.to_string());
             assert_eq!(data["proxyAddress"], lc_proxy_addr.to_string());
 
-            let expected_init_data = if upgrade_twice {
+            let expected_init_data = if options.upgrade_twice {
                 "0x" // no init data for the second upgrade because the proxy was already initialized
             } else {
                 &LightClientV2::new(lc_proxy_addr, &provider)
@@ -1485,19 +1490,34 @@ mod tests {
 
     #[tokio::test]
     async fn test_upgrade_light_client_to_v2_multisig_owner_dry_run() -> Result<()> {
-        test_upgrade_light_client_to_v2_multisig_owner_helper(false, true, false).await
+        test_upgrade_light_client_to_v2_multisig_owner_helper(UpgradeTestOptions {
+            is_mock: false,
+            dry_run: true,
+            upgrade_twice: false,
+        })
+        .await
     }
 
     // We expect no init data for the second upgrade because the proxy was already initialized
     #[tokio::test]
     async fn test_upgrade_light_client_to_v2_twice_multisig_owner_dry_run() -> Result<()> {
-        test_upgrade_light_client_to_v2_multisig_owner_helper(false, true, true).await
+        test_upgrade_light_client_to_v2_multisig_owner_helper(UpgradeTestOptions {
+            is_mock: false,
+            dry_run: true,
+            upgrade_twice: true,
+        })
+        .await
     }
 
     #[tokio::test]
     #[ignore]
-    async fn test_upgrade_light_client_to_v2_multisig_owner_real_run() -> Result<()> {
-        test_upgrade_light_client_to_v2_multisig_owner_helper(false, false, false).await
+    async fn test_upgrade_light_client_to_v2_multisig_owner_live_eth_network() -> Result<()> {
+        test_upgrade_light_client_to_v2_multisig_owner_helper(UpgradeTestOptions {
+            is_mock: false,
+            dry_run: false,
+            upgrade_twice: false,
+        })
+        .await
     }
 
     #[tokio::test]
