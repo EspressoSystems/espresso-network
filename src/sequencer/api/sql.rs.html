@@ -443,7 +443,7 @@
 <a href=#443 id=443 data-nosnippet>443</a>/// range of leaves, and the STF requires all associated data to be present in the `ValidatedState`;
 <a href=#444 id=444 data-nosnippet>444</a>/// otherwise, it will attempt to trigger catchup itself.
 <a href=#445 id=445 data-nosnippet>445</a></span><span class="attr">#[tracing::instrument(skip(instance, tx))]
-<a href=#446 id=446 data-nosnippet>446</a></span><span class="kw">async fn </span>reconstruct_state&lt;Mode: TransactionMode&gt;(
+<a href=#446 id=446 data-nosnippet>446</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>reconstruct_state&lt;Mode: TransactionMode&gt;(
 <a href=#447 id=447 data-nosnippet>447</a>    instance: <span class="kw-2">&amp;</span>NodeState,
 <a href=#448 id=448 data-nosnippet>448</a>    tx: <span class="kw-2">&amp;mut </span>Transaction&lt;Mode&gt;,
 <a href=#449 id=449 data-nosnippet>449</a>    from_height: u64,
@@ -728,14 +728,14 @@
 <a href=#728 id=728 data-nosnippet>728</a>}
 <a href=#729 id=729 data-nosnippet>729</a>
 <a href=#730 id=730 data-nosnippet>730</a><span class="attr">#[cfg(any(test, feature = <span class="string">"testing"</span>))]
-<a href=#731 id=731 data-nosnippet>731</a></span><span class="kw">mod </span>impl_testable_data_source {
+<a href=#731 id=731 data-nosnippet>731</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>impl_testable_data_source {
 <a href=#732 id=732 data-nosnippet>732</a>
 <a href=#733 id=733 data-nosnippet>733</a>    <span class="kw">use </span>hotshot_query_service::data_source::storage::sql::testing::TmpDb;
 <a href=#734 id=734 data-nosnippet>734</a>
 <a href=#735 id=735 data-nosnippet>735</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
 <a href=#736 id=736 data-nosnippet>736</a>    <span class="kw">use </span><span class="kw">crate</span>::api::{<span class="self">self</span>, data_source::testing::TestableSequencerDataSource};
 <a href=#737 id=737 data-nosnippet>737</a>
-<a href=#738 id=738 data-nosnippet>738</a>    <span class="kw">fn </span>tmp_options(db: <span class="kw-2">&amp;</span>TmpDb) -&gt; Options {
+<a href=#738 id=738 data-nosnippet>738</a>    <span class="kw">pub fn </span>tmp_options(db: <span class="kw-2">&amp;</span>TmpDb) -&gt; Options {
 <a href=#739 id=739 data-nosnippet>739</a>        <span class="attr">#[cfg(not(feature = <span class="string">"embedded-db"</span>))]
 <a href=#740 id=740 data-nosnippet>740</a>        </span>{
 <a href=#741 id=741 data-nosnippet>741</a>            <span class="kw">let </span>opt = <span class="kw">crate</span>::persistence::sql::PostgresOptions {
