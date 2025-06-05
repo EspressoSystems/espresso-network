@@ -478,7 +478,6 @@ async fn handle_events<N, P, V>(
 
     while let Some(event) = events.next().await {
         tracing::debug!(node_id, ?event, "consensus event");
-
         // Store latest consensus state.
         persistence.handle_event(&event, &event_consumer).await;
 
