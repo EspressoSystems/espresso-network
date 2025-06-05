@@ -7,8 +7,9 @@
 use std::time::Duration;
 
 use hotshot_example_types::node_types::{
-    EpochsTestVersions, PushCdnImpl, TestTwoStakeTablesTypes, TestTypes,
-    TestTypesEpochCatchupTypes, TestTypesRandomizedLeader,
+    EpochsTestVersions, PushCdnImpl, RandomOverlapQuorumFilterConfig, TestTwoStakeTablesTypes,
+    TestTypes, TestTypesEpochCatchupTypes, TestTypesRandomizedCommitteeMembers,
+    TestTypesRandomizedLeader,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
@@ -157,6 +158,55 @@ cross_tests!(
             num_successful_views: 50,
             possible_view_failures: vec![33, 34],
             decide_timeout: Duration::from_secs(15),
+            ..Default::default()
+        };
+
+        metadata.skip_late = true;
+
+        metadata
+    },
+);
+
+cross_tests!(
+    TestName: test_randomized_committee_catchup_epochs,
+    Impls: [PushCdnImpl],
+    Types: [
+        TestTypesEpochCatchupTypes<EpochsTestVersions, TestTypesRandomizedCommitteeMembers<RandomOverlapQuorumFilterConfig<123, 8, 10, 2, 5>, RandomOverlapQuorumFilterConfig<123, 3, 4, 1, 2>>>,
+    ],
+    Versions: [EpochsTestVersions],
+    Ignore: false,
+    Metadata: {
+        let timing_data = TimingData {
+            next_view_timeout: 5000,
+            ..Default::default()
+        };
+
+        let mut metadata = TestDescription::default().set_num_nodes(20, 7);
+
+        let catchup_node = vec![ChangeNode {
+            idx: 10,
+            updown: NodeAction::Up,
+        }];
+
+        metadata.timing_data = timing_data;
+
+        metadata.view_sync_properties =
+            hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 20);
+
+        metadata.spinning_properties = SpinningTaskDescription {
+            node_changes: vec![(35, catchup_node)],
+        };
+
+        metadata.completion_task_description =
+            CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
+                TimeBasedCompletionTaskDescription {
+                    duration: Duration::from_secs(120),
+                },
+            );
+        metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
+            num_successful_views: 50,
+            possible_view_failures: vec![2, 3, 14, 15, 17, 18],
+            decide_timeout: Duration::from_secs(20),
             ..Default::default()
         };
 

@@ -166,11 +166,17 @@ where
 )]
 /// filler struct to implement node type and allow us
 /// to select our traits
-pub struct TestTypesRandomizedCommitteeMembers<CONFIG: QuorumFilterConfig> {
+pub struct TestTypesRandomizedCommitteeMembers<
+    CONFIG: QuorumFilterConfig,
+    DaConfig: QuorumFilterConfig,
+> {
     _pd: PhantomData<CONFIG>,
+    _dd: PhantomData<DaConfig>,
 }
 
-impl<CONFIG: QuorumFilterConfig> NodeType for TestTypesRandomizedCommitteeMembers<CONFIG> {
+impl<CONFIG: QuorumFilterConfig, DaConfig: QuorumFilterConfig> NodeType
+    for TestTypesRandomizedCommitteeMembers<CONFIG, DaConfig>
+{
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
     type View = ViewNumber;
@@ -181,8 +187,11 @@ impl<CONFIG: QuorumFilterConfig> NodeType for TestTypesRandomizedCommitteeMember
     type Transaction = TestTransaction;
     type ValidatedState = TestValidatedState;
     type InstanceState = TestInstanceState;
-    type Membership =
-        RandomizedCommitteeMembers<TestTypesRandomizedCommitteeMembers<CONFIG>, CONFIG>;
+    type Membership = RandomizedCommitteeMembers<
+        TestTypesRandomizedCommitteeMembers<CONFIG, DaConfig>,
+        CONFIG,
+        DaConfig,
+    >;
     type BuilderSignatureKey = BuilderKey;
     type StateSignatureKey = SchnorrPubKey;
 }
