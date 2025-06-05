@@ -26,7 +26,10 @@ use super::{
     Storable,
 };
 use crate::{
-    availability::{BlockId, BlockQueryData, PayloadMetadata, PayloadQueryData, QueryablePayload},
+    availability::{
+        BlockId, BlockQueryData, PayloadMetadata, PayloadQueryData, QueryableHeader,
+        QueryablePayload,
+    },
     data_source::{
         storage::{
             pruning::PrunedHeightStorage, AvailabilityStorage, NodeStorage,
@@ -62,6 +65,7 @@ where
 impl<Types> Fetchable<Types> for BlockQueryData<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     type Request = BlockId<Types>;
@@ -120,6 +124,7 @@ where
 impl<Types> RangedFetchable<Types> for BlockQueryData<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     type RangedRequest = BlockId<Types>;
@@ -163,6 +168,7 @@ pub(super) fn fetch_block_with_header<Types, S, P>(
     header: Header<Types>,
 ) where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
@@ -193,6 +199,7 @@ pub(super) fn fetch_block_with_header<Types, S, P>(
 impl<Types> Fetchable<Types> for PayloadQueryData<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     type Request = BlockId<Types>;
@@ -248,6 +255,7 @@ where
 impl<Types> RangedFetchable<Types> for PayloadQueryData<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     type RangedRequest = BlockId<Types>;
@@ -291,6 +299,7 @@ impl<Types: NodeType, S, P> PartialOrd for PayloadCallback<Types, S, P> {
 
 impl<Types: NodeType, S, P> Callback<Payload<Types>> for PayloadCallback<Types, S, P>
 where
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
     S: 'static + VersionedDataSource,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
@@ -307,6 +316,7 @@ where
 impl<Types> Fetchable<Types> for PayloadMetadata<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     type Request = BlockId<Types>;
@@ -361,6 +371,7 @@ where
 impl<Types> RangedFetchable<Types> for PayloadMetadata<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     type RangedRequest = BlockId<Types>;

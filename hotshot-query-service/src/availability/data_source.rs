@@ -31,8 +31,8 @@ use super::{
     fetch::Fetch,
     query_data::{
         BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadMetadata, PayloadQueryData,
-        QueryablePayload, TransactionHash, TransactionQueryData, VidCommonMetadata,
-        VidCommonQueryData,
+        QueryableHeader, QueryablePayload, TransactionHash, TransactionQueryData,
+        VidCommonMetadata, VidCommonQueryData,
     },
     StateCertQueryData,
 };
@@ -131,6 +131,7 @@ pub type FetchStream<T> = BoxStream<'static, Fetch<T>>;
 #[async_trait]
 pub trait AvailabilityDataSource<Types: NodeType>
 where
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     async fn get_leaf<ID>(&self, id: ID) -> Fetch<LeafQueryData<Types>>

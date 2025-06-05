@@ -1323,6 +1323,7 @@ pub mod testing {
                         None
                     }
                 }) {
+                    tracing::info!(height, "transaction {commitment} sequenced");
                     return height;
                 }
             } else {

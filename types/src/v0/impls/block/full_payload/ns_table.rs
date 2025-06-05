@@ -307,6 +307,18 @@ impl NsIndex {
     }
 }
 
+impl From<i64> for NsIndex {
+    fn from(i: i64) -> Self {
+        Self(i as usize)
+    }
+}
+
+impl From<NsIndex> for i64 {
+    fn from(i: NsIndex) -> i64 {
+        i.0 as i64
+    }
+}
+
 impl NumNss {
     pub fn in_bounds(&self, index: &NsIndex) -> bool {
         index.0 < self.0

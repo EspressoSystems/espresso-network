@@ -26,7 +26,7 @@ use super::{
     vid::fetch_vid_common_with_header, AvailabilityProvider, Fetcher,
 };
 use crate::{
-    availability::{BlockId, QueryablePayload},
+    availability::{BlockId, QueryableHeader, QueryablePayload},
     data_source::{
         fetching::{Fetchable, HeaderQueryData, LeafQueryData, Notifiers},
         storage::{
@@ -49,6 +49,7 @@ impl<Types: NodeType> From<LeafQueryData<Types>> for HeaderQueryData<Types> {
 fn satisfies_header_req_from_leaf<Types>(leaf: &LeafQueryData<Types>, req: BlockId<Types>) -> bool
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     HeaderQueryData::satisfies(&HeaderQueryData::new(leaf.header().clone()), req)
@@ -58,6 +59,7 @@ where
 impl<Types> Fetchable<Types> for HeaderQueryData<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     type Request = BlockId<Types>;
@@ -163,6 +165,7 @@ impl<Types: NodeType, S, P> Ord for HeaderCallback<Types, S, P> {
 impl<Types, S, P> HeaderCallback<Types, S, P>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
@@ -202,6 +205,7 @@ pub(super) async fn fetch_header_and_then<Types, S, P>(
 ) -> anyhow::Result<()>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,

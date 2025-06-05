@@ -565,21 +565,23 @@ where
         )
         .await?;
 
-        // Index the transactions in the block.
+        // Index the transactions and namespaces in the block.
         let mut rows = vec![];
         for (txn_ix, txn) in block.enumerate() {
+            let ns_id = block.header().namespace_id(&txn_ix.ns_index).unwrap();
             rows.push((
                 txn.commit().to_string(),
                 height as i64,
-                txn_ix.namespace as i64,
+                txn_ix.ns_index.into(),
+                ns_id.into(),
                 txn_ix.position as i64,
             ));
         }
         if !rows.is_empty() {
             self.upsert(
                 "transactions",
-                ["hash", "block_height", "namespace", "position"],
-                ["block_height", "namespace", "position"],
+                ["hash", "block_height", "ns_index", "ns_id", "position"],
+                ["block_height", "ns_id", "position"],
                 rows,
             )
             .await?;
