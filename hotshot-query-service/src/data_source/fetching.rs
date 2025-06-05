@@ -1852,21 +1852,23 @@ where
     async fn count_transactions_in_range(
         &self,
         range: impl RangeBounds<usize> + Send,
+        namespace: Option<u32>
     ) -> QueryResult<usize> {
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
             message: err.to_string(),
         })?;
-        tx.count_transactions_in_range(range).await
+        tx.count_transactions_in_range(range, namespace).await
     }
 
     async fn payload_size_in_range(
         &self,
         range: impl RangeBounds<usize> + Send,
+       namespace: Option<u32>
     ) -> QueryResult<usize> {
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
             message: err.to_string(),
         })?;
-        tx.payload_size_in_range(range).await
+        tx.payload_size_in_range(range, namespace).await
     }
 
     async fn vid_share<ID>(&self, id: ID) -> QueryResult<VidShare>

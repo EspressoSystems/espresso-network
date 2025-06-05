@@ -759,6 +759,7 @@ where
     async fn count_transactions_in_range(
         &mut self,
         range: impl RangeBounds<usize> + Send,
+          namespace: Option<u32>,
     ) -> QueryResult<usize> {
         if !matches!(range.start_bound(), Bound::Unbounded | Bound::Included(0))
             || !matches!(range.end_bound(), Bound::Unbounded)
@@ -768,18 +769,31 @@ where
             });
         }
 
+        if namespace.is_some() {
+            return Err(QueryError::Error {
+                message: "file system does not support per-namespace stats".into(),
+            });
+        }
+
         Ok(self.inner.num_transactions)
     }
 
     async fn payload_size_in_range(
         &mut self,
         range: impl RangeBounds<usize> + Send,
+        namespace: Option<u32>,
     ) -> QueryResult<usize> {
         if !matches!(range.start_bound(), Bound::Unbounded | Bound::Included(0))
             || !matches!(range.end_bound(), Bound::Unbounded)
         {
             return Err(QueryError::Error {
                 message: "partial aggregates are not supported with file system backend".into(),
+            });
+        }
+
+        if namespace.is_some() {
+            return Err(QueryError::Error {
+                message: "file system does not support per-namespace stats".into(),
             });
         }
 

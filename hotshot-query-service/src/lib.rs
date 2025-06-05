@@ -796,14 +796,16 @@ mod test {
         async fn count_transactions_in_range(
             &self,
             range: impl RangeBounds<usize> + Send,
+            namespace: Option<u32>
         ) -> QueryResult<usize> {
-            self.hotshot_qs.count_transactions_in_range(range).await
+            self.hotshot_qs.count_transactions_in_range(range, namespace).await
         }
         async fn payload_size_in_range(
             &self,
             range: impl RangeBounds<usize> + Send,
+           namespace: Option<u32>
         ) -> QueryResult<usize> {
-            self.hotshot_qs.payload_size_in_range(range).await
+            self.hotshot_qs.payload_size_in_range(range, namespace).await
         }
         async fn vid_share<ID>(&self, id: ID) -> QueryResult<VidShare>
         where

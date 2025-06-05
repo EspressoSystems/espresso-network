@@ -56,10 +56,12 @@ pub trait NodeDataSource<Types: NodeType> {
     async fn count_transactions_in_range(
         &self,
         range: impl RangeBounds<usize> + Send,
+        namespace: Option<u32>
     ) -> QueryResult<usize>;
     async fn payload_size_in_range(
         &self,
         range: impl RangeBounds<usize> + Send,
+         namespace: Option<u32>
     ) -> QueryResult<usize>;
     async fn vid_share<ID>(&self, id: ID) -> QueryResult<VidShare>
     where
@@ -75,10 +77,10 @@ pub trait NodeDataSource<Types: NodeType> {
     async fn sync_status(&self) -> QueryResult<SyncStatus>;
 
     async fn count_transactions(&self) -> QueryResult<usize> {
-        self.count_transactions_in_range(0..).await
+        self.count_transactions_in_range(0.., None).await
     }
 
     async fn payload_size(&self) -> QueryResult<usize> {
-        self.payload_size_in_range(0..).await
+        self.payload_size_in_range(0.., None).await
     }
 }

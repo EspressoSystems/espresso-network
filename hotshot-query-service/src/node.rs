@@ -141,7 +141,10 @@ where
                     Some(to) => Bound::Included(to),
                     None => Bound::Unbounded,
                 };
-                Ok(state.count_transactions_in_range((from, to)).await?)
+
+                let ns = req.opt_integer_param("namespace")?;
+
+                Ok(state.count_transactions_in_range((from, to), ns).await?)
             }
             .boxed()
         })?
@@ -155,7 +158,10 @@ where
                     Some(to) => Bound::Included(to),
                     None => Bound::Unbounded,
                 };
-                Ok(state.payload_size_in_range((from, to)).await?)
+
+                 let ns = req.opt_integer_param("namespace")?;
+
+                Ok(state.payload_size_in_range((from, to), ns).await?)
             }
             .boxed()
         })?

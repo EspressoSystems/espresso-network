@@ -1426,12 +1426,12 @@ mod test {
         // The SQL commands used here will fail if not run in order.
         let migrations = vec![
             Migration::unapplied(
-                "V999__create_test_table.sql",
+                "V9999__create_test_table.sql",
                 "ALTER TABLE test ADD COLUMN data INTEGER;",
             )
             .unwrap(),
             Migration::unapplied(
-                "V998__create_test_table.sql",
+                "V9998__create_test_table.sql",
                 "CREATE TABLE test (x bigint);",
             )
             .unwrap(),
