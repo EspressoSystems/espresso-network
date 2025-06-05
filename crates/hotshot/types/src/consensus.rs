@@ -1078,7 +1078,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         self.saved_da_certs
             .retain(|view_number, _| *view_number >= old_anchor_view);
         self.validated_state_map
-            .range(old_anchor_view..gc_view)
+            .range(..gc_view)
             .filter_map(|(_view_number, view)| view.leaf_commitment())
             .for_each(|leaf| {
                 self.saved_leaves.remove(&leaf);
