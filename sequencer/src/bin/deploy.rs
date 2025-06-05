@@ -198,12 +198,7 @@ async fn main() -> anyhow::Result<()> {
     opt.logging.init();
 
     if opt.verify_node_js_files {
-        let script_path = if let Ok(cargo_manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-            Some(PathBuf::from(cargo_manifest_dir).join("../scripts/multisig-upgrade-entrypoint"))
-        } else {
-            None
-        };
-        verify_node_js_files(script_path).await?;
+        verify_node_js_files().await?;
     }
 
     let mut contracts = Contracts::from(opt.contracts);

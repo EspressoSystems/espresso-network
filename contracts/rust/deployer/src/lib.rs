@@ -252,7 +252,7 @@ impl Contracts {
 /// Verify the node js files are present and can be executed.
 ///
 /// It calls the upgrade proxy script with a dummy address and a dummy rpc url in dry run mode
-pub async fn verify_node_js_files(custom_dir: Option<PathBuf>) -> Result<()> {
+pub async fn verify_node_js_files() -> Result<()> {
     call_upgrade_proxy_script(
         Address::random(),
         Address::random(),
@@ -260,7 +260,6 @@ pub async fn verify_node_js_files(custom_dir: Option<PathBuf>) -> Result<()> {
         String::from("https://sepolia.infura.io/v3/"),
         Address::random(),
         Some(true),
-        custom_dir,
     )
     .await?;
     Ok(())
@@ -554,121 +553,129 @@ pub async fn upgrade_light_client_v2_multisig_owner(
         tracing::warn!("Dry run not specified, defaulting to false");
         false
     });
-    match contracts.address(Contract::LightClientProxy) {
-        // check if proxy already exists
-        None => Err(anyhow!(
-            "LightClientProxy (multisig owner) not found, can't upgrade"
-        )),
-        Some(proxy_addr) => {
-            tracing::info!("LightClientProxy found at {proxy_addr:#x}");
-            let proxy = LightClient::new(proxy_addr, &provider);
-            let owner_addr = proxy.owner().call().await?._0;
-            if !dry_run {
-                tracing::info!("Checking if owner is a contract");
-                assert!(
-                    is_contract(&provider, owner_addr).await?,
-                    "Owner is not a contract so not a multisig wallet"
-                );
-            }
 
-            // Deploy PlonkVerifierV2.sol (if not already deployed)
-            let pv2_addr = contracts
-                .deploy(
-                    Contract::PlonkVerifierV2,
-                    PlonkVerifierV2::deploy_builder(&provider),
-                )
-                .await?;
+    let proxy_addr = contracts
+        .address(Contract::LightClientProxy)
+        .ok_or_else(|| anyhow!("LightClientProxy (multisig owner) not found, can't upgrade"))?;
+    tracing::info!("LightClientProxy found at {proxy_addr:#x}");
+    let proxy = LightClient::new(proxy_addr, &provider);
+    let owner_addr = proxy.owner().call().await?._0;
 
-            // then deploy LightClientV2.sol
-            let target_lcv2_bytecode = if params.is_mock {
-                LightClientV2Mock::BYTECODE.encode_hex()
-            } else {
-                LightClientV2::BYTECODE.encode_hex()
-            };
-            let lcv2_linked_bytecode = {
-                match target_lcv2_bytecode
-                    .matches(LIBRARY_PLACEHOLDER_ADDRESS)
-                    .count()
-                {
-                    0 => return Err(anyhow!("lib placeholder not found")),
-                    1 => Bytes::from_hex(target_lcv2_bytecode.replacen(
-                        LIBRARY_PLACEHOLDER_ADDRESS,
-                        &pv2_addr.encode_hex(),
-                        1,
-                    ))?,
-                    _ => {
-                        return Err(anyhow!(
-                            "more than one lib placeholder found, consider using a different value"
-                        ))
-                    },
-                }
-            };
-            let lcv2_addr = if params.is_mock {
-                let addr = LightClientV2Mock::deploy_builder(&provider)
-                    .map(|req| req.with_deploy_code(lcv2_linked_bytecode))
-                    .deploy()
-                    .await?;
-                tracing::info!("deployed LightClientV2Mock at {addr:#x}");
-                addr
-            } else {
-                contracts
-                    .deploy(
-                        Contract::LightClientV2,
-                        LightClientV2::deploy_builder(&provider)
-                            .map(|req| req.with_deploy_code(lcv2_linked_bytecode)),
-                    )
-                    .await?
-            };
+    if !dry_run {
+        tracing::info!("Checking if owner is a contract");
+        assert!(
+            is_contract(&provider, owner_addr).await?,
+            "Owner is not a contract so not a multisig wallet"
+        );
+    }
 
-            // get initialized version number from proxy
-            let proxy_addr = contracts.address(Contract::LightClientProxy).unwrap();
-            let initialized = get_proxy_initialized_version(&provider, proxy_addr).await?;
-            tracing::info!("Initialized version: {}", initialized);
-
-            // get contract version from proxy
-            let lcv2_proxy = LightClientV2::new(proxy_addr, &provider);
-            let lcv2_version = lcv2_proxy.getVersion().call().await?;
-
-            // only set the init data if the proxy was not initialized (when initialized the version number is the same as the contract version number)
-            let init_data = if initialized == lcv2_version.majorVersion
-                && lcv2_version.majorVersion == expected_major_version
-            {
-                tracing::info!(
-                    "Proxy was already initialized for version {}",
-                    expected_major_version
-                );
-                vec![].into()
-            } else {
-                tracing::info!("Proxy was not initialized");
-                tracing::info!("Init Data to be signed.\n Function: initializeV2\n Arguments:\n blocks_per_epoch: {:?}\n epoch_start_block: {:?}", params.blocks_per_epoch, params.epoch_start_block);
-                LightClientV2::new(lcv2_addr, &provider)
-                    .initializeV2(params.blocks_per_epoch, params.epoch_start_block)
-                    .calldata()
-                    .to_owned()
-            };
-
-            // invoke upgrade on proxy via the safeSDK
-            let result = call_upgrade_proxy_script(
-                proxy_addr,
-                lcv2_addr,
-                init_data.to_string(),
-                params.rpc_url,
-                owner_addr,
-                Some(dry_run),
-                None,
+    // Prepare addresses
+    let (_pv2_addr, lcv2_addr) = if !dry_run {
+        // Deploy PlonkVerifierV2.sol (if not already deployed)
+        let pv2_addr = contracts
+            .deploy(
+                Contract::PlonkVerifierV2,
+                PlonkVerifierV2::deploy_builder(&provider),
             )
             .await?;
 
-            tracing::info!("LightClientProxy upgrade proposal sent");
-            tracing::info!(
-                "Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
-                owner_addr
-            );
-            // IDEA: add a function to wait for the proposal to be executed
+        // then deploy LightClientV2.sol
+        let target_lcv2_bytecode = if params.is_mock {
+            LightClientV2Mock::BYTECODE.encode_hex()
+        } else {
+            LightClientV2::BYTECODE.encode_hex()
+        };
+        let lcv2_linked_bytecode = {
+            match target_lcv2_bytecode
+                .matches(LIBRARY_PLACEHOLDER_ADDRESS)
+                .count()
+            {
+                0 => return Err(anyhow!("lib placeholder not found")),
+                1 => Bytes::from_hex(target_lcv2_bytecode.replacen(
+                    LIBRARY_PLACEHOLDER_ADDRESS,
+                    &pv2_addr.encode_hex(),
+                    1,
+                ))?,
+                _ => {
+                    return Err(anyhow!(
+                        "more than one lib placeholder found, consider using a different value"
+                    ))
+                },
+            }
+        };
+        let lcv2_addr = if params.is_mock {
+            let addr = LightClientV2Mock::deploy_builder(&provider)
+                .map(|req| req.with_deploy_code(lcv2_linked_bytecode))
+                .deploy()
+                .await?;
+            tracing::info!("deployed LightClientV2Mock at {addr:#x}");
+            addr
+        } else {
+            contracts
+                .deploy(
+                    Contract::LightClientV2,
+                    LightClientV2::deploy_builder(&provider)
+                        .map(|req| req.with_deploy_code(lcv2_linked_bytecode)),
+                )
+                .await?
+        };
+        (pv2_addr, lcv2_addr)
+    } else {
+        // Use dummy addresses for dry run
+        (Address::random(), Address::random())
+    };
 
-            Ok(result)
-        },
+    // get initialized version number from proxy
+    let initialized = get_proxy_initialized_version(&provider, proxy_addr).await?;
+    tracing::info!("Initialized version: {}", initialized);
+
+    // get contract version from proxy
+    let lcv2_proxy = LightClientV2::new(proxy_addr, &provider);
+    let lcv2_version = lcv2_proxy.getVersion().call().await?;
+
+    // only set the init data if the proxy was not initialized (when initialized the version number is the same as the contract version number)
+    let init_data = if initialized == lcv2_version.majorVersion
+        && lcv2_version.majorVersion == expected_major_version
+    {
+        tracing::info!(
+            "Proxy was already initialized for version {}",
+            expected_major_version
+        );
+        vec![].into()
+    } else {
+        tracing::info!("Proxy was not initialized");
+        tracing::info!("Init Data to be signed.\n Function: initializeV2\n Arguments:\n blocks_per_epoch: {:?}\n epoch_start_block: {:?}", params.blocks_per_epoch, params.epoch_start_block);
+        LightClientV2::new(lcv2_addr, &provider)
+            .initializeV2(params.blocks_per_epoch, params.epoch_start_block)
+            .calldata()
+            .to_owned()
+    };
+
+    // invoke upgrade on proxy via the safeSDK
+    let result = call_upgrade_proxy_script(
+        proxy_addr,
+        lcv2_addr,
+        init_data.to_string(),
+        params.rpc_url,
+        owner_addr,
+        Some(dry_run),
+    )
+    .await?;
+
+    tracing::info!("LightClientProxy upgrade proposal sent");
+    tracing::info!("Init data: {:?}", init_data);
+    if init_data.to_string() != "0x" {
+        tracing::info!("Data to be signed:\n Function: initializeV2\n Arguments:\n blocks_per_epoch: {:?}\n epoch_start_block: {:?}", params.blocks_per_epoch, params.epoch_start_block);
     }
+    if !dry_run {
+        tracing::info!(
+            "Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
+            owner_addr
+        );
+    }
+    // IDEA: add a function to wait for the proposal to be executed
+
+    Ok(result)
 }
 
 /// The primary logic for deploying and initializing an upgradable fee contract.
@@ -954,7 +961,6 @@ pub async fn call_upgrade_proxy_script(
     rpc_url: String,
     safe_addr: Address,
     dry_run: Option<bool>,
-    dir: Option<PathBuf>,
 ) -> Result<(String, bool), anyhow::Error> {
     let dry_run = dry_run.unwrap_or(false);
     tracing::info!("Dry run: {}", dry_run);
@@ -963,7 +969,7 @@ pub async fn call_upgrade_proxy_script(
         safe_addr
     );
 
-    let script_path = find_script_path(dir)?;
+    let script_path = find_script_path()?;
 
     let output = Command::new(script_path)
         .arg("--from-rust")
@@ -993,17 +999,17 @@ pub async fn call_upgrade_proxy_script(
     Ok((stdout.to_string(), true))
 }
 
-fn find_script_path(custom_script_path: Option<PathBuf>) -> Result<PathBuf> {
+fn find_script_path() -> Result<PathBuf> {
     let mut path_options = Vec::new();
-    if let Some(script_path) = custom_script_path {
-        path_options.push(script_path);
-    } else if let Ok(cargo_manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+    if let Ok(cargo_manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
         path_options.push(
-            PathBuf::from(cargo_manifest_dir).join("../../../scripts/multisig-upgrade-entrypoint"),
+            PathBuf::from(cargo_manifest_dir.clone())
+                .join("../../../scripts/multisig-upgrade-entrypoint"),
         );
+        path_options
+            .push(PathBuf::from(cargo_manifest_dir).join("../scripts/multisig-upgrade-entrypoint"));
     }
     path_options.push(PathBuf::from("/bin/multisig-upgrade-entrypoint"));
-
     for path in path_options {
         if path.exists() {
             return Ok(path);
