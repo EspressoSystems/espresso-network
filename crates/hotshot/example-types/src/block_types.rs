@@ -8,7 +8,6 @@ use std::{
     fmt::{Debug, Display},
     mem::size_of,
     sync::Arc,
-    time::SystemTime,
 };
 
 use async_trait::async_trait;
@@ -389,10 +388,7 @@ impl<
     }
 
     fn timestamp(&self) -> u64 {
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
+        self.timestamp
     }
 }
 
