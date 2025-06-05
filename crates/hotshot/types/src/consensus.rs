@@ -646,9 +646,9 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let parent_vid = self
             .vid_shares()
             .get(&parent_view_number)
-            .and_then(|key_map| key_map.get(public_key).cloned())
-            .and_then(|epoch_map| epoch_map.get(&parent_epoch).cloned())
-            .map(|prop| prop.data);
+            .and_then(|key_map| key_map.get(public_key))
+            .and_then(|epoch_map| epoch_map.get(&parent_epoch))
+            .map(|prop| prop.data.clone());
 
         let state_cert = if parent_leaf.with_epoch
             && is_epoch_root(parent_leaf.block_header().block_number(), self.epoch_height)
