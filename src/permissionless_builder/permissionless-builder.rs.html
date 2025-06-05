@@ -158,39 +158,38 @@
 <a href=#158 id=158 data-nosnippet>158</a>
 <a href=#159 id=159 data-nosnippet>159</a>    <span class="kw">let </span>builder_server_url: Url = <span class="macro">format!</span>(<span class="string">"http://0.0.0.0:{}"</span>, opt.port).parse().unwrap();
 <a href=#160 id=160 data-nosnippet>160</a>
-<a href=#161 id=161 data-nosnippet>161</a>    <span class="kw">let </span>instance_state =
-<a href=#162 id=162 data-nosnippet>162</a>        build_instance_state::&lt;V&gt;(genesis.chain_config, l1_params, opt.state_peers);
-<a href=#163 id=163 data-nosnippet>163</a>
-<a href=#164 id=164 data-nosnippet>164</a>    <span class="kw">let </span>base_fee = genesis.max_base_fee();
-<a href=#165 id=165 data-nosnippet>165</a>    <span class="macro">tracing::info!</span>(<span class="question-mark">?</span>base_fee, <span class="string">"base_fee"</span>);
-<a href=#166 id=166 data-nosnippet>166</a>
-<a href=#167 id=167 data-nosnippet>167</a>    <span class="kw">let </span>validated_state = ValidatedState::genesis(<span class="kw-2">&amp;</span>instance_state).<span class="number">0</span>;
-<a href=#168 id=168 data-nosnippet>168</a>
-<a href=#169 id=169 data-nosnippet>169</a>    <span class="kw">let </span>api_response_timeout_duration = opt.max_api_timeout_duration;
-<a href=#170 id=170 data-nosnippet>170</a>
-<a href=#171 id=171 data-nosnippet>171</a>    <span class="comment">// make the txn timeout as 1/4 of the api_response_timeout_duration
-<a href=#172 id=172 data-nosnippet>172</a>    </span><span class="kw">let </span>txn_timeout_duration = api_response_timeout_duration / <span class="number">4</span>;
-<a href=#173 id=173 data-nosnippet>173</a>
-<a href=#174 id=174 data-nosnippet>174</a>    <span class="kw">let </span>_builder_config = BuilderConfig::init::&lt;V&gt;(
-<a href=#175 id=175 data-nosnippet>175</a>        builder_key_pair,
-<a href=#176 id=176 data-nosnippet>176</a>        bootstrapped_view,
-<a href=#177 id=177 data-nosnippet>177</a>        opt.tx_channel_capacity,
-<a href=#178 id=178 data-nosnippet>178</a>        opt.event_channel_capacity,
-<a href=#179 id=179 data-nosnippet>179</a>        opt.node_count,
-<a href=#180 id=180 data-nosnippet>180</a>        instance_state.clone(),
-<a href=#181 id=181 data-nosnippet>181</a>        validated_state,
-<a href=#182 id=182 data-nosnippet>182</a>        opt.hotshot_event_streaming_url,
-<a href=#183 id=183 data-nosnippet>183</a>        builder_server_url,
-<a href=#184 id=184 data-nosnippet>184</a>        api_response_timeout_duration,
-<a href=#185 id=185 data-nosnippet>185</a>        opt.max_block_size_increment_period,
-<a href=#186 id=186 data-nosnippet>186</a>        txn_timeout_duration,
-<a href=#187 id=187 data-nosnippet>187</a>        base_fee,
-<a href=#188 id=188 data-nosnippet>188</a>        opt.tx_status_cache_size,
-<a href=#189 id=189 data-nosnippet>189</a>    )
-<a href=#190 id=190 data-nosnippet>190</a>    .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#191 id=191 data-nosnippet>191</a>
-<a href=#192 id=192 data-nosnippet>192</a>    <span class="comment">// Sleep forever
-<a href=#193 id=193 data-nosnippet>193</a>    </span>pending::&lt;()&gt;().<span class="kw">await</span>;
-<a href=#194 id=194 data-nosnippet>194</a>
-<a href=#195 id=195 data-nosnippet>195</a>    <span class="prelude-val">Ok</span>(())
-<a href=#196 id=196 data-nosnippet>196</a>}</code></pre></div></section></main></body></html>
+<a href=#161 id=161 data-nosnippet>161</a>    <span class="kw">let </span>instance_state = build_instance_state::&lt;V&gt;(genesis.clone(), l1_params, opt.state_peers);
+<a href=#162 id=162 data-nosnippet>162</a>
+<a href=#163 id=163 data-nosnippet>163</a>    <span class="kw">let </span>base_fee = genesis.max_base_fee();
+<a href=#164 id=164 data-nosnippet>164</a>    <span class="macro">tracing::info!</span>(<span class="question-mark">?</span>base_fee, <span class="string">"base_fee"</span>);
+<a href=#165 id=165 data-nosnippet>165</a>
+<a href=#166 id=166 data-nosnippet>166</a>    <span class="kw">let </span>validated_state = ValidatedState::genesis(<span class="kw-2">&amp;</span>instance_state).<span class="number">0</span>;
+<a href=#167 id=167 data-nosnippet>167</a>
+<a href=#168 id=168 data-nosnippet>168</a>    <span class="kw">let </span>api_response_timeout_duration = opt.max_api_timeout_duration;
+<a href=#169 id=169 data-nosnippet>169</a>
+<a href=#170 id=170 data-nosnippet>170</a>    <span class="comment">// make the txn timeout as 1/4 of the api_response_timeout_duration
+<a href=#171 id=171 data-nosnippet>171</a>    </span><span class="kw">let </span>txn_timeout_duration = api_response_timeout_duration / <span class="number">4</span>;
+<a href=#172 id=172 data-nosnippet>172</a>
+<a href=#173 id=173 data-nosnippet>173</a>    <span class="kw">let </span>_builder_config = BuilderConfig::init::&lt;V&gt;(
+<a href=#174 id=174 data-nosnippet>174</a>        builder_key_pair,
+<a href=#175 id=175 data-nosnippet>175</a>        bootstrapped_view,
+<a href=#176 id=176 data-nosnippet>176</a>        opt.tx_channel_capacity,
+<a href=#177 id=177 data-nosnippet>177</a>        opt.event_channel_capacity,
+<a href=#178 id=178 data-nosnippet>178</a>        opt.node_count,
+<a href=#179 id=179 data-nosnippet>179</a>        instance_state.clone(),
+<a href=#180 id=180 data-nosnippet>180</a>        validated_state,
+<a href=#181 id=181 data-nosnippet>181</a>        opt.hotshot_event_streaming_url,
+<a href=#182 id=182 data-nosnippet>182</a>        builder_server_url,
+<a href=#183 id=183 data-nosnippet>183</a>        api_response_timeout_duration,
+<a href=#184 id=184 data-nosnippet>184</a>        opt.max_block_size_increment_period,
+<a href=#185 id=185 data-nosnippet>185</a>        txn_timeout_duration,
+<a href=#186 id=186 data-nosnippet>186</a>        base_fee,
+<a href=#187 id=187 data-nosnippet>187</a>        opt.tx_status_cache_size,
+<a href=#188 id=188 data-nosnippet>188</a>    )
+<a href=#189 id=189 data-nosnippet>189</a>    .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#190 id=190 data-nosnippet>190</a>
+<a href=#191 id=191 data-nosnippet>191</a>    <span class="comment">// Sleep forever
+<a href=#192 id=192 data-nosnippet>192</a>    </span>pending::&lt;()&gt;().<span class="kw">await</span>;
+<a href=#193 id=193 data-nosnippet>193</a>
+<a href=#194 id=194 data-nosnippet>194</a>    <span class="prelude-val">Ok</span>(())
+<a href=#195 id=195 data-nosnippet>195</a>}</code></pre></div></section></main></body></html>

@@ -22,7 +22,7 @@
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>serde::{de::DeserializeOwned, Deserialize, Serialize};
 <a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>vbs::version::Version;
 <a href=#24 id=24 data-nosnippet>24</a>
-<a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span><span class="kw">super</span>::signature_key::BuilderSignatureKey;
+<a href=#25 id=25 data-nosnippet>25</a><span class="kw">use super</span>::{node_implementation::Versions, signature_key::BuilderSignatureKey};
 <a href=#26 id=26 data-nosnippet>26</a><span class="kw">use crate</span>::{
 <a href=#27 id=27 data-nosnippet>27</a>    data::{Leaf2, VidCommitment},
 <a href=#28 id=28 data-nosnippet>28</a>    light_client::LightClientState,
@@ -178,25 +178,24 @@
 <a href=#178 id=178 data-nosnippet>178</a>    ) -&gt; <span class="kw">impl </span>Future&lt;Output = <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Error&gt;&gt; + Send;
 <a href=#179 id=179 data-nosnippet>179</a>
 <a href=#180 id=180 data-nosnippet>180</a>    <span class="doccomment">/// Build the genesis header, payload, and metadata.
-<a href=#181 id=181 data-nosnippet>181</a>    </span><span class="kw">fn </span>genesis(
+<a href=#181 id=181 data-nosnippet>181</a>    </span><span class="kw">fn </span>genesis&lt;V: Versions&gt;(
 <a href=#182 id=182 data-nosnippet>182</a>        instance_state: <span class="kw-2">&amp;</span>&lt;TYPES::ValidatedState <span class="kw">as </span>ValidatedState&lt;TYPES&gt;&gt;::Instance,
-<a href=#183 id=183 data-nosnippet>183</a>        payload_commitment: VidCommitment,
-<a href=#184 id=184 data-nosnippet>184</a>        builder_commitment: BuilderCommitment,
-<a href=#185 id=185 data-nosnippet>185</a>        metadata: &lt;TYPES::BlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::Metadata,
-<a href=#186 id=186 data-nosnippet>186</a>    ) -&gt; <span class="self">Self</span>;
-<a href=#187 id=187 data-nosnippet>187</a>
-<a href=#188 id=188 data-nosnippet>188</a>    <span class="doccomment">/// Get the block number.
-<a href=#189 id=189 data-nosnippet>189</a>    </span><span class="kw">fn </span>block_number(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64;
-<a href=#190 id=190 data-nosnippet>190</a>
-<a href=#191 id=191 data-nosnippet>191</a>    <span class="doccomment">/// Get the payload commitment.
-<a href=#192 id=192 data-nosnippet>192</a>    </span><span class="kw">fn </span>payload_commitment(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; VidCommitment;
-<a href=#193 id=193 data-nosnippet>193</a>
-<a href=#194 id=194 data-nosnippet>194</a>    <span class="doccomment">/// Get the metadata.
-<a href=#195 id=195 data-nosnippet>195</a>    </span><span class="kw">fn </span>metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>&lt;TYPES::BlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::Metadata;
-<a href=#196 id=196 data-nosnippet>196</a>
-<a href=#197 id=197 data-nosnippet>197</a>    <span class="doccomment">/// Get the builder commitment
-<a href=#198 id=198 data-nosnippet>198</a>    </span><span class="kw">fn </span>builder_commitment(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; BuilderCommitment;
-<a href=#199 id=199 data-nosnippet>199</a>
-<a href=#200 id=200 data-nosnippet>200</a>    <span class="doccomment">/// Get the light client state
-<a href=#201 id=201 data-nosnippet>201</a>    </span><span class="kw">fn </span>get_light_client_state(<span class="kw-2">&amp;</span><span class="self">self</span>, view: TYPES::View) -&gt; anyhow::Result&lt;LightClientState&gt;;
-<a href=#202 id=202 data-nosnippet>202</a>}</code></pre></div></section></main></body></html>
+<a href=#183 id=183 data-nosnippet>183</a>        payload: TYPES::BlockPayload,
+<a href=#184 id=184 data-nosnippet>184</a>        metadata: <span class="kw-2">&amp;</span>&lt;TYPES::BlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::Metadata,
+<a href=#185 id=185 data-nosnippet>185</a>    ) -&gt; <span class="self">Self</span>;
+<a href=#186 id=186 data-nosnippet>186</a>
+<a href=#187 id=187 data-nosnippet>187</a>    <span class="doccomment">/// Get the block number.
+<a href=#188 id=188 data-nosnippet>188</a>    </span><span class="kw">fn </span>block_number(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64;
+<a href=#189 id=189 data-nosnippet>189</a>
+<a href=#190 id=190 data-nosnippet>190</a>    <span class="doccomment">/// Get the payload commitment.
+<a href=#191 id=191 data-nosnippet>191</a>    </span><span class="kw">fn </span>payload_commitment(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; VidCommitment;
+<a href=#192 id=192 data-nosnippet>192</a>
+<a href=#193 id=193 data-nosnippet>193</a>    <span class="doccomment">/// Get the metadata.
+<a href=#194 id=194 data-nosnippet>194</a>    </span><span class="kw">fn </span>metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>&lt;TYPES::BlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::Metadata;
+<a href=#195 id=195 data-nosnippet>195</a>
+<a href=#196 id=196 data-nosnippet>196</a>    <span class="doccomment">/// Get the builder commitment
+<a href=#197 id=197 data-nosnippet>197</a>    </span><span class="kw">fn </span>builder_commitment(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; BuilderCommitment;
+<a href=#198 id=198 data-nosnippet>198</a>
+<a href=#199 id=199 data-nosnippet>199</a>    <span class="doccomment">/// Get the light client state
+<a href=#200 id=200 data-nosnippet>200</a>    </span><span class="kw">fn </span>get_light_client_state(<span class="kw-2">&amp;</span><span class="self">self</span>, view: TYPES::View) -&gt; anyhow::Result&lt;LightClientState&gt;;
+<a href=#201 id=201 data-nosnippet>201</a>}</code></pre></div></section></main></body></html>
