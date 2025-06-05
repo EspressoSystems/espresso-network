@@ -4,10 +4,8 @@ use anyhow::Context;
 use async_broadcast::broadcast;
 use async_lock::{Mutex, RwLock};
 use espresso_types::{
-    eth_signature_key::EthKeyPair,
-    v0_1::NoStorage,
-    v0_3::{ChainConfig, StakeTableFetcher},
-    EpochCommittees, FeeAmount, NodeState, Payload, SeqTypes, ValidatedState,
+    eth_signature_key::EthKeyPair, v0_1::NoStorage, v0_3::StakeTableFetcher, EpochCommittees,
+    FeeAmount, NodeState, Payload, SeqTypes, ValidatedState,
 };
 use hotshot::traits::BlockPayload;
 use hotshot_builder_core::{
@@ -41,10 +39,12 @@ pub struct BuilderConfig {
 }
 
 pub fn build_instance_state<V: Versions>(
-    chain_config: ChainConfig,
+    genesis: sequencer::Genesis,
     l1_params: L1Params,
     state_peers: Vec<Url>,
 ) -> NodeState {
+    let chain_config = genesis.chain_config;
+    let genesis_version = genesis.genesis_version;
     let l1_client = l1_params
         .options
         .connect(l1_params.urls)
@@ -81,6 +81,7 @@ pub fn build_instance_state<V: Versions>(
         peers,
         V::Base::version(),
         coordinator,
+        genesis_version,
     )
 }
 
