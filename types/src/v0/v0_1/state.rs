@@ -91,9 +91,9 @@ pub struct RewardAmount(pub U256);
 
  
 pub(crate) const INFLATION_RATE: u128 = 300; // 3% in basis points
-pub(crate) const BLOCK_TIME_SECONDS: u128 = 2;
+pub(crate) const ASSUMED_BLOCK_TIME_SECONDS: u128 = 2;
 pub(crate) const SECONDS_PER_YEAR: u128 = 60 * 60 * 24 * 365;
-pub(crate) const BLOCKS_PER_YEAR: u128 = SECONDS_PER_YEAR / BLOCK_TIME_SECONDS;
+pub(crate) const BLOCKS_PER_YEAR: u128 = SECONDS_PER_YEAR / ASSUMED_BLOCK_TIME_SECONDS;
 pub const COMMISSION_BASIS_POINTS: u16 = 10_000;
 
 #[derive(Clone, Debug, Default)]
