@@ -1,4 +1,5 @@
-//! Circuit implementation for verifying light client state update
+//! Legacy circuit implementation for verifying light client state update
+//! Circuit implementation is copied from commit 5d0baf07cbb27f4ac63df116bc3ff78545554cdb.
 
 use alloy::primitives::U256;
 use ark_ec::twisted_edwards::TECurveConfig;
@@ -24,8 +25,6 @@ pub struct GenericPublicInput<F: PrimeField> {
     pub lc_state: GenericLightClientState<F>,
     // voting stake table state
     pub voting_st_state: GenericStakeTableState<F>,
-    // next-block stake table state
-    pub next_st_state: GenericStakeTableState<F>,
 }
 
 impl<F: PrimeField> GenericPublicInput<F> {
@@ -33,12 +32,10 @@ impl<F: PrimeField> GenericPublicInput<F> {
     pub fn new(
         lc_state: GenericLightClientState<F>,
         voting_st_state: GenericStakeTableState<F>,
-        next_st_state: GenericStakeTableState<F>,
     ) -> Self {
         Self {
             lc_state,
             voting_st_state,
-            next_st_state,
         }
     }
 
@@ -52,10 +49,6 @@ impl<F: PrimeField> GenericPublicInput<F> {
             self.voting_st_state.schnorr_key_comm,
             self.voting_st_state.amount_comm,
             self.voting_st_state.threshold,
-            self.next_st_state.bls_key_comm,
-            self.next_st_state.schnorr_key_comm,
-            self.next_st_state.amount_comm,
-            self.next_st_state.threshold,
         ]
     }
 }
@@ -70,10 +63,6 @@ impl<F: PrimeField> From<GenericPublicInput<F>> for Vec<F> {
             v.voting_st_state.schnorr_key_comm,
             v.voting_st_state.amount_comm,
             v.voting_st_state.threshold,
-            v.next_st_state.bls_key_comm,
-            v.next_st_state.schnorr_key_comm,
-            v.next_st_state.amount_comm,
-            v.next_st_state.threshold,
         ]
     }
 }
@@ -91,16 +80,9 @@ impl<F: PrimeField> From<Vec<F>> for GenericPublicInput<F> {
             amount_comm: v[5],
             threshold: v[6],
         };
-        let next_st_state = GenericStakeTableState {
-            bls_key_comm: v[7],
-            schnorr_key_comm: v[8],
-            amount_comm: v[9],
-            threshold: v[10],
-        };
         Self {
             lc_state,
             voting_st_state,
-            next_st_state,
         }
     }
 }
@@ -174,7 +156,6 @@ impl LightClientStateVar {
 /// - a list of schnorr signatures of the updated states (`Vec<SchnorrSignature>`), default if the node doesn't sign the state
 /// - updated light client state (`(view_number, block_height, block_comm_root)`)
 /// - voting stake table state (containing 3 commitments to the 3 columns of the stake table and a threshold)
-/// - stake table state for the next block (same as the voting stake table except at epoch boundaries)
 ///
 /// Lengths of input vectors should not exceed the `stake_table_capacity`.
 /// The list of stake table entries, bit indicators and signatures will be padded to the `stake_table_capacity`.
@@ -196,7 +177,6 @@ pub(crate) fn build<F, P, STIter, BitIter, SigIter>(
     lightclient_state: &GenericLightClientState<F>,
     stake_table_state: &GenericStakeTableState<F>,
     stake_table_capacity: usize,
-    next_stake_table_state: &GenericStakeTableState<F>,
 ) -> Result<(PlonkCircuit<F>, GenericPublicInput<F>), PlonkError>
 where
     F: RescueParameter,
@@ -301,7 +281,6 @@ where
     // public inputs
     let lightclient_state_pub_var = LightClientStateVar::new(&mut circuit, lightclient_state)?;
     let stake_table_state_pub_var = StakeTableVar::new(&mut circuit, stake_table_state)?;
-    let next_stake_table_state_pub_var = StakeTableVar::new(&mut circuit, next_stake_table_state)?;
 
     // Checking whether the accumulated weight exceeds the quorum threshold
     let mut signed_amount_var = (0..stake_table_capacity / 2)
@@ -369,10 +348,6 @@ where
                     lightclient_state_pub_var.view_num,
                     lightclient_state_pub_var.block_height,
                     lightclient_state_pub_var.block_comm_root,
-                    next_stake_table_state_pub_var.qc_keys_comm,
-                    next_stake_table_state_pub_var.state_keys_comm,
-                    next_stake_table_state_pub_var.stake_amount_comm,
-                    next_stake_table_state_pub_var.threshold,
                 ],
                 &sig,
             )
@@ -392,11 +367,7 @@ where
     circuit.finalize_for_arithmetization()?;
     Ok((
         circuit,
-        GenericPublicInput::new(
-            *lightclient_state,
-            *stake_table_state,
-            *next_stake_table_state,
-        ),
+        GenericPublicInput::new(*lightclient_state, *stake_table_state),
     ))
 }
 
@@ -418,7 +389,6 @@ where
         &lightclient_state,
         &stake_table_state,
         stake_table_capacity,
-        &stake_table_state,
     )
 }
 
@@ -427,8 +397,7 @@ mod tests {
     use ark_ed_on_bn254::EdwardsConfig as Config;
     use ark_std::UniformRand;
     use hotshot_types::{
-        light_client::{LightClientState, StakeTableState},
-        signature_key::SchnorrPubKey,
+        light_client::LightClientState, signature_key::SchnorrPubKey,
         traits::signature_key::StateSignatureKey,
     };
     use jf_relation::Circuit;
@@ -450,7 +419,6 @@ mod tests {
         let (qc_keys, state_keys) = key_pairs_for_testing(num_validators, &mut prng);
         let st = stake_table_for_testing(&qc_keys, &state_keys);
         let st_state = st.commitment(ST_CAPACITY).unwrap();
-        let next_st_state = st_state;
 
         let entries = st
             .iter()
@@ -471,12 +439,8 @@ mod tests {
         let sigs: Vec<_> = state_keys
             .iter()
             .map(|(key, _)| {
-                <SchnorrPubKey as StateSignatureKey>::sign_state(
-                    key,
-                    &lightclient_state,
-                    &next_st_state,
-                )
-                .unwrap()
+                <SchnorrPubKey as StateSignatureKey>::legacy_sign_state(key, &lightclient_state)
+                    .unwrap()
             })
             .collect();
 
@@ -507,7 +471,6 @@ mod tests {
             &lightclient_state,
             &st_state,
             ST_CAPACITY,
-            &next_st_state,
         )
         .unwrap();
         assert!(circuit
@@ -524,7 +487,6 @@ mod tests {
             &lightclient_state,
             &good_st_state,
             ST_CAPACITY,
-            &next_st_state,
         )
         .unwrap();
         assert!(circuit
@@ -540,7 +502,6 @@ mod tests {
             &lightclient_state,
             &st_state,
             ST_CAPACITY,
-            &next_st_state,
         )
         .unwrap();
         assert!(circuit
@@ -573,7 +534,6 @@ mod tests {
             &lightclient_state,
             &st_state,
             ST_CAPACITY,
-            &next_st_state,
         )
         .unwrap();
         assert!(bad_circuit
@@ -591,7 +551,6 @@ mod tests {
             &bad_lightclient_state,
             &st_state,
             ST_CAPACITY,
-            &next_st_state,
         )
         .unwrap();
         assert!(bad_circuit
@@ -600,12 +559,10 @@ mod tests {
 
         // bad path: incorrect signing message
         let bad_lc_state = LightClientState::default();
-        let bad_st_state = StakeTableState::default();
         let bad_sigs: Vec<_> = state_keys
             .iter()
             .map(|(key, _)| {
-                <SchnorrPubKey as StateSignatureKey>::sign_state(key, &bad_lc_state, &bad_st_state)
-                    .unwrap()
+                <SchnorrPubKey as StateSignatureKey>::legacy_sign_state(key, &bad_lc_state).unwrap()
             })
             .collect();
         let (bad_circuit, public_inputs) = build(
@@ -615,7 +572,6 @@ mod tests {
             &lightclient_state,
             &st_state,
             ST_CAPACITY,
-            &next_st_state,
         )
         .unwrap();
         assert!(bad_circuit
@@ -630,7 +586,6 @@ mod tests {
             &lightclient_state,
             &st_state,
             9,
-            &next_st_state,
         )
         .is_err());
     }

@@ -249,6 +249,23 @@ impl StateSignatureKey for SchnorrPubKey {
         SchnorrSignatureScheme::verify(&(), self, msg, signature).is_ok()
     }
 
+    fn legacy_sign_state(
+        sk: &Self::StatePrivateKey,
+        light_client_state: &LightClientState,
+    ) -> Result<Self::StateSignature, Self::SignError> {
+        let state_msg: [_; 3] = light_client_state.into();
+        SchnorrSignatureScheme::sign(&(), sk, state_msg, &mut rand::thread_rng())
+    }
+
+    fn legacy_verify_state_sig(
+        &self,
+        signature: &Self::StateSignature,
+        light_client_state: &LightClientState,
+    ) -> bool {
+        let state_msg: [_; 3] = light_client_state.into();
+        SchnorrSignatureScheme::verify(&(), self, state_msg, signature).is_ok()
+    }
+
     fn generated_from_seed_indexed(seed: [u8; 32], index: u64) -> (Self, Self::StatePrivateKey) {
         let mut hasher = blake3::Hasher::new();
         hasher.update(&seed);
