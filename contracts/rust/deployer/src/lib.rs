@@ -249,6 +249,23 @@ impl Contracts {
     }
 }
 
+/// Verify the node js files are present and can be executed.
+///
+/// It calls the upgrade proxy script with a dummy address and a dummy rpc url in dry run mode
+pub async fn verify_node_js_files(custom_dir: Option<PathBuf>) -> Result<()> {
+    call_upgrade_proxy_script(
+        Address::random(),
+        Address::random(),
+        String::from("0x"),
+        String::from("https://sepolia.infura.io/v3/"),
+        Address::random(),
+        Some(true),
+        custom_dir,
+    )
+    .await?;
+    Ok(())
+}
+
 /// Default deployment function `LightClient.sol` or `LightClientMock.sol` with `mock: true`.
 ///
 /// # NOTE:
@@ -638,6 +655,7 @@ pub async fn upgrade_light_client_v2_multisig_owner(
                 params.rpc_url,
                 owner_addr,
                 Some(dry_run),
+                None,
             )
             .await?;
 
@@ -936,24 +954,17 @@ pub async fn call_upgrade_proxy_script(
     rpc_url: String,
     safe_addr: Address,
     dry_run: Option<bool>,
+    dir: Option<PathBuf>,
 ) -> Result<(String, bool), anyhow::Error> {
     let dry_run = dry_run.unwrap_or(false);
     tracing::info!("Dry run: {}", dry_run);
-    tracing::info!("Sending the upgrade proposal to multisig: {}", safe_addr);
+    tracing::info!(
+        "Attempting to send the upgrade proposal to multisig: {}",
+        safe_addr
+    );
 
-    let script_path = if let Ok(cargo_manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        PathBuf::from(cargo_manifest_dir).join("../../../scripts/multisig-upgrade-entrypoint")
-    } else {
-        // just the script name (assumes it's in PATH) (/bin/multisig-upgrade-entrypoint)
-        PathBuf::from("/bin/multisig-upgrade-entrypoint")
-    };
-    if !script_path.exists() {
-        anyhow::bail!(
-            "Upgrade entrypoint script not found at {:?}. \
-            Make sure it is present in your PATH or at the expected location.",
-            script_path
-        );
-    }
+    let script_path = find_script_path(dir)?;
+
     let output = Command::new(script_path)
         .arg("--from-rust")
         .arg("--proxy")
@@ -981,6 +992,26 @@ pub async fn call_upgrade_proxy_script(
     }
     Ok((stdout.to_string(), true))
 }
+
+fn find_script_path(custom_script_path: Option<PathBuf>) -> Result<PathBuf> {
+    let mut path_options = Vec::new();
+    if let Some(script_path) = custom_script_path {
+        path_options.push(script_path);
+    } else if let Ok(cargo_manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        path_options.push(
+            PathBuf::from(cargo_manifest_dir).join("../../../scripts/multisig-upgrade-entrypoint"),
+        );
+    }
+    path_options.push(PathBuf::from("/bin/multisig-upgrade-entrypoint"));
+
+    for path in path_options {
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+    anyhow::bail!("Upgrade entrypoint script, multisig-upgrade-entrypoint, not found in any of the possible locations");
+}
+
 /// Deploy and initialize a Timelock contract
 ///
 /// Parameters:

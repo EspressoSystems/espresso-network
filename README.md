@@ -190,7 +190,7 @@ You can run the deployer in a container but you need to stand up all services vi
 ```bash
 just pull
 just demo
-docker compose run --rm upgrade-prover-contracts /bin/deploy --deploy-light-client-v1
+docker compose run --rm deploy-prover-contracts /bin/deploy --deploy-light-client-v1
 ```
 
 If making dev changes locally run, `./scripts/build-docker-images-native` instead of `just pull`.

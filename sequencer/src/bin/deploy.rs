@@ -6,7 +6,7 @@ use espresso_contract_deployer::{
     build_provider,
     builder::DeployerArgsBuilder,
     network_config::{light_client_genesis, light_client_genesis_from_stake_table},
-    Contract, Contracts, DeployedContracts,
+    verify_node_js_files, Contract, Contracts, DeployedContracts,
 };
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
@@ -138,6 +138,10 @@ struct Options {
     #[clap(long, default_value = "false")]
     pub mock_espresso_live_network: bool,
 
+    /// Option to verify node js files access to upgrade stake table v2 multisig owner dry run
+    #[clap(long, default_value = "false")]
+    pub verify_node_js_files: bool,
+
     /// Stake table capacity for the prover circuit
     #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
     pub stake_table_capacity: usize,
@@ -192,6 +196,15 @@ struct Options {
 async fn main() -> anyhow::Result<()> {
     let opt = Options::parse();
     opt.logging.init();
+
+    if opt.verify_node_js_files {
+        let script_path = if let Ok(cargo_manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+            Some(PathBuf::from(cargo_manifest_dir).join("../scripts/multisig-upgrade-entrypoint"))
+        } else {
+            None
+        };
+        verify_node_js_files(script_path).await?;
+    }
 
     let mut contracts = Contracts::from(opt.contracts);
     let provider = build_provider(opt.mnemonic, opt.account_index, opt.rpc_url.clone());
