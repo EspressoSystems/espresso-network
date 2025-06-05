@@ -70,19 +70,21 @@ where
         let Some((from, to)) = aggregate_range_bounds(self, range).await? else {
             return Ok(0);
         };
-        let (count,) =
-            query_as::<(i64,)>("SELECT num_transactions FROM aggregate WHERE height = $1")
-                .bind(to as i64)
-                .fetch_one(self.as_mut())
-                .await?;
+        let (count,) = query_as::<(i64,)>(
+            "SELECT num_transactions FROM aggregate WHERE height = $1 AND namespace = -1",
+        )
+        .bind(to as i64)
+        .fetch_one(self.as_mut())
+        .await?;
         let mut count = count as usize;
 
         if from > 0 {
-            let (prev_count,) =
-                query_as::<(i64,)>("SELECT num_transactions FROM aggregate WHERE height = $1")
-                    .bind((from - 1) as i64)
-                    .fetch_one(self.as_mut())
-                    .await?;
+            let (prev_count,) = query_as::<(i64,)>(
+                "SELECT num_transactions FROM aggregate WHERE height = $1 AND namespace = -1",
+            )
+            .bind((from - 1) as i64)
+            .fetch_one(self.as_mut())
+            .await?;
             count = count.saturating_sub(prev_count as usize);
         }
 
@@ -96,18 +98,21 @@ where
         let Some((from, to)) = aggregate_range_bounds(self, range).await? else {
             return Ok(0);
         };
-        let (size,) = query_as::<(i64,)>("SELECT payload_size FROM aggregate WHERE height = $1")
-            .bind(to as i64)
-            .fetch_one(self.as_mut())
-            .await?;
+        let (size,) = query_as::<(i64,)>(
+            "SELECT payload_size FROM aggregate WHERE height = $1 AND namespace = -1",
+        )
+        .bind(to as i64)
+        .fetch_one(self.as_mut())
+        .await?;
         let mut size = size as usize;
 
         if from > 0 {
-            let (prev_size,) =
-                query_as::<(i64,)>("SELECT payload_size FROM aggregate WHERE height = $1")
-                    .bind((from - 1) as i64)
-                    .fetch_one(self.as_mut())
-                    .await?;
+            let (prev_size,) = query_as::<(i64,)>(
+                "SELECT payload_size FROM aggregate WHERE height = $1 AND namespace = -1",
+            )
+            .bind((from - 1) as i64)
+            .fetch_one(self.as_mut())
+            .await?;
             size = size.saturating_sub(prev_size as usize);
         }
 
@@ -373,7 +378,7 @@ impl<Types: NodeType> UpdateAggregatesStorage<Types> for Transaction<Write> {
                     // None represents the total of all the namespaces
                     // and is represented as -1 in databasr
                     rows.push((
-                        *height as i64,
+                        block.height as i64,
                         -1,
                         tx_count[&None] as i64,
                         size[&None] as i64,
@@ -386,7 +391,7 @@ impl<Types: NodeType> UpdateAggregatesStorage<Types> for Transaction<Write> {
                         *size.entry(key).or_insert(0) += info.size as usize;
 
                         rows.push((
-                            *height as i64,
+                            block.height as i64,
                             ns_id as i64,
                             tx_count[&key] as i64,
                             size[&key] as i64,
