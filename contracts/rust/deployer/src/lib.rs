@@ -526,11 +526,8 @@ pub async fn upgrade_light_client_v2(
 }
 
 pub struct LightClientV2UpgradeParams {
-    pub is_mock: bool,
     pub blocks_per_epoch: u64,
     pub epoch_start_block: u64,
-    pub rpc_url: String,
-    pub dry_run: Option<bool>,
 }
 
 /// Upgrade the light client proxy to use LightClientV2.
@@ -547,9 +544,12 @@ pub async fn upgrade_light_client_v2_multisig_owner(
     provider: impl Provider,
     contracts: &mut Contracts,
     params: LightClientV2UpgradeParams,
+    is_mock: bool,
+    rpc_url: String,
+    dry_run: Option<bool>,
 ) -> Result<(String, bool)> {
     let expected_major_version: u8 = 2;
-    let dry_run = params.dry_run.unwrap_or_else(|| {
+    let dry_run = dry_run.unwrap_or_else(|| {
         tracing::warn!("Dry run not specified, defaulting to false");
         false
     });
@@ -580,7 +580,7 @@ pub async fn upgrade_light_client_v2_multisig_owner(
             .await?;
 
         // then deploy LightClientV2.sol
-        let target_lcv2_bytecode = if params.is_mock {
+        let target_lcv2_bytecode = if is_mock {
             LightClientV2Mock::BYTECODE.encode_hex()
         } else {
             LightClientV2::BYTECODE.encode_hex()
@@ -603,7 +603,7 @@ pub async fn upgrade_light_client_v2_multisig_owner(
                 },
             }
         };
-        let lcv2_addr = if params.is_mock {
+        let lcv2_addr = if is_mock {
             let addr = LightClientV2Mock::deploy_builder(&provider)
                 .map(|req| req.with_deploy_code(lcv2_linked_bytecode))
                 .deploy()
@@ -625,17 +625,14 @@ pub async fn upgrade_light_client_v2_multisig_owner(
         (Address::random(), Address::random())
     };
 
-    // get initialized version number from proxy
-    let initialized = get_proxy_initialized_version(&provider, proxy_addr).await?;
-    tracing::info!("Initialized version: {}", initialized);
-
-    // get contract version from proxy
-    let lcv2_proxy = LightClientV2::new(proxy_addr, &provider);
-    let lcv2_version = lcv2_proxy.getVersion().call().await?;
-
-    // only set the init data if the proxy was not initialized (when initialized the version number is the same as the contract version number)
-    let init_data = if initialized == lcv2_version.majorVersion
-        && lcv2_version.majorVersion == expected_major_version
+    // Prepare init data
+    let init_data = if already_initialized(
+        &provider,
+        proxy_addr,
+        Contract::LightClientV2,
+        expected_major_version,
+    )
+    .await?
     {
         tracing::info!(
             "Proxy was already initialized for version {}",
@@ -643,7 +640,6 @@ pub async fn upgrade_light_client_v2_multisig_owner(
         );
         vec![].into()
     } else {
-        tracing::info!("Proxy was not initialized");
         tracing::info!("Init Data to be signed.\n Function: initializeV2\n Arguments:\n blocks_per_epoch: {:?}\n epoch_start_block: {:?}", params.blocks_per_epoch, params.epoch_start_block);
         LightClientV2::new(lcv2_addr, &provider)
             .initializeV2(params.blocks_per_epoch, params.epoch_start_block)
@@ -656,26 +652,49 @@ pub async fn upgrade_light_client_v2_multisig_owner(
         proxy_addr,
         lcv2_addr,
         init_data.to_string(),
-        params.rpc_url,
+        rpc_url,
         owner_addr,
         Some(dry_run),
     )
     .await?;
 
-    tracing::info!("LightClientProxy upgrade proposal sent");
     tracing::info!("Init data: {:?}", init_data);
     if init_data.to_string() != "0x" {
         tracing::info!("Data to be signed:\n Function: initializeV2\n Arguments:\n blocks_per_epoch: {:?}\n epoch_start_block: {:?}", params.blocks_per_epoch, params.epoch_start_block);
     }
     if !dry_run {
         tracing::info!(
-            "Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
+            "LightClientProxy upgrade proposal sent. Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
             owner_addr
         );
     }
     // IDEA: add a function to wait for the proposal to be executed
 
     Ok(result)
+}
+
+async fn already_initialized(
+    provider: impl Provider,
+    proxy_addr: Address,
+    contract: Contract,
+    expected_major_version: u8,
+) -> Result<bool> {
+    let initialized = get_proxy_initialized_version(&provider, proxy_addr).await?;
+    tracing::info!("Initialized version: {}", initialized);
+
+    let contract_major_version = match contract {
+        Contract::LightClientV2 => {
+            let contract_proxy = LightClientV2::new(proxy_addr, &provider);
+            contract_proxy.getVersion().call().await?.majorVersion
+        },
+        Contract::StakeTableV2 => {
+            let contract_proxy = StakeTableV2::new(proxy_addr, &provider);
+            contract_proxy.getVersion().call().await?.majorVersion
+        },
+        _ => anyhow::bail!("Unsupported contract type for already_initialized"),
+    };
+
+    Ok(initialized == contract_major_version && contract_major_version == expected_major_version)
 }
 
 /// The primary logic for deploying and initializing an upgradable fee contract.
@@ -1556,12 +1575,12 @@ mod tests {
             &provider,
             &mut contracts,
             LightClientV2UpgradeParams {
-                is_mock: options.is_mock,
                 blocks_per_epoch,
                 epoch_start_block,
-                rpc_url: sepolia_rpc_url.clone(),
-                dry_run: Some(dry_run),
             },
+            options.is_mock,
+            sepolia_rpc_url.clone(),
+            Some(dry_run),
         )
         .await?;
         tracing::info!(

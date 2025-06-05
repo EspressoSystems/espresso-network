@@ -131,7 +131,6 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 let use_multisig = self.use_multisig;
                 let mut blocks_per_epoch = self.blocks_per_epoch.unwrap();
                 let epoch_start_block = self.epoch_start_block.unwrap();
-                let rpc_url = self.rpc_url.clone();
 
                 // TEST-ONLY: if this config is not yet set, we use a large default value
                 // to avoid contract complaining about invalid zero-valued blocks_per_epoch.
@@ -146,12 +145,12 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         provider,
                         contracts,
                         crate::LightClientV2UpgradeParams {
-                            is_mock: use_mock,
                             blocks_per_epoch,
                             epoch_start_block,
-                            rpc_url,
-                            dry_run: Some(dry_run),
                         },
+                        use_mock,
+                        self.rpc_url.clone(),
+                        Some(dry_run),
                     )
                     .await?;
                 } else {
