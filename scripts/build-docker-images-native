@@ -1,12 +1,85 @@
 #!/usr/bin/env bash
-#
-# Used to build docker images in a quick way for local testing.
-#
-# The build is done inside a docker container.
-#
-# Usage: scripts/build-docker-images-native
-#
 set -euo pipefail
+
+usage() {
+    >&2 cat <<"EOF"
+Usage:
+
+  scripts/build-docker-images-native [--image image] -- <extra args to cargo build>
+  scripts/build-docker-images-native clean
+
+Build espresso docker images locally for development and testing purposes.
+
+- The script supports building all images (the default) or one specific image.
+- By default all images are built with the `test-docker` cargo profile.
+
+Examples:
+
+  # build everything with default profile `test-docker`
+  scripts/build-docker-images-native
+
+  # build only the deploy image
+  scripts/build-docker-images-native --image deploy
+
+  # build sequencer image with the `release` profile
+  scripts/build-docker-images-native --image sequencer -- --profile release
+
+  # clean the build artifacts
+  scripts/build-docker-images-native clean
+EOF
+}
+
+# Use a different target directory for docker builds to avoid conflicts with
+# native builds.
+
+# parse arguments until -- to see if an image was selected
+cargo_build_args=""
+image=""
+clean=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --image)
+      image="$2"
+      shift 2
+      ;;
+    clean)
+      clean=true
+      shift 1
+      ;;
+    --)
+      shift
+      cargo_build_args="$*"
+      break
+      ;;
+    *)
+      >&2 echo "Error: unknown argument: $1"
+      >&2 echo ""
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+repo_root="$(git rev-parse --show-toplevel)"
+if [[ "$PWD" != "$repo_root" ]]; then
+  >&2 echo "This script must be run from the root of the repository: $repo_root"
+  exit 1
+fi
+
+# Persist cargo home for caching. Use a separate directory to avoid conflicts.
+cargo_home="${HOME}/.cargo-docker"
+echo "Using cargo home directory: $cargo_home"
+
+# Enable target artifact caching but use a different target directory for docker builds to avoid
+# conflicts with builds on the host. The relative path is used to ensure it's valid on the host and
+# inside the container.
+cargo_target_dir="./target/docker"
+echo "Using cargo target directory: $cargo_target_dir"
+mkdir -p "$cargo_target_dir"
 
 # Check kernel
 case $(uname -s) in
@@ -23,12 +96,12 @@ esac
 # Check architecture
 case $(uname -m) in
   x86_64)
-    ARCH=amd64
-    PLATFORM=linux/amd64
+    arch=amd64
+    platform=linux/amd64
     ;;
   arm64)
-    ARCH=arm64
-    PLATFORM=linux/arm64
+    arch=arm64
+    platform=linux/arm64
     ;;
   *)
     echo "Machine type $(uname -m) is not supported."
@@ -36,101 +109,161 @@ case $(uname -m) in
     ;;
 esac
 
-# Compile binaries
-
-# Use a different target directory for docker builds to avoid conflicts with
-# native builds.
-CARGO_TARGET_DIR=target/docker
-CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
-
-# Pull our latest devops-rust image. Using an older image may cause a failing
-# rustup channels sync.
+# Build in an up-to-date docker image
 docker pull rust
 
+# All cargo commands will output what they build to this json file, so we can later find all the
+# binary artifacts.
+cargo_build_json="$cargo_target_dir/build.json"
+
+if [[ -n "${clean:-}" ]]; then
+  cargo_cmd_line="cargo clean"
+else
+  # if --profile wasn't specified, use `--profile test-docker`
+  if [[ ! "$cargo_build_args" =~ --profile ]]; then
+    cargo_build_args="--profile test-docker $cargo_build_args"
+  fi
+  echo "cargo build args: $cargo_build_args"
+
+  if [[ -n "${image:-}" ]]; then
+    images=("$image")
+  else
+    images=(
+      bridge
+      builder
+      cdn-broker
+      cdn-marshal
+      cdn-whitelist
+      deploy
+      espresso-dev-node
+      nasty-client
+      node-validator
+      orchestrator
+      prover-service
+      sequencer
+      state-relay-server
+      staking-cli
+      submit-transactions
+    )
+  fi
+
+  echo "building images: ${images[*]}"
+
+  # output json and append to the same file
+  cargo_extra_args="--message-format json $cargo_build_args >> $cargo_build_json"
+
+
+  # If `image` is set, we optimize what we compile
+  case "$image" in
+    "")
+    # By default compile all binaries
+    cargo_cmd_line="cargo build $cargo_extra_args \
+    && cargo build --bin espresso-dev-node --features 'embedded-db testing' $cargo_extra_args \
+    && cargo build --manifest-path ./sequencer-sqlite/Cargo.toml $cargo_extra_args"
+      ;;
+    "espresso-dev-node")
+      cargo_cmd_line="cargo build --bin espresso-dev-node --features 'embedded-db testing' $cargo_extra_args"
+      ;;
+    "sequencer")
+      cargo_cmd_line="cargo build \
+        --bin sequencer \
+        --bin utils \
+        --bin reset-storage \
+        --bin keygen \
+        --bin pub-key \
+        $cargo_extra_args \
+      && cargo build --manifest-path ./sequencer-sqlite/Cargo.toml $cargo_extra_args"
+      ;;
+    "builder")
+      cargo_cmd_line="cargo build --bin permissionless-builder $cargo_extra_args"
+      ;;
+    "bridge")
+      cargo_cmd_line="cargo build --bin espresso-bridge $cargo_extra_args"
+      ;;
+    "node-validator")
+      cargo_cmd_line="cargo build --bin node-metrics $cargo_extra_args"
+      ;;
+    "prover-service")
+      cargo_cmd_line="cargo build --bin state-prover $cargo_extra_args"
+      ;;
+    *)
+      cargo_cmd_line="cargo build --bin $image $cargo_extra_args"
+      ;;
+  esac
+fi
+
+echo "Running cargo commands: $cargo_cmd_line"
+
+# Get the default toolchain in the container to set RUSTUP_TOOLCHAIN during build. Without it rustup
+# will re-download the "stable" toolchain from rust-toolchain.toml, even if "stable" matches the
+# default/installed version in the container.
+rustup_toolchain="$(docker run --rm rust rustup show active-toolchain | cut -d ' ' -f 1)"
+echo "Using rustup toolchain: $rustup_toolchain"
+
 # Build in docker container:
-#   - CARGO_TARGET_DIR is set to point to the location where the hosts
-#     CARGO_TARGET_DIR is mounted.
+#   - cargo_target_dir is set to point to the location where the hosts
+#     cargo_target_dir is mounted.
 #   - PWD is mounted to /work.
 #   - Cargo registry and git directory are mounted to avoid re-downloading
 #     dependencies.
 docker run \
-  -e CARGO_TARGET_DIR=/work/target/docker \
+  --rm \
+  -e "CARGO_TARGET_DIR=/work/$cargo_target_dir" \
+  -e "RUSTUP_TOOLCHAIN=$rustup_toolchain" \
   -v "$(pwd):/work" \
-  -v "$CARGO_HOME/registry:/usr/local/cargo/registry" \
-  -v "$CARGO_HOME/git:/usr/local/cargo/git" \
+  -v "$cargo_home/registry:/usr/local/cargo/registry" \
+  -v "$cargo_home/git:/usr/local/cargo/git" \
   -it rust \
   bash -c "cd /work \
   && git config --global --add safe.directory /work \
-  && cargo build --release \
-  && cargo build --bin espresso-dev-node --release --features 'embedded-db testing' \
-  && cargo build --release --manifest-path ./sequencer-sqlite/Cargo.toml"
+  && rm -rfv \"$cargo_build_json\" \
+  && $cargo_cmd_line"
+
+# If we just wanted to clean, we are done.
+if [[ -n "${clean:-}" ]]; then
+  echo "Cleaned up build artifacts."
+  exit 0
+fi
 
 # Copy binaries to a temporary directory.
-WORKDIR=$(mktemp -d -t espresso-docker-build-XXXXXXXX)
+workdir=$(mktemp -d -t espresso-docker-build-XXXXXXXX)
 
 trap "exit" INT TERM
 trap cleanup EXIT
 cleanup(){
-    rm -rfv "${WORKDIR}"
+    rm -rfv "${workdir}"
 }
 
 # Copy data files to Docker context.
-mkdir -p ${WORKDIR}/data
-cp -rv data/genesis ${WORKDIR}/data/
+mkdir -p "${workdir}/data"
+cp -rv data/genesis "${workdir}/data/"
 
-binaries=(
-  cdn-broker
-  cdn-marshal
-  cdn-whitelist
-  deploy
-  espresso-bridge
-  espresso-dev-node
-  keygen
-  nasty-client
-  node-metrics
-  orchestrator
-  permissionless-builder
-  pub-key
-  reset-storage
-  sequencer
-  sequencer-sqlite
-  state-prover
-  state-relay-server
-  staking-cli
-  submit-transactions
-  utils
+# find all the binaries built
+mapfile -t binaries < <(
+  jq -r 'select((.reason == "compiler-artifact") and .target.kind[0] == "bin") | .filenames[0]' $cargo_build_json |
+  grep -o 'target/.*'
 )
+# exit if no binaries are found
+if [ ${#binaries[@]} -eq 0 ]; then
+  >&2 echo "No binaries found"
+  exit 1
+fi
 
-mkdir -p "${WORKDIR}/target/$ARCH/release"
+# Always copy to release subfolder because that's what our dockerfiles expect
+mkdir -p "${workdir}/target/$arch/release"
 for binary in "${binaries[@]}"; do
-  cp -v "${CARGO_TARGET_DIR}/release/$binary" "${WORKDIR}/target/$ARCH/release"
+  cp -v "$binary" "${workdir}/target/$arch/release"
 done
 
-mkdir -p "${WORKDIR}/docker/scripts"
-cp -v docker/scripts/sequencer-awssecretsmanager.sh "${WORKDIR}/docker/scripts"
+mkdir -p "${workdir}/docker/scripts"
+cp -v docker/scripts/sequencer-awssecretsmanager.sh "${workdir}/docker/scripts"
 
 # Copy the dev-node and sequencer-entrypoint script
-mkdir -p "${WORKDIR}/scripts"
-cp -v scripts/sequencer-entrypoint "${WORKDIR}/scripts/"
+mkdir -p "${workdir}/scripts"
+cp -v scripts/sequencer-entrypoint "${workdir}/scripts/"
 
 export DOCKER_BUILDKIT=1
-images=(
- bridge
- builder
- cdn-broker
- cdn-marshal
- cdn-whitelist
- deploy
- espresso-dev-node
- nasty-client
- node-validator
- orchestrator
- prover-service
- sequencer
- state-relay-server
- staking-cli
- submit-transactions
-)
+
 for image in "${images[@]}"; do
-  docker build --platform $PLATFORM -t ghcr.io/espressosystems/espresso-sequencer/$image:main -f docker/$image.Dockerfile "$WORKDIR"
+  docker build --platform $platform -t "ghcr.io/espressosystems/espresso-sequencer/$image:main" -f "docker/$image.Dockerfile" "$workdir"
 done

@@ -213,7 +213,7 @@ pub struct BackoffParams {
     #[clap(
         long = "catchup-base-retry-delay",
         env = "ESPRESSO_SEQUENCER_CATCHUP_BASE_RETRY_DELAY",
-        default_value = "20ms",
+        default_value = "200ms",
         value_parser = parse_duration
     )]
     base: Duration,

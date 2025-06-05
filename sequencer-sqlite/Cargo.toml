@@ -50,3 +50,12 @@ opt-level = 0
 opt-level = 3
 [profile.test.package.sequencer-sqlite]
 opt-level = 0
+
+# Geared towards building our docker images for local development
+# - Compile quickly
+# - Optimized enough to run demo
+# - Avoids huge binaries
+[profile.test-docker]
+inherits = "test"
+strip = true
+debug = "none"
