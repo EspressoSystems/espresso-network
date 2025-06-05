@@ -853,6 +853,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     /// Update the saved leaves with a new leaf.
     fn update_saved_leaves(&mut self, leaf: Leaf2<TYPES>) {
         self.saved_leaves.insert(leaf.commit(), leaf);
+        println!("Saved leaf len: {}", self.saved_leaves.len());
     }
 
     /// Update the saved payloads with a new encoded transaction.
