@@ -66,7 +66,7 @@ where
     async fn count_transactions_in_range(
         &mut self,
         range: impl RangeBounds<usize> + Send,
-        namespace: Option<u32>
+        namespace: Option<u32>,
     ) -> QueryResult<usize> {
         let namespace = namespace.map(|ns| ns as i32).unwrap_or(-1);
         let Some((from, to)) = aggregate_range_bounds(self, range).await? else {
@@ -86,7 +86,7 @@ where
                 "SELECT num_transactions FROM aggregate WHERE height = $1 AND namespace = $2",
             )
             .bind((from - 1) as i64)
-             .bind(namespace)
+            .bind(namespace)
             .fetch_one(self.as_mut())
             .await?;
             count = count.saturating_sub(prev_count as usize);
@@ -98,7 +98,7 @@ where
     async fn payload_size_in_range(
         &mut self,
         range: impl RangeBounds<usize> + Send,
-         namespace: Option<u32>
+        namespace: Option<u32>,
     ) -> QueryResult<usize> {
         let namespace = namespace.map(|ns| ns as i32).unwrap_or(-1);
         let Some((from, to)) = aggregate_range_bounds(self, range).await? else {
@@ -108,7 +108,7 @@ where
             "SELECT payload_size FROM aggregate WHERE height = $1 AND namespace = $2",
         )
         .bind(to as i64)
-                .bind(namespace)
+        .bind(namespace)
         .fetch_one(self.as_mut())
         .await?;
         let mut size = size as usize;
@@ -118,7 +118,7 @@ where
                 "SELECT payload_size FROM aggregate WHERE height = $1 AND namespace = $2",
             )
             .bind((from - 1) as i64)
-                    .bind(namespace)
+            .bind(namespace)
             .fetch_one(self.as_mut())
             .await?;
             size = size.saturating_sub(prev_size as usize);

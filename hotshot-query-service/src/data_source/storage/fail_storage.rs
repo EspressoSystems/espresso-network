@@ -527,16 +527,18 @@ where
     async fn count_transactions_in_range(
         &mut self,
         range: impl RangeBounds<usize> + Send,
-         namespace: Option<u32>
+        namespace: Option<u32>,
     ) -> QueryResult<usize> {
         self.maybe_fail_read(FailableAction::Any).await?;
-        self.inner.count_transactions_in_range(range, namespace).await
+        self.inner
+            .count_transactions_in_range(range, namespace)
+            .await
     }
 
     async fn payload_size_in_range(
         &mut self,
         range: impl RangeBounds<usize> + Send,
-         namespace: Option<u32>
+        namespace: Option<u32>,
     ) -> QueryResult<usize> {
         self.maybe_fail_read(FailableAction::Any).await?;
         self.inner.payload_size_in_range(range, namespace).await

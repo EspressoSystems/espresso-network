@@ -159,7 +159,7 @@ where
                     None => Bound::Unbounded,
                 };
 
-                 let ns = req.opt_integer_param("namespace")?;
+                let ns = req.opt_integer_param("namespace")?;
 
                 Ok(state.payload_size_in_range((from, to), ns).await?)
             }

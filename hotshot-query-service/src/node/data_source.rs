@@ -56,12 +56,12 @@ pub trait NodeDataSource<Types: NodeType> {
     async fn count_transactions_in_range(
         &self,
         range: impl RangeBounds<usize> + Send,
-        namespace: Option<u32>
+        namespace: Option<u32>,
     ) -> QueryResult<usize>;
     async fn payload_size_in_range(
         &self,
         range: impl RangeBounds<usize> + Send,
-         namespace: Option<u32>
+        namespace: Option<u32>,
     ) -> QueryResult<usize>;
     async fn vid_share<ID>(&self, id: ID) -> QueryResult<VidShare>
     where

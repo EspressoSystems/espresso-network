@@ -1852,7 +1852,7 @@ where
     async fn count_transactions_in_range(
         &self,
         range: impl RangeBounds<usize> + Send,
-        namespace: Option<u32>
+        namespace: Option<u32>,
     ) -> QueryResult<usize> {
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
             message: err.to_string(),
@@ -1863,7 +1863,7 @@ where
     async fn payload_size_in_range(
         &self,
         range: impl RangeBounds<usize> + Send,
-       namespace: Option<u32>
+        namespace: Option<u32>,
     ) -> QueryResult<usize> {
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
             message: err.to_string(),

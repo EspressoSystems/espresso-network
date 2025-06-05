@@ -759,7 +759,7 @@ where
     async fn count_transactions_in_range(
         &mut self,
         range: impl RangeBounds<usize> + Send,
-          namespace: Option<u32>,
+        namespace: Option<u32>,
     ) -> QueryResult<usize> {
         if !matches!(range.start_bound(), Bound::Unbounded | Bound::Included(0))
             || !matches!(range.end_bound(), Bound::Unbounded)
