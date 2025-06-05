@@ -1007,7 +1007,7 @@ impl Fetcher {
             .context("Failed to get token address")?
             ._0;
 
-        // In the transfer event, the token1 represents the address of the sender
+        // In the transfer event, the topic1 represents the address of the sender
         // here the sender is the zero address as the tokens were minted
         let token = EspToken::new(token_address, provider.clone());
         let mut address_bytes = [0u8; 32];
