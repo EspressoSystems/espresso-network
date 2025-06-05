@@ -29,6 +29,7 @@ futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-example-types = { workspace = true }
+hotshot-libp2p-networking = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
 indexmap = { workspace = true }
@@ -64,6 +65,8 @@ vid = { workspace = true }
 espresso-contract-deployer = { path = "../contracts/rust/deployer" }
 espresso-types = { path = ".", features = [ "testing" ] }
 portpicker = { workspace = true }
+rstest = { workspace = true }
+rstest_reuse = { workspace = true }
 
 [package.metadata.cargo-machete]
 ignored = ["base64_bytes", "hotshot_testing"]

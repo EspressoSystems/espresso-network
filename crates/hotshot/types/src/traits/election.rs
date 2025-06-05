@@ -141,7 +141,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     fn has_stake_table(&self, epoch: TYPES::Epoch) -> bool;
 
     /// Returns if the randomized stake table is available for the given epoch
-    fn has_randomized_stake_table(&self, epoch: TYPES::Epoch) -> bool;
+    fn has_randomized_stake_table(&self, epoch: TYPES::Epoch) -> anyhow::Result<bool>;
 
     /// Gets the validated block header and epoch number of the epoch root
     /// at the given block height
@@ -162,18 +162,13 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         async move { anyhow::bail!("Not implemented") }
     }
 
-    #[allow(clippy::type_complexity)]
-    /// Handles notifications that a new epoch root has been created
-    /// Is called under a read lock to the Membership. Return a callback
-    /// with Some to have that callback invoked under a write lock.
-    ///
-    /// #3967 REVIEW NOTE: this is only called if epoch is Some. Is there any reason to do otherwise?
+    /// Handles notifications that a new epoch root has been created.
     fn add_epoch_root(
-        &self,
+        _membership: Arc<RwLock<Self>>,
         _epoch: TYPES::Epoch,
         _block_header: TYPES::BlockHeader,
-    ) -> impl std::future::Future<Output = Option<Box<dyn FnOnce(&mut Self) + Send>>> + Send {
-        async { None }
+    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send {
+        async { Ok(()) }
     }
 
     /// Called to notify the Membership when a new DRB result has been calculated.
@@ -184,5 +179,22 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// Implementations should copy the pre-epoch stake table into epoch and epoch+1
     /// when this is called. The value of initial_drb_result should be used for DRB
     /// calculations for epochs (epoch+1) and earlier.
-    fn set_first_epoch(&mut self, _epoch: TYPES::Epoch, _initial_drb_result: DrbResult);
+    fn set_first_epoch(&mut self, _epoch: TYPES::Epoch, _initial_drb_result: DrbResult) {}
+
+    /// Get first epoch if epochs are enabled, `None` otherwise
+    fn first_epoch(&self) -> Option<TYPES::Epoch> {
+        None
+    }
+}
+
+pub fn membership_spawn_add_epoch_root<TYPES: NodeType>(
+    membership: Arc<RwLock<impl Membership<TYPES> + 'static>>,
+    epoch: TYPES::Epoch,
+    block_header: TYPES::BlockHeader,
+) {
+    tokio::spawn(async move {
+        if let Err(e) = Membership::<TYPES>::add_epoch_root(membership, epoch, block_header).await {
+            tracing::error!("Failed to add epoch root for epoch {}: {}", epoch, e);
+        }
+    });
 }

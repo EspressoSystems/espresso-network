@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 
 use crate::traits::{
     node_implementation::{ConsensusTime, NodeType},
-    storage::StoreDrbProgressFn,
+    storage::{LoadDrbProgressFn, StoreDrbProgressFn},
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -22,6 +22,8 @@ pub struct DrbInput {
     pub iteration: u64,
     /// the value of the drb calculation at the current iteration
     pub value: [u8; 32],
+    /// difficulty value for the DRB calculation
+    pub difficulty_level: u64,
 }
 
 // TODO: Add the following consts once we bench the hash time.
@@ -38,7 +40,7 @@ pub struct DrbInput {
 pub const DIFFICULTY_LEVEL: u64 = 10;
 
 /// Interval at which to store the results
-pub const DRB_CHECKPOINT_INTERVAL: u64 = 3;
+pub const DRB_CHECKPOINT_INTERVAL: u64 = 1000000;
 
 /// DRB seed input for epoch 1 and 2.
 pub const INITIAL_DRB_SEED_INPUT: [u8; 32] = [0; 32];
@@ -72,18 +74,27 @@ pub fn difficulty_level() -> u64 {
 /// # Arguments
 /// * `drb_seed_input` - Serialized QC signature.
 #[must_use]
-pub fn compute_drb_result(
+pub async fn compute_drb_result(
     drb_input: DrbInput,
     store_drb_progress: StoreDrbProgressFn,
+    load_drb_progress: LoadDrbProgressFn,
 ) -> DrbResult {
+    let mut drb_input = drb_input;
+
+    if let Ok(loaded_drb_input) = load_drb_progress(drb_input.epoch).await {
+        if loaded_drb_input.iteration >= drb_input.iteration {
+            drb_input = loaded_drb_input;
+        }
+    }
+
     let mut hash = drb_input.value.to_vec();
     let mut iteration = drb_input.iteration;
-    let remaining_iterations = DIFFICULTY_LEVEL
+    let remaining_iterations = drb_input.difficulty_level
       .checked_sub(iteration)
       .unwrap_or_else(||
         panic!(
           "DRB difficulty level {} exceeds the iteration {} of the input we were given. This is a fatal error", 
-          DIFFICULTY_LEVEL,
+          drb_input.difficulty_level,
           iteration
         )
       );
@@ -107,6 +118,7 @@ pub fn compute_drb_result(
             epoch: drb_input.epoch,
             iteration,
             value: partial_drb_result,
+            difficulty_level: drb_input.difficulty_level,
         };
 
         let store_drb_progress = store_drb_progress.clone();
@@ -120,7 +132,7 @@ pub fn compute_drb_result(
     let final_checkpoint_iteration = iteration;
 
     // perform the remaining iterations
-    for _ in final_checkpoint_iteration..DIFFICULTY_LEVEL {
+    for _ in final_checkpoint_iteration..drb_input.difficulty_level {
         hash = Sha256::digest(hash).to_vec();
         iteration += 1;
     }

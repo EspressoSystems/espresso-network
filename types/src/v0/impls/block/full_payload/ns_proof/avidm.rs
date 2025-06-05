@@ -1,9 +1,15 @@
 //! This module contains the namespace proof implementation for the new AvidM scheme.
 
-use hotshot_types::{data::VidCommitment, vid::avidm::AvidMCommon};
+use hotshot_types::{
+    data::VidCommitment,
+    vid::avidm::{AvidMCommon, AvidMShare},
+};
 use vid::avid_m::namespaced::NsAvidMScheme;
 
-use crate::{v0_3::AvidMNsProof, NamespaceId, NsIndex, NsPayload, NsTable, Payload, Transaction};
+use crate::{
+    v0_3::{AvidMNsProof, AvidMNsProofV1},
+    NamespaceId, NsIndex, NsPayload, NsTable, Payload, Transaction,
+};
 
 impl AvidMNsProof {
     pub fn new(payload: &Payload, index: &NsIndex, common: &AvidMCommon) -> Option<AvidMNsProof> {
@@ -48,6 +54,126 @@ impl AvidMNsProof {
                         let ns_id = ns_table.read_ns_id(&NsIndex(self.0.ns_index))?;
                         let ns_payload = NsPayload::from_bytes_slice(&self.0.ns_payload);
                         Some((ns_payload.export_all_txs(&ns_id), ns_id))
+                    },
+                    Ok(Err(_)) => None,
+                    Err(e) => {
+                        tracing::warn!("error verifying namespace proof: {:?}", e);
+                        None
+                    },
+                }
+            },
+            _ => None,
+        }
+    }
+}
+
+impl AvidMNsProofV1 {
+    pub fn new_correct_encoding(
+        payload: &Payload,
+        index: &NsIndex,
+        common: &AvidMCommon,
+    ) -> Option<AvidMNsProofV1> {
+        let payload_byte_len = payload.byte_len();
+        let index = index.0;
+        let ns_table = payload.ns_table();
+        let ns_table = ns_table
+            .iter()
+            .map(|index| ns_table.ns_range(&index, &payload_byte_len).0)
+            .collect::<Vec<_>>();
+
+        if index >= ns_table.len() {
+            tracing::warn!("ns_index {:?} out of bounds", index);
+            return None; // error: index out of bounds
+        }
+
+        if ns_table[index].is_empty() {
+            None
+        } else {
+            match NsAvidMScheme::namespace_proof(common, &payload.raw_payload, index, ns_table) {
+                Ok(proof) => Some(AvidMNsProofV1::CorrectEncoding(proof)),
+                Err(e) => {
+                    tracing::error!("error generating namespace proof: {:?}", e);
+                    None
+                },
+            }
+        }
+    }
+
+    pub fn new_incorrect_encoding(
+        shares: &[AvidMShare],
+        ns_table: &NsTable,
+        ns_index: &NsIndex,
+        commit: &VidCommitment,
+        common: &AvidMCommon,
+    ) -> Option<AvidMNsProofV1> {
+        let VidCommitment::V1(commit) = commit else {
+            tracing::error!("Error generating incorrect encoding proof: invalid vid commitment");
+            return None;
+        };
+        if shares.is_empty() {
+            tracing::error!("Error generating incorrect encoding proof: no valid shares provided");
+            return None;
+        }
+        let payload_byte_len = crate::PayloadByteLen(shares[0].payload_byte_len());
+        let ns_index = ns_index.0;
+        let ns_table = ns_table
+            .iter()
+            .map(|index| ns_table.ns_range(&index, &payload_byte_len).0)
+            .collect::<Vec<_>>();
+
+        if ns_index >= ns_table.len() {
+            tracing::warn!("ns_index {:?} out of bounds", ns_index);
+            return None; // error: index out of bounds
+        }
+
+        if ns_table[ns_index].is_empty() {
+            None
+        } else {
+            match NsAvidMScheme::proof_of_incorrect_encoding_for_namespace(
+                common, ns_index, commit, shares,
+            ) {
+                Ok(proof) => Some(AvidMNsProofV1::IncorrectEncoding(proof)),
+                Err(e) => {
+                    tracing::error!(
+                        "error generating incorrect encoding proof for namespace index {ns_index}: {:?}",
+                        e
+                    );
+                    None
+                },
+            }
+        }
+    }
+
+    /// Unlike the ADVZ scheme, this function won't fail with a wrong `ns_table`.
+    /// It only uses `ns_table` to get the namespace id.
+    pub fn verify(
+        &self,
+        ns_table: &NsTable,
+        commit: &VidCommitment,
+        common: &AvidMCommon,
+    ) -> Option<(Vec<Transaction>, NamespaceId)> {
+        match (commit, self) {
+            (VidCommitment::V1(commit), AvidMNsProofV1::CorrectEncoding(proof)) => {
+                // correct encoding proof
+                match NsAvidMScheme::verify_namespace_proof(common, commit, proof) {
+                    Ok(Ok(_)) => {
+                        let ns_id = ns_table.read_ns_id(&NsIndex(proof.ns_index))?;
+                        let ns_payload = NsPayload::from_bytes_slice(&proof.ns_payload);
+                        Some((ns_payload.export_all_txs(&ns_id), ns_id))
+                    },
+                    Ok(Err(_)) => None,
+                    Err(e) => {
+                        tracing::warn!("error verifying namespace proof: {:?}", e);
+                        None
+                    },
+                }
+            },
+            (VidCommitment::V1(commit), AvidMNsProofV1::IncorrectEncoding(proof)) => {
+                // incorrect encoding proof
+                match proof.verify(common, commit) {
+                    Ok(Ok(_)) => {
+                        let ns_id = ns_table.read_ns_id(&NsIndex(proof.ns_index))?;
+                        Some((vec![], ns_id))
                     },
                     Ok(Err(_)) => None,
                     Err(e) => {

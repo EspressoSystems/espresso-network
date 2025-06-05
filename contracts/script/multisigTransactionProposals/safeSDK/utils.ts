@@ -69,7 +69,9 @@ export function getSigner(web3Provider: ethers.Provider, useHardwareWallet: bool
     orchestratorSigner = new LedgerSigner(HIDTransport, web3Provider);
   } else {
     // Create a signer using the orchestrator's private key and the web3 provider
-    orchestratorSigner = new ethers.Wallet(getEnvVar("SAFE_ORCHESTRATOR_PRIVATE_KEY"), web3Provider);
+    // orchestratorSigner = new ethers.Wallet(getEnvVar("SAFE_ORCHESTRATOR_PRIVATE_KEY"), web3Provider);
+    //get orchestrator signer from mnemonic
+    orchestratorSigner = ethers.Wallet.fromPhrase(getEnvVar("ESPRESSO_SEQUENCER_ETH_MNEMONIC"), web3Provider);
   }
 
   return orchestratorSigner;

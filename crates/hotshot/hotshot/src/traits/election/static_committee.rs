@@ -250,13 +250,17 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
     fn has_stake_table(&self, _epoch: TYPES::Epoch) -> bool {
         true
     }
-    fn has_randomized_stake_table(&self, _epoch: TYPES::Epoch) -> bool {
-        true
+    fn has_randomized_stake_table(&self, _epoch: TYPES::Epoch) -> anyhow::Result<bool> {
+        Ok(true)
     }
 
     fn add_drb_result(&mut self, _epoch: <TYPES as NodeType>::Epoch, _drb_result: DrbResult) {}
 
     fn set_first_epoch(&mut self, epoch: TYPES::Epoch, _initial_drb_result: DrbResult) {
         self.first_epoch = Some(epoch);
+    }
+
+    fn first_epoch(&self) -> Option<TYPES::Epoch> {
+        self.first_epoch
     }
 }

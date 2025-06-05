@@ -15,8 +15,6 @@ ark-serialize = { workspace = true, features = ["derive"] }
 async-trait = { workspace = true }
 clap = { workspace = true }
 committable = "0.2"
-derive_more = { workspace = true }
-dotenvy = "0.15.7"
 hotshot = { workspace = true }
 hotshot-example-types = { workspace = true }
 log-panics = { workspace = true }

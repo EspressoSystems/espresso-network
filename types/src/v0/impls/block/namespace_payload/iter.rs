@@ -1,30 +1,4 @@
-use crate::{Index, Iter, NsIndex, NsIter, Payload, TxIndex};
-
-impl Index {
-    pub fn ns(&self) -> &NsIndex {
-        &self.ns_index
-    }
-    pub fn tx(&self) -> &TxIndex {
-        &self.tx_index
-    }
-}
-
-// TODO don't impl `PartialOrd`
-// It's needed only for `QueryablePayload` trait:
-// https://github.com/EspressoSystems/hotshot-query-service/issues/639
-impl PartialOrd for Index {
-    fn partial_cmp(&self, _other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(_other))
-    }
-}
-// TODO don't impl `Ord`
-// It's needed only for `QueryablePayload` trait:
-// https://github.com/EspressoSystems/hotshot-query-service/issues/639
-impl Ord for Index {
-    fn cmp(&self, _other: &Self) -> std::cmp::Ordering {
-        unimplemented!()
-    }
-}
+use crate::{Index, Iter, NsIter, Payload};
 
 impl<'a> Iter<'a> {
     pub fn new(block: &'a Payload) -> Self {
@@ -51,8 +25,8 @@ impl Iterator for Iter<'_> {
                 .next()
             {
                 break Some(Index {
-                    ns_index: ns_index.clone(),
-                    tx_index,
+                    namespace: ns_index.0 as u32,
+                    position: tx_index.0 as u32,
                 });
             }
 

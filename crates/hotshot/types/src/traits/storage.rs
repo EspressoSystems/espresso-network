@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 
@@ -145,13 +145,38 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
     /// Add a drb result
     async fn store_drb_result(&self, epoch: TYPES::Epoch, drb_result: DrbResult) -> Result<()>;
     /// Add an epoch block header
-    async fn add_epoch_root(
+    async fn store_epoch_root(
         &self,
         epoch: TYPES::Epoch,
         block_header: TYPES::BlockHeader,
     ) -> Result<()>;
     async fn store_drb_input(&self, drb_input: DrbInput) -> Result<()>;
     async fn load_drb_input(&self, _epoch: u64) -> Result<DrbInput>;
+}
+
+pub async fn load_drb_input_impl<TYPES: NodeType>(
+    storage: impl Storage<TYPES>,
+    epoch: u64,
+) -> Result<DrbInput> {
+    storage.load_drb_input(epoch).await
+}
+
+pub type LoadDrbProgressFn =
+    std::sync::Arc<dyn Fn(u64) -> BoxFuture<'static, Result<DrbInput>> + Send + Sync>;
+
+pub fn load_drb_progress_fn<TYPES: NodeType>(
+    storage: impl Storage<TYPES> + 'static,
+) -> LoadDrbProgressFn {
+    Arc::new(move |epoch| {
+        let storage = storage.clone();
+        Box::pin(load_drb_input_impl(storage, epoch))
+    })
+}
+
+pub fn null_load_drb_progress_fn() -> LoadDrbProgressFn {
+    Arc::new(move |_drb_input| {
+        Box::pin(async { Err(anyhow!("Using null implementation of load_drb_input")) })
+    })
 }
 
 pub async fn store_drb_input_impl<TYPES: NodeType>(

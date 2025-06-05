@@ -228,6 +228,8 @@ paste = "1.0"
 rand = "0.8.5"
 time = "0.3"
 trait-set = "0.3.0"
+rstest = "0.25.0"
+rstest_reuse = "0.7.0"
 
 # NOTE: when making changes here also update sequencer-sqlite/Cargo.toml.
 [profile.dev]
@@ -256,3 +258,12 @@ opt-level = 0
 opt-level = 0
 [profile.test.package.hotshot-state-prover]
 opt-level = 3
+
+# Geared towards building our docker images for local development
+# - Compile quickly
+# - Optimized enough to run demo
+# - Avoids huge binaries
+[profile.test-docker]
+inherits = "test"
+strip = true
+debug = "none"

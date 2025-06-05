@@ -43,6 +43,7 @@ pub fn spawn_timeout_task(test_sender: Sender<TestEvent>, timeout: Duration) -> 
     tokio::spawn(async move {
         sleep(timeout).await;
 
+        error!("Decide timeout triggered.");
         let _ = test_sender.broadcast(TestEvent::Shutdown).await;
     })
 }
@@ -146,6 +147,8 @@ impl<S: TestTaskState + Send + 'static> TestTask<S> {
                 if let Ok(TestEvent::Shutdown) = self.test_receiver.try_recv() {
                     break self.state.check().await;
                 }
+
+                self.receivers.retain(|receiver| !receiver.is_closed());
 
                 let mut messages = Vec::new();
 
