@@ -646,9 +646,9 @@
 <a href=#646 id=646 data-nosnippet>646</a>        <span class="kw">let </span>parent_vid = <span class="self">self
 <a href=#647 id=647 data-nosnippet>647</a>            </span>.vid_shares()
 <a href=#648 id=648 data-nosnippet>648</a>            .get(<span class="kw-2">&amp;</span>parent_view_number)
-<a href=#649 id=649 data-nosnippet>649</a>            .and_then(|key_map| key_map.get(public_key).cloned())
-<a href=#650 id=650 data-nosnippet>650</a>            .and_then(|epoch_map| epoch_map.get(<span class="kw-2">&amp;</span>parent_epoch).cloned())
-<a href=#651 id=651 data-nosnippet>651</a>            .map(|prop| prop.data);
+<a href=#649 id=649 data-nosnippet>649</a>            .and_then(|key_map| key_map.get(public_key))
+<a href=#650 id=650 data-nosnippet>650</a>            .and_then(|epoch_map| epoch_map.get(<span class="kw-2">&amp;</span>parent_epoch))
+<a href=#651 id=651 data-nosnippet>651</a>            .map(|prop| prop.data.clone());
 <a href=#652 id=652 data-nosnippet>652</a>
 <a href=#653 id=653 data-nosnippet>653</a>        <span class="kw">let </span>state_cert = <span class="kw">if </span>parent_leaf.with_epoch
 <a href=#654 id=654 data-nosnippet>654</a>            &amp;&amp; is_epoch_root(parent_leaf.block_header().block_number(), <span class="self">self</span>.epoch_height)
