@@ -48,6 +48,7 @@ pub struct NodeState {
     #[debug(skip)]
     pub coordinator: EpochMembershipCoordinator<SeqTypes>,
     pub epoch_height: Option<u64>,
+    pub genesis_version: Version,
 
     /// Map containing all planned and executed upgrades.
     ///
@@ -123,6 +124,7 @@ impl NodeState {
         catchup: impl StateCatchup + 'static,
         current_version: Version,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
+        genesis_version: Version,
     ) -> Self {
         Self {
             node_id,
@@ -139,6 +141,7 @@ impl NodeState {
             current_version,
             epoch_height: None,
             coordinator,
+            genesis_version,
         }
     }
 
@@ -170,6 +173,7 @@ impl NodeState {
             Arc::new(mock::MockStateCatchup::default()),
             StaticVersion::<0, 1>::version(),
             coordinator,
+            Version { major: 0, minor: 1 },
         )
     }
 
@@ -201,6 +205,7 @@ impl NodeState {
             Arc::new(mock::MockStateCatchup::default()),
             StaticVersion::<0, 2>::version(),
             coordinator,
+            Version { major: 0, minor: 1 },
         )
     }
 
@@ -230,6 +235,7 @@ impl NodeState {
             mock::MockStateCatchup::default(),
             StaticVersion::<0, 3>::version(),
             coordinator,
+            Version { major: 0, minor: 1 },
         )
     }
 
@@ -314,6 +320,7 @@ impl Default for NodeState {
             Arc::new(mock::MockStateCatchup::default()),
             StaticVersion::<0, 1>::version(),
             coordinator,
+            Version { major: 0, minor: 1 },
         )
     }
 }

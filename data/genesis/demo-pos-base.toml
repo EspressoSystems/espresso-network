@@ -1,5 +1,6 @@
 base_version = "0.3"
 upgrade_version = "0.3"
+genesis_version = "0.3"
 epoch_height = 150
 epoch_start_block = 1
 stake_table_capacity = 10
