@@ -2024,6 +2024,7 @@ mod test {
     use hotshot_example_types::node_types::EpochsTestVersions;
     use hotshot_query_service::{
         availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
+        data_source::{sql::Config, storage::SqlStorage, VersionedDataSource},
         types::HeightIndexed,
     };
     use hotshot_types::{
@@ -2053,6 +2054,10 @@ mod test {
     };
     use super::*;
     use crate::{
+        api::{
+            options::Query,
+            sql::{impl_testable_data_source::tmp_options, reconstruct_state},
+        },
         catchup::{NullStateCatchup, StatePeers},
         persistence::no_storage,
         testing::{TestConfig, TestConfigBuilder},
@@ -4007,6 +4012,508 @@ mod test {
                 node_stake_table, stake_table,
                 "Stake table mismatch for epoch {epoch_num}",
             );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_merklized_state_catchup_on_restart() -> anyhow::Result<()> {
+        // This test verifies that a query node can catch up on
+        // merklized state after being offline for multiple epochs.
+        //
+        // Steps:
+        // 1. Start a test network with 5 sequencer nodes.
+        // 2. Start a separate node with the query module enabled, connected to the network.
+        //    - This node stores merklized state
+        // 3. Shut down the query node after 1 epoch.
+        // 4. Allow the network to progress 3 more epochs (query node remains offline).
+        // 5. Restart the query node.
+        //    - The node is expected to reconstruct or catch up on its own
+        setup_test();
+        const EPOCH_HEIGHT: u64 = 10;
+
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        tracing::info!("API PORT = {api_port}");
+        const NUM_NODES: usize = 5;
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<PosVersion>(
+                DelegationConfig::MultipleDelegators,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+            )
+            .await
+            .unwrap()
+            .build();
+        let state = config.states()[0].clone();
+        let mut network = TestNetwork::new(config, PosVersion::new()).await;
+
+        // Remove peer 0 and restart it with the query module enabled.
+        // Adding an additional node to the test network is not straight forward,
+        // as the keys have already been initialized in the config above.
+        // So, we remove this node and re-add it using the same index.
+        network.peers.remove(0);
+        let node_0_storage = &storage[1];
+        let node_0_persistence = persistence[1].clone();
+        let node_0_port = pick_unused_port().expect("No ports free for query service");
+        tracing::info!("node_0_port {node_0_port}");
+        // enable query module with api peers
+        let opt = Options::with_port(node_0_port).query_sql(
+            Query {
+                peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
+            },
+            tmp_options(node_0_storage),
+        );
+
+        // start the query node so that it builds the merklized state
+        let node_0 = opt
+            .clone()
+            .serve(|metrics, consumer, storage| {
+                let cfg = network.cfg.clone();
+                let node_0_persistence = node_0_persistence.clone();
+                let state = state.clone();
+                async move {
+                    Ok(cfg
+                        .init_node(
+                            1,
+                            state,
+                            node_0_persistence.clone(),
+                            Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
+                                vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                                Default::default(),
+                                &NoMetrics,
+                            )),
+                            storage,
+                            &*metrics,
+                            test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
+                            consumer,
+                            PosVersion::new(),
+                            Default::default(),
+                        )
+                        .await)
+                }
+                .boxed()
+            })
+            .await
+            .unwrap();
+
+        let mut events = network.peers[2].event_stream().await;
+        // wait for 1 epoch
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, 1).await;
+
+        // shutdown the node for 3 epochs
+        drop(node_0);
+
+        // wait for 4 epochs
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, 4).await;
+
+        // start the node again.
+        let node_0 = opt
+            .serve(|metrics, consumer, storage| {
+                let cfg = network.cfg.clone();
+                async move {
+                    Ok(cfg
+                        .init_node(
+                            1,
+                            state,
+                            node_0_persistence,
+                            Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
+                                vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                                Default::default(),
+                                &NoMetrics,
+                            )),
+                            storage,
+                            &*metrics,
+                            test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
+                            consumer,
+                            PosVersion::new(),
+                            Default::default(),
+                        )
+                        .await)
+                }
+                .boxed()
+            })
+            .await
+            .unwrap();
+
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{node_0_port}").parse().unwrap());
+        client.connect(None).await;
+
+        let epoch_6_block = EPOCH_HEIGHT * 6 + 1;
+
+        // check that the node's state has reward accounts
+        let mut retries = 0;
+        loop {
+            sleep(Duration::from_secs(1)).await;
+            let state = node_0.decided_state().await;
+            let reward_accounts = state
+                .reward_merkle_tree
+                .clone()
+                .into_iter()
+                .collect::<Vec<_>>();
+
+            if !reward_accounts.is_empty() {
+                tracing::info!("Node's state has reward accounts. {reward_accounts:?}");
+                break;
+            }
+            retries += 1;
+
+            if retries > 120 {
+                panic!("max retries reached. failed to catchup reward state");
+            }
+        }
+
+        // check that the node has stored atleast 6 epochs merklized state in persistence
+        loop {
+            sleep(Duration::from_secs(1)).await;
+
+            let bh = client
+                .get::<u64>("block-state/block-height")
+                .send()
+                .await
+                .expect("block height not found");
+
+            tracing::info!("block state: block height={bh}");
+            if bh > epoch_6_block {
+                break;
+            }
+        }
+
+        // shutdown consensus to freeze the state
+        node_0.shutdown_consensus().await;
+        let decided_leaf = node_0.decided_leaf().await;
+        let state = node_0.decided_state().await;
+
+        state
+            .block_merkle_tree
+            .lookup(decided_leaf.height() - 1)
+            .expect_ok()
+            .expect("block state not found");
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_state_reconstruction() -> anyhow::Result<()> {
+        // This test verifies that a query node can successfully reconstruct its state
+        // after being shut down from the database
+        //
+        // Steps:
+        // 1. Start a test network with 5 nodes.
+        // 2. Add a query node connected to the network.
+        // 3. Let the network run until 3 epochs have passed.
+        // 4. Shut down the query node.
+        // 5. Attempt to reconstruct its state from storage using:
+        //    - No fee/reward accounts
+        //    - Only fee accounts
+        //    - Only reward accounts
+        //    - Both fee and reward accounts
+        // 6. Assert that the reconstructed state is correct in all scenarios.
+
+        setup_test();
+        const EPOCH_HEIGHT: u64 = 10;
+
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        tracing::info!("API PORT = {api_port}");
+        const NUM_NODES: usize = 5;
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<PosVersion>(
+                DelegationConfig::MultipleDelegators,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+            )
+            .await
+            .unwrap()
+            .build();
+        let state = config.states()[0].clone();
+        let mut network = TestNetwork::new(config, PosVersion::new()).await;
+        // Remove peer 0 and restart it with the query module enabled.
+        // Adding an additional node to the test network is not straight forward,
+        // as the keys have already been initialized in the config above.
+        // So, we remove this node and re-add it using the same index.
+        network.peers.remove(0);
+
+        let node_0_storage = &storage[1];
+        let node_0_persistence = persistence[1].clone();
+        let node_0_port = pick_unused_port().expect("No ports free for query service");
+        tracing::info!("node_0_port {node_0_port}");
+        let opt = Options::with_port(node_0_port).query_sql(
+            Query {
+                peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
+            },
+            tmp_options(node_0_storage),
+        );
+        let node_0 = opt
+            .clone()
+            .serve(|metrics, consumer, storage| {
+                let cfg = network.cfg.clone();
+                let node_0_persistence = node_0_persistence.clone();
+                let state = state.clone();
+                async move {
+                    Ok(cfg
+                        .init_node(
+                            1,
+                            state,
+                            node_0_persistence.clone(),
+                            Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
+                                vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                                Default::default(),
+                                &NoMetrics,
+                            )),
+                            storage,
+                            &*metrics,
+                            test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
+                            consumer,
+                            PosVersion::new(),
+                            Default::default(),
+                        )
+                        .await)
+                }
+                .boxed()
+            })
+            .await
+            .unwrap();
+
+        let mut events = network.peers[2].event_stream().await;
+        // Wait until at least 3 epochs have passed
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, 3).await;
+
+        tracing::warn!("shutting down node 0");
+
+        node_0.shutdown_consensus().await;
+
+        let instance = node_0.node_state();
+        let state = node_0.decided_state().await;
+        let fee_accounts = state
+            .fee_merkle_tree
+            .clone()
+            .into_iter()
+            .map(|(acct, _)| acct)
+            .collect::<Vec<_>>();
+        let reward_accounts = state
+            .reward_merkle_tree
+            .clone()
+            .into_iter()
+            .map(|(acct, _)| acct)
+            .collect::<Vec<_>>();
+
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{node_0_port}").parse().unwrap());
+        client.connect(Some(Duration::from_secs(10))).await;
+
+        // wait 3s to be sure that all the
+        // transactions have been committed
+        sleep(Duration::from_secs(3)).await;
+
+        tracing::info!("getting node block height");
+        let node_block_height = client
+            .get::<u64>("node/block-height")
+            .send()
+            .await
+            .context("getting Espresso block height")
+            .unwrap();
+
+        tracing::info!("node block height={node_block_height}");
+
+        let leaf_query_data = client
+            .get::<LeafQueryData<SeqTypes>>(&format!("availability/leaf/{}", node_block_height - 1))
+            .send()
+            .await
+            .context("error getting leaf")
+            .unwrap();
+
+        tracing::info!("leaf={leaf_query_data:?}");
+        let leaf = leaf_query_data.leaf();
+        let to_view = leaf.view_number() + 1;
+
+        let ds = SqlStorage::connect(Config::try_from(&node_0_persistence).unwrap())
+            .await
+            .unwrap();
+        let mut tx = ds.write().await?;
+
+        let (state, leaf) =
+            reconstruct_state(&instance, &mut tx, node_block_height - 1, to_view, &[], &[])
+                .await
+                .unwrap();
+        assert_eq!(leaf.view_number(), to_view);
+        assert!(
+            state
+                .block_merkle_tree
+                .lookup(node_block_height - 1)
+                .expect_ok()
+                .is_ok(),
+            "inconsistent block merkle tree"
+        );
+
+        // Reconstruct fee state
+        let (state, leaf) = reconstruct_state(
+            &instance,
+            &mut tx,
+            node_block_height - 1,
+            to_view,
+            &fee_accounts,
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(leaf.view_number(), to_view);
+        assert!(
+            state
+                .block_merkle_tree
+                .lookup(node_block_height - 1)
+                .expect_ok()
+                .is_ok(),
+            "inconsistent block merkle tree"
+        );
+
+        for account in &fee_accounts {
+            state.fee_merkle_tree.lookup(account).expect_ok().unwrap();
+        }
+
+        // Reconstruct reward state
+
+        let (state, leaf) = reconstruct_state(
+            &instance,
+            &mut tx,
+            node_block_height - 1,
+            to_view,
+            &[],
+            &reward_accounts,
+        )
+        .await
+        .unwrap();
+
+        for account in &reward_accounts {
+            state
+                .reward_merkle_tree
+                .lookup(account)
+                .expect_ok()
+                .unwrap();
+        }
+
+        assert_eq!(leaf.view_number(), to_view);
+        assert!(
+            state
+                .block_merkle_tree
+                .lookup(node_block_height - 1)
+                .expect_ok()
+                .is_ok(),
+            "inconsistent block merkle tree"
+        );
+        // Reconstruct reward and fee state
+
+        let (state, leaf) = reconstruct_state(
+            &instance,
+            &mut tx,
+            node_block_height - 1,
+            to_view,
+            &fee_accounts,
+            &reward_accounts,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            state
+                .block_merkle_tree
+                .lookup(node_block_height - 1)
+                .expect_ok()
+                .is_ok(),
+            "inconsistent block merkle tree"
+        );
+        assert_eq!(leaf.view_number(), to_view);
+        for account in &reward_accounts {
+            state
+                .reward_merkle_tree
+                .lookup(account)
+                .expect_ok()
+                .unwrap();
+        }
+
+        for account in &fee_accounts {
+            state.fee_merkle_tree.lookup(account).expect_ok().unwrap();
+        }
+
+        Ok(())
+    }
+
+    /// Waits until a node has reached the given target epoch (exclusive).
+    /// The function returns once the first event indicates an epoch higher than `target_epoch`.
+    async fn wait_for_epochs(
+        events: &mut (impl futures::Stream<Item = Event<SeqTypes>> + std::marker::Unpin),
+        epoch_height: u64,
+        target_epoch: u64,
+    ) {
+        while let Some(event) = events.next().await {
+            if let EventType::Decide { leaf_chain, .. } = event.event {
+                let leaf = leaf_chain[0].leaf.clone();
+                let epoch = leaf.epoch(epoch_height);
+                tracing::info!(
+                    "Node decided at height: {}, epoch: {:?}",
+                    leaf.height(),
+                    epoch
+                );
+
+                if epoch > Some(EpochNumber::new(target_epoch)) {
+                    break;
+                }
+            }
         }
     }
 }
