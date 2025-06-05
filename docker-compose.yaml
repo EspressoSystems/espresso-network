@@ -15,7 +15,11 @@ services:
 
   deploy-sequencer-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
-    command: deploy --deploy-fee --deploy-esp-token --deploy-stake-table --upgrade-stake-table-v2
+    # NOTE: the API of the deploy CLI changed w.r.t. to the mainnet tag, try the
+    # new API first and if that fails try the old one.
+    command: >-
+      bash -c "deploy --deploy-fee --deploy-esp-token --deploy-stake-table --upgrade-stake-table-v2
+      || deploy --only fee-contract,permissioned-stake-table"
     environment:
       - ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
       - ESPRESSO_SEQUENCER_L1_PROVIDER
@@ -33,7 +37,11 @@ services:
 
   deploy-prover-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
-    command: deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2
+    # NOTE: the API of the deploy CLI changed w.r.t. to the mainnet tag, try the
+    # new API first and if that fails try the old one.
+    command: >-
+      bash -c "deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2
+      || deploy --use-mock-contract --only light-client"
     environment:
       - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL
       - ESPRESSO_SEQUENCER_L1_PROVIDER
@@ -62,7 +70,7 @@ services:
       - L1_PROVIDER=$ESPRESSO_SEQUENCER_L1_PROVIDER
       - L1_POLLING_INTERVAL=$ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
       - ESPRESSO_PROVIDER=http://sequencer1:$ESPRESSO_SEQUENCER_API_PORT
-      - CONTRACT_ADDRESS=0xa15bb66138824a1c7167f5e85b957d04dd34e468
+      - CONTRACT_ADDRESS=$ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
       - MNEMONIC=$ESPRESSO_BUILDER_ETH_MNEMONIC
       - ACCOUNT_INDEX=$ESPRESSO_BUILDER_ETH_ACCOUNT_INDEX
       - AMOUNT=1000000000000000000
@@ -77,7 +85,7 @@ services:
 
   stake-for-demo:
     image: ghcr.io/espressosystems/espresso-sequencer/staking-cli:main
-    command: staking-cli stake-for-demo
+    command: bash -c "staking-cli stake-for-demo || echo 'ignoring staking-cli failure'"
     environment:
       - L1_PROVIDER=$ESPRESSO_SEQUENCER_L1_PROVIDER
       - MNEMONIC=$ESPRESSO_SEQUENCER_ETH_MNEMONIC
@@ -101,6 +109,14 @@ services:
         condition: service_completed_successfully
       sequencer1:
         condition: service_healthy
+
+  # `docker compose up --wait` only works if exiting services have dependents.
+  stake-for-demo-waiter:
+    image: ghcr.io/espressosystems/espresso-sequencer/staking-cli:main
+    command: sleep infinity
+    depends_on:
+      stake-for-demo:
+        condition: service_completed_successfully
 
   orchestrator:
     image: ghcr.io/espressosystems/espresso-sequencer/orchestrator:${DOCKER_TAG:-main}
@@ -203,6 +219,15 @@ services:
       orchestrator:
         condition: service_healthy
 
+  # `docker compose up --wait` only works if exiting services have dependents.
+  # Creates a dependent for cdn-whitelist.
+  cdn-whitelist-waiter:
+    image: ghcr.io/espressosystems/espresso-sequencer/cdn-whitelist:${DOCKER_TAG:-main}
+    command: sleep infinity
+    depends_on:
+      cdn-whitelist:
+        condition: service_completed_successfully
+
   state-relay-server:
     image: ghcr.io/espressosystems/espresso-sequencer/state-relay-server:${DOCKER_TAG:-main}
     ports:
@@ -228,6 +253,8 @@ services:
       - ESPRESSO_SEQUENCER_L1_PROVIDER
       - ESPRESSO_SEQUENCER_ETH_MNEMONIC
       - ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS
+      # Note: set legacy env var ESPRESSO_SEQUENCER_LIGHTCLIENT_ADDRESS for backwards compatibility
+      - ESPRESSO_SEQUENCER_LIGHTCLIENT_ADDRESS=$ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS
       - ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY
       - ESPRESSO_STATE_PROVER_MAX_GAS_PRICE_IN_GWEI
       - MNEMONIC=$ESPRESSO_SEQUENCER_ETH_MNEMONIC

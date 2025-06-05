@@ -3,6 +3,24 @@ set -eE
 
 PATH="$PWD/target/release:$PATH"
 
+# load env vars in .env, without overwriting existing values
+env_backup_path="$(mktemp)"
+trap 'rm -f "$tmpfile"' EXIT
+
+# Get variable names from .env
+env_keys=$(grep -v '^#' .env | grep '=' | cut -d '=' -f1)
+# Save env vars in .env if they are already set, to restore them later
+> "$env_backup_path"
+for key in $env_keys; do
+  if printenv "$key" &>/dev/null; then
+    declare -p "$key" >> "$env_backup_path" 2>/dev/null
+  fi
+done
+# load .env
+set -a; source .env; set +a;
+# restore the backed up env vars
+source "$env_backup_path"
+
 # Duplicate some debugging information to stdout in case the process exits
 trap 'error_handler "${LINENO}" "$BASH_COMMAND"' ERR INT
 error_handler() {
@@ -10,9 +28,6 @@ error_handler() {
   local msg=$2
   echo "Failed at line $lineno: msg: $msg"
 }
-
-# load env vars in .env
-set -a; source .env; set +a;
 
 LOAD_GENERATOR=http://localhost:$ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT
 
