@@ -1460,10 +1460,6 @@ mod tests {
     async fn test_upgrade_light_client_to_v2_multisig_owner_helper(
         options: UpgradeTestOptions,
     ) -> Result<()> {
-        assert!(
-            std::path::Path::new("../../../scripts/multisig-upgrade-entrypoint").exists(),
-            "Script not found!"
-        );
         let mut sepolia_rpc_url = "http://localhost:8545".to_string();
         let mut multisig_admin = Address::random();
         let mut mnemonic =
@@ -1780,12 +1776,14 @@ mod tests {
     // SAFE_ORCHESTRATOR_PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000000
     // Ensure that the private key has proposal rights on the Safe Multisig Wallet and the SDK supports the network
     async fn test_upgrade_stake_table_to_v2_multisig_owner_helper(dry_run: bool) -> Result<()> {
-        assert!(
-            std::path::Path::new("../../../scripts/multisig-upgrade-entrypoint").exists(),
-            "Script not found!"
-        );
         let mut sepolia_rpc_url = "http://localhost:8545".to_string();
         let mut multisig_admin = Address::random();
+        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+        let init_recipient = provider.get_accounts().await?[0];
+        let token_owner = Address::random();
+        let initial_supply = U256::from(3590000000u64);
+
         if !dry_run {
             dotenvy::from_filename_override(".env.deployer.rs.test").ok();
 
@@ -1805,14 +1803,17 @@ mod tests {
             }
         }
 
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
-        let mut contracts = Contracts::new();
-        let init_recipient = provider.get_accounts().await?[0];
-        let token_owner = Address::random();
-
         // deploy proxy and V1
-        let token_addr =
-            deploy_token_proxy(&provider, &mut contracts, token_owner, init_recipient).await?;
+        let token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            token_owner,
+            init_recipient,
+            initial_supply,
+            "Espresso",
+            "ESP",
+        )
+        .await?;
         let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
         let exit_escrow_period = U256::from(1000);
         let owner = init_recipient;
