@@ -1779,7 +1779,6 @@ mod tests {
     // SAFE_MULTISIG_ADDRESS=0x0000000000000000000000000000000000000000
     // SAFE_ORCHESTRATOR_PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000000
     // Ensure that the private key has proposal rights on the Safe Multisig Wallet and the SDK supports the network
-    #[cfg(feature = "safesdk")]
     async fn test_upgrade_stake_table_to_v2_multisig_owner_helper(dry_run: bool) -> Result<()> {
         assert!(
             std::path::Path::new("../../../scripts/multisig-upgrade-entrypoint").exists(),
@@ -1857,7 +1856,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "safesdk")]
     #[tokio::test]
     async fn test_upgrade_stake_table_to_v2_multisig_owner_dry_run() -> Result<()> {
         test_upgrade_stake_table_to_v2_multisig_owner_helper(true).await
