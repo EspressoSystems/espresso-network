@@ -1083,7 +1083,7 @@
 <a href=#1083 id=1083 data-nosnippet>1083</a>        </span><span class="self">self</span>.saved_da_certs
 <a href=#1084 id=1084 data-nosnippet>1084</a>            .retain(|view_number, <span class="kw">_</span>| <span class="kw-2">*</span>view_number &gt;= old_anchor_view);
 <a href=#1085 id=1085 data-nosnippet>1085</a>        <span class="self">self</span>.validated_state_map
-<a href=#1086 id=1086 data-nosnippet>1086</a>            .range(old_anchor_view..gc_view)
+<a href=#1086 id=1086 data-nosnippet>1086</a>            .range(..gc_view)
 <a href=#1087 id=1087 data-nosnippet>1087</a>            .filter_map(|(_view_number, view)| view.leaf_commitment())
 <a href=#1088 id=1088 data-nosnippet>1088</a>            .for_each(|leaf| {
 <a href=#1089 id=1089 data-nosnippet>1089</a>                <span class="self">self</span>.saved_leaves.remove(<span class="kw-2">&amp;</span>leaf);
