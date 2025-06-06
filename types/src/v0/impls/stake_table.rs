@@ -989,7 +989,7 @@ impl Fetcher {
     /// - If either step fails, the function aborts to prevent incorrect reward calculations.
     ///
     /// Relying on mint events directly e.g., searching for mints from the zero address is prone to errors
-    /// becayse in future when reward withdrawals are supported, there might be more than one mint transfer logs from
+    /// because in future when reward withdrawals are supported, there might be more than one mint transfer logs from
     /// zero address
     pub async fn fetch_block_reward(&self) -> anyhow::Result<RewardAmount> {
         let max_events_range = self.l1_client.options().l1_events_max_block_range;
