@@ -16,7 +16,7 @@
 <a href=#16 id=16 data-nosnippet>16</a>    num::{NonZeroUsize, TryFromIntError},
 <a href=#17 id=17 data-nosnippet>17</a>};
 <a href=#18 id=18 data-nosnippet>18</a>
-<a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>hotshot_types::traits::node_implementation::NodeType;
+<a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>serde::{Deserialize, Serialize};
 <a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>tide_disco::StatusCode;
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>time::format_description::well_known::Rfc3339;
@@ -27,7 +27,7 @@
 <a href=#27 id=27 data-nosnippet>27</a>    traits::{ExplorerHeader, ExplorerTransaction},
 <a href=#28 id=28 data-nosnippet>28</a>};
 <a href=#29 id=29 data-nosnippet>29</a><span class="kw">use crate</span>::{
-<a href=#30 id=30 data-nosnippet>30</a>    availability::{BlockQueryData, QueryableHeader, QueryablePayload, TransactionHash},
+<a href=#30 id=30 data-nosnippet>30</a>    availability::{BlockQueryData, QueryablePayload, TransactionHash},
 <a href=#31 id=31 data-nosnippet>31</a>    node::BlockHash,
 <a href=#32 id=32 data-nosnippet>32</a>    types::HeightIndexed,
 <a href=#33 id=33 data-nosnippet>33</a>    Header, Payload, Resolvable, Transaction,
@@ -173,7 +173,7 @@
 <a href=#173 id=173 data-nosnippet>173</a><span class="kw">where
 <a href=#174 id=174 data-nosnippet>174</a>    </span>BlockQueryData&lt;Types&gt;: HeightIndexed,
 <a href=#175 id=175 data-nosnippet>175</a>    Payload&lt;Types&gt;: QueryablePayload&lt;Types&gt;,
-<a href=#176 id=176 data-nosnippet>176</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt; + ExplorerHeader&lt;Types&gt;,
+<a href=#176 id=176 data-nosnippet>176</a>    Header&lt;Types&gt;: BlockHeader&lt;Types&gt; + ExplorerHeader&lt;Types&gt;,
 <a href=#177 id=177 data-nosnippet>177</a>    BalanceAmount&lt;Types&gt;: Into&lt;MonetaryValue&gt;,
 <a href=#178 id=178 data-nosnippet>178</a>{
 <a href=#179 id=179 data-nosnippet>179</a>    <span class="kw">type </span>Error = TimestampConversionError;
@@ -263,7 +263,7 @@
 <a href=#263 id=263 data-nosnippet>263</a><span class="kw">where
 <a href=#264 id=264 data-nosnippet>264</a>    </span>BlockQueryData&lt;Types&gt;: HeightIndexed,
 <a href=#265 id=265 data-nosnippet>265</a>    Payload&lt;Types&gt;: QueryablePayload&lt;Types&gt;,
-<a href=#266 id=266 data-nosnippet>266</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt; + ExplorerHeader&lt;Types&gt;,
+<a href=#266 id=266 data-nosnippet>266</a>    Header&lt;Types&gt;: BlockHeader&lt;Types&gt; + ExplorerHeader&lt;Types&gt;,
 <a href=#267 id=267 data-nosnippet>267</a>{
 <a href=#268 id=268 data-nosnippet>268</a>    <span class="kw">type </span>Error = TimestampConversionError;
 <a href=#269 id=269 data-nosnippet>269</a>
@@ -349,7 +349,7 @@
 <a href=#349 id=349 data-nosnippet>349</a><span class="kw">where
 <a href=#350 id=350 data-nosnippet>350</a>    </span>BlockQueryData&lt;Types&gt;: HeightIndexed,
 <a href=#351 id=351 data-nosnippet>351</a>    Payload&lt;Types&gt;: QueryablePayload&lt;Types&gt;,
-<a href=#352 id=352 data-nosnippet>352</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt; + ExplorerHeader&lt;Types&gt;,
+<a href=#352 id=352 data-nosnippet>352</a>    Header&lt;Types&gt;: BlockHeader&lt;Types&gt; + ExplorerHeader&lt;Types&gt;,
 <a href=#353 id=353 data-nosnippet>353</a>    Transaction&lt;Types&gt;: ExplorerTransaction,
 <a href=#354 id=354 data-nosnippet>354</a>{
 <a href=#355 id=355 data-nosnippet>355</a>    <span class="kw">type </span>Error = TimestampConversionError;
@@ -383,7 +383,7 @@
 <a href=#383 id=383 data-nosnippet>383</a><span class="kw">where
 <a href=#384 id=384 data-nosnippet>384</a>    </span>BlockQueryData&lt;Types&gt;: HeightIndexed,
 <a href=#385 id=385 data-nosnippet>385</a>    Payload&lt;Types&gt;: QueryablePayload&lt;Types&gt;,
-<a href=#386 id=386 data-nosnippet>386</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt; + ExplorerHeader&lt;Types&gt;,
+<a href=#386 id=386 data-nosnippet>386</a>    Header&lt;Types&gt;: BlockHeader&lt;Types&gt; + ExplorerHeader&lt;Types&gt;,
 <a href=#387 id=387 data-nosnippet>387</a>    &lt;Types <span class="kw">as </span>NodeType&gt;::Transaction: ExplorerTransaction,
 <a href=#388 id=388 data-nosnippet>388</a>{
 <a href=#389 id=389 data-nosnippet>389</a>    <span class="kw">type </span>Error = TimestampConversionError;

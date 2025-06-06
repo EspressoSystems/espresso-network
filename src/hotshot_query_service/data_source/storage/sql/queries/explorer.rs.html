@@ -17,7 +17,7 @@
 <a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>async_trait::async_trait;
 <a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>committable::{Commitment, Committable};
 <a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>futures::stream::{<span class="self">self</span>, StreamExt, TryStreamExt};
-<a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>hotshot_types::traits::node_implementation::NodeType;
+<a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
 <a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>itertools::Itertools;
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>sqlx::{FromRow, Row};
 <a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>tagged_base64::{Tagged, TaggedBase64};
@@ -27,7 +27,7 @@
 <a href=#27 id=27 data-nosnippet>27</a>    Database, Db, DecodeError, BLOCK_COLUMNS,
 <a href=#28 id=28 data-nosnippet>28</a>};
 <a href=#29 id=29 data-nosnippet>29</a><span class="kw">use crate</span>::{
-<a href=#30 id=30 data-nosnippet>30</a>    availability::{BlockQueryData, QueryableHeader, QueryablePayload},
+<a href=#30 id=30 data-nosnippet>30</a>    availability::{BlockQueryData, QueryablePayload},
 <a href=#31 id=31 data-nosnippet>31</a>    data_source::storage::{ExplorerStorage, NodeStorage},
 <a href=#32 id=32 data-nosnippet>32</a>    explorer::{
 <a href=#33 id=33 data-nosnippet>33</a>        <span class="self">self</span>,
@@ -83,7 +83,7 @@
 <a href=#83 id=83 data-nosnippet>83</a><span class="kw">impl</span>&lt;<span class="lifetime">'r</span>, Types&gt; FromRow&lt;<span class="lifetime">'r</span>, &lt;Db <span class="kw">as </span>Database&gt;::Row&gt; <span class="kw">for </span>BlockSummary&lt;Types&gt;
 <a href=#84 id=84 data-nosnippet>84</a><span class="kw">where
 <a href=#85 id=85 data-nosnippet>85</a>    </span>Types: NodeType,
-<a href=#86 id=86 data-nosnippet>86</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt; + ExplorerHeader&lt;Types&gt;,
+<a href=#86 id=86 data-nosnippet>86</a>    Header&lt;Types&gt;: BlockHeader&lt;Types&gt; + ExplorerHeader&lt;Types&gt;,
 <a href=#87 id=87 data-nosnippet>87</a>    Payload&lt;Types&gt;: QueryablePayload&lt;Types&gt;,
 <a href=#88 id=88 data-nosnippet>88</a>{
 <a href=#89 id=89 data-nosnippet>89</a>    <span class="kw">fn </span>from_row(row: <span class="kw-2">&amp;</span><span class="lifetime">'r </span>&lt;Db <span class="kw">as </span>Database&gt;::Row) -&gt; sqlx::Result&lt;<span class="self">Self</span>&gt; {
@@ -96,7 +96,7 @@
 <a href=#96 id=96 data-nosnippet>96</a><span class="kw">impl</span>&lt;<span class="lifetime">'r</span>, Types&gt; FromRow&lt;<span class="lifetime">'r</span>, &lt;Db <span class="kw">as </span>Database&gt;::Row&gt; <span class="kw">for </span>BlockDetail&lt;Types&gt;
 <a href=#97 id=97 data-nosnippet>97</a><span class="kw">where
 <a href=#98 id=98 data-nosnippet>98</a>    </span>Types: NodeType,
-<a href=#99 id=99 data-nosnippet>99</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt; + ExplorerHeader&lt;Types&gt;,
+<a href=#99 id=99 data-nosnippet>99</a>    Header&lt;Types&gt;: BlockHeader&lt;Types&gt; + ExplorerHeader&lt;Types&gt;,
 <a href=#100 id=100 data-nosnippet>100</a>    Payload&lt;Types&gt;: QueryablePayload&lt;Types&gt;,
 <a href=#101 id=101 data-nosnippet>101</a>    BalanceAmount&lt;Types&gt;: Into&lt;MonetaryValue&gt;,
 <a href=#102 id=102 data-nosnippet>102</a>{
@@ -270,7 +270,7 @@
 <a href=#270 id=270 data-nosnippet>270</a>    </span>Mode: TransactionMode,
 <a href=#271 id=271 data-nosnippet>271</a>    Types: NodeType,
 <a href=#272 id=272 data-nosnippet>272</a>    Payload&lt;Types&gt;: QueryablePayload&lt;Types&gt;,
-<a href=#273 id=273 data-nosnippet>273</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt; + ExplorerHeader&lt;Types&gt;,
+<a href=#273 id=273 data-nosnippet>273</a>    Header&lt;Types&gt;: BlockHeader&lt;Types&gt; + ExplorerHeader&lt;Types&gt;,
 <a href=#274 id=274 data-nosnippet>274</a>    <span class="kw">crate</span>::Transaction&lt;Types&gt;: explorer::traits::ExplorerTransaction,
 <a href=#275 id=275 data-nosnippet>275</a>    BalanceAmount&lt;Types&gt;: Into&lt;explorer::monetary_value::MonetaryValue&gt;,
 <a href=#276 id=276 data-nosnippet>276</a>{

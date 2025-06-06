@@ -9,7 +9,7 @@
 <a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>espresso_types::{Header, Payload, SeqTypes};
 <a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>futures::{channel::mpsc::SendError, Sink, SinkExt, Stream, StreamExt};
 <a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>hotshot_query_service::{
-<a href=#12 id=12 data-nosnippet>12</a>    availability::{BlockQueryData, Leaf1QueryData, QueryableHeader},
+<a href=#12 id=12 data-nosnippet>12</a>    availability::{BlockQueryData, Leaf1QueryData},
 <a href=#13 id=13 data-nosnippet>13</a>    explorer::{BlockDetail, ExplorerHeader, Timestamp},
 <a href=#14 id=14 data-nosnippet>14</a>    Resolvable,
 <a href=#15 id=15 data-nosnippet>15</a>};
@@ -349,7 +349,7 @@
 <a href=#349 id=349 data-nosnippet>349</a>    <span class="kw-2">mut </span>voters_sender: BVSink,
 <a href=#350 id=350 data-nosnippet>350</a>) -&gt; <span class="prelude-ty">Result</span>&lt;(), ProcessLeafError&gt;
 <a href=#351 id=351 data-nosnippet>351</a><span class="kw">where
-<a href=#352 id=352 data-nosnippet>352</a>    </span>Header: BlockHeader&lt;SeqTypes&gt; + QueryableHeader&lt;SeqTypes&gt; + ExplorerHeader&lt;SeqTypes&gt;,
+<a href=#352 id=352 data-nosnippet>352</a>    </span>Header: BlockHeader&lt;SeqTypes&gt; + BlockHeader&lt;SeqTypes&gt; + ExplorerHeader&lt;SeqTypes&gt;,
 <a href=#353 id=353 data-nosnippet>353</a>    Payload: BlockPayload&lt;SeqTypes&gt;,
 <a href=#354 id=354 data-nosnippet>354</a>    BDSink: Sink&lt;BlockDetail&lt;SeqTypes&gt;, Error = SendError&gt; + Unpin,
 <a href=#355 id=355 data-nosnippet>355</a>    BVSink: Sink&lt;BitVec&lt;u16&gt;, Error = SendError&gt; + Unpin,
@@ -499,7 +499,7 @@
 <a href=#499 id=499 data-nosnippet>499</a>        voters_senders: BVSink,
 <a href=#500 id=500 data-nosnippet>500</a>    ) <span class="kw">where
 <a href=#501 id=501 data-nosnippet>501</a>        </span>S: Stream&lt;Item = LeafAndBlock&lt;SeqTypes&gt;&gt; + Unpin,
-<a href=#502 id=502 data-nosnippet>502</a>        Header: BlockHeader&lt;SeqTypes&gt; + QueryableHeader&lt;SeqTypes&gt; + ExplorerHeader&lt;SeqTypes&gt;,
+<a href=#502 id=502 data-nosnippet>502</a>        Header: BlockHeader&lt;SeqTypes&gt; + BlockHeader&lt;SeqTypes&gt; + ExplorerHeader&lt;SeqTypes&gt;,
 <a href=#503 id=503 data-nosnippet>503</a>        Payload: BlockPayload&lt;SeqTypes&gt;,
 <a href=#504 id=504 data-nosnippet>504</a>        BDSink: Sink&lt;BlockDetail&lt;SeqTypes&gt;, Error = SendError&gt; + Clone + Unpin,
 <a href=#505 id=505 data-nosnippet>505</a>        BVSink: Sink&lt;BitVec&lt;u16&gt;, Error = SendError&gt; + Clone + Unpin,

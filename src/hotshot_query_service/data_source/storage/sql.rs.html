@@ -1068,7 +1068,7 @@
 <a href=#1068 id=1068 data-nosnippet>1068</a>    <span class="kw">use </span>tokio::{net::TcpStream, time::timeout};
 <a href=#1069 id=1069 data-nosnippet>1069</a>
 <a href=#1070 id=1070 data-nosnippet>1070</a>    <span class="kw">use </span><span class="kw">super</span>::Config;
-<a href=#1071 id=1071 data-nosnippet>1071</a>    <span class="kw">use crate</span>::{availability::query_data::QueryableHeader, testing::sleep};
+<a href=#1071 id=1071 data-nosnippet>1071</a>    <span class="kw">use </span><span class="kw">crate</span>::testing::sleep;
 <a href=#1072 id=1072 data-nosnippet>1072</a>    <span class="attr">#[derive(Debug)]
 <a href=#1073 id=1073 data-nosnippet>1073</a>    </span><span class="kw">pub struct </span>TmpDb {
 <a href=#1074 id=1074 data-nosnippet>1074</a>        <span class="attr">#[cfg(not(feature = <span class="string">"embedded-db"</span>))]
@@ -1383,7 +1383,7 @@
 <a href=#1383 id=1383 data-nosnippet>1383</a>
 <a href=#1384 id=1384 data-nosnippet>1384</a>    <span class="kw">use super</span>::{testing::TmpDb, <span class="kw-2">*</span>};
 <a href=#1385 id=1385 data-nosnippet>1385</a>    <span class="kw">use crate</span>::{
-<a href=#1386 id=1386 data-nosnippet>1386</a>        availability::{LeafQueryData, QueryableHeader},
+<a href=#1386 id=1386 data-nosnippet>1386</a>        availability::LeafQueryData,
 <a href=#1387 id=1387 data-nosnippet>1387</a>        data_source::storage::{pruning::PrunedHeightStorage, UpdateAvailabilityStorage},
 <a href=#1388 id=1388 data-nosnippet>1388</a>        merklized_state::{MerklizedState, UpdateStateData},
 <a href=#1389 id=1389 data-nosnippet>1389</a>        testing::{
@@ -1849,7 +1849,7 @@
 <a href=#1849 id=1849 data-nosnippet>1849</a>                    leaf.block_header().commit().to_string(),
 <a href=#1850 id=1850 data-nosnippet>1850</a>                    payload_commitment.to_string(),
 <a href=#1851 id=1851 data-nosnippet>1851</a>                    header_json,
-<a href=#1852 id=1852 data-nosnippet>1852</a>                    leaf.block_header().timestamp() <span class="kw">as </span>i64,
+<a href=#1852 id=1852 data-nosnippet>1852</a>                    &lt;MockHeader <span class="kw">as </span>BlockHeader&lt;MockTypes&gt;&gt;::timestamp(leaf.block_header()) <span class="kw">as </span>i64,
 <a href=#1853 id=1853 data-nosnippet>1853</a>                )],
 <a href=#1854 id=1854 data-nosnippet>1854</a>            )
 <a href=#1855 id=1855 data-nosnippet>1855</a>            .<span class="kw">await

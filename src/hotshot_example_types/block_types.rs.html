@@ -396,34 +396,38 @@
 <a href=#396 id=396 data-nosnippet>396</a>            <span class="self">self</span>.payload_commitment.as_ref(),
 <a href=#397 id=397 data-nosnippet>397</a>        )
 <a href=#398 id=398 data-nosnippet>398</a>    }
-<a href=#399 id=399 data-nosnippet>399</a>}
-<a href=#400 id=400 data-nosnippet>400</a>
-<a href=#401 id=401 data-nosnippet>401</a><span class="kw">impl </span>Committable <span class="kw">for </span>TestBlockHeader {
-<a href=#402 id=402 data-nosnippet>402</a>    <span class="kw">fn </span>commit(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Commitment&lt;<span class="self">Self</span>&gt; {
-<a href=#403 id=403 data-nosnippet>403</a>        RawCommitmentBuilder::new(<span class="string">"Header Comm"</span>)
-<a href=#404 id=404 data-nosnippet>404</a>            .u64_field(
-<a href=#405 id=405 data-nosnippet>405</a>                <span class="string">"block number"</span>,
-<a href=#406 id=406 data-nosnippet>406</a>                &lt;TestBlockHeader <span class="kw">as </span>BlockHeader&lt;TestTypes&gt;&gt;::block_number(<span class="self">self</span>),
-<a href=#407 id=407 data-nosnippet>407</a>            )
-<a href=#408 id=408 data-nosnippet>408</a>            .constant_str(<span class="string">"payload commitment"</span>)
-<a href=#409 id=409 data-nosnippet>409</a>            .fixed_size_bytes(
-<a href=#410 id=410 data-nosnippet>410</a>                &lt;TestBlockHeader <span class="kw">as </span>BlockHeader&lt;TestTypes&gt;&gt;::payload_commitment(<span class="self">self</span>).as_ref(),
+<a href=#399 id=399 data-nosnippet>399</a>
+<a href=#400 id=400 data-nosnippet>400</a>    <span class="kw">fn </span>timestamp(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
+<a href=#401 id=401 data-nosnippet>401</a>        <span class="self">self</span>.timestamp
+<a href=#402 id=402 data-nosnippet>402</a>    }
+<a href=#403 id=403 data-nosnippet>403</a>}
+<a href=#404 id=404 data-nosnippet>404</a>
+<a href=#405 id=405 data-nosnippet>405</a><span class="kw">impl </span>Committable <span class="kw">for </span>TestBlockHeader {
+<a href=#406 id=406 data-nosnippet>406</a>    <span class="kw">fn </span>commit(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Commitment&lt;<span class="self">Self</span>&gt; {
+<a href=#407 id=407 data-nosnippet>407</a>        RawCommitmentBuilder::new(<span class="string">"Header Comm"</span>)
+<a href=#408 id=408 data-nosnippet>408</a>            .u64_field(
+<a href=#409 id=409 data-nosnippet>409</a>                <span class="string">"block number"</span>,
+<a href=#410 id=410 data-nosnippet>410</a>                &lt;TestBlockHeader <span class="kw">as </span>BlockHeader&lt;TestTypes&gt;&gt;::block_number(<span class="self">self</span>),
 <a href=#411 id=411 data-nosnippet>411</a>            )
-<a href=#412 id=412 data-nosnippet>412</a>            .finalize()
-<a href=#413 id=413 data-nosnippet>413</a>    }
-<a href=#414 id=414 data-nosnippet>414</a>
-<a href=#415 id=415 data-nosnippet>415</a>    <span class="kw">fn </span>tag() -&gt; String {
-<a href=#416 id=416 data-nosnippet>416</a>        <span class="string">"TEST_HEADER"</span>.to_string()
+<a href=#412 id=412 data-nosnippet>412</a>            .constant_str(<span class="string">"payload commitment"</span>)
+<a href=#413 id=413 data-nosnippet>413</a>            .fixed_size_bytes(
+<a href=#414 id=414 data-nosnippet>414</a>                &lt;TestBlockHeader <span class="kw">as </span>BlockHeader&lt;TestTypes&gt;&gt;::payload_commitment(<span class="self">self</span>).as_ref(),
+<a href=#415 id=415 data-nosnippet>415</a>            )
+<a href=#416 id=416 data-nosnippet>416</a>            .finalize()
 <a href=#417 id=417 data-nosnippet>417</a>    }
-<a href=#418 id=418 data-nosnippet>418</a>}
-<a href=#419 id=419 data-nosnippet>419</a>
-<a href=#420 id=420 data-nosnippet>420</a><span class="attr">#[async_trait]
-<a href=#421 id=421 data-nosnippet>421</a></span><span class="kw">impl </span>TestableDelay <span class="kw">for </span>TestBlockHeader {
-<a href=#422 id=422 data-nosnippet>422</a>    <span class="kw">async fn </span>run_delay_settings_from_config(delay_config: <span class="kw-2">&amp;</span>DelayConfig) {
-<a href=#423 id=423 data-nosnippet>423</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(settings) =
-<a href=#424 id=424 data-nosnippet>424</a>            delay_config.get_setting(<span class="kw-2">&amp;</span>SupportedTraitTypesForAsyncDelay::BlockHeader)
-<a href=#425 id=425 data-nosnippet>425</a>        {
-<a href=#426 id=426 data-nosnippet>426</a>            <span class="self">Self</span>::handle_async_delay(settings).<span class="kw">await</span>;
-<a href=#427 id=427 data-nosnippet>427</a>        }
-<a href=#428 id=428 data-nosnippet>428</a>    }
-<a href=#429 id=429 data-nosnippet>429</a>}</code></pre></div></section></main></body></html>
+<a href=#418 id=418 data-nosnippet>418</a>
+<a href=#419 id=419 data-nosnippet>419</a>    <span class="kw">fn </span>tag() -&gt; String {
+<a href=#420 id=420 data-nosnippet>420</a>        <span class="string">"TEST_HEADER"</span>.to_string()
+<a href=#421 id=421 data-nosnippet>421</a>    }
+<a href=#422 id=422 data-nosnippet>422</a>}
+<a href=#423 id=423 data-nosnippet>423</a>
+<a href=#424 id=424 data-nosnippet>424</a><span class="attr">#[async_trait]
+<a href=#425 id=425 data-nosnippet>425</a></span><span class="kw">impl </span>TestableDelay <span class="kw">for </span>TestBlockHeader {
+<a href=#426 id=426 data-nosnippet>426</a>    <span class="kw">async fn </span>run_delay_settings_from_config(delay_config: <span class="kw-2">&amp;</span>DelayConfig) {
+<a href=#427 id=427 data-nosnippet>427</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(settings) =
+<a href=#428 id=428 data-nosnippet>428</a>            delay_config.get_setting(<span class="kw-2">&amp;</span>SupportedTraitTypesForAsyncDelay::BlockHeader)
+<a href=#429 id=429 data-nosnippet>429</a>        {
+<a href=#430 id=430 data-nosnippet>430</a>            <span class="self">Self</span>::handle_async_delay(settings).<span class="kw">await</span>;
+<a href=#431 id=431 data-nosnippet>431</a>        }
+<a href=#432 id=432 data-nosnippet>432</a>    }
+<a href=#433 id=433 data-nosnippet>433</a>}</code></pre></div></section></main></body></html>
