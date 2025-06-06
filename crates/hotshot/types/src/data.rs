@@ -41,9 +41,7 @@ use crate::{
     },
     simple_vote::{HasEpoch, QuorumData, QuorumData2, UpgradeProposalData, VersionedVoteData},
     traits::{
-        block_contents::{
-            BlockHeader, BuilderFee, EncodeBytes, TestableBlock, GENESIS_VID_NUM_STORAGE_NODES,
-        },
+        block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock},
         node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::SignatureKey,
         states::TestableState,
@@ -1107,25 +1105,11 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
             TYPES::BlockPayload::from_transactions([], validated_state, instance_state)
                 .await
                 .unwrap();
-        let builder_commitment = payload.builder_commitment(&metadata);
-        let payload_bytes = payload.encode();
 
         let genesis_view = TYPES::View::genesis();
-        let upgrade_lock = UpgradeLock::<TYPES, V>::new();
-        let genesis_version = upgrade_lock.version_infallible(genesis_view).await;
-        let payload_commitment = vid_commitment::<V>(
-            &payload_bytes,
-            &metadata.encode(),
-            GENESIS_VID_NUM_STORAGE_NODES,
-            genesis_version,
-        );
 
-        let block_header = TYPES::BlockHeader::genesis(
-            instance_state,
-            payload_commitment,
-            builder_commitment,
-            metadata,
-        );
+        let block_header =
+            TYPES::BlockHeader::genesis::<V>(instance_state, payload.clone(), &metadata);
 
         let block_number = if V::Base::VERSION < V::Epochs::VERSION {
             None
@@ -1520,25 +1504,11 @@ impl<TYPES: NodeType> Leaf<TYPES> {
             TYPES::BlockPayload::from_transactions([], validated_state, instance_state)
                 .await
                 .unwrap();
-        let builder_commitment = payload.builder_commitment(&metadata);
-        let payload_bytes = payload.encode();
 
         let genesis_view = TYPES::View::genesis();
-        let upgrade_lock = UpgradeLock::<TYPES, V>::new();
-        let genesis_version = upgrade_lock.version_infallible(genesis_view).await;
-        let payload_commitment = vid_commitment::<V>(
-            &payload_bytes,
-            &metadata.encode(),
-            GENESIS_VID_NUM_STORAGE_NODES,
-            genesis_version,
-        );
 
-        let block_header = TYPES::BlockHeader::genesis(
-            instance_state,
-            payload_commitment,
-            builder_commitment,
-            metadata,
-        );
+        let block_header =
+            TYPES::BlockHeader::genesis::<V>(instance_state, payload.clone(), &metadata);
 
         let null_quorum_data = QuorumData {
             leaf_commit: Commitment::<Leaf<TYPES>>::default_commitment_no_preimage(),
