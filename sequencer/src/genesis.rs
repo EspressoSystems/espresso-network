@@ -51,6 +51,8 @@ pub struct Genesis {
     pub base_version: Version,
     #[serde(with = "version_ser")]
     pub upgrade_version: Version,
+    #[serde(with = "version_ser")]
+    pub genesis_version: Version,
     pub epoch_height: Option<u64>,
     pub drb_difficulty: Option<u64>,
     pub epoch_start_block: Option<u64>,
@@ -341,6 +343,7 @@ mod test {
         let toml = toml! {
             base_version = "0.1"
             upgrade_version = "0.2"
+            genesis_version = "0.1"
 
             [stake_table]
             capacity = 10
@@ -367,6 +370,7 @@ mod test {
         .to_string();
 
         let genesis: Genesis = toml::from_str(&toml).unwrap_or_else(|err| panic!("{err:#}"));
+        assert_eq!(genesis.genesis_version, Version { major: 0, minor: 1 });
         assert_eq!(genesis.stake_table, StakeTableConfig { capacity: 10 });
         assert_eq!(
             genesis.chain_config,
@@ -420,6 +424,7 @@ mod test {
         let toml = toml! {
             base_version = "0.1"
             upgrade_version = "0.2"
+            genesis_version = "0.1"
 
             [stake_table]
             capacity = 10
@@ -439,6 +444,7 @@ mod test {
         .to_string();
 
         let genesis: Genesis = toml::from_str(&toml).unwrap_or_else(|err| panic!("{err:#}"));
+
         assert_eq!(genesis.stake_table, StakeTableConfig { capacity: 10 });
         assert_eq!(
             genesis.chain_config,
@@ -466,6 +472,7 @@ mod test {
         let toml = toml! {
             base_version = "0.1"
             upgrade_version = "0.2"
+            genesis_version = "0.1"
 
             [stake_table]
             capacity = 10
@@ -493,6 +500,7 @@ mod test {
         let toml = toml! {
             base_version = "0.1"
             upgrade_version = "0.2"
+            genesis_version = "0.1"
 
             [stake_table]
             capacity = 10
@@ -544,6 +552,7 @@ mod test {
             r#"
             base_version = "0.1"
             upgrade_version = "0.2"
+            genesis_version = "0.1"
 
             [stake_table]
             capacity = 10
@@ -599,6 +608,7 @@ mod test {
             r#"
             base_version = "0.1"
             upgrade_version = "0.2"
+            genesis_version = "0.1"
 
             [stake_table]
             capacity = 10
@@ -654,6 +664,7 @@ mod test {
         let toml = toml! {
             base_version = "0.1"
             upgrade_version = "0.2"
+            genesis_version = "0.1"
 
             [stake_table]
             capacity = 10
@@ -723,6 +734,7 @@ mod test {
         let toml = toml! {
             base_version = "0.1"
             upgrade_version = "0.2"
+            genesis_version = "0.1"
 
             [stake_table]
             capacity = 10
@@ -793,6 +805,7 @@ mod test {
             r#"
             base_version = "0.1"
             upgrade_version = "0.2"
+            genesis_version = "0.1"
 
             [stake_table]
             capacity = 10
@@ -834,6 +847,7 @@ mod test {
         let toml = toml! {
             base_version = "0.1"
             upgrade_version = "0.2"
+            genesis_version = "0.1"
 
             [stake_table]
             capacity = 10
@@ -871,6 +885,7 @@ mod test {
         let toml = toml! {
             base_version = "0.1"
             upgrade_version = "0.2"
+            genesis_version = "0.1"
 
             [stake_table]
             capacity = 10
@@ -939,6 +954,7 @@ mod test {
         let toml = toml! {
             base_version = "0.1"
             upgrade_version = "0.2"
+            genesis_version = "0.1"
 
             [stake_table]
             capacity = 10
@@ -1008,6 +1024,7 @@ mod test {
         let toml = toml! {
             base_version = "0.1"
             upgrade_version = "0.2"
+            genesis_version = "0.1"
 
             [stake_table]
             capacity = 10
@@ -1057,6 +1074,7 @@ mod test {
         let toml = toml! {
             base_version = "0.1"
             upgrade_version = "0.2"
+            genesis_version = "0.1"
             epoch_height = 20
             drb_difficulty = 10
             epoch_start_block = 1

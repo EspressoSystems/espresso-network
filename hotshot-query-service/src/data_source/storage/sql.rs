@@ -1365,10 +1365,10 @@ mod test {
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
-        data::{vid_commitment, QuorumProposal, ViewNumber},
+        data::{QuorumProposal, ViewNumber},
         simple_vote::QuorumData,
         traits::{
-            block_contents::BlockHeader,
+            block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
             node_implementation::{ConsensusTime, Versions},
             EncodeBytes,
         },
@@ -1790,22 +1790,11 @@ mod test {
             )
             .await
             .unwrap();
-            let builder_commitment =
-                <MockPayload as BlockPayload<MockTypes>>::builder_commitment(&payload, &metadata);
-            let payload_bytes = payload.encode();
 
-            let payload_commitment = vid_commitment::<MockVersions>(
-                &payload_bytes,
-                &metadata.encode(),
-                4,
-                <MockVersions as Versions>::Base::VERSION,
-            );
-
-            let mut block_header = <MockHeader as BlockHeader<MockTypes>>::genesis(
+            let mut block_header = <MockHeader as BlockHeader<MockTypes>>::genesis::<MockVersions>(
                 &instance_state,
-                payload_commitment,
-                builder_commitment,
-                metadata,
+                payload.clone(),
+                &metadata,
             );
 
             block_header.block_number = i;
@@ -1833,7 +1822,7 @@ mod test {
             let mut leaf = Leaf::from_quorum_proposal(&quorum_proposal);
             leaf.fill_block_payload::<MockVersions>(
                 payload.clone(),
-                4,
+                GENESIS_VID_NUM_STORAGE_NODES,
                 <MockVersions as Versions>::Base::VERSION,
             )
             .unwrap();
