@@ -769,9 +769,9 @@ pub async fn deploy_token_proxy(
     let token_proxy = EspToken::new(token_proxy_addr, &provider);
     assert_eq!(token_proxy.getVersion().call().await?.majorVersion, 1);
     assert_eq!(token_proxy.owner().call().await?._0, owner);
-    assert_eq!(token_proxy.symbol().call().await?._0, "ESP");
+    assert_eq!(token_proxy.symbol().call().await?._0, symbol);
     assert_eq!(token_proxy.decimals().call().await?._0, 18);
-    assert_eq!(token_proxy.name().call().await?._0, "Espresso");
+    assert_eq!(token_proxy.name().call().await?._0, name);
     let total_supply = token_proxy.totalSupply().call().await?._0;
     assert_eq!(
         token_proxy.balanceOf(init_grant_recipient).call().await?._0,
@@ -810,6 +810,7 @@ async fn upgrade_esp_token_v2(
         // post deploy verification checks
         let proxy_as_v2 = EspTokenV2::new(proxy_addr, &provider);
         assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
+        assert_eq!(proxy_as_v2.name().call().await?._0, "Espresso");
         tracing::info!(%v2_addr, "EspToken successfully upgraded to")
     } else {
         anyhow::bail!("EspToken upgrade failed: {:?}", receipt);
@@ -1876,6 +1877,62 @@ mod tests {
                 .await?
                 ._0
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upgrade_esp_token_v2() -> Result<()> {
+        setup_test();
+        setup_test();
+        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+
+        // deploy token
+        let init_recipient = provider.get_accounts().await?[1];
+        let token_owner = provider.get_accounts().await?[0];
+        let token_name = "Espresso Token";
+        let token_symbol = "ESP";
+        let initial_supply = U256::from(3590000000u64);
+        let token_proxy_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            token_owner,
+            init_recipient,
+            initial_supply,
+            token_name,
+            token_symbol,
+        )
+        .await?;
+        let esp_token = EspToken::new(token_proxy_addr, &provider);
+        assert_eq!(esp_token.name().call().await?._0, token_name);
+
+        // upgrade to v2
+        upgrade_esp_token_v2(&provider, &mut contracts).await?;
+
+        let esp_token_v2 = EspTokenV2::new(token_proxy_addr, &provider);
+
+        assert_eq!(esp_token_v2.getVersion().call().await?, (2, 0, 0).into());
+        assert_eq!(esp_token_v2.owner().call().await?._0, token_owner);
+
+        // name is hardcoded in the EspTokenV2 contract
+        assert_eq!(esp_token_v2.name().call().await?._0, "Espresso");
+        assert_eq!(esp_token_v2.symbol().call().await?._0, "ESP");
+        assert_eq!(esp_token_v2.decimals().call().await?._0, 18);
+
+        let initial_supply_in_wei = parse_ether(&initial_supply.to_string()).unwrap();
+        assert_eq!(
+            esp_token_v2.totalSupply().call().await?._0,
+            initial_supply_in_wei
+        );
+        assert_eq!(
+            esp_token_v2.balanceOf(init_recipient).call().await?._0,
+            initial_supply_in_wei
+        );
+        assert_eq!(
+            esp_token_v2.balanceOf(token_owner).call().await?._0,
+            U256::ZERO
+        );
+
         Ok(())
     }
 
