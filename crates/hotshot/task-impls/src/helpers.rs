@@ -322,6 +322,12 @@ async fn update_metrics<TYPES: NodeType>(
             .metrics
             .proposal_to_decide_time
             .add_point(proposal_to_decide_time as f64);
+        if let Some(txn_bytes) = leaf_view.leaf.block_payload().map(|p| p.txn_bytes()) {
+            consensus_reader
+                .metrics
+                .finalized_bytes
+                .add_point(txn_bytes as f64);
+        }
     }
 }
 
