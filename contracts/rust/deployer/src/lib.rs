@@ -779,9 +779,9 @@ pub async fn deploy_token_proxy(
     let token_proxy = EspToken::new(token_proxy_addr, &provider);
     assert_eq!(token_proxy.getVersion().call().await?.majorVersion, 1);
     assert_eq!(token_proxy.owner().call().await?._0, owner);
-    assert_eq!(token_proxy.symbol().call().await?._0, "ESP");
+    assert_eq!(token_proxy.symbol().call().await?._0, symbol);
     assert_eq!(token_proxy.decimals().call().await?._0, 18);
-    assert_eq!(token_proxy.name().call().await?._0, "Espresso");
+    assert_eq!(token_proxy.name().call().await?._0, name);
     let total_supply = token_proxy.totalSupply().call().await?._0;
     assert_eq!(
         token_proxy.balanceOf(init_grant_recipient).call().await?._0,
@@ -901,6 +901,12 @@ async fn upgrade_stake_table_v2(
         let pauser_role = proxy_as_v2.PAUSER_ROLE().call().await?._0;
         assert_eq!(
             proxy_as_v2.hasRole(pauser_role, pauser).call().await?._0,
+            true
+        );
+        // get admin role
+        let admin_role = proxy_as_v2.DEFAULT_ADMIN_ROLE().call().await?._0;
+        assert_eq!(
+            proxy_as_v2.hasRole(admin_role, admin).call().await?._0,
             true
         );
         tracing::info!(%v2_addr, "StakeTable successfully upgraded to")
