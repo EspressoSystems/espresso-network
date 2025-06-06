@@ -537,7 +537,7 @@ where
         let genesis_overview = {
             let blocks = NodeStorage::<Types>::block_height(self).await? as u64;
             let transactions =
-                NodeStorage::<Types>::count_transactions_in_range(self, ..).await? as u64;
+                NodeStorage::<Types>::count_transactions_in_range(self, .., None).await? as u64;
             GenesisOverview {
                 rollups: 0,
                 transactions,

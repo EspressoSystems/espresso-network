@@ -58,6 +58,7 @@
 
 use std::ops::RangeBounds;
 
+use alloy::primitives::map::HashMap;
 use async_trait::async_trait;
 use futures::future::Future;
 use hotshot_types::{
@@ -229,10 +230,12 @@ pub trait NodeStorage<Types: NodeType> {
     async fn count_transactions_in_range(
         &mut self,
         range: impl RangeBounds<usize> + Send,
+        namespace: Option<u32>,
     ) -> QueryResult<usize>;
     async fn payload_size_in_range(
         &mut self,
         range: impl RangeBounds<usize> + Send,
+        namespace: Option<u32>,
     ) -> QueryResult<usize>;
     async fn vid_share<ID>(&mut self, id: ID) -> QueryResult<VidShare>
     where
@@ -251,8 +254,8 @@ pub trait NodeStorage<Types: NodeType> {
 #[derive(Clone, Debug, Default)]
 pub struct Aggregate {
     pub height: i64,
-    pub num_transactions: i64,
-    pub payload_size: i64,
+    pub num_transactions: HashMap<Option<u32>, usize>,
+    pub payload_size: HashMap<Option<u32>, usize>,
 }
 
 pub trait AggregatesStorage {

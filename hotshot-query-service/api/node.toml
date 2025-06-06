@@ -34,9 +34,11 @@ Returns an integer.
 """
 
 [route.count_transactions]
-PATH = ["transactions/count", "transactions/count/:to", "transactions/count/:from/:to"]
+PATH = ["transactions/count", "transactions/count/:to", "transactions/count/:from/:to", "transactions/count/:namespace",
+        "transactions/count/:namespace/:to", "transactions/count/:namespace/:from/:to"]
 ":from" = "Integer"
 ":to" = "Integer"
+":namespace" = "Integer"
 DOC = """
 Get the number of transactions in the chain.
 
@@ -44,6 +46,8 @@ If `:from` or `:to` is specified, they restrict the range of blocks considered.
 `transactions/count/:to` will return the number of transactions in all blocks up to and including
 block number `:to`, while `transactions/count/:from/:to` will count the transactions in all blocks
 between `:from` (inclusive) and `:to` (inclusive).
+
+If the `:namespace` is provided, the count is restricted for the specified namespace
 
 Returns an integer.
 """
