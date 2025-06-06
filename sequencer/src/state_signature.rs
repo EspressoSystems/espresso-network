@@ -22,6 +22,7 @@ use hotshot_types::{
     },
     utils::{is_ge_epoch_root, option_epoch_from_block_number},
 };
+use jf_signature::SignatureError;
 use surf_disco::{Client, Url};
 use tide_disco::error::ServerError;
 use vbs::version::StaticVersionType;
@@ -148,7 +149,15 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                     }
                 }
 
-                let signature = self.sign_new_state(&state, self.voting_stake_table).await;
+                let Ok(signature) = self.sign_new_state(&state, self.voting_stake_table).await
+                else {
+                    tracing::error!("Failed to sign new state");
+                    return;
+                };
+                let Ok(legacy_signature) = self.legacy_sign_new_state(&state).await else {
+                    tracing::error!("Failed to sign new state for legacy light client");
+                    return;
+                };
 
                 if let Some(client) = &self.relay_server_client {
                     let request_body = StateSignatureRequestBody {
@@ -164,7 +173,23 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                         .send()
                         .await
                     {
-                        tracing::warn!("Error posting signature to the relay server: {:?}", error);
+                        tracing::error!("Error posting signature to the relay server: {:?}", error);
+                    }
+
+                    let request_body = StateSignatureRequestBody {
+                        key: self.ver_key.clone(),
+                        state,
+                        next_stake: self.voting_stake_table,
+                        signature: legacy_signature,
+                    };
+                    if let Err(error) = client
+                        .post::<()>("api/legacy-state")
+                        .body_binary(&request_body)
+                        .unwrap()
+                        .send()
+                        .await
+                    {
+                        tracing::error!("Error posting signature for legacy light client to the relay server: {:?}", error);
                     }
                 }
             },
@@ -185,13 +210,12 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         &self,
         state: &LightClientState,
         next_stake_table: StakeTableState,
-    ) -> StateSignature {
+    ) -> Result<StateSignature, SignatureError> {
         let signature = <SchnorrPubKey as StateSignatureKey>::sign_state(
             &self.sign_key,
             state,
             &next_stake_table,
-        )
-        .unwrap();
+        )?;
         let mut pool_guard = self.signatures.write().await;
         pool_guard.push(
             state.block_height,
@@ -206,7 +230,14 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
             "New signature added for block height {}",
             state.block_height
         );
-        signature
+        Ok(signature)
+    }
+
+    async fn legacy_sign_new_state(
+        &self,
+        state: &LightClientState,
+    ) -> Result<StateSignature, SignatureError> {
+        <SchnorrPubKey as StateSignatureKey>::legacy_sign_state(&self.sign_key, state)
     }
 }
 

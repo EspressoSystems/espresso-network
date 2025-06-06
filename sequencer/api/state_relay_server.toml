@@ -17,3 +17,18 @@ DOC = """
 Fetch the latest light client state who has enough corresponding Schnorr signatures collected,
 as well as a list of those signatures.
 """
+
+
+[route.postlegacystatesignature]
+PATH = ["legacy-state"]
+METHOD = "POST"
+DOC = """
+Post a state and its signature for the legacy light client.
+"""
+
+[route.getlatestlegacystate]
+PATH = ["legacy-state"]
+METHOD = "GET"
+DOC = """
+Fetch the latest state for the legacy light client.
+"""
