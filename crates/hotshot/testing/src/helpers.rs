@@ -26,7 +26,9 @@ use hotshot_example_types::{
 use hotshot_task_impls::events::HotShotEvent;
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
-    data::{vid_commitment, Leaf2, VidCommitment, VidDisperse, VidDisperseShare},
+    data::{
+        vid_commitment, Leaf2, VidCommitment, VidDisperse, VidDisperseAndDuration, VidDisperseShare,
+    },
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::{Proposal, UpgradeLock},
     simple_certificate::DaCertificate2,
@@ -314,7 +316,10 @@ pub async fn build_vid_proposal<TYPES: NodeType, V: Versions>(
     Proposal<TYPES, VidDisperse<TYPES>>,
     Vec<Proposal<TYPES, VidDisperseShare<TYPES>>>,
 ) {
-    let vid_disperse = VidDisperse::calculate_vid_disperse::<V>(
+    let VidDisperseAndDuration {
+        disperse: vid_disperse,
+        duration: _,
+    } = VidDisperse::calculate_vid_disperse::<V>(
         payload,
         &membership.coordinator,
         view_number,
