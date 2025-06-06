@@ -11,7 +11,7 @@ use alloy::{
 use clap::Parser;
 use espresso_contract_deployer::network_config::fetch_epoch_config_from_sequencer;
 use espresso_types::parse_duration;
-use hotshot_state_prover::service::{run_prover_once, run_prover_service, StateProverConfig};
+use hotshot_state_prover::service::StateProverConfig;
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
 use sequencer_utils::logging;
 use url::Url;
@@ -169,16 +169,37 @@ async fn main() {
 
     // validate that the light client contract is a proxy, panics otherwise
     config.validate_light_client_contract().await.unwrap();
+    let is_legacy = hotshot_state_prover::legacy::service::is_contract_legacy(
+        &l1_provider,
+        args.light_client_address,
+    )
+    .await;
 
     if args.daemon {
         // Launching the prover service daemon
-        if let Err(err) = run_prover_service(config, StaticVersion::<0, 1> {}).await {
+        let result = if is_legacy {
+            hotshot_state_prover::legacy::service::run_prover_service(
+                config,
+                StaticVersion::<0, 1> {},
+            )
+            .await
+        } else {
+            hotshot_state_prover::service::run_prover_service(config, StaticVersion::<0, 1> {})
+                .await
+        };
+        if let Err(err) = result {
             tracing::error!("Error running prover service: {:?}", err);
         };
     } else {
         // Run light client state update once
-        if let Err(err) = run_prover_once(config, StaticVersion::<0, 1> {}).await {
-            tracing::error!("Error running prover once: {:?}", err);
+        let result = if is_legacy {
+            hotshot_state_prover::legacy::service::run_prover_once(config, StaticVersion::<0, 1> {})
+                .await
+        } else {
+            hotshot_state_prover::service::run_prover_once(config, StaticVersion::<0, 1> {}).await
         };
+        if let Err(err) = result {
+            tracing::error!("Error running prover once: {:?}", err);
+        }
     }
 }
