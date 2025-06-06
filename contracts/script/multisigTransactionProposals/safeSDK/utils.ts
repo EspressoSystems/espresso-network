@@ -62,15 +62,16 @@ export function createSafeTransactionData(to: string, data: string, value: strin
  * @param {string} address - The Ethereum address to validate
  * @throws {Error} - Throws an error if the address is invalid and doesn't follow Ethereum address standards
  */
-export function getSigner(web3Provider: ethers.Provider): ethers.Signer {
+export function getSigner(web3Provider: ethers.Provider, useHardwareWallet: boolean): ethers.Signer {
   let orchestratorSigner;
-  const use_hardware_wallet = getEnvVar("USE_HARDWARE_WALLET");
-  if (use_hardware_wallet == "true") {
+  if (useHardwareWallet == true) {
     // Create a signer using the ledger
     orchestratorSigner = new LedgerSigner(HIDTransport, web3Provider);
   } else {
     // Create a signer using the orchestrator's private key and the web3 provider
-    orchestratorSigner = new ethers.Wallet(getEnvVar("SAFE_ORCHESTRATOR_PRIVATE_KEY"), web3Provider);
+    // orchestratorSigner = new ethers.Wallet(getEnvVar("SAFE_ORCHESTRATOR_PRIVATE_KEY"), web3Provider);
+    //get orchestrator signer from mnemonic
+    orchestratorSigner = ethers.Wallet.fromPhrase(getEnvVar("ESPRESSO_SEQUENCER_ETH_MNEMONIC"), web3Provider);
   }
 
   return orchestratorSigner;
@@ -90,10 +91,11 @@ export async function createSafeTransaction(
   contractAddress: string,
   data: string,
   value: string,
+  useHardwareWallet: boolean,
 ): Promise<LocalSafeTransaction> {
   // Prepare the safe transaction data with the contract address, data, and value
   let safeTransactionData = createSafeTransactionData(contractAddress, data, value);
-  if (getEnvVar("USE_HARDWARE_WALLET") == "true") {
+  if (useHardwareWallet == true) {
     console.log(`Please sign the message on your connected Ledger device`);
   }
 
@@ -117,11 +119,12 @@ export async function createAndSignSafeTransaction(
   safeSDK: Safe,
   contractAddress: string,
   data: string,
+  useHardwareWallet: boolean,
 ): Promise<{ safeTransaction: LocalSafeTransaction; safeTxHash: string; senderSignature: SafeSignature }> {
   validateEthereumAddress(contractAddress);
 
   // Create the Safe Transaction Object
-  const safeTransaction = await createSafeTransaction(safeSDK, contractAddress, data, "0");
+  const safeTransaction = await createSafeTransaction(safeSDK, contractAddress, data, "0", useHardwareWallet);
 
   // Get the transaction hash
   const safeTxHash = await safeSDK.getTransactionHash(safeTransaction);
