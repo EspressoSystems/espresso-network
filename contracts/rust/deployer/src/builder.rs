@@ -21,6 +21,7 @@ use crate::{Contract, Contracts};
 /// - `epoch_start_block`: block height for the first *activated* epoch
 /// - `exit_escrow_period`: exit escrow period for stake table (in seconds)
 /// - `multisig`: new owner/multisig that owns all the proxy contracts
+/// - `multisig_pauser`: new multisig that owns the pauser role
 /// - `initial_token_supply`: initial token supply for the token contract
 /// - `token_name`: name of the token
 /// - `token_symbol`: symbol of the token
@@ -32,6 +33,12 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     token_recipient: Option<Address>,
     #[builder(default)]
     mock_light_client: bool,
+    #[builder(default)]
+    use_multisig: bool,
+    #[builder(default)]
+    dry_run: bool,
+    #[builder(default)]
+    rpc_url: String,
     #[builder(default)]
     genesis_lc_state: Option<LightClientStateSol>,
     #[builder(default)]
@@ -46,6 +53,8 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     exit_escrow_period: Option<U256>,
     #[builder(default)]
     multisig: Option<Address>,
+    #[builder(default)]
+    multisig_pauser: Option<Address>,
     #[builder(default)]
     initial_token_supply: Option<U256>,
     #[builder(default)]
@@ -121,6 +130,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 );
 
                 let use_mock = self.mock_light_client;
+                let dry_run = self.dry_run;
+                let use_multisig = self.use_multisig;
                 let mut blocks_per_epoch = self.blocks_per_epoch.unwrap();
                 let epoch_start_block = self.epoch_start_block.unwrap();
 
@@ -131,27 +142,42 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 if use_mock && blocks_per_epoch == 0 {
                     blocks_per_epoch = u64::MAX;
                 }
-                tracing::info!(%blocks_per_epoch, "Upgrading LightClientV2 with ");
-                crate::upgrade_light_client_v2(
-                    provider,
-                    contracts,
-                    use_mock,
-                    blocks_per_epoch,
-                    epoch_start_block,
-                )
-                .await?;
-
-                if let Some(multisig) = self.multisig {
-                    let lc_proxy = contracts
-                        .address(Contract::LightClientProxy)
-                        .expect("fail to get LightClientProxy address");
-                    crate::transfer_ownership(
+                tracing::info!(%blocks_per_epoch, ?dry_run, ?use_multisig, "Upgrading LightClientV2 with ");
+                if use_multisig {
+                    crate::upgrade_light_client_v2_multisig_owner(
                         provider,
-                        Contract::LightClientProxy,
-                        lc_proxy,
-                        multisig,
+                        contracts,
+                        crate::LightClientV2UpgradeParams {
+                            blocks_per_epoch,
+                            epoch_start_block,
+                        },
+                        use_mock,
+                        self.rpc_url.clone(),
+                        Some(dry_run),
                     )
                     .await?;
+                } else {
+                    crate::upgrade_light_client_v2(
+                        provider,
+                        contracts,
+                        use_mock,
+                        blocks_per_epoch,
+                        epoch_start_block,
+                    )
+                    .await?;
+
+                    if let Some(multisig) = self.multisig {
+                        let lc_proxy = contracts
+                            .address(Contract::LightClientProxy)
+                            .expect("fail to get LightClientProxy address");
+                        crate::transfer_ownership(
+                            provider,
+                            Contract::LightClientProxy,
+                            lc_proxy,
+                            multisig,
+                        )
+                        .await?;
+                    }
                 }
             },
             Contract::StakeTableProxy => {
@@ -175,19 +201,37 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 // NOTE: we don't transfer ownership to multisig, we only do so after V2 upgrade
             },
             Contract::StakeTableV2 => {
-                crate::upgrade_stake_table_v2(provider, contracts).await?;
-
-                if let Some(multisig) = self.multisig {
-                    let stake_table_proxy = contracts
-                        .address(Contract::StakeTableProxy)
-                        .expect("fail to get StakeTableProxy address");
-                    crate::transfer_ownership(
+                if self.use_multisig {
+                    crate::upgrade_stake_table_v2_multisig_owner(
                         provider,
-                        Contract::StakeTableProxy,
-                        stake_table_proxy,
-                        multisig,
+                        contracts,
+                        self.rpc_url.clone(),
+                        self.multisig.unwrap(),
+                        self.multisig_pauser.unwrap(),
+                        Some(self.dry_run),
                     )
                     .await?;
+                } else {
+                    crate::upgrade_stake_table_v2(
+                        provider,
+                        contracts,
+                        admin,
+                        self.multisig_pauser.unwrap(),
+                    )
+                    .await?;
+
+                    if let Some(multisig) = self.multisig {
+                        let stake_table_proxy = contracts
+                            .address(Contract::StakeTableProxy)
+                            .expect("fail to get StakeTableProxy address");
+                        crate::transfer_ownership(
+                            provider,
+                            Contract::StakeTableProxy,
+                            stake_table_proxy,
+                            multisig,
+                        )
+                        .await?;
+                    }
                 }
             },
             _ => {

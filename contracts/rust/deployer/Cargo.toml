@@ -11,9 +11,11 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 derive_builder = "0.20.2"
 derive_more = { workspace = true }
+dotenvy = { workspace = true }
 espresso-types = { path = "../../../types" }
 hotshot-contract-adapter = { workspace = true }
 hotshot-types = { workspace = true }
+serde_json = { workspace = true }
 surf-disco = { workspace = true }
 tide-disco = { workspace = true }
 tokio = { workspace = true }
