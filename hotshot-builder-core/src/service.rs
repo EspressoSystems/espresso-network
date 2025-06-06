@@ -2523,7 +2523,7 @@ mod test {
                     &[10],
                     &[],
                     TEST_NUM_NODES_IN_VID_COMPUTATION,
-                    <TestVersions as Versions>::Base::VERSION
+                    <TestVersions as Versions>::Base::VERSION,
                 ),
                 parent_view: ViewNumber::new(10),
             }),
@@ -2604,7 +2604,7 @@ mod test {
                     &[10],
                     &[],
                     TEST_NUM_NODES_IN_VID_COMPUTATION,
-                    <TestVersions as Versions>::Base::VERSION
+                    <TestVersions as Versions>::Base::VERSION,
                 ),
                 parent_view: ViewNumber::new(10),
             },
@@ -2702,7 +2702,7 @@ mod test {
                     &[10],
                     &[],
                     TEST_NUM_NODES_IN_VID_COMPUTATION,
-                    <TestVersions as Versions>::Base::VERSION
+                    <TestVersions as Versions>::Base::VERSION,
                 ),
                 parent_view: ViewNumber::new(10),
             },
@@ -2834,7 +2834,7 @@ mod test {
                     &[10],
                     &[],
                     TEST_NUM_NODES_IN_VID_COMPUTATION,
-                    <TestVersions as Versions>::Base::VERSION
+                    <TestVersions as Versions>::Base::VERSION,
                 ),
                 parent_view: ViewNumber::new(10),
             },

@@ -1,5 +1,6 @@
 base_version = "0.2"
 upgrade_version = "0.3"
+genesis_version = "0.2"
 
 [stake_table]
 capacity = 200

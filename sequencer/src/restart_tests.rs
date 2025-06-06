@@ -552,6 +552,7 @@ impl TestNetwork {
             accounts: [(builder_account(), 1000000000.into())]
                 .into_iter()
                 .collect(),
+            genesis_version: Version { major: 0, minor: 1 },
         };
         genesis.to_file(&genesis_file).unwrap();
 
