@@ -7,7 +7,7 @@ use std::{
 
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
-    primitives::{utils::format_ether, Address, FixedBytes, U256},
+    primitives::{utils::format_ether, Address, U256},
     providers::Provider,
     rpc::types::Log,
 };
@@ -984,16 +984,13 @@ impl Fetcher {
     /// This function is used to calculate the reward for a block.
     /// It fetches the initial supply from the token contract.
     ///
-    /// Assumptions:
-    /// - This assumes only one mint event** occurred before the stake table was deployed.
-    /// - This is safe for now, because further minting is disabled until rewards withdrawal is implemented.
-    /// - However, once we support reward withdrawals, new mints will likely also come from the zero address**,
-    ///   making this logic unsafe.
-    ///
-    /// Safer approach:
-    /// - We now ely on the `Initialized` event of the token contract (which should only occur once).
-    /// - After locating this event, we **fetch its transaction receipt and look for a decoded `Transfer` log** (mint).
+    /// - We now rely on the `Initialized` event of the token contract (which should only occur once).
+    /// - After locating this event, we fetch its transaction receipt and look for a decoded `Transfer` log
     /// - If either step fails, the function aborts to prevent incorrect reward calculations.
+    ///
+    /// Relying on mint events directly e.g., searching for mints from the zero address is prone to errors
+    /// becayse in future when reward withdrawals are supported, there might be more than one mint transfer logs from
+    /// zero address
     pub async fn fetch_block_reward(&self) -> anyhow::Result<RewardAmount> {
         let max_events_range = self.l1_client.options().l1_events_max_block_range;
         let chain_config = *self.chain_config.lock().await;
@@ -1031,77 +1028,81 @@ impl Fetcher {
             .from_block(0u64)
             .to_block(BlockNumberOrTag::Finalized)
             .query()
-            .await?;
+            .await;
 
-        let initial_supply = if let Some((_, init_log)) = init_logs.first().cloned() {
-            // Get the transaction that emitted the Initialized event
-            let init_tx = provider
-                .get_transaction_receipt(init_log.transaction_hash.unwrap())
-                .await?
-                .context("Failed to get transaction for Initialized event")?;
-
-            let mint_transfer = init_tx
-                .decoded_log::<EspToken::Transfer>()
-                .context("Failed to decode Transfer log")?;
-
-            tracing::debug!("mint transfer event ={mint_transfer:?}");
+        let init_log = if let Ok(init_logs) = init_logs {
             ensure!(
-                mint_transfer.from == Address::ZERO,
-                "First transfer should be a mint from the zero address"
+                !init_logs.is_empty(),
+                "Token Initialized event logs are empty. This should never happen"
             );
 
-            mint_transfer.value
+            let (_, init_log) = init_logs[0].clone();
+
+            tracing::debug!(tx_hash = ?init_log.transaction_hash, "Found token `Initialized` event");
+            init_log
         } else {
             const MAX_BLOCKS_SCANNED: u64 = 200_000;
             let mut total_scanned = 0;
 
-            tracing::error!("No Initialized event found for fetching block reward");
-
-            // Fallback: manually search for mint transfer (from zero address)
-            let mut address_bytes = [0u8; 32];
-            address_bytes[12..].copy_from_slice(Address::ZERO.as_slice());
-            let topic1 = FixedBytes::<32>::from_slice(&address_bytes);
-
             let mut from_block = stake_table_init_block.saturating_sub(max_events_range);
+            tracing::warn!("Initial token `Initialized` event not found. Scanning backwards from block {from_block}");
 
-            tracing::info!("fetching block reward. from_block={from_block:?}");
-            let transfers = loop {
+            loop {
                 if total_scanned >= MAX_BLOCKS_SCANNED {
                     tracing::error!(
-            "Scanned over {} blocks and found no token transfer events from zero address",
-            MAX_BLOCKS_SCANNED
-        );
+                        total_scanned,
+                        "Exceeded maximum scan range while searching for token Initialized event"
+                    );
                     return Err(anyhow::anyhow!(
-                        "No transfer found from zero address after scanning {} blocks",
+                        "No Initialized event found after scanning {} blocks",
                         MAX_BLOCKS_SCANNED
                     ));
                 }
-
-                let transfers = token
-                    .Transfer_filter()
+                let init_logs = token
+                    .Initialized_filter()
                     .from_block(from_block)
                     .to_block(stake_table_init_block)
-                    .topic1(topic1)
                     .query()
                     .await?;
+                if !init_logs.is_empty() {
+                    let (_, init_log) = init_logs[0].clone();
+                    tracing::info!(from_block, tx_hash = ?init_log.transaction_hash, "Found token Initialized event during scan");
 
-                if !transfers.is_empty() {
-                    break transfers;
+                    break init_log;
                 }
 
                 total_scanned += max_events_range;
                 from_block = from_block.saturating_sub(max_events_range);
-            };
-
-            let (mint_transfer, _) = transfers[0].clone();
-
-            ensure!(
-                mint_transfer.from == Address::ZERO,
-                "First transfer should be a mint from the zero address"
-            );
-
-            mint_transfer.value
+            }
         };
+
+        // Get the transaction that emitted the Initialized event
+        let init_tx = provider
+            .get_transaction_receipt(
+                init_log
+                    .transaction_hash
+                    .context(format!("transaction hash not found. init_log={init_log:?}"))?,
+            )
+            .await?
+            .context(format!(
+                "Failed to get transaction for Initialized event. hash={:?}",
+                init_log.transaction_hash
+            ))?;
+
+        let mint_transfer = init_tx
+            .decoded_log::<EspToken::Transfer>()
+            .context(format!(
+                "Failed to decode Transfer log. init_tx={:?}",
+                init_tx
+            ))?;
+
+        tracing::debug!("mint transfer event ={mint_transfer:?}");
+        ensure!(
+            mint_transfer.from == Address::ZERO,
+            "First transfer should be a mint from the zero address"
+        );
+
+        let initial_supply = mint_transfer.value;
 
         tracing::info!("Initial token amount: {} ESP", format_ether(initial_supply));
 
