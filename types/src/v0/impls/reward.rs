@@ -27,14 +27,13 @@ use sequencer_utils::{
 
 use super::{
     v0_1::{
-        block_reward, RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardAmount,
-        RewardInfo, RewardMerkleCommitment, RewardMerkleProof, RewardMerkleTree,
-        COMMISSION_BASIS_POINTS,
+        RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardAmount, RewardInfo,
+        RewardMerkleCommitment, RewardMerkleProof, RewardMerkleTree, COMMISSION_BASIS_POINTS,
     },
     v0_3::Validator,
     Leaf2, NodeState, ValidatedState,
 };
-use crate::{eth_signature_key::EthKeyPair, FeeAccount};
+use crate::{eth_signature_key::EthKeyPair, Delta, FeeAccount};
 
 impl Committable for RewardInfo {
     fn commit(&self) -> Commitment<Self> {
@@ -353,7 +352,45 @@ impl ComputedRewards {
     }
 }
 
-impl Validator<BLSPubKey> {
+pub struct RewardDistributor {
+    validator: Validator<BLSPubKey>,
+    block_reward: RewardAmount,
+}
+
+impl RewardDistributor {
+    pub fn new(validator: Validator<BLSPubKey>, block_reward: RewardAmount) -> Self {
+        Self {
+            validator,
+            block_reward,
+        }
+    }
+
+    pub fn validator(&self) -> Validator<BLSPubKey> {
+        self.validator.clone()
+    }
+
+    pub fn block_reward(&self) -> RewardAmount {
+        self.block_reward
+    }
+
+    pub fn distribute(&self, state: &mut ValidatedState, delta: &mut Delta) -> anyhow::Result<()> {
+        let reward_state = self.apply_rewards(state.reward_merkle_tree.clone())?;
+        state.reward_merkle_tree = reward_state;
+
+        // Update delta rewards
+        delta
+            .rewards_delta
+            .insert(RewardAccount(self.validator().account));
+        delta.rewards_delta.extend(
+            self.validator()
+                .delegators
+                .keys()
+                .map(|d| RewardAccount(*d)),
+        );
+
+        Ok(())
+    }
+
     pub fn apply_rewards(
         &self,
         mut reward_state: RewardMerkleTree,
@@ -395,24 +432,26 @@ impl Validator<BLSPubKey> {
     /// to ensure the total reward is exactly equal to block reward.
     pub fn compute_rewards(&self) -> anyhow::Result<ComputedRewards> {
         ensure!(
-            self.commission <= COMMISSION_BASIS_POINTS,
+            self.validator.commission <= COMMISSION_BASIS_POINTS,
             "commission must not exceed {COMMISSION_BASIS_POINTS}"
         );
 
+        ensure!(self.block_reward.0 > U256::ZERO, "block reward is zero");
+
         let mut rewards = Vec::new();
 
-        let total_reward = block_reward().0;
+        let total_reward = self.block_reward.0;
         let delegators_ratio_basis_points = U256::from(COMMISSION_BASIS_POINTS)
-            .checked_sub(U256::from(self.commission))
+            .checked_sub(U256::from(self.validator.commission))
             .context("overflow")?;
         let delegators_reward = delegators_ratio_basis_points
             .checked_mul(total_reward)
             .context("overflow")?;
 
         // Distribute delegator rewards
-        let total_stake = self.stake;
+        let total_stake = self.validator.stake;
         let mut delegators_rewards_distributed = U256::from(0);
-        for (delegator_address, delegator_stake) in &self.delegators {
+        for (delegator_address, delegator_stake) in &self.validator.delegators {
             let delegator_reward = RewardAmount::from(
                 (delegator_stake
                     .checked_mul(delegators_reward)
@@ -434,7 +473,7 @@ impl Validator<BLSPubKey> {
 
         Ok(ComputedRewards::new(
             rewards,
-            self.account,
+            self.validator.account,
             leader_commission.into(),
         ))
     }
@@ -547,30 +586,31 @@ pub mod tests {
         // because the remainder after delegator distribution is sent to the validator.
 
         let validator = Validator::mock();
-        let rewards = validator.compute_rewards().unwrap();
+        let mut distributor = RewardDistributor::new(
+            validator,
+            RewardAmount(U256::from(1902000000000000000_u128)),
+        );
+        let rewards = distributor.compute_rewards().unwrap();
         let total = |rewards: ComputedRewards| {
             rewards
                 .all_rewards()
                 .iter()
                 .fold(U256::ZERO, |acc, (_, r)| acc + r.0)
         };
-        assert_eq!(total(rewards.clone()), block_reward().into());
+        assert_eq!(total(rewards.clone()), distributor.block_reward.into());
 
-        let mut validator = Validator::mock();
-        validator.commission = 0;
-        let rewards = validator.compute_rewards().unwrap();
-        assert_eq!(total(rewards.clone()), block_reward().into());
+        distributor.validator.commission = 0;
+        let rewards = distributor.compute_rewards().unwrap();
+        assert_eq!(total(rewards.clone()), distributor.block_reward.into());
 
-        let mut validator = Validator::mock();
-        validator.commission = 10000;
-        let rewards = validator.compute_rewards().unwrap();
-        assert_eq!(total(rewards.clone()), block_reward().into());
+        distributor.validator.commission = 10000;
+        let rewards = distributor.compute_rewards().unwrap();
+        assert_eq!(total(rewards.clone()), distributor.block_reward.into());
         let leader_commission = rewards.leader_commission();
-        assert_eq!(*leader_commission, block_reward());
+        assert_eq!(*leader_commission, distributor.block_reward);
 
-        let mut validator = Validator::mock();
-        validator.commission = 10001;
-        assert!(validator
+        distributor.validator.commission = 10001;
+        assert!(distributor
             .compute_rewards()
             .err()
             .unwrap()
@@ -580,28 +620,35 @@ pub mod tests {
 
     #[test]
     fn test_compute_rewards_validator_commission() {
-        let mut validator = Validator::mock();
-        validator.commission = 0;
-        let rewards = validator.clone().compute_rewards().unwrap();
+        let validator = Validator::mock();
+        let mut distributor = RewardDistributor::new(
+            validator.clone(),
+            RewardAmount(U256::from(1902000000000000000_u128)),
+        );
+        distributor.validator.commission = 0;
+
+        let rewards = distributor.compute_rewards().unwrap();
 
         let leader_commission = rewards.leader_commission();
         let percentage =
-            leader_commission.0 * U256::from(COMMISSION_BASIS_POINTS) / block_reward().0;
+            leader_commission.0 * U256::from(COMMISSION_BASIS_POINTS) / distributor.block_reward.0;
         assert_eq!(percentage, U256::ZERO);
 
         // 3%
-        validator.commission = 300;
-        let rewards = validator.clone().compute_rewards().unwrap();
+        distributor.validator.commission = 300;
+
+        let rewards = distributor.compute_rewards().unwrap();
         let leader_commission = rewards.leader_commission();
         let percentage =
-            leader_commission.0 * U256::from(COMMISSION_BASIS_POINTS) / block_reward().0;
+            leader_commission.0 * U256::from(COMMISSION_BASIS_POINTS) / distributor.block_reward.0;
         println!("percentage: {percentage:?}");
         assert_eq!(percentage, U256::from(300));
 
         //100%
-        validator.commission = 10000;
-        let rewards = validator.compute_rewards().unwrap();
+        distributor.validator.commission = 10000;
+
+        let rewards = distributor.compute_rewards().unwrap();
         let leader_commission = rewards.leader_commission();
-        assert_eq!(*leader_commission, block_reward());
+        assert_eq!(*leader_commission, distributor.block_reward);
     }
 }

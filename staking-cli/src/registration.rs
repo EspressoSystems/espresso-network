@@ -143,7 +143,7 @@ mod test {
     use alloy::providers::WalletProvider as _;
     use espresso_contract_deployer::build_provider;
     use espresso_types::{
-        v0_3::{StakeTableEvent, StakeTableFetcher},
+        v0_3::{Fetcher, StakeTableEvent},
         L1Client,
     };
     use rand::{rngs::StdRng, SeedableRng as _};
@@ -280,7 +280,7 @@ mod test {
         assert!(receipt.status());
 
         let l1 = L1Client::new(vec![system.rpc_url])?;
-        let events = StakeTableFetcher::fetch_events_from_contract(
+        let events = Fetcher::fetch_events_from_contract(
             l1,
             system.stake_table,
             Some(0),
@@ -338,7 +338,7 @@ mod test {
         assert!(receipt.status());
 
         let l1 = L1Client::new(vec![system.rpc_url])?;
-        let events = StakeTableFetcher::fetch_events_from_contract(
+        let events = Fetcher::fetch_events_from_contract(
             l1,
             system.stake_table,
             Some(0),

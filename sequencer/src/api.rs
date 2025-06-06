@@ -15,7 +15,7 @@ use espresso_types::{
     config::PublicNetworkConfig,
     retain_accounts,
     v0::traits::SequencerPersistence,
-    v0_1::{RewardAccount, RewardMerkleTree},
+    v0_1::{RewardAccount, RewardAmount, RewardMerkleTree},
     v0_3::{ChainConfig, Validator},
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction,
@@ -227,6 +227,10 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
         self.as_ref().get_validators(epoch).await
     }
+
+    async fn get_block_reward(&self) -> anyhow::Result<RewardAmount> {
+        self.as_ref().get_block_reward().await
+    }
 }
 
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
@@ -272,6 +276,20 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             epoch,
             stake_table: self.get_stake_table(epoch).await?,
         })
+    }
+
+    async fn get_block_reward(&self) -> anyhow::Result<RewardAmount> {
+        let coordinator = self
+            .consensus()
+            .await
+            .read()
+            .await
+            .membership_coordinator
+            .clone();
+
+        let membership = coordinator.membership().read().await;
+
+        Ok(membership.block_reward())
     }
 
     /// Get the whole validators map
@@ -2011,10 +2029,10 @@ mod test {
     use espresso_types::{
         config::PublicHotShotConfig,
         traits::NullEventConsumer,
-        v0_1::{block_reward, RewardAmount, COMMISSION_BASIS_POINTS},
-        v0_3::StakeTableFetcher,
+        v0_1::{RewardAmount, COMMISSION_BASIS_POINTS},
+        v0_3::Fetcher,
         validators_from_l1_events, EpochVersion, FeeAmount, FeeVersion, Header, L1ClientOptions,
-        MockSequencerVersions, SequencerVersions, ValidatedState,
+        MockSequencerVersions, RewardDistributor, SequencerVersions, ValidatedState,
     };
     use futures::{
         future::{self, join_all},
@@ -3165,7 +3183,7 @@ mod test {
             .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, PosVersion::new()).await;
+        let network = TestNetwork::new(config, PosVersion::new()).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -3202,8 +3220,14 @@ mod test {
         tracing::info!("amount={amount:?}");
 
         let epoch_start_block = 40;
+
+        let node_state = network.server.node_state();
+        let membership = node_state.coordinator.membership().read().await;
+        let block_reward = membership.block_reward();
+        drop(membership);
+
         // The validator gets all the block reward so we can calculate the expected amount
-        let expected_amount = block_reward().0 * (U256::from(block_height - epoch_start_block));
+        let expected_amount = block_reward.0 * (U256::from(block_height - epoch_start_block));
 
         assert_eq!(amount.0, expected_amount, "reward amount don't match");
 
@@ -3257,7 +3281,11 @@ mod test {
             .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, PosVersion::new()).await;
+        let network = TestNetwork::new(config, PosVersion::new()).await;
+        let node_state = network.server.node_state();
+        let membership = node_state.coordinator.membership().read().await;
+        let block_reward = membership.block_reward();
+        drop(membership);
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -3322,7 +3350,7 @@ mod test {
             }
 
             // assert cumulative reward is equal to block reward
-            assert_eq!(cumulative_amount - prev_cumulative_amount, block_reward().0);
+            assert_eq!(cumulative_amount - prev_cumulative_amount, block_reward.0);
             tracing::info!("cumulative_amount is correct for block={block}");
             prev_cumulative_amount = cumulative_amount;
         }
@@ -3404,7 +3432,7 @@ mod test {
             }
             let l1_block = header.l1_finalized().expect("l1 block not found");
 
-            let events = StakeTableFetcher::fetch_events_from_contract(
+            let events = Fetcher::fetch_events_from_contract(
                 l1_client.clone(),
                 stake_table,
                 None,
@@ -3567,6 +3595,11 @@ mod test {
         let node_state = network.server.node_state();
         let coordinator = node_state.coordinator;
 
+        let membership = coordinator.membership().read().await;
+        let block_reward = membership.block_reward();
+
+        drop(membership);
+
         let mut rewards_map = HashMap::new();
 
         for leaf in leaves {
@@ -3579,6 +3612,7 @@ mod test {
                 .leader(leaf.leaf().view_number(), Some(epoch_number))
                 .expect("leader");
             let leader_eth_address = membership.address(&epoch_number, leader).expect("address");
+
             drop(membership);
 
             let validators = client
@@ -3591,6 +3625,7 @@ mod test {
                 .get(&leader_eth_address)
                 .expect("leader not found");
 
+            let distributor = RewardDistributor::new(leader_validator.clone(), block_reward);
             // Verify that the sum of delegator stakes equals the validator's total stake.
             for validator in validators.values() {
                 let delegator_stake_sum: U256 = validator.delegators.values().cloned().sum();
@@ -3598,9 +3633,7 @@ mod test {
                 assert_eq!(delegator_stake_sum, validator.stake);
             }
 
-            let computed_rewards = leader_validator
-                .compute_rewards()
-                .expect("reward computation");
+            let computed_rewards = distributor.compute_rewards().expect("reward computation");
 
             // Verify that the leader commission amount is within the tolerated range.
             // Due to potential rounding errors in decimal calculations for delegator rewards,
@@ -3608,7 +3641,7 @@ mod test {
             // amount may differ very slightly from the calculated value.
             // this asserts that it is within 10wei tolerance level.
             // 10 wei is 10* 10E-18
-            let total_reward = block_reward().0;
+            let total_reward = block_reward.0;
             let leader_commission_basis_points = U256::from(leader_validator.commission);
             let calculated_leader_commission_reward = leader_commission_basis_points
                 .checked_mul(total_reward)
@@ -4515,5 +4548,73 @@ mod test {
                 }
             }
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_block_reward_api() -> anyhow::Result<()> {
+        setup_test();
+        let epoch_height = 10;
+
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(epoch_height)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        const NUM_NODES: usize = 1;
+        // Initialize nodes.
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config.clone())
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<PosVersion>(DelegationConfig::VariableAmounts, Default::default())
+            .await
+            .unwrap()
+            .build();
+
+        let _network = TestNetwork::new(config, PosVersion::new()).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        let _blocks = client
+            .socket("availability/stream/blocks/0")
+            .subscribe::<BlockQueryData<SeqTypes>>()
+            .await
+            .unwrap()
+            .take(3)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        let block_reward = client
+            .get::<RewardAmount>("node/block-reward")
+            .send()
+            .await
+            .expect("failed to get block reward");
+        tracing::info!("block_reward={block_reward:?}");
+
+        assert!(block_reward.0 > U256::ZERO);
+
+        Ok(())
     }
 }
