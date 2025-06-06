@@ -222,157 +222,163 @@ async fn main() {
     #[cfg(feature = "benchmarking")]
     let mut has_started: bool = false;
 
-    while let Some(block) = blocks.next().await {
-        let block: BlockQueryData<SeqTypes> = match block {
-            Ok(block) => block,
-            Err(err) => {
-                tracing::warn!("error getting block: {err}");
-                continue;
-            },
-        };
-        let received_at = Instant::now();
-        tracing::debug!("got block {}", block.height());
-        #[cfg(feature = "benchmarking")]
-        {
-            num_block += 1;
-            if !has_started && (num_block as usize) >= usize::from(opt.benchmark_start_block) {
-                has_started = true;
-                start = Instant::now();
+    loop {
+        while let Some(block) = blocks.next().await {
+            let block: BlockQueryData<SeqTypes> = match block {
+                Ok(block) => block,
+                Err(err) => {
+                    tracing::warn!("error getting block: {err}");
+                    continue;
+                },
+            };
+            let received_at = Instant::now();
+            tracing::debug!("got block {}", block.height());
+            #[cfg(feature = "benchmarking")]
+            {
+                num_block += 1;
+                if !has_started && (num_block as usize) >= usize::from(opt.benchmark_start_block) {
+                    has_started = true;
+                    start = Instant::now();
+                }
             }
-        }
 
-        // Get all transactions which were submitted before this block.
-        while let Ok(Some(tx)) = receiver.try_next() {
-            pending.insert(tx.hash, tx.submitted_at);
-        }
+            // Get all transactions which were submitted before this block.
+            while let Ok(Some(tx)) = receiver.try_next() {
+                pending.insert(tx.hash, tx.submitted_at);
+            }
 
-        // Clear pending transactions from the block.
-        for (_, tx) in block.enumerate() {
-            if let Some(submitted_at) = pending.remove(&tx.commit()) {
-                let latency = received_at - submitted_at;
-                tracing::info!(
-                    "got transaction {} in block {}, latency {latency:?}",
-                    tx.commit(),
-                    block.height()
-                );
-                total_latency += latency;
-                total_transactions += 1;
-                tracing::info!("average latency: {:?}", total_latency / total_transactions);
-                #[cfg(feature = "benchmarking")]
-                {
-                    if has_started && !benchmark_finish {
-                        benchmark_minimum_latency = if total_transactions == 0 {
-                            latency
-                        } else {
-                            std::cmp::min(benchmark_minimum_latency, latency)
-                        };
-                        benchmark_maximum_latency = if total_transactions == 0 {
-                            latency
-                        } else {
-                            std::cmp::max(benchmark_maximum_latency, latency)
-                        };
+            // Clear pending transactions from the block.
+            for (_, tx) in block.enumerate() {
+                if let Some(submitted_at) = pending.remove(&tx.commit()) {
+                    let latency = received_at - submitted_at;
+                    tracing::info!(
+                        "got transaction {} in block {}, latency {latency:?}",
+                        tx.commit(),
+                        block.height()
+                    );
+                    total_latency += latency;
+                    total_transactions += 1;
+                    tracing::info!("average latency: {:?}", total_latency / total_transactions);
+                    #[cfg(feature = "benchmarking")]
+                    {
+                        if has_started && !benchmark_finish {
+                            benchmark_minimum_latency = if total_transactions == 0 {
+                                latency
+                            } else {
+                                std::cmp::min(benchmark_minimum_latency, latency)
+                            };
+                            benchmark_maximum_latency = if total_transactions == 0 {
+                                latency
+                            } else {
+                                std::cmp::max(benchmark_maximum_latency, latency)
+                            };
 
-                        benchmark_total_latency += latency;
-                        benchmark_total_transactions += 1;
-                        // Transaction = NamespaceId(u64) + payload(Vec<u8>)
-                        let payload_length = tx.into_payload().len();
-                        let tx_sz = payload_length * std::mem::size_of::<u8>() // size of payload
+                            benchmark_total_latency += latency;
+                            benchmark_total_transactions += 1;
+                            // Transaction = NamespaceId(u64) + payload(Vec<u8>)
+                            let payload_length = tx.into_payload().len();
+                            let tx_sz = payload_length * std::mem::size_of::<u8>() // size of payload
                         + std::mem::size_of::<u64>() // size of the namespace
                         + std::mem::size_of::<Transaction>(); // size of the struct wrapper
-                        total_throughput += tx_sz;
+                            total_throughput += tx_sz;
+                        }
                     }
                 }
             }
-        }
 
-        #[cfg(feature = "benchmarking")]
-        if !benchmark_finish && (num_block as usize) >= usize::from(opt.benchmark_end_block) {
-            let block_range = format!("{}~{}", opt.benchmark_start_block, opt.benchmark_end_block,);
-            let transaction_size_range_in_bytes = format!("{}~{}", opt.min_size, opt.max_size,);
-            let transactions_per_batch_range = format!(
-                "{}~{}",
-                (opt.jobs as u64 * opt.min_batch_size),
-                (opt.jobs as u64 * opt.max_batch_size),
-            );
-            let benchmark_average_latency = benchmark_total_latency / benchmark_total_transactions;
-            let avg_transaction_size = total_throughput as u32 / benchmark_total_transactions;
-            let total_time_elapsed_in_sec = start.elapsed(); // in seconds
-            let avg_throughput_bytes_per_sec = (total_throughput as u64)
-                / std::cmp::max(total_time_elapsed_in_sec.as_secs(), 1u64);
-            // Open the CSV file in append mode
-            let results_csv_file = OpenOptions::new()
+            #[cfg(feature = "benchmarking")]
+            if !benchmark_finish && (num_block as usize) >= usize::from(opt.benchmark_end_block) {
+                let block_range =
+                    format!("{}~{}", opt.benchmark_start_block, opt.benchmark_end_block,);
+                let transaction_size_range_in_bytes = format!("{}~{}", opt.min_size, opt.max_size,);
+                let transactions_per_batch_range = format!(
+                    "{}~{}",
+                    (opt.jobs as u64 * opt.min_batch_size),
+                    (opt.jobs as u64 * opt.max_batch_size),
+                );
+                let benchmark_average_latency =
+                    benchmark_total_latency / benchmark_total_transactions;
+                let avg_transaction_size = total_throughput as u32 / benchmark_total_transactions;
+                let total_time_elapsed_in_sec = start.elapsed(); // in seconds
+                let avg_throughput_bytes_per_sec = (total_throughput as u64)
+                    / std::cmp::max(total_time_elapsed_in_sec.as_secs(), 1u64);
+                // Open the CSV file in append mode
+                let results_csv_file = OpenOptions::new()
                 .create(true)
                 .append(true) // Open in append mode
                 .open("scripts/benchmarks_results/results.csv")
                 .unwrap();
-            // Open a file for writing
-            let mut wtr = Writer::from_writer(results_csv_file);
-            let mut pub_or_priv_pool = "private";
-            if opt.use_public_mempool() {
-                pub_or_priv_pool = "public";
+                // Open a file for writing
+                let mut wtr = Writer::from_writer(results_csv_file);
+                let mut pub_or_priv_pool = "private";
+                if opt.use_public_mempool() {
+                    pub_or_priv_pool = "public";
+                }
+                let _ = wtr.write_record([
+                    "total_nodes",
+                    "da_committee_size",
+                    "block_range",
+                    "transaction_size_range_in_bytes",
+                    "transaction_per_batch_range",
+                    "pub_or_priv_pool",
+                    "avg_latency_in_sec",
+                    "minimum_latency_in_sec",
+                    "maximum_latency_in_sec",
+                    "avg_throughput_bytes_per_sec",
+                    "total_transactions",
+                    "avg_transaction_size_in_bytes",
+                    "total_time_elapsed_in_sec",
+                ]);
+                let _ = wtr.write_record(&[
+                    opt.num_nodes.to_string(),
+                    opt.num_nodes.to_string(),
+                    block_range,
+                    transaction_size_range_in_bytes,
+                    transactions_per_batch_range,
+                    pub_or_priv_pool.to_string(),
+                    benchmark_average_latency.as_secs().to_string(),
+                    benchmark_minimum_latency.as_secs().to_string(),
+                    benchmark_maximum_latency.as_secs().to_string(),
+                    avg_throughput_bytes_per_sec.to_string(),
+                    benchmark_total_transactions.to_string(),
+                    avg_transaction_size.to_string(),
+                    total_time_elapsed_in_sec.as_secs().to_string(),
+                ]);
+                let _ = wtr.flush();
+                println!(
+                    "Latency results successfully saved in scripts/benchmarks_results/results.csv"
+                );
+                benchmark_finish = true;
             }
-            let _ = wtr.write_record([
-                "total_nodes",
-                "da_committee_size",
-                "block_range",
-                "transaction_size_range_in_bytes",
-                "transaction_per_batch_range",
-                "pub_or_priv_pool",
-                "avg_latency_in_sec",
-                "minimum_latency_in_sec",
-                "maximum_latency_in_sec",
-                "avg_throughput_bytes_per_sec",
-                "total_transactions",
-                "avg_transaction_size_in_bytes",
-                "total_time_elapsed_in_sec",
-            ]);
-            let _ = wtr.write_record(&[
-                opt.num_nodes.to_string(),
-                opt.num_nodes.to_string(),
-                block_range,
-                transaction_size_range_in_bytes,
-                transactions_per_batch_range,
-                pub_or_priv_pool.to_string(),
-                benchmark_average_latency.as_secs().to_string(),
-                benchmark_minimum_latency.as_secs().to_string(),
-                benchmark_maximum_latency.as_secs().to_string(),
-                avg_throughput_bytes_per_sec.to_string(),
-                benchmark_total_transactions.to_string(),
-                avg_transaction_size.to_string(),
-                total_time_elapsed_in_sec.as_secs().to_string(),
-            ]);
-            let _ = wtr.flush();
-            println!(
-                "Latency results successfully saved in scripts/benchmarks_results/results.csv"
-            );
-            benchmark_finish = true;
-        }
 
-        // If a lot of transactions are pending, it might indicate the sequencer is struggling to
-        // finalize them. We should warn about this.
-        if pending.len() >= opt.pending_transactions_warning_threshold {
-            tracing::warn!(
+            // If a lot of transactions are pending, it might indicate the sequencer is struggling to
+            // finalize them. We should warn about this.
+            if pending.len() >= opt.pending_transactions_warning_threshold {
+                tracing::warn!(
                 "transactions are not being finalized or being finalized too slowly, {} pending",
                 pending.len()
             );
-        } else {
-            tracing::debug!("{} transactions still pending", pending.len());
+            } else {
+                tracing::debug!("{} transactions still pending", pending.len());
 
-            // Even if we are not accumulating transactions, it is still possible that some
-            // individual transactions are not being finalized. Warn about any transaction which has
-            // been pending for too long.
-            for (tx, submitted_at) in &pending {
-                let duration = received_at - *submitted_at;
-                if duration >= opt.slow_transaction_warning_threshold {
-                    tracing::warn!("transaction {tx} has been pending for {duration:?}");
+                // Even if we are not accumulating transactions, it is still possible that some
+                // individual transactions are not being finalized. Warn about any transaction which has
+                // been pending for too long.
+                for (tx, submitted_at) in &pending {
+                    let duration = received_at - *submitted_at;
+                    if duration >= opt.slow_transaction_warning_threshold {
+                        tracing::warn!("transaction {tx} has been pending for {duration:?}");
+                    }
                 }
             }
         }
+        tracing::info!(
+            "block stream ended with {} transactions still pending",
+            pending.len()
+        );
+        // wait a bit and restart
+        sleep(Duration::from_secs(1)).await;
     }
-    tracing::info!(
-        "block stream ended with {} transactions still pending",
-        pending.len()
-    );
 }
 
 struct SubmittedTransaction {

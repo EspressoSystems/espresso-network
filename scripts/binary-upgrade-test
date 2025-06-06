@@ -1,33 +1,54 @@
 #!/usr/bin/env bash
 set -euxo pipefail
 
+# process
+# - start the network on main tag
+# - upgrade builder
+# - for each node
+#   - upgrade
+#   - assert progress
+
+# Note: explicitly want to re-use volumes where postgres/sqlite/filesystem nodes store data
+
 # currently running on mainnet
 base_tag=20250228-patch3
 
-# deployer arguments changed, probably others too,
-#   - actually it's mainly the deployer arguments, nothing much else
-#
-# we can check out the old tag to know how to start up the demo, it will have it's own docker compose and env file
-# we want to re-use volumes where postgres/sqlite/filesystem nodes store data
-# everything should happen in the same docker compose environment
-
-# process
-# 1. start the network on main tag
-# 2. stop nodes and restart with current tag
+# do some cleanup
+just down -v
+docker stop $(docker ps -aq)
+docker rm $(docker ps -aq)
 
 # inject some env vars that since changed in the local demo
-
 export ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS=0x0c8e79f3534b00d9a3d4a856b665bf4ebc22f2ba
 export ESPRESSO_SEQUENCER_PERMISSIONED_PROVER=0x14dc79964da2c08b23698b3d3cc7ca32193d9955
 export ESPRESSO_SEQUENCER_PERMISSIONED_STAKE_TABLE_ADDRESS=0x8ce361602b935680e8dec218b820ff5056beb7af
 
-# env DOCKER_TAG=$base_tag just demo --wait
-# env DOCKER_TAG=$base_tag just demo --wait
+# start the demo on mainnet version
+env DOCKER_TAG=$base_tag just demo --wait
 
+scripts/smoke-test-demo
+
+# first upgrade the builder
+docker compose stop permissionless-builder
+env DOCKER_TAG=main docker compose up --no-deps permissionless-builder --force-recreate --wait
+
+scripts/smoke-test-demo # this will potentially work once at first but we soon only get empty blocks
+scripts/smoke-test-demo # XXX will fail: no new txns finalized
+
+# builder now has event stream errors:
+# run: docker logs espresso-network-permissionless-builder-1
+# WARN marketplace_builder_shared::utils::event_service_wrapper: Error in event stream err=Custom { message: "invalid binary: tag for enum is not valid, found 55
+# WARN marketplace_builder_shared::utils::event_service_wrapper: Error in event stream err=Custom { message: "invalid binary: invalid value: integer `88`, expected variant index 0 <= i < 2
+
+
+
+# upgrade sequencer0 binary
+# docker compose stop sequencer0
+# env DOCKER_TAG=main docker compose up --no-deps sequencer0 --force-recreate --wait
+#
+# # submit transactions will have exited due to closed stream
+# env DOCKER_TAG=main docker compose up --no-deps submit-transactions-public --wait
+# env DOCKER_TAG=main docker compose up --no-deps submit-transactions-private --wait
 # scripts/smoke-test-demo
-
-# upgrade sequencer 0
-docker compose stop sequencer0
-env DOCKER_TAG=main docker compose up --no-deps sequencer0 --force-recreate --wait
 
 # assert sequencer 0 is running and making progress

@@ -116,7 +116,13 @@ while true; do
     new_block_height=`curl -sL $SEQUENCER_API/node/block-height`
     new_num_tx=`curl -sL $SEQUENCER_API/node/transactions/count`
     new_light_client_updated=`last_light_client_update`
-    if [[ $new_block_height -gt $block_height && $new_num_tx -gt $num_tx && $new_light_client_updated -gt $light_client_updated ]]; then
+    if (( new_block_height <= block_height )); then
+        echo "Check failed: new_block_height $new_block_height not increased"
+    elif (( new_num_tx <= num_tx )); then
+        echo "Check failed: new_num_tx $new_num_tx not increased"
+    elif (( new_light_client_updated <= light_client_updated )); then
+        echo "Check failed: new_light_client_updated ($new_light_client_updated) not increased"
+    else
         new_builder_balance=`get_balance 0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f $new_block_height`
         new_recipient_balance=`get_balance 0x0000000000000000000000000000000000000000 $new_block_height`
 

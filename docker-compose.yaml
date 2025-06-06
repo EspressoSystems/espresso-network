@@ -30,6 +30,7 @@ services:
       - ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       demo-l1-network:
@@ -53,6 +54,7 @@ services:
       - ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       demo-l1-network:
@@ -77,6 +79,7 @@ services:
       - CONFIRMATIONS=1
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
     depends_on:
       deploy-sequencer-contracts:
         condition: service_completed_successfully
@@ -104,6 +107,7 @@ services:
       - ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_4
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
     depends_on:
       deploy-sequencer-contracts:
         condition: service_completed_successfully
@@ -131,6 +135,7 @@ services:
       - ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
 
   # We use KeyDB (a Redis variant) to maintain consistency between
@@ -239,6 +244,7 @@ services:
       - ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
 
   prover-service:
@@ -262,6 +268,7 @@ services:
       - RAYON_NUM_THREADS=$PROVER_RAYON_NUM_THREADS
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
       - RAYON_NUM_THREADS
     depends_on:
@@ -317,6 +324,7 @@ services:
       - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://sequencer0:$ESPRESSO_SEQUENCER_API_PORT/
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       orchestrator:
@@ -377,6 +385,7 @@ services:
       - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://sequencer1:$ESPRESSO_SEQUENCER_API_PORT/
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       orchestrator:
@@ -431,6 +440,7 @@ services:
       - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://sequencer2:$ESPRESSO_SEQUENCER_API_PORT/
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       orchestrator:
@@ -484,6 +494,7 @@ services:
       - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://sequencer3:$ESPRESSO_SEQUENCER_API_PORT/
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       orchestrator:
@@ -536,6 +547,7 @@ services:
       - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://sequencer4:$ESPRESSO_SEQUENCER_API_PORT/
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       orchestrator:
@@ -566,6 +578,7 @@ services:
       - ESPRESSO_SEQUENCER_URL
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       sequencer0:
@@ -589,6 +602,7 @@ services:
       - ESPRESSO_SEQUENCER_URL
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       sequencer0:
@@ -616,6 +630,7 @@ services:
       - ESPRESSO_BUILDER_INIT_NODE_COUNT
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       sequencer0:
@@ -633,6 +648,7 @@ services:
       - ESPRESSO_NASTY_CLIENT_PORT
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       sequencer0:
@@ -645,6 +661,7 @@ services:
     environment:
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ESPRESSO_NODE_VALIDATOR_PORT
       - ESPRESSO_NODE_VALIDATOR_STAKE_TABLE_SOURCE_BASE_URL=http://sequencer0:$ESPRESSO_SEQUENCER_API_PORT/v0/
       - ESPRESSO_NODE_VALIDATOR_LEAF_STREAM_SOURCE_BASE_URL=http://sequencer0:$ESPRESSO_SEQUENCER_API_PORT/v0/
