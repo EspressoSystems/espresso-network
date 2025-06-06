@@ -394,6 +394,10 @@ pub struct ConsensusMetricsValue {
     pub number_of_empty_blocks_proposed: Box<dyn Counter>,
     /// Number of events in the hotshot event queue
     pub internal_event_queue_len: Box<dyn Gauge>,
+    /// The duration of the validate and apply header
+    pub validate_and_apply_header_duration: Box<dyn Histogram>,
+    /// The duration of update leaf
+    pub update_leaf_duration: Box<dyn Histogram>,
 }
 
 impl ConsensusMetricsValue {
@@ -425,6 +429,14 @@ impl ConsensusMetricsValue {
                 .create_counter(String::from("number_of_empty_blocks_proposed"), None),
             internal_event_queue_len: metrics
                 .create_gauge(String::from("internal_event_queue_len"), None),
+            validate_and_apply_header_duration: metrics.create_histogram(
+                String::from("validate_and_apply_header_duration"),
+                Some("seconds".to_string()),
+            ),
+            update_leaf_duration: metrics.create_histogram(
+                String::from("update_leaf_duration"),
+                Some("seconds".to_string()),
+            ),
         }
     }
 }
