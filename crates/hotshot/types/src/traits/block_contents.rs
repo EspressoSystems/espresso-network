@@ -127,6 +127,9 @@ pub trait BlockPayload<TYPES: NodeType>:
         &'a self,
         metadata: &'a Self::Metadata,
     ) -> impl 'a + Iterator<Item = Self::Transaction>;
+
+    /// Get the number of bytes of transactions in the payload.
+    fn txn_bytes(&self) -> usize;
 }
 
 /// extra functions required on block to be usable by hotshot-testing

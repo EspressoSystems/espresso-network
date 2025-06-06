@@ -250,6 +250,10 @@ impl<TYPES: NodeType> BlockPayload<TYPES> for TestBlockPayload {
     ) -> impl 'a + Iterator<Item = Self::Transaction> {
         self.transactions.iter().cloned()
     }
+
+    fn txn_bytes(&self) -> usize {
+        self.transactions.iter().map(|tx| tx.0.len()).sum()
+    }
 }
 
 /// A [`BlockHeader`] that commits to [`TestBlockPayload`].

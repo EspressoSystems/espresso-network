@@ -202,6 +202,10 @@ impl BlockPayload<SeqTypes> for Payload {
     ) -> impl 'a + Iterator<Item = Self::Transaction> {
         self.enumerate(metadata).map(|(_, t)| t)
     }
+
+    fn txn_bytes(&self) -> usize {
+        self.raw_payload.len()
+    }
 }
 
 impl QueryablePayload<SeqTypes> for Payload {
