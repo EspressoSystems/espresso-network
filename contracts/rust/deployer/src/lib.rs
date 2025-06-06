@@ -844,6 +844,8 @@ pub async fn deploy_stake_table_proxy(
 async fn upgrade_stake_table_v2(
     provider: impl Provider,
     contracts: &mut Contracts,
+    pauser: Address,
+    admin: Address,
 ) -> Result<TransactionReceipt> {
     let Some(proxy_addr) = contracts.address(Contract::StakeTableProxy) else {
         anyhow::bail!("StakeTableProxy not found, can't upgrade")
@@ -860,9 +862,32 @@ async fn upgrade_stake_table_v2(
 
     assert!(is_contract(&provider, v2_addr).await?);
 
+    // Prepare init data
+    let expected_major_version = 2;
+    let init_data = if already_initialized(
+        &provider,
+        proxy_addr,
+        Contract::StakeTableV2,
+        expected_major_version,
+    )
+    .await?
+    {
+        tracing::info!(
+            "Proxy was already initialized for version {}",
+            expected_major_version
+        );
+        vec![].into()
+    } else {
+        tracing::info!("Init Data to be signed.\n Function: initializeV2\n Arguments:\n pauser: {:?}\n admin: {:?}", pauser, admin);
+        StakeTableV2::new(v2_addr, &provider)
+            .initializeV2(pauser, admin)
+            .calldata()
+            .to_owned()
+    };
+
     // invoke upgrade on proxy
     let receipt = proxy
-        .upgradeToAndCall(v2_addr, vec![].into() /* no new init data for V2 */)
+        .upgradeToAndCall(v2_addr, init_data)
         .send()
         .await?
         .get_receipt()
@@ -872,6 +897,12 @@ async fn upgrade_stake_table_v2(
         // post deploy verification checks
         let proxy_as_v2 = StakeTableV2::new(proxy_addr, &provider);
         assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
+        // get pauser role
+        let pauser_role = proxy_as_v2.PAUSER_ROLE().call().await?._0;
+        assert_eq!(
+            proxy_as_v2.hasRole(pauser_role, pauser).call().await?._0,
+            true
+        );
         tracing::info!(%v2_addr, "StakeTable successfully upgraded to")
     } else {
         anyhow::bail!("StakeTable upgrade failed: {:?}", receipt);
@@ -893,6 +924,7 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
     contracts: &mut Contracts,
     rpc_url: String,
     multisig_address: Address,
+    pauser: Address,
     dry_run: Option<bool>,
 ) -> Result<(String, bool)> {
     let dry_run = dry_run.unwrap_or(false);
@@ -908,18 +940,42 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
                 "Proxy is not owned by the multisig"
             );
             // TODO: check if owner is a multisig
-            // first deploy StakeTableV2.sol
+            // first deploy StakeTableV2.sol implementation
             let stake_table_v2_addr = contracts
                 .deploy(
                     Contract::StakeTableV2,
                     StakeTableV2::deploy_builder(&provider),
                 )
                 .await?;
+
+            // prepare init data
+            let expected_major_version = 2;
+            let init_data = if already_initialized(
+                &provider,
+                proxy_addr,
+                Contract::StakeTableV2,
+                expected_major_version,
+            )
+            .await?
+            {
+                tracing::info!(
+                    "Proxy was already initialized for version {}",
+                    expected_major_version
+                );
+                vec![].into()
+            } else {
+                tracing::info!("Init Data to be signed.\n Function: initializeV2\n Arguments:\n pauser: {:?}\n admin: {:?}", pauser, owner_addr);
+                StakeTableV2::new(stake_table_v2_addr, &provider)
+                    .initializeV2(pauser, owner_addr)
+                    .calldata()
+                    .to_owned()
+            };
+
             // invoke upgrade on proxy via the safeSDK
             let result = call_upgrade_proxy_script(
                 proxy_addr,
                 stake_table_v2_addr,
-                "0x".to_string(),
+                init_data.to_string(),
                 rpc_url,
                 owner_addr,
                 Some(dry_run),
@@ -1774,15 +1830,33 @@ mod tests {
             owner,
         )
         .await?;
-        let stake_table = StakeTable::new(stake_table_addr, &provider);
+        let stake_table_v1 = StakeTable::new(stake_table_addr, &provider);
+        assert_eq!(stake_table_v1.getVersion().call().await?, (1, 0, 0).into());
 
         // upgrade to v2
-        upgrade_stake_table_v2(&provider, &mut contracts).await?;
+        let pauser = Address::random();
+        upgrade_stake_table_v2(&provider, &mut contracts, pauser, owner).await?;
 
-        assert_eq!(stake_table.getVersion().call().await?, (2, 0, 0).into());
-        assert_eq!(stake_table.owner().call().await?._0, owner);
-        assert_eq!(stake_table.token().call().await?._0, token_addr);
-        assert_eq!(stake_table.lightClient().call().await?._0, lc_addr);
+        let stake_table_v2 = StakeTableV2::new(stake_table_addr, &provider);
+
+        assert_eq!(stake_table_v2.getVersion().call().await?, (2, 0, 0).into());
+        assert_eq!(stake_table_v2.owner().call().await?._0, owner);
+        assert_eq!(stake_table_v2.token().call().await?._0, token_addr);
+        assert_eq!(stake_table_v2.lightClient().call().await?._0, lc_addr);
+
+        // get pauser role
+        let pauser_role = stake_table_v2.PAUSER_ROLE().call().await?._0;
+        assert_eq!(
+            stake_table_v2.hasRole(pauser_role, pauser).call().await?._0,
+            true
+        );
+
+        // get admin role
+        let admin_role = stake_table_v2.DEFAULT_ADMIN_ROLE().call().await?._0;
+        assert_eq!(
+            stake_table_v2.hasRole(admin_role, owner).call().await?._0,
+            true
+        );
         Ok(())
     }
 
@@ -1856,11 +1930,13 @@ mod tests {
         let stake_table = StakeTable::new(stake_table_proxy_addr, &provider);
         assert_eq!(stake_table.owner().call().await?._0, multisig_admin);
         // then send upgrade proposal to the multisig wallet
+        let pauser = Address::random();
         let (result, success) = upgrade_stake_table_v2_multisig_owner(
             &provider,
             &mut contracts,
             sepolia_rpc_url,
             multisig_admin,
+            pauser,
             Some(dry_run),
         )
         .await?;

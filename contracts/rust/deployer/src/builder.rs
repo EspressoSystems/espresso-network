@@ -21,6 +21,7 @@ use crate::{Contract, Contracts};
 /// - `epoch_start_block`: block height for the first *activated* epoch
 /// - `exit_escrow_period`: exit escrow period for stake table (in seconds)
 /// - `multisig`: new owner/multisig that owns all the proxy contracts
+/// - `multisig_pauser`: new multisig that owns the pauser role
 /// - `initial_token_supply`: initial token supply for the token contract
 /// - `token_name`: name of the token
 /// - `token_symbol`: symbol of the token
@@ -52,6 +53,8 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     exit_escrow_period: Option<U256>,
     #[builder(default)]
     multisig: Option<Address>,
+    #[builder(default)]
+    multisig_pauser: Option<Address>,
     #[builder(default)]
     initial_token_supply: Option<U256>,
     #[builder(default)]
@@ -204,11 +207,18 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         contracts,
                         self.rpc_url.clone(),
                         self.multisig.unwrap(),
+                        self.multisig_pauser.unwrap(),
                         Some(self.dry_run),
                     )
                     .await?;
                 } else {
-                    crate::upgrade_stake_table_v2(provider, contracts).await?;
+                    crate::upgrade_stake_table_v2(
+                        provider,
+                        contracts,
+                        admin,
+                        self.multisig_pauser.unwrap(),
+                    )
+                    .await?;
 
                     if let Some(multisig) = self.multisig {
                         let stake_table_proxy = contracts
