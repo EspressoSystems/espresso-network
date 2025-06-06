@@ -1,12 +1,19 @@
 use std::{collections::HashMap, sync::Arc};
 
-use alloy::primitives::{Address, U256};
+use alloy::{
+    primitives::{Address, U256},
+    rpc::types::Log,
+    sol_types::{Error as ABIError, SolEventInterface},
+};
 use async_lock::Mutex;
 use derive_more::derive::{From, Into};
-use hotshot::types::{BLSPubKey, SignatureKey};
-use hotshot_contract_adapter::sol_types::StakeTableV2::{
-    ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit,
-    ValidatorRegistered, ValidatorRegisteredV2,
+use hotshot::types::{BLSPubKey, SchnorrPubKey, SignatureKey};
+use hotshot_contract_adapter::{
+    sol_types::StakeTableV2::{
+        ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, StakeTableV2Events, Undelegated,
+        ValidatorExit, ValidatorRegistered, ValidatorRegisteredV2,
+    },
+    stake_table::StakeTableSolError,
 };
 use hotshot_types::{
     data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, PeerConfig,
@@ -90,6 +97,17 @@ impl Drop for StakeTableUpdateTask {
     }
 }
 
+/// Type to represent event including metadata used for persistence and sorting.
+#[derive(Debug, Clone)]
+pub struct StakeTableEventType {
+    /// Data represented as an enum variant.
+    pub data: StakeTableEvent,
+    /// Block number used for sorting and required by persistence.
+    pub block_number: u64,
+    /// Log index required by persistence.
+    pub log_index: u64,
+}
+
 // (log block number, log index)
 pub type EventKey = (u64, u64);
 
@@ -103,3 +121,88 @@ pub enum StakeTableEvent {
     KeyUpdate(ConsensusKeysUpdated),
     KeyUpdateV2(ConsensusKeysUpdatedV2),
 }
+
+type ValidatorMap = IndexMap<Address, Validator<BLSPubKey>>;
+
+#[derive(Debug, derive_more::From)]
+pub enum StakeTableEventHandlerError {
+    FailedToAuthenticate(StakeTableSolError),
+    ABIError(ABIError),
+}
+
+impl TryFrom<&Log> for StakeTableEventType {
+    type Error = StakeTableEventHandlerError;
+
+    fn try_from(log: &Log) -> Result<Self, Self::Error> {
+        // TODO map `None` to error type.
+        let block_number = log.block_number.expect("block number");
+        // TODO map `None` to error type.
+        let log_index = log.log_index.expect("log index");
+        let event_variant = StakeTableEvent::try_from(log)?;
+        let event_type = StakeTableEventType {
+            data: event_variant,
+            block_number,
+            log_index,
+        };
+        Ok(event_type)
+    }
+}
+
+impl TryFrom<&Log> for StakeTableEvent {
+    type Error = StakeTableEventHandlerError;
+
+    fn try_from(log: &Log) -> Result<Self, Self::Error> {
+        let event = StakeTableV2Events::decode_log(log.as_ref(), true)?;
+        let event = match event.data {
+            StakeTableV2Events::Delegated(event) => Self::Delegate(event),
+            StakeTableV2Events::ValidatorRegisteredV2(event) => {
+                event.authenticate()?;
+                Self::RegisterV2(event)
+            },
+            _ => todo!(),
+        };
+        Ok(event)
+    }
+}
+
+// TODO move to impl folder
+// impl StakeTableEvent {
+//     pub fn handle(&self) -> Result<ValidatorMap, StakeTableEventHandlerError> {
+//         let mut validators = IndexMap::new();
+//         match self {
+//             Self::RegisterV2(event) => {
+//                 event
+//                     .authenticate()
+//                     .map_err(StakeTableEventHandlerError::FailedToAuthenticate)?;
+//                 self.register(validators);
+//             },
+//             _ => todo!(),
+//         }
+//     }
+//
+//     fn register(&self) -> Result<ValidatorMap, StakeTableEventHandlerError> {
+//         let ValidatorRegisteredV2 {
+//             account,
+//             blsVK,
+//             schnorrVK,
+//             commission,
+//             ..
+//         } = self;
+//
+//         let stake_table_key: BLSPubKey = blsVK.into();
+//         let state_ver_key: SchnorrPubKey = schnorrVK.into();
+//         // TODO uncomment
+//         // The stake table contract enforces that each bls key is only used once.
+//         // if bls_keys.contains(&stake_table_key) {
+//         //     bail!("bls key already used: {}", stake_table_key.to_string());
+//         // };
+//
+//         // // The contract does *not* enforce that each schnorr key is only used once.
+//         // if schnorr_keys.contains(&state_ver_key) {
+//         //     tracing::warn!("schnorr key already used: {}", state_ver_key.to_string());
+//         // };
+//
+//         bls_keys.insert(stake_table_key);
+//         schnorr_keys.insert(state_ver_key.clone());
+//     }
+// }
