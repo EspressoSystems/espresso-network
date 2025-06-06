@@ -21,7 +21,7 @@ cross_tests!(
     TestName: test_epoch_success,
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
     Types: [
-        TestTypesRandomizedCommitteeMembers<RandomOverlapQuorumFilterConfig<123, 4, 7, 0, 2>>, // Overlap = Dynamic
+        TestTypesRandomizedCommitteeMembers<RandomOverlapQuorumFilterConfig<123, 4, 7, 0, 2>, RandomOverlapQuorumFilterConfig<123, 4, 7, 0, 2>>, // Overlap = Dynamic
     ],
     Versions: [EpochsTestVersions],
     Ignore: false,

@@ -28,7 +28,11 @@ use crate::traits::election::helpers::QuorumFilterConfig;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 /// The static committee election
-pub struct RandomizedCommitteeMembers<T: NodeType, C: QuorumFilterConfig> {
+pub struct RandomizedCommitteeMembers<
+    T: NodeType,
+    CONFIG: QuorumFilterConfig,
+    DaConfig: QuorumFilterConfig,
+> {
     /// The nodes eligible for leadership.
     /// NOTE: This is currently a hack because the DA leader needs to be the quorum
     /// leader but without voting rights.
@@ -46,11 +50,20 @@ pub struct RandomizedCommitteeMembers<T: NodeType, C: QuorumFilterConfig> {
     /// The nodes on the da committee and their stake, indexed by public key
     indexed_da_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T>>,
 
+    /// The first epoch which will be encountered. For testing, will panic if an epoch-carrying function is called
+    /// when first_epoch is None or is Some greater than that epoch.
+    first_epoch: Option<T::Epoch>,
+
     /// Phantom
-    _pd: PhantomData<C>,
+    _pd: PhantomData<CONFIG>,
+
+    /// Phantom
+    _da_pd: PhantomData<DaConfig>,
 }
 
-impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> RandomizedCommitteeMembers<TYPES, CONFIG> {
+impl<TYPES: NodeType, CONFIG: QuorumFilterConfig, DaConfig: QuorumFilterConfig>
+    RandomizedCommitteeMembers<TYPES, CONFIG, DaConfig>
+{
     /// Creates a set of indices into the stake_table which reference the nodes selected for this epoch's committee
     fn make_quorum_filter(&self, epoch: <TYPES as NodeType>::Epoch) -> BTreeSet<usize> {
         CONFIG::execute(epoch.u64(), self.stake_table.len())
@@ -58,7 +71,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> RandomizedCommitteeMembers<TYP
 
     /// Creates a set of indices into the da_stake_table which reference the nodes selected for this epoch's da committee
     fn make_da_quorum_filter(&self, epoch: <TYPES as NodeType>::Epoch) -> BTreeSet<usize> {
-        CONFIG::execute(epoch.u64(), self.da_stake_table.len())
+        DaConfig::execute(epoch.u64(), self.da_stake_table.len())
     }
 
     /// Writes the offsets used for the quorum filter and da_quorum filter to stdout
@@ -80,7 +93,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> RandomizedCommitteeMembers<TYP
 
             error!(
                 "{} offsets for DA Quorum filter:",
-                std::any::type_name::<CONFIG>()
+                std::any::type_name::<DaConfig>()
             );
             for epoch in 1..=10 {
                 error!(
@@ -92,8 +105,8 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> RandomizedCommitteeMembers<TYP
     }
 }
 
-impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
-    for RandomizedCommitteeMembers<TYPES, CONFIG>
+impl<TYPES: NodeType, CONFIG: QuorumFilterConfig, DaConfig: QuorumFilterConfig> Membership<TYPES>
+    for RandomizedCommitteeMembers<TYPES, CONFIG, DaConfig>
 {
     type Error = hotshot_utils::anytrace::Error;
     /// Create a new election
@@ -147,7 +160,9 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
             da_stake_table: da_members,
             indexed_stake_table,
             indexed_da_stake_table,
+            first_epoch: None,
             _pd: PhantomData,
+            _da_pd: PhantomData,
         };
 
         s.debug_display_offsets();
@@ -363,7 +378,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
                 .iter()
                 .enumerate()
                 .filter(|(idx, _)| filter.contains(idx))
-                .map(|(_, v)| v.clone())
+                .map(|(idx, v)| (idx, v.clone()))
                 .collect();
 
             let mut rng: StdRng = rand::SeedableRng::seed_from_u64(*view_number);
@@ -374,7 +389,9 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
 
             let res = leader_vec[index].clone();
 
-            Ok(TYPES::SignatureKey::public_key(&res.stake_table_entry))
+            tracing::debug!("RandomizedCommitteeMembers lookup_leader, view_number: {view_number}, epoch: {epoch}, leader: {}", res.0);
+
+            Ok(TYPES::SignatureKey::public_key(&res.1.stake_table_entry))
         } else {
             let mut rng: StdRng = rand::SeedableRng::seed_from_u64(*view_number);
 
@@ -437,4 +454,12 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
     }
 
     fn add_drb_result(&mut self, _epoch: <TYPES as NodeType>::Epoch, _drb_result: DrbResult) {}
+
+    fn set_first_epoch(&mut self, epoch: TYPES::Epoch, _initial_drb_result: DrbResult) {
+        self.first_epoch = Some(epoch);
+    }
+
+    fn first_epoch(&self) -> Option<TYPES::Epoch> {
+        self.first_epoch
+    }
 }
