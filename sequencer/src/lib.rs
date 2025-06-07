@@ -366,6 +366,9 @@ where
         },
     };
 
+    // TODO If we have a drb_difficulty but hotshot_config does have it at
+    // default (zero), we should inject the value from the genesis file.
+
     if let Some(upgrade) = genesis.upgrades.get(&V::Upgrade::VERSION) {
         upgrade.set_hotshot_config_parameters(&mut network_config.config);
     }
