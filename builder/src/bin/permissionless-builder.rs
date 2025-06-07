@@ -18,7 +18,7 @@ use vbs::version::StaticVersionType;
 struct NonPermissionedBuilderOptions {
     /// URL of hotshot events API running on Espresso Sequencer DA committee node
     /// The builder will subscribe to this server to receive hotshot events
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_URL",
         default_value = "http://localhost:22001"
@@ -29,15 +29,15 @@ struct NonPermissionedBuilderOptions {
     ///
     /// This is the address fees will be charged to.
     /// It must be funded with ETH in the Espresso fee ledger
-    #[clap(long, env = "ESPRESSO_BUILDER_ETH_MNEMONIC")]
+    #[arg(long, env = "ESPRESSO_BUILDER_ETH_MNEMONIC")]
     eth_mnemonic: String,
 
     /// Index of a funded account derived from eth-mnemonic.
-    #[clap(long, env = "ESPRESSO_BUILDER_ETH_ACCOUNT_INDEX", default_value = "8")]
+    #[arg(long, env = "ESPRESSO_BUILDER_ETH_ACCOUNT_INDEX", default_value = "8")]
     eth_account_index: u32,
 
     /// Url we will use for RPC communication with L1.
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_BUILDER_L1_PROVIDER",
         value_delimiter = ',',
@@ -46,31 +46,31 @@ struct NonPermissionedBuilderOptions {
     l1_provider_url: Vec<Url>,
 
     /// Peer nodes use to fetch missing state
-    #[clap(long, env = "ESPRESSO_SEQUENCER_STATE_PEERS", value_delimiter = ',')]
+    #[arg(long, env = "ESPRESSO_SEQUENCER_STATE_PEERS", value_delimiter = ',')]
     state_peers: Vec<Url>,
 
     /// Port to run the builder server on.
-    #[clap(short, long, env = "ESPRESSO_BUILDER_SERVER_PORT")]
+    #[arg(short, long, env = "ESPRESSO_BUILDER_SERVER_PORT")]
     port: u16,
 
     /// Bootstrapping View number
-    #[clap(short, long, env = "ESPRESSO_BUILDER_BOOTSTRAPPED_VIEW")]
+    #[arg(short, long, env = "ESPRESSO_BUILDER_BOOTSTRAPPED_VIEW")]
     view_number: u64,
 
     /// BUILDER TRANSACTIONS CHANNEL CAPACITY
-    #[clap(long, env = "ESPRESSO_BUILDER_TX_CHANNEL_CAPACITY")]
+    #[arg(long, env = "ESPRESSO_BUILDER_TX_CHANNEL_CAPACITY")]
     pub tx_channel_capacity: NonZeroUsize,
 
     /// BUILDER HS EVENTS CHANNEL CAPACITY
-    #[clap(long, env = "ESPRESSO_BUILDER_EVENT_CHANNEL_CAPACITY")]
+    #[arg(long, env = "ESPRESSO_BUILDER_EVENT_CHANNEL_CAPACITY")]
     pub event_channel_capacity: NonZeroUsize,
 
     /// NETWORK INITIAL NODE COUNT
-    #[clap(short, long, env = "ESPRESSO_BUILDER_INIT_NODE_COUNT")]
+    #[arg(short, long, env = "ESPRESSO_BUILDER_INIT_NODE_COUNT")]
     node_count: NonZeroUsize,
 
     /// The amount of time a builder can wait before timing out a request to the API.
-    #[clap(
+    #[arg(
         short,
         long,
         env = "ESPRESSO_BUILDER_WEBSERVER_RESPONSE_TIMEOUT_DURATION",
@@ -80,7 +80,7 @@ struct NonPermissionedBuilderOptions {
     max_api_timeout_duration: Duration,
 
     /// The amount of time a builder can wait before incrementing the max block size.
-    #[clap(
+    #[arg(
         short = 'M',
         long,
         env = "ESPRESSO_BUILDER_MAX_BLOCK_SIZE_INCREMENT_PERIOD",
@@ -90,7 +90,7 @@ struct NonPermissionedBuilderOptions {
     max_block_size_increment_period: Duration,
 
     /// The amount of time a builder can wait before incrementing the max block size.
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_BUILDER_TX_STATUS_CACHE_SIZE",
         default_value = "819200"
@@ -98,10 +98,10 @@ struct NonPermissionedBuilderOptions {
     tx_status_cache_size: usize,
 
     /// Path to TOML file containing genesis state.
-    #[clap(long, name = "GENESIS_FILE", env = "ESPRESSO_BUILDER_GENESIS_FILE")]
+    #[arg(long, value_name = "GENESIS_FILE", env = "ESPRESSO_BUILDER_GENESIS_FILE")]
     genesis_file: PathBuf,
 
-    #[clap(flatten)]
+    #[command(flatten)]
     logging: logging::Config,
 }
 
