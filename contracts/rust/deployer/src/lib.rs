@@ -1852,17 +1852,11 @@ mod tests {
 
         // get pauser role
         let pauser_role = stake_table_v2.PAUSER_ROLE().call().await?._0;
-        assert_eq!(
-            stake_table_v2.hasRole(pauser_role, pauser).call().await?._0,
-            true
-        );
+        assert!(stake_table_v2.hasRole(pauser_role, pauser).call().await?._0,);
 
         // get admin role
         let admin_role = stake_table_v2.DEFAULT_ADMIN_ROLE().call().await?._0;
-        assert_eq!(
-            stake_table_v2.hasRole(admin_role, owner).call().await?._0,
-            true
-        );
+        assert!(stake_table_v2.hasRole(admin_role, owner).call().await?._0,);
         Ok(())
     }
 
