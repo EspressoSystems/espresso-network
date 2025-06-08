@@ -27,6 +27,8 @@ import { OwnableUpgradeable } from
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
+import { PausableUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 // Token contract
 import { EspToken } from "../src/EspToken.sol";
@@ -50,6 +52,7 @@ contract StakeTable_register_Test is LightClientCommonTest {
     string public constant NAME = "Espresso";
     string public constant SYMBOL = "ESP";
     uint256 public constant INITIAL_SUPPLY = 3_590_000_000;
+    ERC1967Proxy public proxy;
 
     function genClientWallet(address sender, string memory _seed)
         private
@@ -78,21 +81,21 @@ contract StakeTable_register_Test is LightClientCommonTest {
     }
 
     function registerValidatorOnStakeTable(
-        address validator,
-        string memory seed,
-        uint16 commission,
-        S stakeTable
+        address _validator,
+        string memory _seed,
+        uint16 _commission,
+        S _stakeTable
     ) public {
         (
             BN254.G2Point memory blsVK,
             EdOnBN254.EdOnBN254Point memory schnorrVK,
             BN254.G1Point memory sig
-        ) = genClientWallet(validator, seed);
+        ) = genClientWallet(_validator, _seed);
 
-        vm.startPrank(validator);
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.ValidatorRegistered(validator, blsVK, schnorrVK, commission);
-        stakeTable.registerValidator(blsVK, schnorrVK, sig, commission);
+        vm.startPrank(_validator);
+        vm.expectEmit(false, false, false, true, address(_stakeTable));
+        emit S.ValidatorRegistered(_validator, blsVK, schnorrVK, _commission);
+        _stakeTable.registerValidator(blsVK, schnorrVK, sig, _commission);
         vm.stopPrank();
     }
 
@@ -113,7 +116,7 @@ contract StakeTable_register_Test is LightClientCommonTest {
             NAME,
             SYMBOL
         );
-        ERC1967Proxy proxy = new ERC1967Proxy(address(tokenImpl), initData);
+        proxy = new ERC1967Proxy(address(tokenImpl), initData);
         token = EspToken(payable(address(proxy)));
 
         // transfer minted coin
@@ -1253,20 +1256,20 @@ contract StakeTableFieldsReorderedTest is Test {
     LightClient public lightClient; //re-ordered field
 }
 
-contract StakeTableUpgradeTest is Test {
+contract StakeTableUpgradeV2Test is Test {
     StakeTable_register_Test stakeTableRegisterTest;
 
-    function setUp() public {
+    function setUp() public virtual {
         stakeTableRegisterTest = new StakeTable_register_Test();
         stakeTableRegisterTest.setUp();
     }
 
-    function test_UpgradeSucceeds() public {
-        (uint8 majorVersion,,) = S(stakeTableRegisterTest.stakeTable()).getVersion();
+    function test_UpgradeToV2Test_Succeeds() public {
+        (uint8 majorVersion,,) = S(address(stakeTableRegisterTest.proxy())).getVersion();
         assertEq(majorVersion, 1);
 
         vm.startPrank(stakeTableRegisterTest.admin());
-        address proxy = address(stakeTableRegisterTest.stakeTable());
+        address proxy = address(stakeTableRegisterTest.proxy());
         S(proxy).upgradeToAndCall(address(new StakeTableV2Test()), "");
 
         (uint8 majorVersionNew,,) = StakeTableV2Test(proxy).getVersion();
@@ -1299,7 +1302,7 @@ contract StakeTableUpgradeTest is Test {
         vm.stopPrank();
     }
 
-    function test_InitializeFunction_IsProtected() public {
+    function test_InitializeFunction_IsProtected() public virtual {
         S proxy = stakeTableRegisterTest.stakeTable();
         vm.expectRevert(Initializable.InvalidInitialization.selector);
         proxy.initialize(address(0), address(0), 0, address(0));
@@ -1833,6 +1836,330 @@ contract StakeTableTimelockTest is Test {
         vm.startPrank(executors[0]);
         vm.expectRevert();
         timelockController.execute(address(proxyAddress), 0, invalidData, bytes32(0), bytes32(0));
+        vm.stopPrank();
+    }
+}
+
+contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
+    S public stakeTable;
+    address public pauser = makeAddr("pauser");
+
+    function setUp() public override {
+        super.setUp();
+        stakeTable = S(address(stakeTableRegisterTest.proxy()));
+        (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion) = stakeTable.getVersion();
+        assertEq(majorVersion, 1);
+        assertEq(minorVersion, 0);
+        assertEq(patchVersion, 0);
+    }
+
+    function test_UpgradeToV2_Succeeds() public {
+        (uint8 majorVersion,,) = S(address(stakeTableRegisterTest.proxy())).getVersion();
+        assertEq(majorVersion, 1);
+
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = S(address(stakeTableRegisterTest.proxy()));
+        address admin = proxy.owner();
+        bytes memory initData =
+            abi.encodeWithSelector(StakeTableV2.initializeV2.selector, pauser, admin);
+        proxy.upgradeToAndCall(address(new StakeTableV2()), initData);
+
+        (uint8 majorVersionNew,,) = StakeTableV2(address(proxy)).getVersion();
+        assertEq(majorVersionNew, 2);
+
+        assertNotEq(majorVersion, majorVersionNew);
+        vm.stopPrank();
+    }
+
+    function test_InitializeFunction_IsProtected_InV2() public {
+        test_UpgradeToV2_Succeeds();
+        address proxyAddress = address(stakeTableRegisterTest.proxy());
+        StakeTableV2 stakeTableV2 = StakeTableV2(proxyAddress);
+        (uint8 majorVersionNew,,) = stakeTableV2.getVersion();
+        assertEq(majorVersionNew, 2);
+
+        address admin = stakeTableV2.owner();
+        vm.expectRevert();
+        stakeTableV2.initializeV2(pauser, admin);
+    }
+
+    function test_StorageLayout_IsCompatible_V1V2() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "StakeTable";
+        cmds[3] = "StakeTableV2";
+
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+
+        assertEq(result, "true");
+    }
+
+    function test_StorageLayout_IsIncompatibleIfFieldIsMissingV2() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "StakeTableV2";
+        cmds[3] = "StakeTableMissingFieldTest";
+
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+
+        assertEq(result, "false");
+    }
+
+    function test_StorageLayout_IsIncompatibleIfFieldsAreReorderedV2() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "StakeTableV2";
+        cmds[3] = "StakeTableFieldsReorderedTest";
+
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+
+        assertEq(result, "false");
+    }
+
+    function test_StorageLayout_IsIncompatibleBetweenDiffContractsV2() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "StakeTableV2";
+        cmds[3] = "LightClient";
+
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+
+        assertEq(result, "false");
+    }
+
+    function test_RevertWhen_DeprecatedFunctionsAreCalledV2() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        address proxyAddress = address(stakeTableRegisterTest.proxy());
+
+        StakeTableV2 newImpl = new StakeTableV2();
+        bytes memory initData = "";
+        S(proxyAddress).upgradeToAndCall(address(newImpl), initData);
+        vm.stopPrank();
+
+        StakeTableV2 proxy = StakeTableV2(proxyAddress);
+
+        vm.expectRevert(StakeTableV2.DeprecatedFunction.selector);
+        proxy.registerValidator(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), 0);
+
+        vm.expectRevert(StakeTableV2.DeprecatedFunction.selector);
+        proxy.updateConsensusKeys(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1());
+    }
+
+    // pausability tests
+    function test_addingPauserAndPausingContractSucceeds() public {
+        test_UpgradeToV2_Succeeds();
+        StakeTableV2 proxy = StakeTableV2(address(stakeTableRegisterTest.proxy()));
+        (uint8 majorVersion,,) = proxy.getVersion();
+        assertEq(majorVersion, 2);
+
+        assertEq(proxy.hasRole(proxy.PAUSER_ROLE(), pauser), true);
+
+        vm.startPrank(pauser);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit PausableUpgradeable.Paused(pauser);
+        proxy.pause();
+        assertTrue(proxy.paused());
+
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit PausableUpgradeable.Unpaused(pauser);
+        proxy.unpause();
+        assertFalse(proxy.paused());
+        vm.stopPrank();
+
+        address admin = proxy.owner();
+        address newPauser = makeAddr("newPauser");
+        vm.startPrank(admin);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit IAccessControl.RoleGranted(proxy.PAUSER_ROLE(), pauser, admin);
+        proxy.grantRole(proxy.PAUSER_ROLE(), newPauser);
+        vm.stopPrank();
+
+        vm.startPrank(newPauser);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit PausableUpgradeable.Paused(newPauser);
+        proxy.pause();
+
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit PausableUpgradeable.Unpaused(newPauser);
+        proxy.unpause();
+        vm.stopPrank();
+    }
+
+    function test_revertWhen_InvalidAccountTriesToPauseOrUnpause() public {
+        test_addingPauserAndPausingContractSucceeds();
+        StakeTableV2 proxy = StakeTableV2(address(stakeTableRegisterTest.proxy()));
+        (uint8 majorVersion,,) = proxy.getVersion();
+        assertEq(majorVersion, 2);
+
+        address admin = proxy.owner();
+        vm.startPrank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, admin, proxy.PAUSER_ROLE()
+            )
+        );
+        proxy.pause();
+        vm.stopPrank();
+
+        address randomAccount = makeAddr("randomAccount");
+        vm.startPrank(randomAccount);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                randomAccount,
+                proxy.PAUSER_ROLE()
+            )
+        );
+        proxy.pause();
+        vm.stopPrank();
+
+        // tests that a paused contract can't be unpaused by an invalid account
+        vm.prank(pauser);
+        proxy.pause();
+        vm.startPrank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, admin, proxy.PAUSER_ROLE()
+            )
+        );
+        proxy.unpause();
+        vm.stopPrank();
+    }
+
+    function test_expectRevert_WhenCallingPausedFunctions() public {
+        test_addingPauserAndPausingContractSucceeds();
+        StakeTableV2 proxy = StakeTableV2(address(stakeTableRegisterTest.proxy()));
+        (uint8 majorVersion,,) = proxy.getVersion();
+        assertEq(majorVersion, 2);
+
+        vm.startPrank(pauser);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit PausableUpgradeable.Paused(pauser);
+        proxy.pause();
+        vm.stopPrank();
+
+        address user = makeAddr("user");
+        vm.startPrank(user);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        proxy.delegate(makeAddr("validator"), 100);
+
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        proxy.undelegate(makeAddr("validator"), 100);
+
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        proxy.claimValidatorExit(makeAddr("validator"));
+
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        proxy.claimWithdrawal(makeAddr("validator"));
+
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        proxy.deregisterValidator();
+
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        proxy.updateConsensusKeysV2(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), "");
+
+        vm.expectRevert(StakeTableV2.DeprecatedFunction.selector);
+        proxy.registerValidator(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), 0);
+
+        vm.expectRevert(StakeTableV2.DeprecatedFunction.selector);
+        proxy.updateConsensusKeys(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1());
+
+        vm.stopPrank();
+
+        // unpause and see that the functions are callable
+        vm.startPrank(pauser);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit PausableUpgradeable.Unpaused(pauser);
+        proxy.unpause();
+        vm.stopPrank();
+
+        vm.startPrank(user);
+        //it will revert because the validator doesn't exist but that proves that the functions are
+        // callable
+        vm.expectRevert(S.ValidatorInactive.selector);
+        proxy.delegate(makeAddr("validator"), 100);
+
+        vm.expectRevert(S.ValidatorInactive.selector);
+        proxy.undelegate(makeAddr("validator"), 100);
+
+        vm.expectRevert(S.ValidatorNotExited.selector);
+        proxy.claimValidatorExit(makeAddr("validator"));
+
+        vm.expectRevert(S.NothingToWithdraw.selector);
+        proxy.claimWithdrawal(makeAddr("validator"));
+
+        vm.expectRevert(S.ValidatorInactive.selector);
+        proxy.deregisterValidator();
+
+        vm.expectRevert(S.ValidatorInactive.selector);
+        proxy.updateConsensusKeysV2(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), "");
+
+        vm.expectRevert(S.InvalidSchnorrVK.selector);
+        proxy.registerValidatorV2(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), "", 0);
+
+        vm.stopPrank();
+    }
+
+    function test_UnpausableFunctionsStillWorkWhenContractIsPaused() public {
+        test_addingPauserAndPausingContractSucceeds();
+        StakeTableV2 proxy = StakeTableV2(address(stakeTableRegisterTest.proxy()));
+        (uint8 majorVersion,,) = proxy.getVersion();
+        assertEq(majorVersion, 2);
+
+        vm.startPrank(pauser);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit PausableUpgradeable.Paused(pauser);
+        proxy.pause();
+        vm.stopPrank();
+
+        // it reverts because the schnorrkey is invalid but it's still able to call that function
+        // as it's not paused even though the contract is paused
+        address validator = makeAddr("validator");
+        vm.startPrank(validator);
+        vm.expectRevert(S.InvalidSchnorrVK.selector);
+        proxy.registerValidatorV2(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), "", 0);
+        vm.stopPrank();
+    }
+
+    function test_OnlyAdminCanRevokePauserRole() public {
+        test_addingPauserAndPausingContractSucceeds();
+        StakeTableV2 proxy = StakeTableV2(address(stakeTableRegisterTest.proxy()));
+        (uint8 majorVersion,,) = proxy.getVersion();
+        assertEq(majorVersion, 2);
+
+        address admin = proxy.owner();
+        vm.startPrank(admin);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit IAccessControl.RoleRevoked(proxy.PAUSER_ROLE(), pauser, admin);
+        proxy.revokeRole(proxy.PAUSER_ROLE(), pauser);
+        vm.stopPrank();
+
+        vm.startPrank(pauser);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                pauser,
+                proxy.PAUSER_ROLE()
+            )
+        );
+        proxy.pause();
+        vm.stopPrank();
+
+        vm.startPrank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, admin, proxy.PAUSER_ROLE()
+            )
+        );
+        proxy.pause();
         vm.stopPrank();
     }
 }

@@ -44,6 +44,7 @@ use hotshot_types::{
     vote::{Certificate, HasViewNumber},
 };
 use hotshot_utils::anytrace::*;
+use time::OffsetDateTime;
 use tokio::time::timeout;
 use tracing::instrument;
 use vbs::version::StaticVersionType;
@@ -316,6 +317,27 @@ impl<TYPES: NodeType + Default> Default for LeafChainTraversalOutcome<TYPES> {
     }
 }
 
+async fn update_metrics<TYPES: NodeType>(
+    consensus: &OuterConsensus<TYPES>,
+    leaf_views: &[LeafInfo<TYPES>],
+) {
+    let consensus_reader = consensus.read().await;
+    let now = OffsetDateTime::now_utc().unix_timestamp() as u64;
+
+    for leaf_view in leaf_views {
+        let proposal_timestamp = leaf_view.leaf.block_header().timestamp();
+
+        let Some(proposal_to_decide_time) = now.checked_sub(proposal_timestamp) else {
+            tracing::error!("Failed to calculate proposal to decide time: {proposal_timestamp}");
+            continue;
+        };
+        consensus_reader
+            .metrics
+            .proposal_to_decide_time
+            .add_point(proposal_to_decide_time as f64);
+    }
+}
+
 /// calculate the new decided leaf chain based on the rules of HotStuff 2
 ///
 /// # Panics
@@ -426,6 +448,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
             )
             .await;
         }
+        update_metrics(&consensus, &res.leaf_views).await;
     }
 
     res

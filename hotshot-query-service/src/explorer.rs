@@ -22,7 +22,7 @@ use std::{fmt::Display, num::NonZeroUsize, path::Path};
 pub use currency::*;
 pub use data_source::*;
 use futures::FutureExt;
-use hotshot_types::traits::node_implementation::NodeType;
+use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
 pub use monetary_value::*;
 pub use query_data::*;
 use serde::{Deserialize, Serialize};
@@ -31,11 +31,7 @@ pub use traits::*;
 use vbs::version::StaticVersionType;
 
 use self::errors::InvalidLimit;
-use crate::{
-    api::load_api,
-    availability::{QueryableHeader, QueryablePayload},
-    Header, Payload, Transaction,
-};
+use crate::{api::load_api, availability::QueryablePayload, Header, Payload, Transaction};
 
 /// [Error] is an enum that represents the various errors that can be returned
 /// from the Explorer API.
@@ -242,7 +238,7 @@ pub fn define_api<State, Types: NodeType, Ver: StaticVersionType + 'static>(
 ) -> Result<Api<State, Error, Ver>, ApiError>
 where
     State: 'static + Send + Sync + ReadState,
-    Header<Types>: ExplorerHeader<Types> + QueryableHeader<Types>,
+    Header<Types>: ExplorerHeader<Types> + BlockHeader<Types>,
     Transaction<Types>: ExplorerTransaction,
     Payload<Types>: QueryablePayload<Types>,
     <State as ReadState>::State: ExplorerDataSource<Types> + Send + Sync,
