@@ -899,16 +899,10 @@ async fn upgrade_stake_table_v2(
         assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
         // get pauser role
         let pauser_role = proxy_as_v2.PAUSER_ROLE().call().await?._0;
-        assert_eq!(
-            proxy_as_v2.hasRole(pauser_role, pauser).call().await?._0,
-            true
-        );
+        assert!(proxy_as_v2.hasRole(pauser_role, pauser).call().await?._0,);
         // get admin role
         let admin_role = proxy_as_v2.DEFAULT_ADMIN_ROLE().call().await?._0;
-        assert_eq!(
-            proxy_as_v2.hasRole(admin_role, admin).call().await?._0,
-            true
-        );
+        assert!(proxy_as_v2.hasRole(admin_role, admin).call().await?._0,);
         tracing::info!(%v2_addr, "StakeTable successfully upgraded to")
     } else {
         anyhow::bail!("StakeTable upgrade failed: {:?}", receipt);
