@@ -168,19 +168,19 @@ struct Options {
     token_symbol: String,
 
     /// The admin of the timelock
-    #[clap(long, env = "TIMELOCK_ADMIN")]
+    #[clap(long, env = "ESPRESSO_TIMELOCK_ADMIN")]
     timelock_admin: Option<Address>,
 
     /// The delay of the timelock
-    #[clap(long, env = "TIMELOCK_DELAY")]
+    #[clap(long, env = "ESPRESSO_TIMELOCK_DELAY")]
     timelock_delay: Option<u64>,
 
     /// The executor(s) of the timelock
-    #[clap(long, env = "TIMELOCK_EXECUTORS")]
+    #[clap(long, env = "ESPRESSO_TIMELOCK_EXECUTORS")]
     timelock_executors: Option<Vec<Address>>,
 
     /// The proposer(s) of the timelock
-    #[clap(long, env = "TIMELOCK_PROPOSERS")]
+    #[clap(long, env = "ESPRESSO_TIMELOCK_PROPOSERS")]
     timelock_proposers: Option<Vec<Address>>,
 
     #[clap(flatten)]

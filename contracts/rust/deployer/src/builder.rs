@@ -203,8 +203,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     provider,
                     contracts,
                     self.timelock_delay.unwrap(),
-                    self.timelock_proposers.unwrap(),
-                    self.timelock_executors.unwrap(),
+                    self.timelock_proposers.clone().unwrap(),
+                    self.timelock_executors.clone().unwrap(),
                     self.timelock_admin.unwrap(),
                 )
                 .await?;
