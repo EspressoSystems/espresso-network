@@ -394,17 +394,19 @@ where
             ));
         };
 
-        let add_epoch_root_updater = {
-            let membership_read = self.membership.read().await;
-            membership_read
-                .add_epoch_root(epoch, root_leaf.block_header().clone())
-                .await
-        };
-
-        if let Ok(Some(updater)) = add_epoch_root_updater {
-            let mut membership_write = self.membership.write().await;
-            updater(&mut *(membership_write));
-        };
+        Membership::add_epoch_root(
+            Arc::clone(&self.membership),
+            epoch,
+            root_leaf.block_header().clone(),
+        )
+        .await
+        .map_err(|e| {
+            anytrace::error!(
+                "Failed to add epoch root for epoch {:?} to membership: {}",
+                epoch,
+                e
+            )
+        })?;
 
         Ok(root_leaf)
     }

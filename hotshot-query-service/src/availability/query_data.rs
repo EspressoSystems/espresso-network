@@ -10,7 +10,7 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use std::fmt::Debug;
+use std::{collections::HashMap, fmt::Debug};
 
 use committable::{Commitment, Committable};
 use derive_more::derive::From;
@@ -49,7 +49,7 @@ pub type TransactionInclusionProof<Types> =
 pub type Timestamp = time::OffsetDateTime;
 
 pub trait QueryableHeader<Types: NodeType>: BlockHeader<Types> {
-    fn timestamp(&self) -> u64;
+    fn namespace_size(&self, id: u32, payload_size: usize) -> u64;
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -451,6 +451,17 @@ impl<Types: NodeType> BlockQueryData<Types> {
     pub fn num_transactions(&self) -> u64 {
         self.num_transactions
     }
+
+    pub fn namespace_info(&self) -> HashMap<u32, NamespaceInfo>
+    where
+        Payload<Types>: QueryablePayload<Types>,
+    {
+        let mut map = HashMap::<u32, NamespaceInfo>::new();
+        for tx in self.payload.iter(self.header.metadata()) {
+            map.entry(tx.namespace).or_default().num_transactions += 1;
+        }
+        map
+    }
 }
 
 impl<Types: NodeType> BlockQueryData<Types>
@@ -788,6 +799,7 @@ pub struct BlockSummaryQueryData<Types: NodeType> {
     pub(crate) hash: BlockHash<Types>,
     pub(crate) size: u64,
     pub(crate) num_transactions: u64,
+    pub(crate) namespaces: HashMap<u32, NamespaceInfo>,
 }
 
 // Add some basic getters to the BlockSummaryQueryData type.
@@ -806,6 +818,10 @@ impl<Types: NodeType> BlockSummaryQueryData<Types> {
 
     pub fn num_transactions(&self) -> u64 {
         self.num_transactions
+    }
+
+    pub fn namespaces(&self) -> &HashMap<u32, NamespaceInfo> {
+        &self.namespaces
     }
 }
 
@@ -835,6 +851,7 @@ where
 {
     fn from(value: BlockQueryData<Types>) -> Self {
         BlockSummaryQueryData {
+            namespaces: value.namespace_info(),
             header: value.header,
             hash: value.hash,
             size: value.size,
@@ -843,11 +860,17 @@ where
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct NamespaceInfo {
+    pub num_transactions: u64,
+    pub size: u64,
+}
+
 /// A summary of a payload without all the data.
 ///
 /// This type is useful when you only want information about a payload, such as its size or
 /// transaction count, but you don't want to load the entire payload, which might be very large.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PayloadMetadata<Types>
 where
     Types: NodeType,
@@ -857,6 +880,7 @@ where
     pub hash: VidCommitment,
     pub size: u64,
     pub num_transactions: u64,
+    pub namespaces: HashMap<u32, NamespaceInfo>,
 }
 
 impl<Types> HeightIndexed for PayloadMetadata<Types>
@@ -871,6 +895,7 @@ where
 impl<Types> From<BlockQueryData<Types>> for PayloadMetadata<Types>
 where
     Types: NodeType,
+    Payload<Types>: QueryablePayload<Types>,
 {
     fn from(block: BlockQueryData<Types>) -> Self {
         Self {
@@ -879,6 +904,7 @@ where
             hash: block.payload_hash(),
             size: block.size(),
             num_transactions: block.num_transactions(),
+            namespaces: block.namespace_info(),
         }
     }
 }

@@ -6,13 +6,13 @@ use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
 use hotshot_types::{
-    data::{VidCommitment, ViewNumber},
+    data::{vid_commitment, VidCommitment, ViewNumber},
     light_client::LightClientState,
     traits::{
-        block_contents::{BlockHeader, BuilderFee},
-        node_implementation::{ConsensusTime, NodeType},
+        block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
+        node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::BuilderSignatureKey,
-        BlockPayload, ValidatedState as _,
+        BlockPayload, EncodeBytes, ValidatedState as _,
     },
     utils::BuilderCommitment,
 };
@@ -39,8 +39,8 @@ use crate::{
         impls::reward::{find_validator_info, first_two_epochs},
     },
     v0_1, v0_2, v0_3, BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
-    FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsTable, SeqTypes,
-    UpgradeType,
+    FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable,
+    PayloadByteLen, SeqTypes, UpgradeType,
 };
 
 impl v0_1::Header {
@@ -568,7 +568,7 @@ impl Header {
         &mut *field_mut!(self.height)
     }
 
-    pub fn timestamp(&self) -> u64 {
+    pub fn timestamp_internal(&self) -> u64 {
         *field!(self.timestamp)
     }
 
@@ -884,12 +884,23 @@ impl BlockHeader<SeqTypes> for Header {
         )?)
     }
 
-    fn genesis(
+    fn genesis<V: Versions>(
         instance_state: &NodeState,
-        payload_commitment: VidCommitment,
-        builder_commitment: BuilderCommitment,
-        ns_table: <<SeqTypes as NodeType>::BlockPayload as BlockPayload<SeqTypes>>::Metadata,
+        payload: <SeqTypes as NodeType>::BlockPayload,
+        metadata: &<<SeqTypes as NodeType>::BlockPayload as BlockPayload<SeqTypes>>::Metadata,
     ) -> Self {
+        let payload_bytes = payload.encode();
+        let builder_commitment = payload.builder_commitment(metadata);
+
+        let vid_commitment_version = instance_state.genesis_version;
+
+        let payload_commitment = vid_commitment::<V>(
+            &payload_bytes,
+            &metadata.encode(),
+            GENESIS_VID_NUM_STORAGE_NODES,
+            vid_commitment_version,
+        );
+
         let ValidatedState {
             fee_merkle_tree,
             block_merkle_tree,
@@ -913,7 +924,7 @@ impl BlockHeader<SeqTypes> for Header {
             instance_state.l1_genesis,
             payload_commitment,
             builder_commitment.clone(),
-            ns_table.clone(),
+            metadata.clone(),
             fee_merkle_tree_root,
             block_merkle_tree_root,
             reward_merkle_tree_root,
@@ -921,6 +932,10 @@ impl BlockHeader<SeqTypes> for Header {
             vec![],
             instance_state.current_version,
         )
+    }
+
+    fn timestamp(&self) -> u64 {
+        self.timestamp_internal()
     }
 
     fn block_number(&self) -> u64 {
@@ -961,8 +976,11 @@ impl BlockHeader<SeqTypes> for Header {
 }
 
 impl QueryableHeader<SeqTypes> for Header {
-    fn timestamp(&self) -> u64 {
-        self.timestamp()
+    fn namespace_size(&self, id: u32, payload_size: usize) -> u64 {
+        self.ns_table()
+            .ns_range(&NsIndex(id as usize), &PayloadByteLen(payload_size))
+            .byte_len()
+            .0 as u64
     }
 }
 

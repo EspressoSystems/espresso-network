@@ -397,6 +397,12 @@ pub struct ConsensusMetricsValue {
     pub number_of_empty_blocks_proposed: Box<dyn Counter>,
     /// Number of events in the hotshot event queue
     pub internal_event_queue_len: Box<dyn Gauge>,
+    /// Time from proposal creation to decide time
+    pub proposal_to_decide_time: Box<dyn Histogram>,
+    /// Time from proposal received to proposal creation
+    pub previous_proposal_to_proposal_time: Box<dyn Histogram>,
+    /// Finalized bytes per view
+    pub finalized_bytes: Box<dyn Histogram>,
 }
 
 impl ConsensusMetricsValue {
@@ -428,6 +434,11 @@ impl ConsensusMetricsValue {
                 .create_counter(String::from("number_of_empty_blocks_proposed"), None),
             internal_event_queue_len: metrics
                 .create_gauge(String::from("internal_event_queue_len"), None),
+            proposal_to_decide_time: metrics
+                .create_histogram(String::from("proposal_to_decide_time"), None),
+            previous_proposal_to_proposal_time: metrics
+                .create_histogram(String::from("previous_proposal_to_proposal_time"), None),
+            finalized_bytes: metrics.create_histogram(String::from("finalized_bytes"), None),
         }
     }
 }
@@ -651,9 +662,9 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let parent_vid = self
             .vid_shares()
             .get(&parent_view_number)
-            .and_then(|key_map| key_map.get(public_key).cloned())
-            .and_then(|epoch_map| epoch_map.get(&parent_epoch).cloned())
-            .map(|prop| prop.data);
+            .and_then(|key_map| key_map.get(public_key))
+            .and_then(|epoch_map| epoch_map.get(&parent_epoch))
+            .map(|prop| prop.data.clone());
 
         let state_cert = if parent_leaf.with_epoch
             && is_epoch_root(parent_leaf.block_header().block_number(), self.epoch_height)
@@ -1088,7 +1099,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         self.saved_da_certs
             .retain(|view_number, _| *view_number >= old_anchor_view);
         self.validated_state_map
-            .range(old_anchor_view..gc_view)
+            .range(..gc_view)
             .filter_map(|(_view_number, view)| view.leaf_commitment())
             .for_each(|leaf| {
                 self.saved_leaves.remove(&leaf);

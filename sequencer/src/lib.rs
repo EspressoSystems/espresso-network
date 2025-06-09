@@ -546,6 +546,7 @@ where
         epoch_height: Some(epoch_height),
         state_catchup: Arc::new(state_catchup_providers.clone()),
         coordinator: coordinator.clone(),
+        genesis_version: genesis.genesis_version,
     };
 
     // Initialize the Libp2p network
@@ -1251,6 +1252,7 @@ pub mod testing {
                 Arc::new(catchup_providers.clone()),
                 V::Base::VERSION,
                 coordinator.clone(),
+                Version { major: 0, minor: 1 },
             )
             .with_current_version(V::Base::version())
             .with_genesis(state)
@@ -1338,11 +1340,8 @@ mod test {
     use hotshot::types::EventType::Decide;
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_types::{
-        data::vid_commitment,
         event::LeafInfo,
-        traits::block_contents::{
-            BlockHeader, BlockPayload, EncodeBytes, GENESIS_VID_NUM_STORAGE_NODES,
-        },
+        traits::block_contents::{BlockHeader, BlockPayload},
     };
     use sequencer_utils::test_utils::setup_test;
     use testing::{wait_for_decide_on_handle, TestConfigBuilder};
@@ -1424,23 +1423,9 @@ mod test {
                 Payload::from_transactions([], &ValidatedState::default(), &NodeState::mock())
                     .await
                     .unwrap();
-            let genesis_commitment = {
-                // TODO we should not need to collect payload bytes just to compute vid_commitment
-                let payload_bytes = genesis_payload.encode();
-                vid_commitment::<TestVersions>(
-                    &payload_bytes,
-                    &genesis_ns_table.encode(),
-                    GENESIS_VID_NUM_STORAGE_NODES,
-                    <TestVersions as Versions>::Base::VERSION,
-                )
-            };
+
             let genesis_state = NodeState::mock();
-            Header::genesis(
-                &genesis_state,
-                genesis_commitment,
-                empty_builder_commitment(),
-                genesis_ns_table,
-            )
+            Header::genesis::<TestVersions>(&genesis_state, genesis_payload, &genesis_ns_table)
         };
 
         loop {

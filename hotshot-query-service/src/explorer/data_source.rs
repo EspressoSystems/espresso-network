@@ -11,7 +11,7 @@
 // see <https://www.gnu.org/licenses/>.
 
 use async_trait::async_trait;
-use hotshot_types::traits::node_implementation::NodeType;
+use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
 use tagged_base64::TaggedBase64;
 
 use super::{
@@ -24,10 +24,7 @@ use super::{
     },
     traits::{ExplorerHeader, ExplorerTransaction},
 };
-use crate::{
-    availability::{QueryableHeader, QueryablePayload},
-    Header, Payload, Transaction,
-};
+use crate::{availability::QueryablePayload, Header, Payload, Transaction};
 
 /// An interface for querying Data and Statistics from the HotShot Blockchain.
 ///
@@ -42,7 +39,7 @@ use crate::{
 pub trait ExplorerDataSource<Types>
 where
     Types: NodeType,
-    Header<Types>: ExplorerHeader<Types> + QueryableHeader<Types>,
+    Header<Types>: ExplorerHeader<Types> + BlockHeader<Types>,
     Transaction<Types>: ExplorerTransaction,
     Payload<Types>: QueryablePayload<Types>,
 {

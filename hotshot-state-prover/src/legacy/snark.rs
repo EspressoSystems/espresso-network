@@ -1,3 +1,4 @@
+/// Legacy proof generation
 use alloy::primitives::U256;
 use ark_bn254::Bn254;
 use ark_ed_on_bn254::EdwardsConfig;
@@ -23,7 +24,7 @@ pub type Proof = jf_plonk::proof_system::structs::Proof<Bn254>;
 /// Universal SRS
 pub type UniversalSrs = jf_plonk::proof_system::structs::UniversalSrs<Bn254>;
 /// Public input to the light client state prover service
-pub type PublicInput = crate::circuit::GenericPublicInput<CircuitField>;
+pub type PublicInput = super::circuit::GenericPublicInput<CircuitField>;
 
 /// Given a SRS, returns the proving key and verifying key for state update
 /// # Errors
@@ -33,7 +34,7 @@ pub fn preprocess(
     srs: &UniversalSrs,
     stake_table_capacity: usize,
 ) -> Result<(ProvingKey, VerifyingKey), PlonkError> {
-    let (circuit, _) = crate::circuit::build_for_preprocessing::<CircuitField, EdwardsConfig>(
+    let (circuit, _) = super::circuit::build_for_preprocessing::<CircuitField, EdwardsConfig>(
         stake_table_capacity,
     )?;
     PlonkKzgSnark::preprocess(srs, &circuit)
@@ -67,7 +68,6 @@ pub fn generate_state_update_proof<STIter, R, BitIter, SigIter>(
     lightclient_state: &LightClientState,
     stake_table_state: &StakeTableState,
     stake_table_capacity: usize,
-    next_stake_table_state: &StakeTableState,
 ) -> Result<(Proof, PublicInput), PlonkError>
 where
     STIter: IntoIterator,
@@ -89,14 +89,13 @@ where
         }
     });
 
-    let (circuit, public_inputs) = crate::circuit::build(
+    let (circuit, public_inputs) = super::circuit::build(
         stake_table_entries,
         signer_bit_vec,
         signatures,
         lightclient_state,
         stake_table_state,
         stake_table_capacity,
-        next_stake_table_state,
     )?;
 
     // Sanity check
@@ -128,7 +127,7 @@ mod tests {
 
     use super::{generate_state_update_proof, preprocess, CircuitField, UniversalSrs};
     use crate::{
-        circuit::build_for_preprocessing,
+        legacy::circuit::build_for_preprocessing,
         test_utils::{key_pairs_for_testing, stake_table_for_testing},
     };
 
@@ -199,7 +198,6 @@ mod tests {
         let st_state = st
             .commitment(ST_CAPACITY)
             .expect("Failed to compute stake table commitment");
-        let next_st_state = st_state;
 
         let stake_table_entries = st
             .iter()
@@ -220,12 +218,8 @@ mod tests {
         let sigs: Vec<_> = schnorr_keys
             .iter()
             .map(|(key, _)| {
-                <SchnorrPubKey as StateSignatureKey>::sign_state(
-                    key,
-                    &lightclient_state,
-                    &next_st_state,
-                )
-                .unwrap()
+                <SchnorrPubKey as StateSignatureKey>::legacy_sign_state(key, &lightclient_state)
+                    .unwrap()
             })
             .collect();
 
@@ -267,7 +261,6 @@ mod tests {
             &lightclient_state,
             &st_state,
             ST_CAPACITY,
-            &next_st_state,
         );
         assert!(result.is_ok());
 
@@ -292,7 +285,6 @@ mod tests {
             &lightclient_state,
             &bad_st_state,
             ST_CAPACITY,
-            &next_st_state,
         );
         assert!(result.is_err());
     }
