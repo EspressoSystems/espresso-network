@@ -135,87 +135,6 @@ impl StakeTableEvents {
             keys_v2,
         }
     }
-
-    pub fn _sort_events(self) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
-        let mut events: Vec<(EventKey, StakeTableEvent)> = Vec::new();
-        let Self {
-            registrations,
-            registrations_v2,
-            deregistrations,
-            delegated,
-            undelegated,
-            keys,
-            keys_v2,
-        } = self;
-
-        for (registration, log) in registrations {
-            events.push((
-                (
-                    log.block_number.context("block number")?,
-                    log.log_index.context("log index")?,
-                ),
-                registration.into(),
-            ));
-        }
-        for (registration, log) in registrations_v2 {
-            events.push((
-                (
-                    log.block_number.context("block number")?,
-                    log.log_index.context("log index")?,
-                ),
-                registration.into(),
-            ));
-        }
-        for (dereg, log) in deregistrations {
-            events.push((
-                (
-                    log.block_number.context("block number")?,
-                    log.log_index.context("log index")?,
-                ),
-                dereg.into(),
-            ));
-        }
-        for (delegation, log) in delegated {
-            events.push((
-                (
-                    log.block_number.context("block number")?,
-                    log.log_index.context("log index")?,
-                ),
-                delegation.into(),
-            ));
-        }
-        for (undelegated, log) in undelegated {
-            events.push((
-                (
-                    log.block_number.context("block number")?,
-                    log.log_index.context("log index")?,
-                ),
-                undelegated.into(),
-            ));
-        }
-
-        for (update, log) in keys {
-            events.push((
-                (
-                    log.block_number.context("block number")?,
-                    log.log_index.context("log index")?,
-                ),
-                update.into(),
-            ));
-        }
-        for (update, log) in keys_v2 {
-            events.push((
-                (
-                    log.block_number.context("block number")?,
-                    log.log_index.context("log index")?,
-                ),
-                update.into(),
-            ));
-        }
-
-        events.sort_by_key(|(key, _)| *key);
-        Ok(events)
-    }
 }
 
 /// Extract all validators from L1 stake table events.
@@ -1550,7 +1469,8 @@ impl Membership<SeqTypes> for EpochCommittees {
         // then event.map(mmembership.apply).
         let events = fetcher.fetch(epoch, block_header).await?;
 
-        // TODO remove, will be replaced by apply. also, we should be able to query validators from state.
+        // TODO remove, will be replaced by apply. also, we should be able to
+        // query validators from state.
         let stake_tables =
             active_validator_set_from_l1_events(events.clone().into_iter().map(|e| e.data))
                 .map_err(|e| StakeTableFetchError::StakeTableConstructionError)?;
