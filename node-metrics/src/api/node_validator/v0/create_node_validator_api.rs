@@ -7,6 +7,7 @@ use futures::{
     Sink, SinkExt,
 };
 use hotshot_types::utils::epoch_from_block_number;
+use indexmap::IndexMap;
 use tokio::{spawn, task::JoinHandle};
 use url::Url;
 
@@ -14,9 +15,10 @@ use super::{
     get_config_stake_table_from_sequencer, LeafAndBlock, ProcessNodeIdentityUrlStreamTask,
 };
 use crate::{
-    api::node_validator::v0::get_node_stake_table_from_sequencer,
+    api::node_validator::v0::{
+        get_node_stake_table_from_sequencer, get_node_validators_from_sequencer,
+    },
     service::{
-        client_id::ClientId,
         client_message::InternalClientMessage,
         client_state::{
             ClientThreadState, InternalClientMessageProcessingTask,
@@ -49,6 +51,7 @@ pub struct NodeValidatorConfig {
 #[derive(Debug)]
 pub enum CreateNodeValidatorProcessingError {
     FailedToGetStakeTable(hotshot_query_service::Error),
+    FailedToGetValidators(hotshot_query_service::Error),
 }
 
 /// [SubmitPublicUrlsToScrapeTask] is a task that is capable of submitting
@@ -110,13 +113,7 @@ pub async fn create_node_validator_processing(
     internal_client_message_receiver: Receiver<InternalClientMessage<Sender<ServerMessage>>>,
     leaf_and_block_pair_receiver: Receiver<LeafAndBlock<SeqTypes>>,
 ) -> Result<NodeValidatorAPI<Sender<Url>>, CreateNodeValidatorProcessingError> {
-    let client_thread_state = ClientThreadState::<Sender<ServerMessage>>::new(
-        Default::default(),
-        Default::default(),
-        Default::default(),
-        Default::default(),
-        ClientId::from_count(1),
-    );
+    let client_thread_state: ClientThreadState<Sender<ServerMessage>> = Default::default();
 
     let hotshot_client = surf_disco::Client::new(config.stake_table_url_base.clone());
 
@@ -124,6 +121,7 @@ pub async fn create_node_validator_processing(
         .await
         .map_err(CreateNodeValidatorProcessingError::FailedToGetStakeTable)?;
     let mut stake_table = hotshot_config.known_nodes_with_stake.clone();
+    let mut validator_map = IndexMap::new();
 
     if let (Some(epoch_starting_block), Some(num_blocks_per_epoch)) = (
         hotshot_config.epoch_start_block,
@@ -135,7 +133,7 @@ pub async fn create_node_validator_processing(
             num_blocks_per_epoch
         );
         let epoch = epoch_from_block_number(config.starting_block_height, num_blocks_per_epoch);
-        if epoch > 1 {
+        if config.starting_block_height >= epoch_starting_block {
             // Let's fetch our initial stake table that is not derived from the
             // initial configuration.
 
@@ -145,6 +143,11 @@ pub async fn create_node_validator_processing(
                     .map_err(CreateNodeValidatorProcessingError::FailedToGetStakeTable)?;
 
             stake_table = node_stake_table;
+
+            let validator_info = get_node_validators_from_sequencer(hotshot_client.clone(), epoch)
+                .await
+                .map_err(CreateNodeValidatorProcessingError::FailedToGetValidators)?;
+            validator_map = validator_info.clone();
         }
     } else {
         tracing::warn!(
@@ -152,7 +155,12 @@ pub async fn create_node_validator_processing(
         );
     }
 
-    let data_state = DataState::new(Default::default(), Default::default(), stake_table);
+    let data_state = DataState::new(
+        Default::default(),
+        Default::default(),
+        stake_table,
+        validator_map,
+    );
 
     let data_state = Arc::new(RwLock::new(data_state));
     let client_thread_state = Arc::new(RwLock::new(client_thread_state));

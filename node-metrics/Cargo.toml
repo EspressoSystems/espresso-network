@@ -12,6 +12,7 @@ testing = ["serde_json", "espresso-types/testing", "hotshot-query-service/testin
 node-metrics = { path = ".", features = [ "testing" ] }
 
 [dependencies]
+alloy = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
@@ -23,6 +24,8 @@ futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-example-types = { workspace = true }
 hotshot-query-service = { workspace = true }
+indexmap = { workspace = true }
+tokio = { workspace = true }
 
 # Dependencies for feature `testing`
 hotshot-types = { workspace = true }
@@ -33,7 +36,6 @@ serde_json = { version = "^1.0.113", optional = true }
 surf-disco = { workspace = true }
 tide-disco = { workspace = true }
 time = { workspace = true }
-tokio = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }

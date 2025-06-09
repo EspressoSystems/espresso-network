@@ -15,6 +15,14 @@ pub enum ClientMessage {
     RequestNodeIdentitySnapshot,
     RequestHistogramSnapshot,
     RequestVotersSnapshot,
+
+    // Added for Validators and Stake Tables support.
+    // These are explicitly added afterwards in order to preserve existing
+    // enumeration values.  This is done explicitly for backwards compatibility.
+    SubscribeStakeTables,
+    SubscribeValidators,
+    RequestValidatorsSnapshot,
+    RequestStakeTableSnapshot,
 }
 
 /// InternalClientMessage represents the message requests that the client can
@@ -71,6 +79,11 @@ mod tests {
             ClientMessage::RequestBlocksSnapshot,
             ClientMessage::RequestNodeIdentitySnapshot,
             ClientMessage::RequestHistogramSnapshot,
+            ClientMessage::RequestVotersSnapshot,
+            ClientMessage::SubscribeValidators,
+            ClientMessage::SubscribeStakeTables,
+            ClientMessage::RequestValidatorsSnapshot,
+            ClientMessage::RequestStakeTableSnapshot,
         ];
 
         for (l, r) in zip(messages.iter(), messages.iter()) {
@@ -96,6 +109,11 @@ mod tests {
             ClientMessage::RequestBlocksSnapshot,
             ClientMessage::RequestNodeIdentitySnapshot,
             ClientMessage::RequestHistogramSnapshot,
+            ClientMessage::RequestVotersSnapshot,
+            ClientMessage::SubscribeValidators,
+            ClientMessage::SubscribeStakeTables,
+            ClientMessage::RequestValidatorsSnapshot,
+            ClientMessage::RequestStakeTableSnapshot,
         ];
 
         for message in messages.iter() {
@@ -115,6 +133,11 @@ mod tests {
             ClientMessage::RequestBlocksSnapshot,
             ClientMessage::RequestNodeIdentitySnapshot,
             ClientMessage::RequestHistogramSnapshot,
+            ClientMessage::RequestVotersSnapshot,
+            ClientMessage::SubscribeValidators,
+            ClientMessage::SubscribeStakeTables,
+            ClientMessage::RequestValidatorsSnapshot,
+            ClientMessage::RequestStakeTableSnapshot,
         ];
 
         for message in messages.iter() {
@@ -133,6 +156,11 @@ mod tests {
             ClientMessage::RequestBlocksSnapshot,
             ClientMessage::RequestNodeIdentitySnapshot,
             ClientMessage::RequestHistogramSnapshot,
+            ClientMessage::RequestVotersSnapshot,
+            ClientMessage::SubscribeValidators,
+            ClientMessage::SubscribeStakeTables,
+            ClientMessage::RequestValidatorsSnapshot,
+            ClientMessage::RequestStakeTableSnapshot,
         ];
 
         for message in messages {
