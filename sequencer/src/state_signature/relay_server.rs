@@ -133,7 +133,6 @@ impl StateRelayServerState {
         self.thresholds
             .insert(first_epoch, one_honest_threshold(genesis_total_stake));
 
-        // let mut genesis_known_nodes = HashMap::<StateVerKey, U256>::new();
         for entry in genesis_stake_table.0 {
             self.genesis_known_nodes
                 .insert(entry.state_ver_key.clone(), entry.stake_table_entry.stake());

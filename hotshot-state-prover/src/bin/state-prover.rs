@@ -169,23 +169,27 @@ async fn main() {
 
     // validate that the light client contract is a proxy, panics otherwise
     config.validate_light_client_contract().await.unwrap();
-    let is_legacy = hotshot_state_prover::legacy::service::is_contract_legacy(
+    let is_legacy = match hotshot_state_prover::legacy::service::is_contract_legacy(
         &l1_provider,
         args.light_client_address,
     )
-    .await;
+    .await
+    {
+        Ok(is_legacy) => is_legacy,
+        Err(err) => {
+            tracing::error!("Error checking with the contract: {:?}", err);
+            return;
+        },
+    };
+    // This bind version doesn't represent anything now, but it's required by the service trait
+    let bind_version = StaticVersion::<0, 1> {};
 
     if args.daemon {
         // Launching the prover service daemon
         let result = if is_legacy {
-            hotshot_state_prover::legacy::service::run_prover_service(
-                config,
-                StaticVersion::<0, 1> {},
-            )
-            .await
+            hotshot_state_prover::legacy::service::run_prover_service(config, bind_version).await
         } else {
-            hotshot_state_prover::service::run_prover_service(config, StaticVersion::<0, 1> {})
-                .await
+            hotshot_state_prover::service::run_prover_service(config, bind_version).await
         };
         if let Err(err) = result {
             tracing::error!("Error running prover service: {:?}", err);
@@ -193,10 +197,9 @@ async fn main() {
     } else {
         // Run light client state update once
         let result = if is_legacy {
-            hotshot_state_prover::legacy::service::run_prover_once(config, StaticVersion::<0, 1> {})
-                .await
+            hotshot_state_prover::legacy::service::run_prover_once(config, bind_version).await
         } else {
-            hotshot_state_prover::service::run_prover_once(config, StaticVersion::<0, 1> {}).await
+            hotshot_state_prover::service::run_prover_once(config, bind_version).await
         };
         if let Err(err) = result {
             tracing::error!("Error running prover once: {:?}", err);

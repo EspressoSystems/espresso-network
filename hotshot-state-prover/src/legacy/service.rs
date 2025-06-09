@@ -101,11 +101,14 @@ pub async fn read_contract_state(
 }
 
 /// Check if the contract is a legacy contract. Returns true if the version check succeeds, false otherwise.
-pub async fn is_contract_legacy(provider: impl Provider, address: Address) -> bool {
+pub async fn is_contract_legacy(
+    provider: impl Provider,
+    address: Address,
+) -> Result<bool, ProverError> {
     let contract = LightClient::new(address, &provider);
     match contract.getVersion().call().await {
-        Ok(version) => version.majorVersion == 1,
-        Err(_) => false,
+        Ok(version) => Ok(version.majorVersion == 1),
+        Err(e) => Err(ProverError::ContractError(e.into())),
     }
 }
 

@@ -154,10 +154,6 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                     tracing::error!("Failed to sign new state");
                     return;
                 };
-                let Ok(legacy_signature) = self.legacy_sign_new_state(&state).await else {
-                    tracing::error!("Failed to sign new state for legacy light client");
-                    return;
-                };
 
                 if let Some(client) = &self.relay_server_client {
                     let request_body = StateSignatureRequestBody {
@@ -176,20 +172,27 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                         tracing::error!("Error posting signature to the relay server: {:?}", error);
                     }
 
-                    let request_body = StateSignatureRequestBody {
-                        key: self.ver_key.clone(),
-                        state,
-                        next_stake: self.voting_stake_table,
-                        signature: legacy_signature,
-                    };
-                    if let Err(error) = client
-                        .post::<()>("api/legacy-state")
-                        .body_binary(&request_body)
-                        .unwrap()
-                        .send()
-                        .await
-                    {
-                        tracing::error!("Error posting signature for legacy light client to the relay server: {:?}", error);
+                    if !leaf.with_epoch {
+                        // Before epoch upgrade, we need to sign the state for the legacy light client
+                        let Ok(legacy_signature) = self.legacy_sign_new_state(&state).await else {
+                            tracing::error!("Failed to sign new state for legacy light client");
+                            return;
+                        };
+                        let request_body = StateSignatureRequestBody {
+                            key: self.ver_key.clone(),
+                            state,
+                            next_stake: self.voting_stake_table,
+                            signature: legacy_signature,
+                        };
+                        if let Err(error) = client
+                            .post::<()>("api/legacy-state")
+                            .body_binary(&request_body)
+                            .unwrap()
+                            .send()
+                            .await
+                        {
+                            tracing::error!("Error posting signature for legacy light client to the relay server: {:?}", error);
+                        }
                     }
                 }
             },
