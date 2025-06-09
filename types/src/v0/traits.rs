@@ -40,9 +40,7 @@ use super::{
     impls::NodeState,
     utils::BackoffParams,
     v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment},
-    v0_3::{
-        EventKey, IndexedStake, OrderedValidators, StakeTableEvent, StakeTableEventType, Validator,
-    },
+    v0_3::{EventKey, IndexedStake, StakeTableEvent, StakeTableEventType, Validator, ValidatorMap},
 };
 use crate::{
     v0::impls::ValidatedState, v0_3::ChainConfig, BlockMerkleTree, Event, FeeAccount,
@@ -404,8 +402,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
 
     /// Store stake table at `epoch` in the persistence layer
-    async fn store_stake(&self, epoch: EpochNumber, stake: OrderedValidators)
-        -> anyhow::Result<()>;
+    async fn store_stake(&self, epoch: EpochNumber, stake: ValidatorMap) -> anyhow::Result<()>;
 
     async fn store_events(
         &self,

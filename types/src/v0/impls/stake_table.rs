@@ -45,9 +45,8 @@ use super::v0_3::DAMembers;
 use super::{
     traits::{MembershipPersistence, StateCatchup},
     v0_3::{
-        ChainConfig, EventKey, OrderedValidators, StakeTableEvent, StakeTableEventHandlerError,
-        StakeTableEventType, StakeTableFetchError, StakeTableFetcher, StakeTableUpdateTask,
-        Validator,
+        ChainConfig, EventKey, StakeTableEvent, StakeTableEventHandlerError, StakeTableEventType,
+        StakeTableFetchError, StakeTableFetcher, StakeTableUpdateTask, Validator, ValidatorMap,
     },
     Header, L1Client, Leaf2, PubKey, SeqTypes,
 };
@@ -223,7 +222,7 @@ impl StakeTableEvents {
 // V2 contract will not generate the V1 events after the upgrade to V2.
 pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
     events: I,
-) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+) -> anyhow::Result<ValidatorMap> {
     let mut validators = IndexMap::new();
     let mut bls_keys = HashSet::new();
     let mut schnorr_keys = HashSet::new();
@@ -498,7 +497,7 @@ pub(crate) fn select_active_validator_set(
 /// Extract the active validator set from the L1 stake table events.
 pub(crate) fn active_validator_set_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
     events: I,
-) -> anyhow::Result<OrderedValidators> {
+) -> anyhow::Result<ValidatorMap> {
     let mut validators = validators_from_l1_events(events)?;
     select_active_validator_set(&mut validators)?;
     Ok(validators)
@@ -828,7 +827,7 @@ impl StakeTableFetcher {
         &self,
         epoch: Epoch,
         header: Header,
-    ) -> Result<OrderedValidators, StakeTableFetchError> {
+    ) -> Result<ValidatorMap, StakeTableFetchError> {
         let chain_config = self.get_chain_config(&header).await?;
         // update chain config
         *self.chain_config.lock().await = chain_config;

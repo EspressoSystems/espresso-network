@@ -67,10 +67,10 @@ pub struct Delegator {
 }
 
 /// Validators mapped to `Address`s
-pub type OrderedValidators = IndexMap<Address, Validator<BLSPubKey>>;
+pub type ValidatorMap = IndexMap<Address, Validator<BLSPubKey>>;
 
 /// Type for holding result sets matching epochs to stake tables.
-pub type IndexedStake = (EpochNumber, OrderedValidators);
+pub type IndexedStake = (EpochNumber, ValidatorMap);
 
 #[derive(Debug, PartialEq, Eq, Error, derive_more::From)]
 /// Possible errors from fetching stake table from contract.
@@ -135,8 +135,6 @@ pub enum StakeTableEvent {
     KeyUpdate(ConsensusKeysUpdated),
     KeyUpdateV2(ConsensusKeysUpdatedV2),
 }
-
-type ValidatorMap = IndexMap<Address, Validator<BLSPubKey>>;
 
 #[derive(Error, Debug, derive_more::From)]
 pub enum StakeTableEventHandlerError {
