@@ -1045,7 +1045,7 @@ impl EpochCommittees {
     /// to be called before calling `self.stake()` so that
     /// `Self.stake_table` only needs to be updated once in a given
     /// life-cycle but may be read from many times.
-    fn update_stake_table(&mut self, epoch: EpochNumber, validators: ValidatorMap) {
+    fn _update_stake_table(&mut self, epoch: EpochNumber, validators: ValidatorMap) {
         let mut address_mapping = HashMap::new();
         // TODO figure out why, if we
         // really need this. `Validator` should hold all the info.
@@ -1217,8 +1217,9 @@ impl EpochCommittees {
             },
         };
 
+        // TODO think about persistence
         for (epoch, stake_table) in loaded_stake {
-            self.update_stake_table(epoch, stake_table);
+            self._update_stake_table(epoch, stake_table);
         }
     }
 
@@ -1465,8 +1466,6 @@ impl Membership<SeqTypes> for EpochCommittees {
 
         let fetcher = Arc::clone(&membership_reader.fetcher);
 
-        // TODO instead of getting back stake tables, get back events.
-        // then event.map(mmembership.apply).
         let events = fetcher.fetch(epoch, block_header).await?;
 
         // TODO remove, will be replaced by apply. also, we should be able to
@@ -1494,7 +1493,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         events
             .into_iter()
             .map(|event| membership_writer.apply_event(epoch, event));
-        membership_writer.update_stake_table(epoch, stake_tables);
+        // membership_writer.update_stake_table(epoch, stake_tables);
 
         Ok(())
     }
