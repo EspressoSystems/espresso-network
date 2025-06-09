@@ -210,9 +210,9 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
 
         let consensus_reader = consensus.read().await;
         let difficulty_level = if upgrade_lock.upgraded_drb_and_header(view_number).await {
-            consensus_reader.drb_difficulty
-        } else {
             consensus_reader.drb_upgrade_difficulty
+        } else {
+            consensus_reader.drb_difficulty
         };
 
         drop(consensus_reader);
