@@ -10,20 +10,22 @@ use hotshot_types::{
     traits::{
         election::Membership,
         node_implementation::{NodeType, Versions},
+        signature_key::SignatureKey,
     },
+    PeerConfig,
 };
 
-use super::static_committee::StaticCommittee;
-
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DummyCatchupCommittee<TYPES: NodeType, V: Versions> {
-    inner: StaticCommittee<TYPES>,
+pub struct DummyCatchupCommittee<TYPES: NodeType, V: Versions, InnerTypes: NodeType> {
+    inner: InnerTypes::Membership,
     epochs: HashSet<TYPES::Epoch>,
     drbs: HashSet<TYPES::Epoch>,
     _phantom: PhantomData<V>,
 }
 
-impl<TYPES: NodeType, V: Versions> DummyCatchupCommittee<TYPES, V> {
+impl<TYPES: NodeType, V: Versions, InnerTypes: NodeType>
+    DummyCatchupCommittee<TYPES, V, InnerTypes>
+{
     fn assert_has_stake_table(&self, epoch: Option<TYPES::Epoch>) {
         let Some(epoch) = epoch else {
             return;
@@ -42,14 +44,42 @@ impl<TYPES: NodeType, V: Versions> DummyCatchupCommittee<TYPES, V> {
             "Failed drb check for epoch {epoch}"
         );
     }
+
+    fn convert_peer_config<FromTypes, IntoTypes>(
+        peer_config: PeerConfig<FromTypes>,
+    ) -> PeerConfig<IntoTypes>
+    where
+        FromTypes: NodeType,
+        IntoTypes: NodeType,
+        <IntoTypes::SignatureKey as SignatureKey>::StakeTableEntry:
+            From<<FromTypes::SignatureKey as SignatureKey>::StakeTableEntry>,
+        IntoTypes::StateSignatureKey: From<FromTypes::StateSignatureKey>,
+    {
+        PeerConfig {
+            stake_table_entry: peer_config.stake_table_entry.into(),
+            state_ver_key: Into::<IntoTypes::StateSignatureKey>::into(peer_config.state_ver_key),
+        }
+    }
 }
 
-impl<TYPES: NodeType, V: Versions> Membership<TYPES> for DummyCatchupCommittee<TYPES, V>
+impl<TYPES: NodeType, V: Versions, InnerTypes: NodeType> Membership<TYPES>
+    for DummyCatchupCommittee<TYPES, V, InnerTypes>
 where
     TYPES::BlockHeader: Default,
     TYPES::InstanceState: Default,
+    InnerTypes::Epoch: From<TYPES::Epoch>,
+    TYPES::Epoch: From<InnerTypes::Epoch>,
+    InnerTypes::View: From<TYPES::View>,
+    TYPES::SignatureKey: From<InnerTypes::SignatureKey>,
+    for<'a> &'a InnerTypes::SignatureKey: From<&'a TYPES::SignatureKey>,
+    <InnerTypes::SignatureKey as SignatureKey>::StakeTableEntry:
+        From<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>,
+    InnerTypes::StateSignatureKey: From<TYPES::StateSignatureKey>,
+    <TYPES::SignatureKey as SignatureKey>::StakeTableEntry:
+        From<<InnerTypes::SignatureKey as SignatureKey>::StakeTableEntry>,
+    TYPES::StateSignatureKey: From<InnerTypes::StateSignatureKey>,
 {
-    type Error = hotshot_utils::anytrace::Error;
+    type Error = <InnerTypes::Membership as Membership<InnerTypes>>::Error;
 
     fn new(
         // Note: eligible_leaders is currently a haMemck because the DA leader == the quorum leader
@@ -58,7 +88,16 @@ where
         da_committee_members: Vec<hotshot_types::PeerConfig<TYPES>>,
     ) -> Self {
         Self {
-            inner: StaticCommittee::new(stake_committee_members, da_committee_members),
+            inner: Membership::new(
+                stake_committee_members
+                    .into_iter()
+                    .map(Self::convert_peer_config)
+                    .collect(),
+                da_committee_members
+                    .into_iter()
+                    .map(Self::convert_peer_config)
+                    .collect(),
+            ),
             epochs: HashSet::new(),
             drbs: HashSet::new(),
             _phantom: PhantomData,
@@ -67,12 +106,24 @@ where
 
     fn stake_table(&self, epoch: Option<TYPES::Epoch>) -> HSStakeTable<TYPES> {
         self.assert_has_stake_table(epoch);
-        self.inner.stake_table(epoch)
+        let peer_configs = self.inner.stake_table(epoch.map(Into::into)).0;
+        HSStakeTable(
+            peer_configs
+                .into_iter()
+                .map(Self::convert_peer_config)
+                .collect(),
+        )
     }
 
     fn da_stake_table(&self, epoch: Option<TYPES::Epoch>) -> HSStakeTable<TYPES> {
         self.assert_has_stake_table(epoch);
-        self.inner.da_stake_table(epoch)
+        let peer_configs = self.inner.da_stake_table(epoch.map(Into::into)).0;
+        HSStakeTable(
+            peer_configs
+                .into_iter()
+                .map(Self::convert_peer_config)
+                .collect(),
+        )
     }
 
     fn committee_members(
@@ -81,7 +132,11 @@ where
         epoch: Option<TYPES::Epoch>,
     ) -> std::collections::BTreeSet<TYPES::SignatureKey> {
         self.assert_has_stake_table(epoch);
-        self.inner.committee_members(view_number, epoch)
+        self.inner
+            .committee_members(view_number.into(), epoch.map(Into::into))
+            .into_iter()
+            .map(Into::<TYPES::SignatureKey>::into)
+            .collect()
     }
 
     fn da_committee_members(
@@ -90,7 +145,11 @@ where
         epoch: Option<TYPES::Epoch>,
     ) -> std::collections::BTreeSet<TYPES::SignatureKey> {
         self.assert_has_stake_table(epoch);
-        self.inner.da_committee_members(view_number, epoch)
+        self.inner
+            .da_committee_members(view_number.into(), epoch.map(Into::into))
+            .into_iter()
+            .map(Into::<TYPES::SignatureKey>::into)
+            .collect()
     }
 
     fn stake(
@@ -99,7 +158,9 @@ where
         epoch: Option<TYPES::Epoch>,
     ) -> Option<hotshot_types::PeerConfig<TYPES>> {
         self.assert_has_stake_table(epoch);
-        self.inner.stake(pub_key, epoch)
+        self.inner
+            .stake(pub_key.into(), epoch.map(Into::into))
+            .map(Self::convert_peer_config)
     }
 
     fn da_stake(
@@ -108,17 +169,20 @@ where
         epoch: Option<TYPES::Epoch>,
     ) -> Option<hotshot_types::PeerConfig<TYPES>> {
         self.assert_has_stake_table(epoch);
-        self.inner.da_stake(pub_key, epoch)
+        self.inner
+            .da_stake(pub_key.into(), epoch.map(Into::into))
+            .map(Self::convert_peer_config)
     }
 
     fn has_stake(&self, pub_key: &TYPES::SignatureKey, epoch: Option<TYPES::Epoch>) -> bool {
         self.assert_has_stake_table(epoch);
-        self.inner.has_stake(pub_key, epoch)
+        self.inner.has_stake(pub_key.into(), epoch.map(Into::into))
     }
 
     fn has_da_stake(&self, pub_key: &TYPES::SignatureKey, epoch: Option<TYPES::Epoch>) -> bool {
         self.assert_has_stake_table(epoch);
-        self.inner.has_da_stake(pub_key, epoch)
+        self.inner
+            .has_da_stake(pub_key.into(), epoch.map(Into::into))
     }
 
     fn lookup_leader(
@@ -127,37 +191,39 @@ where
         epoch: Option<TYPES::Epoch>,
     ) -> std::result::Result<TYPES::SignatureKey, Self::Error> {
         self.assert_has_randomized_stake_table(epoch);
-        self.inner.lookup_leader(view, epoch)
+        self.inner
+            .lookup_leader(view.into(), epoch.map(Into::into))
+            .map(Into::<TYPES::SignatureKey>::into)
     }
 
     fn total_nodes(&self, epoch: Option<TYPES::Epoch>) -> usize {
         self.assert_has_stake_table(epoch);
-        self.inner.total_nodes(epoch)
+        self.inner.total_nodes(epoch.map(Into::into))
     }
 
     fn da_total_nodes(&self, epoch: Option<TYPES::Epoch>) -> usize {
         self.assert_has_stake_table(epoch);
-        self.inner.da_total_nodes(epoch)
+        self.inner.da_total_nodes(epoch.map(Into::into))
     }
 
     fn success_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256 {
         self.assert_has_stake_table(epoch);
-        self.inner.success_threshold(epoch)
+        self.inner.success_threshold(epoch.map(Into::into))
     }
 
     fn da_success_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256 {
         self.assert_has_stake_table(epoch);
-        self.inner.da_success_threshold(epoch)
+        self.inner.da_success_threshold(epoch.map(Into::into))
     }
 
     fn failure_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256 {
         self.assert_has_stake_table(epoch);
-        self.inner.failure_threshold(epoch)
+        self.inner.failure_threshold(epoch.map(Into::into))
     }
 
     fn upgrade_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256 {
         self.assert_has_stake_table(epoch);
-        self.inner.upgrade_threshold(epoch)
+        self.inner.upgrade_threshold(epoch.map(Into::into))
     }
 
     fn has_stake_table(&self, epoch: TYPES::Epoch) -> bool {
@@ -193,7 +259,7 @@ where
 
     fn add_drb_result(&mut self, epoch: TYPES::Epoch, drb_result: hotshot_types::drb::DrbResult) {
         self.drbs.insert(epoch);
-        self.inner.add_drb_result(epoch, drb_result);
+        self.inner.add_drb_result(epoch.into(), drb_result);
     }
 
     fn set_first_epoch(
@@ -205,7 +271,7 @@ where
         self.epochs.insert(epoch + 1);
         self.drbs.insert(epoch);
         self.drbs.insert(epoch + 1);
-        self.inner.set_first_epoch(epoch, initial_drb_result);
+        self.inner.set_first_epoch(epoch.into(), initial_drb_result);
     }
 
     async fn add_epoch_root(
@@ -220,6 +286,6 @@ where
     }
 
     fn first_epoch(&self) -> Option<TYPES::Epoch> {
-        self.inner.first_epoch()
+        self.inner.first_epoch().map(Into::into)
     }
 }
