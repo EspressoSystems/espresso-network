@@ -58,7 +58,7 @@ use hotshot_types::{
     },
     traits::{
         block_contents::{BlockHeader, BlockPayload},
-        metrics::{Histogram, Metrics},
+        metrics::Metrics,
         node_implementation::ConsensusTime,
     },
     vote::HasViewNumber,

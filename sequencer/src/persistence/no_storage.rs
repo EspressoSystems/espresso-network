@@ -258,7 +258,7 @@ impl SequencerPersistence for NoStorage {
         Ok(None)
     }
 
-    fn enable_metrics(&mut self, metrics: &dyn Metrics) {}
+    fn enable_metrics(&mut self, _metrics: &dyn Metrics) {}
 }
 
 #[async_trait]
