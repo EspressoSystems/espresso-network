@@ -242,7 +242,8 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
                     Some(EpochNumber::new(1)),
                 )
                 .await
-                .unwrap(),
+                .unwrap()
+                .0,
             )
             .remove(0),
             signature: signature.clone(),

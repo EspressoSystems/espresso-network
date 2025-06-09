@@ -78,7 +78,7 @@ async fn test_vid_task() {
     let builder_commitment =
         <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&payload, &metadata);
     let encoded_transactions: Arc<[u8]> = Arc::from(TestTransaction::encode(&transactions));
-    let payload_commitment = vid_disperse.payload_commitment();
+    let payload_commitment = vid_disperse.disperse.payload_commitment();
 
     let signature = <TestTypes as NodeType>::SignatureKey::sign(
         handle.private_key(),
@@ -99,7 +99,7 @@ async fn test_vid_task() {
     };
 
     let vid_proposal = Proposal {
-        data: vid_disperse.clone(),
+        data: vid_disperse.disperse.clone(),
         signature: message.signature.clone(),
         _pd: PhantomData,
     };
