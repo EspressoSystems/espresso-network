@@ -72,17 +72,27 @@ pub type ValidatorMap = IndexMap<Address, Validator<BLSPubKey>>;
 /// Type for holding result sets matching epochs to stake tables.
 pub type IndexedStake = (EpochNumber, ValidatorMap);
 
-#[derive(Debug, PartialEq, Eq, Error, derive_more::From)]
+#[derive(Debug, PartialEq, Eq, Error)]
 /// Possible errors from fetching stake table from contract.
 pub enum StakeTableFetchError {
-    #[error("Failed to fetch stake table events: {0}.")]
-    FetchError(anyhow::Error), // TODO real error
+    #[error("Failed to fetch stake table events.")]
+    FetchError,
     #[error("No stake table contract address found in Chain config.")]
     ContractAddressNotFound,
     #[error("The epoch root for epoch {0} is missing the L1 finalized block info. This is a fatal error. Consensus is blocked and will not recover.")]
     MissingL1BlockInfo(EpochNumber),
-    #[error("Failed to construct stake table: {0}")]
-    StakeTableConstructionError(anyhow::Error),
+    #[error("Failed to construct stake table")]
+    StakeTableConstructionError,
+    #[error("Failed to load from persistence")]
+    PersistenceLoadError(String),
+    #[error("Failed to events")]
+    PersistenceStoreError,
+    #[error("Evnt Handling Error: {0}")]
+    StakeTableEventHandleError(String),
+    #[error("To block greater than from_block")]
+    ToBlockTooTall,
+    #[error("Failed to fetch ChainConfig")]
+    FailedToFetchChainConfig,
 }
 
 #[derive(Clone, derive_more::derive::Debug)]
@@ -147,7 +157,7 @@ pub enum StakeTableEventHandlerError {
 #[derive(Error, Debug, derive_more::From)]
 pub enum StakeTableApplyEventError {
     #[error("BLS key already used: {0}")]
-    DuplicateBlsKey(PubKey),
+    DuplicateBlsKey(BLSPubKey),
     #[error("Authentication Error: {0}.")]
     FailedToAuthenticate(StakeTableSolError),
 }
