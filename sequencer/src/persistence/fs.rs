@@ -36,6 +36,7 @@ use hotshot_types::{
     },
     traits::{
         block_contents::{BlockHeader, BlockPayload},
+        metrics::Metrics,
         node_implementation::{ConsensusTime, NodeType},
     },
     vote::HasViewNumber,
@@ -1475,6 +1476,10 @@ impl SequencerPersistence for Persistence {
         }
 
         Ok(result)
+    }
+
+    fn enable_metrics(&mut self, _metrics: &dyn Metrics) {
+        todo!()
     }
 }
 

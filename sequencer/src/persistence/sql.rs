@@ -1,4 +1,10 @@
-use std::{collections::BTreeMap, path::PathBuf, str::FromStr, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    path::PathBuf,
+    str::FromStr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
@@ -52,6 +58,7 @@ use hotshot_types::{
     },
     traits::{
         block_contents::{BlockHeader, BlockPayload},
+        metrics::{Histogram, Metrics},
         node_implementation::ConsensusTime,
     },
     vote::HasViewNumber,
@@ -60,7 +67,10 @@ use indexmap::IndexMap;
 use itertools::Itertools;
 use sqlx::{query, Executor, Row};
 
-use crate::{catchup::SqlStateCatchup, NodeType, SeqTypes, ViewNumber, RECENT_STAKE_TABLES_LIMIT};
+use crate::{
+    catchup::SqlStateCatchup, persistence::persistence_metrics::PersistenceMetricsValue, NodeType,
+    SeqTypes, ViewNumber, RECENT_STAKE_TABLES_LIMIT,
+};
 
 /// Options for Postgres-backed persistence.
 #[derive(Parser, Clone, Derivative)]
@@ -583,6 +593,7 @@ impl PersistenceOptions for Options {
         let persistence = Persistence {
             db: SqlStorage::connect(config).await?,
             gc_opt: self.consensus_pruning,
+            metrics: Arc::new(PersistenceMetricsValue::default()),
         };
         persistence.migrate_quorum_proposal_leaf_hashes().await?;
         self.pool = Some(persistence.db.pool());
@@ -600,6 +611,8 @@ impl PersistenceOptions for Options {
 pub struct Persistence {
     db: SqlStorage,
     gc_opt: ConsensusPruningOptions,
+    /// A reference to the metrics trait
+    metrics: Arc<PersistenceMetricsValue>,
 }
 
 impl Persistence {
@@ -1216,6 +1229,7 @@ impl SequencerPersistence for Persistence {
         &self,
         proposal: &Proposal<SeqTypes, ADVZDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()> {
+        let now = Instant::now();
         let view = proposal.data.view_number.u64();
         let payload_hash = proposal.data.payload_commitment;
         let proposal: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
@@ -1230,12 +1244,17 @@ impl SequencerPersistence for Persistence {
             [(view as i64, data_bytes, payload_hash.to_string())],
         )
         .await?;
-        tx.commit().await
+        let res = tx.commit().await;
+        self.metrics
+            .append_vid_duration
+            .add_point(now.elapsed().as_secs_f64());
+        res
     }
     async fn append_vid2(
         &self,
         proposal: &Proposal<SeqTypes, VidDisperseShare2<SeqTypes>>,
     ) -> anyhow::Result<()> {
+        let now = Instant::now();
         let view = proposal.data.view_number.u64();
         let payload_hash = proposal.data.payload_commitment;
         let proposal: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
@@ -1250,7 +1269,11 @@ impl SequencerPersistence for Persistence {
             [(view as i64, data_bytes, payload_hash.to_string())],
         )
         .await?;
-        tx.commit().await
+        let res = tx.commit().await;
+        self.metrics
+            .append_vid2_duration
+            .add_point(now.elapsed().as_secs_f64());
+        res
     }
 
     async fn append_da(
@@ -2096,6 +2119,10 @@ impl SequencerPersistence for Persistence {
                 Ok(None) => None,
             })
             .collect()
+    }
+
+    fn enable_metrics(&mut self, metrics: &dyn Metrics) {
+        self.metrics = Arc::new(PersistenceMetricsValue::new(metrics));
     }
 }
 
