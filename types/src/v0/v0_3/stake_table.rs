@@ -65,11 +65,11 @@ pub struct Delegator {
     pub stake: U256,
 }
 
+/// Validators mapped to `Address`s
+pub type OrderedValidators = IndexMap<Address, Validator<BLSPubKey>>;
+
 /// Type for holding result sets matching epochs to stake tables.
-pub type IndexedStake = (
-    EpochNumber,
-    IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
-);
+pub type IndexedStake = (EpochNumber, OrderedValidators);
 
 #[derive(Clone, derive_more::derive::Debug)]
 pub struct StakeTableFetcher {
@@ -98,7 +98,7 @@ impl Drop for StakeTableUpdateTask {
 }
 
 /// Type to represent event including metadata used for persistence and sorting.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StakeTableEventType {
     /// Data represented as an enum variant.
     pub data: StakeTableEvent,
@@ -124,7 +124,7 @@ pub enum StakeTableEvent {
 
 type ValidatorMap = IndexMap<Address, Validator<BLSPubKey>>;
 
-#[derive(Debug, derive_more::From)]
+#[derive(Debug, derive_more::From, derive_more::Error, derive_more::Display)]
 pub enum StakeTableEventHandlerError {
     FailedToAuthenticate(StakeTableSolError),
     ABIError(ABIError),
@@ -162,6 +162,16 @@ impl TryFrom<&Log> for StakeTableEvent {
             _ => todo!(),
         };
         Ok(event)
+    }
+}
+
+impl From<(EventKey, StakeTableEvent)> for StakeTableEventType {
+    fn from(((block_number, log_index), data): (EventKey, StakeTableEvent)) -> Self {
+        Self {
+            block_number,
+            log_index,
+            data,
+        }
     }
 }
 

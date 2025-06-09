@@ -45,8 +45,8 @@ use super::v0_3::DAMembers;
 use super::{
     traits::{MembershipPersistence, StateCatchup},
     v0_3::{
-        ChainConfig, EventKey, StakeTableEvent, StakeTableEventHandlerError, StakeTableEventType,
-        StakeTableFetcher, StakeTableUpdateTask, Validator,
+        ChainConfig, EventKey, OrderedValidators, StakeTableEvent, StakeTableEventHandlerError,
+        StakeTableEventType, StakeTableFetcher, StakeTableUpdateTask, Validator,
     },
     Header, L1Client, Leaf2, PubKey, SeqTypes,
 };
@@ -497,7 +497,7 @@ pub(crate) fn select_active_validator_set(
 /// Extract the active validator set from the L1 stake table events.
 pub(crate) fn active_validator_set_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
     events: I,
-) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+) -> anyhow::Result<OrderedValidators> {
     let mut validators = validators_from_l1_events(events)?;
     select_active_validator_set(&mut validators)?;
     Ok(validators)
@@ -637,27 +637,23 @@ impl StakeTableFetcher {
         &self,
         contract: Address,
         to_block: u64,
-    ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
-        let persistence_lock = self.persistence.lock().await;
-        let (read_l1_offset, persistence_events) = persistence_lock.load_events(to_block).await?;
-        drop(persistence_lock);
+    ) -> anyhow::Result<Vec<StakeTableEventType>> {
+        let read_l1_offset = {
+            let persistence_lock = self.persistence.lock().await;
+            persistence_lock.load_events(to_block).await?
+            // TODO remove
+            // drop(persistence_lock);
+        };
 
         tracing::info!("loaded events from storage to_block={to_block:?}");
 
         // No need to fetch from contract
         // if persistence returns all the events that we need
-        if let Some(EventsPersistenceRead::Complete) = read_l1_offset {
-            return Ok(persistence_events);
-        }
-
-        let from_block = read_l1_offset
-            .map(|read| match read {
-                EventsPersistenceRead::UntilL1Block(block) => Ok(block + 1),
-                EventsPersistenceRead::Complete => Err(anyhow::anyhow!(
-                    "This should not happen as we already return early incase of complete"
-                )),
-            })
-            .transpose()?;
+        let (from_block, persistence_events) = match read_l1_offset {
+            Some(EventsPersistenceRead::Complete(events)) => return Ok(events),
+            Some(EventsPersistenceRead::UntilL1Block((block, events))) => (Some(block + 1), events),
+            None => (None, vec![]), // TODO get rid of empty vec
+        };
 
         ensure!(
             Some(to_block) >= from_block,
@@ -674,7 +670,8 @@ impl StakeTableFetcher {
 
         tracing::info!("loading events from contract to_block={to_block:?}");
 
-        let contract_events = contract_events.sort_events()?;
+        // TODO remove, events have already been sorted
+        // let contract_events = contract_events.sort_events()?;
         let mut events = match from_block {
             Some(_) => persistence_events
                 .into_iter()
@@ -796,7 +793,7 @@ impl StakeTableFetcher {
         &self,
         contract: Address,
         to_block: u64,
-    ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
+    ) -> anyhow::Result<Vec<StakeTableEventType>> {
         let events = self.fetch_events(contract, to_block).await?;
 
         tracing::info!("storing events in storage to_block={to_block:?}");
@@ -819,9 +816,11 @@ impl StakeTableFetcher {
         to_block: u64,
     ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
         let events = Self::fetch_events_from_contract(l1_client, contract, None, to_block).await?;
-        let sorted = events.sort_events()?;
+        // TODO  remove, already sorted
+        // let sorted = events.sort_events()?;
+
         // Process the sorted events and return the resulting stake table.
-        validators_from_l1_events(sorted.into_iter().map(|(_, e)| e))
+        validators_from_l1_events(events.into_iter().map(|e| e.data))
     }
 
     pub async fn fetch(
@@ -851,8 +850,8 @@ impl StakeTableFetcher {
                 bail!("failed to fetch stake table events {e:?}");
             },
         };
-
-        match active_validator_set_from_l1_events(events.into_iter().map(|(_, e)| e)) {
+        // TODO we should be able to query validators from state.
+        match active_validator_set_from_l1_events(events.into_iter().map(|e| e.data)) {
             Ok(validators) => Ok(validators),
             Err(e) => {
                 bail!("failed to construct stake table {e:?}");

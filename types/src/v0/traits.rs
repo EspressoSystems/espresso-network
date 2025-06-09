@@ -40,7 +40,9 @@ use super::{
     impls::NodeState,
     utils::BackoffParams,
     v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment},
-    v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
+    v0_3::{
+        EventKey, IndexedStake, OrderedValidators, StakeTableEvent, StakeTableEventType, Validator,
+    },
 };
 use crate::{
     v0::impls::ValidatedState, v0_3::ChainConfig, BlockMerkleTree, Event, FeeAccount,
@@ -382,11 +384,11 @@ pub trait PersistenceOptions: Clone + Send + Sync + Debug + 'static {
 }
 
 /// Determine the read state based on the queried block range.
-// - If the persistence returned events up to the requested block, the read is complete.
+/// - If the persistence returned events up to the requested block, the read is complete.
 /// - Otherwise, indicate that the read is up to the last processed block.
 pub enum EventsPersistenceRead {
-    Complete,
-    UntilL1Block(u64),
+    Complete(Vec<StakeTableEventType>),
+    UntilL1Block((u64, Vec<StakeTableEventType>)),
 }
 
 #[async_trait]
@@ -402,24 +404,16 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
 
     /// Store stake table at `epoch` in the persistence layer
-    async fn store_stake(
-        &self,
-        epoch: EpochNumber,
-        stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
-    ) -> anyhow::Result<()>;
+    async fn store_stake(&self, epoch: EpochNumber, stake: OrderedValidators)
+        -> anyhow::Result<()>;
 
     async fn store_events(
         &self,
         l1_finalized: u64,
-        events: Vec<(EventKey, StakeTableEvent)>,
+        events: Vec<StakeTableEventType>,
     ) -> anyhow::Result<()>;
-    async fn load_events(
-        &self,
-        l1_finalized: u64,
-    ) -> anyhow::Result<(
-        Option<EventsPersistenceRead>,
-        Vec<(EventKey, StakeTableEvent)>,
-    )>;
+    async fn load_events(&self, l1_finalized: u64)
+        -> anyhow::Result<Option<EventsPersistenceRead>>;
 }
 
 #[async_trait]
