@@ -3,10 +3,11 @@ pub mod node_identity;
 
 use std::{collections::HashSet, iter::zip, sync::Arc};
 
+use alloy::primitives::Address;
 use async_lock::RwLock;
 use bitvec::vec::BitVec;
 use circular_buffer::CircularBuffer;
-use espresso_types::{Header, Payload, SeqTypes};
+use espresso_types::{v0_3::Validator, Header, Payload, SeqTypes};
 use futures::{channel::mpsc::SendError, Sink, SinkExt, Stream, StreamExt};
 use hotshot_query_service::{
     availability::{BlockQueryData, Leaf1QueryData},
@@ -19,13 +20,15 @@ use hotshot_types::{
     utils::epoch_from_block_number,
     PeerConfig,
 };
+use indexmap::IndexMap;
 pub use location_details::LocationDetails;
 pub use node_identity::NodeIdentity;
 use time::OffsetDateTime;
 use tokio::{spawn, task::JoinHandle};
 
 use crate::api::node_validator::v0::{
-    get_node_stake_table_from_sequencer, LeafAndBlock, PublicHotShotConfig, Version01,
+    get_node_stake_table_from_sequencer, get_node_validators_from_sequencer, LeafAndBlock,
+    PublicHotShotConfig, Version01,
 };
 
 /// MAX_HISTORY represents the last N records that are stored within the
@@ -45,6 +48,7 @@ pub struct DataState {
     stake_table: Vec<PeerConfig<SeqTypes>>,
     // Do we need any other data at the moment?
     node_identity: Vec<NodeIdentity>,
+    validators: IndexMap<Address, Validator<BLSPubKey>>,
 }
 
 impl DataState {
@@ -52,6 +56,7 @@ impl DataState {
         latest_blocks: CircularBuffer<MAX_HISTORY, BlockDetail<SeqTypes>>,
         latest_voters: CircularBuffer<MAX_VOTERS_HISTORY, BitVec<u16>>,
         stake_table: Vec<PeerConfig<SeqTypes>>,
+        validators: IndexMap<Address, Validator<BLSPubKey>>,
     ) -> Self {
         let node_identity: Vec<_> = stake_table
             .iter()
@@ -63,6 +68,7 @@ impl DataState {
             latest_voters,
             stake_table,
             node_identity,
+            validators,
         }
     }
 
@@ -78,12 +84,16 @@ impl DataState {
         self.latest_voters.iter()
     }
 
-    pub fn stake_table(&self) -> &Vec<PeerConfig<SeqTypes>> {
-        &self.stake_table
+    pub fn stake_table(&self) -> impl Iterator<Item = &PeerConfig<SeqTypes>> {
+        self.stake_table.iter()
     }
 
     pub fn node_identity(&self) -> impl Iterator<Item = &NodeIdentity> {
         self.node_identity.iter()
+    }
+
+    pub fn validators(&self) -> impl Iterator<Item = &Validator<BLSPubKey>> {
+        self.validators.values()
     }
 
     // [stake_table_differences] is a helper function that will check the
@@ -162,6 +172,17 @@ impl DataState {
 
         self.node_identity
             .extend(missing_node_identity_entries.map(NodeIdentity::from_public_key));
+    }
+
+    pub fn report_validator_map(&mut self, validators: IndexMap<Address, Validator<BLSPubKey>>) {
+        // We want to copy all of the incoming validators into our list of
+        // validators
+
+        for (address, validator) in validators.into_iter() {
+            // We want to ensure that we have the latest information for this
+            // validator.
+            self.validators.insert(address.clone(), validator.clone());
+        }
     }
 
     pub fn add_latest_block(&mut self, block: BlockDetail<SeqTypes>) {
@@ -308,8 +329,11 @@ async fn perform_stake_table_epoch_check_and_update(
                 block_height,
             );
             // We're in a new epoch, so we'll need to update our stake table
-            let next_stake_table = match get_node_stake_table_from_sequencer(client, upcoming_epoch)
-                .await
+            let next_stake_table = match get_node_stake_table_from_sequencer(
+                client.clone(),
+                upcoming_epoch,
+            )
+            .await
             {
                 Ok(stake_table) => stake_table,
                 Err(err) => {
@@ -327,6 +351,21 @@ async fn perform_stake_table_epoch_check_and_update(
                 // Update the stake table
                 let mut data_state_write_lock_guard = data_state.write().await;
                 data_state_write_lock_guard.replace_stake_table(next_stake_table);
+            }
+
+            let validators = match get_node_validators_from_sequencer(client, upcoming_epoch).await
+            {
+                Ok(validators) => validators,
+                Err(err) => {
+                    tracing::error!("process_incoming_leaf_and_block: error getting validators for epoch {}: {}", upcoming_epoch, err);
+                    return Err(ProcessLeafError::FailedToGetNewStakeTable);
+                },
+            };
+
+            {
+                // Report the validators
+                let mut data_state_write_lock_guard = data_state.write().await;
+                data_state_write_lock_guard.report_validator_map(validators);
             }
         }
     }

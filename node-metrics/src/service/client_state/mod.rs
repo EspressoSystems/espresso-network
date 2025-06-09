@@ -49,6 +49,8 @@ pub struct ClientThreadState<K> {
     subscribed_latest_block: HashSet<ClientId>,
     subscribed_node_identity: HashSet<ClientId>,
     subscribed_voters: HashSet<ClientId>,
+    subscribed_validators: HashSet<ClientId>,
+    subscribed_stake_tables: HashSet<ClientId>,
     connection_id_counter: ClientId,
 }
 
@@ -58,6 +60,8 @@ impl<K> ClientThreadState<K> {
         subscribed_latest_block: HashSet<ClientId>,
         subscribed_node_identity: HashSet<ClientId>,
         subscribed_voters: HashSet<ClientId>,
+        subscribed_validators: HashSet<ClientId>,
+        subscribed_stake_tables: HashSet<ClientId>,
         connection_id_counter: ClientId,
     ) -> Self {
         Self {
@@ -65,7 +69,23 @@ impl<K> ClientThreadState<K> {
             subscribed_latest_block,
             subscribed_node_identity,
             subscribed_voters,
+            subscribed_validators,
+            subscribed_stake_tables,
             connection_id_counter,
+        }
+    }
+}
+
+impl<K> Default for ClientThreadState<K> {
+    fn default() -> Self {
+        Self {
+            clients: Default::default(),
+            subscribed_latest_block: Default::default(),
+            subscribed_node_identity: Default::default(),
+            subscribed_voters: Default::default(),
+            subscribed_validators: Default::default(),
+            subscribed_stake_tables: Default::default(),
+            connection_id_counter: ClientId::from_count(1),
         }
     }
 }
@@ -183,9 +203,6 @@ pub async fn handle_client_message_subscribe_latest_block<K>(
     client_thread_state_write_lock_guard
         .subscribed_latest_block
         .insert(client_id);
-
-    // Explicitly unlock
-    drop(client_thread_state_write_lock_guard);
 }
 
 /// [handle_client_message_subscribe_node_identity] is a function that processes
@@ -199,9 +216,6 @@ pub async fn handle_client_message_subscribe_node_identity<K>(
     client_thread_state_write_lock_guard
         .subscribed_node_identity
         .insert(client_id);
-
-    // Explicitly unlock
-    drop(client_thread_state_write_lock_guard);
 }
 
 /// [handle_client_message_subscribe_voters] is a function that processes
@@ -215,9 +229,30 @@ pub async fn handle_client_message_subscribe_voters<K>(
     client_thread_state_write_lock_guard
         .subscribed_voters
         .insert(client_id);
+}
 
-    // Explicitly unlock
-    drop(client_thread_state_write_lock_guard);
+/// [handle_client_message_subscribe_validators] is a function that processes
+/// the client message to subscribe to the validators stream.
+pub async fn handle_client_message_subscribe_validators<K>(
+    client_id: ClientId,
+    client_thread_state: Arc<RwLock<ClientThreadState<K>>>,
+) {
+    let mut client_thread_state_write_lock_guard = client_thread_state.write().await;
+
+    client_thread_state_write_lock_guard
+        .subscribed_validators
+        .insert(client_id);
+}
+
+pub async fn handle_client_message_subscribe_stake_table<K>(
+    client_id: ClientId,
+    client_thread_state: Arc<RwLock<ClientThreadState<K>>>,
+) {
+    let mut client_thread_state_write_lock_guard = client_thread_state.write().await;
+
+    client_thread_state_write_lock_guard
+        .subscribed_stake_tables
+        .insert(client_id);
 }
 
 /// [HandleRequestBlocksSnapshotsError] represents the scope of errors that can
@@ -508,6 +543,130 @@ where
     Ok(())
 }
 
+#[derive(Debug)]
+pub enum HandleRequestValidatorsSnapshotError {
+    ClientSendError(SendError),
+}
+
+impl std::fmt::Display for HandleRequestValidatorsSnapshotError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HandleRequestValidatorsSnapshotError::ClientSendError(err) => {
+                write!(
+                    f,
+                    "handle request validators snapshot error: client send error: {}",
+                    err
+                )
+            },
+        }
+    }
+}
+
+impl std::error::Error for HandleRequestValidatorsSnapshotError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            HandleRequestValidatorsSnapshotError::ClientSendError(err) => Some(err),
+        }
+    }
+}
+
+pub async fn handle_client_message_request_validators_snapshot<K>(
+    client_id: ClientId,
+    data_state: Arc<RwLock<DataState>>,
+    client_thread_state: Arc<RwLock<ClientThreadState<K>>>,
+) -> Result<(), HandleRequestValidatorsSnapshotError>
+where
+    K: Sink<ServerMessage, Error = SendError> + Clone + Unpin,
+{
+    let (client_thread_state_read_lock_guard, data_state_read_lock_guard) =
+        futures::join!(client_thread_state.read(), data_state.read());
+
+    let validators_data = data_state_read_lock_guard
+        .validators()
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let validators_data = Arc::new(validators_data);
+
+    if let Some(client) = client_thread_state_read_lock_guard.clients.get(&client_id) {
+        let mut sender = client.sender.clone();
+        drop(client_thread_state_read_lock_guard);
+
+        if let Err(err) = sender
+            .send(ServerMessage::ValidatorsSnapshot(validators_data.clone()))
+            .await
+        {
+            drop_client_no_lock_guard(&client_id, client_thread_state.clone()).await;
+            return Err(HandleRequestValidatorsSnapshotError::ClientSendError(err));
+        }
+
+        return Ok(());
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+pub enum HandleRequestStakeTableSnapshotError {
+    ClientSendError(SendError),
+}
+
+impl std::fmt::Display for HandleRequestStakeTableSnapshotError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HandleRequestStakeTableSnapshotError::ClientSendError(err) => {
+                write!(
+                    f,
+                    "handle request stake table snapshot error: client send error: {}",
+                    err
+                )
+            },
+        }
+    }
+}
+
+impl std::error::Error for HandleRequestStakeTableSnapshotError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            HandleRequestStakeTableSnapshotError::ClientSendError(err) => Some(err),
+        }
+    }
+}
+
+pub async fn handle_client_message_request_stake_table_snapshot<K>(
+    client_id: ClientId,
+    data_state: Arc<RwLock<DataState>>,
+    client_thread_state: Arc<RwLock<ClientThreadState<K>>>,
+) -> Result<(), HandleRequestStakeTableSnapshotError>
+where
+    K: Sink<ServerMessage, Error = SendError> + Clone + Unpin,
+{
+    let (client_thread_state_read_lock_guard, data_state_read_lock_guard) =
+        futures::join!(client_thread_state.read(), data_state.read());
+
+    let stake_table = data_state_read_lock_guard
+        .stake_table()
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let stake_table = Arc::new(stake_table);
+
+    if let Some(client) = client_thread_state_read_lock_guard.clients.get(&client_id) {
+        let mut sender = client.sender.clone();
+        drop(client_thread_state_read_lock_guard);
+
+        if let Err(err) = sender
+            .send(ServerMessage::LatestStakeTable(stake_table.clone()))
+            .await
+        {
+            drop_client_no_lock_guard(&client_id, client_thread_state.clone()).await;
+            return Err(HandleRequestStakeTableSnapshotError::ClientSendError(err));
+        }
+
+        return Ok(());
+    }
+    Ok(())
+}
+
 /// [ProcessClientMessageError] represents the scope of errors that can be
 /// returned from the [process_client_message] function.
 #[derive(Debug)]
@@ -517,6 +676,8 @@ pub enum ProcessClientMessageError {
     NodeIdentitySnapshot(HandleRequestNodeIdentitySnapshotError),
     HistogramSnapshot(HandleRequestHistogramSnapshotError),
     VotersSnapshot(HandleRequestVotersSnapshotError),
+    ValidatorsSnapshot(HandleRequestValidatorsSnapshotError),
+    StakeTableSnapshot(HandleRequestStakeTableSnapshotError),
 }
 
 impl From<HandleConnectedError> for ProcessClientMessageError {
@@ -549,6 +710,18 @@ impl From<HandleRequestVotersSnapshotError> for ProcessClientMessageError {
     }
 }
 
+impl From<HandleRequestValidatorsSnapshotError> for ProcessClientMessageError {
+    fn from(err: HandleRequestValidatorsSnapshotError) -> Self {
+        ProcessClientMessageError::ValidatorsSnapshot(err)
+    }
+}
+
+impl From<HandleRequestStakeTableSnapshotError> for ProcessClientMessageError {
+    fn from(err: HandleRequestStakeTableSnapshotError) -> Self {
+        ProcessClientMessageError::StakeTableSnapshot(err)
+    }
+}
+
 impl std::fmt::Display for ProcessClientMessageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -570,6 +743,20 @@ impl std::fmt::Display for ProcessClientMessageError {
             ProcessClientMessageError::VotersSnapshot(err) => {
                 write!(f, "process client message error: voters snapshot: {err}")
             },
+            ProcessClientMessageError::ValidatorsSnapshot(err) => {
+                write!(
+                    f,
+                    "process client message error: validators snapshot: {}",
+                    err
+                )
+            },
+            ProcessClientMessageError::StakeTableSnapshot(err) => {
+                write!(
+                    f,
+                    "process client message error: stake table snapshot: {}",
+                    err
+                )
+            },
         }
     }
 }
@@ -582,6 +769,8 @@ impl std::error::Error for ProcessClientMessageError {
             ProcessClientMessageError::NodeIdentitySnapshot(err) => Some(err),
             ProcessClientMessageError::HistogramSnapshot(err) => Some(err),
             ProcessClientMessageError::VotersSnapshot(err) => Some(err),
+            ProcessClientMessageError::ValidatorsSnapshot(err) => Some(err),
+            ProcessClientMessageError::StakeTableSnapshot(err) => Some(err),
         }
     }
 }
@@ -629,6 +818,16 @@ where
             Ok(())
         },
 
+        InternalClientMessage::Request(client_id, ClientMessage::SubscribeValidators) => {
+            handle_client_message_subscribe_validators(client_id, client_thread_state).await;
+            Ok(())
+        },
+
+        InternalClientMessage::Request(client_id, ClientMessage::SubscribeStakeTables) => {
+            handle_client_message_subscribe_stake_table(client_id, client_thread_state).await;
+            Ok(())
+        },
+
         InternalClientMessage::Request(client_id, ClientMessage::RequestBlocksSnapshot) => {
             handle_client_message_request_blocks_snapshot(
                 client_id,
@@ -661,6 +860,26 @@ where
 
         InternalClientMessage::Request(client_id, ClientMessage::RequestVotersSnapshot) => {
             handle_client_message_request_voters_snapshot(
+                client_id,
+                data_state,
+                client_thread_state,
+            )
+            .await?;
+            Ok(())
+        },
+
+        InternalClientMessage::Request(client_id, ClientMessage::RequestValidatorsSnapshot) => {
+            handle_client_message_request_validators_snapshot(
+                client_id,
+                data_state,
+                client_thread_state,
+            )
+            .await?;
+            Ok(())
+        },
+
+        InternalClientMessage::Request(client_id, ClientMessage::RequestStakeTableSnapshot) => {
+            handle_client_message_request_stake_table_snapshot(
                 client_id,
                 data_state,
                 client_thread_state,
@@ -1196,13 +1415,7 @@ pub mod tests {
     };
 
     pub fn create_test_client_thread_state() -> ClientThreadState<Sender<ServerMessage>> {
-        ClientThreadState {
-            clients: Default::default(),
-            subscribed_latest_block: Default::default(),
-            subscribed_node_identity: Default::default(),
-            subscribed_voters: Default::default(),
-            connection_id_counter: ClientId::from_count(1),
-        }
+        Default::default()
     }
 
     pub fn create_test_data_state() -> (NodeIdentity, NodeIdentity, NodeIdentity, DataState) {
