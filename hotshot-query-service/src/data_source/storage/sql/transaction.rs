@@ -56,8 +56,7 @@ use super::{
 };
 use crate::{
     availability::{
-        BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, StateCertQueryData,
-        VidCommonQueryData,
+        BlockQueryData, LeafQueryData, QueryablePayload, StateCertQueryData, VidCommonQueryData,
     },
     data_source::{
         storage::{pruning::PrunedHeightStorage, UpdateAvailabilityStorage},
@@ -464,7 +463,7 @@ impl<Types> UpdateAvailabilityStorage<Types> for Transaction<Write>
 where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
-    Header<Types>: QueryableHeader<Types>,
+    Header<Types>: BlockHeader<Types>,
 {
     async fn insert_leaf(&mut self, leaf: LeafQueryData<Types>) -> anyhow::Result<()> {
         let height = leaf.height();

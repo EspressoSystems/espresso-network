@@ -396,6 +396,10 @@ impl<
             self.payload_commitment.as_ref(),
         )
     }
+
+    fn timestamp(&self) -> u64 {
+        self.timestamp
+    }
 }
 
 impl Committable for TestBlockHeader {

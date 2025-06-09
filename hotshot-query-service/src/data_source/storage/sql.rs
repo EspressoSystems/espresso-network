@@ -1068,7 +1068,7 @@ pub mod testing {
     use tokio::{net::TcpStream, time::timeout};
 
     use super::Config;
-    use crate::{availability::query_data::QueryableHeader, testing::sleep};
+    use crate::testing::sleep;
     #[derive(Debug)]
     pub struct TmpDb {
         #[cfg(not(feature = "embedded-db"))]
@@ -1383,7 +1383,7 @@ mod test {
 
     use super::{testing::TmpDb, *};
     use crate::{
-        availability::{LeafQueryData, QueryableHeader},
+        availability::LeafQueryData,
         data_source::storage::{pruning::PrunedHeightStorage, UpdateAvailabilityStorage},
         merklized_state::{MerklizedState, UpdateStateData},
         testing::{
@@ -1849,7 +1849,7 @@ mod test {
                     leaf.block_header().commit().to_string(),
                     payload_commitment.to_string(),
                     header_json,
-                    leaf.block_header().timestamp() as i64,
+                    <MockHeader as BlockHeader<MockTypes>>::timestamp(leaf.block_header()) as i64,
                 )],
             )
             .await
