@@ -181,10 +181,9 @@ async fn start_drb_task<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versio
     let storage = storage.clone();
     let store_drb_progress_fn = store_drb_progress_fn(storage.clone());
     let load_drb_progress_fn = load_drb_progress_fn(storage.clone());
-    let version = upgrade_lock.version_infallible(view).await;
 
     let consensus_reader = consensus.read().await;
-    let difficulty_level = if version >= V::DrbDifficultyUpgrade::VERSION {
+    let difficulty_level = if upgrade_lock.upgraded_drb_and_header(view).await {
         consensus_reader.drb_difficulty
     } else {
         consensus_reader.drb_upgrade_difficulty

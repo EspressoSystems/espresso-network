@@ -169,7 +169,7 @@ impl<Base: StaticVersionType + 'static, Upgrade: StaticVersionType + 'static> Ve
     ];
 
     type Epochs = EpochVersion;
-    type DrbDifficultyUpgrade = DrbDifficultyUpgradeVersion;
+    type DrbAndHeaderUpgrade = DrbDifficultyUpgradeVersion;
 }
 
 pub type MockSequencerVersions = SequencerVersions<StaticVersion<0, 1>, StaticVersion<0, 2>>;

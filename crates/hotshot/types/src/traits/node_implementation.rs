@@ -253,5 +253,5 @@ pub trait Versions: Clone + Copy + Debug + Send + Sync + 'static {
     type Epochs: StaticVersionType;
 
     /// The version at which to use the upgraded DRB difficulty
-    type DrbDifficultyUpgrade: StaticVersionType;
+    type DrbAndHeaderUpgrade: StaticVersionType;
 }

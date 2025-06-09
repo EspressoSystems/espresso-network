@@ -9,7 +9,6 @@ use std::{collections::BTreeMap, sync::Arc};
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use vbs::version::StaticVersionType;
 
 use crate::{
     message::UpgradeLock,
@@ -44,7 +43,7 @@ pub fn drb_difficulty_selector<TYPES: NodeType, V: Versions>(
     Arc::new(move |view| {
         let upgrade_lock = upgrade_lock.clone();
         Box::pin(async move {
-            if upgrade_lock.version_infallible(view).await >= V::DrbDifficultyUpgrade::VERSION {
+            if upgrade_lock.upgraded_drb_and_header(view).await {
                 upgrade_difficulty
             } else {
                 base_difficulty
