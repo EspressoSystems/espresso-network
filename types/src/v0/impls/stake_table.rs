@@ -36,6 +36,7 @@ use hotshot_types::{
     PeerConfig,
 };
 use indexmap::IndexMap;
+use itertools::Itertools;
 use thiserror::Error;
 use tokio::{spawn, time::sleep};
 use tracing::Instrument;
@@ -45,8 +46,9 @@ use super::v0_3::DAMembers;
 use super::{
     traits::{MembershipPersistence, StateCatchup},
     v0_3::{
-        ChainConfig, EventKey, StakeTableEvent, StakeTableEventHandlerError, StakeTableEventType,
-        StakeTableFetchError, StakeTableFetcher, StakeTableUpdateTask, Validator, ValidatorMap,
+        ChainConfig, EventKey, StakeTableApplyEventError, StakeTableEvent,
+        StakeTableEventHandlerError, StakeTableEventType, StakeTableFetchError, StakeTableFetcher,
+        StakeTableUpdateTask, Validator, ValidatorMap,
     },
     Header, L1Client, Leaf2, PubKey, SeqTypes,
 };
@@ -134,7 +136,7 @@ impl StakeTableEvents {
         }
     }
 
-    pub fn sort_events(self) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
+    pub fn _sort_events(self) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
         let mut events: Vec<(EventKey, StakeTableEvent)> = Vec::new();
         let Self {
             registrations,
@@ -439,9 +441,7 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
 /// Select active validators
 ///
 /// Removes the validators without stake and selects the top 100 staked validators.
-pub(crate) fn select_active_validator_set(
-    validators: &mut IndexMap<Address, Validator<BLSPubKey>>,
-) -> anyhow::Result<()> {
+pub(crate) fn select_active_validator_set(validators: &mut ValidatorMap) -> anyhow::Result<()> {
     // Remove invalid validators first
     validators.retain(|address, validator| {
         if validator.delegators.is_empty() {
@@ -531,9 +531,258 @@ pub struct EpochCommittees {
 }
 
 impl EpochCommittees {
-    pub fn apply_event(event: StakeTableEventType) {
-        // TODO Do any remaining processing then add the to the committees
-        todo!();
+    pub fn known_validators(&self) -> Vec<ValidatorMap> {
+        self.state
+            .values()
+            .map(|committee| committee.validators.clone())
+            .collect()
+    }
+    pub fn known_stake(&self) -> Vec<IndexMap<PubKey, PeerConfig<SeqTypes>>> {
+        self.state
+            .values()
+            .map(|committee| committee.stake_table.clone())
+            .collect()
+    }
+    pub fn contains_stake_key(&self, key: &BLSPubKey) -> bool {
+        self.known_stake()
+            .iter()
+            .any(|committee| committee.contains_key(key))
+    }
+    pub fn contains_state_key(&self, key: &SchnorrPubKey) -> bool {
+        self.known_stake().iter().any(|committee| {
+            committee
+                .values()
+                .map(|peer| peer.state_ver_key.clone())
+                .contains(key)
+        })
+    }
+
+    pub fn add_validator_to_epoch(&self, epoch: EpochNumber, validator: Validator) {
+        // Simoilar to `update_stake_table` but
+        // 1. only take a single validator
+        // 2. insert_or_update map for epoch
+        todo!()
+    }
+    pub fn apply_event(
+        &self,
+        epoch: EpochNumber,
+        event: StakeTableEventType,
+    ) -> Result<(), StakeTableApplyEventError> {
+        match event.data {
+            StakeTableEvent::Register(ValidatorRegistered {
+                account,
+                blsVk,
+                schnorrVk,
+                commission,
+            }) => {
+                // Register event:
+                // if already registered do nothing / error
+                // if not register / authenticate and register
+                let stake_table_key: BLSPubKey = blsVk.into();
+                let state_ver_key: SchnorrPubKey = schnorrVk.into();
+                // The stake table contract enforces that each bls key is only used once.
+                if self.contains_stake_key(&stake_table_key) {
+                    return Err(StakeTableApplyEventError::DuplicateBlsKey(stake_table_key));
+                };
+
+                // The contract does *not* enforce that each schnorr key is only used once,
+                // therefore it's possible to have multiple validators with the same schnorr key.
+                if self.contains_state_key(&state_ver_key) {
+                    tracing::warn!("schnorr key already used: {}", state_ver_key.to_string());
+                };
+                let validator = Validator {
+                    account,
+                    stake_table_key,
+                    state_ver_key,
+                    stake: U256::from(0_u64),
+                    commission,
+                    delegators: HashMap::default(),
+                };
+
+                self.add_validator_to_epoch(epoch, validator);
+            },
+
+            StakeTableEvent::RegisterV2(event) => {
+                // Signature authentication is performed right after fetching, if we get an
+                // unauthenticated event here, something went wrong, we abort early.
+                event
+                    .authenticate()
+                    .context("Failed to authenticate event: {event:?}")?;
+                let ValidatorRegisteredV2 {
+                    account,
+                    blsVK,
+                    schnorrVK,
+                    commission,
+                    ..
+                } = event;
+
+                let stake_table_key: BLSPubKey = blsVK.into();
+                let state_ver_key: SchnorrPubKey = schnorrVK.into();
+                // The stake table contract enforces that each bls key is only used once.
+                if bls_keys.contains(&stake_table_key) {
+                    bail!("bls key already used: {}", stake_table_key.to_string());
+                };
+
+                // The contract does *not* enforce that each schnorr key is only used once.
+                if schnorr_keys.contains(&state_ver_key) {
+                    tracing::warn!("schnorr key already used: {}", state_ver_key.to_string());
+                };
+
+                bls_keys.insert(stake_table_key);
+                schnorr_keys.insert(state_ver_key.clone());
+
+                match validators.entry(account) {
+                    indexmap::map::Entry::Occupied(_occupied_entry) => {
+                        bail!("validator {:#x} already registered", *account)
+                    },
+                    indexmap::map::Entry::Vacant(vacant_entry) => vacant_entry.insert(Validator {
+                        account,
+                        stake_table_key,
+                        state_ver_key,
+                        stake: U256::from(0_u64),
+                        commission,
+                        delegators: HashMap::default(),
+                    }),
+                };
+            },
+            StakeTableEvent::Deregister(exit) => {
+                validators
+                    .shift_remove(&exit.validator)
+                    .with_context(|| format!("validator {:#x} not found", exit.validator))?;
+            },
+            StakeTableEvent::Delegate(delegated) => {
+                let Delegated {
+                    delegator,
+                    validator,
+                    amount,
+                } = delegated;
+                let validator_entry = validators
+                    .get_mut(&validator)
+                    .with_context(|| format!("validator {validator:#x} not found"))?;
+
+                if amount.is_zero() {
+                    tracing::warn!("delegator {delegator:?} has 0 stake");
+                    continue;
+                }
+                // Increase stake
+                validator_entry.stake += amount;
+                // Insert the delegator with the given stake
+                // or increase the stake if already present
+                validator_entry
+                    .delegators
+                    .entry(delegator)
+                    .and_modify(|stake| *stake += amount)
+                    .or_insert(amount);
+            },
+            StakeTableEvent::Undelegate(undelegated) => {
+                let Undelegated {
+                    delegator,
+                    validator,
+                    amount,
+                } = undelegated;
+                let validator_entry = validators
+                    .get_mut(&validator)
+                    .with_context(|| format!("validator {validator:#x} not found"))?;
+
+                validator_entry.stake = validator_entry
+                    .stake
+                    .checked_sub(amount)
+                    .with_context(|| "stake is less than undelegated amount")?;
+
+                let delegator_stake = validator_entry
+                    .delegators
+                    .get_mut(&delegator)
+                    .with_context(|| format!("delegator {delegator:#x} not found"))?;
+                *delegator_stake = delegator_stake
+                    .checked_sub(amount)
+                    .with_context(|| "delegator_stake is less than undelegated amount")?;
+
+                if delegator_stake.is_zero() {
+                    // if delegator stake is 0, remove from set
+                    validator_entry.delegators.remove(&delegator);
+                }
+            },
+            StakeTableEvent::KeyUpdate(update) => {
+                let ConsensusKeysUpdated {
+                    account,
+                    blsVK,
+                    schnorrVK,
+                } = update;
+                let validator = validators
+                    .get_mut(&account)
+                    .with_context(|| "validator {account:#x} not found")?;
+                let stake_table_key: BLSPubKey = blsVK.into();
+                let state_ver_key: SchnorrPubKey = schnorrVK.into();
+                // The stake table contract enforces that each bls key is only used once.
+                if bls_keys.contains(&stake_table_key) {
+                    bail!("bls key already used: {}", stake_table_key.to_string());
+                };
+
+                // The contract does *not* enforce that each schnorr key is only used once,
+                // therefore it's possible to have multiple validators with the same schnorr key.
+                if schnorr_keys.contains(&state_ver_key) {
+                    tracing::warn!("schnorr key already used: {}", state_ver_key.to_string());
+                };
+
+                let bls = blsVK.into();
+                let state_ver_key = schnorrVK.into();
+
+                validator.stake_table_key = bls;
+                validator.state_ver_key = state_ver_key;
+            },
+            StakeTableEvent::KeyUpdateV2(update) => {
+                // Signature authentication is performed right after fetching, if we get an
+                // unauthenticated event here, something went wrong, we abort early.
+                update
+                    .authenticate()
+                    .context("Failed to authenticate event: {event:?}")?;
+
+                let ConsensusKeysUpdatedV2 {
+                    account,
+                    blsVK,
+                    schnorrVK,
+                    ..
+                } = update;
+
+                // The stake table contract enforces that each bls key is only used once.
+                let stake_table_key: BLSPubKey = blsVK.into();
+                let state_ver_key: SchnorrPubKey = schnorrVK.into();
+                // The stake table contract enforces that each bls key is only used once.
+                if bls_keys.contains(&stake_table_key) {
+                    bail!("bls key already used: {}", stake_table_key.to_string());
+                };
+
+                // The contract does *not* enforce that each schnorr key is only used once,
+                // therefore it's possible to have multiple validators with the same schnorr key.
+                if schnorr_keys.contains(&state_ver_key) {
+                    tracing::warn!("schnorr key already used: {}", state_ver_key.to_string());
+                };
+
+                let validator = validators
+                    .get_mut(&account)
+                    .with_context(|| "validator {account:#x} not found")?;
+                let bls = blsVK.into();
+                let state_ver_key = schnorrVK.into();
+
+                validator.stake_table_key = bls;
+                validator.state_ver_key = state_ver_key;
+            },
+        }
+        Ok(())
+    }
+}
+
+// Event container, generic over any contract event
+struct ContractEvents<T: SolEvent> {
+    /// Ordered map of etherium accounts to contract Event
+    events_by_account: IndexMap<Address, T>,
+    // /// Ordered map of stake table event kind to contract Event
+    // envents_by_kind: HashMap<StakeTableEvent, T>, // TODO it may be more
+}
+
+impl<T: SolEvent> ContractEvents<T> {
+    pub fn push(&mut self, event: T) {
+        self.events_by_account.insert(Address::default(), event);
     }
 }
 
@@ -771,12 +1020,9 @@ impl StakeTableFetcher {
 
         let events: Vec<Log> = logs.flatten().collect().await;
 
-        // let logs = l1_client.provider.get_logs(&events_filter).await.unwrap();
         // TODO we probably want to handle individual errors instead erroring on the first
-        let mut events: Result<Vec<StakeTableEventType>, StakeTableEventHandlerError> = events
-            .iter()
-            .map(|log| StakeTableEventType::try_from(log))
-            .collect();
+        let mut events: Result<Vec<StakeTableEventType>, StakeTableEventHandlerError> =
+            events.iter().map(StakeTableEventType::try_from).collect();
 
         events
             .as_mut()
@@ -793,7 +1039,7 @@ impl StakeTableFetcher {
         &self,
         contract: Address,
         to_block: u64,
-    ) -> anyhow::Result<Vec<StakeTableEventType>> {
+    ) -> Result<Vec<StakeTableEventType>, StakeTableFetchError> {
         let events = self.fetch_events(contract, to_block).await?;
 
         tracing::info!("storing events in storage to_block={to_block:?}");
@@ -814,7 +1060,7 @@ impl StakeTableFetcher {
         l1_client: L1Client,
         contract: Address,
         to_block: u64,
-    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+    ) -> anyhow::Result<ValidatorMap> {
         let events = Self::fetch_events_from_contract(l1_client, contract, None, to_block).await?;
         // TODO  remove, already sorted
         // let sorted = events.sort_events()?;
@@ -827,7 +1073,7 @@ impl StakeTableFetcher {
         &self,
         epoch: Epoch,
         header: Header,
-    ) -> Result<ValidatorMap, StakeTableFetchError> {
+    ) -> Result<Vec<StakeTableEventType>, StakeTableFetchError> {
         let chain_config = self.get_chain_config(&header).await?;
         // update chain config
         *self.chain_config.lock().await = chain_config;
@@ -844,10 +1090,6 @@ impl StakeTableFetcher {
             .fetch_and_store_stake_table_events(address, l1_finalized_block_info.number())
             .await
             .map_err(StakeTableFetchError::FetchError)?;
-
-        // TODO we should be able to query validators from state.
-        active_validator_set_from_l1_events(events.into_iter().map(|e| e.data))
-            .map_err(StakeTableFetchError::StakeTableConstructionError)
     }
 
     /// Retrieve and verify `ChainConfig`
@@ -917,8 +1159,8 @@ pub struct EpochCommittee {
     eligible_leaders: Vec<PeerConfig<SeqTypes>>,
     /// Ordered keys for nodes participating in the network
     stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>>,
-    /// Ordered keys for nodes participating in the network
-    validators: IndexMap<Address, Validator<BLSPubKey>>,
+    /// Ordered verification keys for nodes participating in the network
+    validators: ValidatorMap,
     /// Mapping of BLS keys used to sign consensus to etherium addresses holding
     /// stake on the l1.
     address_mapping: HashMap<BLSPubKey, Address>,
@@ -1357,11 +1599,22 @@ impl Membership<SeqTypes> for EpochCommittees {
             );
             return Ok(());
         }
+
         let fetcher = Arc::clone(&membership_reader.fetcher);
+
+        // TODO instead of getting back stake tables, get back events.
+        // then event.map(mmembership.apply).
+        let events = fetcher.fetch(epoch, block_header).await?;
+
+        // TODO remove, will be replaced by apply. also, we should be able to query validators from state.
+        let stake_tables =
+            active_validator_set_from_l1_events(events.clone().into_iter().map(|e| e.data))
+                .map_err(StakeTableFetchError::StakeTableConstructionError)?;
+
         drop(membership_reader);
 
-        let stake_tables = fetcher.fetch(epoch, block_header).await?;
-
+        // TODO replace with `memberhsip.persist` which should be able to figure
+        // out for itself what needs to be persisted.
         // Store stake table in persistence
         {
             let persistence_lock = fetcher.persistence.lock().await;
@@ -1374,7 +1627,11 @@ impl Membership<SeqTypes> for EpochCommittees {
         }
 
         let mut membership_writer = membership.write().await;
+        events
+            .into_iter()
+            .map(|event| membership_writer.apply_event(epoch, event));
         membership_writer.update_stake_table(epoch, stake_tables);
+
         Ok(())
     }
 
