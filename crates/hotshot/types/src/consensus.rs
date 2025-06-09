@@ -397,6 +397,12 @@ pub struct ConsensusMetricsValue {
     pub number_of_empty_blocks_proposed: Box<dyn Counter>,
     /// Number of events in the hotshot event queue
     pub internal_event_queue_len: Box<dyn Gauge>,
+    /// Time from proposal creation to decide time
+    pub proposal_to_decide_time: Box<dyn Histogram>,
+    /// Time from proposal received to proposal creation
+    pub previous_proposal_to_proposal_time: Box<dyn Histogram>,
+    /// Finalized bytes per view
+    pub finalized_bytes: Box<dyn Histogram>,
     /// The duration of the validate and apply header
     pub validate_and_apply_header_duration: Box<dyn Histogram>,
     /// The duration of update leaf
@@ -434,6 +440,11 @@ impl ConsensusMetricsValue {
                 .create_counter(String::from("number_of_empty_blocks_proposed"), None),
             internal_event_queue_len: metrics
                 .create_gauge(String::from("internal_event_queue_len"), None),
+            proposal_to_decide_time: metrics
+                .create_histogram(String::from("proposal_to_decide_time"), None),
+            previous_proposal_to_proposal_time: metrics
+                .create_histogram(String::from("previous_proposal_to_proposal_time"), None),
+            finalized_bytes: metrics.create_histogram(String::from("finalized_bytes"), None),
             validate_and_apply_header_duration: metrics.create_histogram(
                 String::from("validate_and_apply_header_duration"),
                 Some("seconds".to_string()),

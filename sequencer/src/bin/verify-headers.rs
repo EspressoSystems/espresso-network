@@ -9,6 +9,7 @@ use alloy::{
 use clap::Parser;
 use espresso_types::{Header, L1BlockInfo};
 use futures::future::join_all;
+use hotshot_types::traits::block_contents::BlockHeader;
 use itertools::Itertools;
 use sequencer::SequencerApiVersion;
 use sequencer_utils::logging;

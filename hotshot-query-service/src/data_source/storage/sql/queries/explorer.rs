@@ -17,7 +17,7 @@ use std::{collections::VecDeque, num::NonZeroUsize};
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use futures::stream::{self, StreamExt, TryStreamExt};
-use hotshot_types::traits::node_implementation::NodeType;
+use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
 use itertools::Itertools;
 use sqlx::{FromRow, Row};
 use tagged_base64::{Tagged, TaggedBase64};
@@ -27,7 +27,7 @@ use super::{
     Database, Db, DecodeError, BLOCK_COLUMNS,
 };
 use crate::{
-    availability::{BlockQueryData, QueryableHeader, QueryablePayload},
+    availability::{BlockQueryData, QueryablePayload},
     data_source::storage::{ExplorerStorage, NodeStorage},
     explorer::{
         self,
@@ -83,7 +83,7 @@ impl From<sqlx::Error> for GetSearchResultsError {
 impl<'r, Types> FromRow<'r, <Db as Database>::Row> for BlockSummary<Types>
 where
     Types: NodeType,
-    Header<Types>: QueryableHeader<Types> + ExplorerHeader<Types>,
+    Header<Types>: BlockHeader<Types> + ExplorerHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
@@ -96,7 +96,7 @@ where
 impl<'r, Types> FromRow<'r, <Db as Database>::Row> for BlockDetail<Types>
 where
     Types: NodeType,
-    Header<Types>: QueryableHeader<Types> + ExplorerHeader<Types>,
+    Header<Types>: BlockHeader<Types> + ExplorerHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
     BalanceAmount<Types>: Into<MonetaryValue>,
 {
@@ -270,7 +270,7 @@ where
     Mode: TransactionMode,
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
-    Header<Types>: QueryableHeader<Types> + ExplorerHeader<Types>,
+    Header<Types>: BlockHeader<Types> + ExplorerHeader<Types>,
     crate::Transaction<Types>: explorer::traits::ExplorerTransaction,
     BalanceAmount<Types>: Into<explorer::monetary_value::MonetaryValue>,
 {

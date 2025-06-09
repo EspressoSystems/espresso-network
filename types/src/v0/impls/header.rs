@@ -568,7 +568,7 @@ impl Header {
         &mut *field_mut!(self.height)
     }
 
-    pub fn timestamp(&self) -> u64 {
+    pub fn timestamp_internal(&self) -> u64 {
         *field!(self.timestamp)
     }
 
@@ -934,6 +934,10 @@ impl BlockHeader<SeqTypes> for Header {
         )
     }
 
+    fn timestamp(&self) -> u64 {
+        self.timestamp_internal()
+    }
+
     fn block_number(&self) -> u64 {
         self.height()
     }
@@ -972,10 +976,6 @@ impl BlockHeader<SeqTypes> for Header {
 }
 
 impl QueryableHeader<SeqTypes> for Header {
-    fn timestamp(&self) -> u64 {
-        self.timestamp()
-    }
-
     fn namespace_size(&self, id: u32, payload_size: usize) -> u64 {
         self.ns_table()
             .ns_range(&NsIndex(id as usize), &PayloadByteLen(payload_size))
