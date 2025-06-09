@@ -144,6 +144,14 @@ pub enum StakeTableEventHandlerError {
     ABIError(ABIError),
 }
 
+#[derive(Error, Debug, derive_more::From)]
+pub enum StakeTableApplyEventError {
+    #[error("BLS key already used: {0}")]
+    DuplicateBlsKey(PubKey),
+    #[error("Authentication Error: {0}.")]
+    FailedToAuthenticate(StakeTableSolError),
+}
+
 impl TryFrom<&Log> for StakeTableEventType {
     type Error = StakeTableEventHandlerError;
 
