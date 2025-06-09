@@ -451,7 +451,7 @@ impl StateRelayServerDataSource for StateRelayServerState {
         req: StateSignatureRequestBody,
     ) -> Result<(), ServerError> {
         let block_height = req.state.block_height;
-        if block_height <= self.latest_block_height.unwrap_or(0) {
+        if block_height <= self.latest_block_height_for_legacy.unwrap_or(0) {
             // This signature is no longer needed
             return Ok(());
         }
@@ -462,19 +462,16 @@ impl StateRelayServerDataSource for StateRelayServerState {
             );
             return Err(ServerError::catch_all(
                 StatusCode::UNAUTHORIZED,
-                "Signature posted by nodes not on the stake table".to_owned(),
+                "Legacy signature posted by nodes not on the stake table".to_owned(),
             ));
         };
 
         // sanity check the signature validity first before adding in
-        if !req
-            .key
-            .verify_state_sig(&req.signature, &req.state, &req.next_stake)
-        {
+        if !req.key.legacy_verify_state_sig(&req.signature, &req.state) {
             tracing::warn!("Received invalid legacy signature: {:?}", req);
             return Err(ServerError::catch_all(
                 StatusCode::BAD_REQUEST,
-                "The posted signature is not valid.".to_owned(),
+                "The posted legacy signature is not valid.".to_owned(),
             ));
         }
 
@@ -490,7 +487,7 @@ impl StateRelayServerDataSource for StateRelayServerState {
                 accumulated_weight: U256::from(0),
             });
         tracing::debug!(
-            "Accepting new signature for block height {} from {}.",
+            "Accepting new legacy signature for block height {} from {}.",
             block_height,
             req.key
         );
@@ -499,7 +496,7 @@ impl StateRelayServerDataSource for StateRelayServerState {
                 // A signature is already posted for this key with this state
                 return Err(ServerError::catch_all(
                     StatusCode::BAD_REQUEST,
-                    "A signature of this light client state is already posted at this block height for this key.".to_owned(),
+                    "A legacy signature of this light client state is already posted at this block height for this key.".to_owned(),
                 ));
             },
             Entry::Vacant(entry) => {
@@ -510,7 +507,7 @@ impl StateRelayServerDataSource for StateRelayServerState {
 
         if bundle.accumulated_weight >= self.genesis_threshold {
             tracing::info!(
-                "State signature bundle at block height {} is ready to serve.",
+                "Legacy state signature bundle at block height {} is ready to serve.",
                 block_height
             );
             self.latest_block_height_for_legacy = Some(block_height);

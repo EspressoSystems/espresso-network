@@ -181,6 +181,11 @@ async fn main() {
             return;
         },
     };
+    tracing::info!(
+        "Detected contract version {}",
+        if is_legacy { "v1" } else { "v2" }
+    );
+
     // This bind version doesn't represent anything now, but it's required by the service trait
     let bind_version = StaticVersion::<0, 1> {};
 

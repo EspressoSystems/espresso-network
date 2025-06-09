@@ -62,7 +62,7 @@ pub fn load_proving_key(stake_table_capacity: usize) -> ProvingKey {
 
     tracing::info!("Generating proving key and verification key.");
     let key_gen_timer = Instant::now();
-    let (pk, _) = crate::snark::preprocess(&srs, stake_table_capacity)
+    let (pk, _) = super::snark::preprocess(&srs, stake_table_capacity)
         .expect("Fail to preprocess state prover circuit");
     let key_gen_elapsed = Instant::now().signed_duration_since(key_gen_timer);
     tracing::info!("Done in {key_gen_elapsed:.3}");
@@ -152,7 +152,6 @@ async fn generate_proof(
     state: &mut ProverServiceState,
     light_client_state: LightClientState,
     current_stake_table_state: StakeTableState,
-    next_stake_table_state: StakeTableState,
     signature_map: HashMap<StateVerKey, StateSignature>,
     proving_key: &ProvingKey,
 ) -> Result<(Proof, PublicInput), ProverError> {
@@ -173,7 +172,7 @@ async fn generate_proof(
     entries.iter().enumerate().for_each(|(i, (key, stake))| {
         if let Some(sig) = signature_map.get(key) {
             // Check if the signature is valid
-            if key.verify_state_sig(sig, &light_client_state, &next_stake_table_state) {
+            if key.legacy_verify_state_sig(sig, &light_client_state) {
                 signer_bit_vec[i] = true;
                 signatures[i] = sig.clone();
                 accumulated_weight += *stake;
@@ -293,7 +292,6 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     let (proof, public_input) = generate_proof(
         state,
         bundle.state,
-        contract_st_state,
         contract_st_state,
         bundle.signatures,
         proving_key,
