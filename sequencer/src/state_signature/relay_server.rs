@@ -338,6 +338,22 @@ impl StateRelayServerDataSource for StateRelayServerState {
     }
 
     async fn post_signature(&mut self, req: StateSignatureRequestBody) -> Result<(), ServerError> {
+        // sanity check the signature validity first before adding in
+        if !req
+            .key
+            .verify_state_sig(&req.signature, &req.state, &req.next_stake)
+        {
+            // If it's a legacy signature, handle it separately
+            if req.key.legacy_verify_state_sig(&req.signature, &req.state) {
+                return self.post_legacy_signature(req).await;
+            }
+            tracing::warn!("Received invalid signature: {:?}", req);
+            return Err(ServerError::catch_all(
+                StatusCode::BAD_REQUEST,
+                "The posted signature is not valid.".to_owned(),
+            ));
+        }
+
         let block_height = req.state.block_height;
         if block_height <= self.latest_block_height.unwrap_or(0) {
             // This signature is no longer needed
@@ -388,18 +404,6 @@ impl StateRelayServerDataSource for StateRelayServerState {
                 "Signature posted by nodes not on the stake table".to_owned(),
             ));
         };
-
-        // sanity check the signature validity first before adding in
-        if !req
-            .key
-            .verify_state_sig(&req.signature, &req.state, &req.next_stake)
-        {
-            tracing::warn!("Received invalid signature: {:?}", req);
-            return Err(ServerError::catch_all(
-                StatusCode::BAD_REQUEST,
-                "The posted signature is not valid.".to_owned(),
-            ));
-        }
 
         let bundles_at_height = self.bundles.entry(block_height).or_default();
         self.queue.insert(block_height);
