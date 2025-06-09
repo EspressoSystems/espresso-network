@@ -48,8 +48,8 @@ use crate::{
     availability::{
         data_source::{BlockId, LeafId},
         query_data::{
-            BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadQueryData, QueryableHeader,
-            QueryablePayload, TransactionHash, TransactionQueryData, VidCommonQueryData,
+            BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadQueryData, QueryablePayload,
+            TransactionHash, TransactionQueryData, VidCommonQueryData,
         },
         StateCertQueryData,
     },
@@ -158,7 +158,7 @@ where
 impl<Types: NodeType> FileSystemStorage<Types>
 where
     Payload<Types>: QueryablePayload<Types>,
-    Header<Types>: QueryableHeader<Types>,
+    Header<Types>: BlockHeader<Types>,
 {
     /// Create a new [FileSystemStorage] with storage at `path`.
     ///
@@ -490,7 +490,7 @@ impl<Types, T> AvailabilityStorage<Types> for Transaction<T>
 where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
-    Header<Types>: QueryableHeader<Types>,
+    Header<Types>: BlockHeader<Types>,
     T: Revert + Deref<Target = FileSystemStorageInner<Types>> + Send + Sync,
 {
     async fn get_leaf(&mut self, id: LeafId<Types>) -> QueryResult<LeafQueryData<Types>> {
@@ -656,7 +656,7 @@ impl<Types: NodeType> UpdateAvailabilityStorage<Types>
     for Transaction<RwLockWriteGuard<'_, FileSystemStorageInner<Types>>>
 where
     Payload<Types>: QueryablePayload<Types>,
-    Header<Types>: QueryableHeader<Types>,
+    Header<Types>: BlockHeader<Types>,
 {
     async fn insert_leaf(&mut self, leaf: LeafQueryData<Types>) -> anyhow::Result<()> {
         self.inner
@@ -749,7 +749,7 @@ impl<Types, T> NodeStorage<Types> for Transaction<T>
 where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
-    Header<Types>: QueryableHeader<Types>,
+    Header<Types>: BlockHeader<Types>,
     T: Revert + Deref<Target = FileSystemStorageInner<Types>> + Send,
 {
     async fn block_height(&mut self) -> QueryResult<usize> {
