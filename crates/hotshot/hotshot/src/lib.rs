@@ -273,6 +273,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let upgrade_lock =
             UpgradeLock::<TYPES, V>::from_certificate(&initializer.decided_upgrade_certificate);
 
+        debug!("Setting DRB difficulty selector in membership");
+        let drb_difficulty_selector = drb_difficulty_selector(upgrade_lock.clone(), &config);
+
+        membership_coordinator
+            .set_drb_difficulty_selector(drb_difficulty_selector)
+            .await;
+
         // Allow overflow on the external channel, otherwise sending to it may block.
         external_rx.set_overflow(true);
 
@@ -393,14 +400,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
 
         debug!("Starting Consensus");
         let consensus = self.consensus.read().await;
-
-        debug!("Setting DRB difficulty selector in membership");
-        let drb_difficulty_selector =
-            drb_difficulty_selector(self.upgrade_lock.clone(), &self.config);
-
-        self.membership_coordinator
-            .set_drb_difficulty_selector(drb_difficulty_selector)
-            .await;
 
         let first_epoch = option_epoch_from_block_number::<TYPES>(
             V::Base::VERSION >= V::Epochs::VERSION,
