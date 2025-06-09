@@ -13,7 +13,7 @@ use espresso_contract_deployer::network_config::{
 use espresso_types::SeqTypes;
 use futures::FutureExt;
 use hotshot_types::{
-    light_client::{StateSignaturesBundle, StateVerKey},
+    light_client::{LegacyStateSignatureRequestBody, StateSignaturesBundle, StateVerKey},
     stake_table::one_honest_threshold,
     traits::signature_key::{StakeTableEntryType, StateSignatureKey},
     utils::{epoch_from_block_number, is_gt_epoch_root},
@@ -563,11 +563,19 @@ where
     })?
     .post("poststatesignature", move |req, state| {
         async move {
-            let body = req
-                .body_auto::<StateSignatureRequestBody, ApiVer>(ApiVer::instance())
-                .map_err(ServerError::from_request_error)?;
-            state.post_signature(body).await?;
-            Ok(())
+            if let Ok(body) = req.body_auto::<StateSignatureRequestBody, ApiVer>(ApiVer::instance())
+            {
+                state.post_signature(body).await
+            } else if let Ok(legacy_body) =
+                req.body_auto::<LegacyStateSignatureRequestBody, ApiVer>(ApiVer::instance())
+            {
+                state.post_legacy_signature(legacy_body.into()).await
+            } else {
+                Err(ServerError::catch_all(
+                    StatusCode::BAD_REQUEST,
+                    "Invalid request body".to_string(),
+                ))
+            }
         }
         .boxed()
     })?

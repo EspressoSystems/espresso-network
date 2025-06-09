@@ -181,7 +181,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                         let request_body = StateSignatureRequestBody {
                             key: self.ver_key.clone(),
                             state,
-                            next_stake: self.voting_stake_table,
+                            next_stake: StakeTableState::default(),
                             signature: legacy_signature,
                         };
                         if let Err(error) = client
