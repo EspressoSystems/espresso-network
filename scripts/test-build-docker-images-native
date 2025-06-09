@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euxo pipefail
+
+images=(
+  bridge
+  builder
+  cdn-broker
+  cdn-marshal
+  cdn-whitelist
+  deploy
+  espresso-dev-node
+  nasty-client
+  node-validator
+  orchestrator
+  prover-service
+  sequencer
+  state-relay-server
+  staking-cli
+  submit-transactions
+)
+
+for image in "${images[@]}"; do
+  scripts/build-docker-images-native --image "$image"
+done
+
+# build everything
+scripts/build-docker-images-native
+
+scripts/build-docker-images-native clean
+
+echo "Ok"

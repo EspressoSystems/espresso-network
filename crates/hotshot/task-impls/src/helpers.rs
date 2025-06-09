@@ -18,7 +18,7 @@ use hotshot_task::dependency::{Dependency, EventDependency};
 use hotshot_types::{
     consensus::OuterConsensus,
     data::{Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewChangeEvidence2},
-    drb::{DrbInput, DrbResult, DrbSeedInput},
+    drb::{DrbInput, DrbResult},
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType, LeafInfo},
     message::{Proposal, UpgradeLock},
@@ -168,38 +168,7 @@ pub async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
 
     membership.write().await.add_drb_result(epoch, drb_result)
 }
-/// Start the DRB computation task for the next epoch.
-async fn start_drb_task<TYPES: NodeType, I: NodeImplementation<TYPES>>(
-    seed: DrbSeedInput,
-    epoch: TYPES::Epoch,
-    membership: &Arc<RwLock<TYPES::Membership>>,
-    storage: &I::Storage,
-    consensus: &OuterConsensus<TYPES>,
-) {
-    let membership = membership.clone();
-    let storage = storage.clone();
-    let store_drb_progress_fn = store_drb_progress_fn(storage.clone());
-    let load_drb_progress_fn = load_drb_progress_fn(storage.clone());
-    let consensus = consensus.clone();
-    let difficulty_level = consensus.read().await.drb_difficulty;
-    let drb_input = DrbInput {
-        epoch: *epoch,
-        iteration: 0,
-        value: seed,
-        difficulty_level,
-    };
-    tokio::spawn(async move {
-        let drb_result = hotshot_types::drb::compute_drb_result(
-            drb_input,
-            store_drb_progress_fn,
-            load_drb_progress_fn,
-        )
-        .await;
 
-        handle_drb_result::<TYPES, I>(&membership, epoch, &storage, &consensus, drb_result).await;
-        drb_result
-    });
-}
 /// Handles calling add_epoch_root and sync_l1 on Membership if necessary.
 async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     decided_leaf: &Leaf2<TYPES>,
@@ -215,7 +184,7 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
         let next_epoch_number =
             TYPES::Epoch::new(epoch_from_block_number(decided_block_number, epoch_height) + 2);
 
-        let mut start = Instant::now();
+        let start = Instant::now();
         if let Err(e) = storage
             .store_epoch_root(next_epoch_number, decided_leaf.block_header().clone())
             .await
@@ -224,44 +193,88 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
         }
         tracing::info!("Time taken to store epoch root: {:?}", start.elapsed());
 
-        start = Instant::now();
-        let write_callback = {
-            tracing::debug!("Calling add_epoch_root for epoch {next_epoch_number}");
-            let membership_reader = membership.read().await;
-            membership_reader
-                .add_epoch_root(next_epoch_number, decided_leaf.block_header().clone())
-                .await
-        };
-        if let Ok(Some(write_callback)) = write_callback {
-            let mut membership_writer = membership.write().await;
-            write_callback(&mut *membership_writer);
-        }
-        tracing::info!("Time taken to add epoch root: {:?}", start.elapsed());
-
-        let mut consensus_writer = consensus.write().await;
-        consensus_writer
-            .drb_results
-            .garbage_collect(next_epoch_number);
-        drop(consensus_writer);
-
         let Ok(drb_seed_input_vec) = bincode::serialize(&decided_leaf.justify_qc().signatures)
         else {
             tracing::error!("Failed to serialize the QC signature.");
             return;
         };
 
-        let mut drb_seed_input = [0u8; 32];
-        let len = drb_seed_input_vec.len().min(32);
-        drb_seed_input[..len].copy_from_slice(&drb_seed_input_vec[..len]);
+        let membership = membership.clone();
+        let decided_block_header = decided_leaf.block_header().clone();
+        let storage = storage.clone();
+        let store_drb_progress_fn = store_drb_progress_fn(storage.clone());
+        let load_drb_progress_fn = load_drb_progress_fn(storage.clone());
+        let consensus = consensus.clone();
+        let difficulty_level = consensus.read().await.drb_difficulty;
 
-        start_drb_task::<TYPES, I>(
-            drb_seed_input,
-            next_epoch_number,
-            membership,
-            storage,
-            consensus,
-        )
-        .await;
+        tokio::spawn(async move {
+            let membership_clone = membership.clone();
+            let epoch_root_future = tokio::spawn(async move {
+                let start = Instant::now();
+                if let Err(e) = Membership::add_epoch_root(
+                    Arc::clone(&membership_clone),
+                    next_epoch_number,
+                    decided_block_header,
+                )
+                .await
+                {
+                    tracing::error!("Failed to add epoch root for epoch {next_epoch_number}: {e}");
+                }
+                tracing::info!("Time taken to add epoch root: {:?}", start.elapsed());
+            });
+
+            let mut consensus_writer = consensus.write().await;
+            consensus_writer
+                .drb_results
+                .garbage_collect(next_epoch_number);
+            drop(consensus_writer);
+
+            let drb_result_future = tokio::spawn(async move {
+                let start = Instant::now();
+                let mut drb_seed_input = [0u8; 32];
+                let len = drb_seed_input_vec.len().min(32);
+                drb_seed_input[..len].copy_from_slice(&drb_seed_input_vec[..len]);
+
+                let drb_input = DrbInput {
+                    epoch: *next_epoch_number,
+                    iteration: 0,
+                    value: drb_seed_input,
+                    difficulty_level,
+                };
+
+                let drb_result = hotshot_types::drb::compute_drb_result(
+                    drb_input,
+                    store_drb_progress_fn,
+                    load_drb_progress_fn,
+                )
+                .await;
+
+                tracing::info!("Time taken to calculate drb result: {:?}", start.elapsed());
+
+                drb_result
+            });
+
+            let (_, drb_result) = tokio::join!(epoch_root_future, drb_result_future);
+
+            let drb_result = match drb_result {
+                Ok(result) => result,
+                Err(e) => {
+                    tracing::error!("Failed to compute DRB result: {e}");
+                    return;
+                },
+            };
+
+            let start = Instant::now();
+            handle_drb_result::<TYPES, I>(
+                &membership,
+                next_epoch_number,
+                &storage,
+                &consensus,
+                drb_result,
+            )
+            .await;
+            tracing::info!("Time taken to handle drb result: {:?}", start.elapsed());
+        });
     }
 }
 

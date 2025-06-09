@@ -4,7 +4,7 @@ CREATE FUNCTION json_4byte_le_to_integer(j JSONB)
     IMMUTABLE
 AS $$
 DECLARE
-    len INT := json_array_length(j);
+    len INT := jsonb_array_length(j);
 BEGIN
     IF len <> 4 THEN
         RAISE 'expected JSON array of 4 bytes, got (%) instead', len;

@@ -42,8 +42,6 @@ pub type StateSignature = schnorr::Signature<Config>;
 pub type StateVerKey = schnorr::VerKey<Config>;
 /// Signing key for signing a light client state
 pub type StateSignKey = schnorr::SignKey<ark_ed_on_bn254::Fr>;
-/// Concrete for circuit's public input
-pub type PublicInput = GenericPublicInput<CircuitField>;
 /// Key pairs for signing/verifying a light client state
 #[derive(Debug, Default, Clone)]
 pub struct StateKeyPair(pub schnorr::KeyPair<Config>);
@@ -212,94 +210,6 @@ impl StateKeyPair {
 impl From<schnorr::KeyPair<Config>> for StateKeyPair {
     fn from(value: schnorr::KeyPair<Config>) -> Self {
         StateKeyPair(value)
-    }
-}
-
-/// Public input to the light client state prover service
-#[derive(Clone, Debug)]
-pub struct GenericPublicInput<F: PrimeField> {
-    // new light client state
-    pub lc_state: GenericLightClientState<F>,
-    // voting stake table state
-    pub voting_st_state: GenericStakeTableState<F>,
-    // next-block stake table state
-    pub next_st_state: GenericStakeTableState<F>,
-}
-
-impl<F: PrimeField> GenericPublicInput<F> {
-    /// Construct a public input from light client state and static stake table state
-    pub fn new(
-        lc_state: GenericLightClientState<F>,
-        voting_st_state: GenericStakeTableState<F>,
-        next_st_state: GenericStakeTableState<F>,
-    ) -> Self {
-        Self {
-            lc_state,
-            voting_st_state,
-            next_st_state,
-        }
-    }
-
-    /// Convert to a vector of field elements
-    pub fn to_vec(&self) -> Vec<F> {
-        vec![
-            F::from(self.lc_state.view_number),
-            F::from(self.lc_state.block_height),
-            self.lc_state.block_comm_root,
-            self.voting_st_state.bls_key_comm,
-            self.voting_st_state.schnorr_key_comm,
-            self.voting_st_state.amount_comm,
-            self.voting_st_state.threshold,
-            self.next_st_state.bls_key_comm,
-            self.next_st_state.schnorr_key_comm,
-            self.next_st_state.amount_comm,
-            self.next_st_state.threshold,
-        ]
-    }
-}
-
-impl<F: PrimeField> From<GenericPublicInput<F>> for Vec<F> {
-    fn from(v: GenericPublicInput<F>) -> Self {
-        vec![
-            F::from(v.lc_state.view_number),
-            F::from(v.lc_state.block_height),
-            v.lc_state.block_comm_root,
-            v.voting_st_state.bls_key_comm,
-            v.voting_st_state.schnorr_key_comm,
-            v.voting_st_state.amount_comm,
-            v.voting_st_state.threshold,
-            v.next_st_state.bls_key_comm,
-            v.next_st_state.schnorr_key_comm,
-            v.next_st_state.amount_comm,
-            v.next_st_state.threshold,
-        ]
-    }
-}
-
-impl<F: PrimeField> From<Vec<F>> for GenericPublicInput<F> {
-    fn from(v: Vec<F>) -> Self {
-        let lc_state = GenericLightClientState {
-            view_number: v[0].into_bigint().as_ref()[0],
-            block_height: v[1].into_bigint().as_ref()[0],
-            block_comm_root: v[2],
-        };
-        let voting_st_state = GenericStakeTableState {
-            bls_key_comm: v[3],
-            schnorr_key_comm: v[4],
-            amount_comm: v[5],
-            threshold: v[6],
-        };
-        let next_st_state = GenericStakeTableState {
-            bls_key_comm: v[7],
-            schnorr_key_comm: v[8],
-            amount_comm: v[9],
-            threshold: v[10],
-        };
-        Self {
-            lc_state,
-            voting_st_state,
-            next_st_state,
-        }
     }
 }
 
