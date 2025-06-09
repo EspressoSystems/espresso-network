@@ -46,7 +46,8 @@ use super::{
     traits::{MembershipPersistence, StateCatchup},
     v0_3::{
         ChainConfig, EventKey, OrderedValidators, StakeTableEvent, StakeTableEventHandlerError,
-        StakeTableEventType, StakeTableFetcher, StakeTableUpdateTask, Validator,
+        StakeTableEventType, StakeTableFetchError, StakeTableFetcher, StakeTableUpdateTask,
+        Validator,
     },
     Header, L1Client, Leaf2, PubKey, SeqTypes,
 };
@@ -827,36 +828,27 @@ impl StakeTableFetcher {
         &self,
         epoch: Epoch,
         header: Header,
-    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+    ) -> Result<OrderedValidators, StakeTableFetchError> {
         let chain_config = self.get_chain_config(&header).await?;
         // update chain config
         *self.chain_config.lock().await = chain_config;
 
         let Some(address) = chain_config.stake_table_contract else {
-            bail!("No stake table contract address found in Chain config");
+            return Err(StakeTableFetchError::ContractAddressNotFound);
         };
 
         let Some(l1_finalized_block_info) = header.l1_finalized() else {
-            bail!("The epoch root for epoch {} is missing the L1 finalized block info. This is a fatal error. Consensus is blocked and will not recover.", epoch);
+            return Err(StakeTableFetchError::MissingL1BlockInfo(epoch));
         };
 
-        let events = match self
+        let events = self
             .fetch_and_store_stake_table_events(address, l1_finalized_block_info.number())
             .await
-            .map_err(GetStakeTablesError::L1ClientFetchError)
-        {
-            Ok(events) => events,
-            Err(e) => {
-                bail!("failed to fetch stake table events {e:?}");
-            },
-        };
+            .map_err(StakeTableFetchError::FetchError)?;
+
         // TODO we should be able to query validators from state.
-        match active_validator_set_from_l1_events(events.into_iter().map(|e| e.data)) {
-            Ok(validators) => Ok(validators),
-            Err(e) => {
-                bail!("failed to construct stake table {e:?}");
-            },
-        }
+        active_validator_set_from_l1_events(events.into_iter().map(|e| e.data))
+            .map_err(StakeTableFetchError::StakeTableConstructionError)
     }
 
     /// Retrieve and verify `ChainConfig`

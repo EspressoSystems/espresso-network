@@ -20,6 +20,7 @@ use hotshot_types::{
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use tokio::task::JoinHandle;
 
 use super::L1Client;
@@ -70,6 +71,19 @@ pub type OrderedValidators = IndexMap<Address, Validator<BLSPubKey>>;
 
 /// Type for holding result sets matching epochs to stake tables.
 pub type IndexedStake = (EpochNumber, OrderedValidators);
+
+#[derive(Debug, PartialEq, Eq, Error, derive_more::From)]
+/// Possible errors from fetching stake table from contract.
+pub enum StakeTableFetchError {
+    #[error("Failed to fetch stake table events: {0}.")]
+    FetchError(anyhow::Error), // TODO real error
+    #[error("No stake table contract address found in Chain config.")]
+    ContractAddressNotFound,
+    #[error("The epoch root for epoch {0} is missing the L1 finalized block info. This is a fatal error. Consensus is blocked and will not recover.")]
+    MissingL1BlockInfo(EpochNumber),
+    #[error("Failed to construct stake table: {0}")]
+    StakeTableConstructionError(anyhow::Error),
+}
 
 #[derive(Clone, derive_more::derive::Debug)]
 pub struct StakeTableFetcher {
@@ -124,9 +138,11 @@ pub enum StakeTableEvent {
 
 type ValidatorMap = IndexMap<Address, Validator<BLSPubKey>>;
 
-#[derive(Debug, derive_more::From, derive_more::Error, derive_more::Display)]
+#[derive(Error, Debug, derive_more::From)]
 pub enum StakeTableEventHandlerError {
+    #[error("Authentication Error: {0}.")]
     FailedToAuthenticate(StakeTableSolError),
+    #[error("ABI Error: {0}.")]
     ABIError(ABIError),
 }
 
