@@ -169,6 +169,7 @@ impl<Base: StaticVersionType + 'static, Upgrade: StaticVersionType + 'static> Ve
     ];
 
     type Epochs = EpochVersion;
+    type DrbAndHeaderUpgrade = DrbDifficultyUpgradeVersion;
 }
 
 pub type MockSequencerVersions = SequencerVersions<StaticVersion<0, 1>, StaticVersion<0, 2>>;
@@ -177,6 +178,7 @@ pub type V0_0 = StaticVersion<0, 0>;
 pub type V0_1 = StaticVersion<0, 1>;
 pub type FeeVersion = StaticVersion<0, 2>;
 pub type EpochVersion = StaticVersion<0, 3>;
+pub type DrbDifficultyUpgradeVersion = StaticVersion<0, 4>;
 
 pub type Leaf = hotshot_types::data::Leaf<SeqTypes>;
 pub type Leaf2 = hotshot_types::data::Leaf2<SeqTypes>;

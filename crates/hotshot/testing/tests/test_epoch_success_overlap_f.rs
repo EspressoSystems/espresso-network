@@ -21,7 +21,7 @@ cross_tests!(
     TestName: test_epoch_success,
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
     Types: [
-        TestTypesRandomizedCommitteeMembers<StableQuorumFilterConfig<123, 2>>,                 // Overlap =  F
+        TestTypesRandomizedCommitteeMembers<StableQuorumFilterConfig<123, 2>, StableQuorumFilterConfig<123, 2>>,                 // Overlap =  F
     ],
     Versions: [EpochsTestVersions],
     Ignore: false,
