@@ -1479,7 +1479,7 @@ impl SequencerPersistence for Persistence {
     }
 
     fn enable_metrics(&mut self, _metrics: &dyn Metrics) {
-        todo!()
+        // todo!()
     }
 }
 
