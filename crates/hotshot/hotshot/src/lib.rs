@@ -63,6 +63,7 @@ use hotshot_types::{
     event::{EventType, LeafInfo},
     message::{DataMessage, Message, MessageKind, Proposal},
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
+    storage_metrics::StorageMetricsValue,
     traits::{
         consensus_api::ConsensusApi,
         network::ConnectedNetwork,
@@ -148,6 +149,9 @@ pub struct SystemContext<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versi
     /// Reference to the internal storage for consensus datum.
     pub storage: I::Storage,
 
+    /// Storage metrics
+    pub storage_metrics: Arc<StorageMetricsValue>,
+
     /// shared lock for upgrade information
     pub upgrade_lock: UpgradeLock<TYPES, V>,
 }
@@ -174,6 +178,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> Clone
             internal_event_stream: self.internal_event_stream.clone(),
             id: self.id,
             storage: self.storage.clone(),
+            storage_metrics: Arc::clone(&self.storage_metrics),
             upgrade_lock: self.upgrade_lock.clone(),
         }
     }
@@ -201,8 +206,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
-        metrics: ConsensusMetricsValue,
+        consensus_metrics: ConsensusMetricsValue,
         storage: I::Storage,
+        storage_metrics: StorageMetricsValue,
     ) -> Arc<Self> {
         let internal_chan = broadcast(EVENT_CHANNEL_SIZE);
         let external_chan = broadcast(EXTERNAL_EVENT_CHANNEL_SIZE);
@@ -216,8 +222,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             memberships,
             network,
             initializer,
-            metrics,
+            consensus_metrics,
             storage,
+            storage_metrics,
             internal_chan,
             external_chan,
         )
@@ -241,8 +248,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         membership_coordinator: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
-        metrics: ConsensusMetricsValue,
+        consensus_metrics: ConsensusMetricsValue,
         storage: I::Storage,
+        storage_metrics: StorageMetricsValue,
         internal_channel: (
             Sender<Arc<HotShotEvent<TYPES>>>,
             Receiver<Arc<HotShotEvent<TYPES>>>,
@@ -253,7 +261,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
 
         tracing::warn!("Starting consensus with HotShotConfig:\n\n {:?}", config);
 
-        let consensus_metrics = Arc::new(metrics);
+        let consensus_metrics = Arc::new(consensus_metrics);
+        let storage_metrics = Arc::new(storage_metrics);
         let anchored_leaf = initializer.anchor_leaf;
         let instance_state = initializer.instance_state;
 
@@ -383,6 +392,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             external_event_stream: (external_tx, external_rx.deactivate()),
             anchored_leaf: anchored_leaf.clone(),
             storage,
+            storage_metrics,
             upgrade_lock,
         });
 
@@ -644,8 +654,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
-        metrics: ConsensusMetricsValue,
+        consensus_metrics: ConsensusMetricsValue,
         storage: I::Storage,
+        storage_metrics: StorageMetricsValue,
     ) -> Result<
         (
             SystemContextHandle<TYPES, I, V>,
@@ -663,8 +674,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             memberships,
             network,
             initializer,
-            metrics,
+            consensus_metrics,
             storage,
+            storage_metrics,
         )
         .await;
         let handle = Arc::clone(&hotshot).run_tasks().await;
@@ -807,8 +819,9 @@ where
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
-        metrics: ConsensusMetricsValue,
+        consensus_metrics: ConsensusMetricsValue,
         storage: I::Storage,
+        storage_metrics: StorageMetricsValue,
     ) -> (
         SystemContextHandle<TYPES, I, V>,
         SystemContextHandle<TYPES, I, V>,
@@ -823,8 +836,9 @@ where
             memberships.clone(),
             Arc::clone(&network),
             initializer.clone(),
-            metrics.clone(),
+            consensus_metrics.clone(),
             storage.clone(),
+            storage_metrics.clone(),
         )
         .await;
         let right_system_context = SystemContext::new(
@@ -836,8 +850,9 @@ where
             memberships,
             network,
             initializer,
-            metrics,
+            consensus_metrics,
             storage,
+            storage_metrics,
         )
         .await;
 

@@ -32,6 +32,7 @@ use hotshot_types::{
     simple_certificate::DaCertificate2,
     simple_vote::{DaData2, DaVote2, SimpleVote, VersionedVoteData},
     stake_table::StakeTableEntries,
+    storage_metrics::StorageMetricsValue,
     traits::{
         election::Membership,
         node_implementation::{NodeType, Versions},
@@ -133,6 +134,7 @@ pub async fn build_system_handle_from_launcher<
         initializer,
         ConsensusMetricsValue::default(),
         storage,
+        StorageMetricsValue::default(),
     )
     .await
     .expect("Could not init hotshot");

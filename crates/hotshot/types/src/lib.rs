@@ -45,6 +45,7 @@ pub mod simple_vote;
 pub mod stake_table;
 pub mod traits;
 
+pub mod storage_metrics;
 /// Holds the upgrade configuration specification for HotShot nodes.
 pub mod upgrade_config;
 pub mod utils;
