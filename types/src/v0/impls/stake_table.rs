@@ -1059,7 +1059,7 @@ impl Fetcher {
                 tracing::warn!(
                     "RPC returned error {err:?}. will fallback to scanning over fixed block range"
                 );
-                self.scan_initialized_event_log(stake_table_init_block, token)
+                self.scan_token_contract_initialized_event_log(stake_table_init_block, token)
                     .await?
             },
         };
@@ -1101,7 +1101,7 @@ impl Fetcher {
         Ok(RewardAmount(reward))
     }
 
-    pub async fn scan_initialized_event_log(
+    pub async fn scan_token_contract_initialized_event_log(
         &self,
         stake_table_init_block: u64,
         token: EspTokenInstance<(), L1Provider>,

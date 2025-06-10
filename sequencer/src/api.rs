@@ -4720,7 +4720,7 @@ mod test {
         let token = EspToken::new(token_address, provider.clone());
 
         let init_log = fetcher
-            .scan_initialized_event_log(stake_table_init_block, token)
+            .scan_token_contract_initialized_event_log(stake_table_init_block, token)
             .await
             .unwrap();
 
