@@ -425,15 +425,21 @@ impl EpochCommittees {
 
     /// Update state to either create a new stake table for the given epoch or
     /// insert the given validator into the already existing stake table.
-    pub fn add_validator_to_epoch(&mut self, epoch: EpochNumber, validator: Validator<PubKey>) {
+    pub fn add_validator_to_epoch(
+        &mut self,
+        epoch: EpochNumber,
+        validator: Validator<PubKey>,
+    ) -> Result<(), StakeTableStateInsertError> {
         // Similar to `update_stake_table` but
         // 1. only take a single validator
         // 2. insert_or_update map for epoch
         if let Some(stake_table) = self.state.get_mut(&epoch) {
-            stake_table.update(validator);
+            stake_table.update(validator)?;
         } else {
-            self.insert(epoch, validator);
+            self.insert(epoch, validator)?;
         }
+
+        Ok(())
     }
     pub fn validate(
         &self,
@@ -441,13 +447,13 @@ impl EpochCommittees {
         state_key: &SchnorrPubKey,
     ) -> Result<(), StakeTableApplyEventError> {
         // The stake table contract enforces that each bls key is only used once.
-        if self.contains_stake_key(&stake_key) {
+        if self.contains_stake_key(stake_key) {
             return Err(StakeTableApplyEventError::DuplicateBlsKey(*stake_key));
         };
 
         // The contract does *not* enforce that each schnorr key is only used once,
         // therefore it's possible to have multiple validators with the same schnorr key.
-        if self.contains_state_key(&state_key) {
+        if self.contains_state_key(state_key) {
             tracing::warn!("schnorr key already used: {}", state_key.to_string());
         };
         Ok(())
@@ -471,7 +477,7 @@ impl EpochCommittees {
                 // if not register / authenticate and register
                 let stake_table_key: BLSPubKey = blsVk.into();
                 let state_ver_key: SchnorrPubKey = schnorrVk.into();
-                self.validate(&stake_table_key, &state_ver_key);
+                self.validate(&stake_table_key, &state_ver_key)?;
 
                 let validator = Validator {
                     account,
@@ -1793,6 +1799,33 @@ mod tests {
 
         assert!(stake_table.update(validator.clone()).is_err());
         assert!(stake_table.update(Validator::mock()).is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn test_add_validator_to_epoch() -> Result<()> {
+        setup_test();
+        let epoch = EpochNumber::new(4);
+        let validator = Validator::mock();
+        let mut epoch_committees = EpochCommittees::default();
+
+        // Same validator, same epoch.
+        assert!(epoch_committees
+            .add_validator_to_epoch(epoch, validator.clone())
+            .is_ok());
+        assert!(epoch_committees
+            .add_validator_to_epoch(epoch, validator.clone())
+            .is_err());
+
+        // Save validator, different epoch is Ok.
+        assert!(epoch_committees
+            .add_validator_to_epoch(EpochNumber::new(12), validator)
+            .is_ok());
+        // Of course we can have more than one validator per epoch.
+        assert!(epoch_committees
+            .add_validator_to_epoch(EpochNumber::new(12), Validator::mock())
+            .is_ok());
+
         Ok(())
     }
 
