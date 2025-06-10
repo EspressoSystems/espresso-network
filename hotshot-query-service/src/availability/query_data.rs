@@ -49,7 +49,6 @@ pub type TransactionInclusionProof<Types> =
 pub type Timestamp = time::OffsetDateTime;
 
 pub trait QueryableHeader<Types: NodeType>: BlockHeader<Types> {
-    fn timestamp(&self) -> u64;
     fn namespace_size(&self, id: u32, payload_size: usize) -> u64;
 }
 

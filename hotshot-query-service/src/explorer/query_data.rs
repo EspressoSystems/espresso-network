@@ -16,7 +16,7 @@ use std::{
     num::{NonZeroUsize, TryFromIntError},
 };
 
-use hotshot_types::traits::node_implementation::NodeType;
+use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
 use serde::{Deserialize, Serialize};
 use tide_disco::StatusCode;
 use time::format_description::well_known::Rfc3339;
@@ -27,7 +27,7 @@ use super::{
     traits::{ExplorerHeader, ExplorerTransaction},
 };
 use crate::{
-    availability::{BlockQueryData, QueryableHeader, QueryablePayload, TransactionHash},
+    availability::{BlockQueryData, QueryablePayload, TransactionHash},
     node::BlockHash,
     types::HeightIndexed,
     Header, Payload, Resolvable, Transaction,
@@ -173,7 +173,7 @@ impl<Types: NodeType> TryFrom<BlockQueryData<Types>> for BlockDetail<Types>
 where
     BlockQueryData<Types>: HeightIndexed,
     Payload<Types>: QueryablePayload<Types>,
-    Header<Types>: QueryableHeader<Types> + ExplorerHeader<Types>,
+    Header<Types>: BlockHeader<Types> + ExplorerHeader<Types>,
     BalanceAmount<Types>: Into<MonetaryValue>,
 {
     type Error = TimestampConversionError;
@@ -263,7 +263,7 @@ impl<Types: NodeType> TryFrom<BlockQueryData<Types>> for BlockSummary<Types>
 where
     BlockQueryData<Types>: HeightIndexed,
     Payload<Types>: QueryablePayload<Types>,
-    Header<Types>: QueryableHeader<Types> + ExplorerHeader<Types>,
+    Header<Types>: BlockHeader<Types> + ExplorerHeader<Types>,
 {
     type Error = TimestampConversionError;
 
@@ -349,7 +349,7 @@ impl<Types: NodeType>
 where
     BlockQueryData<Types>: HeightIndexed,
     Payload<Types>: QueryablePayload<Types>,
-    Header<Types>: QueryableHeader<Types> + ExplorerHeader<Types>,
+    Header<Types>: BlockHeader<Types> + ExplorerHeader<Types>,
     Transaction<Types>: ExplorerTransaction,
 {
     type Error = TimestampConversionError;
@@ -383,7 +383,7 @@ impl<Types: NodeType>
 where
     BlockQueryData<Types>: HeightIndexed,
     Payload<Types>: QueryablePayload<Types>,
-    Header<Types>: QueryableHeader<Types> + ExplorerHeader<Types>,
+    Header<Types>: BlockHeader<Types> + ExplorerHeader<Types>,
     <Types as NodeType>::Transaction: ExplorerTransaction,
 {
     type Error = TimestampConversionError;

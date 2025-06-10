@@ -60,15 +60,18 @@ use std::ops::RangeBounds;
 
 use async_trait::async_trait;
 use futures::future::Future;
-use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
+use hotshot_types::{
+    data::VidShare,
+    traits::{block_contents::BlockHeader, node_implementation::NodeType},
+};
 use jf_merkle_tree::prelude::MerkleProof;
 use tagged_base64::TaggedBase64;
 
 use crate::{
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, PayloadMetadata, PayloadQueryData,
-        QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
-        TransactionQueryData, VidCommonMetadata, VidCommonQueryData,
+        QueryablePayload, StateCertQueryData, TransactionHash, TransactionQueryData,
+        VidCommonMetadata, VidCommonQueryData,
     },
     explorer::{
         query_data::{
@@ -287,7 +290,7 @@ where
 pub trait ExplorerStorage<Types>
 where
     Types: NodeType,
-    Header<Types>: ExplorerHeader<Types> + QueryableHeader<Types>,
+    Header<Types>: ExplorerHeader<Types> + BlockHeader<Types>,
     Transaction<Types>: ExplorerTransaction,
     Payload<Types>: QueryablePayload<Types>,
 {

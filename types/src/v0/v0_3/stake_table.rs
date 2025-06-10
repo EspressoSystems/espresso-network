@@ -65,7 +65,7 @@ pub type IndexedStake = (
 );
 
 #[derive(Clone, derive_more::derive::Debug)]
-pub struct StakeTableFetcher {
+pub struct Fetcher {
     /// Peers for catching up the stake table
     #[debug(skip)]
     pub(crate) peers: Arc<dyn StateCatchup>,

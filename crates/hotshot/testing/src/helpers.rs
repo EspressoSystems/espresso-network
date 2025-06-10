@@ -26,7 +26,9 @@ use hotshot_example_types::{
 use hotshot_task_impls::events::HotShotEvent;
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
-    data::{vid_commitment, Leaf2, VidCommitment, VidDisperse, VidDisperseShare},
+    data::{
+        vid_commitment, Leaf2, VidCommitment, VidDisperse, VidDisperseAndDuration, VidDisperseShare,
+    },
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::{Proposal, UpgradeLock},
     simple_certificate::DaCertificate2,
@@ -118,12 +120,8 @@ pub async fn build_system_handle_from_launcher<
         hotshot_config.known_da_nodes.clone(),
     )));
 
-    let coordinator = EpochMembershipCoordinator::new(
-        memberships,
-        hotshot_config.epoch_height,
-        &storage,
-        hotshot_config.drb_difficulty,
-    );
+    let coordinator =
+        EpochMembershipCoordinator::new(memberships, hotshot_config.epoch_height, &storage);
     let node_key_map = launcher.metadata.build_node_key_map();
 
     let (c, s, r) = SystemContext::init(
@@ -314,7 +312,10 @@ pub async fn build_vid_proposal<TYPES: NodeType, V: Versions>(
     Proposal<TYPES, VidDisperse<TYPES>>,
     Vec<Proposal<TYPES, VidDisperseShare<TYPES>>>,
 ) {
-    let vid_disperse = VidDisperse::calculate_vid_disperse::<V>(
+    let VidDisperseAndDuration {
+        disperse: vid_disperse,
+        duration: _,
+    } = VidDisperse::calculate_vid_disperse::<V>(
         payload,
         &membership.coordinator,
         view_number,

@@ -436,6 +436,7 @@ pub use error::Error;
 use futures::{future::BoxFuture, stream::StreamExt};
 use hotshot::types::SystemContextHandle;
 use hotshot_types::traits::{
+    block_contents::BlockHeader,
     node_implementation::{NodeImplementation, NodeType, Versions},
     BlockPayload,
 };
@@ -530,7 +531,7 @@ pub async fn run_standalone_service<
 ) -> Result<(), Error>
 where
     Payload<Types>: availability::QueryablePayload<Types>,
-    Header<Types>: availability::QueryableHeader<Types>,
+    Header<Types>: BlockHeader<Types>,
     D: availability::AvailabilityDataSource<Types>
         + data_source::UpdateDataSource<Types>
         + node::NodeDataSource<Types>
