@@ -13,7 +13,7 @@ pub mod documentation;
 use committable::Committable;
 use futures::future::{select, Either};
 use hotshot_types::{
-    drb::{DrbResult, INITIAL_DRB_RESULT},
+    drb::{drb_difficulty_selector, DrbResult, INITIAL_DRB_RESULT},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     simple_certificate::LightClientStateUpdateCertificate,
@@ -273,6 +273,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let upgrade_lock =
             UpgradeLock::<TYPES, V>::from_certificate(&initializer.decided_upgrade_certificate);
 
+        debug!("Setting DRB difficulty selector in membership");
+        let drb_difficulty_selector = drb_difficulty_selector(upgrade_lock.clone(), &config);
+
+        membership_coordinator
+            .set_drb_difficulty_selector(drb_difficulty_selector)
+            .await;
+
         // Allow overflow on the external channel, otherwise sending to it may block.
         external_rx.set_overflow(true);
 
@@ -349,6 +356,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             config.epoch_height,
             initializer.state_cert,
             config.drb_difficulty,
+            config.drb_upgrade_difficulty,
         );
 
         let consensus = Arc::new(RwLock::new(consensus));
