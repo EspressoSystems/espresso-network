@@ -3,16 +3,15 @@ use std::fmt;
 use anyhow::{ensure, Context};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
-use hotshot::types::BLSPubKey;
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
 use hotshot_types::{
-    data::{VidCommitment, ViewNumber},
+    data::{vid_commitment, VidCommitment, ViewNumber},
     light_client::LightClientState,
     traits::{
-        block_contents::{BlockHeader, BuilderFee},
-        node_implementation::{ConsensusTime, NodeType},
+        block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
+        node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::BuilderSignatureKey,
-        BlockPayload, ValidatedState as _,
+        BlockPayload, EncodeBytes, ValidatedState as _,
     },
     utils::BuilderCommitment,
 };
@@ -30,17 +29,17 @@ use super::{
     instance_state::NodeState,
     state::ValidatedState,
     v0_1::{IterableFeeInfo, RewardMerkleCommitment, RewardMerkleTree, REWARD_MERKLE_TREE_HEIGHT},
-    v0_3::{ChainConfig, Validator},
+    v0_3::ChainConfig,
 };
 use crate::{
     eth_signature_key::BuilderSignature,
     v0::{
         header::{EitherOrVersion, VersionedHeader},
-        impls::reward::{find_validator_info, first_two_epochs},
+        impls::reward::{find_validator_info, first_two_epochs, RewardDistributor},
     },
     v0_1, v0_2, v0_3, BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
-    FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsTable, SeqTypes,
-    UpgradeType,
+    FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable,
+    PayloadByteLen, SeqTypes, UpgradeType,
 };
 
 impl v0_1::Header {
@@ -363,7 +362,7 @@ impl Header {
         mut state: ValidatedState,
         chain_config: ChainConfig,
         version: Version,
-        validator: Option<Validator<BLSPubKey>>,
+        reward_distributor: Option<RewardDistributor>,
     ) -> anyhow::Result<Self> {
         ensure!(
             version.major == 0,
@@ -463,8 +462,9 @@ impl Header {
 
         assert!(major == 0, "Invalid major version {major}");
 
-        if let Some(validator) = validator {
-            let reward_state = validator.apply_rewards(state.reward_merkle_tree.clone())?;
+        if let Some(reward_distributor) = reward_distributor {
+            let reward_state =
+                reward_distributor.apply_rewards(state.reward_merkle_tree.clone())?;
             state.reward_merkle_tree = reward_state;
         }
 
@@ -568,7 +568,7 @@ impl Header {
         &mut *field_mut!(self.height)
     }
 
-    pub fn timestamp(&self) -> u64 {
+    pub fn timestamp_internal(&self) -> u64 {
         *field!(self.timestamp)
     }
 
@@ -850,22 +850,22 @@ impl BlockHeader<SeqTypes> for Header {
                 .context("remembering block proof")?;
         }
 
-        let mut leader_config = None;
+        let mut compute_reward = None;
         // Rewards are distributed only if the current epoch is not the first or second epoch
         // this is because we don't have stake table from the contract for the first two epochs
         let proposed_header_height = parent_leaf.height() + 1;
         if version >= EpochVersion::version()
             && !first_two_epochs(proposed_header_height, instance_state).await?
         {
-            leader_config = Some(
-                find_validator_info(
-                    instance_state,
-                    &mut validated_state,
-                    parent_leaf,
-                    ViewNumber::new(view_number),
-                )
-                .await?,
-            );
+            let leader = find_validator_info(
+                instance_state,
+                &mut validated_state,
+                parent_leaf,
+                ViewNumber::new(view_number),
+            )
+            .await?;
+            let block_reward = instance_state.block_reward().await;
+            compute_reward = Some(RewardDistributor::new(leader, block_reward));
         };
 
         Ok(Self::from_info(
@@ -880,16 +880,27 @@ impl BlockHeader<SeqTypes> for Header {
             validated_state,
             chain_config,
             version,
-            leader_config,
+            compute_reward,
         )?)
     }
 
-    fn genesis(
+    fn genesis<V: Versions>(
         instance_state: &NodeState,
-        payload_commitment: VidCommitment,
-        builder_commitment: BuilderCommitment,
-        ns_table: <<SeqTypes as NodeType>::BlockPayload as BlockPayload<SeqTypes>>::Metadata,
+        payload: <SeqTypes as NodeType>::BlockPayload,
+        metadata: &<<SeqTypes as NodeType>::BlockPayload as BlockPayload<SeqTypes>>::Metadata,
     ) -> Self {
+        let payload_bytes = payload.encode();
+        let builder_commitment = payload.builder_commitment(metadata);
+
+        let vid_commitment_version = instance_state.genesis_version;
+
+        let payload_commitment = vid_commitment::<V>(
+            &payload_bytes,
+            &metadata.encode(),
+            GENESIS_VID_NUM_STORAGE_NODES,
+            vid_commitment_version,
+        );
+
         let ValidatedState {
             fee_merkle_tree,
             block_merkle_tree,
@@ -913,7 +924,7 @@ impl BlockHeader<SeqTypes> for Header {
             instance_state.l1_genesis,
             payload_commitment,
             builder_commitment.clone(),
-            ns_table.clone(),
+            metadata.clone(),
             fee_merkle_tree_root,
             block_merkle_tree_root,
             reward_merkle_tree_root,
@@ -921,6 +932,10 @@ impl BlockHeader<SeqTypes> for Header {
             vec![],
             instance_state.current_version,
         )
+    }
+
+    fn timestamp(&self) -> u64 {
+        self.timestamp_internal()
     }
 
     fn block_number(&self) -> u64 {
@@ -961,8 +976,11 @@ impl BlockHeader<SeqTypes> for Header {
 }
 
 impl QueryableHeader<SeqTypes> for Header {
-    fn timestamp(&self) -> u64 {
-        self.timestamp()
+    fn namespace_size(&self, id: u32, payload_size: usize) -> u64 {
+        self.ns_table()
+            .ns_range(&NsIndex(id as usize), &PayloadByteLen(payload_size))
+            .byte_len()
+            .0 as u64
     }
 }
 

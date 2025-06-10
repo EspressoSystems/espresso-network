@@ -615,10 +615,12 @@ impl TestNetwork {
             epoch_start_block: Some(1),
             // TODO we apparently have two `capacity` configurations
             stake_table_capacity: Some(STAKE_TABLE_CAPACITY_FOR_TEST),
+            drb_upgrade_difficulty: None,
             // Start with a funded account, so we can test catchup after restart.
             accounts: [(builder_account(), 1000000000.into())]
                 .into_iter()
                 .collect(),
+            genesis_version: Version { major: 0, minor: 1 },
         };
 
         let node_params = (0..da_nodes + regular_nodes)

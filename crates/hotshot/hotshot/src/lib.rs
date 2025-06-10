@@ -13,7 +13,7 @@ pub mod documentation;
 use committable::Committable;
 use futures::future::{select, Either};
 use hotshot_types::{
-    drb::{DrbResult, INITIAL_DRB_RESULT},
+    drb::{drb_difficulty_selector, DrbResult, INITIAL_DRB_RESULT},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     simple_certificate::LightClientStateUpdateCertificate,
@@ -273,6 +273,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let upgrade_lock =
             UpgradeLock::<TYPES, V>::from_certificate(&initializer.decided_upgrade_certificate);
 
+        debug!("Setting DRB difficulty selector in membership");
+        let drb_difficulty_selector = drb_difficulty_selector(upgrade_lock.clone(), &config);
+
+        membership_coordinator
+            .set_drb_difficulty_selector(drb_difficulty_selector)
+            .await;
+
         // Allow overflow on the external channel, otherwise sending to it may block.
         external_rx.set_overflow(true);
 
@@ -349,6 +356,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             config.epoch_height,
             initializer.state_cert,
             config.drb_difficulty,
+            config.drb_upgrade_difficulty,
         );
 
         let consensus = Arc::new(RwLock::new(consensus));
@@ -1219,17 +1227,21 @@ async fn load_start_epoch_info<TYPES: NodeType>(
     for epoch_info in start_epoch_info {
         if let Some(block_header) = &epoch_info.block_header {
             tracing::info!("Calling add_epoch_root for epoch {:?}", epoch_info.epoch);
-            let write_callback = {
-                let membership_reader = membership.read().await;
-                membership_reader
-                    .add_epoch_root(epoch_info.epoch, block_header.clone())
-                    .await
-            };
 
-            if let Ok(Some(write_callback)) = write_callback {
-                let mut membership_writer = membership.write().await;
-                write_callback(&mut *membership_writer);
-            }
+            Membership::add_epoch_root(
+                Arc::clone(membership),
+                epoch_info.epoch,
+                block_header.clone(),
+            )
+            .await
+            .unwrap_or_else(|err| {
+                // REVIEW NOTE: Should we panic here? a failure here seems like it should be fatal
+                tracing::error!(
+                    "Failed to add epoch root for epoch {:?}: {}",
+                    epoch_info.epoch,
+                    err
+                );
+            });
         }
     }
 

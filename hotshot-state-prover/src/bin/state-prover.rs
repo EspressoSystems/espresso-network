@@ -11,7 +11,7 @@ use alloy::{
 use clap::Parser;
 use espresso_contract_deployer::network_config::fetch_epoch_config_from_sequencer;
 use espresso_types::parse_duration;
-use hotshot_state_prover::service::{run_prover_once, run_prover_service, StateProverConfig};
+use hotshot_state_prover::service::StateProverConfig;
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
 use sequencer_utils::logging;
 use url::Url;
@@ -94,6 +94,14 @@ struct Args {
     #[clap(short, long, env = "ESPRESSO_STATE_PROVER_MAX_GAS_PRICE_IN_GWEI")]
     pub max_gas_price: Option<String>,
 
+    /// Indicated if the prover is using the old V1 LightClient contract
+    #[clap(
+        long = "v1-contract",
+        env = "ESPRESSO_STATE_PROVER_V1_CONTRACT",
+        default_value = "false"
+    )]
+    pub v1_contract: bool,
+
     #[clap(flatten)]
     logging: logging::Config,
 }
@@ -161,16 +169,45 @@ async fn main() {
 
     // validate that the light client contract is a proxy, panics otherwise
     config.validate_light_client_contract().await.unwrap();
+    let is_legacy = match hotshot_state_prover::legacy::service::is_contract_legacy(
+        &l1_provider,
+        args.light_client_address,
+    )
+    .await
+    {
+        Ok(is_legacy) => is_legacy,
+        Err(err) => {
+            tracing::error!("Error checking with the contract: {:?}", err);
+            return;
+        },
+    };
+    tracing::info!(
+        "Detected contract version {}",
+        if is_legacy { "v1" } else { "v2" }
+    );
+
+    // This bind version doesn't represent anything now, but it's required by the service trait
+    let bind_version = StaticVersion::<0, 1> {};
 
     if args.daemon {
         // Launching the prover service daemon
-        if let Err(err) = run_prover_service(config, StaticVersion::<0, 1> {}).await {
+        let result = if is_legacy {
+            hotshot_state_prover::legacy::service::run_prover_service(config, bind_version).await
+        } else {
+            hotshot_state_prover::service::run_prover_service(config, bind_version).await
+        };
+        if let Err(err) = result {
             tracing::error!("Error running prover service: {:?}", err);
         };
     } else {
         // Run light client state update once
-        if let Err(err) = run_prover_once(config, StaticVersion::<0, 1> {}).await {
-            tracing::error!("Error running prover once: {:?}", err);
+        let result = if is_legacy {
+            hotshot_state_prover::legacy::service::run_prover_once(config, bind_version).await
+        } else {
+            hotshot_state_prover::service::run_prover_once(config, bind_version).await
         };
+        if let Err(err) = result {
+            tracing::error!("Error running prover once: {:?}", err);
+        }
     }
 }

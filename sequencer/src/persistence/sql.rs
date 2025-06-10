@@ -2565,15 +2565,16 @@ mod test {
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_types::{
         data::{
-            ns_table::parse_ns_table, vid_commitment, vid_disperse::VidDisperseShare2, EpochNumber,
-            QuorumProposal2,
+            ns_table::parse_ns_table, vid_disperse::VidDisperseShare2, EpochNumber, QuorumProposal2,
         },
         message::convert_proposal,
         simple_certificate::QuorumCertificate,
         simple_vote::QuorumData,
         traits::{
-            block_contents::BlockHeader, node_implementation::Versions,
-            signature_key::SignatureKey, EncodeBytes,
+            block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
+            node_implementation::Versions,
+            signature_key::SignatureKey,
+            EncodeBytes,
         },
         utils::EpochTransitionIndicator,
         vid::{
@@ -2985,22 +2986,11 @@ mod test {
                 Payload::from_transactions([], &validated_state, &instance_state)
                     .await
                     .unwrap();
-            let builder_commitment = payload.builder_commitment(&metadata);
+
             let payload_bytes = payload.encode();
 
-            let payload_commitment = vid_commitment::<TestVersions>(
-                &payload_bytes,
-                &metadata.encode(),
-                4,
-                <TestVersions as Versions>::Base::VERSION,
-            );
-
-            let block_header = Header::genesis(
-                &instance_state,
-                payload_commitment,
-                builder_commitment,
-                metadata,
-            );
+            let block_header =
+                Header::genesis::<TestVersions>(&instance_state, payload.clone(), &metadata);
 
             let null_quorum_data = QuorumData {
                 leaf_commit: Commitment::<Leaf>::default_commitment_no_preimage(),
@@ -3039,7 +3029,7 @@ mod test {
             let mut leaf = Leaf::from_quorum_proposal(&quorum_proposal);
             leaf.fill_block_payload::<TestVersions>(
                 payload,
-                4,
+                GENESIS_VID_NUM_STORAGE_NODES,
                 <TestVersions as Versions>::Base::VERSION,
             )
             .unwrap();
@@ -3077,7 +3067,9 @@ mod test {
 
             tx.commit().await.unwrap();
 
-            let disperse = advz_scheme(4).disperse(payload_bytes.clone()).unwrap();
+            let disperse = advz_scheme(GENESIS_VID_NUM_STORAGE_NODES)
+                .disperse(payload_bytes.clone())
+                .unwrap();
 
             let vid = ADVZDisperseShare::<SeqTypes> {
                 view_number: ViewNumber::new(i),
