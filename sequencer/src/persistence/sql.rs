@@ -1229,13 +1229,13 @@ impl SequencerPersistence for Persistence {
         &self,
         proposal: &Proposal<SeqTypes, ADVZDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()> {
-        let now = Instant::now();
         let view = proposal.data.view_number.u64();
         let payload_hash = proposal.data.payload_commitment;
         let proposal: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
             convert_proposal(proposal.clone());
         let data_bytes = bincode::serialize(&proposal).unwrap();
 
+        let now = Instant::now();
         let mut tx = self.db.write().await?;
         tx.upsert(
             "vid_share2",
@@ -1254,13 +1254,13 @@ impl SequencerPersistence for Persistence {
         &self,
         proposal: &Proposal<SeqTypes, VidDisperseShare2<SeqTypes>>,
     ) -> anyhow::Result<()> {
-        let now = Instant::now();
         let view = proposal.data.view_number.u64();
         let payload_hash = proposal.data.payload_commitment;
         let proposal: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
             convert_proposal(proposal.clone());
         let data_bytes = bincode::serialize(&proposal).unwrap();
 
+        let now = Instant::now();
         let mut tx = self.db.write().await?;
         tx.upsert(
             "vid_share2",
@@ -1285,6 +1285,7 @@ impl SequencerPersistence for Persistence {
         let view = data.view_number().u64();
         let data_bytes = bincode::serialize(proposal).unwrap();
 
+        let now = Instant::now();
         let mut tx = self.db.write().await?;
         tx.upsert(
             "da_proposal",
@@ -1293,7 +1294,11 @@ impl SequencerPersistence for Persistence {
             [(view as i64, data_bytes, vid_commit.to_string())],
         )
         .await?;
-        tx.commit().await
+        let res = tx.commit().await;
+        self.metrics
+            .append_da_duration
+            .add_point(now.elapsed().as_secs_f64());
+        res
     }
 
     async fn record_action(
@@ -1336,6 +1341,8 @@ impl SequencerPersistence for Persistence {
 
         let proposal_bytes = bincode::serialize(&proposal).context("serializing proposal")?;
         let leaf_hash = Committable::commit(&Leaf2::from_quorum_proposal(&proposal.data));
+
+        let now = Instant::now();
         let mut tx = self.db.write().await?;
         tx.upsert(
             "quorum_proposals2",
@@ -1359,8 +1366,11 @@ impl SequencerPersistence for Persistence {
             )],
         )
         .await?;
-
-        tx.commit().await
+        let res = tx.commit().await;
+        self.metrics
+            .append_quorum2_duration
+            .add_point(now.elapsed().as_secs_f64());
+        res
     }
 
     async fn load_upgrade_certificate(
@@ -1943,6 +1953,7 @@ impl SequencerPersistence for Persistence {
         let view = data.view_number().u64();
         let data_bytes = bincode::serialize(proposal).unwrap();
 
+        let now = Instant::now();
         let mut tx = self.db.write().await?;
         tx.upsert(
             "da_proposal2",
@@ -1951,7 +1962,11 @@ impl SequencerPersistence for Persistence {
             [(view as i64, data_bytes, vid_commit.to_string())],
         )
         .await?;
-        tx.commit().await
+        let res = tx.commit().await;
+        self.metrics
+            .append_da2_duration
+            .add_point(now.elapsed().as_secs_f64());
+        res
     }
 
     async fn store_drb_result(
