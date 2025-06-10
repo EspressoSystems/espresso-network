@@ -423,16 +423,13 @@ impl EpochCommittees {
         })
     }
 
-    /// Update state to either create a new stake table for the given epoch or
-    /// insert the given validator into the already existing stake table.
+    /// Update state to either create a new stake table for the given epoch
+    /// containing the given validator, or update the existing stake table with the given validator
     pub fn add_validator_to_epoch(
         &mut self,
         epoch: EpochNumber,
         validator: Validator<PubKey>,
     ) -> Result<(), StakeTableStateInsertError> {
-        // Similar to `update_stake_table` but
-        // 1. only take a single validator
-        // 2. insert_or_update map for epoch
         if let Some(stake_table) = self.state.get_mut(&epoch) {
             stake_table.update(validator)?;
         } else {
