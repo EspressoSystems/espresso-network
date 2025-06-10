@@ -939,8 +939,8 @@ pub struct EpochCommittee {
     address_mapping: HashMap<BLSPubKey, Address>,
 }
 
-impl From<Validator<PubKey>> for PeerConfig<SeqTypes> {
-    fn from(validator: Validator<PubKey>) -> Self {
+impl From<&Validator<PubKey>> for PeerConfig<SeqTypes> {
+    fn from(validator: &Validator<PubKey>) -> Self {
         Self {
             stake_table_entry: BLSPubKey::stake_table_entry(
                 &validator.stake_table_key,
@@ -957,13 +957,15 @@ impl EpochCommittee {
         validator: Validator<PubKey>,
         // TODO use `anyhow` for now b/c state data model will probably change
     ) -> anyhow::Result<()> {
-        let peer = PeerConfig::from(validator.clone());
+        let stake_table_key = validator.stake_table_key;
+        let account = validator.account;
+        let peer = PeerConfig::from(&validator);
+
         self.eligible_leaders.push(peer.clone());
-        self.stake_table.insert(*peer.stake_table_entry.key(), peer);
-        self.validators
-            .insert(validator.account.clone(), validator.clone());
+        self.stake_table.insert(stake_table_key, peer);
+        self.validators.insert(account, validator.clone());
         self.address_mapping
-            .insert(validator.stake_table_key, validator.account.clone());
+            .insert(validator.stake_table_key, account);
         Ok(())
     }
 }
@@ -977,23 +979,28 @@ impl EpochCommittees {
         &self.fetcher
     }
 
+    /// Insert a new `EpochCommittee`.
     pub fn insert(
         &mut self,
         epoch: EpochNumber,
         validator: Validator<PubKey>,
     ) -> Result<(), StakeTableStateInsertError> {
-        let peer = PeerConfig::from(validator.clone());
+        let stake_table_key = validator.stake_table_key;
+        let account = validator.account;
+        let peer = PeerConfig::from(&validator);
+
         let mut address_mapping = HashMap::new();
         let mut stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>> = IndexMap::new();
         let mut validators: IndexMap<Address, Validator<PubKey>> = IndexMap::new();
 
-        let None = validators.insert(validator.account, validator.clone()) else {
+        let None = validators.insert(validator.account, validator) else {
             return Err(StakeTableStateInsertError::UpdateOnInsertValidator);
         };
-        let None = address_mapping.insert(validator.stake_table_key, validator.account) else {
+        let None = address_mapping.insert(stake_table_key, account) else {
             return Err(StakeTableStateInsertError::UpdateOnInsertValidator);
         };
-        let None = stake_table.insert(validator.stake_table_key, peer.clone()) else {
+        // TODO don't worry about the clone b/c we can remove `stake_table`
+        let None = stake_table.insert(stake_table_key, peer.clone()) else {
             return Err(StakeTableStateInsertError::UpdateOnInsertStakeTable);
         };
 
