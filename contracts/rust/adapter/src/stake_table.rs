@@ -17,7 +17,9 @@ use jf_signature::{
 };
 
 use crate::sol_types::{
-    StakeTableV2::{getVersionReturn, ConsensusKeysUpdatedV2, ValidatorRegisteredV2},
+    StakeTableV2::{
+        getVersionReturn, ConsensusKeysUpdatedV2, StakeTableV2Events, ValidatorRegisteredV2,
+    },
     *,
 };
 
