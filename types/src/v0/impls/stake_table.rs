@@ -440,6 +440,25 @@ impl EpochCommittees {
         Ok(())
     }
 
+    /// Remove `Validator` from stake table.
+    pub fn validator_exit(
+        &mut self,
+        epoch: EpochNumber,
+        account: Address,
+    ) -> Result<(), StakeTableApplyEventError> {
+        if let Some(stake_table) = self.state.get_mut(&epoch) {
+            stake_table
+                .remove(&account)
+                .ok_or(StakeTableApplyEventError::GhostExit(account))?;
+        } else {
+            return Err(StakeTableApplyEventError::ExitNonExistentStakeTable(
+                account,
+            ));
+        };
+
+        Ok(())
+    }
+
     /// Validate that the given BLS key does not exist in any stake table.
     pub fn validate_keys(
         &self,
@@ -493,7 +512,9 @@ impl EpochCommittees {
             StakeTableEvent::RegisterV2(event) => {
                 // Signature authentication is performed right after fetching, if we get an
                 // unauthenticated event here, something went wrong, we abort early.
-                event.authenticate()?; // TODO verify the veracity above ^ comment
+                event
+                    .authenticate()
+                    .map_err(|e| StakeTableApplyEventError(e.to_string()))?; // TODO verify the veracity above ^ comment
                 let ValidatorRegisteredV2 {
                     account,
                     blsVK,
@@ -517,7 +538,9 @@ impl EpochCommittees {
                 self.validate_keys(&validator)?;
                 self.register_validator(epoch, validator)?;
             },
-            StakeTableEvent::Deregister(exit) => {},
+            StakeTableEvent::Deregister(exit) => {
+                self.validator_exit(epoch, exit.validator)?;
+            },
             _ => todo!(),
         }
         Ok(())
@@ -1013,6 +1036,18 @@ impl EpochCommittee {
         self.eligible_leaders.push(peer.clone());
 
         Ok(())
+    }
+
+    /// Remove `Validator` from stake table
+    pub fn remove(&mut self, account: &Address) -> Option<Address> {
+        // TODO it would be better to zip all the `Some` cases, that way we can
+        // detect if only some of the data types have the validator, which would
+        // indicate a bug on insertion/update side.
+        self.validators
+            .shift_remove(account)
+            .and_then(|validator| self.stake_table.shift_remove(&validator.stake_table_key))
+            .and_then(|peer| self.address_mapping.remove(peer.stake_table_entry.key()))
+            .or(None)
     }
 }
 
@@ -1868,6 +1903,39 @@ mod tests {
         assert!(epoch_committees
             .apply_event(epoch, StakeTableEvent::RegisterV2(registered))
             .is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_apply_event_exit() -> Result<()> {
+        setup_test();
+        let epoch = EpochNumber::new(4);
+        let validator = Validator::mock();
+        let mut epoch_committees = EpochCommittees::default();
+
+        assert!(epoch_committees
+            .register_validator(epoch, validator.clone())
+            .is_ok());
+
+        let test_validator = TestValidator::random();
+        let registered = ValidatorRegisteredV2::from(&test_validator);
+
+        assert!(epoch_committees
+            .apply_event(epoch, StakeTableEvent::RegisterV2(registered.clone()))
+            .is_ok());
+
+        let exit = ValidatorExit::from(&test_validator);
+        assert!(epoch_committees
+            .apply_event(epoch, StakeTableEvent::Deregister(exit))
+            .is_ok());
+
+        assert_eq!(
+            epoch_committees
+                .apply_event(epoch, StakeTableEvent::Deregister(exit))
+                .unwrap_err(),
+            StakeTableApplyEventError::GhostExit(exit.validator)
+        );
 
         Ok(())
     }

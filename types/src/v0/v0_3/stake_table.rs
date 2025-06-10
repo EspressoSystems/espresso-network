@@ -154,7 +154,7 @@ pub enum StakeTableEventHandlerError {
     ABIError(#[from] ABIError),
 }
 
-#[derive(thiserror::Error, Debug, derive_more::From)]
+#[derive(thiserror::Error, Debug, derive_more::From, PartialEq, Eq)]
 pub enum StakeTableStateInsertError {
     #[error("`insert` called and `Validator` already present in validator state")]
     UpdateOnInsertValidator,
@@ -167,13 +167,23 @@ pub enum StakeTableStateInsertError {
 }
 
 #[derive(thiserror::Error, Debug)]
+pub enum EventAuthencationError {
+    #[error("Authentication Error: {0}.")]
+    FailedToAuthenticate(#[from] StakeTableSolError),
+}
+
+#[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum StakeTableApplyEventError {
     #[error("BLS key already used: {0}")]
     DuplicateBlsKey(BLSPubKey),
     #[error("Authentication Error: {0}.")]
-    FailedToAuthenticate(#[from] StakeTableSolError),
+    AuthenticationError(String),
     #[error("Registration Error: {0}.")]
     RegistrationError(#[from] StakeTableStateInsertError),
+    #[error("Recieved Deregister event for non-existent `Validator`")]
+    GhostExit(Address),
+    #[error("Recieved Deregister event for non-existent stake table")]
+    ExitNonExistentStakeTable(Address),
 }
 
 impl TryFrom<&Log> for StakeTableEventType {
@@ -223,13 +233,13 @@ impl From<(EventKey, StakeTableEvent)> for StakeTableEventType {
 
 // TODO move to impl folder
 impl StakeTableEvent {
-    pub fn handle(&self) -> Result<(), StakeTableEventHandlerError> {
+    pub fn handle(&self) -> Result<(), EventAuthencationError> {
         // let mut validators = IndexMap::new();
         match self {
             Self::RegisterV2(event) => {
                 event
                     .authenticate()
-                    .map_err(StakeTableEventHandlerError::FailedToAuthenticate)?;
+                    .map_err(EventAuthencationError::FailedToAuthenticate)?;
                 // let validator = Validator::from_event(event);
                 // self.register(validators);
             },
