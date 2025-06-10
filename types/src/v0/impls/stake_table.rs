@@ -992,11 +992,11 @@ impl Fetcher {
     /// because in future when reward withdrawals are supported, there might be more than one mint transfer logs from
     /// zero address
     ///
-    /// The ESP token contract itself does not expose the block
-    /// it was initialized at. But the stake table contract does
-    /// Since the stake table contract is deployed after the token contract is deployed as it holds the token
-    /// contract address, we use its initialization block as a safe upper bound when scanning
-    ///  backwards for the token contract initialization even t
+    /// The ESP token contract itself does not expose the intialization block
+    /// but the stake table contract does
+    /// The stake table contract is deployed after the token contract as it holds the token
+    /// contract address. We use the stake table contract initialization block as a safe upper bound when scanning
+    ///  backwards for the token contract initialization event
     pub async fn fetch_block_reward(&self) -> anyhow::Result<RewardAmount> {
         let chain_config = *self.chain_config.lock().await;
 
