@@ -22,6 +22,11 @@ impl TestNodeStakes {
             .cloned()
             .unwrap_or(self.default_stake)
     }
+
+    pub fn with_stake(mut self, node_id: u64, stake: U256) -> Self {
+        self.stakes.insert(node_id, stake);
+        self
+    }
 }
 
 impl Default for TestNodeStakes {
