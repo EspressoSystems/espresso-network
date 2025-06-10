@@ -668,6 +668,11 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
         self.version_infallible(view).await >= V::Epochs::VERSION
     }
 
+    /// Return whether epochs are enabled in the given view
+    pub async fn upgraded_drb_and_header(&self, view: TYPES::View) -> bool {
+        self.version_infallible(view).await >= V::DrbAndHeaderUpgrade::VERSION
+    }
+
     /// Serialize a message with a version number, using `message.view_number()` and an optional decided upgrade certificate to determine the message's version.
     ///
     /// # Errors
