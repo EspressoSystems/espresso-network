@@ -6,7 +6,6 @@
 
 use std::{collections::HashMap, num::NonZeroUsize, rc::Rc, sync::Arc, time::Duration};
 
-use alloy::primitives::U256;
 use async_lock::RwLock;
 use hotshot::{
     tasks::EventTransformerState,
@@ -35,6 +34,7 @@ use super::{
 };
 use crate::{
     helpers::{key_pair_for_id, TestNodeKeyMap},
+    node_stake::TestNodeStakes,
     spinning_task::SpinningTaskDescription,
     test_launcher::{Network, ResourceGenerators, TestLauncher},
     test_task::TestTaskStateSeed,
@@ -99,6 +99,7 @@ pub fn default_hotshot_config<TYPES: NodeType>(
 pub fn gen_node_lists<TYPES: NodeType>(
     num_staked_nodes: u64,
     num_da_nodes: u64,
+    node_stakes: &TestNodeStakes,
 ) -> (Vec<PeerConfig<TYPES>>, Vec<PeerConfig<TYPES>>) {
     let mut staked_nodes = Vec::new();
     let mut da_nodes = Vec::new();
@@ -107,7 +108,7 @@ pub fn gen_node_lists<TYPES: NodeType>(
         let validator_config: ValidatorConfig<TYPES> = ValidatorConfig::generated_from_seed_indexed(
             [0u8; 32],
             n,
-            U256::from(1),
+            node_stakes.get(n),
             n < num_da_nodes,
         );
 
@@ -163,6 +164,8 @@ pub struct TestDescription<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
     pub start_solver: bool,
     /// boxed closure used to validate the resulting transactions
     pub validate_transactions: TransactionValidator,
+    /// stake to apply to particular nodes. Nodes not included will have a stake of 1.
+    pub node_stakes: TestNodeStakes,
 }
 
 pub fn nonempty_block_threshold(threshold: (u64, u64)) -> TransactionValidator {
@@ -254,8 +257,12 @@ pub async fn create_test_handle<
     // See whether or not we should be DA
     let is_da = node_id < config.da_staked_committee_size as u64;
 
-    let validator_config: ValidatorConfig<TYPES> =
-        ValidatorConfig::generated_from_seed_indexed([0u8; 32], node_id, U256::from(1), is_da);
+    let validator_config: ValidatorConfig<TYPES> = ValidatorConfig::generated_from_seed_indexed(
+        [0u8; 32],
+        node_id,
+        metadata.node_stakes.get(node_id),
+        is_da,
+    );
 
     // Get key pair for certificate aggregation
     let private_key = validator_config.private_key.clone();
@@ -402,12 +409,19 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
     #[must_use]
     #[allow(clippy::redundant_field_names)]
     pub fn default_more_nodes() -> Self {
+        Self::default_more_nodes_with_stake(TestNodeStakes::default())
+    }
+
+    #[must_use]
+    #[allow(clippy::redundant_field_names)]
+    pub fn default_more_nodes_with_stake(node_stakes: TestNodeStakes) -> Self {
         let num_nodes_with_stake = 20;
         let num_da_nodes = 14;
         let epoch_height = 10;
         let epoch_start_block = 1;
 
-        let (staked_nodes, da_nodes) = gen_node_lists::<TYPES>(num_nodes_with_stake, num_da_nodes);
+        let (staked_nodes, da_nodes) =
+            gen_node_lists::<TYPES>(num_nodes_with_stake, num_da_nodes, &node_stakes);
 
         Self {
             test_config: default_hotshot_config::<TYPES>(
@@ -437,6 +451,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
                 0,
                 num_nodes_with_stake.try_into().unwrap(),
             ),
+            node_stakes,
             ..Self::default()
         }
     }
@@ -444,7 +459,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
     pub fn set_num_nodes(self, num_nodes: u64, num_da_nodes: u64) -> Self {
         assert!(num_da_nodes <= num_nodes, "Cannot build test with fewer DA than total nodes. You may have mixed up the arguments to the function");
 
-        let (staked_nodes, da_nodes) = gen_node_lists::<TYPES>(num_nodes, num_da_nodes);
+        let (staked_nodes, da_nodes) =
+            gen_node_lists::<TYPES>(num_nodes, num_da_nodes, &self.node_stakes);
 
         Self {
             test_config: default_hotshot_config::<TYPES>(
@@ -467,20 +483,16 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
 
         Arc::new(node_key_map)
     }
-}
 
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> Default
-    for TestDescription<TYPES, I, V>
-{
-    /// by default, just a single round
-    #[allow(clippy::redundant_field_names)]
-    fn default() -> Self {
+    #[must_use]
+    fn default_with_stake(node_stakes: TestNodeStakes) -> Self {
         let num_nodes_with_stake = 7;
         let num_da_nodes = num_nodes_with_stake;
         let epoch_height = 10;
         let epoch_start_block = 1;
 
-        let (staked_nodes, da_nodes) = gen_node_lists::<TYPES>(num_nodes_with_stake, num_da_nodes);
+        let (staked_nodes, da_nodes) =
+            gen_node_lists::<TYPES>(num_nodes_with_stake, num_da_nodes, &node_stakes);
 
         Self {
             test_config: default_hotshot_config::<TYPES>(
@@ -520,7 +532,18 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> Default
             upgrade_view: None,
             start_solver: true,
             validate_transactions: Arc::new(|_| Ok(())),
+            node_stakes,
         }
+    }
+}
+
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> Default
+    for TestDescription<TYPES, I, V>
+{
+    /// by default, just a single round
+    #[allow(clippy::redundant_field_names)]
+    fn default() -> Self {
+        Self::default_with_stake(TestNodeStakes::default())
     }
 }
 
@@ -554,6 +577,7 @@ where
             timing_data,
             unreliable_network,
             test_config,
+            node_stakes,
             ..
         } = self.clone();
 
@@ -565,7 +589,7 @@ where
             ValidatorConfig::<TYPES>::generated_from_seed_indexed(
                 [0u8; 32],
                 node_id,
-                U256::from(1),
+                node_stakes.get(node_id),
                 // This is the config for node 0
                 node_id < test_config.da_staked_committee_size as u64,
             )

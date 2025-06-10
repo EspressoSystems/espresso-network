@@ -53,3 +53,6 @@ pub mod view_generator;
 
 /// byzantine framework for tests
 pub mod byzantine;
+
+/// helpers for testing variable stake
+pub mod node_stake;
