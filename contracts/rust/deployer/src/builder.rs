@@ -134,6 +134,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 let use_multisig = self.use_multisig;
                 let mut blocks_per_epoch = self.blocks_per_epoch.unwrap();
                 let epoch_start_block = self.epoch_start_block.unwrap();
+                let rpc_url = self.rpc_url.clone();
 
                 // TEST-ONLY: if this config is not yet set, we use a large default value
                 // to avoid contract complaining about invalid zero-valued blocks_per_epoch.
@@ -152,7 +153,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                             epoch_start_block,
                         },
                         use_mock,
-                        self.rpc_url.clone(),
+                        rpc_url,
                         Some(dry_run),
                     )
                     .await?;

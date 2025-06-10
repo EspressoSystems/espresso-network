@@ -15,7 +15,10 @@ use hotshot_contract_adapter::{
     sol_types::{LightClient, LightClientStateSol, PlonkProofSol, StakeTableStateSol},
 };
 use hotshot_types::{
-    light_client::{CircuitField, LightClientState, StakeTableState, StateSignature, StateVerKey},
+    light_client::{
+        CircuitField, LightClientState, StakeTableState, StateSignature, StateSignaturesBundle,
+        StateVerKey,
+    },
     traits::signature_key::StateSignatureKey,
 };
 use jf_pcs::prelude::UnivariateUniversalParams;
@@ -28,7 +31,7 @@ use vbs::version::StaticVersionType;
 
 use crate::{
     legacy::snark::{Proof, ProvingKey, PublicInput},
-    service::{fetch_latest_state, ProverError, ProverServiceState, StateProverConfig},
+    service::{ProverError, ProverServiceState, StateProverConfig},
 };
 
 pub fn load_proving_key(stake_table_capacity: usize) -> ProvingKey {
@@ -59,7 +62,7 @@ pub fn load_proving_key(stake_table_capacity: usize) -> ProvingKey {
 
     tracing::info!("Generating proving key and verification key.");
     let key_gen_timer = Instant::now();
-    let (pk, _) = crate::snark::preprocess(&srs, stake_table_capacity)
+    let (pk, _) = super::snark::preprocess(&srs, stake_table_capacity)
         .expect("Fail to preprocess state prover circuit");
     let key_gen_elapsed = Instant::now().signed_duration_since(key_gen_timer);
     tracing::info!("Done in {key_gen_elapsed:.3}");
@@ -95,6 +98,18 @@ pub async fn read_contract_state(
     };
 
     Ok((state.into(), st_state.into()))
+}
+
+/// Check if the contract is a legacy contract. Returns true if the version check succeeds, false otherwise.
+pub async fn is_contract_legacy(
+    provider: impl Provider,
+    address: Address,
+) -> Result<bool, ProverError> {
+    let contract = LightClient::new(address, &provider);
+    match contract.getVersion().call().await {
+        Ok(version) => Ok(version.majorVersion == 1),
+        Err(e) => Err(ProverError::ContractError(e.into())),
+    }
 }
 
 /// submit the latest finalized state along with a proof to the L1 LightClient contract
@@ -137,7 +152,6 @@ async fn generate_proof(
     state: &mut ProverServiceState,
     light_client_state: LightClientState,
     current_stake_table_state: StakeTableState,
-    next_stake_table_state: StakeTableState,
     signature_map: HashMap<StateVerKey, StateSignature>,
     proving_key: &ProvingKey,
 ) -> Result<(Proof, PublicInput), ProverError> {
@@ -158,7 +172,7 @@ async fn generate_proof(
     entries.iter().enumerate().for_each(|(i, (key, stake))| {
         if let Some(sig) = signature_map.get(key) {
             // Check if the signature is valid
-            if key.verify_state_sig(sig, &light_client_state, &next_stake_table_state) {
+            if key.legacy_verify_state_sig(sig, &light_client_state) {
                 signer_bit_vec[i] = true;
                 signatures[i] = sig.clone();
                 accumulated_weight += *stake;
@@ -197,6 +211,18 @@ async fn generate_proof(
     tracing::info!("Proof generation completed. Elapsed: {proof_gen_elapsed:.3}");
 
     Ok((proof, public_input))
+}
+
+#[inline(always)]
+/// Get the latest LightClientState and signature bundle from Sequencer network
+pub async fn fetch_latest_legacy_state<ApiVer: StaticVersionType>(
+    client: &Client<ServerError, ApiVer>,
+) -> Result<StateSignaturesBundle, ServerError> {
+    tracing::info!("Fetching the latest state signatures bundle from relay server.");
+    client
+        .get::<StateSignaturesBundle>("/api/legacy-state")
+        .send()
+        .await
 }
 
 /// Sync the light client state from the relay server and submit the proof to the L1 LightClient contract
@@ -244,9 +270,13 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
         contract_state.block_height
     );
 
-    let bundle = fetch_latest_state(relay_server_client).await?;
+    let bundle = fetch_latest_legacy_state(relay_server_client).await?;
     tracing::debug!("Bundle accumulated weight: {}", bundle.accumulated_weight);
     tracing::info!("Latest HotShot block height: {}", bundle.state.block_height);
+
+    if bundle.state.block_height >= state.config.epoch_start_block {
+        return Err(ProverError::EpochAlreadyStarted(bundle.state.block_height));
+    }
 
     if contract_state.block_height >= bundle.state.block_height {
         tracing::info!("No update needed.");
@@ -262,7 +292,6 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     let (proof, public_input) = generate_proof(
         state,
         bundle.state,
-        contract_st_state,
         contract_st_state,
         bundle.signatures,
         proving_key,
@@ -330,6 +359,9 @@ pub async fn run_prover_service<ApiVer: StaticVersionType + 'static>(
     let retry_interval = state.config.retry_interval;
     loop {
         if let Err(err) = sync_state(&mut state, &proving_key, &relay_server_client).await {
+            if let ProverError::EpochAlreadyStarted(_) = err {
+                return Err(err.into());
+            }
             tracing::error!("Cannot sync the light client state, will retry: {}", err);
             sleep(retry_interval).await;
         } else {
@@ -357,6 +389,12 @@ pub async fn run_prover_once<ApiVer: StaticVersionType>(
             Err(ProverError::GasPriceTooHigh(..)) => {
                 // static ERROR message for easier observability and alert
                 tracing::error!("Gas price too high, sync later");
+            },
+            Err(ProverError::EpochAlreadyStarted(block_height)) => {
+                tracing::error!(
+                    "Epoch has already started on block {}, please upgrade the contract to V2.",
+                    block_height
+                );
             },
             Err(err) => {
                 tracing::error!("Cannot sync the light client state, will retry: {}", err);
