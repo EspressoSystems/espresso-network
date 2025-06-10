@@ -682,6 +682,8 @@ pub enum ProverError {
     NetworkError(anyhow::Error),
     /// Abort due to high gas price: current {0} gwei, max allowed: {1} gwei
     GasPriceTooHigh(String, String),
+    /// Epoch has already started on block {0}, please upgrade the contract to V2.
+    EpochAlreadyStarted(u64),
 }
 
 impl From<ServerError> for ProverError {
