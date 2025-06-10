@@ -59,6 +59,29 @@ pub struct StateSignatureRequestBody {
     pub signature: StateSignature,
 }
 
+/// Legacy struct to work with the old sequencer
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize, Serialize, Deserialize)]
+pub struct LegacyStateSignatureRequestBody {
+    /// The public key associated with this request
+    pub key: StateVerKey,
+    /// The associated light client state
+    pub state: LightClientState,
+    /// The associated signature of the light client state
+    pub signature: StateSignature,
+}
+
+impl From<LegacyStateSignatureRequestBody> for StateSignatureRequestBody {
+    fn from(value: LegacyStateSignatureRequestBody) -> Self {
+        Self {
+            key: value.key,
+            state: value.state,
+            // Filling default values here because the legacy prover/contract doesn't care about this next_stake.
+            next_stake: StakeTableState::default(),
+            signature: value.signature,
+        }
+    }
+}
+
 /// The state signatures bundle is a light client state and its signatures collected
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StateSignaturesBundle {
