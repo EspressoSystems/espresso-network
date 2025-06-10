@@ -951,21 +951,64 @@ impl From<&Validator<PubKey>> for PeerConfig<SeqTypes> {
     }
 }
 
-impl EpochCommittee {
-    pub fn update(
-        &mut self,
-        validator: Validator<PubKey>,
-        // TODO use `anyhow` for now b/c state data model will probably change
-    ) -> anyhow::Result<()> {
+/// Facilitate instantiating an `EpochCommittee` from a single `Validator`.
+impl TryFrom<Validator<PubKey>> for EpochCommittee {
+    type Error = StakeTableStateInsertError;
+
+    fn try_from(validator: Validator<PubKey>) -> Result<Self, Self::Error> {
         let stake_table_key = validator.stake_table_key;
         let account = validator.account;
         let peer = PeerConfig::from(&validator);
 
+        let mut address_mapping = HashMap::new();
+        let mut stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>> = IndexMap::new();
+        let mut validators: IndexMap<Address, Validator<PubKey>> = IndexMap::new();
+
+        let None = validators.insert(account, validator) else {
+            return Err(StakeTableStateInsertError::UpdateOnInsertValidator);
+        };
+        let None = address_mapping.insert(stake_table_key, account) else {
+            return Err(StakeTableStateInsertError::UpdateOnInsertValidator);
+        };
+        // TODO don't worry about the clone b/c we can remove `stake_table`
+        let None = stake_table.insert(stake_table_key, peer.clone()) else {
+            return Err(StakeTableStateInsertError::UpdateOnInsertStakeTable);
+        };
+
+        let committee = Self {
+            eligible_leaders: vec![peer],
+            stake_table,
+            validators,
+            address_mapping,
+        };
+
+        Ok(committee)
+    }
+}
+
+impl EpochCommittee {
+    /// Update an `EpochCommitee` by adding a `Validator to it`.
+    pub fn update(
+        &mut self,
+        validator: Validator<PubKey>,
+    ) -> Result<(), StakeTableStateInsertError> {
+        let stake_table_key = validator.stake_table_key;
+        let account = validator.account;
+        let peer = PeerConfig::from(&validator);
+
+        let None = self.validators.insert(account, validator) else {
+            return Err(StakeTableStateInsertError::UpdateOnInsertValidator);
+        };
+        let None = self.address_mapping.insert(stake_table_key, account) else {
+            return Err(StakeTableStateInsertError::UpdateOnInsertValidator);
+        };
+        // TODO don't worry about the clone b/c we can remove `stake_table`
+        let None = self.stake_table.insert(stake_table_key, peer.clone()) else {
+            return Err(StakeTableStateInsertError::UpdateOnInsertStakeTable);
+        };
+
         self.eligible_leaders.push(peer.clone());
-        self.stake_table.insert(stake_table_key, peer);
-        self.validators.insert(account, validator.clone());
-        self.address_mapping
-            .insert(validator.stake_table_key, account);
+
         Ok(())
     }
 }
@@ -985,34 +1028,9 @@ impl EpochCommittees {
         epoch: EpochNumber,
         validator: Validator<PubKey>,
     ) -> Result<(), StakeTableStateInsertError> {
-        let stake_table_key = validator.stake_table_key;
-        let account = validator.account;
-        let peer = PeerConfig::from(&validator);
+        let committee = EpochCommittee::try_from(validator)?;
 
-        let mut address_mapping = HashMap::new();
-        let mut stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>> = IndexMap::new();
-        let mut validators: IndexMap<Address, Validator<PubKey>> = IndexMap::new();
-
-        let None = validators.insert(validator.account, validator) else {
-            return Err(StakeTableStateInsertError::UpdateOnInsertValidator);
-        };
-        let None = address_mapping.insert(stake_table_key, account) else {
-            return Err(StakeTableStateInsertError::UpdateOnInsertValidator);
-        };
-        // TODO don't worry about the clone b/c we can remove `stake_table`
-        let None = stake_table.insert(stake_table_key, peer.clone()) else {
-            return Err(StakeTableStateInsertError::UpdateOnInsertStakeTable);
-        };
-
-        let None = self.state.insert(
-            epoch,
-            EpochCommittee {
-                eligible_leaders: vec![peer],
-                stake_table,
-                validators,
-                address_mapping,
-            },
-        ) else {
+        let None = self.state.insert(epoch, committee) else {
             return Err(StakeTableStateInsertError::UpdateOnInsertStakeTable);
         };
 
@@ -1771,6 +1789,17 @@ mod tests {
 
         assert!(epoch_committees.insert(epoch, validator.clone()).is_ok());
         assert!(epoch_committees.insert(epoch, validator).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_epoch_committee_update() -> Result<()> {
+        setup_test();
+        let validator = Validator::mock();
+        let mut stake_table = EpochCommittee::try_from(validator.clone())?;
+
+        assert!(stake_table.update(validator.clone()).is_err());
+        assert!(stake_table.update(Validator::mock()).is_ok());
         Ok(())
     }
 
