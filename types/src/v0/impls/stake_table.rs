@@ -992,7 +992,7 @@ impl Fetcher {
     /// because in future when reward withdrawals are supported, there might be more than one mint transfer logs from
     /// zero address
     ///
-    /// The ESP token contract itself does not expose the intialization block
+    /// The ESP token contract itself does not expose the initialization block
     /// but the stake table contract does
     /// The stake table contract is deployed after the token contract as it holds the token
     /// contract address. We use the stake table contract initialization block as a safe upper bound when scanning
