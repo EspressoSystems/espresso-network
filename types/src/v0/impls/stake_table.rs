@@ -1486,9 +1486,10 @@ impl Membership<SeqTypes> for EpochCommittees {
         }
 
         let mut membership_writer = membership.write().await;
-        events
+        let _: Vec<_> = events
             .into_iter()
-            .map(|event| membership_writer.apply_event(epoch, event));
+            .map(|event| membership_writer.apply_event(epoch, event))
+            .collect();
         // membership_writer.update_stake_table(epoch, stake_tables);
 
         Ok(())
