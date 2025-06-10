@@ -4661,7 +4661,7 @@ mod test {
             .genesis_st_state(genesis_stake)
             .blocks_per_epoch(blocks_per_epoch)
             .epoch_start_block(1)
-            .multisig_pauser(network_config.signer().address().clone())
+            .multisig_pauser(network_config.signer().address())
             .build()
             .unwrap();
 
