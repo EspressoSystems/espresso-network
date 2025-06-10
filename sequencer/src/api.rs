@@ -4115,4 +4115,83 @@ mod test {
             );
         }
     }
+
+    use std::time::Instant;
+
+    use espresso_types::NamespaceId;
+    use rand::thread_rng;
+
+    use crate::testing::wait_for_decide_on_handle;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_namespace_transaction_count_endpoints() {
+        setup_test();
+
+        let mut rng = thread_rng();
+
+        let port = pick_unused_port().expect("No ports free");
+
+        let url = format!("http://localhost:{port}").parse().unwrap();
+        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+
+        let options = Options::with_port(port).submit(Default::default());
+        const NUM_NODES: usize = 2;
+        // Initialize storage for each node
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+
+        let persistence_options: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let network_config = TestConfigBuilder::default().build();
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(SqlDataSource::options(&storage[0], options))
+            .network_config(network_config)
+            .persistences(persistence_options.clone())
+            .build();
+        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let mut events = network.server.event_stream().await;
+        let start = Instant::now();
+        for i in 1..=3 {
+            for j in 0..i {
+                // Generate a random payload length between 4 and 10 bytes
+                let payload_len = rng.gen_range(4..=10);
+                // Generate a random payload with values between 0 and 255
+                let payload: Vec<u8> = (0..payload_len).map(|_| rng.gen()).collect();
+
+                let txn = Transaction::new(NamespaceId::from(i as u32), payload);
+
+                client.connect(None).await;
+
+                let hash = client
+                    .post("submit/submit")
+                    .body_json(&txn)
+                    .unwrap()
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(txn.commit(), hash);
+
+                // Wait for a Decide event containing transaction matching the one we sent
+                wait_for_decide_on_handle(&mut events, &txn).await;
+            }
+        }
+
+        let duration = start.elapsed();
+
+        println!("Time elapsed to submit transactions: {:?}", duration);
+
+        for i in 1..=3 {
+            let count = client
+                .get::<u64>(&format!("node/transactions/count/namespace/{i}"))
+                .send()
+                .await
+                .unwrap();
+            tracing::error!("count={count}");
+        }
+    }
 }

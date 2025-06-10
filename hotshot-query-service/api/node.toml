@@ -34,8 +34,8 @@ Returns an integer.
 """
 
 [route.count_transactions]
-PATH = ["transactions/count", "transactions/count/:to", "transactions/count/:from/:to", "transactions/count/:namespace",
-        "transactions/count/:namespace/:to", "transactions/count/:namespace/:from/:to"]
+PATH = ["transactions/count", "transactions/count/:to", "transactions/count/:from/:to", "transactions/count/namespace/:namespace",
+        "transactions/count/namespace/:namespace/:to", "transactions/count/namespace/:namespace/:from/:to"]
 ":from" = "Integer"
 ":to" = "Integer"
 ":namespace" = "Integer"

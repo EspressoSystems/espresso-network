@@ -311,13 +311,12 @@ impl<Mode: TransactionMode> AggregatesStorage for Transaction<Mode> {
     async fn load_prev_aggregate(&mut self) -> anyhow::Result<Option<Aggregate>> {
         // Get the maximum height for which we have stored aggregated results
         // then query all the namespace info for that height
-        let res: Option<(i64,)> = query_as(
-            "SELECT height FROM aggregate WHERE namespace = -1 ORDER BY height DESC LIMIT 1",
-        )
-        .fetch_optional(self.as_mut())
-        .await?;
+        let res: (Option<i64>,) =
+            query_as("SELECT max(height) FROM aggregate WHERE namespace = -1")
+                .fetch_one(self.as_mut())
+                .await?;
 
-        let Some((max_height,)) = res else {
+        let (Some(max_height),) = res else {
             return Ok(None);
         };
 
