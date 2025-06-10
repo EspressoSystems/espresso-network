@@ -143,7 +143,7 @@
 <a href=#143 id=143 data-nosnippet>143</a>    <span class="kw">use </span>alloy::providers::WalletProvider <span class="kw">as _</span>;
 <a href=#144 id=144 data-nosnippet>144</a>    <span class="kw">use </span>espresso_contract_deployer::build_provider;
 <a href=#145 id=145 data-nosnippet>145</a>    <span class="kw">use </span>espresso_types::{
-<a href=#146 id=146 data-nosnippet>146</a>        v0_3::{StakeTableEvent, StakeTableFetcher},
+<a href=#146 id=146 data-nosnippet>146</a>        v0_3::{Fetcher, StakeTableEvent},
 <a href=#147 id=147 data-nosnippet>147</a>        L1Client,
 <a href=#148 id=148 data-nosnippet>148</a>    };
 <a href=#149 id=149 data-nosnippet>149</a>    <span class="kw">use </span>rand::{rngs::StdRng, SeedableRng <span class="kw">as _</span>};
@@ -280,7 +280,7 @@
 <a href=#280 id=280 data-nosnippet>280</a>        <span class="macro">assert!</span>(receipt.status());
 <a href=#281 id=281 data-nosnippet>281</a>
 <a href=#282 id=282 data-nosnippet>282</a>        <span class="kw">let </span>l1 = L1Client::new(<span class="macro">vec!</span>[system.rpc_url])<span class="question-mark">?</span>;
-<a href=#283 id=283 data-nosnippet>283</a>        <span class="kw">let </span>events = StakeTableFetcher::fetch_events_from_contract(
+<a href=#283 id=283 data-nosnippet>283</a>        <span class="kw">let </span>events = Fetcher::fetch_events_from_contract(
 <a href=#284 id=284 data-nosnippet>284</a>            l1,
 <a href=#285 id=285 data-nosnippet>285</a>            system.stake_table,
 <a href=#286 id=286 data-nosnippet>286</a>            <span class="prelude-val">Some</span>(<span class="number">0</span>),
@@ -338,7 +338,7 @@
 <a href=#338 id=338 data-nosnippet>338</a>        <span class="macro">assert!</span>(receipt.status());
 <a href=#339 id=339 data-nosnippet>339</a>
 <a href=#340 id=340 data-nosnippet>340</a>        <span class="kw">let </span>l1 = L1Client::new(<span class="macro">vec!</span>[system.rpc_url])<span class="question-mark">?</span>;
-<a href=#341 id=341 data-nosnippet>341</a>        <span class="kw">let </span>events = StakeTableFetcher::fetch_events_from_contract(
+<a href=#341 id=341 data-nosnippet>341</a>        <span class="kw">let </span>events = Fetcher::fetch_events_from_contract(
 <a href=#342 id=342 data-nosnippet>342</a>            l1,
 <a href=#343 id=343 data-nosnippet>343</a>            system.stake_table,
 <a href=#344 id=344 data-nosnippet>344</a>            <span class="prelude-val">Some</span>(<span class="number">0</span>),

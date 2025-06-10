@@ -89,47 +89,37 @@
 <a href=#89 id=89 data-nosnippet>89</a>#[display(<span class="string">"{_0}"</span>)]
 <a href=#90 id=90 data-nosnippet>90</a></span><span class="kw">pub struct </span>RewardAmount(<span class="kw">pub </span>U256);
 <a href=#91 id=91 data-nosnippet>91</a>
-<a href=#92 id=92 data-nosnippet>92</a><span class="comment">// This function is used to calculate the reward for a block
-<a href=#93 id=93 data-nosnippet>93</a>// It does not currently take block height into account
-<a href=#94 id=94 data-nosnippet>94</a>// The reward is currently fixed at 1.902 tokens at 3% inflation per block
-<a href=#95 id=95 data-nosnippet>95</a></span><span class="kw">pub fn </span>block_reward() -&gt; RewardAmount {
-<a href=#96 id=96 data-nosnippet>96</a>    U256::from(REWARD_PER_BLOCK).into()
-<a href=#97 id=97 data-nosnippet>97</a>}
+<a href=#92 id=92 data-nosnippet>92</a> 
+<a href=#93 id=93 data-nosnippet>93</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>INFLATION_RATE: u128 = <span class="number">300</span>; <span class="comment">// 3% in basis points
+<a href=#94 id=94 data-nosnippet>94</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>ASSUMED_BLOCK_TIME_SECONDS: u128 = <span class="number">2</span>;
+<a href=#95 id=95 data-nosnippet>95</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>SECONDS_PER_YEAR: u128 = <span class="number">60 </span>* <span class="number">60 </span>* <span class="number">24 </span>* <span class="number">365</span>;
+<a href=#96 id=96 data-nosnippet>96</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>BLOCKS_PER_YEAR: u128 = SECONDS_PER_YEAR / ASSUMED_BLOCK_TIME_SECONDS;
+<a href=#97 id=97 data-nosnippet>97</a><span class="kw">pub const </span>COMMISSION_BASIS_POINTS: u16 = <span class="number">10_000</span>;
 <a href=#98 id=98 data-nosnippet>98</a>
-<a href=#99 id=99 data-nosnippet>99</a><span class="comment">// 10 billion tokens with 18 decimals
-<a href=#100 id=100 data-nosnippet>100</a></span><span class="kw">const </span>TOTAL_SUPPLY: u128 = <span class="number">10_000_000_000 </span>* <span class="number">10_u128</span>.pow(<span class="number">18</span>);
-<a href=#101 id=101 data-nosnippet>101</a><span class="kw">const </span>INFLATION_RATE: u128 = <span class="number">300</span>; <span class="comment">// 3% in basis points
-<a href=#102 id=102 data-nosnippet>102</a></span><span class="kw">const </span>BLOCK_TIME_SECONDS: u128 = <span class="number">2</span>;
-<a href=#103 id=103 data-nosnippet>103</a><span class="kw">const </span>SECONDS_PER_YEAR: u128 = <span class="number">60 </span>* <span class="number">60 </span>* <span class="number">24 </span>* <span class="number">365</span>;
-<a href=#104 id=104 data-nosnippet>104</a><span class="kw">const </span>BLOCKS_PER_YEAR: u128 = SECONDS_PER_YEAR / BLOCK_TIME_SECONDS;
-<a href=#105 id=105 data-nosnippet>105</a><span class="kw">const </span>REWARD_PER_BLOCK: u128 =
-<a href=#106 id=106 data-nosnippet>106</a>    ((TOTAL_SUPPLY * INFLATION_RATE) / BLOCKS_PER_YEAR) / COMMISSION_BASIS_POINTS <span class="kw">as </span>u128;
-<a href=#107 id=107 data-nosnippet>107</a><span class="kw">pub const </span>COMMISSION_BASIS_POINTS: u16 = <span class="number">10_000</span>;
-<a href=#108 id=108 data-nosnippet>108</a>
-<a href=#109 id=109 data-nosnippet>109</a><span class="attr">#[derive(Clone, Debug, Default)]
-<a href=#110 id=110 data-nosnippet>110</a></span><span class="kw">pub struct </span>RewardInfo {
-<a href=#111 id=111 data-nosnippet>111</a>    <span class="kw">pub </span>account: RewardAccount,
-<a href=#112 id=112 data-nosnippet>112</a>    <span class="kw">pub </span>amount: RewardAmount,
+<a href=#99 id=99 data-nosnippet>99</a><span class="attr">#[derive(Clone, Debug, Default)]
+<a href=#100 id=100 data-nosnippet>100</a></span><span class="kw">pub struct </span>RewardInfo {
+<a href=#101 id=101 data-nosnippet>101</a>    <span class="kw">pub </span>account: RewardAccount,
+<a href=#102 id=102 data-nosnippet>102</a>    <span class="kw">pub </span>amount: RewardAmount,
+<a href=#103 id=103 data-nosnippet>103</a>}
+<a href=#104 id=104 data-nosnippet>104</a>
+<a href=#105 id=105 data-nosnippet>105</a><span class="doccomment">/// A proof of the balance of an account in the fee ledger.
+<a href=#106 id=106 data-nosnippet>106</a>///
+<a href=#107 id=107 data-nosnippet>107</a>/// If the account of interest does not exist in the fee state, this is a Merkle non-membership
+<a href=#108 id=108 data-nosnippet>108</a>/// proof, and the balance is implicitly zero. Otherwise, this is a normal Merkle membership proof.
+<a href=#109 id=109 data-nosnippet>109</a></span><span class="attr">#[derive(Clone, Debug, Deserialize, Serialize)]
+<a href=#110 id=110 data-nosnippet>110</a></span><span class="kw">pub struct </span>RewardAccountProof {
+<a href=#111 id=111 data-nosnippet>111</a>    <span class="kw">pub </span>account: Address,
+<a href=#112 id=112 data-nosnippet>112</a>    <span class="kw">pub </span>proof: RewardMerkleProof,
 <a href=#113 id=113 data-nosnippet>113</a>}
 <a href=#114 id=114 data-nosnippet>114</a>
-<a href=#115 id=115 data-nosnippet>115</a><span class="doccomment">/// A proof of the balance of an account in the fee ledger.
-<a href=#116 id=116 data-nosnippet>116</a>///
-<a href=#117 id=117 data-nosnippet>117</a>/// If the account of interest does not exist in the fee state, this is a Merkle non-membership
-<a href=#118 id=118 data-nosnippet>118</a>/// proof, and the balance is implicitly zero. Otherwise, this is a normal Merkle membership proof.
-<a href=#119 id=119 data-nosnippet>119</a></span><span class="attr">#[derive(Clone, Debug, Deserialize, Serialize)]
-<a href=#120 id=120 data-nosnippet>120</a></span><span class="kw">pub struct </span>RewardAccountProof {
-<a href=#121 id=121 data-nosnippet>121</a>    <span class="kw">pub </span>account: Address,
-<a href=#122 id=122 data-nosnippet>122</a>    <span class="kw">pub </span>proof: RewardMerkleProof,
-<a href=#123 id=123 data-nosnippet>123</a>}
-<a href=#124 id=124 data-nosnippet>124</a>
-<a href=#125 id=125 data-nosnippet>125</a><span class="attr">#[derive(Clone, Debug, Deserialize, Serialize)]
-<a href=#126 id=126 data-nosnippet>126</a></span><span class="kw">pub enum </span>RewardMerkleProof {
-<a href=#127 id=127 data-nosnippet>127</a>    Presence(&lt;RewardMerkleTree <span class="kw">as </span>MerkleTreeScheme&gt;::MembershipProof),
-<a href=#128 id=128 data-nosnippet>128</a>    Absence(&lt;RewardMerkleTree <span class="kw">as </span>UniversalMerkleTreeScheme&gt;::NonMembershipProof),
-<a href=#129 id=129 data-nosnippet>129</a>}
-<a href=#130 id=130 data-nosnippet>130</a>
-<a href=#131 id=131 data-nosnippet>131</a><span class="attr">#[derive(Clone, Debug, Serialize, Deserialize)]
-<a href=#132 id=132 data-nosnippet>132</a></span><span class="kw">pub struct </span>RewardAccountQueryData {
-<a href=#133 id=133 data-nosnippet>133</a>    <span class="kw">pub </span>balance: U256,
-<a href=#134 id=134 data-nosnippet>134</a>    <span class="kw">pub </span>proof: RewardAccountProof,
-<a href=#135 id=135 data-nosnippet>135</a>}</code></pre></div></section></main></body></html>
+<a href=#115 id=115 data-nosnippet>115</a><span class="attr">#[derive(Clone, Debug, Deserialize, Serialize)]
+<a href=#116 id=116 data-nosnippet>116</a></span><span class="kw">pub enum </span>RewardMerkleProof {
+<a href=#117 id=117 data-nosnippet>117</a>    Presence(&lt;RewardMerkleTree <span class="kw">as </span>MerkleTreeScheme&gt;::MembershipProof),
+<a href=#118 id=118 data-nosnippet>118</a>    Absence(&lt;RewardMerkleTree <span class="kw">as </span>UniversalMerkleTreeScheme&gt;::NonMembershipProof),
+<a href=#119 id=119 data-nosnippet>119</a>}
+<a href=#120 id=120 data-nosnippet>120</a>
+<a href=#121 id=121 data-nosnippet>121</a><span class="attr">#[derive(Clone, Debug, Serialize, Deserialize)]
+<a href=#122 id=122 data-nosnippet>122</a></span><span class="kw">pub struct </span>RewardAccountQueryData {
+<a href=#123 id=123 data-nosnippet>123</a>    <span class="kw">pub </span>balance: U256,
+<a href=#124 id=124 data-nosnippet>124</a>    <span class="kw">pub </span>proof: RewardAccountProof,
+<a href=#125 id=125 data-nosnippet>125</a>}</code></pre></div></section></main></body></html>
