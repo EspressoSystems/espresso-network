@@ -1232,13 +1232,6 @@ impl EpochCommittees {
 }
 
 #[derive(Error, Debug)]
-/// Error representing fail cases for retrieving the stake table.
-enum GetStakeTablesError {
-    #[error("Error fetching from L1: {0}")]
-    L1ClientFetchError(anyhow::Error),
-}
-
-#[derive(Error, Debug)]
 #[error("Could not lookup leader")]
 pub struct LeaderLookupError;
 
