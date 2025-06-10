@@ -582,6 +582,18 @@ where
                 })
         }
         .boxed()
+    })?
+    .at("get_block_reward", |_, state| {
+        async move {
+            state
+                .read(|state| state.get_block_reward().boxed())
+                .await
+                .map_err(|err| node::Error::Custom {
+                    message: format!("failed to get block reward. err={err:#}"),
+                    status: StatusCode::NOT_FOUND,
+                })
+        }
+        .boxed()
     })?;
 
     Ok(api)
