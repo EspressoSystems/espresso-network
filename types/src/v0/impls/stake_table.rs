@@ -439,7 +439,9 @@ impl EpochCommittees {
 
         Ok(())
     }
-    pub fn validate(
+
+    /// Validate that the given BLS key does not exist in any stake table.
+    pub fn validate_keys(
         &self,
         stake_key: &BLSPubKey,
         state_key: &SchnorrPubKey,
@@ -475,7 +477,7 @@ impl EpochCommittees {
                 // if not register / authenticate and register
                 let stake_table_key: BLSPubKey = blsVk.into();
                 let state_ver_key: SchnorrPubKey = schnorrVk.into();
-                self.validate(&stake_table_key, &state_ver_key)?;
+                self.validate_keys(&stake_table_key, &state_ver_key)?;
 
                 let validator = Validator {
                     account,
@@ -505,7 +507,7 @@ impl EpochCommittees {
                 let stake_table_key: BLSPubKey = blsVK.into();
                 let state_ver_key: SchnorrPubKey = schnorrVK.into();
 
-                self.validate(&stake_table_key, &state_ver_key);
+                self.validate_keys(&stake_table_key, &state_ver_key);
 
                 let validator = Validator {
                     account,
@@ -1816,7 +1818,7 @@ mod tests {
             .add_validator_to_epoch(epoch, validator.clone())
             .is_err());
 
-        // Save validator, different epoch is Ok.
+        // Same validator, different epoch is Ok.
         assert!(epoch_committees
             .add_validator_to_epoch(EpochNumber::new(12), validator)
             .is_ok());
@@ -1824,6 +1826,25 @@ mod tests {
         assert!(epoch_committees
             .add_validator_to_epoch(EpochNumber::new(12), Validator::mock())
             .is_ok());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_validate_keys() -> Result<()> {
+        setup_test();
+        let epoch = EpochNumber::new(4);
+        let validator = Validator::mock();
+        let mut epoch_committees = EpochCommittees::default();
+
+        assert!(epoch_committees
+            .add_validator_to_epoch(epoch, validator.clone())
+            .is_ok());
+
+        // We cannot have duplicate bls keys in the stake table, even across different epochs.
+        assert!(epoch_committees
+            .validate_keys(&validator.stake_table_key, &validator.state_ver_key)
+            .is_err());
 
         Ok(())
     }
