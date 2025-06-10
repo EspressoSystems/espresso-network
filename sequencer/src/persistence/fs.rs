@@ -739,7 +739,7 @@ impl SequencerPersistence for Persistence {
                 let now = Instant::now();
                 file.write_all(&proposal_bytes)?;
                 self.metrics
-                    .append_vid_duration
+                    .internal_append_vid_duration
                     .add_point(now.elapsed().as_secs_f64());
                 Ok(())
             },
@@ -773,7 +773,7 @@ impl SequencerPersistence for Persistence {
                 let now = Instant::now();
                 file.write_all(&proposal_bytes)?;
                 self.metrics
-                    .append_vid2_duration
+                    .internal_append_vid2_duration
                     .add_point(now.elapsed().as_secs_f64());
                 Ok(())
             },
@@ -804,7 +804,7 @@ impl SequencerPersistence for Persistence {
                 let now = Instant::now();
                 file.write_all(&proposal_bytes)?;
                 self.metrics
-                    .append_da_duration
+                    .internal_append_da_duration
                     .add_point(now.elapsed().as_secs_f64());
                 Ok(())
             },
@@ -888,7 +888,7 @@ impl SequencerPersistence for Persistence {
                 let now = Instant::now();
                 file.write_all(&proposal_bytes)?;
                 self.metrics
-                    .append_quorum2_duration
+                    .internal_append_quorum2_duration
                     .add_point(now.elapsed().as_secs_f64());
                 Ok(())
             },
@@ -1045,7 +1045,7 @@ impl SequencerPersistence for Persistence {
                 let now = Instant::now();
                 file.write_all(&proposal_bytes)?;
                 self.metrics
-                    .append_da2_duration
+                    .internal_append_da2_duration
                     .add_point(now.elapsed().as_secs_f64());
                 Ok(())
             },

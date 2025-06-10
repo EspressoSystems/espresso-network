@@ -593,7 +593,7 @@ impl PersistenceOptions for Options {
         let persistence = Persistence {
             db: SqlStorage::connect(config).await?,
             gc_opt: self.consensus_pruning,
-            metrics: Arc::new(PersistenceMetricsValue::default()),
+            internal_metrics: PersistenceMetricsValue::default(),
         };
         persistence.migrate_quorum_proposal_leaf_hashes().await?;
         self.pool = Some(persistence.db.pool());
@@ -611,8 +611,8 @@ impl PersistenceOptions for Options {
 pub struct Persistence {
     db: SqlStorage,
     gc_opt: ConsensusPruningOptions,
-    /// A reference to the metrics trait
-    metrics: Arc<PersistenceMetricsValue>,
+    /// A reference to the internal metrics
+    internal_metrics: PersistenceMetricsValue,
 }
 
 impl Persistence {
@@ -1245,8 +1245,8 @@ impl SequencerPersistence for Persistence {
         )
         .await?;
         let res = tx.commit().await;
-        self.metrics
-            .append_vid_duration
+        self.internal_metrics
+            .internal_append_vid_duration
             .add_point(now.elapsed().as_secs_f64());
         res
     }
@@ -1270,8 +1270,8 @@ impl SequencerPersistence for Persistence {
         )
         .await?;
         let res = tx.commit().await;
-        self.metrics
-            .append_vid2_duration
+        self.internal_metrics
+            .internal_append_vid2_duration
             .add_point(now.elapsed().as_secs_f64());
         res
     }
@@ -1295,8 +1295,8 @@ impl SequencerPersistence for Persistence {
         )
         .await?;
         let res = tx.commit().await;
-        self.metrics
-            .append_da_duration
+        self.internal_metrics
+            .internal_append_da_duration
             .add_point(now.elapsed().as_secs_f64());
         res
     }
@@ -1367,8 +1367,8 @@ impl SequencerPersistence for Persistence {
         )
         .await?;
         let res = tx.commit().await;
-        self.metrics
-            .append_quorum2_duration
+        self.internal_metrics
+            .internal_append_quorum2_duration
             .add_point(now.elapsed().as_secs_f64());
         res
     }
@@ -1963,8 +1963,8 @@ impl SequencerPersistence for Persistence {
         )
         .await?;
         let res = tx.commit().await;
-        self.metrics
-            .append_da2_duration
+        self.internal_metrics
+            .internal_append_da2_duration
             .add_point(now.elapsed().as_secs_f64());
         res
     }
@@ -2137,7 +2137,7 @@ impl SequencerPersistence for Persistence {
     }
 
     fn enable_metrics(&mut self, metrics: &dyn Metrics) {
-        self.metrics = Arc::new(PersistenceMetricsValue::new(metrics));
+        self.internal_metrics = PersistenceMetricsValue::new(metrics);
     }
 }
 
