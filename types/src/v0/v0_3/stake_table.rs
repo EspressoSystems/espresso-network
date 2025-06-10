@@ -155,6 +155,18 @@ pub enum StakeTableEventHandlerError {
 }
 
 #[derive(Error, Debug, derive_more::From)]
+pub enum StakeTableStateInsertError {
+    #[error("`insert` called and `Validator` already present in validator state")]
+    UpdateOnInsertValidator,
+    #[error("`insert` called and `Validator` already present in address mapping")]
+    UpdateOnInsertAddressMapping,
+    #[error("`insert` called and `Peer` already present in stake table")]
+    UpdateOnInsertStakeTable,
+    #[error("`insert` called and `EpochCommittee` already present in for epoch")]
+    UpdateOnInsertEpochCommittee,
+}
+
+#[derive(Error, Debug, derive_more::From)]
 pub enum StakeTableApplyEventError {
     #[error("BLS key already used: {0}")]
     DuplicateBlsKey(BLSPubKey),

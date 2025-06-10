@@ -48,7 +48,7 @@ use super::{
     v0_3::{
         ChainConfig, EventKey, StakeTableApplyEventError, StakeTableEvent,
         StakeTableEventHandlerError, StakeTableEventType, StakeTableFetchError, StakeTableFetcher,
-        StakeTableUpdateTask, Validator, ValidatorMap,
+        StakeTableStateInsertError, StakeTableUpdateTask, Validator, ValidatorMap,
     },
     Header, L1Client, Leaf2, PubKey, SeqTypes,
 };
@@ -436,7 +436,7 @@ impl std::fmt::Debug for StakeTableEvent {
     }
 }
 
-#[derive(Clone, derive_more::derive::Debug)]
+#[derive(Clone, derive_more::derive::Debug, Default)]
 /// Type to describe DA and Stake memberships
 pub struct EpochCommittees {
     /// Committee used when we're in pre-epoch state
@@ -939,8 +939,24 @@ impl StakeTableFetcher {
         Self::new(peers, Arc::new(Mutex::new(persistence)), l1, chain_config)
     }
 }
+
+#[cfg(any(test, feature = "testing"))]
+impl Default for StakeTableFetcher {
+    fn default() -> Self {
+        use crate::{mock, v0_1::NoStorage};
+        let chain_config = ChainConfig::default();
+        let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
+            .expect("Failed to create L1 client");
+
+        let peers = Arc::new(mock::MockStateCatchup::default());
+        let persistence = NoStorage;
+
+        Self::new(peers, Arc::new(Mutex::new(persistence)), l1, chain_config)
+    }
+}
+
 /// Holds Stake table and DA members
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct NonEpochCommittee {
     /// The nodes eligible for leadership.
     /// NOTE: This is currently a hack because the DA leader needs to be the quorum
@@ -961,7 +977,7 @@ struct NonEpochCommittee {
 }
 
 /// Holds Stake table and DA members
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
 pub struct EpochCommittee {
     /// The nodes eligible for leadership.
     /// NOTE: This is currently a hack because the DA leader needs to be the quorum
@@ -1018,17 +1034,23 @@ impl EpochCommittees {
         &mut self,
         epoch: EpochNumber,
         validator: Validator<PubKey>,
-        // TODO use `anyhow` for now b/c state data model will probably change
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), StakeTableStateInsertError> {
         let peer = PeerConfig::from(validator.clone());
         let mut address_mapping = HashMap::new();
-        address_mapping.insert(validator.stake_table_key, validator.account);
         let mut stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>> = IndexMap::new();
-        stake_table.insert(validator.stake_table_key, peer.clone());
         let mut validators: IndexMap<Address, Validator<PubKey>> = IndexMap::new();
-        validators.insert(validator.account, validator);
 
-        self.state.insert(
+        let None = validators.insert(validator.account, validator.clone()) else {
+            return Err(StakeTableStateInsertError::UpdateOnInsertValidator);
+        };
+        let None = address_mapping.insert(validator.stake_table_key, validator.account) else {
+            return Err(StakeTableStateInsertError::UpdateOnInsertValidator);
+        };
+        let None = stake_table.insert(validator.stake_table_key, peer.clone()) else {
+            return Err(StakeTableStateInsertError::UpdateOnInsertStakeTable);
+        };
+
+        let None = self.state.insert(
             epoch,
             EpochCommittee {
                 eligible_leaders: vec![peer],
@@ -1036,7 +1058,10 @@ impl EpochCommittees {
                 validators,
                 address_mapping,
             },
-        );
+        ) else {
+            return Err(StakeTableStateInsertError::UpdateOnInsertStakeTable);
+        };
+
         Ok(())
     }
 
@@ -1776,12 +1801,24 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::v0::impls::testing::*;
     use alloy::{primitives::Address, rpc::types::Log};
+    use anyhow::Result;
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use sequencer_utils::test_utils::setup_test;
 
-    use super::*;
-    use crate::v0::impls::testing::*;
+    #[test]
+    fn test_epoch_committees_insert() -> Result<()> {
+        setup_test();
+        let epoch = EpochNumber::new(4);
+        let validator = Validator::mock();
+        let mut epoch_committees = EpochCommittees::default();
+
+        assert!(epoch_committees.insert(epoch, validator.clone()).is_ok());
+        assert!(epoch_committees.insert(epoch, validator).is_err());
+        Ok(())
+    }
 
     #[test]
     fn test_from_l1_events() -> anyhow::Result<()> {
