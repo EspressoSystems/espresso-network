@@ -172,6 +172,8 @@ pub enum StakeTableApplyEventError {
     DuplicateBlsKey(BLSPubKey),
     #[error("Authentication Error: {0}.")]
     FailedToAuthenticate(#[from] StakeTableSolError),
+    #[error("Registration Error: {0}.")]
+    RegistrationError(#[from] StakeTableStateInsertError),
 }
 
 impl TryFrom<&Log> for StakeTableEventType {
@@ -219,44 +221,91 @@ impl From<(EventKey, StakeTableEvent)> for StakeTableEventType {
     }
 }
 
+impl Validator {
+    pub fn from_event(event: StakeTableEvent) {
+        match event {
+            StakeTableEvent::Register(ValidatorRegistered {
+                account,
+                blsVk,
+                schnorrVk,
+                commission,
+            }) => {
+                let stake_table_key = BLSPubKey::from(blsVk);
+                let state_ver_key = SchnorrPubKey::from(schnorrVk);
+
+                Validator {
+                    account,
+                    stake_table_key,
+                    state_ver_key,
+                    stake: U256::from(0_u64),
+                    commission,
+                    delegators: HashMap::default(),
+                }
+            },
+            StakeTableEvent::RegisterV2(ValidatorRegisteredV2 {
+                account,
+                blsVK,
+                schnorrVK,
+                commission,
+                ..
+            }) => {
+                let stake_table_key: BLSPubKey = blsVK.into();
+                let state_ver_key: SchnorrPubKey = schnorrVK.into();
+
+                Validator {
+                    account,
+                    stake_table_key,
+                    state_ver_key,
+                    stake: U256::from(0_u64),
+                    commission,
+                    delegators: HashMap::default(),
+                }
+            },
+            _ => panic!("A `Validator` can only be built from a Registration Event"),
+        }
+    }
+}
+
 // TODO move to impl folder
-// impl StakeTableEvent {
-//     pub fn handle(&self) -> Result<ValidatorMap, StakeTableEventHandlerError> {
-//         let mut validators = IndexMap::new();
-//         match self {
-//             Self::RegisterV2(event) => {
-//                 event
-//                     .authenticate()
-//                     .map_err(StakeTableEventHandlerError::FailedToAuthenticate)?;
-//                 self.register(validators);
-//             },
-//             _ => todo!(),
-//         }
-//     }
-//
-//     fn register(&self) -> Result<ValidatorMap, StakeTableEventHandlerError> {
-//         let ValidatorRegisteredV2 {
-//             account,
-//             blsVK,
-//             schnorrVK,
-//             commission,
-//             ..
-//         } = self;
-//
-//         let stake_table_key: BLSPubKey = blsVK.into();
-//         let state_ver_key: SchnorrPubKey = schnorrVK.into();
-//         // TODO uncomment
-//         // The stake table contract enforces that each bls key is only used once.
-//         // if bls_keys.contains(&stake_table_key) {
-//         //     bail!("bls key already used: {}", stake_table_key.to_string());
-//         // };
-//
-//         // // The contract does *not* enforce that each schnorr key is only used once.
-//         // if schnorr_keys.contains(&state_ver_key) {
-//         //     tracing::warn!("schnorr key already used: {}", state_ver_key.to_string());
-//         // };
-//
-//         bls_keys.insert(stake_table_key);
-//         schnorr_keys.insert(state_ver_key.clone());
-//     }
-// }
+impl StakeTableEvent {
+    pub fn handle(&self) -> Result<(), StakeTableEventHandlerError> {
+        // let mut validators = IndexMap::new();
+        match self {
+            Self::RegisterV2(event) => {
+                event
+                    .authenticate()
+                    .map_err(StakeTableEventHandlerError::FailedToAuthenticate)?;
+                let validator = Validator::from_event(event);
+                // self.register(validators);
+            },
+            _ => todo!(),
+        }
+        Ok(())
+    }
+
+    // fn register(&self) -> Result<ValidatorMap, StakeTableEventHandlerError> {
+    //     let ValidatorRegisteredV2 {
+    //         account,
+    //         blsVK,
+    //         schnorrVK,
+    //         commission,
+    //         ..
+    //     } = self;
+
+    //     let stake_table_key: BLSPubKey = blsVK.into();
+    //     let state_ver_key: SchnorrPubKey = schnorrVK.into();
+    //     // TODO uncomment
+    //     // The stake table contract enforces that each bls key is only used once.
+    //     // if bls_keys.contains(&stake_table_key) {
+    //     //     bail!("bls key already used: {}", stake_table_key.to_string());
+    //     // };
+
+    //     // // The contract does *not* enforce that each schnorr key is only used once.
+    //     // if schnorr_keys.contains(&state_ver_key) {
+    //     //     tracing::warn!("schnorr key already used: {}", state_ver_key.to_string());
+    //     // };
+
+    //     bls_keys.insert(stake_table_key);
+    //     schnorr_keys.insert(state_ver_key.clone());
+    // }
+}

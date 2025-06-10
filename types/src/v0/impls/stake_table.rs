@@ -426,7 +426,7 @@ impl EpochCommittees {
     /// Update state by either creating a new stake table for the given epoch
     /// containing only the given validator, or update the existing stake table with
     /// the given validator.
-    pub fn add_validator_to_epoch(
+    pub fn register_validator(
         &mut self,
         epoch: EpochNumber,
         validator: Validator<PubKey>,
@@ -443,18 +443,21 @@ impl EpochCommittees {
     /// Validate that the given BLS key does not exist in any stake table.
     pub fn validate_keys(
         &self,
-        stake_key: &BLSPubKey,
-        state_key: &SchnorrPubKey,
+        validator: &Validator,
+        // stake_key: &BLSPubKey,
+        // state_key: &SchnorrPubKey,
     ) -> Result<(), StakeTableApplyEventError> {
         // The stake table contract enforces that each bls key is only used once.
         if self.contains_stake_key(stake_key) {
-            return Err(StakeTableApplyEventError::DuplicateBlsKey(*stake_key));
+            return Err(StakeTableApplyEventError::DuplicateBlsKey(
+                *validator.stake_table_key,
+            ));
         };
 
         // The contract does *not* enforce that each schnorr key is only used once,
         // therefore it's possible to have multiple validators with the same schnorr key.
         if self.contains_state_key(state_key) {
-            tracing::warn!("schnorr key already used: {}", state_key.to_string());
+            tracing::warn!("schnorr key already used: {}", validator.state_ver_key);
         };
         Ok(())
     }
@@ -466,59 +469,20 @@ impl EpochCommittees {
         event: StakeTableEventType,
     ) -> Result<(), StakeTableApplyEventError> {
         match event.data {
-            StakeTableEvent::Register(ValidatorRegistered {
-                account,
-                blsVk,
-                schnorrVk,
-                commission,
-            }) => {
-                // Register event:
-                // if already registered do nothing / error
-                // if not register / authenticate and register
-                let stake_table_key: BLSPubKey = blsVk.into();
-                let state_ver_key: SchnorrPubKey = schnorrVk.into();
-                self.validate_keys(&stake_table_key, &state_ver_key)?;
+            StakeTableEvent::Register(ValidatorRegistered(event)) => {
+                let validator = Validator::from_event(event);
 
-                let validator = Validator {
-                    account,
-                    stake_table_key,
-                    state_ver_key,
-                    stake: U256::from(0_u64),
-                    commission,
-                    delegators: HashMap::default(),
-                };
-                // TODO throw error if validator already registered
-                self.add_validator_to_epoch(epoch, validator);
+                // TODO if there are no more validation routines, call this `validate`
+                self.validate_keys(&validator)?;
+                self.register_validator(epoch, validator)?;
             },
 
             StakeTableEvent::RegisterV2(event) => {
                 // Signature authentication is performed right after fetching, if we get an
                 // unauthenticated event here, something went wrong, we abort early.
-                event.authenticate()?;
-
-                let ValidatorRegisteredV2 {
-                    account,
-                    blsVK,
-                    schnorrVK,
-                    commission,
-                    ..
-                } = event;
-
-                let stake_table_key: BLSPubKey = blsVK.into();
-                let state_ver_key: SchnorrPubKey = schnorrVK.into();
-
-                self.validate_keys(&stake_table_key, &state_ver_key);
-
-                let validator = Validator {
-                    account,
-                    stake_table_key,
-                    state_ver_key,
-                    stake: U256::from(0_u64),
-                    commission,
-                    delegators: HashMap::default(),
-                };
-
-                self.add_validator_to_epoch(epoch, validator);
+                event.authenticate()?; // TODO verify the veracity above ^ comment
+                self.validate_keys(&validator)?;
+                self.register_validator(epoch, validator)?;
             },
             StakeTableEvent::Deregister(exit) => {},
             _ => todo!(),
@@ -1812,19 +1776,19 @@ mod tests {
 
         // Same validator, same epoch.
         assert!(epoch_committees
-            .add_validator_to_epoch(epoch, validator.clone())
+            .register_validator(epoch, validator.clone())
             .is_ok());
         assert!(epoch_committees
-            .add_validator_to_epoch(epoch, validator.clone())
+            .register_validator(epoch, validator.clone())
             .is_err());
 
         // Same validator, different epoch is Ok.
         assert!(epoch_committees
-            .add_validator_to_epoch(EpochNumber::new(12), validator)
+            .register_validator(EpochNumber::new(12), validator)
             .is_ok());
         // Of course we can have more than one validator per epoch.
         assert!(epoch_committees
-            .add_validator_to_epoch(EpochNumber::new(12), Validator::mock())
+            .register_validator(EpochNumber::new(12), Validator::mock())
             .is_ok());
 
         Ok(())
@@ -1838,7 +1802,7 @@ mod tests {
         let mut epoch_committees = EpochCommittees::default();
 
         assert!(epoch_committees
-            .add_validator_to_epoch(epoch, validator.clone())
+            .register_validator(epoch, validator.clone())
             .is_ok());
 
         // We cannot have duplicate bls keys in the stake table, even across different epochs.
