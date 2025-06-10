@@ -146,15 +146,15 @@ pub enum StakeTableEvent {
     KeyUpdateV2(ConsensusKeysUpdatedV2),
 }
 
-#[derive(Error, Debug, derive_more::From)]
+#[derive(thiserror::Error, Debug)]
 pub enum StakeTableEventHandlerError {
     #[error("Authentication Error: {0}.")]
-    FailedToAuthenticate(StakeTableSolError),
+    FailedToAuthenticate(#[from] StakeTableSolError),
     #[error("ABI Error: {0}.")]
-    ABIError(ABIError),
+    ABIError(#[from] ABIError),
 }
 
-#[derive(Error, Debug, derive_more::From)]
+#[derive(thiserror::Error, Debug, derive_more::From)]
 pub enum StakeTableStateInsertError {
     #[error("`insert` called and `Validator` already present in validator state")]
     UpdateOnInsertValidator,
@@ -166,12 +166,12 @@ pub enum StakeTableStateInsertError {
     UpdateOnInsertEpochCommittee,
 }
 
-#[derive(Error, Debug, derive_more::From)]
+#[derive(thiserror::Error, Debug)]
 pub enum StakeTableApplyEventError {
     #[error("BLS key already used: {0}")]
     DuplicateBlsKey(BLSPubKey),
     #[error("Authentication Error: {0}.")]
-    FailedToAuthenticate(StakeTableSolError),
+    FailedToAuthenticate(#[from] StakeTableSolError),
 }
 
 impl TryFrom<&Log> for StakeTableEventType {
