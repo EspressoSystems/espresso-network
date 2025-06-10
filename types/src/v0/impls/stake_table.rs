@@ -829,9 +829,9 @@ impl StakeTableFetcher {
         let mut events: Result<Vec<StakeTableEventType>, StakeTableEventHandlerError> =
             events.iter().map(StakeTableEventType::try_from).collect();
 
-        events
-            .as_mut()
-            .map(|e| e.sort_by_key(|event| event.block_number));
+        if let Ok(e) = events.as_mut() {
+            e.sort_by_key(|event| event.block_number)
+        }
         events
     }
 
