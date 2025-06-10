@@ -221,51 +221,6 @@ impl From<(EventKey, StakeTableEvent)> for StakeTableEventType {
     }
 }
 
-impl Validator {
-    pub fn from_event(event: StakeTableEvent) {
-        match event {
-            StakeTableEvent::Register(ValidatorRegistered {
-                account,
-                blsVk,
-                schnorrVk,
-                commission,
-            }) => {
-                let stake_table_key = BLSPubKey::from(blsVk);
-                let state_ver_key = SchnorrPubKey::from(schnorrVk);
-
-                Validator {
-                    account,
-                    stake_table_key,
-                    state_ver_key,
-                    stake: U256::from(0_u64),
-                    commission,
-                    delegators: HashMap::default(),
-                }
-            },
-            StakeTableEvent::RegisterV2(ValidatorRegisteredV2 {
-                account,
-                blsVK,
-                schnorrVK,
-                commission,
-                ..
-            }) => {
-                let stake_table_key: BLSPubKey = blsVK.into();
-                let state_ver_key: SchnorrPubKey = schnorrVK.into();
-
-                Validator {
-                    account,
-                    stake_table_key,
-                    state_ver_key,
-                    stake: U256::from(0_u64),
-                    commission,
-                    delegators: HashMap::default(),
-                }
-            },
-            _ => panic!("A `Validator` can only be built from a Registration Event"),
-        }
-    }
-}
-
 // TODO move to impl folder
 impl StakeTableEvent {
     pub fn handle(&self) -> Result<(), StakeTableEventHandlerError> {
@@ -275,7 +230,7 @@ impl StakeTableEvent {
                 event
                     .authenticate()
                     .map_err(StakeTableEventHandlerError::FailedToAuthenticate)?;
-                let validator = Validator::from_event(event);
+                // let validator = Validator::from_event(event);
                 // self.register(validators);
             },
             _ => todo!(),
