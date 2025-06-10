@@ -423,8 +423,9 @@ impl EpochCommittees {
         })
     }
 
-    /// Update state to either create a new stake table for the given epoch
-    /// containing the given validator, or update the existing stake table with the given validator
+    /// Update state by either creating a new stake table for the given epoch
+    /// containing only the given validator, or update the existing stake table with
+    /// the given validator.
     pub fn add_validator_to_epoch(
         &mut self,
         epoch: EpochNumber,
