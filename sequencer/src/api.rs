@@ -2024,11 +2024,21 @@ mod test {
         time::Duration,
     };
 
-    use alloy::primitives::U256;
+    use alloy::{
+        eips::BlockId,
+        network::EthereumWallet,
+        primitives::U256,
+        providers::{Provider, ProviderBuilder},
+    };
+    use async_lock::Mutex;
     use committable::{Commitment, Committable};
+    use espresso_contract_deployer::{
+        builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
+        Contract, Contracts,
+    };
     use espresso_types::{
         config::PublicHotShotConfig,
-        traits::NullEventConsumer,
+        traits::{NullEventConsumer, PersistenceOptions},
         v0_1::{RewardAmount, COMMISSION_BASIS_POINTS},
         v0_3::Fetcher,
         validators_from_l1_events, EpochVersion, FeeAmount, FeeVersion, Header, L1ClientOptions,
@@ -2039,6 +2049,7 @@ mod test {
         stream::{StreamExt, TryStreamExt},
     };
     use hotshot::types::EventType;
+    use hotshot_contract_adapter::sol_types::{EspToken, StakeTableV2};
     use hotshot_example_types::node_types::EpochsTestVersions;
     use hotshot_query_service::{
         availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
@@ -2075,6 +2086,7 @@ mod test {
         api::{
             options::Query,
             sql::{impl_testable_data_source::tmp_options, reconstruct_state},
+            test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
         },
         catchup::{NullStateCatchup, StatePeers},
         persistence::no_storage,
@@ -4614,6 +4626,117 @@ mod test {
         tracing::info!("block_reward={block_reward:?}");
 
         assert!(block_reward.0 > U256::ZERO);
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_scanning_token_contract_initialized_event() -> anyhow::Result<()> {
+        use espresso_types::v0_3::ChainConfig;
+
+        setup_test();
+
+        let blocks_per_epoch = 10;
+
+        let network_config = TestConfigBuilder::<1>::default()
+            .epoch_height(blocks_per_epoch)
+            .build();
+
+        let (genesis_state, genesis_stake) = light_client_genesis_from_stake_table(
+            &network_config.hotshot_config().hotshot_stake_table(),
+            STAKE_TABLE_CAPACITY_FOR_TEST,
+        )
+        .unwrap();
+
+        let deployer = ProviderBuilder::new()
+            .wallet(EthereumWallet::from(network_config.signer().clone()))
+            .on_http(network_config.l1_url().clone());
+
+        let mut contracts = Contracts::new();
+        let args = DeployerArgsBuilder::default()
+            .deployer(deployer.clone())
+            .mock_light_client(true)
+            .genesis_lc_state(genesis_state)
+            .genesis_st_state(genesis_stake)
+            .blocks_per_epoch(blocks_per_epoch)
+            .epoch_start_block(1)
+            .build()
+            .unwrap();
+
+        args.deploy_all(&mut contracts).await.unwrap();
+
+        let st_addr = contracts
+            .address(Contract::StakeTableProxy)
+            .expect("StakeTableProxy deployed");
+
+        let l1_url = network_config.l1_url().clone();
+
+        let storage = SqlDataSource::create_storage().await;
+        let mut opt = <SqlDataSource as TestableSequencerDataSource>::persistence_options(&storage);
+        let persistence = opt.create().await.unwrap();
+
+        let l1_client = L1ClientOptions {
+            stake_table_update_interval: Duration::from_secs(7),
+            l1_retry_delay: Duration::from_millis(10),
+            l1_events_max_block_range: 10000,
+            ..Default::default()
+        }
+        .connect(vec![l1_url])
+        .unwrap();
+        l1_client.spawn_tasks().await;
+
+        let fetcher = Fetcher::new(
+            Arc::new(NullStateCatchup::default()),
+            Arc::new(Mutex::new(persistence.clone())),
+            l1_client.clone(),
+            ChainConfig {
+                stake_table_contract: Some(st_addr),
+                base_fee: 0.into(),
+                ..Default::default()
+            },
+        );
+
+        let provider = l1_client.provider;
+        let stake_table = StakeTableV2::new(st_addr, provider.clone());
+
+        let stake_table_init_block = stake_table
+            .initializedAtBlock()
+            .block(BlockId::finalized())
+            .call()
+            .await?
+            ._0
+            .to::<u64>();
+
+        tracing::info!("stake table init block ={stake_table_init_block}");
+
+        let token_address = stake_table
+            .token()
+            .block(BlockId::finalized())
+            .call()
+            .await
+            .context("Failed to get token address")?
+            ._0;
+
+        let token = EspToken::new(token_address, provider.clone());
+
+        let init_log = fetcher
+            .scan_initialized_event_log(stake_table_init_block, token)
+            .await
+            .unwrap();
+
+        let init_tx = provider
+            .get_transaction_receipt(
+                init_log
+                    .transaction_hash
+                    .context(format!("transaction hash not found. init_log={init_log:?}"))?,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        let mint_transfer = init_tx.decoded_log::<EspToken::Transfer>().unwrap();
+
+        assert!(mint_transfer.value > U256::ZERO);
 
         Ok(())
     }

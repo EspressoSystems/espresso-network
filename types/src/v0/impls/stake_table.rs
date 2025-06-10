@@ -17,7 +17,7 @@ use committable::Committable;
 use futures::stream::{self, StreamExt};
 use hotshot::types::{BLSPubKey, SchnorrPubKey, SignatureKey as _};
 use hotshot_contract_adapter::sol_types::{
-    EspToken,
+    EspToken::{self, EspTokenInstance},
     StakeTableV2::{
         self, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit,
         ValidatorRegistered, ValidatorRegisteredV2,
@@ -51,7 +51,7 @@ use super::{
 };
 use crate::{
     traits::EventsPersistenceRead,
-    v0_1::{RewardAmount, BLOCKS_PER_YEAR, COMMISSION_BASIS_POINTS, INFLATION_RATE},
+    v0_1::{L1Provider, RewardAmount, BLOCKS_PER_YEAR, COMMISSION_BASIS_POINTS, INFLATION_RATE},
 };
 
 type Epoch = <SeqTypes as NodeType>::Epoch;
@@ -991,8 +991,13 @@ impl Fetcher {
     /// Relying on mint events directly e.g., searching for mints from the zero address is prone to errors
     /// because in future when reward withdrawals are supported, there might be more than one mint transfer logs from
     /// zero address
+    ///
+    /// The ESP token contract itself does not expose the block
+    /// it was initialized at. But the stake table contract does
+    /// Since the stake table contract is deployed after the token contract is deployed as it holds the token
+    /// contract address, we use its initialization block as a safe upper bound when scanning
+    ///  backwards for the token contract initialization even t
     pub async fn fetch_block_reward(&self) -> anyhow::Result<RewardAmount> {
-        let max_events_range = self.l1_client.options().l1_events_max_block_range;
         let chain_config = *self.chain_config.lock().await;
 
         let Some(stake_table_contract) = chain_config.stake_table_contract else {
@@ -1002,6 +1007,9 @@ impl Fetcher {
         let provider = self.l1_client.provider.clone();
         let stake_table = StakeTableV2::new(stake_table_contract, provider.clone());
 
+        // Get the block number where the stake table was initialized
+        // Stake table contract has the token contract address
+        // so the token contract is deployed before the stake table contract
         let stake_table_init_block = stake_table
             .initializedAtBlock()
             .block(BlockId::finalized())
@@ -1022,7 +1030,12 @@ impl Fetcher {
 
         let token = EspToken::new(token_address, provider.clone());
 
-        // Attempt to find Initialized event
+        // Try to fetch the `Initialized` event directly. This event is emitted only once,
+        // during the token contract initialization. The initialization transaction also transfers initial supply minted
+        // from the zero address. Since the result set is small (a single event),
+        // most RPC providers like Infura and Alchemy allow querying across the full block range
+        // If this fails because provider does not allow the query due to rate limiting (or some other error), we fall back to scanning over
+        // a fixed block range.
         let init_logs = token
             .Initialized_filter()
             .from_block(0u64)
@@ -1030,50 +1043,25 @@ impl Fetcher {
             .query()
             .await;
 
-        let init_log = if let Ok(init_logs) = init_logs {
-            ensure!(
-                !init_logs.is_empty(),
-                "Token Initialized event logs are empty. This should never happen"
-            );
+        let init_log = match init_logs {
+            Ok(init_logs) => {
+                ensure!(
+                    !init_logs.is_empty(),
+                    "Token Initialized event logs are empty. This should never happen"
+                );
 
-            let (_, init_log) = init_logs[0].clone();
+                let (_, init_log) = init_logs[0].clone();
 
-            tracing::debug!(tx_hash = ?init_log.transaction_hash, "Found token `Initialized` event");
-            init_log
-        } else {
-            const MAX_BLOCKS_SCANNED: u64 = 200_000;
-            let mut total_scanned = 0;
-
-            let mut from_block = stake_table_init_block.saturating_sub(max_events_range);
-            tracing::warn!("Initial token `Initialized` event not found. Scanning backwards from block {from_block}");
-
-            loop {
-                if total_scanned >= MAX_BLOCKS_SCANNED {
-                    tracing::error!(
-                        total_scanned,
-                        "Exceeded maximum scan range while searching for token Initialized event"
-                    );
-                    return Err(anyhow::anyhow!(
-                        "No Initialized event found after scanning {} blocks",
-                        MAX_BLOCKS_SCANNED
-                    ));
-                }
-                let init_logs = token
-                    .Initialized_filter()
-                    .from_block(from_block)
-                    .to_block(stake_table_init_block)
-                    .query()
-                    .await?;
-                if !init_logs.is_empty() {
-                    let (_, init_log) = init_logs[0].clone();
-                    tracing::info!(from_block, tx_hash = ?init_log.transaction_hash, "Found token Initialized event during scan");
-
-                    break init_log;
-                }
-
-                total_scanned += max_events_range;
-                from_block = from_block.saturating_sub(max_events_range);
-            }
+                tracing::debug!(tx_hash = ?init_log.transaction_hash, "Found token `Initialized` event");
+                init_log
+            },
+            Err(err) => {
+                tracing::warn!(
+                    "RPC returned error {err:?}. will fallback to scanning over fixed block range"
+                );
+                self.scan_initialized_event_log(stake_table_init_block, token)
+                    .await?
+            },
         };
 
         // Get the transaction that emitted the Initialized event
@@ -1111,6 +1099,46 @@ impl Fetcher {
             .ok_or_else(|| anyhow::anyhow!("COMMISSION_BASIS_POINTS is zero"))?;
 
         Ok(RewardAmount(reward))
+    }
+
+    pub async fn scan_initialized_event_log(
+        &self,
+        stake_table_init_block: u64,
+        token: EspTokenInstance<(), L1Provider>,
+    ) -> anyhow::Result<Log> {
+        let max_events_range = self.l1_client.options().l1_events_max_block_range;
+        const MAX_BLOCKS_SCANNED: u64 = 200_000;
+        let mut total_scanned = 0;
+
+        let mut from_block = stake_table_init_block.saturating_sub(max_events_range);
+
+        loop {
+            if total_scanned >= MAX_BLOCKS_SCANNED {
+                tracing::error!(
+                    total_scanned,
+                    "Exceeded maximum scan range while searching for token Initialized event"
+                );
+                return Err(anyhow::anyhow!(
+                    "No Initialized event found after scanning {} blocks",
+                    MAX_BLOCKS_SCANNED
+                ));
+            }
+            let init_logs = token
+                .Initialized_filter()
+                .from_block(from_block)
+                .to_block(stake_table_init_block)
+                .query()
+                .await?;
+            if !init_logs.is_empty() {
+                let (_, init_log) = init_logs[0].clone();
+                tracing::info!(from_block, tx_hash = ?init_log.transaction_hash, "Found token Initialized event during scan");
+
+                break Ok(init_log);
+            }
+
+            total_scanned += max_events_range;
+            from_block = from_block.saturating_sub(max_events_range);
+        }
     }
 
     pub async fn fetch(
