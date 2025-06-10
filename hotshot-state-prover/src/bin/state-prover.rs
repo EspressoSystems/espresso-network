@@ -3,6 +3,7 @@ use std::time::Duration;
 use alloy::{
     primitives::{utils::parse_units, Address},
     providers::{Provider, ProviderBuilder},
+    rpc::client::RpcClient,
     signers::{
         local::{coins_bip39::English, MnemonicBuilder},
         Signer,
@@ -10,7 +11,7 @@ use alloy::{
 };
 use clap::Parser;
 use espresso_contract_deployer::network_config::fetch_epoch_config_from_sequencer;
-use espresso_types::parse_duration;
+use espresso_types::{parse_duration, v0_1::SwitchingTransport, L1ClientOptions};
 use hotshot_state_prover::service::StateProverConfig;
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
 use sequencer_utils::logging;
@@ -47,13 +48,19 @@ struct Args {
     )]
     max_retries: u64,
 
-    /// URL of layer 1 Ethereum JSON-RPC provider.
+    /// Url we will use for RPC communication with L1.
     #[clap(
         long,
         env = "ESPRESSO_SEQUENCER_L1_PROVIDER",
-        default_value = "http://localhost:8545"
+        default_value = "http://localhost:8545",
+        value_delimiter = ',',
+        num_args = 1..,
     )]
-    l1_provider: Url,
+    pub l1_provider_url: Vec<Url>,
+
+    /// Configuration for the L1 client.
+    #[clap(flatten)]
+    pub l1_options: L1ClientOptions,
 
     /// Address of LightClient contract on layer 1.
     #[clap(long, env = "ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS")]
@@ -94,14 +101,6 @@ struct Args {
     #[clap(short, long, env = "ESPRESSO_STATE_PROVER_MAX_GAS_PRICE_IN_GWEI")]
     pub max_gas_price: Option<String>,
 
-    /// Indicated if the prover is using the old V1 LightClient contract
-    #[clap(
-        long = "v1-contract",
-        env = "ESPRESSO_STATE_PROVER_V1_CONTRACT",
-        default_value = "false"
-    )]
-    pub v1_contract: bool,
-
     #[clap(flatten)]
     logging: logging::Config,
 }
@@ -112,7 +111,10 @@ async fn main() {
     args.logging.init();
 
     // prepare config for state prover from user options
-    let l1_provider = ProviderBuilder::new().on_http(args.l1_provider.clone());
+    let transport = SwitchingTransport::new(args.l1_options, args.l1_provider_url)
+        .expect("failed to create switching transport");
+    let rpc_client = RpcClient::new(transport.clone(), false);
+    let l1_provider = ProviderBuilder::new().on_client(rpc_client.clone());
     let chain_id = l1_provider.get_chain_id().await.unwrap();
     let signer = MnemonicBuilder::<English>::default()
         .phrase(args.eth_mnemonic)
@@ -155,7 +157,7 @@ async fn main() {
         relay_server: args.relay_server,
         update_interval: args.update_interval,
         retry_interval: args.retry_interval,
-        provider_endpoint: args.l1_provider,
+        l1_rpc_client: rpc_client,
         light_client_address: args.light_client_address,
         signer,
         sequencer_url: args.sequencer_url,
