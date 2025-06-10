@@ -698,7 +698,8 @@ impl std::error::Error for ProverError {}
 mod test {
 
     use alloy::{
-        node_bindings::Anvil, providers::layers::AnvilProvider, providers::ProviderBuilder,
+        node_bindings::Anvil,
+        providers::{layers::AnvilProvider, ProviderBuilder},
         sol_types::SolValue,
     };
     use anyhow::Result;
