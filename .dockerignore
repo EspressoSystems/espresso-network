@@ -1,5 +1,6 @@
 .cargo
 .git
+target/nix/
 target*/debug
 target*/**/.fingerprint
 target*/**/build
@@ -7,3 +8,4 @@ target*/**/deps
 target*/**/examples
 target*/**/incremental
 target*/**/doc
+node_modules/

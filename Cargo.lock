@@ -496,7 +496,7 @@ dependencies = [
  "lru 0.13.0",
  "parking_lot",
  "pin-project",
- "reqwest 0.12.16",
+ "reqwest 0.12.18",
  "serde",
  "serde_json",
  "thiserror 2.0.12",
@@ -563,7 +563,7 @@ dependencies = [
  "async-stream",
  "futures",
  "pin-project",
- "reqwest 0.12.16",
+ "reqwest 0.12.18",
  "serde",
  "serde_json",
  "tokio",
@@ -796,7 +796,7 @@ checksum = "4cc3079a33483afa1b1365a3add3ea3e21c75b10f704870198ba7846627d10f2"
 dependencies = [
  "alloy-json-rpc",
  "alloy-transport",
- "reqwest 0.12.16",
+ "reqwest 0.12.18",
  "serde_json",
  "tower 0.5.2",
  "tracing",
@@ -1879,9 +1879,9 @@ dependencies = [
 
 [[package]]
 name = "backon"
-version = "1.5.0"
+version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd0b50b1b78dbadd44ab18b3c794e496f3a139abb9fbc27d9c94c4eebbb96496"
+checksum = "302eaff5357a264a2c42f127ecb8bac761cf99749fc3dc95677e2743991f99e7"
 dependencies = [
  "fastrand 2.3.0",
 ]
@@ -4092,10 +4092,12 @@ dependencies = [
  "clap 4.5.39",
  "derive_builder",
  "derive_more 1.0.0",
+ "dotenvy",
  "espresso-types",
  "hotshot-contract-adapter",
  "hotshot-types",
  "sequencer-utils",
+ "serde_json",
  "surf-disco",
  "tide-disco",
  "tokio",
@@ -5573,7 +5575,7 @@ dependencies = [
  "rand 0.8.5",
  "semver 1.0.26",
  "serde",
- "snafu 0.8.5",
+ "snafu 0.8.6",
  "surf-disco",
  "tide-disco",
  "tokio",
@@ -5596,7 +5598,7 @@ dependencies = [
  "hotshot-types",
  "jf-vid",
  "rand 0.8.5",
- "reqwest 0.12.16",
+ "reqwest 0.12.18",
  "serde",
  "sha2 0.10.9",
  "sha3",
@@ -5630,7 +5632,7 @@ dependencies = [
  "local-ip-address",
  "portpicker",
  "rand 0.8.5",
- "reqwest 0.12.16",
+ "reqwest 0.12.18",
  "sequencer",
  "serde",
  "sha2 0.10.9",
@@ -5747,11 +5749,11 @@ dependencies = [
  "rand 0.8.5",
  "refinery",
  "refinery-core",
- "reqwest 0.12.16",
+ "reqwest 0.12.18",
  "semver 1.0.26",
  "serde",
  "serde_json",
- "snafu 0.8.5",
+ "snafu 0.8.6",
  "sqlx",
  "surf-disco",
  "tagged-base64",
@@ -5796,7 +5798,7 @@ dependencies = [
  "jf-rescue",
  "jf-signature 0.2.0",
  "jf-utils",
- "reqwest 0.12.16",
+ "reqwest 0.12.18",
  "sequencer-utils",
  "serde",
  "surf-disco",
@@ -5884,7 +5886,7 @@ dependencies = [
  "lru 0.12.5",
  "portpicker",
  "rand 0.8.5",
- "reqwest 0.12.16",
+ "reqwest 0.12.18",
  "serde",
  "sha2 0.10.9",
  "tagged-base64",
@@ -7691,9 +7693,9 @@ dependencies = [
 
 [[package]]
 name = "lock_api"
-version = "0.4.12"
+version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07af8b9cdd281b7915f413fa73f29ebd5d55d0d3f0155584dade1ff18cea1b17"
+checksum = "96936507f153605bddfcda068dd804796c84324ed2510809e5b2a624c81da765"
 dependencies = [
  "autocfg",
  "scopeguard",
@@ -8216,7 +8218,7 @@ dependencies = [
  "hotshot-types",
  "node-metrics",
  "prometheus-parse",
- "reqwest 0.12.16",
+ "reqwest 0.12.18",
  "serde",
  "serde_json",
  "surf-disco",
@@ -8483,9 +8485,9 @@ dependencies = [
 
 [[package]]
 name = "openssl"
-version = "0.10.72"
+version = "0.10.73"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fedfea7d58a1f73118430a55da6a286e7b044961736ce96a16a17068ea25e5da"
+checksum = "8505734d46c8ab1e19a1dce3aef597ad87dcb4c37e7188231769bd6bd51cebf8"
 dependencies = [
  "bitflags 2.9.1",
  "cfg-if",
@@ -8524,9 +8526,9 @@ dependencies = [
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.108"
+version = "0.9.109"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e145e1651e858e820e4860f7b9c5e169bc1d8ce1c86043be79fa7b7634821847"
+checksum = "90096e2e47630d78b7d1c20952dc621f957103f8bc2c8359ec81290d75238571"
 dependencies = [
  "cc",
  "libc",
@@ -8608,9 +8610,9 @@ checksum = "f38d5652c16fde515bb1ecef450ab0f6a219d619a7274976324d5e377f7dceba"
 
 [[package]]
 name = "parking_lot"
-version = "0.12.3"
+version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1bf18183cf54e8d6059647fc3063646a1801cf30896933ec2311622cc4b9a27"
+checksum = "70d58bf43669b5795d1576d0641cfb6fbb2057bf629506267a92807158584a13"
 dependencies = [
  "lock_api",
  "parking_lot_core",
@@ -8618,9 +8620,9 @@ dependencies = [
 
 [[package]]
 name = "parking_lot_core"
-version = "0.9.10"
+version = "0.9.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e401f977ab385c9e4e3ab30627d6f26d00e2c73eef317493c4ec6d468726cf8"
+checksum = "bc838d2a56b5b1a6c25f55575dfc605fabb63bb2365f6c2353ef9159aa69e4a5"
 dependencies = [
  "cfg-if",
  "libc",
@@ -9077,9 +9079,9 @@ dependencies = [
 
 [[package]]
 name = "priority-queue"
-version = "2.3.1"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef08705fa1589a1a59aa924ad77d14722cb0cd97b67dd5004ed5f4a4873fce8d"
+checksum = "b816314f0ba557376adec2392396a0b5c8195b25ef5394b7eea496ac26e353e4"
 dependencies = [
  "autocfg",
  "equivalent",
@@ -9815,9 +9817,9 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.12.16"
+version = "0.12.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bf597b113be201cb2269b4c39b39a804d01b99ee95a4278f0ed04e45cff1c71"
+checksum = "e98ff6b0dbbe4d5a37318f433d4fc82babd21631f194d370409ceb2e40b2f0b5"
 dependencies = [
  "base64 0.22.1",
  "bytes 1.10.1",
@@ -10589,7 +10591,7 @@ dependencies = [
  "rand_chacha 0.3.1",
  "rand_distr",
  "request-response",
- "reqwest 0.12.16",
+ "reqwest 0.12.18",
  "rstest",
  "rstest_reuse",
  "semver 1.0.26",
@@ -10598,7 +10600,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "snafu 0.8.5",
+ "snafu 0.8.6",
  "sqlx",
  "staking-cli",
  "static_assertions",
@@ -11010,11 +11012,11 @@ dependencies = [
 
 [[package]]
 name = "snafu"
-version = "0.8.5"
+version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "223891c85e2a29c3fe8fb900c1fae5e69c2e42415e3177752e8718475efa5019"
+checksum = "320b01e011bf8d5d7a4a4a4be966d9160968935849c83b918827f6a435e7f627"
 dependencies = [
- "snafu-derive 0.8.5",
+ "snafu-derive 0.8.6",
 ]
 
 [[package]]
@@ -11031,9 +11033,9 @@ dependencies = [
 
 [[package]]
 name = "snafu-derive"
-version = "0.8.5"
+version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03c3c6b7927ffe7ecaa769ee0e3994da3b8cafc8f444578982c83ecb161af917"
+checksum = "1961e2ef424c1424204d3a5d6975f934f56b6d50ff5732382d84ebf460e147f7"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -11526,7 +11528,7 @@ dependencies = [
  "derivative",
  "futures",
  "hex",
- "reqwest 0.12.16",
+ "reqwest 0.12.18",
  "serde",
  "serde_json",
  "tide-disco",
@@ -11759,7 +11761,7 @@ dependencies = [
  "base64 0.22.1",
  "crc-any",
  "serde",
- "snafu 0.8.5",
+ "snafu 0.8.6",
  "tagged-base64-macros",
  "wasm-bindgen",
 ]
@@ -11814,7 +11816,7 @@ dependencies = [
  "dotenvy",
  "espresso-types",
  "futures",
- "reqwest 0.12.16",
+ "reqwest 0.12.18",
  "sequencer",
  "surf-disco",
  "tempfile",
@@ -11938,7 +11940,7 @@ dependencies = [
  "pin-project",
  "prometheus",
  "rand 0.8.5",
- "reqwest 0.12.16",
+ "reqwest 0.12.18",
  "routefinder",
  "semver 1.0.26",
  "serde",
@@ -11947,7 +11949,7 @@ dependencies = [
  "shellexpand",
  "signal-hook",
  "signal-hook-async-std",
- "snafu 0.8.5",
+ "snafu 0.8.6",
  "strum 0.26.3",
  "strum_macros 0.26.4",
  "tagged-base64",
