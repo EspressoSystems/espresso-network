@@ -1111,6 +1111,7 @@ impl Fetcher {
         let mut total_scanned = 0;
 
         let mut from_block = stake_table_init_block.saturating_sub(max_events_range);
+        let mut to_block = stake_table_init_block;
 
         loop {
             if total_scanned >= MAX_BLOCKS_SCANNED {
@@ -1126,7 +1127,7 @@ impl Fetcher {
             let init_logs = token
                 .Initialized_filter()
                 .from_block(from_block)
-                .to_block(stake_table_init_block)
+                .to_block(to_block)
                 .query()
                 .await?;
             if !init_logs.is_empty() {
@@ -1138,6 +1139,7 @@ impl Fetcher {
 
             total_scanned += max_events_range;
             from_block = from_block.saturating_sub(max_events_range);
+            to_block = to_block.saturating_sub(max_events_range);
         }
     }
 
