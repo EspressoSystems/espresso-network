@@ -789,7 +789,7 @@ impl TestNetwork {
             .genesis_st_state(genesis_stake)
             .blocks_per_epoch(blocks_per_epoch.unwrap())
             .epoch_start_block(epoch_start_block.unwrap())
-            .multisig_pauser(signer.address().clone())
+            .multisig_pauser(signer.address())
             .build()
             .unwrap();
 
