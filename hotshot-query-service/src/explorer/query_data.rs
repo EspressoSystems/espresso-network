@@ -27,7 +27,9 @@ use super::{
     traits::{ExplorerHeader, ExplorerTransaction},
 };
 use crate::{
-    availability::{BlockQueryData, QueryablePayload, TransactionHash},
+    availability::{
+        BlockQueryData, NamespaceId, QueryableHeader, QueryablePayload, TransactionHash,
+    },
     node::BlockHash,
     types::HeightIndexed,
     Header, Payload, Resolvable, Transaction,
@@ -146,8 +148,6 @@ impl<'de> Deserialize<'de> for Timestamp {
 }
 
 pub type WalletAddress<Types> = <Header<Types> as ExplorerHeader<Types>>::WalletAddress;
-pub type BlockNamespaceId<Types> = <Header<Types> as ExplorerHeader<Types>>::NamespaceId;
-pub type TransactionNamespaceId<Types> = <Transaction<Types> as ExplorerTransaction>::NamespaceId;
 pub type ProposerId<Types> = <Header<Types> as ExplorerHeader<Types>>::ProposerId;
 pub type BalanceAmount<Types> = <Header<Types> as ExplorerHeader<Types>>::BalanceAmount;
 
@@ -330,10 +330,9 @@ pub struct TransactionDetailResponse<Types: NodeType> {
 pub struct TransactionSummary<Types: NodeType>
 where
     Header<Types>: ExplorerHeader<Types>,
-    Transaction<Types>: ExplorerTransaction,
 {
     pub hash: TransactionHash<Types>,
-    pub rollups: Vec<TransactionNamespaceId<Types>>,
+    pub rollups: Vec<NamespaceId<Types>>,
     pub height: u64,
     pub offset: u64,
     pub num_transactions: u64,
@@ -349,8 +348,8 @@ impl<Types: NodeType>
 where
     BlockQueryData<Types>: HeightIndexed,
     Payload<Types>: QueryablePayload<Types>,
-    Header<Types>: BlockHeader<Types> + ExplorerHeader<Types>,
-    Transaction<Types>: ExplorerTransaction,
+    Header<Types>: QueryableHeader<Types> + ExplorerHeader<Types>,
+    Transaction<Types>: ExplorerTransaction<Types>,
 {
     type Error = TimestampConversionError;
 
@@ -383,8 +382,8 @@ impl<Types: NodeType>
 where
     BlockQueryData<Types>: HeightIndexed,
     Payload<Types>: QueryablePayload<Types>,
-    Header<Types>: BlockHeader<Types> + ExplorerHeader<Types>,
-    <Types as NodeType>::Transaction: ExplorerTransaction,
+    Header<Types>: QueryableHeader<Types> + ExplorerHeader<Types>,
+    <Types as NodeType>::Transaction: ExplorerTransaction<Types>,
 {
     type Error = TimestampConversionError;
 
@@ -423,9 +422,14 @@ pub struct GetBlockSummariesRequest<Types: NodeType>(pub BlockRange<Types>);
 /// [TransactionSummaryFilter] represents the various filters that can be
 /// applied when retrieving a list of [TransactionSummary] entries.
 #[derive(Debug, Deserialize, Serialize)]
-pub enum TransactionSummaryFilter {
+#[serde(bound = "")]
+pub enum TransactionSummaryFilter<Types>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+{
     None,
-    RollUp(usize),
+    RollUp(NamespaceId<Types>),
     Block(usize),
 }
 
@@ -434,12 +438,20 @@ pub enum TransactionSummaryFilter {
 /// endpoint will be mapped to this struct in order for the request to be
 /// processed.
 #[derive(Debug)]
-pub struct GetTransactionSummariesRequest<Types: NodeType> {
+pub struct GetTransactionSummariesRequest<Types>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+{
     pub range: TransactionRange<Types>,
-    pub filter: TransactionSummaryFilter,
+    pub filter: TransactionSummaryFilter<Types>,
 }
 
-impl<Types: NodeType> Default for GetTransactionSummariesRequest<Types> {
+impl<Types> Default for GetTransactionSummariesRequest<Types>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+{
     fn default() -> Self {
         Self {
             range: TransactionRange {
@@ -492,7 +504,7 @@ pub struct ExplorerHistograms {
 pub struct ExplorerSummary<Types: NodeType>
 where
     Header<Types>: ExplorerHeader<Types>,
-    Transaction<Types>: ExplorerTransaction,
+    Transaction<Types>: ExplorerTransaction<Types>,
 {
     pub latest_block: BlockDetail<Types>,
     pub genesis_overview: GenesisOverview,
@@ -510,7 +522,7 @@ where
 pub struct SearchResult<Types: NodeType>
 where
     Header<Types>: ExplorerHeader<Types>,
-    Transaction<Types>: ExplorerTransaction,
+    Transaction<Types>: ExplorerTransaction<Types>,
 {
     pub blocks: Vec<BlockSummary<Types>>,
     pub transactions: Vec<TransactionSummary<Types>>,

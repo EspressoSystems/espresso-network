@@ -21,7 +21,7 @@ use hotshot_types::traits::node_implementation::NodeType;
 
 use super::{AvailabilityProvider, FetchRequest, Fetchable, Fetcher, Notifiers};
 use crate::{
-    availability::{QueryablePayload, TransactionHash, TransactionQueryData},
+    availability::{QueryableHeader, QueryablePayload, TransactionHash, TransactionQueryData},
     data_source::{
         storage::{
             pruning::PrunedHeightStorage, AvailabilityStorage, NodeStorage,
@@ -29,7 +29,7 @@ use crate::{
         },
         update::VersionedDataSource,
     },
-    Payload, QueryResult,
+    Header, Payload, QueryResult,
 };
 
 #[derive(Clone, Copy, Debug, From)]
@@ -41,6 +41,7 @@ impl<Types: NodeType> FetchRequest for TransactionRequest<Types> {}
 impl<Types> Fetchable<Types> for TransactionQueryData<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     type Request = TransactionRequest<Types>;
