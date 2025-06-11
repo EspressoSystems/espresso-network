@@ -3,7 +3,6 @@ use std::fmt;
 use anyhow::{ensure, Context};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
-use hotshot::types::BLSPubKey;
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
 use hotshot_types::{
     data::{vid_commitment, VidCommitment, ViewNumber},
@@ -30,13 +29,13 @@ use super::{
     instance_state::NodeState,
     state::ValidatedState,
     v0_1::{IterableFeeInfo, RewardMerkleCommitment, RewardMerkleTree, REWARD_MERKLE_TREE_HEIGHT},
-    v0_3::{ChainConfig, Validator},
+    v0_3::ChainConfig,
 };
 use crate::{
     eth_signature_key::BuilderSignature,
     v0::{
         header::{EitherOrVersion, VersionedHeader},
-        impls::reward::{find_validator_info, first_two_epochs},
+        impls::reward::{find_validator_info, first_two_epochs, RewardDistributor},
     },
     v0_1, v0_2, v0_3, v0_4, BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
     FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable,
@@ -394,7 +393,7 @@ impl Header {
         mut state: ValidatedState,
         chain_config: ChainConfig,
         version: Version,
-        validator: Option<Validator<BLSPubKey>>,
+        reward_distributor: Option<RewardDistributor>,
     ) -> anyhow::Result<Self> {
         ensure!(
             version.major == 0,
@@ -490,8 +489,9 @@ impl Header {
 
         let fee_merkle_tree_root = state.fee_merkle_tree.commitment();
 
-        if let Some(validator) = validator {
-            let reward_state = validator.apply_rewards(state.reward_merkle_tree.clone())?;
+        if let Some(reward_distributor) = reward_distributor {
+            let reward_state =
+                reward_distributor.apply_rewards(state.reward_merkle_tree.clone())?;
             state.reward_merkle_tree = reward_state;
         }
 
@@ -915,22 +915,22 @@ impl BlockHeader<SeqTypes> for Header {
                 .context("remembering block proof")?;
         }
 
-        let mut leader_config = None;
+        let mut compute_reward = None;
         // Rewards are distributed only if the current epoch is not the first or second epoch
         // this is because we don't have stake table from the contract for the first two epochs
         let proposed_header_height = parent_leaf.height() + 1;
         if version >= EpochVersion::version()
             && !first_two_epochs(proposed_header_height, instance_state).await?
         {
-            leader_config = Some(
-                find_validator_info(
-                    instance_state,
-                    &mut validated_state,
-                    parent_leaf,
-                    ViewNumber::new(view_number),
-                )
-                .await?,
-            );
+            let leader = find_validator_info(
+                instance_state,
+                &mut validated_state,
+                parent_leaf,
+                ViewNumber::new(view_number),
+            )
+            .await?;
+            let block_reward = instance_state.block_reward().await;
+            compute_reward = Some(RewardDistributor::new(leader, block_reward));
         };
 
         Ok(Self::from_info(
@@ -945,7 +945,7 @@ impl BlockHeader<SeqTypes> for Header {
             validated_state,
             chain_config,
             version,
-            leader_config,
+            compute_reward,
         )?)
     }
 

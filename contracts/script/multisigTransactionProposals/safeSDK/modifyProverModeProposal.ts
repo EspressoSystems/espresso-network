@@ -15,9 +15,14 @@ async function main() {
 
     // Initialize web3 provider using the RPC URL from environment variables
     const web3Provider = new ethers.JsonRpcProvider(getEnvVar("RPC_URL"));
-
+    let useHardwareWallet = false;
+    try {
+      useHardwareWallet = getEnvVar("USE_HARDWARE_WALLET") === "true";
+    } catch (error) {
+      console.error("USE_HARDWARE_WALLET is not set, defaulting to false");
+    }
     // Get the signer, this signer must be one of the signers on the Safe Multisig Wallet
-    const orchestratorSigner = getSigner(web3Provider);
+    const orchestratorSigner = getSigner(web3Provider, useHardwareWallet);
 
     // Set up Eth Adapter with ethers and the signer
     const ethAdapter = new EthersAdapter({
@@ -43,10 +48,17 @@ async function main() {
         orchestratorSignerAddress,
         safeAddress,
         permissionedProverAddress,
+        useHardwareWallet,
       );
     } else if (command === DISABLE_PROVER_CMD) {
       console.log(`${command}`);
-      await proposeDisableProverTransaction(safeSdk, safeService, orchestratorSignerAddress, safeAddress);
+      await proposeDisableProverTransaction(
+        safeSdk,
+        safeService,
+        orchestratorSignerAddress,
+        safeAddress,
+        useHardwareWallet,
+      );
     }
 
     console.log(
@@ -86,6 +98,7 @@ export async function proposeSetProverTransaction(
   signerAddress: string,
   safeAddress: string,
   proverAddress: string,
+  useHardwareWallet: boolean,
 ) {
   // Prepare the transaction data to set the permissioned prover
   let data = createPermissionedProverTxData(proverAddress);
@@ -98,6 +111,7 @@ export async function proposeSetProverTransaction(
     safeSDK,
     contractAddress,
     data,
+    useHardwareWallet,
   );
 
   // Propose the transaction which can be signed by other owners via the Safe UI
@@ -136,6 +150,7 @@ export async function proposeDisableProverTransaction(
   safeService: SafeApiKit,
   signerAddress: string,
   safeAddress: string,
+  useHardwareWallet: boolean,
 ) {
   // Prepare the transaction data to disable permissioned prover mode
   // Define the ABI of the function to be called
@@ -152,6 +167,7 @@ export async function proposeDisableProverTransaction(
     safeSDK,
     contractAddress,
     data,
+    useHardwareWallet,
   );
 
   // Propose the transaction which can be signed by other owners via the Safe UI

@@ -22,7 +22,7 @@ use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
 use espresso_types::{
     traits::{EventConsumer, MembershipPersistence},
-    v0_3::StakeTableFetcher,
+    v0_3::Fetcher,
     BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes, ValidatedState,
 };
 use genesis::L1Finalized;
@@ -511,17 +511,19 @@ where
         },
     };
 
-    let fetcher = StakeTableFetcher::new(
+    let fetcher = Fetcher::new(
         Arc::new(state_catchup_providers.clone()),
         Arc::new(Mutex::new(persistence.clone())),
         l1_client.clone(),
         genesis.chain_config,
     );
     fetcher.spawn_update_loop().await;
+    let block_reward = fetcher.fetch_block_reward().await.ok().unwrap_or_default();
     // Create the HotShot membership
     let mut membership = EpochCommittees::new_stake(
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
+        block_reward,
         fetcher,
     );
     membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
@@ -532,7 +534,6 @@ where
         membership,
         network_config.config.epoch_height,
         &persistence.clone(),
-        network_config.config.drb_difficulty,
     );
 
     let instance_state = NodeState {
@@ -1028,6 +1029,7 @@ pub mod testing {
                 epoch_start_block: 1,
                 stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
                 drb_difficulty: 10,
+                drb_upgrade_difficulty: 20,
             };
 
             let anvil = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
@@ -1221,7 +1223,7 @@ pub mod testing {
                 .expect("failed to create L1 client");
             l1_client.spawn_tasks().await;
 
-            let fetcher = StakeTableFetcher::new(
+            let fetcher = Fetcher::new(
                 Arc::new(catchup_providers.clone()),
                 Arc::new(Mutex::new(persistence.clone())),
                 l1_client.clone(),
@@ -1229,9 +1231,11 @@ pub mod testing {
             );
             fetcher.spawn_update_loop().await;
 
+            let block_reward = fetcher.fetch_block_reward().await.ok().unwrap_or_default();
             let mut membership = EpochCommittees::new_stake(
                 config.known_nodes_with_stake.clone(),
                 config.known_da_nodes.clone(),
+                block_reward,
                 fetcher,
             );
             membership.reload_stake(50).await;
@@ -1243,7 +1247,6 @@ pub mod testing {
                 membership,
                 config.epoch_height,
                 &persistence.clone(),
-                config.drb_difficulty,
             );
 
             let node_state = NodeState::new(

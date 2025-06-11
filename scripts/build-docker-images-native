@@ -262,6 +262,12 @@ cp -v docker/scripts/sequencer-awssecretsmanager.sh "${workdir}/docker/scripts"
 mkdir -p "${workdir}/scripts"
 cp -v scripts/sequencer-entrypoint "${workdir}/scripts/"
 
+# Copy the safeSDK for multisig transaction proposals
+mkdir -p "${WORKDIR}/contracts/script/multisigTransactionProposals"
+cp -rv contracts/script/multisigTransactionProposals/safeSDK "${WORKDIR}/contracts/script/multisigTransactionProposals/"
+cp -v scripts/multisig-upgrade-entrypoint "${WORKDIR}/scripts/"
+cp package.json yarn.lock "$WORKDIR/"
+
 export DOCKER_BUILDKIT=1
 
 for image in "${images[@]}"; do
