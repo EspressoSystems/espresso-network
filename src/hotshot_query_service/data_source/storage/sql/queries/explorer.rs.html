@@ -390,7 +390,7 @@
 <a href=#390 id=390 data-nosnippet>390</a>                    .bind(namespace)
 <a href=#391 id=391 data-nosnippet>391</a>                    .bind(position)
 <a href=#392 id=392 data-nosnippet>392</a>                    .bind((range.num_transactions.get() + offset) <span class="kw">as </span>i64)
-<a href=#393 id=393 data-nosnippet>393</a>                    .bind(ns.clone().into())
+<a href=#393 id=393 data-nosnippet>393</a>                    .bind((<span class="kw-2">*</span>ns).into())
 <a href=#394 id=394 data-nosnippet>394</a>            },
 <a href=#395 id=395 data-nosnippet>395</a>            TransactionSummaryFilter::None =&gt; {
 <a href=#396 id=396 data-nosnippet>396</a>                query(<span class="kw-2">&amp;</span>GET_BLOCKS_CONTAINING_TRANSACTIONS_NO_FILTER_QUERY)
@@ -576,7 +576,7 @@
 <a href=#576 id=576 data-nosnippet>576</a>        <span class="kw">let </span>genesis_overview = {
 <a href=#577 id=577 data-nosnippet>577</a>            <span class="kw">let </span>blocks = NodeStorage::&lt;Types&gt;::block_height(<span class="self">self</span>).<span class="kw">await</span><span class="question-mark">? </span><span class="kw">as </span>u64;
 <a href=#578 id=578 data-nosnippet>578</a>            <span class="kw">let </span>transactions =
-<a href=#579 id=579 data-nosnippet>579</a>                NodeStorage::&lt;Types&gt;::count_transactions_in_range(<span class="self">self</span>, ..).<span class="kw">await</span><span class="question-mark">? </span><span class="kw">as </span>u64;
+<a href=#579 id=579 data-nosnippet>579</a>                NodeStorage::&lt;Types&gt;::count_transactions_in_range(<span class="self">self</span>, .., <span class="prelude-val">None</span>).<span class="kw">await</span><span class="question-mark">? </span><span class="kw">as </span>u64;
 <a href=#580 id=580 data-nosnippet>580</a>            GenesisOverview {
 <a href=#581 id=581 data-nosnippet>581</a>                rollups: <span class="number">0</span>,
 <a href=#582 id=582 data-nosnippet>582</a>                transactions,
