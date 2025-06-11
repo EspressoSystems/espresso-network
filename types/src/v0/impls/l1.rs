@@ -170,7 +170,7 @@ impl L1ClientMetrics {
 
 impl SwitchingTransport {
     /// Create a new `SwitchingTransport` with the given options and URLs
-    fn new(opt: L1ClientOptions, urls: Vec<Url>) -> anyhow::Result<Self> {
+    pub fn new(opt: L1ClientOptions, urls: Vec<Url>) -> anyhow::Result<Self> {
         // Return early if there were no URLs provided
         let Some(first_url) = urls.first().cloned() else {
             return Err(anyhow::anyhow!("No valid URLs provided"));
