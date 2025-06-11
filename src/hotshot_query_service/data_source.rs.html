@@ -266,7 +266,7 @@
 <a href=#266 id=266 data-nosnippet>266</a>                // available locally.
 <a href=#267 id=267 data-nosnippet>267</a>                </span><span class="kw">let </span>ix = seen_transactions
 <a href=#268 id=268 data-nosnippet>268</a>                    .entry(txn.commit())
-<a href=#269 id=269 data-nosnippet>269</a>                    .or_insert((i <span class="kw">as </span>u64, j));
+<a href=#269 id=269 data-nosnippet>269</a>                    .or_insert((i <span class="kw">as </span>u64, j.clone()));
 <a href=#270 id=270 data-nosnippet>270</a>                <span class="kw">if let </span><span class="prelude-val">Ok</span>(tx_data) = ds.get_transaction(txn.commit()).<span class="kw">await</span>.try_resolve() {
 <a href=#271 id=271 data-nosnippet>271</a>                    <span class="macro">assert_eq!</span>(tx_data.transaction(), <span class="kw-2">&amp;</span>txn);
 <a href=#272 id=272 data-nosnippet>272</a>                    <span class="macro">assert_eq!</span>(tx_data.block_height(), ix.<span class="number">0</span>);

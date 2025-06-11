@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["VERSION"],"struct":["Index"]};
+window.SIDEBAR_ITEMS = {"constant":["VERSION"]};
