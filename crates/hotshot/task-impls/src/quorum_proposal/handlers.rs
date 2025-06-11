@@ -637,6 +637,11 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
 
         Ok(())
     }
+
+    fn print_proposal_events(&self, res: &Vec<Vec<Vec<Arc<HotShotEvent<TYPES>>>>>) {
+        let events: Vec<_> = res.iter().flatten().flatten().map(Arc::as_ref).collect();
+        tracing::error!("Failed to propose, events: {:#?}", events);
+    }
 }
 
 impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<TYPES, V> {
@@ -699,6 +704,7 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                 "Failed to get version for view {:?}, not proposing",
                 self.view_number
             );
+            self.print_proposal_events(&res);
             return;
         };
 
@@ -729,6 +735,7 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                     "We've formed a transition QC but we haven't formed \
                     the corresponding next epoch QC. Do not propose."
                 );
+                self.print_proposal_events(&res);
                 return;
             }
             (qc, next_epoch_qc, state_cert)
@@ -741,6 +748,7 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                     tracing::error!(
                         "No epoch found on view change evidence, but we are in epoch mode"
                     );
+                    self.print_proposal_events(&res);
                     return;
                 };
                 if qc
@@ -756,6 +764,7 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                         },
                         Err(e) => {
                             tracing::error!("Error while waiting for highest QC: {e:?}");
+                            self.print_proposal_events(&res);
                             return;
                         },
                     }
@@ -765,6 +774,7 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                     self.wait_for_highest_qc().await
                 else {
                     tracing::error!("Error while waiting for highest QC");
+                    self.print_proposal_events(&res);
                     return;
                 };
                 if qc.data.block_number.is_some_and(|bn| {
@@ -772,6 +782,7 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                         && !is_last_block(bn, self.epoch_height)
                 }) {
                     tracing::error!("High is in transition but we need to propose with transition QC, do nothing");
+                    self.print_proposal_events(&res);
                     return;
                 }
                 (qc, maybe_next_epoch_qc, maybe_state_cert)
@@ -783,6 +794,7 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                 },
                 Err(e) => {
                     tracing::error!("Error while waiting for highest QC: {e:?}");
+                    self.print_proposal_events(&res);
                     return;
                 },
             }
@@ -792,11 +804,13 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
             tracing::error!(
                 "Somehow completed the proposal dependency task without a commitment and metadata"
             );
+            self.print_proposal_events(&res);
             return;
         }
 
         if vid_share.is_none() {
             tracing::error!("Somehow completed the proposal dependency task without a VID share");
+            self.print_proposal_events(&res);
             return;
         }
 
@@ -813,6 +827,7 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
             .await
         {
             tracing::error!("Failed to publish proposal; error = {e:#}");
+            self.print_proposal_events(&res);
         }
     }
 }
