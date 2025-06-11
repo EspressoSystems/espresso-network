@@ -881,6 +881,7 @@ impl ValidatedState {
         let cf = match upgrade.upgrade_type {
             UpgradeType::Fee { chain_config } => chain_config,
             UpgradeType::Epoch { chain_config } => chain_config,
+            UpgradeType::DrbAndHeader { chain_config } => chain_config,
         };
 
         self.chain_config = cf.into();
@@ -1548,7 +1549,7 @@ mod test {
 
         let mock_time: u64 = OffsetDateTime::now_utc().unix_timestamp() as u64;
         let mut header = parent.clone();
-        *header.timestamp_mut() = mock_time - 13;
+        *header.set_timestamp(mock_time - 13 as u128);
         let proposal = Proposal::new(&header, block_size);
 
         let err = proposal.validate_timestamp_drift(mock_time).unwrap_err();
@@ -1564,15 +1565,15 @@ mod test {
 
         // Success cases.
         let mut header = parent.clone();
-        *header.timestamp_mut() = mock_time;
+        *header.set_timestamp(mock_time as u128);
         let proposal = Proposal::new(&header, block_size);
         proposal.validate_timestamp_drift(mock_time).unwrap();
 
-        *header.timestamp_mut() = mock_time - 11;
+        *header.set_timestamp(mock_time - 11 as u128);
         let proposal = Proposal::new(&header, block_size);
         proposal.validate_timestamp_drift(mock_time).unwrap();
 
-        *header.timestamp_mut() = mock_time - 12;
+        *header.set_timestamp(mock_time - 12 as u128);
         let proposal = Proposal::new(&header, block_size);
         proposal.validate_timestamp_drift(mock_time).unwrap();
     }

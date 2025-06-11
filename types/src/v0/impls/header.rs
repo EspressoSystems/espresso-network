@@ -38,7 +38,7 @@ use crate::{
         header::{EitherOrVersion, VersionedHeader},
         impls::reward::{find_validator_info, first_two_epochs},
     },
-    v0_1, v0_2, v0_3, BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
+    v0_1, v0_2, v0_3, v0_4, BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
     FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable,
     PayloadByteLen, SeqTypes, UpgradeType,
 };
@@ -86,6 +86,11 @@ impl Committable for Header {
                 .u64_field("version_minor", 3)
                 .field("fields", fields.commit())
                 .finalize(),
+            Self::V4(fields) => RawCommitmentBuilder::new(&Self::tag())
+                .u64_field("version_major", 0)
+                .u64_field("version_minor", 3)
+                .field("fields", fields.commit())
+                .finalize(),
         }
     }
 
@@ -110,6 +115,11 @@ impl Serialize for Header {
             .serialize(serializer),
             Self::V3(fields) => VersionedHeader {
                 version: EitherOrVersion::Version(Version { major: 0, minor: 3 }),
+                fields: fields.clone(),
+            }
+            .serialize(serializer),
+            Self::V4(fields) => VersionedHeader {
+                version: EitherOrVersion::Version(Version { major: 0, minor: 4 }),
                 fields: fields.clone(),
             }
             .serialize(serializer),
@@ -158,6 +168,10 @@ impl<'de> Deserialize<'de> for Header {
                         seq.next_element()?
                             .ok_or_else(|| de::Error::missing_field("fields"))?,
                     )),
+                    EitherOrVersion::Version(Version { major: 0, minor: 4 }) => Ok(Header::V4(
+                        seq.next_element()?
+                            .ok_or_else(|| de::Error::missing_field("fields"))?,
+                    )),
                     EitherOrVersion::Version(v) => {
                         Err(serde::de::Error::custom(format!("invalid version {v:?}")))
                     },
@@ -187,6 +201,9 @@ impl<'de> Deserialize<'de> for Header {
                             serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
                         )),
                         EitherOrVersion::Version(Version { major: 0, minor: 3 }) => Ok(Header::V3(
+                            serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
+                        )),
+                        EitherOrVersion::Version(Version { major: 0, minor: 4 }) => Ok(Header::V4(
                             serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
                         )),
                         EitherOrVersion::Version(v) => {
@@ -246,6 +263,7 @@ impl Header {
             Self::V1(_) => Version { major: 0, minor: 1 },
             Self::V2(_) => Version { major: 0, minor: 2 },
             Self::V3(_) => Version { major: 0, minor: 3 },
+            Self::V4(_) => Version { major: 0, minor: 4 },
         }
     }
     #[allow(clippy::too_many_arguments)]
@@ -265,15 +283,11 @@ impl Header {
         builder_signature: Vec<BuilderSignature>,
         version: Version,
     ) -> Self {
-        let Version { major, minor } = version;
-
-        // Ensure the major version is 0, otherwise panic
-        assert!(major == 0, "Invalid major version {major}");
         // Ensure FeeInfo contains at least 1 element
         assert!(!fee_info.is_empty(), "Invalid fee_info length: 0");
 
-        match minor {
-            1 => Self::V1(v0_1::Header {
+        match (version.major, version.minor) {
+            (0, 1) => Self::V1(v0_1::Header {
                 chain_config: v0_1::ResolvableChainConfig::from(v0_1::ChainConfig::from(
                     chain_config,
                 )),
@@ -289,7 +303,7 @@ impl Header {
                 fee_info: fee_info[0], // NOTE this is asserted to exist above
                 builder_signature: builder_signature.first().copied(),
             }),
-            2 => Self::V2(v0_2::Header {
+            (0, 2) => Self::V2(v0_2::Header {
                 chain_config: v0_1::ResolvableChainConfig::from(v0_1::ChainConfig::from(
                     chain_config,
                 )),
@@ -305,10 +319,25 @@ impl Header {
                 fee_info: fee_info[0], // NOTE this is asserted to exist above
                 builder_signature: builder_signature.first().copied(),
             }),
-            3 => Self::V3(v0_3::Header {
+            (0, 3) => Self::V3(v0_3::Header {
                 chain_config: chain_config.into(),
                 height,
                 timestamp,
+                l1_head,
+                l1_finalized,
+                payload_commitment,
+                builder_commitment,
+                ns_table,
+                block_merkle_tree_root,
+                fee_merkle_tree_root,
+                fee_info: fee_info[0], // NOTE this is asserted to exist above
+                builder_signature: builder_signature.first().copied(),
+                reward_merkle_tree_root,
+            }),
+            (0, 4) => Self::V4(v0_4::Header {
+                chain_config: chain_config.into(),
+                height,
+                timestamp: timestamp.into(),
                 l1_head,
                 l1_finalized,
                 payload_commitment,
@@ -335,6 +364,7 @@ macro_rules! field {
             Self::V1(data) => &data.$name,
             Self::V2(data) => &data.$name,
             Self::V3(data) => &data.$name,
+            Self::V4(data) => &data.$name,
         }
     };
 }
@@ -345,6 +375,7 @@ macro_rules! field_mut {
             Self::V1(data) => &mut data.$name,
             Self::V2(data) => &mut data.$name,
             Self::V3(data) => &mut data.$name,
+            Self::V4(data) => &mut data.$name,
         }
     };
 }
@@ -459,17 +490,13 @@ impl Header {
 
         let fee_merkle_tree_root = state.fee_merkle_tree.commitment();
 
-        let Version { major, minor } = version;
-
-        assert!(major == 0, "Invalid major version {major}");
-
         if let Some(validator) = validator {
             let reward_state = validator.apply_rewards(state.reward_merkle_tree.clone())?;
             state.reward_merkle_tree = reward_state;
         }
 
-        let header = match minor {
-            1 => Self::V1(v0_1::Header {
+        let header = match (version.major, version.minor) {
+            (0, 1) => Self::V1(v0_1::Header {
                 chain_config: v0_1::ResolvableChainConfig::from(v0_1::ChainConfig::from(
                     chain_config,
                 )),
@@ -485,7 +512,7 @@ impl Header {
                 fee_info: fee_info[0],
                 builder_signature: builder_signature.first().copied(),
             }),
-            2 => Self::V2(v0_2::Header {
+            (0, 2) => Self::V2(v0_2::Header {
                 chain_config: v0_1::ResolvableChainConfig::from(v0_1::ChainConfig::from(
                     chain_config,
                 )),
@@ -501,10 +528,25 @@ impl Header {
                 fee_info: fee_info[0],
                 builder_signature: builder_signature.first().copied(),
             }),
-            3 => Self::V3(v0_3::Header {
+            (0, 3) => Self::V3(v0_3::Header {
                 chain_config: chain_config.into(),
                 height,
                 timestamp,
+                l1_head: l1.head,
+                l1_finalized: l1.finalized,
+                payload_commitment,
+                builder_commitment,
+                ns_table,
+                block_merkle_tree_root,
+                fee_merkle_tree_root,
+                reward_merkle_tree_root: state.reward_merkle_tree.commitment(),
+                fee_info: fee_info[0],
+                builder_signature: builder_signature.first().copied(),
+            }),
+            (0, 4) => Self::V4(v0_4::Header {
+                chain_config: chain_config.into(),
+                height,
+                timestamp: timestamp.into(),
                 l1_head: l1.head,
                 l1_finalized: l1.finalized,
                 payload_commitment,
@@ -557,6 +599,7 @@ impl Header {
             Self::V1(fields) => v0_3::ResolvableChainConfig::from(&fields.chain_config),
             Self::V2(fields) => v0_3::ResolvableChainConfig::from(&fields.chain_config),
             Self::V3(fields) => fields.chain_config,
+            Self::V4(fields) => fields.chain_config,
         }
     }
 
@@ -569,11 +612,21 @@ impl Header {
     }
 
     pub fn timestamp_internal(&self) -> u64 {
-        *field!(self.timestamp)
+        match self {
+          Self::V1(fields) => fields.timestamp,
+          Self::V2(fields) => fields.timestamp,
+          Self::V3(fields) => fields.timestamp,
+          Self::V4(fields) => fields.timestamp as u64,
+        }
     }
 
-    pub fn timestamp_mut(&mut self) -> &mut u64 {
-        &mut *field_mut!(self.timestamp)
+    pub fn set_timestamp(&mut self, timestamp: u128) {
+        match self {
+          Self::V1(fields) => { fields.timestamp = timestamp as u64; }
+          Self::V2(fields) => { fields.timestamp = timestamp as u64; }
+          Self::V3(fields) => { fields.timestamp = timestamp as u64; }
+          Self::V4(fields) => { fields.timestamp = timestamp; }
+        };
     }
 
     /// The Espresso block header includes a reference to the current head of the L1 chain.
@@ -674,6 +727,7 @@ impl Header {
             Self::V1(fields) => vec![fields.fee_info],
             Self::V2(fields) => vec![fields.fee_info],
             Self::V3(fields) => vec![fields.fee_info],
+            Self::V4(fields) => vec![fields.fee_info],
         }
     }
 
@@ -684,6 +738,7 @@ impl Header {
             Self::V1(_) => empty_reward_merkle_tree.commitment(),
             Self::V2(_) => empty_reward_merkle_tree.commitment(),
             Self::V3(fields) => fields.reward_merkle_tree_root,
+            Self::V4(fields) => fields.reward_merkle_tree_root,
         }
     }
 
@@ -704,6 +759,7 @@ impl Header {
             Self::V1(fields) => fields.builder_signature.as_slice().to_vec(),
             Self::V2(fields) => fields.builder_signature.as_slice().to_vec(),
             Self::V3(fields) => fields.builder_signature.as_slice().to_vec(),
+            Self::V4(fields) => fields.builder_signature.as_slice().to_vec(),
         }
     }
 }
@@ -768,6 +824,7 @@ impl BlockHeader<SeqTypes> for Header {
                 Some(upgrade) => match upgrade.upgrade_type {
                     UpgradeType::Fee { chain_config } => chain_config,
                     UpgradeType::Epoch { chain_config } => chain_config,
+                    UpgradeType::DrbAndHeader { chain_config } => chain_config,
                 },
                 None => Header::get_chain_config(&validated_state, instance_state).await?,
             }
