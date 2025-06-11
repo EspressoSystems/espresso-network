@@ -1160,7 +1160,7 @@ mod test {
 
     use super::*;
     use crate::{
-        eth_signature_key::EthKeyPair, v0_1, v0_2, v0_3, BlockSize, FeeAccountProof,
+        eth_signature_key::EthKeyPair, v0_1, v0_2, v0_3, v0_4, BlockSize, FeeAccountProof,
         FeeMerkleProof, Leaf, Payload, Transaction,
     };
 
@@ -1194,6 +1194,11 @@ mod test {
                     timestamp: OffsetDateTime::now_utc().unix_timestamp() as u64,
                     ..parent.clone()
                 }),
+                Header::V4(parent) => Header::V4(v0_4::Header {
+                    height: parent.height + 1,
+                    timestamp: OffsetDateTime::now_utc().unix_timestamp() as u128,
+                    ..parent.clone()
+                }),
             }
         }
         /// Replaces builder signature w/ invalid one.
@@ -1216,6 +1221,11 @@ mod test {
                     ..header.clone()
                 }),
                 Header::V3(header) => Header::V3(v0_3::Header {
+                    fee_info,
+                    builder_signature: Some(sig),
+                    ..header.clone()
+                }),
+                Header::V4(header) => Header::V4(v0_4::Header {
                     fee_info,
                     builder_signature: Some(sig),
                     ..header.clone()
@@ -1246,6 +1256,11 @@ mod test {
                     ..parent.clone()
                 }),
                 Header::V3(parent) => Header::V3(v0_3::Header {
+                    fee_info,
+                    builder_signature: Some(sig),
+                    ..parent.clone()
+                }),
+                Header::V4(parent) => Header::V4(v0_4::Header {
                     fee_info,
                     builder_signature: Some(sig),
                     ..parent.clone()
@@ -1549,7 +1564,7 @@ mod test {
 
         let mock_time: u64 = OffsetDateTime::now_utc().unix_timestamp() as u64;
         let mut header = parent.clone();
-        *header.set_timestamp(mock_time - 13 as u128);
+        header.set_timestamp((mock_time - 13) as u128);
         let proposal = Proposal::new(&header, block_size);
 
         let err = proposal.validate_timestamp_drift(mock_time).unwrap_err();
@@ -1565,15 +1580,15 @@ mod test {
 
         // Success cases.
         let mut header = parent.clone();
-        *header.set_timestamp(mock_time as u128);
+        header.set_timestamp(mock_time as u128);
         let proposal = Proposal::new(&header, block_size);
         proposal.validate_timestamp_drift(mock_time).unwrap();
 
-        *header.set_timestamp(mock_time - 11 as u128);
+        header.set_timestamp((mock_time - 11) as u128);
         let proposal = Proposal::new(&header, block_size);
         proposal.validate_timestamp_drift(mock_time).unwrap();
 
-        *header.set_timestamp(mock_time - 12 as u128);
+        header.set_timestamp((mock_time - 12) as u128);
         let proposal = Proposal::new(&header, block_size);
         proposal.validate_timestamp_drift(mock_time).unwrap();
     }
@@ -1828,6 +1843,11 @@ mod test {
                 ..header
             }),
             Header::V3(header) => Header::V3(v0_3::Header {
+                builder_signature: Some(sig),
+                fee_info: FeeInfo::new(account, data),
+                ..header
+            }),
+            Header::V4(header) => Header::V4(v0_4::Header {
                 builder_signature: Some(sig),
                 fee_info: FeeInfo::new(account, data),
                 ..header

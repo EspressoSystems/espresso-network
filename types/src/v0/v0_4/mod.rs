@@ -13,16 +13,11 @@ pub use super::v0_1::{
     BLOCK_MERKLE_TREE_HEIGHT, FEE_MERKLE_TREE_HEIGHT, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN,
     NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, TX_OFFSET_BYTE_LEN,
 };
-pub(crate) use super::v0_1::{L1ClientMetrics, L1Event, L1State, L1UpdateTask};
 
 pub use super::v0_3::{ResolvableChainConfig, ChainConfig};
 
 pub const VERSION: Version = Version { major: 0, minor: 4 };
 
 mod header;
-mod nsproof;
-mod stake_table;
 
 pub use header::*;
-pub use nsproof::*;
-pub use stake_table::*;

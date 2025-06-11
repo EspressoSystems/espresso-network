@@ -613,19 +613,27 @@ impl Header {
 
     pub fn timestamp_internal(&self) -> u64 {
         match self {
-          Self::V1(fields) => fields.timestamp,
-          Self::V2(fields) => fields.timestamp,
-          Self::V3(fields) => fields.timestamp,
-          Self::V4(fields) => fields.timestamp as u64,
+            Self::V1(fields) => fields.timestamp,
+            Self::V2(fields) => fields.timestamp,
+            Self::V3(fields) => fields.timestamp,
+            Self::V4(fields) => fields.timestamp as u64,
         }
     }
 
     pub fn set_timestamp(&mut self, timestamp: u128) {
         match self {
-          Self::V1(fields) => { fields.timestamp = timestamp as u64; }
-          Self::V2(fields) => { fields.timestamp = timestamp as u64; }
-          Self::V3(fields) => { fields.timestamp = timestamp as u64; }
-          Self::V4(fields) => { fields.timestamp = timestamp; }
+            Self::V1(fields) => {
+                fields.timestamp = timestamp as u64;
+            },
+            Self::V2(fields) => {
+                fields.timestamp = timestamp as u64;
+            },
+            Self::V3(fields) => {
+                fields.timestamp = timestamp as u64;
+            },
+            Self::V4(fields) => {
+                fields.timestamp = timestamp;
+            },
         };
     }
 
@@ -1131,7 +1139,7 @@ mod test_headers {
 
             let genesis = GenesisForTest::default().await;
             let mut parent = genesis.header.clone();
-            *parent.timestamp_mut() = self.parent_timestamp;
+            parent.set_timestamp(self.parent_timestamp as u128);
             *parent.l1_head_mut() = self.parent_l1_head;
             *parent.l1_finalized_mut() = self.parent_l1_finalized;
 
