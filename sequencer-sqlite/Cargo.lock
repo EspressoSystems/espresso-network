@@ -4712,6 +4712,7 @@ dependencies = [
  "async-broadcast",
  "async-lock 3.4.0",
  "async-trait",
+ "bincode",
  "clap 4.5.37",
  "derive_more 1.0.0",
  "futures",
