@@ -546,12 +546,14 @@ impl TestNetwork {
             upgrade_version: Version { major: 0, minor: 2 },
             epoch_height: None,
             drb_difficulty: None,
+            drb_upgrade_difficulty: None,
             epoch_start_block: None,
             stake_table_capacity: None,
             // Start with a funded account, so we can test catchup after restart.
             accounts: [(builder_account(), 1000000000.into())]
                 .into_iter()
                 .collect(),
+            genesis_version: Version { major: 0, minor: 1 },
         };
         genesis.to_file(&genesis_file).unwrap();
 

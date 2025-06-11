@@ -70,6 +70,7 @@ const CACHED_STATE_CERT_COUNT: usize = 5;
 pub struct FileSystemStorageInner<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     index_by_leaf_hash: HashMap<LeafHash<Types>, u64>,
@@ -90,6 +91,7 @@ where
 impl<Types> FileSystemStorageInner<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     fn get_block_index(&self, id: BlockId<Types>) -> QueryResult<usize> {
@@ -128,18 +130,22 @@ where
 #[derive(Debug)]
 pub struct FileSystemStorage<Types: NodeType>
 where
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     inner: RwLock<FileSystemStorageInner<Types>>,
     metrics: PrometheusMetrics,
 }
 
-impl<Types: NodeType> PrunerConfig for FileSystemStorage<Types> where
-    Payload<Types>: QueryablePayload<Types>
+impl<Types: NodeType> PrunerConfig for FileSystemStorage<Types>
+where
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
 {
 }
 impl<Types: NodeType> PruneStorage for FileSystemStorage<Types>
 where
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     type Pruner = ();
@@ -148,6 +154,7 @@ where
 #[async_trait]
 impl<Types: NodeType> MigrateTypes<Types> for FileSystemStorage<Types>
 where
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     async fn migrate_types(&self, _batch_size: u64) -> anyhow::Result<()> {
@@ -351,6 +358,7 @@ pub trait Revert {
 impl<Types> Revert for RwLockWriteGuard<'_, FileSystemStorageInner<Types>>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     fn revert(&mut self) {
@@ -364,6 +372,7 @@ where
 impl<Types> Revert for RwLockReadGuard<'_, FileSystemStorageInner<Types>>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     fn revert(&mut self) {
@@ -384,6 +393,7 @@ impl<T: Revert> Drop for Transaction<T> {
 impl<Types> update::Transaction for Transaction<RwLockWriteGuard<'_, FileSystemStorageInner<Types>>>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     async fn commit(mut self) -> anyhow::Result<()> {
@@ -406,6 +416,7 @@ where
 impl<Types> update::Transaction for Transaction<RwLockReadGuard<'_, FileSystemStorageInner<Types>>>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     async fn commit(self) -> anyhow::Result<()> {
@@ -421,6 +432,7 @@ where
 
 impl<Types: NodeType> VersionedDataSource for FileSystemStorage<Types>
 where
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     type Transaction<'a>
@@ -902,6 +914,7 @@ impl<T: Revert + Send> AggregatesStorage for Transaction<T> {
 impl<Types, T: Revert + Send> UpdateAggregatesStorage<Types> for Transaction<T>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
 {
     async fn update_aggregates(
         &mut self,
@@ -917,6 +930,7 @@ impl<T: Revert> PrunedHeightStorage for Transaction<T> {}
 impl<Types> HasMetrics for FileSystemStorage<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     fn metrics(&self) -> &PrometheusMetrics {

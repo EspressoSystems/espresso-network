@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"testing"
@@ -13,6 +14,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
+
+var errs []error
+var defaultFetchWithMajorityError = fmt.Errorf("no majority consensus reached with potential errors. Errors: %v\n", errs)
 
 // MockClient is a mock implementation of the Client interface
 type MockClient struct {
@@ -56,7 +60,7 @@ func TestFetchWithMajority(t *testing.T) {
 	})
 
 	assert.Error(t, err)
-	assert.Equal(t, "no majority consensus reached", err.Error())
+	assert.Equal(t, defaultFetchWithMajorityError.Error(), err.Error())
 
 	// Simulate a scenario where all nodes return an error
 	mockNode1.On("FetchRawHeaderByHeight", ctx, uint64(3)).Return(json.RawMessage{}, errors.New("error"))

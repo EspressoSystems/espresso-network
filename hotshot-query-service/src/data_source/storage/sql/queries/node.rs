@@ -32,6 +32,7 @@ use super::{
     parse_header, DecodeError, QueryBuilder, HEADER_COLUMNS,
 };
 use crate::{
+    availability::QueryableHeader,
     data_source::storage::{
         Aggregate, AggregatesStorage, NodeStorage, PayloadMetadata, UpdateAggregatesStorage,
     },
@@ -353,7 +354,10 @@ impl<Mode: TransactionMode> AggregatesStorage for Transaction<Mode> {
     }
 }
 
-impl<Types: NodeType> UpdateAggregatesStorage<Types> for Transaction<Write> {
+impl<Types: NodeType> UpdateAggregatesStorage<Types> for Transaction<Write>
+where
+    Header<Types>: QueryableHeader<Types>,
+{
     async fn update_aggregates(
         &mut self,
         prev: Aggregate,

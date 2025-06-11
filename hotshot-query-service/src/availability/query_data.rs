@@ -10,7 +10,7 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use std::{collections::HashMap, fmt::Debug};
+use std::{collections::HashMap, fmt::Debug, hash::Hash};
 
 use committable::{Commitment, Committable};
 use derive_more::derive::From;
@@ -45,18 +45,42 @@ pub type BlockHash<Types> = Commitment<Header<Types>>;
 pub type TransactionHash<Types> = Commitment<Transaction<Types>>;
 pub type TransactionInclusionProof<Types> =
     <Payload<Types> as QueryablePayload<Types>>::InclusionProof;
+pub type NamespaceIndex<Types> = <Header<Types> as QueryableHeader<Types>>::NamespaceIndex;
+pub type NamespaceId<Types> = <Header<Types> as QueryableHeader<Types>>::NamespaceId;
 
 pub type Timestamp = time::OffsetDateTime;
 
 pub trait QueryableHeader<Types: NodeType>: BlockHeader<Types> {
-    fn timestamp(&self) -> u64;
-    fn namespace_size(&self, id: u32, payload_size: usize) -> u64;
+    /// Index for looking up a namespace.
+    type NamespaceIndex: Clone + Debug + Hash + PartialEq + Eq + From<i64> + Into<i64> + Send + Sync;
+
+    /// Serialized representation of a namespace.
+    type NamespaceId: Clone
+        + Debug
+        + Serialize
+        + DeserializeOwned
+        + Send
+        + Sync
+        + Hash
+        + PartialEq
+        + Eq
+        + From<i64>
+        + Into<i64>;
+
+    /// Resolve a namespace index to the serialized identifier for that namespace.
+    fn namespace_id(&self, i: &Self::NamespaceIndex) -> Option<Self::NamespaceId>;
+
+    /// Get the size taken up by the given namespace in the payload.
+    fn namespace_size(&self, i: &Self::NamespaceIndex, payload_size: usize) -> u64;
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct TransactionIndex {
-    /// Identifier of the namespace this transaction belongs to.
-    pub namespace: u32,
+#[derive(Clone, Debug)]
+pub struct TransactionIndex<Types: NodeType>
+where
+    Header<Types>: QueryableHeader<Types>,
+{
+    /// Index for looking up the namespace this transaction belongs to.
+    pub ns_index: NamespaceIndex<Types>,
     /// Index of the transaction within its namespace in its block.
     pub position: u32,
 }
@@ -69,9 +93,12 @@ pub struct TransactionIndex {
 /// the default implementations may be inefficient (e.g. performing an O(n) search, or computing an
 /// unnecessary inclusion proof). It is good practice to override these default implementations if
 /// your block type supports more efficient implementations (e.g. sublinear indexing by hash).
-pub trait QueryablePayload<Types: NodeType>: traits::BlockPayload<Types> {
+pub trait QueryablePayload<Types: NodeType>: traits::BlockPayload<Types>
+where
+    Header<Types>: QueryableHeader<Types>,
+{
     /// Enumerate the transactions in this block.
-    type Iter<'a>: Iterator<Item = TransactionIndex>
+    type Iter<'a>: Iterator<Item = TransactionIndex<Types>>
     where
         Self: 'a;
 
@@ -100,7 +127,7 @@ pub trait QueryablePayload<Types: NodeType>: traits::BlockPayload<Types> {
     fn enumerate<'a>(
         &'a self,
         meta: &'a Self::Metadata,
-    ) -> Box<dyn 'a + Iterator<Item = (TransactionIndex, Self::Transaction)>> {
+    ) -> Box<dyn 'a + Iterator<Item = (TransactionIndex<Types>, Self::Transaction)>> {
         Box::new(self.iter(meta).map(|ix| {
             // `self.transaction` should always return `Some` if we are using an index which was
             // yielded by `self.iter`.
@@ -113,14 +140,14 @@ pub trait QueryablePayload<Types: NodeType>: traits::BlockPayload<Types> {
     fn transaction_with_proof(
         &self,
         meta: &Self::Metadata,
-        index: &TransactionIndex,
+        index: &TransactionIndex<Types>,
     ) -> Option<(Self::Transaction, Self::InclusionProof)>;
 
     /// Get a transaction by its block-specific index.
     fn transaction(
         &self,
         meta: &Self::Metadata,
-        index: &TransactionIndex,
+        index: &TransactionIndex<Types>,
     ) -> Option<Self::Transaction> {
         Some(self.transaction_with_proof(meta, index)?.0)
     }
@@ -129,13 +156,13 @@ pub trait QueryablePayload<Types: NodeType>: traits::BlockPayload<Types> {
     fn proof(
         &self,
         meta: &Self::Metadata,
-        index: &TransactionIndex,
+        index: &TransactionIndex<Types>,
     ) -> Option<Self::InclusionProof> {
         Some(self.transaction_with_proof(meta, index)?.1)
     }
 
     /// Get the index of the `nth` transaction.
-    fn nth(&self, meta: &Self::Metadata, n: usize) -> Option<TransactionIndex> {
+    fn nth(&self, meta: &Self::Metadata, n: usize) -> Option<TransactionIndex<Types>> {
         self.iter(meta).nth(n)
     }
 
@@ -158,7 +185,7 @@ pub trait QueryablePayload<Types: NodeType>: traits::BlockPayload<Types> {
         &self,
         meta: &Self::Metadata,
         hash: Commitment<Self::Transaction>,
-    ) -> Option<TransactionIndex> {
+    ) -> Option<TransactionIndex<Types>> {
         self.iter(meta).find(|i| {
             if let Some(tx) = self.transaction(meta, i) {
                 tx.commit() == hash
@@ -403,6 +430,7 @@ pub struct BlockQueryData<Types: NodeType> {
 impl<Types: NodeType> BlockQueryData<Types> {
     pub fn new(header: Header<Types>, payload: Payload<Types>) -> Self
     where
+        Header<Types>: QueryableHeader<Types>,
         Payload<Types>: QueryablePayload<Types>,
     {
         Self {
@@ -419,6 +447,7 @@ impl<Types: NodeType> BlockQueryData<Types> {
         instance_state: &Types::InstanceState,
     ) -> Self
     where
+        Header<Types>: QueryableHeader<Types>,
         Payload<Types>: QueryablePayload<Types>,
     {
         let leaf = Leaf2::<Types>::genesis::<HsVer>(validated_state, instance_state).await;
@@ -453,13 +482,22 @@ impl<Types: NodeType> BlockQueryData<Types> {
         self.num_transactions
     }
 
-    pub fn namespace_info(&self) -> HashMap<u32, NamespaceInfo>
+    pub fn namespace_info(&self) -> NamespaceMap<Types>
     where
+        Header<Types>: QueryableHeader<Types>,
         Payload<Types>: QueryablePayload<Types>,
     {
-        let mut map = HashMap::<u32, NamespaceInfo>::new();
+        let mut map = NamespaceMap::<Types>::new();
         for tx in self.payload.iter(self.header.metadata()) {
-            map.entry(tx.namespace).or_default().num_transactions += 1;
+            let Some(ns_id) = self.header.namespace_id(&tx.ns_index) else {
+                continue;
+            };
+            map.entry(ns_id)
+                .or_insert_with(|| NamespaceInfo {
+                    num_transactions: 0,
+                    size: self.header.namespace_size(&tx.ns_index, self.size as usize),
+                })
+                .num_transactions += 1;
         }
         map
     }
@@ -467,16 +505,17 @@ impl<Types: NodeType> BlockQueryData<Types> {
 
 impl<Types: NodeType> BlockQueryData<Types>
 where
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
-    pub fn transaction(&self, ix: &TransactionIndex) -> Option<Transaction<Types>> {
+    pub fn transaction(&self, ix: &TransactionIndex<Types>) -> Option<Transaction<Types>> {
         self.payload().transaction(self.metadata(), ix)
     }
 
     pub fn transaction_by_hash(
         &self,
         hash: Commitment<Transaction<Types>>,
-    ) -> Option<TransactionIndex> {
+    ) -> Option<TransactionIndex<Types>> {
         self.payload().by_hash(self.metadata(), hash)
     }
 
@@ -488,7 +527,9 @@ where
         self.len() == 0
     }
 
-    pub fn enumerate(&self) -> impl '_ + Iterator<Item = (TransactionIndex, Transaction<Types>)> {
+    pub fn enumerate(
+        &self,
+    ) -> impl '_ + Iterator<Item = (TransactionIndex<Types>, Transaction<Types>)> {
         self.payload.enumerate(self.metadata())
     }
 }
@@ -551,6 +592,7 @@ impl<Types: NodeType> PayloadQueryData<Types> {
         instance_state: &Types::InstanceState,
     ) -> Self
     where
+        Header<Types>: QueryableHeader<Types>,
         Payload<Types>: QueryablePayload<Types>,
     {
         BlockQueryData::genesis::<HsVer>(validated_state, instance_state)
@@ -705,6 +747,7 @@ impl<Types: NodeType> HeightIndexed for (VidCommonQueryData<Types>, Option<VidSh
 #[serde(bound = "")]
 pub struct TransactionQueryData<Types: NodeType>
 where
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     transaction: Transaction<Types>,
@@ -713,17 +756,18 @@ where
     proof: TransactionInclusionProof<Types>,
     block_hash: BlockHash<Types>,
     block_height: u64,
-    namespace: u32,
+    namespace: NamespaceId<Types>,
     pos_in_namespace: u32,
 }
 
 impl<Types: NodeType> TransactionQueryData<Types>
 where
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     pub(crate) fn new(
         block: &BlockQueryData<Types>,
-        i: TransactionIndex,
+        i: TransactionIndex<Types>,
         index: u64,
     ) -> Option<Self> {
         let (transaction, proof) = block
@@ -736,7 +780,7 @@ where
             proof,
             block_hash: block.hash(),
             block_height: block.height(),
-            namespace: i.namespace,
+            namespace: block.header().namespace_id(&i.ns_index)?,
             pos_in_namespace: i.position,
         })
     }
@@ -795,16 +839,22 @@ pub(crate) fn payload_size<Types: NodeType>(payload: &Payload<Types>) -> u64 {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(bound = "")]
-pub struct BlockSummaryQueryData<Types: NodeType> {
+pub struct BlockSummaryQueryData<Types: NodeType>
+where
+    Header<Types>: QueryableHeader<Types>,
+{
     pub(crate) header: Header<Types>,
     pub(crate) hash: BlockHash<Types>,
     pub(crate) size: u64,
     pub(crate) num_transactions: u64,
-    pub(crate) namespaces: HashMap<u32, NamespaceInfo>,
+    pub(crate) namespaces: NamespaceMap<Types>,
 }
 
 // Add some basic getters to the BlockSummaryQueryData type.
-impl<Types: NodeType> BlockSummaryQueryData<Types> {
+impl<Types: NodeType> BlockSummaryQueryData<Types>
+where
+    Header<Types>: QueryableHeader<Types>,
+{
     pub fn header(&self) -> &Header<Types> {
         &self.header
     }
@@ -821,12 +871,15 @@ impl<Types: NodeType> BlockSummaryQueryData<Types> {
         self.num_transactions
     }
 
-    pub fn namespaces(&self) -> &HashMap<u32, NamespaceInfo> {
+    pub fn namespaces(&self) -> &NamespaceMap<Types> {
         &self.namespaces
     }
 }
 
-impl<Types: NodeType> HeightIndexed for BlockSummaryQueryData<Types> {
+impl<Types: NodeType> HeightIndexed for BlockSummaryQueryData<Types>
+where
+    Header<Types>: QueryableHeader<Types>,
+{
     fn height(&self) -> u64 {
         self.header.block_number()
     }
@@ -848,6 +901,7 @@ pub struct TransactionSummaryQueryData<Types: NodeType> {
 // contentions.
 impl<Types: NodeType> From<BlockQueryData<Types>> for BlockSummaryQueryData<Types>
 where
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     fn from(value: BlockQueryData<Types>) -> Self {
@@ -867,6 +921,8 @@ pub struct NamespaceInfo {
     pub size: u64,
 }
 
+pub type NamespaceMap<Types> = HashMap<NamespaceId<Types>, NamespaceInfo>;
+
 /// A summary of a payload without all the data.
 ///
 /// This type is useful when you only want information about a payload, such as its size or
@@ -875,18 +931,20 @@ pub struct NamespaceInfo {
 pub struct PayloadMetadata<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
 {
     pub height: u64,
     pub block_hash: BlockHash<Types>,
     pub hash: VidCommitment,
     pub size: u64,
     pub num_transactions: u64,
-    pub namespaces: HashMap<u32, NamespaceInfo>,
+    pub namespaces: NamespaceMap<Types>,
 }
 
 impl<Types> HeightIndexed for PayloadMetadata<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
 {
     fn height(&self) -> u64 {
         self.height
@@ -896,6 +954,7 @@ where
 impl<Types> From<BlockQueryData<Types>> for PayloadMetadata<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     fn from(block: BlockQueryData<Types>) -> Self {

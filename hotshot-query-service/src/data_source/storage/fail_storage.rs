@@ -27,8 +27,9 @@ use super::{
 };
 use crate::{
     availability::{
-        BlockId, BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, QueryablePayload,
-        StateCertQueryData, TransactionHash, TransactionQueryData, VidCommonQueryData,
+        BlockId, BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, QueryableHeader,
+        QueryablePayload, StateCertQueryData, TransactionHash, TransactionQueryData,
+        VidCommonQueryData,
     },
     data_source::{
         storage::{PayloadMetadata, VidCommonMetadata},
@@ -329,6 +330,7 @@ where
 impl<Types, T> AvailabilityStorage<Types> for Transaction<T>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
     T: AvailabilityStorage<Types>,
 {
@@ -471,6 +473,7 @@ where
 impl<Types, T> UpdateAvailabilityStorage<Types> for Transaction<T>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
     T: UpdateAvailabilityStorage<Types> + Send + Sync,
 {
@@ -586,6 +589,7 @@ where
 impl<T, Types> UpdateAggregatesStorage<Types> for Transaction<T>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     T: UpdateAggregatesStorage<Types> + Send + Sync,
 {
     async fn update_aggregates(

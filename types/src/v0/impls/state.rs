@@ -3,7 +3,6 @@ use std::ops::Add;
 use alloy::primitives::{Address, U256};
 use anyhow::{bail, Context};
 use committable::{Commitment, Committable};
-use hotshot::types::BLSPubKey;
 use hotshot_query_service::merklized_state::MerklizedState;
 use hotshot_types::{
     data::{BlockError, ViewNumber},
@@ -33,11 +32,11 @@ use super::{
         IterableFeeInfo, RewardAccount, RewardAmount, RewardMerkleCommitment, RewardMerkleTree,
         REWARD_MERKLE_TREE_HEIGHT,
     },
-    v0_3::Validator,
     BlockMerkleCommitment, BlockSize, EpochVersion, FeeMerkleCommitment, L1Client,
 };
 use crate::{
     traits::StateCatchup,
+    v0::impls::reward::RewardDistributor,
     v0_3::{ChainConfig, ResolvableChainConfig},
     BlockMerkleTree, Delta, FeeAccount, FeeAmount, FeeInfo, FeeMerkleTree, Header, Leaf2,
     NsTableValidationError, PayloadByteLen, SeqTypes, UpgradeType, BLOCK_MERKLE_TREE_HEIGHT,
@@ -291,23 +290,6 @@ impl ValidatedState {
             self.charge_fee(fee_info, recipient)?;
             delta.fees_delta.extend([fee_info.account, recipient]);
         }
-        Ok(())
-    }
-
-    pub fn distribute_rewards(
-        &mut self,
-        delta: &mut Delta,
-        validator: Validator<BLSPubKey>,
-    ) -> anyhow::Result<()> {
-        let reward_state = validator.apply_rewards(self.reward_merkle_tree.clone())?;
-        self.reward_merkle_tree = reward_state;
-
-        // Update delta rewards
-        delta.rewards_delta.insert(RewardAccount(validator.account));
-        delta
-            .rewards_delta
-            .extend(validator.delegators.keys().map(|d| RewardAccount(*d)));
-
         Ok(())
     }
 
@@ -858,9 +840,11 @@ impl ValidatedState {
                 find_validator_info(instance, &mut validated_state, parent_leaf, view_number)
                     .await?;
 
+            let block_reward = instance.block_reward().await;
+            let reward_distributor = RewardDistributor::new(validator, block_reward);
             // apply rewards
-            validated_state
-                .distribute_rewards(&mut delta, validator)
+            reward_distributor
+                .distribute(&mut validated_state, &mut delta)
                 .context("failed to distribute rewards")?;
         }
 
@@ -1153,13 +1137,9 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for RewardMerkleTree {
 mod test {
     use hotshot::{helpers::initialize_logging, traits::BlockPayload};
     use hotshot_query_service::{testing::mocks::MockVersions, Resolvable};
-    use hotshot_types::{
-        data::vid_commitment,
-        traits::{node_implementation::Versions, signature_key::BuilderSignatureKey, EncodeBytes},
-    };
+    use hotshot_types::traits::signature_key::BuilderSignatureKey;
     use sequencer_utils::ser::FromStringOrInteger;
     use tracing::debug;
-    use vbs::version::StaticVersionType;
 
     use super::*;
     use crate::{
@@ -1175,18 +1155,7 @@ mod test {
                     .await
                     .unwrap();
 
-            let builder_commitment = payload.builder_commitment(&metadata);
-            let payload_bytes = payload.encode();
-
-            let payload_commitment = vid_commitment::<MockVersions>(
-                &payload_bytes,
-                &metadata.encode(),
-                1,
-                <MockVersions as Versions>::Base::VERSION,
-            );
-
-            let header =
-                Header::genesis(&instance, payload_commitment, builder_commitment, metadata);
+            let header = Header::genesis::<MockVersions>(&instance, payload.clone(), &metadata);
 
             let header = header.sign();
 

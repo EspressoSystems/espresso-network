@@ -117,6 +117,7 @@ pub use sql::SqlStorage;
 pub trait AvailabilityStorage<Types>: Send + Sync
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     async fn get_leaf(&mut self, id: LeafId<Types>) -> QueryResult<LeafQueryData<Types>>;
@@ -268,6 +269,7 @@ pub trait AggregatesStorage {
 pub trait UpdateAggregatesStorage<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
 {
     /// Update aggregate statistics based on a new block.
     fn update_aggregates(
@@ -291,7 +293,7 @@ pub trait ExplorerStorage<Types>
 where
     Types: NodeType,
     Header<Types>: ExplorerHeader<Types> + QueryableHeader<Types>,
-    Transaction<Types>: ExplorerTransaction,
+    Transaction<Types>: ExplorerTransaction<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     /// `get_block_detail` is a method that retrieves the details of a specific

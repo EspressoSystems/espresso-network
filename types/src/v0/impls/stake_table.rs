@@ -6,7 +6,9 @@ use std::{
 };
 
 use alloy::{
-    primitives::{Address, U256},
+    eips::{BlockId, BlockNumberOrTag},
+    primitives::{utils::format_ether, Address, U256},
+    providers::Provider,
     rpc::types::Log,
 };
 use anyhow::{bail, ensure, Context};
@@ -14,9 +16,12 @@ use async_lock::{Mutex, RwLock};
 use committable::Committable;
 use futures::stream::{self, StreamExt};
 use hotshot::types::{BLSPubKey, SchnorrPubKey, SignatureKey as _};
-use hotshot_contract_adapter::sol_types::StakeTableV2::{
-    self, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit,
-    ValidatorRegistered, ValidatorRegisteredV2,
+use hotshot_contract_adapter::sol_types::{
+    EspToken::{self, EspTokenInstance},
+    StakeTableV2::{
+        self, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit,
+        ValidatorRegistered, ValidatorRegisteredV2,
+    },
 };
 use hotshot_types::{
     data::{vid_disperse::VID_TARGET_TOTAL_STAKE, EpochNumber},
@@ -41,12 +46,13 @@ use tracing::Instrument;
 use super::v0_3::DAMembers;
 use super::{
     traits::{MembershipPersistence, StateCatchup},
-    v0_3::{
-        ChainConfig, EventKey, StakeTableEvent, StakeTableFetcher, StakeTableUpdateTask, Validator,
-    },
+    v0_3::{ChainConfig, EventKey, Fetcher, StakeTableEvent, StakeTableUpdateTask, Validator},
     Header, L1Client, Leaf2, PubKey, SeqTypes,
 };
-use crate::traits::EventsPersistenceRead;
+use crate::{
+    traits::EventsPersistenceRead,
+    v0_1::{L1Provider, RewardAmount, BLOCKS_PER_YEAR, COMMISSION_BASIS_POINTS, INFLATION_RATE},
+};
 
 type Epoch = <SeqTypes as NodeType>::Epoch;
 
@@ -523,10 +529,11 @@ pub struct EpochCommittees {
     /// Randomized committees, filled when we receive the DrbResult
     randomized_committees: BTreeMap<Epoch, RandomizedCommittee<StakeTableEntry<PubKey>>>,
     first_epoch: Option<Epoch>,
-    fetcher: Arc<StakeTableFetcher>,
+    block_reward: RewardAmount,
+    fetcher: Arc<Fetcher>,
 }
 
-impl StakeTableFetcher {
+impl Fetcher {
     pub fn new(
         peers: Arc<dyn StateCatchup>,
         persistence: Arc<Mutex<dyn MembershipPersistence>>,
@@ -974,6 +981,167 @@ impl StakeTableFetcher {
         // Process the sorted events and return the resulting stake table.
         validators_from_l1_events(sorted.into_iter().map(|(_, e)| e))
     }
+    /// This function is used to calculate the reward for a block.
+    /// It fetches the initial supply from the token contract.
+    ///
+    /// - We now rely on the `Initialized` event of the token contract (which should only occur once).
+    /// - After locating this event, we fetch its transaction receipt and look for a decoded `Transfer` log
+    /// - If either step fails, the function aborts to prevent incorrect reward calculations.
+    ///
+    /// Relying on mint events directly e.g., searching for mints from the zero address is prone to errors
+    /// because in future when reward withdrawals are supported, there might be more than one mint transfer logs from
+    /// zero address
+    ///
+    /// The ESP token contract itself does not expose the initialization block
+    /// but the stake table contract does
+    /// The stake table contract is deployed after the token contract as it holds the token
+    /// contract address. We use the stake table contract initialization block as a safe upper bound when scanning
+    ///  backwards for the token contract initialization event
+    pub async fn fetch_block_reward(&self) -> anyhow::Result<RewardAmount> {
+        let chain_config = *self.chain_config.lock().await;
+
+        let Some(stake_table_contract) = chain_config.stake_table_contract else {
+            bail!("No stake table contract address found in Chain config");
+        };
+
+        let provider = self.l1_client.provider.clone();
+        let stake_table = StakeTableV2::new(stake_table_contract, provider.clone());
+
+        // Get the block number where the stake table was initialized
+        // Stake table contract has the token contract address
+        // so the token contract is deployed before the stake table contract
+        let stake_table_init_block = stake_table
+            .initializedAtBlock()
+            .block(BlockId::finalized())
+            .call()
+            .await?
+            ._0
+            .to::<u64>();
+
+        tracing::info!("stake table init block ={stake_table_init_block}");
+
+        let token_address = stake_table
+            .token()
+            .block(BlockId::finalized())
+            .call()
+            .await
+            .context("Failed to get token address")?
+            ._0;
+
+        let token = EspToken::new(token_address, provider.clone());
+
+        // Try to fetch the `Initialized` event directly. This event is emitted only once,
+        // during the token contract initialization. The initialization transaction also transfers initial supply minted
+        // from the zero address. Since the result set is small (a single event),
+        // most RPC providers like Infura and Alchemy allow querying across the full block range
+        // If this fails because provider does not allow the query due to rate limiting (or some other error), we fall back to scanning over
+        // a fixed block range.
+        let init_logs = token
+            .Initialized_filter()
+            .from_block(0u64)
+            .to_block(BlockNumberOrTag::Finalized)
+            .query()
+            .await;
+
+        let init_log = match init_logs {
+            Ok(init_logs) => {
+                ensure!(
+                    !init_logs.is_empty(),
+                    "Token Initialized event logs are empty. This should never happen"
+                );
+
+                let (_, init_log) = init_logs[0].clone();
+
+                tracing::debug!(tx_hash = ?init_log.transaction_hash, "Found token `Initialized` event");
+                init_log
+            },
+            Err(err) => {
+                tracing::warn!(
+                    "RPC returned error {err:?}. will fallback to scanning over fixed block range"
+                );
+                self.scan_token_contract_initialized_event_log(stake_table_init_block, token)
+                    .await?
+            },
+        };
+
+        // Get the transaction that emitted the Initialized event
+        let init_tx = provider
+            .get_transaction_receipt(
+                init_log
+                    .transaction_hash
+                    .context(format!("transaction hash not found. init_log={init_log:?}"))?,
+            )
+            .await?
+            .context(format!(
+                "Failed to get transaction for Initialized event. hash={:?}",
+                init_log.transaction_hash
+            ))?;
+
+        let mint_transfer = init_tx
+            .decoded_log::<EspToken::Transfer>()
+            .context(format!(
+                "Failed to decode Transfer log. init_tx={:?}",
+                init_tx
+            ))?;
+
+        tracing::debug!("mint transfer event ={mint_transfer:?}");
+        ensure!(
+            mint_transfer.from == Address::ZERO,
+            "First transfer should be a mint from the zero address"
+        );
+
+        let initial_supply = mint_transfer.value;
+
+        tracing::info!("Initial token amount: {} ESP", format_ether(initial_supply));
+
+        let reward = ((initial_supply * U256::from(INFLATION_RATE)) / U256::from(BLOCKS_PER_YEAR))
+            .checked_div(U256::from(COMMISSION_BASIS_POINTS))
+            .ok_or_else(|| anyhow::anyhow!("COMMISSION_BASIS_POINTS is zero"))?;
+
+        Ok(RewardAmount(reward))
+    }
+
+    pub async fn scan_token_contract_initialized_event_log(
+        &self,
+        stake_table_init_block: u64,
+        token: EspTokenInstance<(), L1Provider>,
+    ) -> anyhow::Result<Log> {
+        let max_events_range = self.l1_client.options().l1_events_max_block_range;
+        const MAX_BLOCKS_SCANNED: u64 = 200_000;
+        let mut total_scanned = 0;
+
+        let mut from_block = stake_table_init_block.saturating_sub(max_events_range);
+        let mut to_block = stake_table_init_block;
+
+        loop {
+            if total_scanned >= MAX_BLOCKS_SCANNED {
+                tracing::error!(
+                    total_scanned,
+                    "Exceeded maximum scan range while searching for token Initialized event"
+                );
+                return Err(anyhow::anyhow!(
+                    "No Initialized event found after scanning {} blocks",
+                    MAX_BLOCKS_SCANNED
+                ));
+            }
+            let init_logs = token
+                .Initialized_filter()
+                .from_block(from_block)
+                .to_block(to_block)
+                .query()
+                .await?;
+            if !init_logs.is_empty() {
+                let (_, init_log) = init_logs[0].clone();
+                tracing::info!(from_block, tx_hash = ?init_log.transaction_hash, "Found token Initialized event during scan");
+
+                break Ok(init_log);
+            }
+
+            total_scanned += max_events_range;
+            from_block = from_block.saturating_sub(max_events_range);
+            to_block = to_block.saturating_sub(max_events_range);
+        }
+    }
 
     pub async fn fetch(
         &self,
@@ -1087,7 +1255,7 @@ impl EpochCommittees {
         self.first_epoch
     }
 
-    pub fn fetcher(&self) -> &StakeTableFetcher {
+    pub fn fetcher(&self) -> &Fetcher {
         &self.fetcher
     }
 
@@ -1096,10 +1264,11 @@ impl EpochCommittees {
     /// to be called before calling `self.stake()` so that
     /// `Self.stake_table` only needs to be updated once in a given
     /// life-cycle but may be read from many times.
-    fn update_stake_table(
+    fn update(
         &mut self,
         epoch: EpochNumber,
         validators: IndexMap<Address, Validator<BLSPubKey>>,
+        block_reward: Option<RewardAmount>,
     ) {
         let mut address_mapping = HashMap::new();
         let stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>> = validators
@@ -1131,6 +1300,10 @@ impl EpochCommittees {
                 address_mapping,
             },
         );
+
+        if let Some(block_reward) = block_reward {
+            self.block_reward = block_reward;
+        }
     }
 
     pub fn validators(
@@ -1171,13 +1344,18 @@ impl EpochCommittees {
             .cloned()
     }
 
+    pub fn block_reward(&self) -> RewardAmount {
+        self.block_reward
+    }
+
     // We need a constructor to match our concrete type.
     pub fn new_stake(
         // TODO remove `new` from trait and rename this to `new`.
         // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
         committee_members: Vec<PeerConfig<SeqTypes>>,
         da_members: Vec<PeerConfig<SeqTypes>>,
-        fetcher: StakeTableFetcher,
+        block_reward: RewardAmount,
+        fetcher: Fetcher,
     ) -> Self {
         // For each member, get the stake table entry
         let stake_table: Vec<_> = committee_members
@@ -1244,6 +1422,7 @@ impl EpochCommittees {
             state: map,
             randomized_committees: BTreeMap::new(),
             first_epoch: None,
+            block_reward,
             fetcher: Arc::new(fetcher),
         }
     }
@@ -1271,7 +1450,7 @@ impl EpochCommittees {
         };
 
         for (epoch, stake_table) in loaded_stake {
-            self.update_stake_table(epoch, stake_table);
+            self.update(epoch, stake_table, None);
         }
     }
 
@@ -1503,24 +1682,42 @@ impl Membership<SeqTypes> for EpochCommittees {
         max(higher_threshold, normal_threshold)
     }
 
-    #[allow(refining_impl_trait)]
     async fn add_epoch_root(
-        &self,
+        membership: Arc<RwLock<Self>>,
         epoch: Epoch,
         block_header: Header,
-    ) -> anyhow::Result<Option<Box<dyn FnOnce(&mut Self) + Send>>> {
-        if self.state.contains_key(&epoch) {
+    ) -> anyhow::Result<()> {
+        let membership_reader = membership.read().await;
+        if membership_reader.state.contains_key(&epoch) {
             tracing::info!(
                 "We already have the stake table for epoch {}. Skipping L1 fetching.",
                 epoch
             );
-            return Ok(None);
+            return Ok(());
+        }
+        let fetcher = Arc::clone(&membership_reader.fetcher);
+        drop(membership_reader);
+
+        let stake_tables = fetcher.fetch(epoch, block_header).await?;
+
+        let mut block_reward = None;
+
+        {
+            let membership_reader = membership.read().await;
+            // Assumes the stake table contract proxy address does not change
+            // In the future, if we want to support updates to the stake table contract address via chain config,
+            // or allow the contract to handle additional block reward calculation parameters (e.g., inflation, block time),
+            // the `fetch_block_reward` logic can be updated to support per-epoch rewards.
+            // Initially, the block reward is zero if the node starts on pre-epoch version
+            // but it is updated on the first call to `add_epoch_root()`
+            if membership_reader.block_reward == RewardAmount(U256::ZERO) {
+                block_reward = Some(fetcher.fetch_block_reward().await?);
+            }
         }
 
-        let stake_tables = self.fetcher.fetch(epoch, block_header).await?;
         // Store stake table in persistence
         {
-            let persistence_lock = self.fetcher.persistence.lock().await;
+            let persistence_lock = fetcher.persistence.lock().await;
             if let Err(e) = persistence_lock
                 .store_stake(epoch, stake_tables.clone())
                 .await
@@ -1529,9 +1726,9 @@ impl Membership<SeqTypes> for EpochCommittees {
             }
         }
 
-        Ok(Some(Box::new(move |committee: &mut Self| {
-            committee.update_stake_table(epoch, stake_tables);
-        })))
+        let mut membership_writer = membership.write().await;
+        membership_writer.update(epoch, stake_tables, block_reward);
+        Ok(())
     }
 
     fn has_stake_table(&self, epoch: Epoch) -> bool {

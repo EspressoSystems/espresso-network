@@ -9,7 +9,7 @@ use circular_buffer::CircularBuffer;
 use espresso_types::{Header, Payload, SeqTypes};
 use futures::{channel::mpsc::SendError, Sink, SinkExt, Stream, StreamExt};
 use hotshot_query_service::{
-    availability::{BlockQueryData, Leaf1QueryData, QueryableHeader},
+    availability::{BlockQueryData, Leaf1QueryData},
     explorer::{BlockDetail, ExplorerHeader, Timestamp},
     Resolvable,
 };
@@ -349,7 +349,7 @@ async fn process_incoming_leaf_and_block<BDSink, BVSink>(
     mut voters_sender: BVSink,
 ) -> Result<(), ProcessLeafError>
 where
-    Header: BlockHeader<SeqTypes> + QueryableHeader<SeqTypes> + ExplorerHeader<SeqTypes>,
+    Header: BlockHeader<SeqTypes> + BlockHeader<SeqTypes> + ExplorerHeader<SeqTypes>,
     Payload: BlockPayload<SeqTypes>,
     BDSink: Sink<BlockDetail<SeqTypes>, Error = SendError> + Unpin,
     BVSink: Sink<BitVec<u16>, Error = SendError> + Unpin,
@@ -499,7 +499,7 @@ impl ProcessLeafAndBlockPairStreamTask {
         voters_senders: BVSink,
     ) where
         S: Stream<Item = LeafAndBlock<SeqTypes>> + Unpin,
-        Header: BlockHeader<SeqTypes> + QueryableHeader<SeqTypes> + ExplorerHeader<SeqTypes>,
+        Header: BlockHeader<SeqTypes> + BlockHeader<SeqTypes> + ExplorerHeader<SeqTypes>,
         Payload: BlockPayload<SeqTypes>,
         BDSink: Sink<BlockDetail<SeqTypes>, Error = SendError> + Clone + Unpin,
         BVSink: Sink<BitVec<u16>, Error = SendError> + Clone + Unpin,

@@ -290,8 +290,10 @@ mod test {
             upgrade_version: Version { major: 0, minor: 2 },
             epoch_height: None,
             drb_difficulty: None,
+            drb_upgrade_difficulty: None,
             epoch_start_block: None,
             stake_table_capacity: None,
+            genesis_version: Version { major: 0, minor: 1 },
         };
         genesis.to_file(&genesis_file).unwrap();
 
