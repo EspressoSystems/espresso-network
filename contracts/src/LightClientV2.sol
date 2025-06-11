@@ -90,7 +90,12 @@ contract LightClientV2 is LightClient {
             newState.viewNum <= finalizedState.viewNum
                 || newState.blockHeight <= finalizedState.blockHeight
         ) {
-            revert OutdatedState();
+            // unfortunate historical bug on Decaf testnet, we accidentally allow the last block
+            // of epoch #1155 to get accepted and finalized before the epoch root to be submitted.
+            // thus make exception for that epoch as a fix and contracts is upgraded live.
+            if (epochFromBlockNumber(newState.blockHeight, blocksPerEpoch) != 1155) {
+                revert OutdatedState();
+            }
         }
         // format validity check
         BN254.validateScalarField(newState.blockCommRoot);
