@@ -1580,7 +1580,7 @@ mod api_tests {
         assert_eq!(txn.commit(), hash);
 
         // Wait for a Decide event containing transaction matching the one we sent
-        let block_height = wait_for_decide_on_handle(&mut events, &txn).await as usize;
+        let block_height = wait_for_decide_on_handle(&mut events, &txn).await.0 as usize;
         tracing::info!(block_height, "transaction sequenced");
 
         // Wait for the query service to update to this block height.
@@ -4779,7 +4779,7 @@ mod test {
                     .send()
                     .await
                     .unwrap();
-                let block = wait_for_decide_on_handle(&mut events, &txn).await;
+                let (block, _) = wait_for_decide_on_handle(&mut events, &txn).await;
 
                 // Block summary should contain information about the namespace.
                 let summary: BlockSummaryQueryData<SeqTypes> = client
@@ -4825,7 +4825,7 @@ mod test {
     use rand::thread_rng;
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_namespace_transaction_count_endpoints() {
+    async fn test_aggregator_namespace_endpoints() {
         setup_test();
 
         let mut rng = thread_rng();
@@ -4860,6 +4860,7 @@ mod test {
         let start = Instant::now();
         let mut total_transactions = 0;
         let mut tx_heights = Vec::new();
+        let mut sizes = HashMap::new();
         // inserting transactions for some namespaces
         // the number of transactions inserted is equal to namespace number.
         for namespace in 1..=4 {
@@ -4882,9 +4883,10 @@ mod test {
                 assert_eq!(txn.commit(), hash);
 
                 // Wait for a Decide event containing transaction matching the one we sent
-                let height = wait_for_decide_on_handle(&mut events, &txn).await;
+                let (height, size) = wait_for_decide_on_handle(&mut events, &txn).await;
                 tx_heights.push(height);
                 total_transactions += 1;
+                *sizes.entry(namespace).or_insert(0) += size;
             }
         }
 
@@ -4926,10 +4928,60 @@ mod test {
                 .unwrap();
             assert_eq!(from_to_endpoint_count, namespace as u64, "Incorrect transaction count for range endpoint (from-to) for namespace {}: expected {}, got {}", 
             namespace, namespace, from_to_endpoint_count,);
+
+            let total_payload_size = client
+                .get::<usize>("node/payloads/size")
+                .send()
+                .await
+                .unwrap();
+
+            let expected_total_size: usize = sizes.values().copied().sum();
+            assert_eq!(
+                total_payload_size, expected_total_size,
+                "Incorrect total payload size: expected {}, got {}",
+                expected_total_size, total_payload_size,
+            );
+
+            let ns_size = client
+                .get::<usize>(&format!("node/payloads/size/{namespace}"))
+                .send()
+                .await
+                .unwrap();
+
+            let expected_ns_size = *sizes.get(&namespace).unwrap();
+            assert_eq!(
+                ns_size, expected_ns_size,
+                "Incorrect payload size for namespace {}: expected {}, got {}",
+                namespace, expected_ns_size, ns_size,
+            );
+
+            let ns_size_to = client
+                .get::<usize>(&format!("node/payloads/size/{namespace}/{last_tx_height}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                ns_size_to, expected_ns_size,
+                "Incorrect payload size for namespace {} up to height {}: expected {}, got {}",
+                namespace, last_tx_height, expected_ns_size, ns_size_to,
+            );
+
+            let ns_size_from_to = client
+                .get::<usize>(&format!(
+                    "node/payloads/size/{namespace}/0/{last_tx_height}"
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                ns_size_from_to, expected_ns_size,
+                "Incorrect payload size for namespace {} from 0 to height {}: expected {}, got {}",
+                namespace, last_tx_height, expected_ns_size, ns_size_from_to,
+            );
         }
 
         let total_tx_count = client
-            .get::<u64>(&format!("node/transactions/count"))
+            .get::<u64>("node/transactions/count")
             .send()
             .await
             .unwrap();

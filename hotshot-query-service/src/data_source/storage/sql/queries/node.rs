@@ -345,9 +345,9 @@ where
             let key = if namespace_id == -1 {
                 None
             } else {
-                Some((namespace_id as i64).into())
+                Some(namespace_id.into())
             };
-            num_transactions.insert(key.clone(), num_tx as usize);
+            num_transactions.insert(key, num_tx as usize);
             payload_size.insert(key, payload_sz as usize);
         }
 
@@ -406,7 +406,7 @@ where
 
                     // Update per-namespace cumulative stats
                     for (&ns_id, info) in &block.namespaces {
-                        let key = Some(ns_id.clone());
+                        let key = Some(ns_id);
 
                         *tx_count.entry(key).or_insert(0) += info.num_transactions as usize;
                         *size.entry(key).or_insert(0) += info.size as usize;
@@ -416,10 +416,10 @@ where
                     // Even if a namespace wasn't present in this block,
                     // we still insert its latest cumulative stats at this height.
                     for ns_id in tx_count.keys().filter_map(|k| k.as_ref()) {
-                        let key = Some(ns_id.clone());
+                        let key = Some(*ns_id);
                         rows.push((
                             block.height as i64,
-                            ns_id.clone().into(),
+                            (*ns_id).into(),
                             tx_count[&key] as i64,
                             size[&key] as i64,
                         ));

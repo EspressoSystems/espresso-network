@@ -53,16 +53,18 @@ Returns an integer.
 """
 
 [route.payload_size]
-PATH = ["payloads/size", "payloads/size/:to", "payloads/size/:from/:to", "payloads/total-size"]
+PATH = ["payloads/size", "payloads/size/:to", "payloads/size/:from/:to", "payloads/total-size",
+        "payloads/size/:namespace", "payloads/size/:namespace/:to", "payloads/size/:namespace/:from/:to"]
 ":from" = "Integer"
 ":to" = "Integer"
+":namespace" = "Integer"
 DOC = """
 Get the size (in bytes) of all payload data in the chain.
 
 If `:from` or `:to` is specified, they restrict the range of blocks considered. `payloads/size/:to`
 will return the cumulative size of all payloads in blocks up to and including block number `:to`,
 while `payloads/size/:from/:to` will return the cumulative size in all blocks between `:from`
-(inclusive) and `:to` (inclusive).
+(inclusive) and `:to` (inclusive). If the `:namespace` is provided, the count is restricted for the specified namespace
 
 `payloads/total-size` is a deprecated alias for `payloads/size`.
 

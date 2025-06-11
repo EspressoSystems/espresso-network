@@ -390,7 +390,7 @@ where
                     .bind(namespace)
                     .bind(position)
                     .bind((range.num_transactions.get() + offset) as i64)
-                    .bind(ns.clone().into())
+                    .bind((*ns).into())
             },
             TransactionSummaryFilter::None => {
                 query(&GET_BLOCKS_CONTAINING_TRANSACTIONS_NO_FILTER_QUERY)

@@ -484,7 +484,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         let mut events = ctx.event_stream().await;
         let tx = Transaction::random(&mut rand::thread_rng());
         ctx.submit_transaction(tx.clone()).await.unwrap();
-        let block = timeout(
+        let (block, _) = timeout(
             Duration::from_secs(60),
             wait_for_decide_on_handle(&mut events, &tx),
         )
