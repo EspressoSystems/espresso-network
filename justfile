@@ -22,21 +22,13 @@ lint *args:
     just clippy -- -D warnings
 
 clippy *args:
-    #!/usr/bin/env bash
-    set -euxo pipefail
-    # Use the same target dir for both `clippy` invocations
-    export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target}
     cargo clippy --workspace --features testing --all-targets {{args}}
     cargo clippy --workspace --features "embedded-db testing" --all-targets {{args}}
-    cargo clippy --workspace --all-targets --manifest-path sequencer-sqlite/Cargo.toml {{args}}
+    cargo clippy --all-targets -p sequencer-sqlite {{args}}
 
 build profile="dev" features="":
-    #!/usr/bin/env bash
-    set -euxo pipefail
-    # Use the same target dir for both `build` invocations
-    export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target}
     cargo build --profile {{profile}} {{features}}
-    cargo build --profile {{profile}} --manifest-path ./sequencer-sqlite/Cargo.toml {{features}}
+    cargo build --profile {{profile}} -p sequencer-sqlite {{features}}
 
 demo-native-pos *args: (build "test" "--features fee,pos")
     ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE=data/genesis/demo-pos.toml scripts/demo-native -f process-compose.yaml {{args}}

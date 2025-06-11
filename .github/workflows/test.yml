@@ -167,7 +167,7 @@ jobs:
 
       - name: Build sequencer-sqlite binary
         run: |
-          cargo build --locked --profile test --manifest-path ./sequencer-sqlite/Cargo.toml --target-dir ./target
+          cargo build --locked --profile test -p sequencer-sqlite
         timeout-minutes: 30
 
       - name: Upload archive to workflow
