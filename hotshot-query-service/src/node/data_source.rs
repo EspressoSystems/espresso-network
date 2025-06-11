@@ -32,7 +32,10 @@ use derive_more::From;
 use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
 
 use super::query_data::{BlockHash, BlockId, SyncStatus, TimeWindowQueryData};
-use crate::{Header, QueryResult};
+use crate::{
+    availability::{NamespaceId, QueryableHeader},
+    Header, QueryResult,
+};
 
 #[derive(Derivative, From)]
 #[derivative(Copy(bound = ""), Debug(bound = ""))]
@@ -51,17 +54,21 @@ impl<Types: NodeType> Clone for WindowStart<Types> {
 }
 
 #[async_trait]
-pub trait NodeDataSource<Types: NodeType> {
+pub trait NodeDataSource<Types>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+{
     async fn block_height(&self) -> QueryResult<usize>;
     async fn count_transactions_in_range(
         &self,
         range: impl RangeBounds<usize> + Send,
-        namespace: Option<u32>,
+        namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize>;
     async fn payload_size_in_range(
         &self,
         range: impl RangeBounds<usize> + Send,
-        namespace: Option<u32>,
+        namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize>;
     async fn vid_share<ID>(&self, id: ID) -> QueryResult<VidShare>
     where

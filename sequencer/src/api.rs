@@ -4820,12 +4820,9 @@ mod test {
         }
     }
 
-     use std::time::Instant;
+    use std::time::Instant;
 
-    use espresso_types::NamespaceId;
     use rand::thread_rng;
-
-    use crate::testing::wait_for_decide_on_handle;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_namespace_transaction_count_endpoints() {
@@ -4836,6 +4833,7 @@ mod test {
         let port = pick_unused_port().expect("No ports free");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
+        tracing::info!("Sequencer URL = {url}");
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
 
         let options = Options::with_port(port).submit(Default::default());
@@ -4860,14 +4858,17 @@ mod test {
         let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
         let mut events = network.server.event_stream().await;
         let start = Instant::now();
-        for i in 1..=3 {
-            for j in 0..i {
+        let mut total_transactions = 0;
+        let mut tx_heights = Vec::new();
+        // inserting transactions for some namespaces
+        // the number of transactions inserted is equal to namespace number.
+        for namespace in 1..=4 {
+            for _count in 0..namespace {
                 // Generate a random payload length between 4 and 10 bytes
                 let payload_len = rng.gen_range(4..=10);
-                // Generate a random payload with values between 0 and 255
                 let payload: Vec<u8> = (0..payload_len).map(|_| rng.gen()).collect();
 
-                let txn = Transaction::new(NamespaceId::from(i as u32), payload);
+                let txn = Transaction::new(NamespaceId::from(namespace as u32), payload);
 
                 client.connect(None).await;
 
@@ -4881,7 +4882,9 @@ mod test {
                 assert_eq!(txn.commit(), hash);
 
                 // Wait for a Decide event containing transaction matching the one we sent
-                wait_for_decide_on_handle(&mut events, &txn).await;
+                let height = wait_for_decide_on_handle(&mut events, &txn).await;
+                tx_heights.push(height);
+                total_transactions += 1;
             }
         }
 
@@ -4889,13 +4892,51 @@ mod test {
 
         println!("Time elapsed to submit transactions: {:?}", duration);
 
-        for i in 1..=3 {
+        let last_tx_height = tx_heights.last().unwrap();
+        for namespace in 1..=4 {
             let count = client
-                .get::<u64>(&format!("node/transactions/count/namespace/{i}"))
+                .get::<u64>(&format!("node/transactions/count/namespace/{namespace}"))
                 .send()
                 .await
                 .unwrap();
-            tracing::error!("count={count}");
+            assert_eq!(
+                count, namespace as u64,
+                "Incorrect transaction count for namespace {}: expected {}, got {}",
+                namespace, namespace, count,
+            );
+
+            // check the range endpoint
+            let to_endpoint_count = client
+                .get::<u64>(&format!(
+                    "node/transactions/count/namespace/{namespace}/{last_tx_height}"
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(to_endpoint_count, namespace as u64, "Incorrect transaction count for range endpoint (to only) for namespace {}: expected {}, got {}",
+            namespace, namespace, to_endpoint_count,);
+
+            // check the range endpoint
+            let from_to_endpoint_count = client
+                .get::<u64>(&format!(
+                    "node/transactions/count/namespace/{namespace}/0/{last_tx_height}"
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(from_to_endpoint_count, namespace as u64, "Incorrect transaction count for range endpoint (from-to) for namespace {}: expected {}, got {}", 
+            namespace, namespace, from_to_endpoint_count,);
         }
+
+        let total_tx_count = client
+            .get::<u64>(&format!("node/transactions/count"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            total_tx_count, total_transactions,
+            "Incorrect total transaction count: expected {}, got {}",
+            total_transactions, total_tx_count,
+        );
     }
 }

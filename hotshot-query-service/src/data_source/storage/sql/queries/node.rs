@@ -32,7 +32,7 @@ use super::{
     parse_header, DecodeError, QueryBuilder, HEADER_COLUMNS,
 };
 use crate::{
-    availability::QueryableHeader,
+    availability::{NamespaceId, QueryableHeader},
     data_source::storage::{
         Aggregate, AggregatesStorage, NodeStorage, PayloadMetadata, UpdateAggregatesStorage,
     },
@@ -46,6 +46,7 @@ impl<Mode, Types> NodeStorage<Types> for Transaction<Mode>
 where
     Mode: TransactionMode,
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
 {
     async fn block_height(&mut self) -> QueryResult<usize> {
         match query_as::<(Option<i64>,)>("SELECT max(height) FROM header")
@@ -67,10 +68,10 @@ where
     async fn count_transactions_in_range(
         &mut self,
         range: impl RangeBounds<usize> + Send,
-        namespace: Option<u32>,
+        namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
-        let namespace = namespace.map(|ns| ns as i32).unwrap_or(-1);
-        let Some((from, to)) = aggregate_range_bounds(self, range).await? else {
+        let namespace: i64 = namespace.map(|ns| ns.into()).unwrap_or(-1);
+        let Some((from, to)) = aggregate_range_bounds::<Types>(self, range).await? else {
             return Ok(0);
         };
         let (count,) = query_as::<(i64,)>(
@@ -99,10 +100,10 @@ where
     async fn payload_size_in_range(
         &mut self,
         range: impl RangeBounds<usize> + Send,
-        namespace: Option<u32>,
+        namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
-        let namespace = namespace.map(|ns| ns as i32).unwrap_or(-1);
-        let Some((from, to)) = aggregate_range_bounds(self, range).await? else {
+        let namespace: i64 = namespace.map(|ns| ns.into()).unwrap_or(-1);
+        let Some((from, to)) = aggregate_range_bounds::<Types>(self, range).await? else {
             return Ok(0);
         };
         let (size,) = query_as::<(i64,)>(
@@ -301,7 +302,11 @@ where
     }
 }
 
-impl<Mode: TransactionMode> AggregatesStorage for Transaction<Mode> {
+impl<Types, Mode: TransactionMode> AggregatesStorage<Types> for Transaction<Mode>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+{
     async fn aggregates_height(&mut self) -> anyhow::Result<usize> {
         let (height,): (i64,) = query_as("SELECT coalesce(max(height) + 1, 0) FROM aggregate")
             .fetch_one(self.as_mut())
@@ -309,7 +314,7 @@ impl<Mode: TransactionMode> AggregatesStorage for Transaction<Mode> {
         Ok(height as usize)
     }
 
-    async fn load_prev_aggregate(&mut self) -> anyhow::Result<Option<Aggregate>> {
+    async fn load_prev_aggregate(&mut self) -> anyhow::Result<Option<Aggregate<Types>>> {
         // Get the maximum height for which we have stored aggregated results
         // then query all the namespace info for that height
         let res: (Option<i64>,) =
@@ -340,9 +345,9 @@ impl<Mode: TransactionMode> AggregatesStorage for Transaction<Mode> {
             let key = if namespace_id == -1 {
                 None
             } else {
-                Some(namespace_id as u32)
+                Some((namespace_id as i64).into())
             };
-            num_transactions.insert(key, num_tx as usize);
+            num_transactions.insert(key.clone(), num_tx as usize);
             payload_size.insert(key, payload_sz as usize);
         }
 
@@ -360,9 +365,9 @@ where
 {
     async fn update_aggregates(
         &mut self,
-        prev: Aggregate,
+        prev: Aggregate<Types>,
         blocks: &[PayloadMetadata<Types>],
-    ) -> anyhow::Result<Aggregate> {
+    ) -> anyhow::Result<Aggregate<Types>> {
         let height = blocks[0].height();
         let (prev_tx_count, prev_size) = (prev.num_transactions, prev.payload_size);
 
@@ -383,11 +388,15 @@ where
                     }
                     *height += 1;
 
+                    //  Update total global stats
+                    // `None` represents stats across all namespaces.
+                    // It is represented as -1 in database
+
                     *tx_count.entry(None).or_insert(0) += block.num_transactions as usize;
                     *size.entry(None).or_insert(0) += block.size as usize;
 
-                    // None represents the total of all the namespaces
-                    // and is represented as -1 in databasr
+                    // Add row for global cumulative stats (namespace = -1)
+
                     rows.push((
                         block.height as i64,
                         -1,
@@ -395,15 +404,22 @@ where
                         size[&None] as i64,
                     ));
 
+                    // Update per-namespace cumulative stats
                     for (&ns_id, info) in &block.namespaces {
-                        let key = Some(ns_id);
+                        let key = Some(ns_id.clone());
 
                         *tx_count.entry(key).or_insert(0) += info.num_transactions as usize;
                         *size.entry(key).or_insert(0) += info.size as usize;
+                    }
 
+                    //  Insert cumulative stats for all known namespaces
+                    // Even if a namespace wasn't present in this block,
+                    // we still insert its latest cumulative stats at this height.
+                    for ns_id in tx_count.keys().filter_map(|k| k.as_ref()) {
+                        let key = Some(ns_id.clone());
                         rows.push((
                             block.height as i64,
-                            ns_id as i64,
+                            ns_id.clone().into(),
                             tx_count[&key] as i64,
                             size[&key] as i64,
                         ));
@@ -525,10 +541,14 @@ impl<Mode: TransactionMode> Transaction<Mode> {
 ///
 /// Returns [`None`] if there are no blocks in the given range, in which case the result should be
 /// the default value of the aggregate statistic.
-async fn aggregate_range_bounds(
+async fn aggregate_range_bounds<Types>(
     tx: &mut Transaction<impl TransactionMode>,
     range: impl RangeBounds<usize>,
-) -> QueryResult<Option<(usize, usize)>> {
+) -> QueryResult<Option<(usize, usize)>>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+{
     let from = match range.start_bound() {
         Bound::Included(from) => *from,
         Bound::Excluded(from) => *from + 1,
@@ -539,8 +559,7 @@ async fn aggregate_range_bounds(
         Bound::Excluded(0) => return Ok(None),
         Bound::Excluded(to) => *to - 1,
         Bound::Unbounded => {
-            let height = tx
-                .aggregates_height()
+            let height = AggregatesStorage::<Types>::aggregates_height(tx)
                 .await
                 .map_err(|err| QueryError::Error {
                     message: format!("{err:#}"),
