@@ -50,9 +50,21 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
             ApiVer,
         >,
     > {
+        tracing::info!(%url, "Connecting to hotshot events API");
+
         let client = Client::<hotshot_events_service::events::Error, ApiVer>::new(url.clone());
 
         timeout(Self::CONNECTION_TIMEOUT, async {
+            // TODO if we have a /v0 /v1 API postfix the healthcheck doesn't work, remove the version postfix
+            let url = url
+                .to_string()
+                .trim_end_matches("/")
+                .trim_end_matches("v1")
+                .trim_end_matches("v0")
+                .parse()
+                .expect("Failed to parse URL for healthcheck");
+            tracing::info!(%url, "Connecting to hotshot events API for healthcheck");
+            let client = Client::<hotshot_events_service::events::Error, ApiVer>::new(url);
             loop {
                 match client.healthcheck::<HealthStatus>().await {
                     Ok(_) => break,
