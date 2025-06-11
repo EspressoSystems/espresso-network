@@ -56,7 +56,8 @@ use super::{
 };
 use crate::{
     availability::{
-        BlockQueryData, LeafQueryData, QueryablePayload, StateCertQueryData, VidCommonQueryData,
+        BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, StateCertQueryData,
+        VidCommonQueryData,
     },
     data_source::{
         storage::{pruning::PrunedHeightStorage, UpdateAvailabilityStorage},
@@ -463,7 +464,7 @@ impl<Types> UpdateAvailabilityStorage<Types> for Transaction<Write>
 where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
-    Header<Types>: BlockHeader<Types>,
+    Header<Types>: QueryableHeader<Types>,
 {
     async fn insert_leaf(&mut self, leaf: LeafQueryData<Types>) -> anyhow::Result<()> {
         let height = leaf.height();
@@ -564,21 +565,23 @@ where
         )
         .await?;
 
-        // Index the transactions in the block.
+        // Index the transactions and namespaces in the block.
         let mut rows = vec![];
         for (txn_ix, txn) in block.enumerate() {
+            let ns_id = block.header().namespace_id(&txn_ix.ns_index).unwrap();
             rows.push((
                 txn.commit().to_string(),
                 height as i64,
-                txn_ix.namespace as i64,
+                txn_ix.ns_index.into(),
+                ns_id.into(),
                 txn_ix.position as i64,
             ));
         }
         if !rows.is_empty() {
             self.upsert(
                 "transactions",
-                ["hash", "block_height", "namespace", "position"],
-                ["block_height", "namespace", "position"],
+                ["hash", "block_height", "ns_index", "ns_id", "position"],
+                ["block_height", "ns_id", "position"],
                 rows,
             )
             .await?;
