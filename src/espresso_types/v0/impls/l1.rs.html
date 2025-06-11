@@ -170,7 +170,7 @@
 <a href=#170 id=170 data-nosnippet>170</a>
 <a href=#171 id=171 data-nosnippet>171</a><span class="kw">impl </span>SwitchingTransport {
 <a href=#172 id=172 data-nosnippet>172</a>    <span class="doccomment">/// Create a new `SwitchingTransport` with the given options and URLs
-<a href=#173 id=173 data-nosnippet>173</a>    </span><span class="kw">fn </span>new(opt: L1ClientOptions, urls: Vec&lt;Url&gt;) -&gt; anyhow::Result&lt;<span class="self">Self</span>&gt; {
+<a href=#173 id=173 data-nosnippet>173</a>    </span><span class="kw">pub fn </span>new(opt: L1ClientOptions, urls: Vec&lt;Url&gt;) -&gt; anyhow::Result&lt;<span class="self">Self</span>&gt; {
 <a href=#174 id=174 data-nosnippet>174</a>        <span class="comment">// Return early if there were no URLs provided
 <a href=#175 id=175 data-nosnippet>175</a>        </span><span class="kw">let </span><span class="prelude-val">Some</span>(first_url) = urls.first().cloned() <span class="kw">else </span>{
 <a href=#176 id=176 data-nosnippet>176</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="macro">anyhow::anyhow!</span>(<span class="string">"No valid URLs provided"</span>));
