@@ -14,6 +14,7 @@ use std::{
     hash::Hash,
     marker::PhantomData,
     sync::Arc,
+    time::Duration,
 };
 
 use async_lock::RwLock;
@@ -373,6 +374,14 @@ impl From<AvidMShare> for VidShare {
 pub mod ns_table;
 pub mod vid_disperse;
 
+/// A helper struct to hold the disperse data and the time it took to calculate the disperse
+pub struct VidDisperseAndDuration<TYPES: NodeType> {
+    /// The disperse data
+    pub disperse: VidDisperse<TYPES>,
+    /// The time it took to calculate the disperse
+    pub duration: Duration,
+}
+
 /// VID dispersal data
 ///
 /// Like [`DaProposal`].
@@ -432,7 +441,7 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
         data_epoch: Option<TYPES::Epoch>,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
         upgrade_lock: &UpgradeLock<TYPES, V>,
-    ) -> Result<Self> {
+    ) -> Result<VidDisperseAndDuration<TYPES>> {
         let version = upgrade_lock.version_infallible(view).await;
         if version < V::Epochs::VERSION {
             ADVZDisperse::calculate_vid_disperse(
@@ -443,7 +452,10 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
                 data_epoch,
             )
             .await
-            .map(|disperse| Self::V0(disperse))
+            .map(|(disperse, duration)| VidDisperseAndDuration {
+                disperse: Self::V0(disperse),
+                duration,
+            })
         } else {
             AvidMDisperse::calculate_vid_disperse(
                 payload,
@@ -454,7 +466,10 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
                 metadata,
             )
             .await
-            .map(|disperse| Self::V1(disperse))
+            .map(|(disperse, duration)| VidDisperseAndDuration {
+                disperse: Self::V1(disperse),
+                duration,
+            })
         }
     }
 
