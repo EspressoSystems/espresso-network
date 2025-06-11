@@ -20,7 +20,7 @@ case "$1" in
     "other")
         BINS="$(cargo metadata --no-deps --format-version 1 \
         | jq -r '.packages[].targets[] | select(.kind[] == "bin") | .name' \
-        | grep -v '^sequencer$\|espresso-dev-node' \
+        | grep -v '^sequencer$\|^sequencer-sqlite$\|^espresso-dev-node$' \
         | xargs -I{} echo --bin {} \
         | tr '\n' ' ')"
         echo "Building other binaries: $BINS"
