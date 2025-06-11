@@ -3,8 +3,8 @@ use hotshot_query_service::explorer::ExplorerTransaction;
 use hotshot_types::traits::block_contents::Transaction as HotShotTransaction;
 use serde::{de::Error, Deserialize, Deserializer};
 
-use super::{NsPayloadBuilder, NsTableBuilder};
-use crate::{NamespaceId, Transaction};
+use super::NsPayloadBuilder;
+use crate::{NamespaceId, SeqTypes, Transaction};
 
 impl From<u32> for NamespaceId {
     fn from(value: u32) -> Self {
@@ -13,6 +13,18 @@ impl From<u32> for NamespaceId {
 }
 
 impl From<NamespaceId> for u32 {
+    fn from(value: NamespaceId) -> Self {
+        value.0 as Self
+    }
+}
+
+impl From<i64> for NamespaceId {
+    fn from(value: i64) -> Self {
+        Self(value as u64)
+    }
+}
+
+impl From<NamespaceId> for i64 {
     fn from(value: NamespaceId) -> Self {
         value.0 as Self
     }
@@ -64,7 +76,6 @@ impl Transaction {
     pub fn size_in_block(&self, new_ns: bool) -> u64 {
         if new_ns {
             // each new namespace adds overhead
-            // here self.minimum_block_size() = `self.payload().len() + NsPayloadBuilder::tx_table_entry_byte_len() + NsTableBuilder::entry_byte_len() + NsPayloadBuilder::tx_table_header_byte_len()`
             self.minimum_block_size()
         } else {
             (self.payload().len() + NsPayloadBuilder::tx_table_entry_byte_len()) as u64
@@ -92,10 +103,18 @@ impl Transaction {
 
 impl HotShotTransaction for Transaction {
     fn minimum_block_size(&self) -> u64 {
-        let len = self.payload().len()
+        // Any block containing this transaction will have at least:
+        let len =
+            // bytes for the payload of the transaction itself
+            self.payload().len()
+            // a transaction table entry in the transaction's namespace payload
             + NsPayloadBuilder::tx_table_entry_byte_len()
-            + NsTableBuilder::entry_byte_len()
+            // a header of the transaction table in the transaction's namespace payload
             + NsPayloadBuilder::tx_table_header_byte_len();
+        // The block will also have an entry in the namespace table for the transaction's namespace;
+        // however this takes up space in the header, not the payload, so doesn't count against the
+        // size of the block.
+
         len as u64
     }
 }
@@ -113,9 +132,8 @@ impl Committable for Transaction {
     }
 }
 
-impl ExplorerTransaction for Transaction {
-    type NamespaceId = NamespaceId;
-    fn namespace_id(&self) -> Self::NamespaceId {
+impl ExplorerTransaction<SeqTypes> for Transaction {
+    fn namespace_id(&self) -> NamespaceId {
         self.namespace
     }
 

@@ -2042,7 +2042,7 @@ mod test {
         v0_1::{RewardAmount, COMMISSION_BASIS_POINTS},
         v0_3::Fetcher,
         validators_from_l1_events, EpochVersion, FeeAmount, FeeVersion, Header, L1ClientOptions,
-        MockSequencerVersions, RewardDistributor, SequencerVersions, ValidatedState,
+        MockSequencerVersions, NamespaceId, RewardDistributor, SequencerVersions, ValidatedState,
     };
     use futures::{
         future::{self, join_all},
@@ -2052,8 +2052,9 @@ mod test {
     use hotshot_contract_adapter::sol_types::{EspToken, StakeTableV2};
     use hotshot_example_types::node_types::EpochsTestVersions;
     use hotshot_query_service::{
-        availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
+        availability::{BlockQueryData, BlockSummaryQueryData, LeafQueryData, VidCommonQueryData},
         data_source::{sql::Config, storage::SqlStorage, VersionedDataSource},
+        explorer::TransactionSummariesResponse,
         types::HeightIndexed,
     };
     use hotshot_types::{
@@ -2090,7 +2091,7 @@ mod test {
         },
         catchup::{NullStateCatchup, StatePeers},
         persistence::no_storage,
-        testing::{TestConfig, TestConfigBuilder},
+        testing::{wait_for_decide_on_handle, TestConfig, TestConfigBuilder},
     };
 
     #[tokio::test(flavor = "multi_thread")]
@@ -4739,5 +4740,83 @@ mod test {
         assert!(mint_transfer.value > U256::ZERO);
 
         Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_tx_metadata() {
+        setup_test();
+
+        let port = pick_unused_port().expect("No ports free");
+
+        let url = format!("http://localhost:{port}").parse().unwrap();
+        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+
+        let storage = SqlDataSource::create_storage().await;
+        let network_config = TestConfigBuilder::default().build();
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(
+                SqlDataSource::options(&storage, Options::with_port(port))
+                    .submit(Default::default())
+                    .explorer(Default::default()),
+            )
+            .network_config(network_config)
+            .build();
+        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let mut events = network.server.event_stream().await;
+
+        client.connect(None).await;
+
+        // Submit a few transactions in different namespaces.
+        let namespace_counts = [(101, 1), (102, 2), (103, 3)];
+        for (ns, count) in &namespace_counts {
+            for i in 0..*count {
+                let ns_id = NamespaceId::from(*ns as u64);
+                let txn = Transaction::new(ns_id, vec![*ns, i]);
+                client
+                    .post::<()>("submit/submit")
+                    .body_json(&txn)
+                    .unwrap()
+                    .send()
+                    .await
+                    .unwrap();
+                let block = wait_for_decide_on_handle(&mut events, &txn).await;
+
+                // Block summary should contain information about the namespace.
+                let summary: BlockSummaryQueryData<SeqTypes> = client
+                    .get(&format!("availability/block/summary/{block}"))
+                    .send()
+                    .await
+                    .unwrap();
+                let ns_info = summary.namespaces();
+                assert_eq!(ns_info.len(), 1);
+                assert_eq!(ns_info.keys().copied().collect::<Vec<_>>(), vec![ns_id]);
+                assert_eq!(ns_info[&ns_id].num_transactions, 1);
+                assert_eq!(ns_info[&ns_id].size, txn.size_in_block(true));
+            }
+        }
+
+        // List transactions in each namespace.
+        for (ns, count) in &namespace_counts {
+            tracing::info!(ns, "list transactions in namespace");
+
+            let ns_id = NamespaceId::from(*ns as u64);
+            let summaries: TransactionSummariesResponse<SeqTypes> = client
+                .get(&format!(
+                    "explorer/transactions/latest/{count}/namespace/{ns_id}"
+                ))
+                .send()
+                .await
+                .unwrap();
+            let txs = summaries.transaction_summaries;
+            assert_eq!(txs.len(), *count as usize);
+
+            // Check that transactions are listed in descending order.
+            for i in 0..*count {
+                let summary = &txs[i as usize];
+                let expected = Transaction::new(ns_id, vec![*ns, count - i - 1]);
+                assert_eq!(summary.rollups, vec![ns_id]);
+                assert_eq!(summary.hash, expected.commit());
+            }
+        }
     }
 }

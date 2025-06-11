@@ -440,8 +440,8 @@ pub(crate) async fn update_shared_state<
         .await
         .wrap()
         .context(warn!("Block header doesn't extend the proposal!"))?;
-    let duration = now.elapsed();
-    tracing::debug!("Validation time: {:?}", duration);
+    let validation_duration = now.elapsed();
+    tracing::debug!("Validation time: {:?}", validation_duration);
 
     let now = Instant::now();
     // Now that we've rounded everyone up, we need to update the shared state
@@ -454,10 +454,18 @@ pub(crate) async fn update_shared_state<
     ) {
         tracing::trace!("{e:?}");
     }
+    let update_leaf_duration = now.elapsed();
 
+    consensus_writer
+        .metrics
+        .validate_and_apply_header_duration
+        .add_point(validation_duration.as_secs_f64());
+    consensus_writer
+        .metrics
+        .update_leaf_duration
+        .add_point(update_leaf_duration.as_secs_f64());
     drop(consensus_writer);
-    let duration = now.elapsed();
-    tracing::debug!("update_leaf time: {:?}", duration);
+    tracing::debug!("update_leaf time: {:?}", update_leaf_duration);
 
     Ok(())
 }

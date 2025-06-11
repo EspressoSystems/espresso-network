@@ -60,18 +60,15 @@ use std::ops::RangeBounds;
 
 use async_trait::async_trait;
 use futures::future::Future;
-use hotshot_types::{
-    data::VidShare,
-    traits::{block_contents::BlockHeader, node_implementation::NodeType},
-};
+use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
 use jf_merkle_tree::prelude::MerkleProof;
 use tagged_base64::TaggedBase64;
 
 use crate::{
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, PayloadMetadata, PayloadQueryData,
-        QueryablePayload, StateCertQueryData, TransactionHash, TransactionQueryData,
-        VidCommonMetadata, VidCommonQueryData,
+        QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
+        TransactionQueryData, VidCommonMetadata, VidCommonQueryData,
     },
     explorer::{
         query_data::{
@@ -119,6 +116,7 @@ pub use sql::SqlStorage;
 pub trait AvailabilityStorage<Types>: Send + Sync
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     async fn get_leaf(&mut self, id: LeafId<Types>) -> QueryResult<LeafQueryData<Types>>;
@@ -268,6 +266,7 @@ pub trait AggregatesStorage {
 pub trait UpdateAggregatesStorage<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
 {
     /// Update aggregate statistics based on a new block.
     fn update_aggregates(
@@ -290,8 +289,8 @@ where
 pub trait ExplorerStorage<Types>
 where
     Types: NodeType,
-    Header<Types>: ExplorerHeader<Types> + BlockHeader<Types>,
-    Transaction<Types>: ExplorerTransaction,
+    Header<Types>: ExplorerHeader<Types> + QueryableHeader<Types>,
+    Transaction<Types>: ExplorerTransaction<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     /// `get_block_detail` is a method that retrieves the details of a specific
