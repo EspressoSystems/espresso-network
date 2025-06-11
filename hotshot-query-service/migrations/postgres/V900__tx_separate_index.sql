@@ -24,7 +24,7 @@ AS $$
 DECLARE
     start INT := 8*ns_index + 4;
 BEGIN
-    RETURN bytea_4byte_le_to_integer(substring(ns_table from start for 4));
+    RETURN bytea_4byte_le_to_integer(substring(ns_table from start + 1 for 4));
 END;
 $$;
 
@@ -46,6 +46,18 @@ BEGIN
 END;
 $$;
 
+CREATE FUNCTION get_ns_table(h JSONB)
+    RETURNS BYTEA
+    LANGUAGE plpgsql
+    IMMUTABLE
+AS $$
+DECLARE
+    bytes VARCHAR := COALESCE(h #>> '{fields,ns_table,bytes}', h #>> '{ns_table,bytes}');
+BEGIN
+    RETURN decode(bytes, 'base64');
+END;
+$$;
+
 ALTER TABLE transactions
     -- Add the new columns and populate from the existing JSON `idx` field.
     ADD COLUMN ns_index BIGINT NOT NULL GENERATED ALWAYS AS (json_4byte_le_to_integer(idx -> 'ns_index')) STORED,
@@ -56,7 +68,7 @@ ALTER TABLE transactions
 
 -- Populate the `ns_id` column.
 UPDATE transactions SET (ns_id) = (
-    SELECT read_ns_id(decode(h.data #>> '{fields,ns_table,bytes}','base64'), ns_index)
+    SELECT read_ns_id(get_ns_table(h.data), ns_index)
       FROM header AS h
      WHERE h.height = block_height
 );
