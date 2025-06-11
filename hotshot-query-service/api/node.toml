@@ -54,7 +54,7 @@ Returns an integer.
 
 [route.payload_size]
 PATH = ["payloads/size", "payloads/size/:to", "payloads/size/:from/:to", "payloads/total-size",
-        "payloads/size/:namespace", "payloads/size/:namespace/:to", "payloads/size/:namespace/:from/:to"]
+        "payloads/size/namespace/:namespace", "payloads/size/namespace/:namespace/:to", "payloads/size/namespace/:namespace/:from/:to"]
 ":from" = "Integer"
 ":to" = "Integer"
 ":namespace" = "Integer"

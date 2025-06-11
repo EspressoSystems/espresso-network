@@ -4929,21 +4929,8 @@ mod test {
             assert_eq!(from_to_endpoint_count, namespace as u64, "Incorrect transaction count for range endpoint (from-to) for namespace {}: expected {}, got {}", 
             namespace, namespace, from_to_endpoint_count,);
 
-            let total_payload_size = client
-                .get::<usize>("node/payloads/size")
-                .send()
-                .await
-                .unwrap();
-
-            let expected_total_size: usize = sizes.values().copied().sum();
-            assert_eq!(
-                total_payload_size, expected_total_size,
-                "Incorrect total payload size: expected {}, got {}",
-                expected_total_size, total_payload_size,
-            );
-
             let ns_size = client
-                .get::<usize>(&format!("node/payloads/size/{namespace}"))
+                .get::<usize>(&format!("node/payloads/size/namespace/{namespace}"))
                 .send()
                 .await
                 .unwrap();
@@ -4956,7 +4943,9 @@ mod test {
             );
 
             let ns_size_to = client
-                .get::<usize>(&format!("node/payloads/size/{namespace}/{last_tx_height}"))
+                .get::<usize>(&format!(
+                    "node/payloads/size/namespace/{namespace}/{last_tx_height}"
+                ))
                 .send()
                 .await
                 .unwrap();
@@ -4968,7 +4957,7 @@ mod test {
 
             let ns_size_from_to = client
                 .get::<usize>(&format!(
-                    "node/payloads/size/{namespace}/0/{last_tx_height}"
+                    "node/payloads/size/namespace/{namespace}/0/{last_tx_height}"
                 ))
                 .send()
                 .await
@@ -4989,6 +4978,19 @@ mod test {
             total_tx_count, total_transactions,
             "Incorrect total transaction count: expected {}, got {}",
             total_transactions, total_tx_count,
+        );
+
+        let total_payload_size = client
+            .get::<usize>("node/payloads/size")
+            .send()
+            .await
+            .unwrap();
+
+        let expected_total_size: usize = sizes.values().copied().sum();
+        assert_eq!(
+            total_payload_size, expected_total_size,
+            "Incorrect total payload size: expected {}, got {}",
+            expected_total_size, total_payload_size,
         );
     }
 }
