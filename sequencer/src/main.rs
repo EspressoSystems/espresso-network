@@ -13,8 +13,8 @@ instead.
 
 By default the sequencer-sqlite workspace crate is excluded from cargo
 invocations because it's not a default workspace member. Avoid using the
-`--workspace` cargo flag unless enabling the `embedded-db` feature (via inclusion
-of the sequencer-sqlite crate in the build) is intended.
+`--workspace` cargo flag unless enabling the `embedded-db` feature (via
+inclusion of the sequencer-sqlite crate in the build) is intended.
 
 "#
 );
