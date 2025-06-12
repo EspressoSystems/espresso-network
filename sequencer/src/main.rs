@@ -1,4 +1,8 @@
-#[cfg(all(feature = "embedded-db", not(clippy)))]
+// NOTE: due to nextest eagerly compiling binaries we allow the build if we're
+// not building with --release (without debug_assertions). There is
+// unfortunately no good way to detect if a build is performed by nextest
+// because nextest doesn't expose any build time env vars.
+#[cfg(all(feature = "embedded-db", not(debug_assertions), not(clippy)))]
 compile_error!(
     r#"
 The `embedded-db` feature is enabled, but the sequencer binary is not compatible
@@ -24,5 +28,18 @@ flag `--all-features` when building the sequencer binary target.
 
 #[tokio::main]
 pub async fn main() -> anyhow::Result<()> {
-    sequencer::main().await
+    // If we compiled with the embedded-db feature **and** are running it now
+    // something is wrong.
+    #[cfg(feature = "embedded-db")]
+    {
+        panic!(
+            r#"The sequencer binary is not compatible with the embedded-db feature.
+     Please build the sequencer-sqlite binary instead."#
+        );
+    }
+
+    #[cfg(not(feature = "embedded-db"))]
+    {
+        sequencer::main().await
+    }
 }

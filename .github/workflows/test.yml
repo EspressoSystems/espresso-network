@@ -54,7 +54,7 @@ jobs:
 
       - name: Build and archive tests
         # hotshot-testing is tested in hotshot.yml, exclude from compilation
-        run: cargo nextest archive --locked --workspace --exclude hotshot-testing --archive-file nextest-archive-postgres.tar.zst
+        run: cargo nextest archive --locked --exclude hotshot-testing --archive-file nextest-archive-postgres.tar.zst
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v4
@@ -94,7 +94,7 @@ jobs:
 
       - name: Build and archive tests
         # hotshot-testing is tested in hotshot.yml, exclude from compilation
-        run: cargo nextest archive --locked --features "embedded-db testing" --workspace --exclude hotshot-testing --archive-file nextest-archive-sqlite.tar.zst
+        run: cargo nextest archive --locked --features "embedded-db testing" --exclude hotshot-testing --archive-file nextest-archive-sqlite.tar.zst
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v4
