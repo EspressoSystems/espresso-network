@@ -990,10 +990,7 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
                 // IDEA: add a function to wait for the proposal to be executed
             }
 
-            match result {
-                Ok(r) => Ok(r),
-                Err(e) => Err(anyhow!("Upgrade proposal failed: {:?}", e)),
-            }
+            result.context("Upgrade proposal failed")?
         },
     }
 }
