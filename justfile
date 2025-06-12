@@ -22,9 +22,10 @@ lint *args:
     just clippy -- -D warnings
 
 clippy *args:
-    cargo clippy --workspace --features testing --all-targets {{args}}
+    # check all targets in default workspace members
+    cargo clippy --features testing --all-targets {{args}}
+    # check entire workspace (including sequencer-sqlite crate) with embedded-db feature
     cargo clippy --workspace --features "embedded-db testing" --all-targets {{args}}
-    cargo clippy --all-targets -p sequencer-sqlite {{args}}
 
 build profile="dev" features="":
     cargo build --profile {{profile}} {{features}}

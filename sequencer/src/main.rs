@@ -1,4 +1,4 @@
-#[cfg(feature = "embedded-db")]
+#[cfg(all(feature = "embedded-db", not(clippy)))]
 compile_error!("The sequencer binary is not compatible with the 'embedded-db' feature, compile the sequencer-sqlite crate instead");
 
 #[tokio::main]
