@@ -43,6 +43,9 @@ ENV ESPRESSO_SEQUENCER_STORAGE_PATH=/store/sequencer
 # is very old.
 ENV ESPRESSO_SEQUENCER_L1_FINALIZED_SAFETY_MARGIN=100
 
+# use sqlite by default
+ENV ESPRESSO_SEQUENCER_EMBEDDED_DB=true
+
 CMD ["/bin/sequencer", "--", "http"]
 HEALTHCHECK --interval=1s --timeout=1s --retries=100 CMD curl --fail http://localhost:${ESPRESSO_SEQUENCER_API_PORT}/healthcheck  || exit 1
 EXPOSE ${ESPRESSO_SEQUENCER_API_PORT}
