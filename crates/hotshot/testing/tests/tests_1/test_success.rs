@@ -6,7 +6,6 @@
 
 use std::time::Duration;
 
-use alloy::primitives::U256;
 use hotshot_example_types::{
     node_types::{
         Libp2pImpl, MemoryImpl, PushCdnImpl, TestConsecutiveLeaderTypes, TestTypes,
@@ -18,7 +17,6 @@ use hotshot_macros::cross_tests;
 use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
-        node_stake::TestNodeStakes,
     test_builder::TestDescription,
     view_sync_task::ViewSyncTaskDescription,
 };
@@ -45,32 +43,6 @@ cross_tests!(
         metadata
     },
 );
-
-
-cross_tests!(
-    TestName: test_success_with_unequal_stake,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
-    Types: [TestTypes, TestTypesRandomizedLeader],
-    Versions: [TestVersions],
-    Ignore: false,
-    Metadata: {
-        let mut metadata = TestDescription {
-            // allow more time to pass in CI
-            completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-                                             TimeBasedCompletionTaskDescription {
-                                                 duration: Duration::from_secs(60),
-                                             },
-                                         ),
-            node_stakes: TestNodeStakes::default().with_stake(1, U256::from(10)),
-            ..TestDescription::default()
-        };
-
-        metadata.test_config.epoch_height = 0;
-
-        metadata
-    },
-);
-
 
 cross_tests!(
     TestName: test_success_with_async_delay,

@@ -485,7 +485,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
     }
 
     #[must_use]
-    fn default_with_stake(node_stakes: TestNodeStakes) -> Self {
+    pub fn default_with_stake(node_stakes: TestNodeStakes) -> Self {
         let num_nodes_with_stake = 7;
         let num_da_nodes = num_nodes_with_stake;
         let epoch_height = 10;
