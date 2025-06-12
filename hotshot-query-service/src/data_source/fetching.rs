@@ -119,9 +119,9 @@ use super::{
 use crate::{
     availability::{
         AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch, FetchStream,
-        HeaderQueryData, LeafId, LeafQueryData, PayloadMetadata, PayloadQueryData, QueryableHeader,
-        QueryablePayload, StateCertQueryData, TransactionHash, TransactionQueryData,
-        UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
+        HeaderQueryData, LeafId, LeafQueryData, NamespaceId, PayloadMetadata, PayloadQueryData,
+        QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
+        TransactionQueryData, UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
     explorer::{self, ExplorerDataSource},
     fetching::{
@@ -390,8 +390,10 @@ where
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types>,
     S: PruneStorage + VersionedDataSource + HasMetrics + MigrateTypes<Types> + 'static,
-    for<'a> S::ReadOnly<'a>:
-        AvailabilityStorage<Types> + PrunedHeightStorage + NodeStorage<Types> + AggregatesStorage,
+    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types>
+        + PrunedHeightStorage
+        + NodeStorage<Types>
+        + AggregatesStorage<Types>,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types> + UpdateAggregatesStorage<Types>,
     P: AvailabilityProvider<Types>,
 {
@@ -505,8 +507,10 @@ where
     Header<Types>: QueryableHeader<Types>,
     S: VersionedDataSource + PruneStorage + HasMetrics + MigrateTypes<Types> + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types> + UpdateAggregatesStorage<Types>,
-    for<'a> S::ReadOnly<'a>:
-        AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage + AggregatesStorage,
+    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types>
+        + NodeStorage<Types>
+        + PrunedHeightStorage
+        + AggregatesStorage<Types>,
     P: AvailabilityProvider<Types>,
 {
     /// Build a [`FetchingDataSource`] with the given `storage` and `provider`.
@@ -607,6 +611,7 @@ where
 impl<Types, S, P> StatusDataSource for FetchingDataSource<Types, S, P>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     S: VersionedDataSource + HasMetrics + Send + Sync + 'static,
     for<'a> S::ReadOnly<'a>: NodeStorage<Types>,
     P: Send + Sync,
@@ -930,6 +935,7 @@ where
 impl<Types, S, P> Fetcher<Types, S, P>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     S: VersionedDataSource + Sync,
     for<'a> S::ReadOnly<'a>: PrunedHeightStorage + NodeStorage<Types>,
 {
@@ -1594,8 +1600,10 @@ where
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types> + UpdateAggregatesStorage<Types>,
-    for<'a> S::ReadOnly<'a>:
-        AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage + AggregatesStorage,
+    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types>
+        + NodeStorage<Types>
+        + PrunedHeightStorage
+        + AggregatesStorage<Types>,
     P: AvailabilityProvider<Types>,
 {
     #[tracing::instrument(skip_all)]
@@ -1659,6 +1667,7 @@ where
                     .await;
                     match res {
                         Ok(()) => {
+                            tracing::error!("updated aggregate");
                             break;
                         },
                         Err(err) => {
@@ -1781,6 +1790,7 @@ impl Heights {
     async fn load<Types, T>(tx: &mut T) -> anyhow::Result<Self>
     where
         Types: NodeType,
+        Header<Types>: QueryableHeader<Types>,
         T: NodeStorage<Types> + PrunedHeightStorage + Send,
     {
         let height = tx.block_height().await.context("loading block height")? as u64;
@@ -1844,6 +1854,7 @@ where
 impl<Types, S, P> NodeDataSource<Types> for FetchingDataSource<Types, S, P>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     S: VersionedDataSource + 'static,
     for<'a> S::ReadOnly<'a>: NodeStorage<Types>,
     P: Send + Sync,
@@ -1858,21 +1869,23 @@ where
     async fn count_transactions_in_range(
         &self,
         range: impl RangeBounds<usize> + Send,
+        namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
             message: err.to_string(),
         })?;
-        tx.count_transactions_in_range(range).await
+        tx.count_transactions_in_range(range, namespace).await
     }
 
     async fn payload_size_in_range(
         &self,
         range: impl RangeBounds<usize> + Send,
+        namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
             message: err.to_string(),
         })?;
-        tx.payload_size_in_range(range).await
+        tx.payload_size_in_range(range, namespace).await
     }
 
     async fn vid_share<ID>(&self, id: ID) -> QueryResult<VidShare>

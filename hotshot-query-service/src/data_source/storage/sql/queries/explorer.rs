@@ -390,7 +390,7 @@ where
                     .bind(namespace)
                     .bind(position)
                     .bind((range.num_transactions.get() + offset) as i64)
-                    .bind(ns.clone().into())
+                    .bind((*ns).into())
             },
             TransactionSummaryFilter::None => {
                 query(&GET_BLOCKS_CONTAINING_TRANSACTIONS_NO_FILTER_QUERY)
@@ -576,7 +576,7 @@ where
         let genesis_overview = {
             let blocks = NodeStorage::<Types>::block_height(self).await? as u64;
             let transactions =
-                NodeStorage::<Types>::count_transactions_in_range(self, ..).await? as u64;
+                NodeStorage::<Types>::count_transactions_in_range(self, .., None).await? as u64;
             GenesisOverview {
                 rollups: 0,
                 transactions,
