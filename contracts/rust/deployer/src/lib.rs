@@ -19,7 +19,7 @@ use alloy::{
     signers::local::{coins_bip39::English, MnemonicBuilder, PrivateKeySigner},
     transports::http::reqwest::Url,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::{builder::OsStr, Parser};
 use derive_more::{derive::Deref, Display};
 use hotshot_contract_adapter::sol_types::*;
@@ -989,8 +989,7 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
                 tracing::info!("StakeTableProxy upgrade proposal sent");
                 // IDEA: add a function to wait for the proposal to be executed
             }
-
-            result.context("Upgrade proposal failed")?
+            Ok(result.context("Upgrade proposal failed")?)
         },
     }
 }
