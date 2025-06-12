@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["builder_state","decide_leaf_chain","decide_leaf_chain_with_transactions","parent_references","proposals","proposals_with_transactions","transaction"]};

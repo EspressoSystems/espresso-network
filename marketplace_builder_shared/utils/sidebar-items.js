@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["event_service_wrapper","rotating_set"],"struct":["ProposalId"],"type":["BuilderKeys"]};
