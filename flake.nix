@@ -147,13 +147,6 @@
               types_or = [ "toml" ];
               pass_filenames = false;
             };
-            cargo-lock-sqlite = {
-              enable = true;
-              description = "Ensure Cargo.lock is compatible with Cargo.toml";
-              entry = "cargo update --manifest-path sequencer-sqlite/Cargo.toml --workspace --verbose";
-              types_or = [ "toml" ];
-              pass_filenames = false;
-            };
             forge-fmt = {
               enable = true;
               description = "Enforce forge fmt";

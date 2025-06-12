@@ -436,7 +436,6 @@ pub use error::Error;
 use futures::{future::BoxFuture, stream::StreamExt};
 use hotshot::types::SystemContextHandle;
 use hotshot_types::traits::{
-    block_contents::BlockHeader,
     node_implementation::{NodeImplementation, NodeType, Versions},
     BlockPayload,
 };
@@ -531,7 +530,7 @@ pub async fn run_standalone_service<
 ) -> Result<(), Error>
 where
     Payload<Types>: availability::QueryablePayload<Types>,
-    Header<Types>: BlockHeader<Types>,
+    Header<Types>: availability::QueryableHeader<Types>,
     D: availability::AvailabilityDataSource<Types>
         + data_source::UpdateDataSource<Types>
         + node::NodeDataSource<Types>
@@ -616,8 +615,9 @@ mod test {
     use crate::{
         availability::{
             AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch, FetchStream, LeafId,
-            LeafQueryData, PayloadMetadata, PayloadQueryData, StateCertQueryData, TransactionHash,
-            TransactionQueryData, UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
+            LeafQueryData, NamespaceId, PayloadMetadata, PayloadQueryData, StateCertQueryData,
+            TransactionHash, TransactionQueryData, UpdateAvailabilityData, VidCommonMetadata,
+            VidCommonQueryData,
         },
         metrics::PrometheusMetrics,
         node::{NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
@@ -797,14 +797,20 @@ mod test {
         async fn count_transactions_in_range(
             &self,
             range: impl RangeBounds<usize> + Send,
+            namespace: Option<NamespaceId<MockTypes>>,
         ) -> QueryResult<usize> {
-            self.hotshot_qs.count_transactions_in_range(range).await
+            self.hotshot_qs
+                .count_transactions_in_range(range, namespace)
+                .await
         }
         async fn payload_size_in_range(
             &self,
             range: impl RangeBounds<usize> + Send,
+            namespace: Option<NamespaceId<MockTypes>>,
         ) -> QueryResult<usize> {
-            self.hotshot_qs.payload_size_in_range(range).await
+            self.hotshot_qs
+                .payload_size_in_range(range, namespace)
+                .await
         }
         async fn vid_share<ID>(&self, id: ID) -> QueryResult<VidShare>
         where

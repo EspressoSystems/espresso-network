@@ -10623,6 +10623,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sequencer-sqlite"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "sequencer",
+ "tokio",
+]
+
+[[package]]
 name = "sequencer-utils"
 version = "0.1.0"
 dependencies = [

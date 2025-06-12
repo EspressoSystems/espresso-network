@@ -235,7 +235,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     let wallet = EthereumWallet::from(state.config.signer.clone());
     let provider = ProviderBuilder::new()
         .wallet(wallet)
-        .on_http(state.config.provider_endpoint.clone());
+        .on_client(state.config.l1_rpc_client.clone());
 
     // only sync light client state when gas price is sane
     if let Some(max_gas_price) = state.config.max_gas_price {
@@ -256,12 +256,6 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
             return Err(ProverError::GasPriceTooHigh(cur_gwei, max_gwei));
         }
     }
-
-    tracing::info!(
-        ?light_client_address,
-        "Start syncing light client state for provider: {}",
-        state.config.provider_endpoint,
-    );
 
     let (contract_state, contract_st_state) =
         read_contract_state(&provider, light_client_address).await?;
@@ -408,7 +402,11 @@ pub async fn run_prover_once<ApiVer: StaticVersionType>(
 #[cfg(test)]
 mod test {
 
-    use alloy::{node_bindings::Anvil, providers::layers::AnvilProvider, sol_types::SolValue};
+    use alloy::{
+        node_bindings::Anvil,
+        providers::{layers::AnvilProvider, ProviderBuilder},
+        sol_types::SolValue,
+    };
     use anyhow::Result;
     use espresso_contract_deployer::{deploy_light_client_proxy, Contracts};
     use hotshot_contract_adapter::sol_types::LightClientMock;
