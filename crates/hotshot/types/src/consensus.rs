@@ -278,6 +278,63 @@ impl<T: ConsensusTime> HotShotActionViews<T> {
         }
     }
 }
+
+#[derive(Debug, Clone)]
+struct ValidatorParticipation<TYPES: NodeType> {
+    epoch: TYPES::Epoch,
+    /// Current epoch participation by key maps key -> (num leader, num times proposed)
+    current_epoch_participation: HashMap<TYPES::SignatureKey, (u64, u64)>,
+
+    /// Last epoch participation by key maps key -> (num leader, num times proposed)
+    last_epoch_participation: HashMap<TYPES::SignatureKey, (u64, u64)>,
+}
+
+impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
+    fn new() -> Self {
+        Self {
+            epoch: TYPES::Epoch::genesis(),
+            current_epoch_participation: HashMap::new(),
+            last_epoch_participation: HashMap::new(),
+        }
+    }
+
+    fn update_participation(&mut self, key: TYPES::SignatureKey, proposed: bool) {
+        let entry = self
+            .current_epoch_participation
+            .entry(key)
+            .or_insert((0, 0));
+        if proposed {
+            entry.1 += 1;
+        }
+        entry.0 += 1;
+    }
+
+    fn update_participation_epoch(&mut self, epoch: TYPES::Epoch) {
+        if epoch <= self.epoch {
+            return;
+        }
+        self.epoch = epoch;
+        self.last_epoch_participation = self.current_epoch_participation.clone();
+        self.current_epoch_participation = HashMap::new();
+    }
+
+    fn get_participation(&self, key: TYPES::SignatureKey) -> (f64, Option<f64>) {
+        let current_epoch_participation = self
+            .current_epoch_participation
+            .get(&key)
+            .unwrap_or(&(0, 0));
+        let current_epoch_participation_ratio =
+            current_epoch_participation.0 as f64 / current_epoch_participation.1 as f64;
+        let last_epoch_participation = self.last_epoch_participation.get(&key);
+        let last_epoch_participation_ratio =
+            last_epoch_participation.map(|(leader, proposed)| *leader as f64 / *proposed as f64);
+        (
+            current_epoch_participation_ratio,
+            last_epoch_participation_ratio,
+        )
+    }
+}
+
 /// A reference to the consensus algorithm
 ///
 /// This will contain the state of all rounds.
@@ -329,6 +386,9 @@ pub struct Consensus<TYPES: NodeType> {
 
     /// The high QC for the next epoch
     next_epoch_high_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
+
+    /// Track the participation of each validator in the current epoch and previous epoch
+    validator_participation: ValidatorParticipation<TYPES>,
 
     /// A reference to the metrics trait
     pub metrics: Arc<ConsensusMetricsValue>,
@@ -506,6 +566,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             highest_block: 0,
             state_cert,
             drb_difficulty,
+            validator_participation: ValidatorParticipation::new(),
         }
     }
 
@@ -635,6 +696,23 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         );
         self.cur_view = view_number;
         Ok(())
+    }
+
+    /// Update the validator participation
+    pub fn update_validator_participation(&mut self, key: TYPES::SignatureKey, proposed: bool) {
+        self.validator_participation
+            .update_participation(key, proposed);
+    }
+
+    /// Update the validator participation epoch
+    pub fn update_validator_participation_epoch(&mut self, epoch: TYPES::Epoch) {
+        self.validator_participation
+            .update_participation_epoch(epoch);
+    }
+
+    /// Get the validator participation
+    pub fn get_validator_participation(&self, key: TYPES::SignatureKey) -> (f64, Option<f64>) {
+        self.validator_participation.get_participation(key)
     }
 
     /// Get the parent Leaf Info from a given leaf and our public key.
