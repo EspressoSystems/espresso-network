@@ -406,7 +406,9 @@ impl<
     }
 
     fn timestamp_u64(&self) -> u64 {
-        self.timestamp as u64
+        OffsetDateTime::from_unix_timestamp_nanos(self.timestamp as i128)
+            .unwrap()
+            .unix_timestamp() as u64
     }
 }
 
