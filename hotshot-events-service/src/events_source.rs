@@ -144,11 +144,24 @@ impl<Types: NodeType> EventsSource<Types> for EventsStreamer<Types> {
         if let Some(filter) = filter {
             receiver
                 .filter(move |event| {
+                    // TODO: MA: debugging
+                    tracing::debug!("MAA: sending event: {:?}", event);
                     futures::future::ready(filter.should_broadcast(&event.as_ref().event))
                 })
                 .boxed()
         } else {
-            receiver.boxed()
+            receiver
+                .map(move |event| {
+                    // TODO: MA: debugging
+                    let event = event.clone();
+                    let s = bincode::serialize(&event)
+                        .map_err(|e| tracing::error!("Failed to serialize event: {:?}", e))
+                        .ok();
+                    // Log the event being sent
+                    tracing::debug!("MAA: sending event: {:?} {:?}", event, s);
+                    event
+                })
+                .boxed()
         }
     }
 
@@ -170,6 +183,14 @@ impl<Types: NodeType> EventsSource<Types> for EventsStreamer<Types> {
         } else {
             receiver
                 .filter_map(|a| {
+                    // TODO: MA: debugging
+                    let event = Event::to_legacy(a.as_ref().clone()).unwrap();
+                    let s = bincode::serialize(&event)
+                        .map_err(|e| tracing::error!("Failed to serialize event: {:?}", e))
+                        .ok();
+                    // Log the event being sent
+                    tracing::debug!("MAA: sending event: {:?} {:?}", event, s);
+
                     futures::future::ready(Event::to_legacy(a.as_ref().clone()).ok().map(Arc::new))
                 })
                 .boxed()

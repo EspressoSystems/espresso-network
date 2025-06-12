@@ -15,7 +15,11 @@ services:
 
   deploy-sequencer-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
-    command: deploy --deploy-fee --deploy-esp-token --deploy-stake-table --upgrade-stake-table-v2
+    # NOTE: the API of the deploy CLI changed w.r.t. to the mainnet tag, try the
+    # new API first and if that fails try the old one.
+    command: >-
+      bash -c "deploy --deploy-fee --deploy-esp-token --deploy-stake-table --upgrade-stake-table-v2
+      || deploy --only fee-contract,permissioned-stake-table"
     environment:
       - ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
       - ESPRESSO_SEQUENCER_L1_PROVIDER
@@ -26,6 +30,7 @@ services:
       - ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       demo-l1-network:
@@ -33,7 +38,11 @@ services:
 
   deploy-prover-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
-    command: deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2
+    # NOTE: the API of the deploy CLI changed w.r.t. to the mainnet tag, try the
+    # new API first and if that fails try the old one.
+    command: >-
+      bash -c "deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2
+      || deploy --use-mock-contract --only light-client"
     environment:
       - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL
       - ESPRESSO_SEQUENCER_L1_PROVIDER
@@ -45,6 +54,7 @@ services:
       - ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       demo-l1-network:
@@ -90,13 +100,14 @@ services:
       - L1_PROVIDER=$ESPRESSO_SEQUENCER_L1_PROVIDER
       - L1_POLLING_INTERVAL=$ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
       - ESPRESSO_PROVIDER=http://sequencer1:$ESPRESSO_SEQUENCER_API_PORT
-      - CONTRACT_ADDRESS=0xa15bb66138824a1c7167f5e85b957d04dd34e468
+      - CONTRACT_ADDRESS=$ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
       - MNEMONIC=$ESPRESSO_BUILDER_ETH_MNEMONIC
       - ACCOUNT_INDEX=$ESPRESSO_BUILDER_ETH_ACCOUNT_INDEX
       - AMOUNT=1000000000000000000
       - CONFIRMATIONS=1
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
     depends_on:
       deploy-sequencer-contracts:
         condition: service_completed_successfully
@@ -105,7 +116,7 @@ services:
 
   stake-for-demo:
     image: ghcr.io/espressosystems/espresso-sequencer/staking-cli:main
-    command: staking-cli stake-for-demo
+    command: bash -c "staking-cli stake-for-demo || echo 'ignoring staking-cli failure'"
     environment:
       - L1_PROVIDER=$ESPRESSO_SEQUENCER_L1_PROVIDER
       - MNEMONIC=$ESPRESSO_SEQUENCER_ETH_MNEMONIC
@@ -124,11 +135,20 @@ services:
       - ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_4
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
     depends_on:
       deploy-sequencer-contracts:
         condition: service_completed_successfully
       sequencer1:
         condition: service_healthy
+
+  # `docker compose up --wait` only works if exiting services have dependents.
+  stake-for-demo-waiter:
+    image: ghcr.io/espressosystems/espresso-sequencer/staking-cli:main
+    command: sleep infinity
+    depends_on:
+      stake-for-demo:
+        condition: service_completed_successfully
 
   orchestrator:
     image: ghcr.io/espressosystems/espresso-sequencer/orchestrator:${DOCKER_TAG:-main}
@@ -143,6 +163,7 @@ services:
       - ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
 
   # We use KeyDB (a Redis variant) to maintain consistency between
@@ -231,6 +252,15 @@ services:
       orchestrator:
         condition: service_healthy
 
+  # `docker compose up --wait` only works if exiting services have dependents.
+  # Creates a dependent for cdn-whitelist.
+  cdn-whitelist-waiter:
+    image: ghcr.io/espressosystems/espresso-sequencer/cdn-whitelist:${DOCKER_TAG:-main}
+    command: sleep infinity
+    depends_on:
+      cdn-whitelist:
+        condition: service_completed_successfully
+
   state-relay-server:
     image: ghcr.io/espressosystems/espresso-sequencer/state-relay-server:${DOCKER_TAG:-main}
     ports:
@@ -242,6 +272,7 @@ services:
       - ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
 
   prover-service:
@@ -256,6 +287,8 @@ services:
       - ESPRESSO_SEQUENCER_L1_PROVIDER
       - ESPRESSO_SEQUENCER_ETH_MNEMONIC
       - ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS
+      # Note: set legacy env var ESPRESSO_SEQUENCER_LIGHTCLIENT_ADDRESS for backwards compatibility
+      - ESPRESSO_SEQUENCER_LIGHTCLIENT_ADDRESS=$ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS
       - ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY
       - ESPRESSO_STATE_PROVER_MAX_GAS_PRICE_IN_GWEI
       - MNEMONIC=$ESPRESSO_SEQUENCER_ETH_MNEMONIC
@@ -263,6 +296,7 @@ services:
       - RAYON_NUM_THREADS=$PROVER_RAYON_NUM_THREADS
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
       - RAYON_NUM_THREADS
     depends_on:
@@ -316,8 +350,9 @@ services:
       - ESPRESSO_SEQUENCER_IDENTITY_LATITUDE=40.7128
       - ESPRESSO_SEQUENCER_IDENTITY_LONGITUDE=-74.0060
       - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://sequencer0:$ESPRESSO_SEQUENCER_API_PORT/
-      - RUST_LOG
+      - RUST_LOG=debug
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       orchestrator:
@@ -378,6 +413,7 @@ services:
       - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://sequencer1:$ESPRESSO_SEQUENCER_API_PORT/
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       orchestrator:
@@ -432,6 +468,7 @@ services:
       - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://sequencer2:$ESPRESSO_SEQUENCER_API_PORT/
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       orchestrator:
@@ -485,6 +522,7 @@ services:
       - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://sequencer3:$ESPRESSO_SEQUENCER_API_PORT/
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       orchestrator:
@@ -537,6 +575,7 @@ services:
       - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://sequencer4:$ESPRESSO_SEQUENCER_API_PORT/
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       orchestrator:
@@ -567,6 +606,7 @@ services:
       - ESPRESSO_SEQUENCER_URL
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       sequencer0:
@@ -590,6 +630,7 @@ services:
       - ESPRESSO_SEQUENCER_URL
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       sequencer0:
@@ -602,7 +643,7 @@ services:
     ports:
       - "$ESPRESSO_BUILDER_SERVER_PORT:$ESPRESSO_BUILDER_SERVER_PORT"
     environment:
-      - ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_URL=http://sequencer0:$ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT
+      - ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_URL=http://sequencer0:${ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT}/${HOTSHOT_EVENTS_VERSION}
       - ESPRESSO_SEQUENCER_STATE_PEERS=http://sequencer0:$ESPRESSO_SEQUENCER_API_PORT
       - ESPRESSO_BUILDER_GENESIS_FILE
       - ESPRESSO_BUILDER_ETH_MNEMONIC
@@ -615,8 +656,9 @@ services:
       - ESPRESSO_BUILDER_WEBSERVER_RESPONSE_TIMEOUT_DURATION
       - ESPRESSO_BUILDER_BUFFER_VIEW_NUM_COUNT
       - ESPRESSO_BUILDER_INIT_NODE_COUNT
-      - RUST_LOG
+      - RUST_LOG=debug
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       sequencer0:
@@ -634,6 +676,7 @@ services:
       - ESPRESSO_NASTY_CLIENT_PORT
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       sequencer0:
@@ -646,6 +689,7 @@ services:
     environment:
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE
       - ESPRESSO_NODE_VALIDATOR_PORT
       - ESPRESSO_NODE_VALIDATOR_STAKE_TABLE_SOURCE_BASE_URL=http://sequencer0:$ESPRESSO_SEQUENCER_API_PORT/v0/
       - ESPRESSO_NODE_VALIDATOR_LEAF_STREAM_SOURCE_BASE_URL=http://sequencer0:$ESPRESSO_SEQUENCER_API_PORT/v0/

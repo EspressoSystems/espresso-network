@@ -226,9 +226,14 @@ pub struct HotShotConfig<TYPES: NodeType> {
     #[serde(default = "default_stake_table_capacity")]
     pub stake_table_capacity: usize,
     /// number of iterations in the DRB calculation
+    #[serde(default = "default_drb_difficulty")]
     pub drb_difficulty: u64,
     /// number of iterations in the DRB calculation
     pub drb_upgrade_difficulty: u64,
+}
+
+fn default_drb_difficulty() -> u64 {
+    0
 }
 
 fn default_epoch_start_block() -> u64 {
