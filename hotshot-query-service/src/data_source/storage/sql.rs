@@ -46,7 +46,7 @@ use crate::{
     metrics::PrometheusMetrics,
     node::BlockId,
     status::HasMetrics,
-    QueryError, QueryResult, VidCommon,
+    Header, QueryError, QueryResult, VidCommon,
 };
 pub extern crate sqlx;
 pub use sqlx::{Database, Sqlite};
@@ -665,10 +665,11 @@ impl SqlStorage {
     }
 
     /// Get the stored VID share for a given block, if one exists.
-    pub async fn get_vid_share<Types: NodeType>(
-        &self,
-        block_id: BlockId<Types>,
-    ) -> QueryResult<VidShare> {
+    pub async fn get_vid_share<Types>(&self, block_id: BlockId<Types>) -> QueryResult<VidShare>
+    where
+        Types: NodeType,
+        Header<Types>: QueryableHeader<Types>,
+    {
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
             message: err.to_string(),
         })?;
@@ -1426,12 +1427,12 @@ mod test {
         // The SQL commands used here will fail if not run in order.
         let migrations = vec![
             Migration::unapplied(
-                "V999__create_test_table.sql",
+                "V9999__create_test_table.sql",
                 "ALTER TABLE test ADD COLUMN data INTEGER;",
             )
             .unwrap(),
             Migration::unapplied(
-                "V998__create_test_table.sql",
+                "V9998__create_test_table.sql",
                 "CREATE TABLE test (x bigint);",
             )
             .unwrap(),

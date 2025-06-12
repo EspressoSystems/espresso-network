@@ -64,6 +64,7 @@ pub trait QueryableHeader<Types: NodeType>: BlockHeader<Types> {
         + Hash
         + PartialEq
         + Eq
+        + Copy
         + From<i64>
         + Into<i64>;
 

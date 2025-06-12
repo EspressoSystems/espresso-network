@@ -58,6 +58,7 @@
 
 use std::ops::RangeBounds;
 
+use alloy::primitives::map::HashMap;
 use async_trait::async_trait;
 use futures::future::Future;
 use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
@@ -66,8 +67,8 @@ use tagged_base64::TaggedBase64;
 
 use crate::{
     availability::{
-        BlockId, BlockQueryData, LeafId, LeafQueryData, PayloadMetadata, PayloadQueryData,
-        QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
+        BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
+        PayloadQueryData, QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
         TransactionQueryData, VidCommonMetadata, VidCommonQueryData,
     },
     explorer::{
@@ -222,15 +223,21 @@ where
 }
 
 #[async_trait]
-pub trait NodeStorage<Types: NodeType> {
+pub trait NodeStorage<Types>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+{
     async fn block_height(&mut self) -> QueryResult<usize>;
     async fn count_transactions_in_range(
         &mut self,
         range: impl RangeBounds<usize> + Send,
+        namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize>;
     async fn payload_size_in_range(
         &mut self,
         range: impl RangeBounds<usize> + Send,
+        namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize>;
     async fn vid_share<ID>(&mut self, id: ID) -> QueryResult<VidShare>
     where
@@ -247,20 +254,27 @@ pub trait NodeStorage<Types: NodeType> {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct Aggregate {
+pub struct Aggregate<Types: NodeType>
+where
+    Header<Types>: QueryableHeader<Types>,
+{
     pub height: i64,
-    pub num_transactions: i64,
-    pub payload_size: i64,
+    pub num_transactions: HashMap<Option<NamespaceId<Types>>, usize>,
+    pub payload_size: HashMap<Option<NamespaceId<Types>>, usize>,
 }
 
-pub trait AggregatesStorage {
+pub trait AggregatesStorage<Types>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+{
     /// The block height for which aggregate statistics are currently available.
     fn aggregates_height(&mut self) -> impl Future<Output = anyhow::Result<usize>> + Send;
 
     /// the last aggregate
     fn load_prev_aggregate(
         &mut self,
-    ) -> impl Future<Output = anyhow::Result<Option<Aggregate>>> + Send;
+    ) -> impl Future<Output = anyhow::Result<Option<Aggregate<Types>>>> + Send;
 }
 
 pub trait UpdateAggregatesStorage<Types>
@@ -271,9 +285,9 @@ where
     /// Update aggregate statistics based on a new block.
     fn update_aggregates(
         &mut self,
-        aggregate: Aggregate,
+        aggregate: Aggregate<Types>,
         blocks: &[PayloadMetadata<Types>],
-    ) -> impl Future<Output = anyhow::Result<Aggregate>> + Send;
+    ) -> impl Future<Output = anyhow::Result<Aggregate<Types>>> + Send;
 }
 
 /// An interface for querying Data and Statistics from the HotShot Blockchain.

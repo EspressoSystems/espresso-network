@@ -21,9 +21,9 @@ use super::VersionedDataSource;
 use crate::{
     availability::{
         AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch, FetchStream, LeafId,
-        LeafQueryData, PayloadMetadata, PayloadQueryData, QueryableHeader, QueryablePayload,
-        StateCertQueryData, TransactionHash, TransactionQueryData, UpdateAvailabilityData,
-        VidCommonMetadata, VidCommonQueryData,
+        LeafQueryData, NamespaceId, PayloadMetadata, PayloadQueryData, QueryableHeader,
+        QueryablePayload, StateCertQueryData, TransactionHash, TransactionQueryData,
+        UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
     data_source::storage::pruning::PrunedHeightDataSource,
     explorer::{self, ExplorerDataSource, ExplorerHeader, ExplorerTransaction},
@@ -326,6 +326,7 @@ where
     D: NodeDataSource<Types> + Send + Sync,
     U: Send + Sync,
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
 {
     async fn block_height(&self) -> QueryResult<usize> {
         self.data_source.block_height().await
@@ -333,14 +334,20 @@ where
     async fn count_transactions_in_range(
         &self,
         range: impl RangeBounds<usize> + Send,
+        namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
-        self.data_source.count_transactions_in_range(range).await
+        self.data_source
+            .count_transactions_in_range(range, namespace)
+            .await
     }
     async fn payload_size_in_range(
         &self,
         range: impl RangeBounds<usize> + Send,
+        namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
-        self.data_source.payload_size_in_range(range).await
+        self.data_source
+            .payload_size_in_range(range, namespace)
+            .await
     }
     async fn vid_share<ID>(&self, id: ID) -> QueryResult<VidShare>
     where

@@ -159,7 +159,7 @@ else
     # By default compile all binaries
     cargo_cmd_line="cargo build $cargo_extra_args \
     && cargo build --bin espresso-dev-node --features 'embedded-db testing' $cargo_extra_args \
-    && cargo build --manifest-path ./sequencer-sqlite/Cargo.toml $cargo_extra_args"
+    && cargo build -p sequencer-sqlite $cargo_extra_args"
       ;;
     "espresso-dev-node")
       cargo_cmd_line="cargo build --bin espresso-dev-node --features 'embedded-db testing' $cargo_extra_args"
@@ -172,7 +172,7 @@ else
         --bin keygen \
         --bin pub-key \
         $cargo_extra_args \
-      && cargo build --manifest-path ./sequencer-sqlite/Cargo.toml $cargo_extra_args"
+      && cargo build -p sequencer-sqlite $cargo_extra_args"
       ;;
     "builder")
       cargo_cmd_line="cargo build --bin permissionless-builder $cargo_extra_args"

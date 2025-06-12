@@ -51,7 +51,7 @@ use crate::{
             BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadQueryData, QueryableHeader,
             QueryablePayload, TransactionHash, TransactionQueryData, VidCommonQueryData,
         },
-        StateCertQueryData,
+        NamespaceId, StateCertQueryData,
     },
     data_source::{update, VersionedDataSource},
     metrics::PrometheusMetrics,
@@ -771,6 +771,7 @@ where
     async fn count_transactions_in_range(
         &mut self,
         range: impl RangeBounds<usize> + Send,
+        namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
         if !matches!(range.start_bound(), Bound::Unbounded | Bound::Included(0))
             || !matches!(range.end_bound(), Bound::Unbounded)
@@ -780,18 +781,31 @@ where
             });
         }
 
+        if namespace.is_some() {
+            return Err(QueryError::Error {
+                message: "file system does not support per-namespace stats".into(),
+            });
+        }
+
         Ok(self.inner.num_transactions)
     }
 
     async fn payload_size_in_range(
         &mut self,
         range: impl RangeBounds<usize> + Send,
+        namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
         if !matches!(range.start_bound(), Bound::Unbounded | Bound::Included(0))
             || !matches!(range.end_bound(), Bound::Unbounded)
         {
             return Err(QueryError::Error {
                 message: "partial aggregates are not supported with file system backend".into(),
+            });
+        }
+
+        if namespace.is_some() {
+            return Err(QueryError::Error {
+                message: "file system does not support per-namespace stats".into(),
             });
         }
 
@@ -887,12 +901,16 @@ where
     }
 }
 
-impl<T: Revert + Send> AggregatesStorage for Transaction<T> {
+impl<Types, T: Revert + Send> AggregatesStorage<Types> for Transaction<T>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+{
     async fn aggregates_height(&mut self) -> anyhow::Result<usize> {
         Ok(0)
     }
 
-    async fn load_prev_aggregate(&mut self) -> anyhow::Result<Option<Aggregate>> {
+    async fn load_prev_aggregate(&mut self) -> anyhow::Result<Option<Aggregate<Types>>> {
         Ok(None)
     }
 }
@@ -904,9 +922,9 @@ where
 {
     async fn update_aggregates(
         &mut self,
-        _prev: Aggregate,
+        _prev: Aggregate<Types>,
         _blocks: &[PayloadMetadata<Types>],
-    ) -> anyhow::Result<Aggregate> {
+    ) -> anyhow::Result<Aggregate<Types>> {
         Ok(Aggregate::default())
     }
 }
