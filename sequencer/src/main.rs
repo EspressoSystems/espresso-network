@@ -16,6 +16,8 @@ invocations because it's not a default workspace member. Avoid using the
 `--workspace` cargo flag unless enabling the `embedded-db` feature (via
 inclusion of the sequencer-sqlite crate in the build) is intended.
 
+Similarly, avoid enabling the `embedded-db` feature by using passing the cargo
+flag `--all-features` when building the sequencer binary target.
 "#
 );
 
