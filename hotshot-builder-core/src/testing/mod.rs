@@ -176,7 +176,7 @@ pub async fn calc_proposal_msg<V: Versions>(
         block_number: round as u64,
         payload_commitment: block_vid_commitment,
         builder_commitment: block_builder_commitment,
-        timestamp: round as u64,
+        timestamp: round as u128,
         metadata,
         random: 1, // arbitrary
     };

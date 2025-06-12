@@ -74,7 +74,11 @@ impl Default for Timestamp {
 }
 
 impl Timestamp {
-    pub fn unix_timestamp(&self) -> u64 {
+    pub fn unix_timestamp(&self) -> u128 {
+        self.0.unix_timestamp_nanos() as u128
+    }
+
+    pub fn unix_timestamp_u64(&self) -> u64 {
         self.0.unix_timestamp() as u64
     }
 
@@ -105,7 +109,7 @@ impl FromStringOrInteger for Timestamp {
     }
 
     fn to_binary(&self) -> anyhow::Result<Self::Binary> {
-        Ok(self.unix_timestamp())
+        Ok(self.unix_timestamp_u64())
     }
 
     fn to_string(&self) -> anyhow::Result<String> {

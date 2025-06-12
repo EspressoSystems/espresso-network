@@ -893,13 +893,13 @@ impl ResourceManager<Header> {
         // Sanity check the window: prev and next should be correct bookends.
         if let Some(prev) = &window.prev {
             ensure!(
-                prev.timestamp() < start,
+                prev.timestamp_u64() < start,
                 format!("prev header {} is later than {start}", prev.height())
             );
         }
         if let Some(next) = &window.next {
             ensure!(
-                next.timestamp() >= end,
+                next.timestamp_u64() >= end,
                 format!("next header {} is earlier than {end}", next.height())
             );
         }
@@ -907,7 +907,7 @@ impl ResourceManager<Header> {
         let mut prev = window.prev;
         for header in window.window {
             ensure!(
-                header.timestamp() >= start && header.timestamp() < end,
+                header.timestamp_u64() >= start && header.timestamp_u64() < end,
                 format!(
                     "header {} with timestamp {} is not in window [{start}, {end})",
                     header.height(),

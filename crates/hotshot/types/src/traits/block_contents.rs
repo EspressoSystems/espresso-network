@@ -191,7 +191,10 @@ pub trait BlockHeader<TYPES: NodeType>:
     fn block_number(&self) -> u64;
 
     /// Get the timestamp.
-    fn timestamp(&self) -> u64;
+    fn timestamp(&self) -> u128;
+
+    /// Get the timestamp.
+    fn timestamp_u64(&self) -> u64;
 
     /// Get the payload commitment.
     fn payload_commitment(&self) -> VidCommitment;

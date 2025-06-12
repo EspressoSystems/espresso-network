@@ -324,7 +324,7 @@ async fn progress_round_with_transactions(
             block_number: round,
             payload_commitment,
             builder_commitment,
-            timestamp: round,
+            timestamp: round as u128,
             metadata,
             random: 0,
         };

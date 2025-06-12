@@ -110,14 +110,14 @@ pub enum ProposalValidationError {
     SomeFeeAmountOutOfRange,
     #[error("Invalid timestamp: proposal={proposal_timestamp}, parent={parent_timestamp}")]
     DecrementingTimestamp {
-        proposal_timestamp: u64,
-        parent_timestamp: u64,
+        proposal_timestamp: u128,
+        parent_timestamp: u128,
     },
     #[error("Timestamp drift too high: proposed:={proposal}, system={system}, diff={diff}")]
     InvalidTimestampDrift {
-        proposal: u64,
-        system: u64,
-        diff: u64,
+        proposal: u128,
+        system: u128,
+        diff: u128,
     },
     #[error("l1_finalized has `None` value")]
     L1FinalizedNotFound,
@@ -376,7 +376,7 @@ impl<'a> Proposal<'a> {
     /// The timestamp must be non-decreasing relative to parent.
     fn validate_timestamp_non_dec(
         &self,
-        parent_timestamp: u64,
+        parent_timestamp: u128,
     ) -> Result<(), ProposalValidationError> {
         if self.header.timestamp() < parent_timestamp {
             return Err(ProposalValidationError::DecrementingTimestamp {
@@ -392,7 +392,7 @@ impl<'a> Proposal<'a> {
     ///
     /// The tolerance is currently `12` seconds. This value may be moved to
     /// configuration in the future.
-    fn validate_timestamp_drift(&self, system_time: u64) -> Result<(), ProposalValidationError> {
+    fn validate_timestamp_drift(&self, system_time: u128) -> Result<(), ProposalValidationError> {
         // TODO 12 seconds of tolerance should be enough for reasonably
         // configured nodes, but we should make this configurable.
         let diff = self.header.timestamp().abs_diff(system_time);
@@ -605,7 +605,7 @@ impl<'a> ValidatedTransition<'a> {
             .validate_timestamp_non_dec(self.parent.timestamp())?;
 
         // Validate timestamp hasn't drifted too much from system time.
-        let system_time: u64 = OffsetDateTime::now_utc().unix_timestamp() as u64;
+        let system_time = OffsetDateTime::now_utc().unix_timestamp_nanos() as u128;
         self.proposal.validate_timestamp_drift(system_time)?;
 
         Ok(())
@@ -1180,7 +1180,7 @@ mod test {
                 }),
                 Header::V4(parent) => Header::V4(v0_4::Header {
                     height: parent.height + 1,
-                    timestamp: OffsetDateTime::now_utc().unix_timestamp() as u128,
+                    timestamp: OffsetDateTime::now_utc().unix_timestamp_nanos() as u128,
                     ..parent.clone()
                 }),
             }
@@ -1501,14 +1501,14 @@ mod test {
         // Error case
         let proposal = Proposal::new(&parent, block_size);
         let proposal_timestamp = proposal.header.timestamp();
-        let err = proposal.validate_timestamp_non_dec(u64::MAX).unwrap_err();
+        let err = proposal.validate_timestamp_non_dec(u128::MAX).unwrap_err();
 
         // Validation fails because the proposal is using same default.
         tracing::info!(%err, "task failed successfully");
         assert_eq!(
             ProposalValidationError::DecrementingTimestamp {
                 proposal_timestamp,
-                parent_timestamp: u64::MAX,
+                parent_timestamp: u128::MAX,
             },
             err
         );
@@ -1530,7 +1530,7 @@ mod test {
         let proposal = Proposal::new(&header, block_size);
         let proposal_timestamp = header.timestamp();
 
-        let mock_time = OffsetDateTime::now_utc().unix_timestamp() as u64;
+        let mock_time = OffsetDateTime::now_utc().unix_timestamp_nanos() as u128;
         // TODO
         let err = ValidatedTransition::mock(instance.clone(), &parent, proposal)
             .validate_timestamp()
@@ -1546,9 +1546,9 @@ mod test {
             err
         );
 
-        let mock_time: u64 = OffsetDateTime::now_utc().unix_timestamp() as u64;
+        let mock_time: u128 = OffsetDateTime::now_utc().unix_timestamp_nanos() as u128;
         let mut header = parent.clone();
-        header.set_timestamp((mock_time - 13) as u128);
+        header.set_timestamp(mock_time - 13);
         let proposal = Proposal::new(&header, block_size);
 
         let err = proposal.validate_timestamp_drift(mock_time).unwrap_err();
@@ -1564,15 +1564,15 @@ mod test {
 
         // Success cases.
         let mut header = parent.clone();
-        header.set_timestamp(mock_time as u128);
+        header.set_timestamp(mock_time);
         let proposal = Proposal::new(&header, block_size);
         proposal.validate_timestamp_drift(mock_time).unwrap();
 
-        header.set_timestamp((mock_time - 11) as u128);
+        header.set_timestamp(mock_time - 11);
         let proposal = Proposal::new(&header, block_size);
         proposal.validate_timestamp_drift(mock_time).unwrap();
 
-        header.set_timestamp((mock_time - 12) as u128);
+        header.set_timestamp(mock_time - 12);
         let proposal = Proposal::new(&header, block_size);
         proposal.validate_timestamp_drift(mock_time).unwrap();
     }

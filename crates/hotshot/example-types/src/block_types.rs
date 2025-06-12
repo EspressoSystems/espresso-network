@@ -271,7 +271,7 @@ pub struct TestBlockHeader {
     /// block metadata
     pub metadata: TestMetadata,
     /// Timestamp when this header was created.
-    pub timestamp: u64,
+    pub timestamp: u128,
     /// random
     pub random: u64,
 }
@@ -285,7 +285,7 @@ impl TestBlockHeader {
     ) -> Self {
         let parent = parent_leaf.block_header();
 
-        let mut timestamp = OffsetDateTime::now_utc().unix_timestamp() as u64;
+        let mut timestamp = OffsetDateTime::now_utc().unix_timestamp_nanos() as u128;
         if timestamp < parent.timestamp {
             // Prevent decreasing timestamps.
             timestamp = parent.timestamp;
@@ -401,8 +401,12 @@ impl<
         )
     }
 
-    fn timestamp(&self) -> u64 {
+    fn timestamp(&self) -> u128 {
         self.timestamp
+    }
+
+    fn timestamp_u64(&self) -> u64 {
+        self.timestamp as u64
     }
 }
 
