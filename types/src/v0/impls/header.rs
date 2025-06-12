@@ -650,15 +650,18 @@ impl Header {
     }
 
     pub fn set_timestamp(&mut self, timestamp: u128) {
+        let timestamp_u64 = OffsetDateTime::from_unix_timestamp_nanos(timestamp as i128)
+            .unwrap()
+            .unix_timestamp() as u64;
         match self {
             Self::V1(fields) => {
-                fields.timestamp = timestamp as u64;
+                fields.timestamp = timestamp_u64;
             },
             Self::V2(fields) => {
-                fields.timestamp = timestamp as u64;
+                fields.timestamp = timestamp_u64;
             },
             Self::V3(fields) => {
-                fields.timestamp = timestamp as u64;
+                fields.timestamp = timestamp_u64;
             },
             Self::V4(fields) => {
                 fields.timestamp = timestamp;
