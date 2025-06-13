@@ -53,6 +53,7 @@ use crate::{
 type V1Serializer = vbs::Serializer<StaticVersion<0, 1>>;
 type V2Serializer = vbs::Serializer<StaticVersion<0, 2>>;
 type V3Serializer = vbs::Serializer<StaticVersion<0, 3>>;
+type V4Serializer = vbs::Serializer<StaticVersion<0, 4>>;
 
 const REFERENCE_NAMESPACE_ID: u32 = 12648430;
 
@@ -224,6 +225,7 @@ async fn reference_header(version: Version) -> Header {
 const REFERENCE_V1_HEADER_COMMITMENT: &str = "BLOCK~dh1KpdvvxSvnnPpOi2yI3DOg8h6ltr2Kv13iRzbQvtN2";
 const REFERENCE_V2_HEADER_COMMITMENT: &str = "BLOCK~V0GJjL19nCrlm9n1zZ6gaOKEekSMCT6uR5P-h7Gi6UJR";
 const REFERENCE_V3_HEADER_COMMITMENT: &str = "BLOCK~jcrvSlMuQnR2bK6QtraQ4RhlP_F3-v_vae5Zml0rtPbl";
+const REFERENCE_V4_HEADER_COMMITMENT: &str = "BLOCK~Q5WUy8hg9F1ehoM4G_SDKkwBKFsmHcbTUd-BlZeECPne";
 
 fn reference_transaction<R>(ns_id: NamespaceId, rng: &mut R) -> Transaction
 where
@@ -299,6 +301,7 @@ change in the serialization of this data structure.
         "v1" => V1Serializer::serialize(&reference).unwrap(),
         "v2" => V2Serializer::serialize(&reference).unwrap(),
         "v3" => V3Serializer::serialize(&reference).unwrap(),
+        "v4" => V4Serializer::serialize(&reference).unwrap(),
         _ => panic!("invalid version"),
     };
     if actual != expected {
@@ -328,6 +331,7 @@ change in the serialization of this data structure.
         "v1" => V1Serializer::deserialize(&expected).unwrap(),
         "v2" => V2Serializer::deserialize(&expected).unwrap(),
         "v3" => V3Serializer::deserialize(&expected).unwrap(),
+        "v4" => V4Serializer::deserialize(&expected).unwrap(),
         _ => panic!("invalid version"),
     };
 
@@ -465,6 +469,16 @@ async fn test_reference_header_v3() {
         "header",
         reference_header(StaticVersion::<0, 3>::version()).await,
         REFERENCE_V3_HEADER_COMMITMENT,
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reference_header_v4() {
+    reference_test(
+        "v4",
+        "header",
+        reference_header(StaticVersion::<0, 4>::version()).await,
+        REFERENCE_V4_HEADER_COMMITMENT,
     );
 }
 
