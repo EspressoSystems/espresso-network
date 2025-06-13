@@ -9,7 +9,7 @@ use std::{
     collections::HashMap,
     fmt::Debug,
     fs,
-    net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     num::NonZeroUsize,
     sync::Arc,
     time::Instant,
@@ -702,32 +702,9 @@ where
         let public_key = &validator_config.public_key;
         let private_key = &validator_config.private_key;
 
-        // In an example, we can calculate the libp2p bind address as a function
-        // of the advertise address.
-        let bind_address = if let Some(libp2p_advertise_address) = libp2p_advertise_address {
-            let libp2p_advertise_address: SocketAddrV4 = libp2p_advertise_address
-                .parse()
-                .expect("failed to parse advertise address");
-
-            // If we have supplied one, use it
-            SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-                libp2p_advertise_address.port(),
-            )
-            .to_string()
-        } else {
-            // If not, index a base port with our node index
-            SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-                8000 + (u16::try_from(config.node_index)
-                    .expect("failed to create advertise address")),
-            )
-            .to_string()
-        };
-
         // Derive the bind address
-        let bind_address =
-            derive_libp2p_multiaddr(&bind_address).expect("failed to derive bind address");
+        let address = derive_libp2p_multiaddr(&libp2p_advertise_address.unwrap())
+            .expect("failed to derive Libp2p address");
 
         // Create the Libp2p network
         let libp2p_network = Libp2pNetwork::from_config(
@@ -736,7 +713,8 @@ where
             Arc::clone(membership),
             GossipConfig::default(),
             RequestResponseConfig::default(),
-            bind_address,
+            address.clone(),
+            address,
             public_key,
             private_key,
             Libp2pMetricsValue::default(),

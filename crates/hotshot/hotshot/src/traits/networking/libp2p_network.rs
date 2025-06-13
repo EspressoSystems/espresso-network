@@ -254,7 +254,7 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Libp2pNetwork<T> {
                 let config = NetworkNodeConfigBuilder::default()
                     .keypair(libp2p_keypair)
                     .replication_factor(replication_factor)
-                    .bind_address(Some(addr))
+                    .bind_address(Some(addr.clone()))
                     .to_connect_addrs(HashSet::default())
                     .republication_interval(None)
                     .build()
@@ -280,6 +280,7 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Libp2pNetwork<T> {
                             config,
                             pubkey.clone(),
                             lookup_record_value,
+                            addr,
                             bootstrap_addrs_ref,
                             usize::try_from(node_id).unwrap(),
                             #[cfg(feature = "hotshot-testing")]
@@ -399,6 +400,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
         gossip_config: GossipConfig,
         request_response_config: RequestResponseConfig,
         bind_address: Multiaddr,
+        advertise_address: Multiaddr,
         pub_key: &T::SignatureKey,
         priv_key: &<T::SignatureKey as SignatureKey>::PrivateKey,
         metrics: Libp2pMetricsValue,
@@ -474,6 +476,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
             node_config,
             pub_key.clone(),
             lookup_record_value,
+            advertise_address,
             Arc::new(RwLock::new(libp2p_config.bootstrap_nodes)),
             usize::try_from(config.node_index)?,
             #[cfg(feature = "hotshot-testing")]
@@ -517,6 +520,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
         config: NetworkNodeConfig<T>,
         pk: T::SignatureKey,
         lookup_record_value: RecordValue<T::SignatureKey>,
+        advertise_address: Multiaddr,
         bootstrap_addrs: BootstrapAddrs,
         id: usize,
         #[cfg(feature = "hotshot-testing")] reliability_config: Option<Box<dyn NetworkReliability>>,
@@ -575,7 +579,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
 
         result.handle_event_generator(sender, rx);
         result.spawn_node_lookup(node_lookup_recv);
-        result.spawn_connect(id, lookup_record_value);
+        result.spawn_connect(id, lookup_record_value, advertise_address);
 
         Ok(result)
     }
@@ -612,20 +616,31 @@ impl<T: NodeType> Libp2pNetwork<T> {
     }
 
     /// Initiates connection to the outside world
-    fn spawn_connect(&mut self, id: usize, lookup_record_value: RecordValue<T::SignatureKey>) {
+    fn spawn_connect(
+        &mut self,
+        id: usize,
+        lookup_record_value: RecordValue<T::SignatureKey>,
+        advertise_address: Multiaddr,
+    ) {
         let pk = self.inner.pk.clone();
         let bootstrap_ref = Arc::clone(&self.inner.bootstrap_addrs);
         let handle = Arc::clone(&self.inner.handle);
         let is_bootstrapped = Arc::clone(&self.inner.is_bootstrapped);
         let inner = Arc::clone(&self.inner);
+        let pid = self.inner.handle.peer_id();
 
         spawn({
             let is_ready = Arc::clone(&self.inner.is_ready);
             async move {
                 let bs_addrs = bootstrap_ref.read().await.clone();
 
-                // Add known peers to the network
+                // Add our configured peers to the routing table
                 handle.add_known_peers(bs_addrs).unwrap();
+
+                // Add our advertise address to the routing table
+                handle
+                    .add_known_peers(vec![(pid, advertise_address)])
+                    .unwrap();
 
                 // Begin the bootstrap process
                 handle.begin_bootstrap()?;

@@ -349,7 +349,7 @@ where
                 validator_config.clone(),
                 // Register in our Libp2p advertise address and public key so other nodes
                 // can contact us on startup
-                Some(libp2p_advertise_address),
+                Some(libp2p_advertise_address.clone()),
                 Some(libp2p_public_key),
             )
             .await?
@@ -560,6 +560,7 @@ where
             gossip_config,
             request_response_config,
             libp2p_bind_address,
+            libp2p_advertise_address,
             &validator_config.public_key,
             // We need the private key so we can derive our Libp2p keypair
             // (using https://docs.rs/blake3/latest/blake3/fn.derive_key.html)
