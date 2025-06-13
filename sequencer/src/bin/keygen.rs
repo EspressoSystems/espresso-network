@@ -28,31 +28,28 @@ enum Scheme {
 }
 
 impl Scheme {
-    fn gen(self, seed: [u8; 32], index: u64, env_file: &mut impl Write) -> anyhow::Result<()> {
+    fn gen(self, seed: [u8; 32], index: u64, output: &mut impl Write) -> anyhow::Result<()> {
         match self {
             Self::All => {
-                Self::Bls.gen(seed, index, env_file)?;
-                Self::Schnorr.gen(seed, index, env_file)?;
+                Self::Bls.gen(seed, index, output)?;
+                Self::Schnorr.gen(seed, index, output)?;
             },
             Self::Bls => {
                 let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed(seed, index);
                 let priv_key = priv_key.to_tagged_base64()?;
-                writeln!(env_file, "ESPRESSO_SEQUENCER_PUBLIC_STAKING_KEY={pub_key}")?;
-                writeln!(
-                    env_file,
-                    "ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY={priv_key}"
-                )?;
+                writeln!(output, "ESPRESSO_SEQUENCER_PUBLIC_STAKING_KEY={pub_key}")?;
+                writeln!(output, "ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY={priv_key}")?;
                 tracing::info!(%pub_key, "generated staking key")
             },
             Self::Schnorr => {
                 let key_pair = StateKeyPair::generate_from_seed_indexed(seed, index);
                 let priv_key = key_pair.sign_key_ref().to_tagged_base64()?;
                 writeln!(
-                    env_file,
+                    output,
                     "ESPRESSO_SEQUENCER_PUBLIC_STATE_KEY={}",
                     key_pair.ver_key()
                 )?;
-                writeln!(env_file, "ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY={priv_key}")?;
+                writeln!(output, "ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY={priv_key}")?;
                 tracing::info!(pub_key = %key_pair.ver_key(), "generated state key");
             },
         }
@@ -96,8 +93,9 @@ struct Options {
     /// be written to files immediately under DIR, with names like 0.env, 1.env, etc. for 0 through
     /// N - 1. The random seed used to generate the keys will also be written to a file in DIR
     /// called .seed.
+    /// If not provided, keys will be printed to stdout.
     #[clap(short, long, name = "OUT")]
-    out: PathBuf,
+    out: Option<PathBuf>,
 
     #[clap(flatten)]
     logging: logging::Config,
@@ -117,7 +115,6 @@ fn gen_default_seed() -> [u8; 32] {
 
     seed
 }
-
 fn main() -> anyhow::Result<()> {
     let opts = Options::parse();
     opts.logging.init();
@@ -128,29 +125,41 @@ fn main() -> anyhow::Result<()> {
         opts.scheme
     );
 
-    // Create output dir if necessary.
-    fs::create_dir_all(&opts.out)?;
-
     let seed = opts.seed.unwrap_or_else(|| {
         tracing::debug!("No seed provided, generating a random seed");
         gen_default_seed()
     });
-    fs::write(opts.out.join(".seed"), hex::encode(seed))?;
+
+    if let Some(ref out_dir) = opts.out {
+        fs::create_dir_all(out_dir)?;
+        fs::write(out_dir.join(".seed"), hex::encode(seed))?;
+    }
 
     for index in 0..opts.num {
         let span = info_span!("gen", index);
         let _enter = span.enter();
         tracing::info!("generating new key set");
 
-        let path = opts.out.join(format!("{index}.env"));
-        let mut file = File::options()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)?;
-        opts.scheme.gen(seed, index as u64, &mut file)?;
+        let mut output = if let Some(ref out_dir) = opts.out {
+            let path = out_dir.join(format!("{index}.env"));
+            let file = File::options()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&path)?;
+            Box::new(file) as Box<dyn Write>
+        } else {
+            Box::new(std::io::stdout())
+        };
 
-        tracing::info!("private keys written to {}", path.display());
+        opts.scheme.gen(seed, index as u64, &mut output)?;
+
+        if let Some(ref out_dir) = opts.out {
+            tracing::info!(
+                "private keys written to {}",
+                out_dir.join(format!("{index}.env")).display()
+            );
+        }
     }
 
     Ok(())
