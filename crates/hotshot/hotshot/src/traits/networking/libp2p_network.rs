@@ -895,6 +895,8 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         use rand::Rng;
         let random_num = rand::thread_rng().gen::<u64>();
 
+        // Call lookup_pid
+
         // short circuit if we're dming ourselves
         if recipient == self.inner.pk {
             // panic if we already shut down?
@@ -922,6 +924,20 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
                 )));
             },
         };
+
+        if let Err(e) = self.inner.handle.lookup_pid(pid).await {
+            println!("{}: Failed to lookup pid {:?}: {:?}", random_num, pid, e);
+            return Err(NetworkError::LookupError(format!(
+                "failed to lookup pid: {e}"
+            )));
+        }
+
+        if let Err(e) = self.inner.handle.print_routing_table().await {
+            println!("{}: Failed to print routing table: {:?}", random_num, e);
+            return Err(NetworkError::LookupError(format!(
+                "failed to print routing table: {e}"
+            )));
+        }
 
         println!("{}: Looked up {:?}", random_num, pid);
 
