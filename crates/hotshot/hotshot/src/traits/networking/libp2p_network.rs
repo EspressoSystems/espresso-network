@@ -918,6 +918,14 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
             },
         };
 
+        // Spawn a lookup for the address
+        if let Err(e) = self.inner.handle.lookup_pid(pid).await {
+            self.inner.metrics.num_failed_messages.add(1);
+            return Err(NetworkError::LookupError(format!(
+                "failed to look up PID for direct message: {e}"
+            )));
+        }
+
         #[cfg(feature = "hotshot-testing")]
         {
             let metrics = self.inner.metrics.clone();
