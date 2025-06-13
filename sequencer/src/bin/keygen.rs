@@ -91,8 +91,8 @@ struct Options {
     ///
     /// DIR must be a directory. If it does not exist, one will be created. Private key setups will
     /// be written to files immediately under DIR, with names like 0.env, 1.env, etc. for 0 through
-    /// N - 1. The random seed used to generate the keys will also be written to a file in DIR
-    /// called .seed.
+    /// N - 1. The random seed used to generate the keys will also be included
+    /// in the .env file as comment at the top
     /// If not provided, keys will be printed to stdout.
     #[clap(short, long, name = "OUT")]
     out: Option<PathBuf>,
