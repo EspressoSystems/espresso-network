@@ -25,6 +25,7 @@ use alloy::sol;
 pub use crate::bindings::{
     erc1967proxy::ERC1967Proxy,
     esptoken::EspToken,
+    esptokenv2::EspTokenV2,
     feecontract::FeeContract::{self, Deposit},
     lightclient::{
         IPlonkVerifier::{PlonkProof as PlonkProofSol, VerifyingKey as VerifyingKeySol},
