@@ -801,7 +801,7 @@ pub mod node_tests {
     };
 
     fn block_header_timestamp(header: &Header<MockTypes>) -> u64 {
-        <TestBlockHeader as BlockHeader<MockTypes>>::timestamp_u64(header)
+        <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(header)
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -995,7 +995,7 @@ pub mod node_tests {
             let header = TestBlockHeader {
                 block_number: i,
                 payload_commitment,
-                timestamp: i as u128,
+                timestamp: i,
                 builder_commitment:
                     <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(
                         &payload, &metadata,
@@ -1251,38 +1251,36 @@ pub mod node_tests {
         tracing::info!("blocks for testing: {test_blocks:#?}");
 
         // Define invariants that every response should satisfy.
-        let check_invariants = |res: &TimeWindowQueryData<Header<MockTypes>>,
-                                start,
-                                end,
-                                check_prev| {
-            let mut prev = res.prev.as_ref();
-            if let Some(prev) = prev {
-                if check_prev {
-                    assert!(block_header_timestamp(prev) < start);
-                }
-            } else {
-                // `prev` can only be `None` if the first block in the window is the genesis
-                // block.
-                assert_eq!(res.from().unwrap(), 0);
-            };
-            for header in &res.window {
-                assert!(start <= block_header_timestamp(header));
-                assert!(block_header_timestamp(header) < end);
+        let check_invariants =
+            |res: &TimeWindowQueryData<Header<MockTypes>>, start, end, check_prev| {
+                let mut prev = res.prev.as_ref();
                 if let Some(prev) = prev {
-                    assert!(
-                        <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(prev)
-                            <= <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(header)
-                    );
+                    if check_prev {
+                        assert!(block_header_timestamp(prev) < start);
+                    }
+                } else {
+                    // `prev` can only be `None` if the first block in the window is the genesis
+                    // block.
+                    assert_eq!(res.from().unwrap(), 0);
+                };
+                for header in &res.window {
+                    assert!(start <= block_header_timestamp(header));
+                    assert!(block_header_timestamp(header) < end);
+                    if let Some(prev) = prev {
+                        assert!(
+                            <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(prev)
+                                <= <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(header)
+                        );
+                    }
+                    prev = Some(header);
                 }
-                prev = Some(header);
-            }
-            if let Some(next) = &res.next {
-                assert!(<TestBlockHeader as BlockHeader<MockTypes>>::timestamp_u64(next) >= end);
-                // If there is a `next`, there must be at least one previous block (either `prev`
-                // itself or the last block if the window is nonempty), so we can `unwrap` here.
-                assert!(block_header_timestamp(next) >= block_header_timestamp(prev.unwrap()));
-            }
-        };
+                if let Some(next) = &res.next {
+                    assert!(<TestBlockHeader as BlockHeader<MockTypes>>::timestamp(next) >= end);
+                    // If there is a `next`, there must be at least one previous block (either `prev`
+                    // itself or the last block if the window is nonempty), so we can `unwrap` here.
+                    assert!(block_header_timestamp(next) >= block_header_timestamp(prev.unwrap()));
+                }
+            };
 
         let get_window = |start, end| {
             let ds = ds.clone();
@@ -1298,7 +1296,7 @@ pub mod node_tests {
         };
 
         // Case 0: happy path. All blocks are available, including prev and next.
-        let start = <TestBlockHeader as BlockHeader<MockTypes>>::timestamp_u64(&test_blocks[1][0]);
+        let start = <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(&test_blocks[1][0]);
         let end = start + 1;
         let res = get_window(start, end).await;
         assert_eq!(res.prev.unwrap(), *test_blocks[0].last().unwrap());
@@ -1307,15 +1305,14 @@ pub mod node_tests {
 
         // Case 1: no `prev`, start of window is before genesis.
         let start = 0;
-        let end =
-            <TestBlockHeader as BlockHeader<MockTypes>>::timestamp_u64(&test_blocks[0][0]) + 1;
+        let end = <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(&test_blocks[0][0]) + 1;
         let res = get_window(start, end).await;
         assert_eq!(res.prev, None);
         assert_eq!(res.window, test_blocks[0]);
         assert_eq!(res.next.unwrap(), test_blocks[1][0]);
 
         // Case 2: no `next`, end of window is after the most recently sequenced block.
-        let start = <TestBlockHeader as BlockHeader<MockTypes>>::timestamp_u64(&test_blocks[2][0]);
+        let start = <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(&test_blocks[2][0]);
         let end = i64::MAX as u64;
         let res = get_window(start, end).await;
         assert_eq!(res.prev.unwrap(), *test_blocks[1].last().unwrap());
@@ -1357,7 +1354,7 @@ pub mod node_tests {
         assert_eq!(more2.window[..more.window.len()], more.window);
 
         // Case 3: the window is empty.
-        let start = <TestBlockHeader as BlockHeader<MockTypes>>::timestamp_u64(&test_blocks[1][0]);
+        let start = <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(&test_blocks[1][0]);
         let end = start;
         let res = get_window(start, end).await;
         assert_eq!(res.prev.unwrap(), *test_blocks[0].last().unwrap());

@@ -258,7 +258,7 @@ where
                     leaf.height(),
                 );
                 index_by_time
-                    .entry(leaf.header().timestamp_u64())
+                    .entry(leaf.header().timestamp())
                     .or_default()
                     .push(leaf.height());
                 (leaf.hash(), leaf.height())
@@ -677,7 +677,7 @@ where
         );
         self.inner
             .index_by_time
-            .entry(leaf.header().timestamp_u64())
+            .entry(leaf.header().timestamp())
             .or_default()
             .push(leaf.height());
         Ok(())
@@ -861,7 +861,7 @@ where
         // the requested time window.
         for block in self.inner.get_block_range(first_block..)? {
             let header = block?.header().clone();
-            if header.timestamp_u64() >= end {
+            if header.timestamp() >= end {
                 res.next = Some(header);
                 break;
             }

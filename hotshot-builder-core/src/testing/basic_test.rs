@@ -357,7 +357,7 @@ mod tests {
                         block_number: round as u64,
                         payload_commitment: block_payload_commitment,
                         builder_commitment,
-                        timestamp: round as u128,
+                        timestamp: round as u64,
                         metadata,
                         random: 1, // arbitrary
                     };

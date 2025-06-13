@@ -269,7 +269,7 @@ impl Header {
     pub(crate) fn create(
         chain_config: ChainConfig,
         height: u64,
-        timestamp: u128,
+        timestamp: u64,
         l1_head: u64,
         l1_finalized: Option<L1BlockInfo>,
         payload_commitment: VidCommitment,
@@ -285,17 +285,13 @@ impl Header {
         // Ensure FeeInfo contains at least 1 element
         assert!(!fee_info.is_empty(), "Invalid fee_info length: 0");
 
-        let timestamp_u64 = OffsetDateTime::from_unix_timestamp_nanos(timestamp as i128)
-            .unwrap()
-            .unix_timestamp() as u64;
-
         match (version.major, version.minor) {
             (0, 1) => Self::V1(v0_1::Header {
                 chain_config: v0_1::ResolvableChainConfig::from(v0_1::ChainConfig::from(
                     chain_config,
                 )),
                 height,
-                timestamp: timestamp_u64,
+                timestamp,
                 l1_head,
                 l1_finalized,
                 payload_commitment,
@@ -311,7 +307,7 @@ impl Header {
                     chain_config,
                 )),
                 height,
-                timestamp: timestamp_u64,
+                timestamp,
                 l1_head,
                 l1_finalized,
                 payload_commitment,
@@ -325,7 +321,7 @@ impl Header {
             (0, 3) => Self::V3(v0_3::Header {
                 chain_config: chain_config.into(),
                 height,
-                timestamp: timestamp_u64,
+                timestamp,
                 l1_head,
                 l1_finalized,
                 payload_commitment,
@@ -340,7 +336,7 @@ impl Header {
             (0, 4) => Self::V4(v0_4::Header {
                 chain_config: chain_config.into(),
                 height,
-                timestamp,
+                timestamp: timestamp.into(),
                 l1_head,
                 l1_finalized,
                 payload_commitment,
@@ -393,7 +389,7 @@ impl Header {
         mut l1: L1Snapshot,
         l1_deposits: &[FeeInfo],
         builder_fee: Vec<BuilderFee<SeqTypes>>,
-        mut timestamp: u128,
+        mut timestamp: u64,
         mut state: ValidatedState,
         chain_config: ChainConfig,
         version: Version,
@@ -404,10 +400,6 @@ impl Header {
             "Invalid major version {}",
             version.major
         );
-
-        let mut timestamp_u64 = OffsetDateTime::from_unix_timestamp_nanos(timestamp as i128)
-            .unwrap()
-            .unix_timestamp() as u64;
 
         // Increment height.
         let parent_header = parent_leaf.block_header();
@@ -447,13 +439,9 @@ impl Header {
         // only happen if our clock is badly out of sync with L1.
         if let Some(l1_block) = &l1.finalized {
             let l1_timestamp = l1_block.timestamp.to::<u64>();
-            if timestamp_u64 < l1_timestamp {
+            if timestamp < l1_timestamp {
                 tracing::warn!("Espresso timestamp {timestamp} behind L1 timestamp {l1_timestamp}, local clock may be out of sync");
-
-                timestamp_u64 = l1_timestamp;
-                timestamp = OffsetDateTime::from_unix_timestamp(timestamp as i64)
-                    .unwrap()
-                    .unix_timestamp_nanos() as u128;
+                timestamp = l1_timestamp;
             }
         }
 
@@ -513,7 +501,7 @@ impl Header {
                     chain_config,
                 )),
                 height,
-                timestamp: timestamp_u64,
+                timestamp,
                 l1_head: l1.head,
                 l1_finalized: l1.finalized,
                 payload_commitment,
@@ -529,7 +517,7 @@ impl Header {
                     chain_config,
                 )),
                 height,
-                timestamp: timestamp_u64,
+                timestamp,
                 l1_head: l1.head,
                 l1_finalized: l1.finalized,
                 payload_commitment,
@@ -543,7 +531,7 @@ impl Header {
             (0, 3) => Self::V3(v0_3::Header {
                 chain_config: chain_config.into(),
                 height,
-                timestamp: timestamp_u64,
+                timestamp,
                 l1_head: l1.head,
                 l1_finalized: l1.finalized,
                 payload_commitment,
@@ -558,7 +546,7 @@ impl Header {
             (0, 4) => Self::V4(v0_4::Header {
                 chain_config: chain_config.into(),
                 height,
-                timestamp,
+                timestamp: timestamp.into(),
                 l1_head: l1.head,
                 l1_finalized: l1.finalized,
                 payload_commitment,
@@ -623,45 +611,25 @@ impl Header {
         &mut *field_mut!(self.height)
     }
 
-    pub fn timestamp_internal(&self) -> u128 {
-        match self {
-            Self::V1(fields) => OffsetDateTime::from_unix_timestamp(fields.timestamp as i64)
-                .unwrap()
-                .unix_timestamp_nanos() as u128,
-            Self::V2(fields) => OffsetDateTime::from_unix_timestamp(fields.timestamp as i64)
-                .unwrap()
-                .unix_timestamp_nanos() as u128,
-            Self::V3(fields) => OffsetDateTime::from_unix_timestamp(fields.timestamp as i64)
-                .unwrap()
-                .unix_timestamp_nanos() as u128,
-            Self::V4(fields) => fields.timestamp,
-        }
-    }
-
-    pub fn timestamp_internal_u64(&self) -> u64 {
+    pub fn timestamp_internal(&self) -> u64 {
         match self {
             Self::V1(fields) => fields.timestamp,
             Self::V2(fields) => fields.timestamp,
             Self::V3(fields) => fields.timestamp,
-            Self::V4(fields) => OffsetDateTime::from_unix_timestamp_nanos(fields.timestamp as i128)
-                .unwrap()
-                .unix_timestamp() as u64,
+            Self::V4(fields) => fields.timestamp as u64,
         }
     }
 
     pub fn set_timestamp(&mut self, timestamp: u128) {
-        let timestamp_u64 = OffsetDateTime::from_unix_timestamp_nanos(timestamp as i128)
-            .unwrap()
-            .unix_timestamp() as u64;
         match self {
             Self::V1(fields) => {
-                fields.timestamp = timestamp_u64;
+                fields.timestamp = timestamp as u64;
             },
             Self::V2(fields) => {
-                fields.timestamp = timestamp_u64;
+                fields.timestamp = timestamp as u64;
             },
             Self::V3(fields) => {
-                fields.timestamp = timestamp_u64;
+                fields.timestamp = timestamp as u64;
             },
             Self::V4(fields) => {
                 fields.timestamp = timestamp;
@@ -973,7 +941,7 @@ impl BlockHeader<SeqTypes> for Header {
             l1_snapshot,
             &l1_deposits,
             vec![builder_fee],
-            OffsetDateTime::now_utc().unix_timestamp_nanos() as u128,
+            OffsetDateTime::now_utc().unix_timestamp() as u64,
             validated_state,
             chain_config,
             version,
@@ -1031,12 +999,8 @@ impl BlockHeader<SeqTypes> for Header {
         )
     }
 
-    fn timestamp(&self) -> u128 {
+    fn timestamp(&self) -> u64 {
         self.timestamp_internal()
-    }
-
-    fn timestamp_u64(&self) -> u64 {
-        self.timestamp_internal_u64()
     }
 
     fn block_number(&self) -> u64 {
@@ -1148,18 +1112,18 @@ mod test_headers {
     #[must_use]
     struct TestCase {
         // Parent header info.
-        parent_timestamp: u128,
+        parent_timestamp: u64,
         parent_l1_head: u64,
         parent_l1_finalized: Option<L1BlockInfo>,
 
         // Environment at the time the new header is created.
         l1_head: u64,
         l1_finalized: Option<L1BlockInfo>,
-        timestamp: u128,
+        timestamp: u64,
         l1_deposits: Vec<FeeInfo>,
 
         // Expected new header info.
-        expected_timestamp: u128,
+        expected_timestamp: u64,
         expected_l1_head: u64,
         expected_l1_finalized: Option<L1BlockInfo>,
     }
@@ -1175,7 +1139,7 @@ mod test_headers {
 
             let genesis = GenesisForTest::default().await;
             let mut parent = genesis.header.clone();
-            parent.set_timestamp(self.parent_timestamp);
+            parent.set_timestamp(self.parent_timestamp as u128);
             *parent.l1_head_mut() = self.parent_l1_head;
             *parent.l1_finalized_mut() = self.parent_l1_finalized;
 

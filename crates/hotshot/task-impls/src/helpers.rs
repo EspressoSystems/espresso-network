@@ -332,7 +332,7 @@ async fn update_metrics<TYPES: NodeType>(
     leaf_views: &[LeafInfo<TYPES>],
 ) {
     let consensus_reader = consensus.read().await;
-    let now = OffsetDateTime::now_utc().unix_timestamp_nanos() as u128;
+    let now = OffsetDateTime::now_utc().unix_timestamp() as u64;
 
     for leaf_view in leaf_views {
         let proposal_timestamp = leaf_view.leaf.block_header().timestamp();

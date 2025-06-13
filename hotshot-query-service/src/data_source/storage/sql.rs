@@ -1494,8 +1494,7 @@ mod test {
         // insert some mock data
         for i in 0..20 {
             leaf.leaf.block_header_mut().block_number = i;
-            leaf.leaf.block_header_mut().timestamp =
-                Utc::now().timestamp_nanos_opt().unwrap() as u128;
+            leaf.leaf.block_header_mut().timestamp = Utc::now().timestamp() as u64;
             let mut tx = storage.write().await.unwrap();
             tx.insert_leaf(leaf.clone()).await.unwrap();
             tx.commit().await.unwrap();
@@ -1675,8 +1674,7 @@ mod test {
         // insert some mock data
         for i in 0..20 {
             leaf.leaf.block_header_mut().block_number = i;
-            leaf.leaf.block_header_mut().timestamp =
-                Utc::now().timestamp_nanos_opt().unwrap() as u128;
+            leaf.leaf.block_header_mut().timestamp = Utc::now().timestamp() as u64;
             let mut tx = storage.write().await.unwrap();
             tx.insert_leaf(leaf.clone()).await.unwrap();
             tx.commit().await.unwrap();

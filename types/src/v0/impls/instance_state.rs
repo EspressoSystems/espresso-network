@@ -341,14 +341,13 @@ impl Upgrade {
                 config.stop_voting_time = u64::MAX;
             },
             UpgradeMode::Time(t) => {
-                config.start_proposing_time = t.start_proposing_time.unix_timestamp_u64();
-                config.stop_proposing_time = t.stop_proposing_time.unix_timestamp_u64();
-                config.start_voting_time =
-                    t.start_voting_time.unwrap_or_default().unix_timestamp_u64();
+                config.start_proposing_time = t.start_proposing_time.unix_timestamp();
+                config.stop_proposing_time = t.stop_proposing_time.unix_timestamp();
+                config.start_voting_time = t.start_voting_time.unwrap_or_default().unix_timestamp();
                 config.stop_voting_time = t
                     .stop_voting_time
                     .unwrap_or(Timestamp::max())
-                    .unix_timestamp_u64();
+                    .unix_timestamp();
                 config.start_proposing_view = 0;
                 config.stop_proposing_view = u64::MAX;
                 config.start_voting_view = 0;
