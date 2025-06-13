@@ -68,12 +68,14 @@ impl DMBehaviour {
                 warn!("Outbound message failure to {:?}: {:?}", peer, error);
                 if let Some(mut req) = self.in_progress_rr.remove(&request_id) {
                     if req.retry_count == 0 {
+                        error!("Out of retries for {:?}", peer);
                         return None;
                     }
                     req.retry_count -= 1;
                     if let Some(retry_tx) = retry_tx {
                         spawn(async move {
                             sleep(req.backoff.next_timeout(false)).await;
+                            error!("Retrying direct request to {:?}", peer);
                             let _ = retry_tx.send(ClientRequest::DirectRequest {
                                 pid: peer,
                                 contents: req.data,

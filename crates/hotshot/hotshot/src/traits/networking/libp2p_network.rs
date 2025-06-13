@@ -925,31 +925,6 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
 
         println!("{}: Looked up {:?}", random_num, pid);
 
-        #[cfg(feature = "hotshot-testing")]
-        {
-            println!("Somehow hit HotShot testing code");
-            let metrics = self.inner.metrics.clone();
-            if let Some(ref config) = &self.inner.reliability_config {
-                let handle = Arc::clone(&self.inner.handle);
-
-                let fut = config.clone().chaos_send_msg(
-                    message,
-                    Arc::new(move |msg: Vec<u8>| {
-                        let handle_2 = Arc::clone(&handle);
-                        let metrics_2 = metrics.clone();
-                        boxed_sync(async move {
-                            if let Err(e) = handle_2.direct_request_no_serialize(pid, msg) {
-                                metrics_2.num_failed_messages.add(1);
-                                warn!("Failed to broadcast to libp2p: {:?}", e);
-                            }
-                        })
-                    }),
-                );
-                spawn(fut);
-                return Ok(());
-            }
-        }
-
         println!("Sending direct request to {:?}", pid);
 
         match self.inner.handle.direct_request(pid, &message) {
