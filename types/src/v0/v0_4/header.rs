@@ -15,7 +15,8 @@ pub struct Header {
     /// A commitment to a ChainConfig or a full ChainConfig.
     pub(crate) chain_config: ResolvableChainConfig,
     pub(crate) height: u64,
-    pub(crate) timestamp: u128,
+    pub(crate) timestamp: u64,
+    pub(crate) timestamp_nanos: i128,
     pub(crate) l1_head: u64,
     pub(crate) l1_finalized: Option<L1BlockInfo>,
     pub(crate) payload_commitment: VidCommitment,
@@ -47,7 +48,8 @@ impl Committable for Header {
         RawCommitmentBuilder::new(&Self::tag())
             .field("chain_config", self.chain_config.commit())
             .u64_field("height", self.height)
-            .fixed_size_bytes(&self.timestamp.to_be_bytes())
+            .u64_field("timestamp", self.timestamp)
+            .fixed_size_bytes(&self.timestamp_nanos.to_be_bytes())
             .u64_field("l1_head", self.l1_head)
             .optional("l1_finalized", &self.l1_finalized)
             .constant_str("payload_commitment")

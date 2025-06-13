@@ -1166,21 +1166,26 @@ mod test {
     impl Header {
         /// Build a new header from parent.
         fn next(self) -> Self {
+            let time = OffsetDateTime::now_utc();
+            let timestamp = time.unix_timestamp() as u64;
+            let timestamp_nanos = time.unix_timestamp_nanos();
+
             match self {
                 Header::V1(_) => panic!("You called `Header.next()` on unimplemented version (v1)"),
                 Header::V2(parent) => Header::V2(v0_2::Header {
                     height: parent.height + 1,
-                    timestamp: OffsetDateTime::now_utc().unix_timestamp() as u64,
+                    timestamp,
                     ..parent.clone()
                 }),
                 Header::V3(parent) => Header::V3(v0_3::Header {
                     height: parent.height + 1,
-                    timestamp: OffsetDateTime::now_utc().unix_timestamp() as u64,
+                    timestamp,
                     ..parent.clone()
                 }),
                 Header::V4(parent) => Header::V4(v0_4::Header {
                     height: parent.height + 1,
-                    timestamp: OffsetDateTime::now_utc().unix_timestamp() as u128,
+                    timestamp,
+                    timestamp_nanos,
                     ..parent.clone()
                 }),
             }
@@ -1546,17 +1551,20 @@ mod test {
             err
         );
 
-        let mock_time: u64 = OffsetDateTime::now_utc().unix_timestamp() as u64;
+        let time = OffsetDateTime::now_utc();
+        let timestamp: u64 = time.unix_timestamp() as u64;
+        let timestamp_nanos: i128 = time.unix_timestamp_nanos() as i128;
+
         let mut header = parent.clone();
-        header.set_timestamp((mock_time - 13) as u128);
+        header.set_timestamp(timestamp - 13, timestamp_nanos - 13_000_000_000);
         let proposal = Proposal::new(&header, block_size);
 
-        let err = proposal.validate_timestamp_drift(mock_time).unwrap_err();
+        let err = proposal.validate_timestamp_drift(timestamp).unwrap_err();
         tracing::info!(%err, "task failed successfully");
         assert_eq!(
             ProposalValidationError::InvalidTimestampDrift {
-                proposal: mock_time - 13,
-                system: mock_time,
+                proposal: timestamp - 13,
+                system: timestamp,
                 diff: 13
             },
             err
@@ -1564,17 +1572,17 @@ mod test {
 
         // Success cases.
         let mut header = parent.clone();
-        header.set_timestamp(mock_time as u128);
+        header.set_timestamp(timestamp, timestamp_nanos);
         let proposal = Proposal::new(&header, block_size);
-        proposal.validate_timestamp_drift(mock_time).unwrap();
+        proposal.validate_timestamp_drift(timestamp).unwrap();
 
-        header.set_timestamp((mock_time - 11) as u128);
+        header.set_timestamp(timestamp - 11, timestamp_nanos - 11_000_000_000);
         let proposal = Proposal::new(&header, block_size);
-        proposal.validate_timestamp_drift(mock_time).unwrap();
+        proposal.validate_timestamp_drift(timestamp).unwrap();
 
-        header.set_timestamp((mock_time - 12) as u128);
+        header.set_timestamp(timestamp - 12, timestamp_nanos - 12_000_000_000);
         let proposal = Proposal::new(&header, block_size);
-        proposal.validate_timestamp_drift(mock_time).unwrap();
+        proposal.validate_timestamp_drift(timestamp).unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]

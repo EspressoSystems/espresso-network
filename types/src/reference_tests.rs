@@ -206,6 +206,7 @@ async fn reference_header(version: Version) -> Header {
         reference_chain_config(),
         42,
         789,
+        789_000_000_000,
         124,
         Some(reference_l1_block()),
         payload_commitment,
