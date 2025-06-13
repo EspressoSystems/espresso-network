@@ -132,7 +132,6 @@ fn main() -> anyhow::Result<()> {
 
     if let Some(ref out_dir) = opts.out {
         fs::create_dir_all(out_dir)?;
-        fs::write(out_dir.join(".seed"), hex::encode(seed))?;
     }
 
     for index in 0..opts.num {
@@ -142,11 +141,14 @@ fn main() -> anyhow::Result<()> {
 
         let mut output = if let Some(ref out_dir) = opts.out {
             let path = out_dir.join(format!("{index}.env"));
-            let file = File::options()
+            let mut file = File::options()
                 .write(true)
                 .create(true)
                 .truncate(true)
                 .open(&path)?;
+
+            // Write the seed as a comment at the top
+            writeln!(file, "# Seed: {}", hex::encode(seed))?;
             Box::new(file) as Box<dyn Write>
         } else {
             Box::new(std::io::stdout())
