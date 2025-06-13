@@ -390,13 +390,13 @@ impl<'a> Proposal<'a> {
 
     /// The timestamp must not drift too much from local system time.
     ///
-    /// The tolerance is currently `12` seconds. This value may be moved to
+    /// The tolerance is currently `12` seconds (or `12_000_000_000` nanoseconds). This value may be moved to
     /// configuration in the future.
     fn validate_timestamp_drift(&self, system_time: u128) -> Result<(), ProposalValidationError> {
         // TODO 12 seconds of tolerance should be enough for reasonably
         // configured nodes, but we should make this configurable.
         let diff = self.header.timestamp().abs_diff(system_time);
-        if diff > 12 {
+        if diff > 12_000_000_000 {
             return Err(ProposalValidationError::InvalidTimestampDrift {
                 proposal: self.header.timestamp(),
                 system: system_time,
