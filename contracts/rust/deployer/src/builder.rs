@@ -216,8 +216,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     crate::upgrade_stake_table_v2(
                         provider,
                         contracts,
-                        admin,
                         self.multisig_pauser.unwrap(),
+                        admin,
                     )
                     .await?;
 
