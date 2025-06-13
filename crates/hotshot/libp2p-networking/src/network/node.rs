@@ -472,7 +472,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                         contents,
                         retry_count,
                     } => {
-                        debug!("Sending direct request to {:?}", pid);
+                        error!("Sending direct request to {:?}", pid);
                         let id = behaviour.add_direct_request(pid, contents.clone());
                         let req = DMRequest {
                             peer_id: pid,
