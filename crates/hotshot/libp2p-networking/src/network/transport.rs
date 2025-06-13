@@ -22,7 +22,7 @@ use libp2p::{
 use pin_project::pin_project;
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
-use tracing::warn;
+use tracing::{info, warn};
 
 /// The maximum size of an authentication message. This is used to prevent
 /// DoS attacks by sending large messages.
@@ -155,7 +155,11 @@ impl<T: Transport, Types: NodeType, C: StreamMuxer + Unpin> StakeTableAuthentica
         // Create a new upgrade that performs the authentication handshake on top
         Box::pin(async move {
             // Wait for the original future to resolve
-            let mut stream = original_future.await?;
+
+            let mut stream = original_future.await.map_err(|e| {
+                warn!("Failed to perform inner dial: {:?}", e);
+                e
+            })?;
 
             // Time out the authentication block
             timeout(AUTH_HANDSHAKE_TIMEOUT, async {
@@ -176,6 +180,8 @@ impl<T: Transport, Types: NodeType, C: StreamMuxer + Unpin> StakeTableAuthentica
                             IoError::other(e)
                         })?;
 
+                    info!("Authenticated with remote peer {:?}", stream.as_peer_id());
+
                     // Verify the remote peer's authentication
                     Self::verify_peer_authentication(
                         &mut substream,
@@ -187,6 +193,11 @@ impl<T: Transport, Types: NodeType, C: StreamMuxer + Unpin> StakeTableAuthentica
                         warn!("Failed to verify remote peer: {:?}", e);
                         IoError::other(e)
                     })?;
+
+                    info!(
+                        "Verified authentication of remote peer {:?}",
+                        stream.as_peer_id()
+                    );
                 } else {
                     // If it is incoming, verify the remote peer's authentication first
                     Self::verify_peer_authentication(
@@ -200,6 +211,11 @@ impl<T: Transport, Types: NodeType, C: StreamMuxer + Unpin> StakeTableAuthentica
                         IoError::other(e)
                     })?;
 
+                    info!(
+                        "Verified authentication of remote peer {:?}",
+                        stream.as_peer_id()
+                    );
+
                     // Authenticate with the remote peer
                     Self::authenticate_with_remote_peer(&mut substream, auth_message)
                         .await
@@ -207,6 +223,8 @@ impl<T: Transport, Types: NodeType, C: StreamMuxer + Unpin> StakeTableAuthentica
                             warn!("Failed to authenticate with remote peer: {:?}", e);
                             IoError::other(e)
                         })?;
+
+                    info!("Authenticated with remote peer {:?}", stream.as_peer_id());
                 }
 
                 Ok(stream)
