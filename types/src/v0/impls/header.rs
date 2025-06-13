@@ -1289,7 +1289,9 @@ mod test_headers {
     async fn test_new_header_advance_timestamp() {
         TestCase {
             timestamp: 1,
+            timestamp_nanos: 1_000_000_000,
             expected_timestamp: 1,
+            expected_timestamp_nanos: 1_000_000_000,
             ..Default::default()
         }
         .run()
@@ -1336,10 +1338,12 @@ mod test_headers {
             l1_head: 1,
             l1_finalized,
             timestamp: 0,
+            timestamp_nanos: 0,
 
             expected_l1_head: 1,
             expected_l1_finalized: l1_finalized,
             expected_timestamp: 1,
+            expected_timestamp_nanos: 1_000_000_000,
 
             ..Default::default()
         }
@@ -1351,8 +1355,11 @@ mod test_headers {
     async fn test_new_header_timestamp_behind() {
         TestCase {
             parent_timestamp: 1,
+            parent_timestamp_nanos: 1_000_000_000,
             timestamp: 0,
+            timestamp_nanos: 0,
             expected_timestamp: 1,
+            expected_timestamp_nanos: 1_000_000_000,
 
             ..Default::default()
         }
