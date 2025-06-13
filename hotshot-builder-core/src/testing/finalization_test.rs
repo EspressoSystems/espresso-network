@@ -325,6 +325,7 @@ async fn progress_round_with_transactions(
             payload_commitment,
             builder_commitment,
             timestamp: round,
+            timestamp_nanos: round as i128 * 1_000_000_000,
             metadata,
             random: 0,
         };

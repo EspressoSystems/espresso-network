@@ -272,6 +272,8 @@ pub struct TestBlockHeader {
     pub metadata: TestMetadata,
     /// Timestamp when this header was created.
     pub timestamp: u64,
+    /// Timestamp when this header was created.
+    pub timestamp_nanos: i128,
     /// random
     pub random: u64,
 }
@@ -291,6 +293,12 @@ impl TestBlockHeader {
             timestamp = parent.timestamp;
         }
 
+        let mut timestamp_nanos = OffsetDateTime::now_utc().unix_timestamp_nanos();
+        if timestamp_nanos < parent.timestamp_nanos {
+            // Prevent decreasing timestamps.
+            timestamp_nanos = parent.timestamp_nanos;
+        }
+
         let random = thread_rng().gen_range(0..=u64::MAX);
 
         Self {
@@ -299,6 +307,7 @@ impl TestBlockHeader {
             builder_commitment,
             metadata,
             timestamp,
+            timestamp_nanos,
             random,
         }
     }
@@ -315,6 +324,7 @@ impl Default for TestBlockHeader {
             builder_commitment: Default::default(),
             metadata,
             timestamp: 0,
+            timestamp_nanos: 0,
             random: 0,
         }
     }
@@ -373,6 +383,7 @@ impl<
             builder_commitment,
             metadata: *metadata,
             timestamp: 0,
+            timestamp_nanos: 0,
             random: 0,
         }
     }
@@ -403,6 +414,10 @@ impl<
 
     fn timestamp(&self) -> u64 {
         self.timestamp
+    }
+
+    fn timestamp_nanos(&self) -> i128 {
+        self.timestamp_nanos
     }
 }
 

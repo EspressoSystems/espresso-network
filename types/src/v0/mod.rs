@@ -37,7 +37,7 @@ use vbs::version::{StaticVersion, StaticVersionType};
 // instead we write `with_minor_versions!(some_macro!(args))`.
 macro_rules! with_minor_versions {
     ($m:ident!($($arg:tt),*)) => {
-        $m!($($arg,)* v0_1, v0_2, v0_3);
+        $m!($($arg,)* v0_1, v0_2, v0_3, v0_4);
     };
 }
 

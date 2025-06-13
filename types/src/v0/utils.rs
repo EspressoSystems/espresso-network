@@ -78,6 +78,10 @@ impl Timestamp {
         self.0.unix_timestamp() as u64
     }
 
+    pub fn unix_timestamp_nanos(&self) -> i128 {
+        self.0.unix_timestamp_nanos()
+    }
+
     pub fn max() -> Self {
         Self(OffsetDateTime::new_utc(Date::MAX, time!(23:59)))
     }
