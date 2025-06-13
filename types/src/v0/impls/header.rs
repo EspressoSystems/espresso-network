@@ -642,15 +642,9 @@ impl Header {
 
     pub fn timestamp_nanos_internal(&self) -> i128 {
         match self {
-            Self::V1(fields) => OffsetDateTime::from_unix_timestamp(fields.timestamp as i64)
-                .unwrap()
-                .unix_timestamp_nanos(),
-            Self::V2(fields) => OffsetDateTime::from_unix_timestamp(fields.timestamp as i64)
-                .unwrap()
-                .unix_timestamp_nanos(),
-            Self::V3(fields) => OffsetDateTime::from_unix_timestamp(fields.timestamp as i64)
-                .unwrap()
-                .unix_timestamp_nanos(),
+            Self::V1(fields) => fields.timestamp as i128 * 1_000_000_000,
+            Self::V2(fields) => fields.timestamp as i128 * 1_000_000_000,
+            Self::V3(fields) => fields.timestamp as i128 * 1_000_000_000,
             Self::V4(fields) => fields.timestamp_nanos,
         }
     }

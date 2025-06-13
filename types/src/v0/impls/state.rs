@@ -119,6 +119,11 @@ pub enum ProposalValidationError {
         system: u64,
         diff: u64,
     },
+    #[error("Inconsistent timestamps on header: timestamp:={timestamp}, timestamp_nanos={timestamp_nanos}")]
+    InconsistentTimestamps {
+        timestamp: u64,
+        timestamp_nanos: i128,
+    },
     #[error("l1_finalized has `None` value")]
     L1FinalizedNotFound,
     #[error("l1_finalized height is decreasing: parent={parent:?} proposed={proposed:?}")]
@@ -407,6 +412,18 @@ impl<'a> Proposal<'a> {
         Ok(())
     }
 
+    /// The `timestamp` and `timestamp_nanos` fields must be coherent
+    fn validate_timestamp_consistency(&self) -> Result<(), ProposalValidationError> {
+        if self.header.timestamp() as i128 * 1_000_000_000 != self.header.timestamp_nanos() {
+            return Err(ProposalValidationError::InconsistentTimestamps {
+                timestamp: self.header.timestamp(),
+                timestamp_nanos: self.header.timestamp_nanos(),
+            });
+        }
+
+        Ok(())
+    }
+
     /// The proposed ['BlockMerkleTree'] must match the one in ['ValidatedState'].
     fn validate_block_merkle_tree(
         &self,
@@ -601,6 +618,8 @@ impl<'a> ValidatedTransition<'a> {
     /// currently 12 seconds. This value may be moved to configuration
     /// in the future. Do this check first so we don't add unnecessary drift.
     fn validate_timestamp(&self) -> Result<(), ProposalValidationError> {
+        self.proposal.validate_timestamp_consistency()?;
+
         self.proposal
             .validate_timestamp_non_dec(self.parent.timestamp())?;
 
