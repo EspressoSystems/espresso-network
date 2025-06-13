@@ -857,10 +857,17 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
             return Err(NetworkError::NotReadyYet);
         };
 
+        use rand::Rng;
+        let random_num = rand::thread_rng().gen::<u64>();
+
+        println!("{}: DA broadcasting message", random_num);
+
         let future_results = recipients
             .into_iter()
             .map(|r| self.direct_message(message.clone(), r));
         let results = join_all(future_results).await;
+
+        println!("{}: DA broadcast message complete", random_num);
 
         let errors: Vec<_> = results.into_iter().filter_map(|r| r.err()).collect();
 
@@ -883,6 +890,9 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
             return Err(NetworkError::NotReadyYet);
         };
 
+        use rand::Rng;
+        let random_num = rand::thread_rng().gen::<u64>();
+
         // short circuit if we're dming ourselves
         if recipient == self.inner.pk {
             // panic if we already shut down?
@@ -893,6 +903,8 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
             return Ok(());
         }
 
+        println!("{}: Looking up {:?}", random_num, recipient);
+
         let pid = match self
             .inner
             .handle
@@ -902,11 +914,14 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
             Ok(pid) => pid,
             Err(err) => {
                 self.inner.metrics.num_failed_messages.add(1);
+                println!("{}: Failed to look up {:?}", random_num, recipient);
                 return Err(NetworkError::LookupError(format!(
                     "failed to look up node for direct message: {err}"
                 )));
             },
         };
+
+        println!("{}: Looked up {:?}", random_num, pid);
 
         #[cfg(feature = "hotshot-testing")]
         {
@@ -932,10 +947,16 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
             }
         }
 
+        println!("Sending direct request to {:?}", pid);
+
         match self.inner.handle.direct_request(pid, &message) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                println!("Sent direct request to {:?}", pid);
+                Ok(())
+            },
             Err(e) => {
                 self.inner.metrics.num_failed_messages.add(1);
+                println!("Failed to send direct request to {:?}: {:?}", pid, e);
                 Err(e)
             },
         }
