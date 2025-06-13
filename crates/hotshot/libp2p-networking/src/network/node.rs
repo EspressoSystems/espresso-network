@@ -606,15 +606,18 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                                     public_key: _,
                                     protocol_version: _,
                                     agent_version: _,
-                                    observed_addr: _,
+                                    observed_addr,
                                 },
                             connection_id: _,
                         } = *e
                         {
+                            println!("Observed addr: {:?}", observed_addr);
+
                             let behaviour = self.swarm.behaviour_mut();
 
                             // into hashset to delete duplicates (I checked: there are duplicates)
                             for addr in listen_addrs.iter().collect::<HashSet<_>>() {
+                                println!("Local addr: {:?}", addr);
                                 behaviour.dht.add_address(&peer_id, addr.clone());
                             }
                         }
