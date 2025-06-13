@@ -21,6 +21,7 @@ use hotshot_example_types::{
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
     epoch_membership::EpochMembershipCoordinator,
+    storage_metrics::StorageMetricsValue,
     traits::node_implementation::{NodeType, Versions},
     HotShotConfig, PeerConfig, ValidatorConfig,
 };
@@ -280,6 +281,7 @@ pub async fn create_test_handle<
                     initializer,
                     ConsensusMetricsValue::default(),
                     storage,
+                    StorageMetricsValue::default(),
                 )
                 .await;
 
@@ -299,6 +301,7 @@ pub async fn create_test_handle<
                     initializer,
                     ConsensusMetricsValue::default(),
                     storage,
+                    StorageMetricsValue::default(),
                 )
                 .await
         },
@@ -314,6 +317,7 @@ pub async fn create_test_handle<
                 initializer,
                 ConsensusMetricsValue::default(),
                 storage,
+                StorageMetricsValue::default(),
             )
             .await;
 

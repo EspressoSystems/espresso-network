@@ -90,6 +90,7 @@ async fn test_vote_dependency_handle() {
                 instance_state: handle.hotshot.instance_state(),
                 membership_coordinator: handle.hotshot.membership_coordinator.clone(),
                 storage: handle.storage(),
+                storage_metrics: handle.storage_metrics(),
                 view_number,
                 sender: event_sender.clone(),
                 receiver: event_receiver.clone().deactivate(),

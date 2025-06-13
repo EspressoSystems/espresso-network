@@ -153,6 +153,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             private_key: handle.private_key().clone(),
             id: handle.hotshot.id,
             storage: handle.storage.clone(),
+            storage_metrics: handle.storage_metrics(),
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
         }
     }
@@ -239,6 +240,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             output_event_stream: handle.hotshot.external_event_stream.0.clone(),
             id: handle.hotshot.id,
             storage: handle.storage.clone(),
+            storage_metrics: handle.storage_metrics(),
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.hotshot.config.epoch_height,
             consensus_metrics,

@@ -27,6 +27,7 @@ use hotshot_types::{
     },
     stake_table::HSStakeTable,
     traits::{
+        metrics::Metrics,
         node_implementation::{ConsensusTime, NodeType, Versions},
         storage::Storage,
         ValidatedState as HotShotState,
@@ -788,6 +789,8 @@ pub trait SequencerPersistence:
         &self,
         state_cert: LightClientStateUpdateCertificate<SeqTypes>,
     ) -> anyhow::Result<()>;
+
+    fn enable_metrics(&mut self, metrics: &dyn Metrics);
 }
 
 #[async_trait]

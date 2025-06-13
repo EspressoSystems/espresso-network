@@ -5,6 +5,7 @@ use std::{
     ops::RangeInclusive,
     path::{Path, PathBuf},
     sync::Arc,
+    time::Instant,
 };
 
 use anyhow::{anyhow, Context};
@@ -36,6 +37,7 @@ use hotshot_types::{
     },
     traits::{
         block_contents::{BlockHeader, BlockPayload},
+        metrics::Metrics,
         node_implementation::{ConsensusTime, NodeType},
     },
     vote::HasViewNumber,
@@ -43,7 +45,10 @@ use hotshot_types::{
 use indexmap::IndexMap;
 use itertools::Itertools;
 
-use crate::{ViewNumber, RECENT_STAKE_TABLES_LIMIT};
+use crate::{
+    persistence::persistence_metrics::PersistenceMetricsValue, ViewNumber,
+    RECENT_STAKE_TABLES_LIMIT,
+};
 
 /// Options for file system backed persistence.
 #[derive(Parser, Clone, Debug)]
@@ -119,6 +124,7 @@ impl PersistenceOptions for Options {
                 migrated,
                 view_retention,
             })),
+            metrics: Arc::new(PersistenceMetricsValue::default()),
         })
     }
 
@@ -134,6 +140,8 @@ pub struct Persistence {
     // implementation does not support transaction isolation for concurrent reads and writes. We can
     // improve this in the future by switching to a SQLite-based file system implementation.
     inner: Arc<RwLock<Inner>>,
+    /// A reference to the metrics trait
+    metrics: Arc<PersistenceMetricsValue>,
 }
 
 #[derive(Debug)]
@@ -728,7 +736,11 @@ impl SequencerPersistence for Persistence {
                 let proposal: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
                     convert_proposal(proposal.clone());
                 let proposal_bytes = bincode::serialize(&proposal).context("serialize proposal")?;
+                let now = Instant::now();
                 file.write_all(&proposal_bytes)?;
+                self.metrics
+                    .internal_append_vid_duration
+                    .add_point(now.elapsed().as_secs_f64());
                 Ok(())
             },
         )
@@ -758,7 +770,11 @@ impl SequencerPersistence for Persistence {
                 let proposal: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
                     convert_proposal(proposal.clone());
                 let proposal_bytes = bincode::serialize(&proposal).context("serialize proposal")?;
+                let now = Instant::now();
                 file.write_all(&proposal_bytes)?;
+                self.metrics
+                    .internal_append_vid2_duration
+                    .add_point(now.elapsed().as_secs_f64());
                 Ok(())
             },
         )
@@ -785,7 +801,11 @@ impl SequencerPersistence for Persistence {
             },
             |mut file| {
                 let proposal_bytes = bincode::serialize(&proposal).context("serialize proposal")?;
+                let now = Instant::now();
                 file.write_all(&proposal_bytes)?;
+                self.metrics
+                    .internal_append_da_duration
+                    .add_point(now.elapsed().as_secs_f64());
                 Ok(())
             },
         )
@@ -865,8 +885,11 @@ impl SequencerPersistence for Persistence {
             },
             |mut file| {
                 let proposal_bytes = bincode::serialize(&proposal).context("serialize proposal")?;
-
+                let now = Instant::now();
                 file.write_all(&proposal_bytes)?;
+                self.metrics
+                    .internal_append_quorum2_duration
+                    .add_point(now.elapsed().as_secs_f64());
                 Ok(())
             },
         )
@@ -1019,7 +1042,11 @@ impl SequencerPersistence for Persistence {
             },
             |mut file| {
                 let proposal_bytes = bincode::serialize(&proposal).context("serialize proposal")?;
+                let now = Instant::now();
                 file.write_all(&proposal_bytes)?;
+                self.metrics
+                    .internal_append_da2_duration
+                    .add_point(now.elapsed().as_secs_f64());
                 Ok(())
             },
         )
@@ -1475,6 +1502,10 @@ impl SequencerPersistence for Persistence {
         }
 
         Ok(result)
+    }
+
+    fn enable_metrics(&mut self, _metrics: &dyn Metrics) {
+        // todo!()
     }
 }
 

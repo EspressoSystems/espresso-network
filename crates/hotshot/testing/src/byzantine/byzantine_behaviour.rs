@@ -346,6 +346,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
             epoch: None,
             membership_coordinator: handle.membership_coordinator.clone(),
             storage: handle.storage(),
+            storage_metrics: handle.storage_metrics(),
             consensus: OuterConsensus::new(handle.consensus()),
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             transmit_tasks: BTreeMap::new(),

@@ -199,7 +199,7 @@ pub async fn init_node<
     genesis: Genesis,
     network_params: NetworkParams,
     metrics: &dyn Metrics,
-    persistence: P,
+    mut persistence: P,
     l1_params: L1Params,
     storage: Option<RequestResponseStorage>,
     seq_versions: V,
@@ -510,6 +510,8 @@ where
             );
         },
     };
+
+    persistence.enable_metrics(metrics);
 
     let fetcher = Fetcher::new(
         Arc::new(state_catchup_providers.clone()),

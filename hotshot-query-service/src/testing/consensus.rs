@@ -33,6 +33,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     light_client::StateKeyPair,
     signature_key::BLSPubKey,
+    storage_metrics::StorageMetricsValue,
     traits::{
         election::Membership,
         network::Topic,
@@ -223,6 +224,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
                             .unwrap(),
                             ConsensusMetricsValue::new(&*data_source.populate_metrics()),
                             hs_storage,
+                            StorageMetricsValue::new(&*data_source.populate_metrics()),
                         )
                         .await
                         .unwrap()
