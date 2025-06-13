@@ -966,7 +966,7 @@ impl BlockHeader<SeqTypes> for Header {
         let now = OffsetDateTime::now_utc();
 
         let timestamp = now.unix_timestamp() as u64;
-        let timestamp_nanos = now.unix_timestamp_nanos() as i128;
+        let timestamp_nanos = now.unix_timestamp_nanos();
 
         Ok(Self::from_info(
             payload_commitment,

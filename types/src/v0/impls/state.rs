@@ -1572,7 +1572,7 @@ mod test {
 
         let time = OffsetDateTime::now_utc();
         let timestamp: u64 = time.unix_timestamp() as u64;
-        let timestamp_nanos: i128 = time.unix_timestamp_nanos() as i128;
+        let timestamp_nanos: i128 = time.unix_timestamp_nanos();
 
         let mut header = parent.clone();
         header.set_timestamp(timestamp - 13, timestamp_nanos - 13_000_000_000);
