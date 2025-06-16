@@ -120,7 +120,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
         let mut vid_share = None;
         let mut da_cert = None;
         let mut parent_view_number = None;
-        for event in res {
+        for event in res.iter() {
             match event.as_ref() {
                 #[allow(unused_assignments)]
                 HotShotEvent::QuorumProposalValidated(proposal, parent_leaf) => {
@@ -131,6 +131,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                     if let Some(ref comm) = payload_commitment {
                         if proposal_payload_comm != *comm {
                             tracing::error!("Quorum proposal has inconsistent payload commitment with DAC or VID.");
+                            self.print_vote_events(&res);
                             return;
                         }
                     } else {
@@ -139,12 +140,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
 
                     if proposed_leaf.parent_commitment() != parent_commitment {
                         tracing::warn!("Proposed leaf parent commitment does not match parent leaf payload commitment. Aborting vote.");
+                        self.print_vote_events(&res);
                         return;
                     }
                     // Update our persistent storage of the proposal. If we cannot store the proposal return
                     // and error so we don't vote
                     if let Err(e) = self.storage.append_proposal_wrapper(proposal).await {
                         tracing::error!("failed to store proposal, not voting.  error = {e:#}");
+                        self.print_vote_events(&res);
                         return;
                     }
                     leaf = Some(proposed_leaf);
@@ -156,6 +159,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                     if let Some(ref comm) = payload_commitment {
                         if cert_payload_comm != comm {
                             tracing::error!("DAC has inconsistent payload commitment with quorum proposal or VID.");
+                            self.print_vote_events(&res);
                             return;
                         }
                     } else {
@@ -167,6 +171,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                         tracing::error!(
                             "DAC has inconsistent next epoch payload commitment with VID."
                         );
+                        self.print_vote_events(&res);
                         return;
                     } else {
                         next_epoch_payload_commitment = next_epoch_cert_payload_comm;
@@ -183,6 +188,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                                 tracing::error!(
                                     "VID has inconsistent next epoch payload commitment with DAC."
                                 );
+                                self.print_vote_events(&res);
                                 return;
                             }
                         } else {
@@ -191,6 +197,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                     } else if let Some(ref comm) = payload_commitment {
                         if vid_payload_commitment != comm {
                             tracing::error!("VID has inconsistent payload commitment with quorum proposal or DAC.");
+                            self.print_vote_events(&res);
                             return;
                         }
                     } else {
@@ -206,6 +213,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                 "We don't have the VID share for this view {:?}, but we should, because the vote dependencies have completed.",
                 self.view_number
             );
+            self.print_vote_events(&res);
             return;
         };
 
@@ -214,6 +222,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                 "We don't have the leaf for this view {:?}, but we should, because the vote dependencies have completed.",
                 self.view_number
             );
+            self.print_vote_events(&res);
             return;
         };
 
@@ -222,6 +231,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                 "We don't have the DA cert for this view {:?}, but we should, because the vote dependencies have completed.",
                 self.view_number
             );
+            self.print_vote_events(&res);
             return;
         };
 
@@ -243,6 +253,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                 .await
             else {
                 tracing::warn!("Couldn't acquire current epoch membership. Do not vote!");
+                self.print_vote_events(&res);
                 return;
             };
             let Ok(next_epoch_membership) = self
@@ -251,6 +262,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                 .await
             else {
                 tracing::warn!("Couldn't acquire next epoch membership. Do not vote!");
+                self.print_vote_events(&res);
                 return;
             };
 
@@ -288,6 +300,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                                 "We have both epochs vid shares but the leaf's vid commit doesn't \
                                 match the old epoch vid share's commit. It should never happen."
                             );
+                            self.print_vote_events(&res);
                             return;
                         }
                     },
@@ -296,6 +309,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                             "This is an epoch transition block, we are in both epochs \
                              but we received only one VID share. Do not vote! Error: {e:?}"
                         );
+                        self.print_vote_events(&res);
                         return;
                     },
                 }
@@ -321,6 +335,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
         .await
         {
             tracing::error!("Failed to update shared consensus state; error = {e:#}");
+            self.print_vote_events(&res);
             return;
         }
         let cur_epoch = option_epoch_from_block_number::<TYPES>(
@@ -341,6 +356,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             Ok(epoch_membership) => epoch_membership,
             Err(e) => {
                 tracing::warn!("{e:?}");
+                self.print_vote_events(&res);
                 return;
             },
         };
@@ -362,25 +378,36 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             .await;
         }
 
-        log!(
-            submit_vote::<TYPES, I, V>(
-                self.sender.clone(),
-                epoch_membership,
-                self.public_key.clone(),
-                self.private_key.clone(),
-                self.upgrade_lock.clone(),
-                self.view_number,
-                self.storage.clone(),
-                leaf,
-                maybe_current_epoch_vid_share.unwrap_or(vid_share),
-                is_vote_leaf_extended,
-                is_vote_epoch_root,
-                self.epoch_height,
-                &self.state_private_key,
-                self.stake_table_capacity,
-            )
-            .await
+        let result = submit_vote::<TYPES, I, V>(
+            self.sender.clone(),
+            epoch_membership,
+            self.public_key.clone(),
+            self.private_key.clone(),
+            self.upgrade_lock.clone(),
+            self.view_number,
+            self.storage.clone(),
+            leaf,
+            maybe_current_epoch_vid_share.unwrap_or(vid_share),
+            is_vote_leaf_extended,
+            is_vote_epoch_root,
+            self.epoch_height,
+            &self.state_private_key,
+            self.stake_table_capacity,
         )
+        .await;
+        if result.is_err() {
+            log!(result);
+            self.print_vote_events(&res);
+        }
+    }
+}
+
+impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
+    VoteDependencyHandle<TYPES, I, V>
+{
+    fn print_vote_events(&self, res: &[Arc<HotShotEvent<TYPES>>]) {
+        let events: Vec<_> = res.iter().map(Arc::as_ref).collect();
+        tracing::error!("Failed to vote, events: {:#?}", events);
     }
 }
 
