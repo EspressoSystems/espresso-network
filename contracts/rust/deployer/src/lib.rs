@@ -566,11 +566,9 @@ pub async fn upgrade_light_client_v2_multisig_owner(
     let proxy = LightClient::new(proxy_addr, &provider);
     let owner_addr = proxy.owner().call().await?._0;
 
-    if !dry_run {
-        if !is_contract(&provider, owner_addr).await? {
-            tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
-            anyhow::bail!("Proxy owner is not a contract");
-        }
+    if !dry_run && !is_contract(&provider, owner_addr).await? {
+        tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
+        anyhow::bail!("Proxy owner is not a contract");
     }
 
     // Prepare addresses
@@ -945,11 +943,9 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
                 tracing::error!("Proxy is not owned by the multisig. Expected: {multisig_address:#x}, Got: {owner_addr:#x}");
                 anyhow::bail!("Proxy is not owned by the multisig");
             }
-            if !dry_run {
-                if !is_contract(&provider, owner_addr).await? {
-                    tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
-                    anyhow::bail!("Proxy owner is not a contract");
-                }
+            if !dry_run && !is_contract(&provider, owner_addr).await? {
+                tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
+                anyhow::bail!("Proxy owner is not a contract");
             }
             // TODO: check if owner is a SAFE multisig
 
