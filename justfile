@@ -44,6 +44,9 @@ demo-native-pos *args: (build "test" "--features fee,pos")
 demo-native-pos-base *args: (build "test" "--features pos")
     ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE=data/genesis/demo-pos-base.toml scripts/demo-native -f process-compose.yaml {{args}}
 
+demo-native-drb-header-upgrade *args: (build "test" "--features pos")
+    ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE=data/genesis/demo-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
+
 demo-native-benchmark:
     cargo build --release --features benchmarking
     scripts/demo-native
