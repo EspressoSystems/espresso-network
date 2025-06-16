@@ -1667,7 +1667,6 @@ where
                     .await;
                     match res {
                         Ok(()) => {
-                            tracing::error!("updated aggregate");
                             break;
                         },
                         Err(err) => {
