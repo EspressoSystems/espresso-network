@@ -87,7 +87,7 @@ impl Committable for Header {
                 .finalize(),
             Self::V4(fields) => RawCommitmentBuilder::new(&Self::tag())
                 .u64_field("version_major", 0)
-                .u64_field("version_minor", 3)
+                .u64_field("version_minor", 4)
                 .field("fields", fields.commit())
                 .finalize(),
         }
