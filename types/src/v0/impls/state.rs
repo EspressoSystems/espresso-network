@@ -414,7 +414,7 @@ impl<'a> Proposal<'a> {
 
     /// The `timestamp` and `timestamp_nanos` fields must be coherent
     fn validate_timestamp_consistency(&self) -> Result<(), ProposalValidationError> {
-        if self.header.timestamp() as i128 * 1_000_000_000 != self.header.timestamp_nanos() {
+        if self.header.timestamp() as i128 != self.header.timestamp_nanos() / 1_000_000_000 {
             return Err(ProposalValidationError::InconsistentTimestamps {
                 timestamp: self.header.timestamp(),
                 timestamp_nanos: self.header.timestamp_nanos(),
