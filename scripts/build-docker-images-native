@@ -266,7 +266,7 @@ cp -v scripts/sequencer-entrypoint "${workdir}/scripts/"
 mkdir -p "${workdir}/contracts/script/multisigTransactionProposals"
 cp -rv contracts/script/multisigTransactionProposals/safeSDK "${workdir}/contracts/script/multisigTransactionProposals/"
 cp -v scripts/multisig-upgrade-entrypoint "${workdir}/scripts/"
-cp package.json yarn.lock "$workdir"
+cp package.json yarn.lock "$workdir/"
 
 export DOCKER_BUILDKIT=1
 
