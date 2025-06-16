@@ -1580,7 +1580,7 @@ mod api_tests {
         assert_eq!(txn.commit(), hash);
 
         // Wait for a Decide event containing transaction matching the one we sent
-        let block_height = wait_for_decide_on_handle(&mut events, &txn).await as usize;
+        let block_height = wait_for_decide_on_handle(&mut events, &txn).await.0 as usize;
         tracing::info!(block_height, "transaction sequenced");
 
         // Wait for the query service to update to this block height.
@@ -2042,7 +2042,7 @@ mod test {
         v0_1::{RewardAmount, COMMISSION_BASIS_POINTS},
         v0_3::Fetcher,
         validators_from_l1_events, EpochVersion, FeeAmount, FeeVersion, Header, L1ClientOptions,
-        MockSequencerVersions, RewardDistributor, SequencerVersions, ValidatedState,
+        MockSequencerVersions, NamespaceId, RewardDistributor, SequencerVersions, ValidatedState,
     };
     use futures::{
         future::{self, join_all},
@@ -2052,8 +2052,9 @@ mod test {
     use hotshot_contract_adapter::sol_types::{EspToken, StakeTableV2};
     use hotshot_example_types::node_types::EpochsTestVersions;
     use hotshot_query_service::{
-        availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
+        availability::{BlockQueryData, BlockSummaryQueryData, LeafQueryData, VidCommonQueryData},
         data_source::{sql::Config, storage::SqlStorage, VersionedDataSource},
+        explorer::TransactionSummariesResponse,
         types::HeightIndexed,
     };
     use hotshot_types::{
@@ -2090,7 +2091,7 @@ mod test {
         },
         catchup::{NullStateCatchup, StatePeers},
         persistence::no_storage,
-        testing::{TestConfig, TestConfigBuilder},
+        testing::{wait_for_decide_on_handle, TestConfig, TestConfigBuilder},
     };
 
     #[tokio::test(flavor = "multi_thread")]
@@ -4739,5 +4740,257 @@ mod test {
         assert!(mint_transfer.value > U256::ZERO);
 
         Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_tx_metadata() {
+        setup_test();
+
+        let port = pick_unused_port().expect("No ports free");
+
+        let url = format!("http://localhost:{port}").parse().unwrap();
+        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+
+        let storage = SqlDataSource::create_storage().await;
+        let network_config = TestConfigBuilder::default().build();
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(
+                SqlDataSource::options(&storage, Options::with_port(port))
+                    .submit(Default::default())
+                    .explorer(Default::default()),
+            )
+            .network_config(network_config)
+            .build();
+        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let mut events = network.server.event_stream().await;
+
+        client.connect(None).await;
+
+        // Submit a few transactions in different namespaces.
+        let namespace_counts = [(101, 1), (102, 2), (103, 3)];
+        for (ns, count) in &namespace_counts {
+            for i in 0..*count {
+                let ns_id = NamespaceId::from(*ns as u64);
+                let txn = Transaction::new(ns_id, vec![*ns, i]);
+                client
+                    .post::<()>("submit/submit")
+                    .body_json(&txn)
+                    .unwrap()
+                    .send()
+                    .await
+                    .unwrap();
+                let (block, _) = wait_for_decide_on_handle(&mut events, &txn).await;
+
+                // Block summary should contain information about the namespace.
+                let summary: BlockSummaryQueryData<SeqTypes> = client
+                    .get(&format!("availability/block/summary/{block}"))
+                    .send()
+                    .await
+                    .unwrap();
+                let ns_info = summary.namespaces();
+                assert_eq!(ns_info.len(), 1);
+                assert_eq!(ns_info.keys().copied().collect::<Vec<_>>(), vec![ns_id]);
+                assert_eq!(ns_info[&ns_id].num_transactions, 1);
+                assert_eq!(ns_info[&ns_id].size, txn.size_in_block(true));
+            }
+        }
+
+        // List transactions in each namespace.
+        for (ns, count) in &namespace_counts {
+            tracing::info!(ns, "list transactions in namespace");
+
+            let ns_id = NamespaceId::from(*ns as u64);
+            let summaries: TransactionSummariesResponse<SeqTypes> = client
+                .get(&format!(
+                    "explorer/transactions/latest/{count}/namespace/{ns_id}"
+                ))
+                .send()
+                .await
+                .unwrap();
+            let txs = summaries.transaction_summaries;
+            assert_eq!(txs.len(), *count as usize);
+
+            // Check that transactions are listed in descending order.
+            for i in 0..*count {
+                let summary = &txs[i as usize];
+                let expected = Transaction::new(ns_id, vec![*ns, count - i - 1]);
+                assert_eq!(summary.rollups, vec![ns_id]);
+                assert_eq!(summary.hash, expected.commit());
+            }
+        }
+    }
+
+    use std::time::Instant;
+
+    use rand::thread_rng;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_aggregator_namespace_endpoints() {
+        setup_test();
+
+        let mut rng = thread_rng();
+
+        let port = pick_unused_port().expect("No ports free");
+
+        let url = format!("http://localhost:{port}").parse().unwrap();
+        tracing::info!("Sequencer URL = {url}");
+        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+
+        let options = Options::with_port(port).submit(Default::default());
+        const NUM_NODES: usize = 2;
+        // Initialize storage for each node
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+
+        let persistence_options: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let network_config = TestConfigBuilder::default().build();
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(SqlDataSource::options(&storage[0], options))
+            .network_config(network_config)
+            .persistences(persistence_options.clone())
+            .build();
+        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let mut events = network.server.event_stream().await;
+        let start = Instant::now();
+        let mut total_transactions = 0;
+        let mut tx_heights = Vec::new();
+        let mut sizes = HashMap::new();
+        // inserting transactions for some namespaces
+        // the number of transactions inserted is equal to namespace number.
+        for namespace in 1..=4 {
+            for _count in 0..namespace {
+                // Generate a random payload length between 4 and 10 bytes
+                let payload_len = rng.gen_range(4..=10);
+                let payload: Vec<u8> = (0..payload_len).map(|_| rng.gen()).collect();
+
+                let txn = Transaction::new(NamespaceId::from(namespace as u32), payload);
+
+                client.connect(None).await;
+
+                let hash = client
+                    .post("submit/submit")
+                    .body_json(&txn)
+                    .unwrap()
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(txn.commit(), hash);
+
+                // Wait for a Decide event containing transaction matching the one we sent
+                let (height, size) = wait_for_decide_on_handle(&mut events, &txn).await;
+                tx_heights.push(height);
+                total_transactions += 1;
+                *sizes.entry(namespace).or_insert(0) += size;
+            }
+        }
+
+        let duration = start.elapsed();
+
+        println!("Time elapsed to submit transactions: {:?}", duration);
+
+        let last_tx_height = tx_heights.last().unwrap();
+        for namespace in 1..=4 {
+            let count = client
+                .get::<u64>(&format!("node/transactions/count/namespace/{namespace}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                count, namespace as u64,
+                "Incorrect transaction count for namespace {}: expected {}, got {}",
+                namespace, namespace, count,
+            );
+
+            // check the range endpoint
+            let to_endpoint_count = client
+                .get::<u64>(&format!(
+                    "node/transactions/count/namespace/{namespace}/{last_tx_height}"
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(to_endpoint_count, namespace as u64, "Incorrect transaction count for range endpoint (to only) for namespace {}: expected {}, got {}",
+            namespace, namespace, to_endpoint_count,);
+
+            // check the range endpoint
+            let from_to_endpoint_count = client
+                .get::<u64>(&format!(
+                    "node/transactions/count/namespace/{namespace}/0/{last_tx_height}"
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(from_to_endpoint_count, namespace as u64, "Incorrect transaction count for range endpoint (from-to) for namespace {}: expected {}, got {}", 
+            namespace, namespace, from_to_endpoint_count,);
+
+            let ns_size = client
+                .get::<usize>(&format!("node/payloads/size/namespace/{namespace}"))
+                .send()
+                .await
+                .unwrap();
+
+            let expected_ns_size = *sizes.get(&namespace).unwrap();
+            assert_eq!(
+                ns_size, expected_ns_size,
+                "Incorrect payload size for namespace {}: expected {}, got {}",
+                namespace, expected_ns_size, ns_size,
+            );
+
+            let ns_size_to = client
+                .get::<usize>(&format!(
+                    "node/payloads/size/namespace/{namespace}/{last_tx_height}"
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                ns_size_to, expected_ns_size,
+                "Incorrect payload size for namespace {} up to height {}: expected {}, got {}",
+                namespace, last_tx_height, expected_ns_size, ns_size_to,
+            );
+
+            let ns_size_from_to = client
+                .get::<usize>(&format!(
+                    "node/payloads/size/namespace/{namespace}/0/{last_tx_height}"
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                ns_size_from_to, expected_ns_size,
+                "Incorrect payload size for namespace {} from 0 to height {}: expected {}, got {}",
+                namespace, last_tx_height, expected_ns_size, ns_size_from_to,
+            );
+        }
+
+        let total_tx_count = client
+            .get::<u64>("node/transactions/count")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            total_tx_count, total_transactions,
+            "Incorrect total transaction count: expected {}, got {}",
+            total_transactions, total_tx_count,
+        );
+
+        let total_payload_size = client
+            .get::<usize>("node/payloads/size")
+            .send()
+            .await
+            .unwrap();
+
+        let expected_total_size: usize = sizes.values().copied().sum();
+        assert_eq!(
+            total_payload_size, expected_total_size,
+            "Incorrect total payload size: expected {}, got {}",
+            expected_total_size, total_payload_size,
+        );
     }
 }
