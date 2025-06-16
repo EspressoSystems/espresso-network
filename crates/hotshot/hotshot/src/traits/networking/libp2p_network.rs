@@ -908,6 +908,13 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
             },
         };
 
+        let connected_pids = self.inner.handle.connected_pids().await.unwrap();
+        println!(
+            "{} connected_pids: {:?}",
+            connected_pids.len(),
+            connected_pids
+        );
+
         #[cfg(feature = "hotshot-testing")]
         {
             let metrics = self.inner.metrics.clone();
