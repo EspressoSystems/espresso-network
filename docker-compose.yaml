@@ -94,6 +94,8 @@ services:
         condition: service_healthy
       deploy-sequencer-contracts:
         condition: service_completed_successfully
+      deploy-prover-contracts:
+        condition: service_completed_successfully
 
   upgrade-prover-contracts-v2:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
