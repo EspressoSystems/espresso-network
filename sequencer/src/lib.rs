@@ -680,7 +680,7 @@ pub mod testing {
         signature_key::BLSKeyPair,
         traits::{
             block_contents::BlockHeader, metrics::NoMetrics, network::Topic,
-            signature_key::BuilderSignatureKey,
+            signature_key::BuilderSignatureKey, EncodeBytes,
         },
         HotShotConfig, PeerConfig,
     };
@@ -1303,11 +1303,11 @@ pub mod testing {
     }
 
     // Wait for decide event, make sure it matches submitted transaction. Return the block number
-    // containing the transaction.
+    // containing the transaction and the block payload size
     pub async fn wait_for_decide_on_handle(
         events: &mut (impl Stream<Item = Event> + Unpin),
         submitted_txn: &Transaction,
-    ) -> u64 {
+    ) -> (u64, usize) {
         let commitment = submitted_txn.commit();
 
         // Keep getting events until we see a Decide event
@@ -1316,19 +1316,23 @@ pub mod testing {
             tracing::info!("Received event from handle: {event:?}");
 
             if let Decide { leaf_chain, .. } = event.event {
-                if let Some(height) = leaf_chain.iter().find_map(|LeafInfo { leaf, .. }| {
-                    if leaf
-                        .block_payload()
-                        .as_ref()?
-                        .transaction_commitments(leaf.block_header().metadata())
-                        .contains(&commitment)
-                    {
-                        Some(leaf.block_header().block_number())
-                    } else {
-                        None
-                    }
-                }) {
-                    return height;
+                if let Some((height, size)) =
+                    leaf_chain.iter().find_map(|LeafInfo { leaf, .. }| {
+                        if leaf
+                            .block_payload()
+                            .as_ref()?
+                            .transaction_commitments(leaf.block_header().metadata())
+                            .contains(&commitment)
+                        {
+                            let size = leaf.block_payload().unwrap().encode().len();
+                            Some((leaf.block_header().block_number(), size))
+                        } else {
+                            None
+                        }
+                    })
+                {
+                    tracing::info!(height, "transaction {commitment} sequenced");
+                    return (height, size);
                 }
             } else {
                 // Keep waiting

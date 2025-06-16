@@ -22,21 +22,14 @@ lint *args:
     just clippy -- -D warnings
 
 clippy *args:
-    #!/usr/bin/env bash
-    set -euxo pipefail
-    # Use the same target dir for both `clippy` invocations
-    export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target}
-    cargo clippy --workspace --features testing --all-targets {{args}}
+    # check all targets in default workspace members
+    cargo clippy --features testing --all-targets {{args}}
+    # check entire workspace (including sequencer-sqlite crate) with embedded-db feature
     cargo clippy --workspace --features "embedded-db testing" --all-targets {{args}}
-    cargo clippy --workspace --all-targets --manifest-path sequencer-sqlite/Cargo.toml {{args}}
 
 build profile="dev" features="":
-    #!/usr/bin/env bash
-    set -euxo pipefail
-    # Use the same target dir for both `build` invocations
-    export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target}
     cargo build --profile {{profile}} {{features}}
-    cargo build --profile {{profile}} --manifest-path ./sequencer-sqlite/Cargo.toml {{features}}
+    cargo build --profile {{profile}} -p sequencer-sqlite {{features}}
 
 demo-native-pos *args: (build "test" "--features fee,pos")
     ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE=data/genesis/demo-pos.toml scripts/demo-native -f process-compose.yaml {{args}}
@@ -68,7 +61,7 @@ anvil *args:
 
 nextest *args:
     # exclude hotshot-testing because it takes ages to compile and has its own hotshot.just file
-    cargo nextest run --locked --workspace --exclude hotshot-testing --verbose {{args}}
+    cargo nextest run --locked --workspace --exclude sequencer-sqlite --exclude hotshot-testing --verbose {{args}}
 
 test *args:
     @echo 'Omitting slow tests. Use `test-slow` for those. Or `test-all` for all tests.'
@@ -97,8 +90,7 @@ check-features-ci *args:
     # check each pair of features plus `default` and `--no-default-features`
     cargo hack check --feature-powerset \
         --depth 2 \
-        --exclude contract-bindings-alloy \
-        --exclude contract-bindings-ethers \
+        --exclude-all-features \
         --exclude hotshot \
         --exclude hotshot-builder-api \
         --exclude hotshot-contract-adapter \
@@ -108,7 +100,6 @@ check-features-ci *args:
         --exclude hotshot-macros \
         --exclude hotshot-orchestrator \
         --exclude hotshot-query-service \
-        --exclude hotshot-stake-table \
         --exclude hotshot-state-prover \
         --exclude hotshot-task \
         --exclude hotshot-task-impls \
