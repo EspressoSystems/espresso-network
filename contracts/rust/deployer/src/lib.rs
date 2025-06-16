@@ -561,12 +561,9 @@ pub async fn upgrade_light_client_v2_multisig_owner(
     let proxy = LightClient::new(proxy_addr, &provider);
     let owner_addr = proxy.owner().call().await?._0;
 
-    if !dry_run {
-        tracing::info!("Checking if owner is a contract");
-        assert!(
-            is_contract(&provider, owner_addr).await?,
-            "Owner is not a contract so not a multisig wallet"
-        );
+    if !dry_run && !is_contract(&provider, owner_addr).await? {
+        tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
+        anyhow::bail!("Proxy owner is not a contract");
     }
 
     // Prepare addresses
