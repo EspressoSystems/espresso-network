@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-  "log/slog"
 	"sort"
 	"sync"
 
@@ -43,7 +42,6 @@ func (c *MultipleNodesClient) FetchLatestBlockHeight(ctx context.Context) (uint6
 		if err == nil {
 			return height, nil
 		} else {
-      slog.Error("encountered an error while attempting to fetch latest block height from one node.", "Error", err, "Node", node)
 			errs = append(errs, err)
 		}
 	}
@@ -140,7 +138,6 @@ func (c *MultipleNodesClient) SubmitTransaction(ctx context.Context, tx common.T
 		if err == nil {
 			return hash, nil
 		} else {
-			slog.Error("encountered an error while attempting to submit transaction with one node.", "Error", err, "Node", node)
 			errs = append(errs, err)
 		}
 	}
@@ -196,7 +193,6 @@ func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T
 
 				}
 			} else {
-			  slog.Error("encountered an error while attempting to fetch with majority.", "Error", res.err)
 				errs = append(errs, res.err)
 			}
 
