@@ -8,6 +8,7 @@ const TRANSFER_OWNERSHIP_CMD = "transferOwnership" as const;
 
 export interface TransferOwnershipData {
   proxyAddress: string;
+  initData: string;
   rpcUrl: string;
   newOwner: string;
   safeAddress: string;
@@ -19,7 +20,17 @@ async function main() {
 
   try {
     const [transferOwnershipData, dryRun] = processCommandLineArguments();
-    console.log(JSON.stringify(transferOwnershipData));
+    if (dryRun) {
+      // Prepare the transaction data to upgrade the proxy
+      const abi = ["function transferOwnership(address)"];
+      // Encode the function call with the new implementation address and its init data
+      transferOwnershipData.initData = new ethers.Interface(abi).encodeFunctionData("transferOwnership", [
+        transferOwnershipData.newOwner,
+      ]);
+
+      console.log(JSON.stringify(transferOwnershipData));
+      return;
+    }
 
     if (!dryRun) {
       // Initialize web3 provider using the RPC URL from environment variables
@@ -65,6 +76,7 @@ export function processRustCommandLineArguments(args: string[]): [TransferOwners
   let safeAddress = "";
   let useHardwareWallet = false;
   let dryRun = false;
+  let initData = "";
   // Parse named flags like --proxy, --impl, --init
   const map: Record<string, string> = {};
   for (let i = 0; i < args.length; i++) {
@@ -81,7 +93,7 @@ export function processRustCommandLineArguments(args: string[]): [TransferOwners
     }
   }
 
-  proxyAddress = map["proxy-address"];
+  proxyAddress = map["proxy"];
   rpcUrl = map["rpc-url"];
   newOwner = map["new-owner"];
   safeAddress = map["safe-address"];
@@ -96,6 +108,7 @@ export function processRustCommandLineArguments(args: string[]): [TransferOwners
 
   let transferOwnershipData: TransferOwnershipData = {
     proxyAddress: proxyAddress,
+    initData: initData,
     rpcUrl: rpcUrl,
     newOwner: newOwner,
     safeAddress: safeAddress,
@@ -108,6 +121,7 @@ export function processRustCommandLineArguments(args: string[]): [TransferOwners
 function processCommandLineArguments(): [TransferOwnershipData, boolean] {
   let proxyAddress = "";
   let rpcUrl = "";
+  let initData = "";
   let newOwner = "";
   let safeAddress = "";
   let useHardwareWallet = false;
@@ -136,6 +150,7 @@ function processCommandLineArguments(): [TransferOwnershipData, boolean] {
 
   let transferOwnershipData: TransferOwnershipData = {
     proxyAddress: proxyAddress,
+    initData: initData,
     rpcUrl: rpcUrl,
     newOwner: newOwner,
     safeAddress: safeAddress,
