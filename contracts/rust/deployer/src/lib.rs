@@ -1777,7 +1777,6 @@ mod tests {
     #[tokio::test]
     async fn test_upgrade_stake_table_v2() -> Result<()> {
         setup_test();
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
