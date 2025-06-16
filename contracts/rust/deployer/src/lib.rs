@@ -103,6 +103,10 @@ pub struct DeployedContracts {
     #[clap(long, env = Contract::EspToken)]
     esp_token: Option<Address>,
 
+    /// Use an already-deployed EspTokenV2.sol instead of deploying a new one.
+    #[clap(long, env = Contract::EspTokenV2)]
+    esp_token_v2: Option<Address>,
+
     /// Use an already-deployed EspToken.sol proxy instead of deploying a new one.
     #[clap(long, env = Contract::EspTokenProxy)]
     esp_token_proxy: Option<Address>,
@@ -141,6 +145,8 @@ pub enum Contract {
     FeeContractProxy,
     #[display("ESPRESSO_SEQUENCER_ESP_TOKEN_ADDRESS")]
     EspToken,
+    #[display("ESPRESSO_SEQUENCER_ESP_TOKEN_V2_ADDRESS")]
+    EspTokenV2,
     #[display("ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS")]
     EspTokenProxy,
     #[display("ESPRESSO_SEQUENCER_STAKE_TABLE_ADDRESS")]
@@ -190,6 +196,9 @@ impl From<DeployedContracts> for Contracts {
         }
         if let Some(addr) = deployed.esp_token {
             m.insert(Contract::EspToken, addr);
+        }
+        if let Some(addr) = deployed.esp_token_v2 {
+            m.insert(Contract::EspTokenV2, addr);
         }
         if let Some(addr) = deployed.esp_token_proxy {
             m.insert(Contract::EspTokenProxy, addr);
@@ -757,9 +766,9 @@ pub async fn deploy_token_proxy(
     let token_proxy = EspToken::new(token_proxy_addr, &provider);
     assert_eq!(token_proxy.getVersion().call().await?.majorVersion, 1);
     assert_eq!(token_proxy.owner().call().await?._0, owner);
-    assert_eq!(token_proxy.symbol().call().await?._0, "ESP");
+    assert_eq!(token_proxy.symbol().call().await?._0, symbol);
     assert_eq!(token_proxy.decimals().call().await?._0, 18);
-    assert_eq!(token_proxy.name().call().await?._0, "Espresso");
+    assert_eq!(token_proxy.name().call().await?._0, name);
     let total_supply = token_proxy.totalSupply().call().await?._0;
     assert_eq!(
         token_proxy.balanceOf(init_grant_recipient).call().await?._0,
@@ -767,6 +776,113 @@ pub async fn deploy_token_proxy(
     );
 
     Ok(token_proxy_addr)
+}
+
+/// Upgrade the esp token proxy to use EspTokenV2.
+async fn upgrade_esp_token_v2(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+) -> Result<TransactionReceipt> {
+    let Some(proxy_addr) = contracts.address(Contract::EspTokenProxy) else {
+        anyhow::bail!("EspTokenProxy not found, can't upgrade")
+    };
+
+    let proxy = EspToken::new(proxy_addr, &provider);
+    // Deploy the new implementation
+    let v2_addr = contracts
+        .deploy(Contract::EspTokenV2, EspTokenV2::deploy_builder(&provider))
+        .await?;
+
+    assert!(is_contract(&provider, v2_addr).await?);
+
+    // invoke upgrade on proxy
+    let receipt = proxy
+        .upgradeToAndCall(v2_addr, vec![].into() /* no new init data for V2 */)
+        .send()
+        .await?
+        .get_receipt()
+        .await?;
+
+    if receipt.inner.is_success() {
+        // post deploy verification checks
+        let proxy_as_v2 = EspTokenV2::new(proxy_addr, &provider);
+        assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
+        assert_eq!(proxy_as_v2.name().call().await?._0, "Espresso");
+        tracing::info!(%v2_addr, "EspToken successfully upgraded to")
+    } else {
+        anyhow::bail!("EspToken upgrade failed: {:?}", receipt);
+    }
+
+    Ok(receipt)
+}
+
+/// Upgrade the EspToken proxy to use EspTokenV2.
+/// Internally, first detect existence of proxy, then deploy EspTokenV2, then upgrade and initializeV2.
+/// Assumes:
+/// - the proxy is already deployed.
+/// - the proxy is owned by a multisig.
+///
+/// Returns the url link to the upgrade proposal
+/// This function can only be called on a real network supported by the safeSDK
+pub async fn upgrade_esp_token_v2_multisig_owner(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+    rpc_url: String,
+    dry_run: Option<bool>,
+) -> Result<(String, bool)> {
+    let dry_run = dry_run.unwrap_or_else(|| {
+        tracing::warn!("Dry run not specified, defaulting to false");
+        false
+    });
+
+    let proxy_addr = contracts
+        .address(Contract::EspTokenProxy)
+        .ok_or_else(|| anyhow!("EspTokenProxy (multisig owner) not found, can't upgrade"))?;
+    tracing::info!("EspTokenProxy found at {proxy_addr:#x}");
+    let proxy = EspToken::new(proxy_addr, &provider);
+    let owner_addr = proxy.owner().call().await?._0;
+
+    if !dry_run {
+        tracing::info!("Checking if owner is a contract");
+        assert!(
+            is_contract(&provider, owner_addr).await?,
+            "Owner is not a contract so not a multisig wallet"
+        );
+    }
+
+    // Prepare addresses
+    let esp_token_v2_addr = if !dry_run {
+        contracts
+            .deploy(Contract::EspTokenV2, EspTokenV2::deploy_builder(&provider))
+            .await?
+    } else {
+        // Use dummy addresses for dry run
+        Address::random()
+    };
+
+    // no reinitializer so empty init data
+    let init_data = "0x".to_string();
+
+    // invoke upgrade on proxy via the safeSDK
+    let result = call_upgrade_proxy_script(
+        proxy_addr,
+        esp_token_v2_addr,
+        init_data.to_string(),
+        rpc_url,
+        owner_addr,
+        Some(dry_run),
+    )
+    .await?;
+
+    tracing::info!("No init data to be signed");
+    if !dry_run {
+        tracing::info!(
+            "EspTokenProxy upgrade proposal sent. Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
+            owner_addr
+        );
+    }
+
+    Ok(result)
 }
 
 /// The primary logic for deploying and initializing an upgradable permissionless StakeTable contract.
@@ -1658,7 +1774,6 @@ mod tests {
     #[tokio::test]
     async fn test_upgrade_stake_table_v2() -> Result<()> {
         setup_test();
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -1758,6 +1873,188 @@ mod tests {
                 .await?
                 ._0
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upgrade_esp_token_v2() -> Result<()> {
+        setup_test();
+        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+
+        // deploy token
+        let init_recipient = provider.get_accounts().await?[1];
+        let token_owner = provider.get_accounts().await?[0];
+        let token_name = "Espresso Token";
+        let token_symbol = "ESP";
+        let initial_supply = U256::from(3590000000u64);
+        let token_proxy_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            token_owner,
+            init_recipient,
+            initial_supply,
+            token_name,
+            token_symbol,
+        )
+        .await?;
+        let esp_token = EspToken::new(token_proxy_addr, &provider);
+        assert_eq!(esp_token.name().call().await?._0, token_name);
+
+        // upgrade to v2
+        upgrade_esp_token_v2(&provider, &mut contracts).await?;
+
+        let esp_token_v2 = EspTokenV2::new(token_proxy_addr, &provider);
+
+        assert_eq!(esp_token_v2.getVersion().call().await?, (2, 0, 0).into());
+        assert_eq!(esp_token_v2.owner().call().await?._0, token_owner);
+
+        // name is hardcoded in the EspTokenV2 contract
+        assert_eq!(esp_token_v2.name().call().await?._0, "Espresso");
+        assert_eq!(esp_token_v2.symbol().call().await?._0, "ESP");
+        assert_eq!(esp_token_v2.decimals().call().await?._0, 18);
+
+        let initial_supply_in_wei = parse_ether(&initial_supply.to_string()).unwrap();
+        assert_eq!(
+            esp_token_v2.totalSupply().call().await?._0,
+            initial_supply_in_wei
+        );
+        assert_eq!(
+            esp_token_v2.balanceOf(init_recipient).call().await?._0,
+            initial_supply_in_wei
+        );
+        assert_eq!(
+            esp_token_v2.balanceOf(token_owner).call().await?._0,
+            U256::ZERO
+        );
+
+        Ok(())
+    }
+
+    // We expect no init data for the upgrade because there is no reinitializer for v2
+    #[tokio::test]
+    async fn test_upgrade_esp_token_v2_multisig_owner_dry_run() -> Result<()> {
+        test_upgrade_esp_token_v2_multisig_owner_helper(UpgradeTestOptions {
+            is_mock: false,
+            run_mode: RunMode::DryRun,
+            upgrade_count: UpgradeCount::Once,
+        })
+        .await
+    }
+
+    // This test is used to test the upgrade of the EspTokenProxy via the multisig wallet
+    // It only tests the upgrade proposal via the typescript script and thus requires the upgrade proposal to be sent to a real network
+    // However, the contracts are deployed on anvil, so the test will pass even if the upgrade proposal is not executed
+    // The test assumes that there is a file .env.deployer.rs.test in the root directory:
+    // Ensure that the private key has proposal rights on the Safe Multisig Wallet and the SDK supports the network
+    async fn test_upgrade_esp_token_v2_multisig_owner_helper(
+        options: UpgradeTestOptions,
+    ) -> Result<()> {
+        let mut sepolia_rpc_url = "http://localhost:8545".to_string();
+        let mut multisig_admin = Address::random();
+        let mut mnemonic =
+            "test test test test test test test test test test test junk".to_string();
+        let mut account_index = 0;
+        let anvil = Anvil::default().spawn();
+        let dry_run = matches!(options.run_mode, RunMode::DryRun);
+
+        if !dry_run {
+            dotenvy::from_filename_override(".env.deployer.rs.test").ok();
+
+            for item in dotenvy::from_filename_iter(".env.deployer.rs.test")
+                .expect("Failed to read .env.deployer.rs.test")
+            {
+                let (key, val) = item?;
+                if key == "ESPRESSO_SEQUENCER_L1_PROVIDER" {
+                    sepolia_rpc_url = val.to_string();
+                } else if key == "ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS" {
+                    multisig_admin = val.parse::<Address>()?;
+                } else if key == "ESPRESSO_SEQUENCER_ETH_MNEMONIC" {
+                    mnemonic = val.to_string();
+                } else if key == "ESPRESSO_DEPLOYER_ACCOUNT_INDEX" {
+                    account_index = val.parse::<u32>()?;
+                }
+            }
+
+            if sepolia_rpc_url.is_empty() || multisig_admin.is_zero() {
+                panic!("ESPRESSO_SEQUENCER_L1_PROVIDER and ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS must be set in .env.deployer.rs.test");
+            }
+        }
+
+        let mut contracts = Contracts::new();
+        let admin_signer = MnemonicBuilder::<English>::default()
+            .phrase(mnemonic)
+            .index(account_index)
+            .expect("wrong mnemonic or index")
+            .build()?;
+        let admin = admin_signer.address();
+        let provider = if !dry_run {
+            ProviderBuilder::new()
+                .wallet(admin_signer)
+                .connect(&sepolia_rpc_url)
+                .await?
+        } else {
+            ProviderBuilder::new()
+                .wallet(admin_signer)
+                .connect(&anvil.endpoint())
+                .await?
+        };
+        let init_recipient = provider.get_accounts().await?[0];
+        let initial_supply = U256::from(3590000000u64);
+        let token_name = "Espresso";
+        let token_symbol = "ESP";
+
+        // deploy proxy and V1
+        let esp_token_proxy_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            admin,
+            init_recipient,
+            initial_supply,
+            token_name,
+            token_symbol,
+        )
+        .await?;
+        if matches!(options.upgrade_count, UpgradeCount::Twice) {
+            // upgrade to v2
+            upgrade_esp_token_v2(&provider, &mut contracts).await?;
+        }
+
+        // transfer ownership to multisig
+        let _receipt = transfer_ownership(
+            &provider,
+            Contract::EspTokenProxy,
+            esp_token_proxy_addr,
+            multisig_admin,
+        )
+        .await?;
+        let esp_token = EspToken::new(esp_token_proxy_addr, &provider);
+        assert_eq!(esp_token.owner().call().await?._0, multisig_admin);
+
+        // then send upgrade proposal to the multisig wallet
+        let (result, success) = upgrade_esp_token_v2_multisig_owner(
+            &provider,
+            &mut contracts,
+            sepolia_rpc_url.clone(),
+            Some(dry_run),
+        )
+        .await?;
+        tracing::info!(
+            "Result when trying to upgrade EspTokenProxy via the multisig wallet: {:?}",
+            result
+        );
+        assert!(success);
+        if dry_run {
+            let data: serde_json::Value = serde_json::from_str(&result)?;
+            assert_eq!(data["rpcUrl"], sepolia_rpc_url);
+            assert_eq!(data["safeAddress"], multisig_admin.to_string());
+            assert_eq!(data["proxyAddress"], esp_token_proxy_addr.to_string());
+            assert_eq!(data["initData"], "0x");
+            assert_eq!(data["useHardwareWallet"], false);
+        }
+        // v1 state persistence cannot be tested here because the upgrade proposal is not yet executed
+        // One has to test that the upgrade proposal is available via the Safe UI
+        // and then test that the v1 state is persisted
         Ok(())
     }
 }

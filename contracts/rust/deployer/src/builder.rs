@@ -103,6 +103,34 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     crate::transfer_ownership(provider, target, addr, multisig).await?;
                 }
             },
+            Contract::EspTokenV2 => {
+                let use_multisig = self.use_multisig;
+
+                if use_multisig {
+                    crate::upgrade_esp_token_v2_multisig_owner(
+                        provider,
+                        contracts,
+                        self.rpc_url.clone(),
+                        Some(self.dry_run),
+                    )
+                    .await?;
+                } else {
+                    crate::upgrade_esp_token_v2(provider, contracts).await?;
+
+                    if let Some(multisig) = self.multisig {
+                        let token_proxy = contracts
+                            .address(Contract::EspTokenProxy)
+                            .expect("fail to get EspTokenProxy address");
+                        crate::transfer_ownership(
+                            provider,
+                            Contract::EspTokenProxy,
+                            token_proxy,
+                            multisig,
+                        )
+                        .await?;
+                    }
+                }
+            },
             Contract::LightClientProxy => {
                 assert!(
                     self.genesis_lc_state.is_some(),
