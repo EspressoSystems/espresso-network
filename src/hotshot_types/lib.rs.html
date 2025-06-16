@@ -124,7 +124,7 @@
 <a href=#124 id=124 data-nosnippet>124</a>    }
 <a href=#125 id=125 data-nosnippet>125</a>}
 <a href=#126 id=126 data-nosnippet>126</a>
-<a href=#127 id=127 data-nosnippet>127</a><span class="attr">#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Display, PartialEq, Eq, Hash)]
+<a href=#127 id=127 data-nosnippet>127</a><span class="attr">#[derive(serde::Serialize, serde::Deserialize, Clone, Display, PartialEq, Eq, Hash)]
 <a href=#128 id=128 data-nosnippet>128</a>#[serde(bound(deserialize = <span class="string">""</span>))]
 <a href=#129 id=129 data-nosnippet>129</a></span><span class="doccomment">/// structure of peers' config, including public key, stake value, and state key.
 <a href=#130 id=130 data-nosnippet>130</a></span><span class="kw">pub struct </span>PeerConfig&lt;TYPES: NodeType&gt; {
@@ -171,89 +171,98 @@
 <a href=#171 id=171 data-nosnippet>171</a>    }
 <a href=#172 id=172 data-nosnippet>172</a>}
 <a href=#173 id=173 data-nosnippet>173</a>
-<a href=#174 id=174 data-nosnippet>174</a><span class="doccomment">/// Holds configuration for a `HotShot`
-<a href=#175 id=175 data-nosnippet>175</a></span><span class="attr">#[derive(Clone, derive_more::Debug, serde::Serialize, serde::Deserialize)]
-<a href=#176 id=176 data-nosnippet>176</a>#[serde(bound(deserialize = <span class="string">""</span>))]
-<a href=#177 id=177 data-nosnippet>177</a></span><span class="kw">pub struct </span>HotShotConfig&lt;TYPES: NodeType&gt; {
-<a href=#178 id=178 data-nosnippet>178</a>    <span class="doccomment">/// The proportion of nodes required before the orchestrator issues the ready signal,
-<a href=#179 id=179 data-nosnippet>179</a>    /// expressed as (numerator, denominator)
-<a href=#180 id=180 data-nosnippet>180</a>    </span><span class="kw">pub </span>start_threshold: (u64, u64),
-<a href=#181 id=181 data-nosnippet>181</a>    <span class="doccomment">/// Total number of nodes in the network
-<a href=#182 id=182 data-nosnippet>182</a>    </span><span class="comment">// Earlier it was total_nodes
-<a href=#183 id=183 data-nosnippet>183</a>    </span><span class="kw">pub </span>num_nodes_with_stake: NonZeroUsize,
-<a href=#184 id=184 data-nosnippet>184</a>    <span class="doccomment">/// List of known node's public keys and stake value for certificate aggregation, serving as public parameter
-<a href=#185 id=185 data-nosnippet>185</a>    </span><span class="kw">pub </span>known_nodes_with_stake: Vec&lt;PeerConfig&lt;TYPES&gt;&gt;,
-<a href=#186 id=186 data-nosnippet>186</a>    <span class="doccomment">/// All public keys known to be DA nodes
-<a href=#187 id=187 data-nosnippet>187</a>    </span><span class="kw">pub </span>known_da_nodes: Vec&lt;PeerConfig&lt;TYPES&gt;&gt;,
-<a href=#188 id=188 data-nosnippet>188</a>    <span class="doccomment">/// List of DA committee (staking)nodes for static DA committee
-<a href=#189 id=189 data-nosnippet>189</a>    </span><span class="kw">pub </span>da_staked_committee_size: usize,
-<a href=#190 id=190 data-nosnippet>190</a>    <span class="doccomment">/// Number of fixed leaders for GPU VID, normally it will be 0, it's only used when running GPU VID
-<a href=#191 id=191 data-nosnippet>191</a>    </span><span class="kw">pub </span>fixed_leader_for_gpuvid: usize,
-<a href=#192 id=192 data-nosnippet>192</a>    <span class="doccomment">/// Base duration for next-view timeout, in milliseconds
-<a href=#193 id=193 data-nosnippet>193</a>    </span><span class="kw">pub </span>next_view_timeout: u64,
-<a href=#194 id=194 data-nosnippet>194</a>    <span class="doccomment">/// Duration of view sync round timeouts
-<a href=#195 id=195 data-nosnippet>195</a>    </span><span class="kw">pub </span>view_sync_timeout: Duration,
-<a href=#196 id=196 data-nosnippet>196</a>    <span class="doccomment">/// Number of network bootstrap nodes
-<a href=#197 id=197 data-nosnippet>197</a>    </span><span class="kw">pub </span>num_bootstrap: usize,
-<a href=#198 id=198 data-nosnippet>198</a>    <span class="doccomment">/// The maximum amount of time a leader can wait to get a block from a builder
-<a href=#199 id=199 data-nosnippet>199</a>    </span><span class="kw">pub </span>builder_timeout: Duration,
-<a href=#200 id=200 data-nosnippet>200</a>    <span class="doccomment">/// time to wait until we request data associated with a proposal
-<a href=#201 id=201 data-nosnippet>201</a>    </span><span class="kw">pub </span>data_request_delay: Duration,
-<a href=#202 id=202 data-nosnippet>202</a>    <span class="doccomment">/// Builder API base URL
-<a href=#203 id=203 data-nosnippet>203</a>    </span><span class="kw">pub </span>builder_urls: Vec1&lt;Url&gt;,
-<a href=#204 id=204 data-nosnippet>204</a>    <span class="doccomment">/// View to start proposing an upgrade
-<a href=#205 id=205 data-nosnippet>205</a>    </span><span class="kw">pub </span>start_proposing_view: u64,
-<a href=#206 id=206 data-nosnippet>206</a>    <span class="doccomment">/// View to stop proposing an upgrade. To prevent proposing an upgrade, set stop_proposing_view &lt;= start_proposing_view.
-<a href=#207 id=207 data-nosnippet>207</a>    </span><span class="kw">pub </span>stop_proposing_view: u64,
-<a href=#208 id=208 data-nosnippet>208</a>    <span class="doccomment">/// View to start voting on an upgrade
-<a href=#209 id=209 data-nosnippet>209</a>    </span><span class="kw">pub </span>start_voting_view: u64,
-<a href=#210 id=210 data-nosnippet>210</a>    <span class="doccomment">/// View to stop voting on an upgrade. To prevent voting on an upgrade, set stop_voting_view &lt;= start_voting_view.
-<a href=#211 id=211 data-nosnippet>211</a>    </span><span class="kw">pub </span>stop_voting_view: u64,
-<a href=#212 id=212 data-nosnippet>212</a>    <span class="doccomment">/// Unix time in seconds at which we start proposing an upgrade
-<a href=#213 id=213 data-nosnippet>213</a>    </span><span class="kw">pub </span>start_proposing_time: u64,
-<a href=#214 id=214 data-nosnippet>214</a>    <span class="doccomment">/// Unix time in seconds at which we stop proposing an upgrade. To prevent proposing an upgrade, set stop_proposing_time &lt;= start_proposing_time.
-<a href=#215 id=215 data-nosnippet>215</a>    </span><span class="kw">pub </span>stop_proposing_time: u64,
-<a href=#216 id=216 data-nosnippet>216</a>    <span class="doccomment">/// Unix time in seconds at which we start voting on an upgrade
-<a href=#217 id=217 data-nosnippet>217</a>    </span><span class="kw">pub </span>start_voting_time: u64,
-<a href=#218 id=218 data-nosnippet>218</a>    <span class="doccomment">/// Unix time in seconds at which we stop voting on an upgrade. To prevent voting on an upgrade, set stop_voting_time &lt;= start_voting_time.
-<a href=#219 id=219 data-nosnippet>219</a>    </span><span class="kw">pub </span>stop_voting_time: u64,
-<a href=#220 id=220 data-nosnippet>220</a>    <span class="doccomment">/// Number of blocks in an epoch, zero means there are no epochs
-<a href=#221 id=221 data-nosnippet>221</a>    </span><span class="kw">pub </span>epoch_height: u64,
-<a href=#222 id=222 data-nosnippet>222</a>    <span class="doccomment">/// Epoch start block   
-<a href=#223 id=223 data-nosnippet>223</a>    </span><span class="attr">#[serde(default = <span class="string">"default_epoch_start_block"</span>)]
-<a href=#224 id=224 data-nosnippet>224</a>    </span><span class="kw">pub </span>epoch_start_block: u64,
-<a href=#225 id=225 data-nosnippet>225</a>    <span class="doccomment">/// Stake table capacity for light client use
-<a href=#226 id=226 data-nosnippet>226</a>    </span><span class="attr">#[serde(default = <span class="string">"default_stake_table_capacity"</span>)]
-<a href=#227 id=227 data-nosnippet>227</a>    </span><span class="kw">pub </span>stake_table_capacity: usize,
-<a href=#228 id=228 data-nosnippet>228</a>    <span class="doccomment">/// number of iterations in the DRB calculation
-<a href=#229 id=229 data-nosnippet>229</a>    </span><span class="kw">pub </span>drb_difficulty: u64,
-<a href=#230 id=230 data-nosnippet>230</a>    <span class="doccomment">/// number of iterations in the DRB calculation
-<a href=#231 id=231 data-nosnippet>231</a>    </span><span class="kw">pub </span>drb_upgrade_difficulty: u64,
-<a href=#232 id=232 data-nosnippet>232</a>}
-<a href=#233 id=233 data-nosnippet>233</a>
-<a href=#234 id=234 data-nosnippet>234</a><span class="kw">fn </span>default_epoch_start_block() -&gt; u64 {
-<a href=#235 id=235 data-nosnippet>235</a>    <span class="number">1
-<a href=#236 id=236 data-nosnippet>236</a></span>}
-<a href=#237 id=237 data-nosnippet>237</a>
-<a href=#238 id=238 data-nosnippet>238</a><span class="kw">fn </span>default_stake_table_capacity() -&gt; usize {
-<a href=#239 id=239 data-nosnippet>239</a>    <span class="kw">crate</span>::light_client::DEFAULT_STAKE_TABLE_CAPACITY
-<a href=#240 id=240 data-nosnippet>240</a>}
-<a href=#241 id=241 data-nosnippet>241</a>
-<a href=#242 id=242 data-nosnippet>242</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; HotShotConfig&lt;TYPES&gt; {
-<a href=#243 id=243 data-nosnippet>243</a>    <span class="doccomment">/// Update a hotshot config to have a view-based upgrade.
-<a href=#244 id=244 data-nosnippet>244</a>    </span><span class="kw">pub fn </span>set_view_upgrade(<span class="kw-2">&amp;mut </span><span class="self">self</span>, view: u64) {
-<a href=#245 id=245 data-nosnippet>245</a>        <span class="self">self</span>.start_proposing_view = view;
-<a href=#246 id=246 data-nosnippet>246</a>        <span class="self">self</span>.stop_proposing_view = view + <span class="number">1</span>;
-<a href=#247 id=247 data-nosnippet>247</a>        <span class="self">self</span>.start_voting_view = view.saturating_sub(<span class="number">1</span>);
-<a href=#248 id=248 data-nosnippet>248</a>        <span class="self">self</span>.stop_voting_view = view + <span class="number">10</span>;
-<a href=#249 id=249 data-nosnippet>249</a>        <span class="self">self</span>.start_proposing_time = <span class="number">0</span>;
-<a href=#250 id=250 data-nosnippet>250</a>        <span class="self">self</span>.stop_proposing_time = u64::MAX;
-<a href=#251 id=251 data-nosnippet>251</a>        <span class="self">self</span>.start_voting_time = <span class="number">0</span>;
-<a href=#252 id=252 data-nosnippet>252</a>        <span class="self">self</span>.stop_voting_time = u64::MAX;
-<a href=#253 id=253 data-nosnippet>253</a>    }
-<a href=#254 id=254 data-nosnippet>254</a>
-<a href=#255 id=255 data-nosnippet>255</a>    <span class="doccomment">/// Return the `known_nodes_with_stake` as a `HSStakeTable`
-<a href=#256 id=256 data-nosnippet>256</a>    </span><span class="kw">pub fn </span>hotshot_stake_table(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; HSStakeTable&lt;TYPES&gt; {
-<a href=#257 id=257 data-nosnippet>257</a>        <span class="self">self</span>.known_nodes_with_stake.clone().into()
-<a href=#258 id=258 data-nosnippet>258</a>    }
-<a href=#259 id=259 data-nosnippet>259</a>}</code></pre></div></section></main></body></html>
+<a href=#174 id=174 data-nosnippet>174</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; Debug <span class="kw">for </span>PeerConfig&lt;TYPES&gt; {
+<a href=#175 id=175 data-nosnippet>175</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
+<a href=#176 id=176 data-nosnippet>176</a>        f.debug_struct(<span class="string">"PeerConfig"</span>)
+<a href=#177 id=177 data-nosnippet>177</a>            .field(<span class="string">"stake_table_entry"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.stake_table_entry)
+<a href=#178 id=178 data-nosnippet>178</a>            .field(<span class="string">"state_ver_key"</span>, <span class="kw-2">&amp;</span><span class="macro">format_args!</span>(<span class="string">"{}"</span>, <span class="self">self</span>.state_ver_key))
+<a href=#179 id=179 data-nosnippet>179</a>            .finish()
+<a href=#180 id=180 data-nosnippet>180</a>    }
+<a href=#181 id=181 data-nosnippet>181</a>}
+<a href=#182 id=182 data-nosnippet>182</a>
+<a href=#183 id=183 data-nosnippet>183</a><span class="doccomment">/// Holds configuration for a `HotShot`
+<a href=#184 id=184 data-nosnippet>184</a></span><span class="attr">#[derive(Clone, derive_more::Debug, serde::Serialize, serde::Deserialize)]
+<a href=#185 id=185 data-nosnippet>185</a>#[serde(bound(deserialize = <span class="string">""</span>))]
+<a href=#186 id=186 data-nosnippet>186</a></span><span class="kw">pub struct </span>HotShotConfig&lt;TYPES: NodeType&gt; {
+<a href=#187 id=187 data-nosnippet>187</a>    <span class="doccomment">/// The proportion of nodes required before the orchestrator issues the ready signal,
+<a href=#188 id=188 data-nosnippet>188</a>    /// expressed as (numerator, denominator)
+<a href=#189 id=189 data-nosnippet>189</a>    </span><span class="kw">pub </span>start_threshold: (u64, u64),
+<a href=#190 id=190 data-nosnippet>190</a>    <span class="doccomment">/// Total number of nodes in the network
+<a href=#191 id=191 data-nosnippet>191</a>    </span><span class="comment">// Earlier it was total_nodes
+<a href=#192 id=192 data-nosnippet>192</a>    </span><span class="kw">pub </span>num_nodes_with_stake: NonZeroUsize,
+<a href=#193 id=193 data-nosnippet>193</a>    <span class="doccomment">/// List of known node's public keys and stake value for certificate aggregation, serving as public parameter
+<a href=#194 id=194 data-nosnippet>194</a>    </span><span class="kw">pub </span>known_nodes_with_stake: Vec&lt;PeerConfig&lt;TYPES&gt;&gt;,
+<a href=#195 id=195 data-nosnippet>195</a>    <span class="doccomment">/// All public keys known to be DA nodes
+<a href=#196 id=196 data-nosnippet>196</a>    </span><span class="kw">pub </span>known_da_nodes: Vec&lt;PeerConfig&lt;TYPES&gt;&gt;,
+<a href=#197 id=197 data-nosnippet>197</a>    <span class="doccomment">/// List of DA committee (staking)nodes for static DA committee
+<a href=#198 id=198 data-nosnippet>198</a>    </span><span class="kw">pub </span>da_staked_committee_size: usize,
+<a href=#199 id=199 data-nosnippet>199</a>    <span class="doccomment">/// Number of fixed leaders for GPU VID, normally it will be 0, it's only used when running GPU VID
+<a href=#200 id=200 data-nosnippet>200</a>    </span><span class="kw">pub </span>fixed_leader_for_gpuvid: usize,
+<a href=#201 id=201 data-nosnippet>201</a>    <span class="doccomment">/// Base duration for next-view timeout, in milliseconds
+<a href=#202 id=202 data-nosnippet>202</a>    </span><span class="kw">pub </span>next_view_timeout: u64,
+<a href=#203 id=203 data-nosnippet>203</a>    <span class="doccomment">/// Duration of view sync round timeouts
+<a href=#204 id=204 data-nosnippet>204</a>    </span><span class="kw">pub </span>view_sync_timeout: Duration,
+<a href=#205 id=205 data-nosnippet>205</a>    <span class="doccomment">/// Number of network bootstrap nodes
+<a href=#206 id=206 data-nosnippet>206</a>    </span><span class="kw">pub </span>num_bootstrap: usize,
+<a href=#207 id=207 data-nosnippet>207</a>    <span class="doccomment">/// The maximum amount of time a leader can wait to get a block from a builder
+<a href=#208 id=208 data-nosnippet>208</a>    </span><span class="kw">pub </span>builder_timeout: Duration,
+<a href=#209 id=209 data-nosnippet>209</a>    <span class="doccomment">/// time to wait until we request data associated with a proposal
+<a href=#210 id=210 data-nosnippet>210</a>    </span><span class="kw">pub </span>data_request_delay: Duration,
+<a href=#211 id=211 data-nosnippet>211</a>    <span class="doccomment">/// Builder API base URL
+<a href=#212 id=212 data-nosnippet>212</a>    </span><span class="kw">pub </span>builder_urls: Vec1&lt;Url&gt;,
+<a href=#213 id=213 data-nosnippet>213</a>    <span class="doccomment">/// View to start proposing an upgrade
+<a href=#214 id=214 data-nosnippet>214</a>    </span><span class="kw">pub </span>start_proposing_view: u64,
+<a href=#215 id=215 data-nosnippet>215</a>    <span class="doccomment">/// View to stop proposing an upgrade. To prevent proposing an upgrade, set stop_proposing_view &lt;= start_proposing_view.
+<a href=#216 id=216 data-nosnippet>216</a>    </span><span class="kw">pub </span>stop_proposing_view: u64,
+<a href=#217 id=217 data-nosnippet>217</a>    <span class="doccomment">/// View to start voting on an upgrade
+<a href=#218 id=218 data-nosnippet>218</a>    </span><span class="kw">pub </span>start_voting_view: u64,
+<a href=#219 id=219 data-nosnippet>219</a>    <span class="doccomment">/// View to stop voting on an upgrade. To prevent voting on an upgrade, set stop_voting_view &lt;= start_voting_view.
+<a href=#220 id=220 data-nosnippet>220</a>    </span><span class="kw">pub </span>stop_voting_view: u64,
+<a href=#221 id=221 data-nosnippet>221</a>    <span class="doccomment">/// Unix time in seconds at which we start proposing an upgrade
+<a href=#222 id=222 data-nosnippet>222</a>    </span><span class="kw">pub </span>start_proposing_time: u64,
+<a href=#223 id=223 data-nosnippet>223</a>    <span class="doccomment">/// Unix time in seconds at which we stop proposing an upgrade. To prevent proposing an upgrade, set stop_proposing_time &lt;= start_proposing_time.
+<a href=#224 id=224 data-nosnippet>224</a>    </span><span class="kw">pub </span>stop_proposing_time: u64,
+<a href=#225 id=225 data-nosnippet>225</a>    <span class="doccomment">/// Unix time in seconds at which we start voting on an upgrade
+<a href=#226 id=226 data-nosnippet>226</a>    </span><span class="kw">pub </span>start_voting_time: u64,
+<a href=#227 id=227 data-nosnippet>227</a>    <span class="doccomment">/// Unix time in seconds at which we stop voting on an upgrade. To prevent voting on an upgrade, set stop_voting_time &lt;= start_voting_time.
+<a href=#228 id=228 data-nosnippet>228</a>    </span><span class="kw">pub </span>stop_voting_time: u64,
+<a href=#229 id=229 data-nosnippet>229</a>    <span class="doccomment">/// Number of blocks in an epoch, zero means there are no epochs
+<a href=#230 id=230 data-nosnippet>230</a>    </span><span class="kw">pub </span>epoch_height: u64,
+<a href=#231 id=231 data-nosnippet>231</a>    <span class="doccomment">/// Epoch start block   
+<a href=#232 id=232 data-nosnippet>232</a>    </span><span class="attr">#[serde(default = <span class="string">"default_epoch_start_block"</span>)]
+<a href=#233 id=233 data-nosnippet>233</a>    </span><span class="kw">pub </span>epoch_start_block: u64,
+<a href=#234 id=234 data-nosnippet>234</a>    <span class="doccomment">/// Stake table capacity for light client use
+<a href=#235 id=235 data-nosnippet>235</a>    </span><span class="attr">#[serde(default = <span class="string">"default_stake_table_capacity"</span>)]
+<a href=#236 id=236 data-nosnippet>236</a>    </span><span class="kw">pub </span>stake_table_capacity: usize,
+<a href=#237 id=237 data-nosnippet>237</a>    <span class="doccomment">/// number of iterations in the DRB calculation
+<a href=#238 id=238 data-nosnippet>238</a>    </span><span class="kw">pub </span>drb_difficulty: u64,
+<a href=#239 id=239 data-nosnippet>239</a>    <span class="doccomment">/// number of iterations in the DRB calculation
+<a href=#240 id=240 data-nosnippet>240</a>    </span><span class="kw">pub </span>drb_upgrade_difficulty: u64,
+<a href=#241 id=241 data-nosnippet>241</a>}
+<a href=#242 id=242 data-nosnippet>242</a>
+<a href=#243 id=243 data-nosnippet>243</a><span class="kw">fn </span>default_epoch_start_block() -&gt; u64 {
+<a href=#244 id=244 data-nosnippet>244</a>    <span class="number">1
+<a href=#245 id=245 data-nosnippet>245</a></span>}
+<a href=#246 id=246 data-nosnippet>246</a>
+<a href=#247 id=247 data-nosnippet>247</a><span class="kw">fn </span>default_stake_table_capacity() -&gt; usize {
+<a href=#248 id=248 data-nosnippet>248</a>    <span class="kw">crate</span>::light_client::DEFAULT_STAKE_TABLE_CAPACITY
+<a href=#249 id=249 data-nosnippet>249</a>}
+<a href=#250 id=250 data-nosnippet>250</a>
+<a href=#251 id=251 data-nosnippet>251</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; HotShotConfig&lt;TYPES&gt; {
+<a href=#252 id=252 data-nosnippet>252</a>    <span class="doccomment">/// Update a hotshot config to have a view-based upgrade.
+<a href=#253 id=253 data-nosnippet>253</a>    </span><span class="kw">pub fn </span>set_view_upgrade(<span class="kw-2">&amp;mut </span><span class="self">self</span>, view: u64) {
+<a href=#254 id=254 data-nosnippet>254</a>        <span class="self">self</span>.start_proposing_view = view;
+<a href=#255 id=255 data-nosnippet>255</a>        <span class="self">self</span>.stop_proposing_view = view + <span class="number">1</span>;
+<a href=#256 id=256 data-nosnippet>256</a>        <span class="self">self</span>.start_voting_view = view.saturating_sub(<span class="number">1</span>);
+<a href=#257 id=257 data-nosnippet>257</a>        <span class="self">self</span>.stop_voting_view = view + <span class="number">10</span>;
+<a href=#258 id=258 data-nosnippet>258</a>        <span class="self">self</span>.start_proposing_time = <span class="number">0</span>;
+<a href=#259 id=259 data-nosnippet>259</a>        <span class="self">self</span>.stop_proposing_time = u64::MAX;
+<a href=#260 id=260 data-nosnippet>260</a>        <span class="self">self</span>.start_voting_time = <span class="number">0</span>;
+<a href=#261 id=261 data-nosnippet>261</a>        <span class="self">self</span>.stop_voting_time = u64::MAX;
+<a href=#262 id=262 data-nosnippet>262</a>    }
+<a href=#263 id=263 data-nosnippet>263</a>
+<a href=#264 id=264 data-nosnippet>264</a>    <span class="doccomment">/// Return the `known_nodes_with_stake` as a `HSStakeTable`
+<a href=#265 id=265 data-nosnippet>265</a>    </span><span class="kw">pub fn </span>hotshot_stake_table(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; HSStakeTable&lt;TYPES&gt; {
+<a href=#266 id=266 data-nosnippet>266</a>        <span class="self">self</span>.known_nodes_with_stake.clone().into()
+<a href=#267 id=267 data-nosnippet>267</a>    }
+<a href=#268 id=268 data-nosnippet>268</a>}</code></pre></div></section></main></body></html>
