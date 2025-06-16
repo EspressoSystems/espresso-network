@@ -210,14 +210,17 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 // NOTE: we don't transfer ownership to multisig, we only do so after V2 upgrade
             },
             Contract::StakeTableV2 => {
-                if self.use_multisig {
+                let use_multisig = self.use_multisig;
+                let dry_run = self.dry_run;
+                tracing::info!(?dry_run, ?use_multisig, "Upgrading to StakeTableV2 with ");
+                if use_multisig {
                     crate::upgrade_stake_table_v2_multisig_owner(
                         provider,
                         contracts,
                         self.rpc_url.clone(),
                         self.multisig.unwrap(),
                         self.multisig_pauser.unwrap(),
-                        Some(self.dry_run),
+                        Some(dry_run),
                     )
                     .await?;
                 } else {

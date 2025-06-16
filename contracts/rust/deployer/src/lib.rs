@@ -481,6 +481,11 @@ pub async fn upgrade_light_client_v2(
                     .await?
             };
 
+            // get owner of proxy
+            let owner = proxy.owner().call().await?;
+            let owner_addr = owner._0;
+            tracing::info!("Proxy owner: {owner_addr:#x}");
+
             // prepare init calldata
             let lcv2 = LightClientV2::new(lcv2_addr, &provider);
             let init_data = lcv2
@@ -562,11 +567,10 @@ pub async fn upgrade_light_client_v2_multisig_owner(
     let owner_addr = proxy.owner().call().await?._0;
 
     if !dry_run {
-        tracing::info!("Checking if owner is a contract");
-        assert!(
-            is_contract(&provider, owner_addr).await?,
-            "Owner is not a contract so not a multisig wallet"
-        );
+        if !is_contract(&provider, owner_addr).await? {
+            tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
+            anyhow::bail!("Proxy owner is not a contract");
+        }
     }
 
     // Prepare addresses
@@ -847,6 +851,7 @@ async fn upgrade_stake_table_v2(
     pauser: Address,
     admin: Address,
 ) -> Result<TransactionReceipt> {
+    tracing::info!("Upgrading StakeTableProxy to StakeTableV2 with EOA admin");
     let Some(proxy_addr) = contracts.address(Contract::StakeTableProxy) else {
         anyhow::bail!("StakeTableProxy not found, can't upgrade")
     };
@@ -927,6 +932,7 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
     pauser: Address,
     dry_run: Option<bool>,
 ) -> Result<(String, bool)> {
+    tracing::info!("Upgrading StakeTableProxy to StakeTableV2 using multisig owner");
     let dry_run = dry_run.unwrap_or(false);
     match contracts.address(Contract::StakeTableProxy) {
         // check if proxy already exists
@@ -935,11 +941,18 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
             let proxy = StakeTable::new(proxy_addr, &provider);
             let owner = proxy.owner().call().await?;
             let owner_addr = owner._0;
-            assert_eq!(
-                owner_addr, multisig_address,
-                "Proxy is not owned by the multisig"
-            );
-            // TODO: check if owner is a multisig
+            if owner_addr != multisig_address {
+                tracing::error!("Proxy is not owned by the multisig. Expected: {multisig_address:#x}, Got: {owner_addr:#x}");
+                anyhow::bail!("Proxy is not owned by the multisig");
+            }
+            if !dry_run {
+                if !is_contract(&provider, owner_addr).await? {
+                    tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
+                    anyhow::bail!("Proxy owner is not a contract");
+                }
+            }
+            // TODO: check if owner is a SAFE multisig
+
             // first deploy StakeTableV2.sol implementation
             let stake_table_v2_addr = contracts
                 .deploy(
