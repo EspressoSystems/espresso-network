@@ -909,6 +909,100 @@ pub async fn transfer_ownership(
     Ok(receipt)
 }
 
+/// Call the transfer ownership script to transfer ownership of a contract to a new owner
+///
+/// Parameters:
+/// - `proxy_addr`: The address of the proxy contract
+/// - `new_owner`: The address of the new owner
+/// - `rpc_url`: The RPC URL for the network
+pub async fn call_transfer_ownership_script(
+    proxy_addr: Address,
+    new_owner: Address,
+    rpc_url: String,
+    safe_addr: Address,
+    use_hardware_wallet: bool,
+    dry_run: bool,
+) -> Result<(String, bool), anyhow::Error> {
+    let script_path = find_script_path()?;
+    let output = Command::new(script_path)
+        .arg("transferOwnership.ts")
+        .arg("--from-rust")
+        .arg("--proxy")
+        .arg(proxy_addr.to_string())
+        .arg("--new-owner")
+        .arg(new_owner.to_string())
+        .arg("--rpc-url")
+        .arg(rpc_url)
+        .arg("--safe-address")
+        .arg(safe_addr.to_string())
+        .arg("--dry-run")
+        .arg(dry_run.to_string())
+        .arg("--use-hardware-wallet")
+        .arg(use_hardware_wallet.to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output();
+
+    let output = output.unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // if stderr is not empty, return the stderr
+    if !output.status.success() {
+        return Err(anyhow!("Transfer ownership script failed: {}", stderr));
+    }
+    Ok((stdout.to_string(), true))
+}
+
+pub async fn transfer_ownership_from_multisig_to_timelock(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+    contract_type: Contract,
+    rpc_url: String,
+    safe_addr: Address,
+    use_hardware_wallet: bool,
+    dry_run: bool,
+    new_owner: Address,
+) -> Result<(String, bool)> {
+    let (proxy_addr, proxy_instance) = match contract_type {
+        Contract::LightClientProxy
+        | Contract::FeeContractProxy
+        | Contract::EspTokenProxy
+        | Contract::StakeTableProxy => {
+            let addr = contracts.address(contract_type).ok_or_else(|| {
+                anyhow!("{contract_type} (multisig owner) not found, can't upgrade")
+            })?;
+            (addr, OwnableUpgradeable::new(addr, &provider))
+        },
+        _ => anyhow::bail!("Not a proxy contract, can't transfer ownership"),
+    };
+    tracing::info!("{} found at {proxy_addr:#x}", contract_type);
+
+    let owner_addr = proxy_instance.owner().call().await?._0;
+
+    if !dry_run && !is_contract(&provider, owner_addr).await? {
+        tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
+        anyhow::bail!("Proxy owner is not a contract");
+    }
+
+    // invoke upgrade on proxy via the safeSDK
+    let result = call_transfer_ownership_script(
+        proxy_addr,
+        new_owner,
+        rpc_url,
+        safe_addr,
+        use_hardware_wallet,
+        dry_run,
+    )
+    .await?;
+
+    tracing::info!("Transfer Ownership proposal sent to {}", contract_type);
+    tracing::info!("Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}", safe_addr);
+
+    // IDEA: add a function to wait for the proposal to be executed
+
+    Ok(result)
+}
+
 /// helper function to decide if the contract at given address `addr` is a proxy contract
 pub async fn is_proxy_contract(provider: impl Provider, addr: Address) -> Result<bool> {
     // confirm that the proxy_address is a proxy
@@ -969,6 +1063,7 @@ pub async fn call_upgrade_proxy_script(
     let script_path = find_script_path()?;
 
     let output = Command::new(script_path)
+        .arg("upgradeProxy.ts")
         .arg("--from-rust")
         .arg("--proxy")
         .arg(proxy_addr.to_string())
@@ -1658,7 +1753,6 @@ mod tests {
     #[tokio::test]
     async fn test_upgrade_stake_table_v2() -> Result<()> {
         setup_test();
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -1759,5 +1853,193 @@ mod tests {
                 ._0
         );
         Ok(())
+    }
+
+    async fn test_transfer_ownership_helper(
+        contract_type: Contract,
+        options: UpgradeTestOptions,
+    ) -> Result<()> {
+        assert!(
+            std::path::Path::new("../../../scripts/multisig-upgrade-entrypoint").exists(),
+            "Script not found!"
+        );
+        let mut sepolia_rpc_url = "http://localhost:8545".to_string();
+        let mut multisig_admin = Address::random();
+        let mut timelock = Address::random();
+        let mut mnemonic =
+            "test test test test test test test test test test test junk".to_string();
+        let mut account_index = 0;
+        let anvil = Anvil::default().spawn();
+        let dry_run = matches!(options.run_mode, RunMode::DryRun);
+        if !dry_run {
+            dotenvy::from_filename_override(".env.deployer.rs.test").ok();
+
+            for item in dotenvy::from_filename_iter(".env.deployer.rs.test")
+                .expect("Failed to read .env.deployer.rs.test")
+            {
+                let (key, val) = item?;
+                if key == "ESPRESSO_SEQUENCER_L1_PROVIDER" {
+                    sepolia_rpc_url = val.to_string();
+                } else if key == "ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS" {
+                    multisig_admin = val.parse::<Address>()?;
+                } else if key == "ESPRESSO_SEQUENCER_ETH_MNEMONIC" {
+                    mnemonic = val.to_string();
+                } else if key == "ESPRESSO_DEPLOYER_ACCOUNT_INDEX" {
+                    account_index = val.parse::<u32>()?;
+                } else if key == "ESPRESSO_SEQUENCER_TIMELOCK_CONTROLLER_ADDRESS" {
+                    timelock = val.parse::<Address>()?;
+                }
+            }
+
+            if sepolia_rpc_url.is_empty() || multisig_admin.is_zero() || timelock.is_zero() {
+                panic!("ESPRESSO_SEQUENCER_L1_PROVIDER, ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS, ESPRESSO_SEQUENCER_TIMELOCK_CONTROLLER_ADDRESS must be set in .env.deployer.rs.test");
+            }
+        }
+
+        let mut contracts = Contracts::new();
+        let admin_signer = MnemonicBuilder::<English>::default()
+            .phrase(mnemonic)
+            .index(account_index)
+            .expect("wrong mnemonic or index")
+            .build()?;
+        let admin = admin_signer.address();
+        let provider = if !dry_run {
+            ProviderBuilder::new()
+                .wallet(admin_signer)
+                .connect(&sepolia_rpc_url)
+                .await?
+        } else {
+            ProviderBuilder::new()
+                .wallet(admin_signer)
+                .connect(&anvil.endpoint())
+                .await?
+        };
+
+        // prepare `initialize()` input
+        let genesis_state = LightClientStateSol::dummy_genesis();
+        let genesis_stake = StakeTableStateSol::dummy_genesis();
+
+        let prover = Address::random();
+
+        // deploy proxy and V1
+        let proxy_addr = match contract_type {
+            Contract::LightClientProxy => {
+                deploy_light_client_proxy(
+                    &provider,
+                    &mut contracts,
+                    false,
+                    genesis_state.clone(),
+                    genesis_stake.clone(),
+                    admin,
+                    Some(prover),
+                )
+                .await?
+            },
+            Contract::FeeContractProxy => {
+                deploy_fee_contract_proxy(&provider, &mut contracts, admin).await?
+            },
+            Contract::EspTokenProxy => {
+                deploy_token_proxy(
+                    &provider,
+                    &mut contracts,
+                    admin,
+                    multisig_admin,
+                    U256::from(0u64),
+                    "Test",
+                    "TEST",
+                )
+                .await?
+            },
+            Contract::StakeTableProxy => {
+                let token_addr = Address::random();
+                let light_client_addr = Address::random();
+                deploy_stake_table_proxy(
+                    &provider,
+                    &mut contracts,
+                    token_addr,
+                    light_client_addr,
+                    U256::from(0u64),
+                    multisig_admin,
+                )
+                .await?
+            },
+            _ => anyhow::bail!("Not a proxy contract, can't transfer ownership"),
+        };
+
+        // transfer ownership to multisig
+        let _receipt =
+            transfer_ownership(&provider, contract_type, proxy_addr, multisig_admin).await?;
+        assert_eq!(
+            OwnableUpgradeable::new(proxy_addr, &provider)
+                .owner()
+                .call()
+                .await?
+                ._0,
+            multisig_admin
+        );
+
+        // then send transfer ownership proposal to the multisig wallet
+        let (result, success) = transfer_ownership_from_multisig_to_timelock(
+            &provider,
+            &mut contracts,
+            contract_type,
+            sepolia_rpc_url.clone(),
+            multisig_admin,
+            false,
+            dry_run,
+            timelock,
+        )
+        .await?;
+        tracing::info!(
+            "Result when trying to transfer ownership of {} to the timelock: {:?}",
+            contract_type,
+            result
+        );
+        assert!(success);
+        if dry_run {
+            let data: serde_json::Value = serde_json::from_str(&result)?;
+            assert_eq!(data["rpcUrl"], sepolia_rpc_url);
+            assert_eq!(data["safeAddress"], multisig_admin.to_string());
+
+            let expected_init_data = match contract_type {
+                Contract::LightClientProxy => LightClient::new(proxy_addr, &provider)
+                    .transferOwnership(timelock)
+                    .calldata()
+                    .to_string(),
+                Contract::FeeContractProxy => FeeContract::new(proxy_addr, &provider)
+                    .transferOwnership(timelock)
+                    .calldata()
+                    .to_string(),
+                Contract::EspTokenProxy => EspToken::new(proxy_addr, &provider)
+                    .transferOwnership(timelock)
+                    .calldata()
+                    .to_string(),
+                Contract::StakeTableProxy => StakeTable::new(proxy_addr, &provider)
+                    .transferOwnership(timelock)
+                    .calldata()
+                    .to_string(),
+                _ => "0x".to_string(),
+            };
+
+            assert_eq!(data["initData"], expected_init_data);
+            assert_eq!(data["useHardwareWallet"], false);
+        }
+        // v1 state persistence cannot be tested here because the upgrade proposal is not yet executed
+        // One has to test that the upgrade proposal is available via the Safe UI
+        // and then test that the v1 state is persisted
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_transfer_ownership_light_client_proxy() -> Result<()> {
+        test_transfer_ownership_helper(
+            Contract::LightClientProxy,
+            UpgradeTestOptions {
+                is_mock: false,
+                run_mode: RunMode::DryRun,
+                upgrade_count: UpgradeCount::Once,
+            },
+        )
+        .await
     }
 }
