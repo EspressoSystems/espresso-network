@@ -901,6 +901,10 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         };
 
         info!("{} -> {}", recipient, pid);
+        info!(
+            "connected_pids: {:?}",
+            self.inner.handle.connected_pids().await.unwrap()
+        );
 
         // short circuit if we're dming ourselves
         if recipient == self.inner.pk {
