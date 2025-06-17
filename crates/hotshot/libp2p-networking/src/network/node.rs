@@ -69,7 +69,7 @@ use super::{
     NetworkEventInternal,
 };
 use crate::network::behaviours::{
-    dht::{DHTBehaviour, DHTProgress, KadPutQuery, NUM_REPLICATED_TO_TRUST},
+    dht::{DHTBehaviour, DHTProgress, KadPutQuery},
     direct_message::{DMBehaviour, DMRequest},
     exponential_backoff::ExponentialBackoff,
 };
@@ -432,7 +432,6 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                         self.dht_handler.get_record(
                             key,
                             notify,
-                            NonZeroUsize::new(NUM_REPLICATED_TO_TRUST).unwrap(),
                             ExponentialBackoff::default(),
                             retry_count,
                             &mut self.swarm.behaviour_mut().dht,

@@ -12,7 +12,10 @@ use std::{
 use anyhow::Context;
 use async_trait::async_trait;
 use delegate::delegate;
-use hotshot_types::{signature_key::BLSPubKey, traits::signature_key::SignatureKey};
+use hotshot_types::{
+    constants::KAD_DEFAULT_REPUB_INTERVAL_SEC, signature_key::BLSPubKey,
+    traits::signature_key::SignatureKey,
+};
 use libp2p::{
     kad::store::{RecordStore, Result},
     PeerId,
@@ -333,7 +336,7 @@ impl<R: RecordStore, D: DhtPersistentStorage> PersistentStore<R, D> {
         for serializable_record in serializable_records {
             // Convert the serializable record back to a `libp2p::kad::Record`
             match libp2p::kad::Record::try_from(serializable_record) {
-                Ok(record) => {
+                Ok(mut record) => {
                     let key = RecordKey::try_from_bytes(&record.key.to_vec())
                         .with_context(|| "Failed to convert record key to record key")?;
                     let value: RecordValue<BLSPubKey> = bincode::deserialize(&record.value)
@@ -344,9 +347,16 @@ impl<R: RecordStore, D: DhtPersistentStorage> PersistentStore<R, D> {
                     let peer_id = PeerId::from_bytes(&value.value())
                         .with_context(|| "Failed to convert record value to record value")?;
 
+                    record.expires = Some(record.expires.unwrap_or(
+                        Instant::now() + Duration::from_secs(KAD_DEFAULT_REPUB_INTERVAL_SEC),
+                    ));
+
                     info!(
                         "Record: {} -> {}. Publisher: {:?}, expires: {:?}",
-                        pub_key, peer_id, record.publisher, record.expires
+                        pub_key,
+                        peer_id,
+                        record.publisher,
+                        record.expires.map(|e| e.duration_since(Instant::now()))
                     );
 
                     // Put the record into the new store
