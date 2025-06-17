@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     io::Write,
     path::PathBuf,
-    process::{Command, Stdio},
+    process::{Command, Output, Stdio},
     time::Duration,
 };
 
@@ -1047,6 +1047,15 @@ pub async fn transfer_ownership(
     Ok(receipt)
 }
 
+#[derive(Clone)]
+pub struct TransferOwnershipParams {
+    pub new_owner: Address,
+    pub rpc_url: String,
+    pub safe_addr: Address,
+    pub use_hardware_wallet: bool,
+    pub dry_run: bool,
+}
+
 /// Call the transfer ownership script to transfer ownership of a contract to a new owner
 ///
 /// Parameters:
@@ -1055,12 +1064,8 @@ pub async fn transfer_ownership(
 /// - `rpc_url`: The RPC URL for the network
 pub async fn call_transfer_ownership_script(
     proxy_addr: Address,
-    new_owner: Address,
-    rpc_url: String,
-    safe_addr: Address,
-    use_hardware_wallet: bool,
-    dry_run: bool,
-) -> Result<(String, bool), anyhow::Error> {
+    params: TransferOwnershipParams,
+) -> Result<Output, anyhow::Error> {
     let script_path = find_script_path()?;
     let output = Command::new(script_path)
         .arg("transferOwnership.ts")
@@ -1068,39 +1073,34 @@ pub async fn call_transfer_ownership_script(
         .arg("--proxy")
         .arg(proxy_addr.to_string())
         .arg("--new-owner")
-        .arg(new_owner.to_string())
+        .arg(params.new_owner.to_string())
         .arg("--rpc-url")
-        .arg(rpc_url)
+        .arg(params.rpc_url)
         .arg("--safe-address")
-        .arg(safe_addr.to_string())
+        .arg(params.safe_addr.to_string())
         .arg("--dry-run")
-        .arg(dry_run.to_string())
+        .arg(params.dry_run.to_string())
         .arg("--use-hardware-wallet")
-        .arg(use_hardware_wallet.to_string())
+        .arg(params.use_hardware_wallet.to_string())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output();
 
     let output = output.unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     // if stderr is not empty, return the stderr
     if !output.status.success() {
         return Err(anyhow!("Transfer ownership script failed: {}", stderr));
     }
-    Ok((stdout.to_string(), true))
+    Ok(output)
 }
 
 pub async fn transfer_ownership_from_multisig_to_timelock(
     provider: impl Provider,
     contracts: &mut Contracts,
     contract_type: Contract,
-    rpc_url: String,
-    safe_addr: Address,
-    use_hardware_wallet: bool,
-    dry_run: bool,
-    new_owner: Address,
-) -> Result<(String, bool)> {
+    params: TransferOwnershipParams,
+) -> Result<Output> {
     let (proxy_addr, proxy_instance) = match contract_type {
         Contract::LightClientProxy
         | Contract::FeeContractProxy
@@ -1117,24 +1117,22 @@ pub async fn transfer_ownership_from_multisig_to_timelock(
 
     let owner_addr = proxy_instance.owner().call().await?._0;
 
-    if !dry_run && !is_contract(&provider, owner_addr).await? {
+    if !params.dry_run && !is_contract(&provider, owner_addr).await? {
         tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
         anyhow::bail!("Proxy owner is not a contract");
     }
 
     // invoke upgrade on proxy via the safeSDK
-    let result = call_transfer_ownership_script(
-        proxy_addr,
-        new_owner,
-        rpc_url,
-        safe_addr,
-        use_hardware_wallet,
-        dry_run,
-    )
-    .await?;
+    let result = call_transfer_ownership_script(proxy_addr, params.clone()).await?;
+    if !result.status.success() {
+        anyhow::bail!(
+            "Transfer ownership script failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
 
     tracing::info!("Transfer Ownership proposal sent to {}", contract_type);
-    tracing::info!("Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}", safe_addr);
+    tracing::info!("Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}", params.safe_addr);
 
     // IDEA: add a function to wait for the proposal to be executed
 
@@ -2308,25 +2306,23 @@ mod tests {
         );
 
         // then send transfer ownership proposal to the multisig wallet
-        let (result, success) = transfer_ownership_from_multisig_to_timelock(
+        let result = transfer_ownership_from_multisig_to_timelock(
             &provider,
             &mut contracts,
             contract_type,
-            sepolia_rpc_url.clone(),
-            multisig_admin,
-            false,
-            dry_run,
-            timelock,
+            TransferOwnershipParams {
+                new_owner: timelock,
+                rpc_url: sepolia_rpc_url.clone(),
+                safe_addr: multisig_admin,
+                use_hardware_wallet: false,
+                dry_run,
+            },
         )
         .await?;
-        tracing::info!(
-            "Result when trying to transfer ownership of {} to the timelock: {:?}",
-            contract_type,
-            result
-        );
-        assert!(success);
+        assert!(result.status.success());
         if dry_run {
-            let data: serde_json::Value = serde_json::from_str(&result)?;
+            let data: serde_json::Value =
+                serde_json::from_str(&String::from_utf8_lossy(&result.stdout))?;
             assert_eq!(data["rpcUrl"], sepolia_rpc_url);
             assert_eq!(data["safeAddress"], multisig_admin.to_string());
 
