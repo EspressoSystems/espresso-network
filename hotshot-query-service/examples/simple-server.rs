@@ -45,6 +45,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     light_client::StateKeyPair,
     signature_key::BLSPubKey,
+    storage_metrics::StorageMetricsValue,
     traits::{election::Membership, network::Topic},
     HotShotConfig, PeerConfig,
 };
@@ -267,6 +268,7 @@ async fn init_consensus(
                     .unwrap(),
                     ConsensusMetricsValue::new(&*data_source.populate_metrics()),
                     storage,
+                    StorageMetricsValue::new(&*data_source.populate_metrics()),
                 )
                 .await
                 .unwrap()

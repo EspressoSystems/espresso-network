@@ -26,6 +26,7 @@ use hotshot_types::{
         LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate2,
         UpgradeCertificate,
     },
+    traits::metrics::Metrics,
 };
 use indexmap::IndexMap;
 
@@ -256,6 +257,8 @@ impl SequencerPersistence for NoStorage {
     ) -> anyhow::Result<Option<LightClientStateUpdateCertificate<SeqTypes>>> {
         Ok(None)
     }
+
+    fn enable_metrics(&mut self, _metrics: &dyn Metrics) {}
 }
 
 #[async_trait]

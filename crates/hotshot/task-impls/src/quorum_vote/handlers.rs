@@ -17,6 +17,7 @@ use hotshot_types::{
     event::{Event, EventType},
     message::{Proposal, UpgradeLock},
     simple_vote::{EpochRootQuorumVote, LightClientStateUpdateVote, QuorumData2, QuorumVote2},
+    storage_metrics::StorageMetricsValue,
     traits::{
         block_contents::BlockHeader,
         election::Membership,
@@ -481,6 +482,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     upgrade_lock: UpgradeLock<TYPES, V>,
     view_number: TYPES::View,
     storage: I::Storage,
+    storage_metrics: Arc<StorageMetricsValue>,
     leaf: Leaf2<TYPES>,
     vid_share: Proposal<TYPES, VidDisperseShare<TYPES>>,
     extended_vote: bool,
@@ -533,8 +535,11 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         .await
         .wrap()
         .context(error!("Failed to store VID share"))?;
-    let duration = now.elapsed();
-    tracing::debug!("append_vid_general time: {:?}", duration);
+    let append_vid_duration = now.elapsed();
+    storage_metrics
+        .append_vid_duration
+        .add_point(append_vid_duration.as_secs_f64());
+    tracing::debug!("append_vid_general time: {:?}", append_vid_duration);
 
     // Make epoch root vote
 

@@ -206,7 +206,7 @@ where
 }
 
 /// VID Commitment type
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Ord, PartialOrd)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, Ord, PartialOrd)]
 #[serde(
     try_from = "tagged_base64::TaggedBase64",
     into = "tagged_base64::TaggedBase64"
@@ -225,6 +225,12 @@ impl Default for VidCommitment {
 impl Display for VidCommitment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::write!(f, "{}", TaggedBase64::from(self))
+    }
+}
+
+impl Debug for VidCommitment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
     }
 }
 
@@ -1927,5 +1933,35 @@ impl<TYPES: NodeType> PackedBundle<TYPES> {
             epoch_number,
             sequencing_fees,
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_vid_commitment_display() {
+        let vc = VidCommitment::V0(ADVZCommitment::default());
+        assert_eq!(
+            format!("{vc}"),
+            "HASH~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI"
+        );
+        assert_eq!(
+            format!("{vc:?}"),
+            "HASH~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI"
+        );
+
+        let vc = VidCommitment::V1(AvidMCommitment {
+            commit: Default::default(),
+        });
+        assert_eq!(
+            format!("{vc}"),
+            "AvidMCommit~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADr"
+        );
+        assert_eq!(
+            format!("{vc:?}"),
+            "AvidMCommit~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADr"
+        );
     }
 }
