@@ -259,7 +259,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
     ) -> Arc<Self> {
         debug!("Creating a new hotshot");
 
-        tracing::warn!("Starting consensus with HotShotConfig:\n\n {:?}", config);
+        tracing::warn!("Starting consensus with HotShotConfig:\n\n {config:?}");
 
         let consensus_metrics = Arc::new(consensus_metrics);
         let storage_metrics = Arc::new(storage_metrics);
@@ -1233,7 +1233,7 @@ async fn load_start_epoch_info<TYPES: NodeType>(
     let first_epoch_number =
         TYPES::Epoch::new(epoch_from_block_number(epoch_start_block, epoch_height));
 
-    tracing::warn!("Calling set_first_epoch for epoch {:?}", first_epoch_number);
+    tracing::warn!("Calling set_first_epoch for epoch {first_epoch_number:?}");
     membership
         .write()
         .await

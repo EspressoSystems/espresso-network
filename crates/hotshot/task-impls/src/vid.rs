@@ -95,9 +95,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     .ok()?
                     != self.public_key
                 {
-                    tracing::debug!(
-                        "We are not the leader in the current epoch. Do not send the VID dispersal."
-                    );
+                    tracing::debug!("We are not the leader in the current epoch. Do not send the VID dispersal.");
                     return None;
                 }
                 let VidDisperseAndDuration {

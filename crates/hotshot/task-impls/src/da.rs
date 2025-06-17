@@ -331,9 +331,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                                 .and_then(|epoch_map| epoch_map.get(&target_epoch))
                             {
                                 tracing::debug!(
-                                    "Primary network is down. Calculated own VID share for epoch {:?}, my id {:?}",
-                                    target_epoch,
-                                    my_id
+                                    "Primary network is down. Calculated own VID share for epoch {target_epoch:?}, my id {my_id:?}"
                                 );
                                 broadcast_event(
                                     Arc::new(HotShotEvent::VidShareRecv(

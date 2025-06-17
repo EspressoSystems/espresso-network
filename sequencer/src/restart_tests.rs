@@ -276,7 +276,7 @@ struct TestNode<S: TestableSequencerDataSource> {
 impl<S: TestableSequencerDataSource> TestNode<S> {
     #[tracing::instrument]
     async fn new(network: NetworkParams<'_>, node: &NodeParams) -> Self {
-        tracing::info!(?network, ?node, "creating node",);
+        tracing::info!(?network, ?node, "creating node");
 
         let opts = api::Options::from(api::options::Http::with_port(node.api_port));
         let storage = S::create_storage().await;
@@ -586,7 +586,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         };
 
         let node_id = context.node_id();
-        tracing::info!(node_id, "waiting for epoch: {:?}", epoch);
+        tracing::info!(node_id, "waiting for epoch: {epoch:?}");
         let mut events = context.event_stream().await;
 
         let timeout_duration = Duration::from_secs(60);
@@ -596,7 +596,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                     continue;
                 };
                 if qc.data.epoch >= Some(epoch) {
-                    tracing::info!(node_id, "reached epoch: {:?}", epoch);
+                    tracing::info!(node_id, "reached epoch: {epoch:?}");
                     break;
                 }
             }
@@ -1161,10 +1161,10 @@ async fn start_broker(ports: &mut PortPicker, dir: &Path) -> JoinHandle<()> {
     let public_port = ports.pick();
     let private_port = ports.pick();
     let broker_config: BrokerConfig<TestingDef<SeqTypes>> = BrokerConfig {
-        public_advertise_endpoint: format!("127.0.0.1:{}", public_port),
-        public_bind_endpoint: format!("127.0.0.1:{}", public_port),
-        private_advertise_endpoint: format!("127.0.0.1:{}", private_port),
-        private_bind_endpoint: format!("127.0.0.1:{}", private_port),
+        public_advertise_endpoint: format!("127.0.0.1:{public_port}"),
+        public_bind_endpoint: format!("127.0.0.1:{public_port}"),
+        private_advertise_endpoint: format!("127.0.0.1:{private_port}"),
+        private_bind_endpoint: format!("127.0.0.1:{private_port}"),
 
         metrics_bind_endpoint: None,
         discovery_endpoint: dir.display().to_string(),

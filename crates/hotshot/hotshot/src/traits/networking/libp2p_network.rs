@@ -598,13 +598,13 @@ impl<T: NodeType> Libp2pNetwork<T> {
                 #[allow(clippy::cast_possible_truncation)]
                 const THRESHOLD: u64 = (LOOK_AHEAD as f64 * 0.8) as u64;
 
-                trace!("Performing lookup for peer {:?}", pk);
+                trace!("Performing lookup for peer {pk}");
 
                 // only run if we are not too close to the next view number
                 if latest_seen_view.load(Ordering::Relaxed) + THRESHOLD <= *view_number {
                     // look up
                     if let Err(err) = handle.lookup_node(&pk.to_bytes(), dht_timeout).await {
-                        warn!("Failed to perform lookup for key {:?}: {}", pk, err);
+                        warn!("Failed to perform lookup for key {pk}: {err}");
                     };
                 }
             }

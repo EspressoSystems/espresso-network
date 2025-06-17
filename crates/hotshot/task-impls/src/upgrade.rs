@@ -118,7 +118,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
     ) -> Result<()> {
         match event.as_ref() {
             HotShotEvent::UpgradeProposalRecv(proposal, sender) => {
-                tracing::info!("Received upgrade proposal: {:?}", proposal);
+                tracing::info!("Received upgrade proposal: {proposal:?}");
 
                 let view = *proposal.data.view_number();
 
@@ -234,7 +234,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                 ensure!(
                     view_leader_key == *sender,
                     info!(
-                        "Upgrade proposal doesn't have expected leader key for view {} \n Upgrade proposal is: {:?}", *view, proposal.data.clone()
+                        "Upgrade proposal doesn't have expected leader key for view {} \n Upgrade proposal is: {:?}", *view, proposal.data
                     )
                 );
 
@@ -389,7 +389,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                     )
                     .expect("Failed to sign upgrade proposal commitment!");
 
-                    tracing::warn!("Sending upgrade proposal:\n\n {:?}", upgrade_proposal);
+                    tracing::warn!("Sending upgrade proposal:\n\n {upgrade_proposal:?}");
 
                     let message = Proposal {
                         data: upgrade_proposal,

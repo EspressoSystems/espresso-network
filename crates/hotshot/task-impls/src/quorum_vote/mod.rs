@@ -355,7 +355,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             },
         };
         let duration = now.elapsed();
-        tracing::info!("membership_for_epoch time: {:?}", duration);
+        tracing::info!("membership_for_epoch time: {duration:?}");
 
         let is_vote_leaf_extended = is_last_block(leaf.height(), self.epoch_height);
         let is_vote_epoch_root = is_epoch_root(leaf.height(), self.epoch_height);
@@ -493,11 +493,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 };
                 if event_view == view_number {
                     tracing::debug!(
-                        "Vote dependency {:?} completed for view {:?}, my id is {:?}",
-                        dependency_type,
-                        view_number,
-                        id,
-                    );
+                        "Vote dependency {dependency_type:?} completed for view {view_number:?}, my id is {id:?}");
                     return true;
                 }
                 false

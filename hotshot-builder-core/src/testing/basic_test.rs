@@ -330,9 +330,7 @@ mod tests {
                     let metadata = claimed_block.metadata;
 
                     tracing::debug!(
-                        "Encoded transactions: {:?} Num nodes:{}",
-                        encoded_transactions,
-                        NUM_NODES_IN_VID_COMPUTATION
+                        "Encoded transactions: {encoded_transactions:?} Num nodes:{NUM_NODES_IN_VID_COMPUTATION}"
                     );
 
                     let block_payload_commitment = vid_commitment::<TestVersions>(
@@ -342,10 +340,7 @@ mod tests {
                         <TestVersions as Versions>::Base::VERSION,
                     );
 
-                    tracing::debug!(
-                        "Block Payload vid commitment: {:?}",
-                        block_payload_commitment
-                    );
+                    tracing::debug!("Block Payload vid commitment: {block_payload_commitment:?}");
 
                     let builder_commitment =
                         <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(
@@ -395,7 +390,7 @@ mod tests {
                         )
                     };
 
-                    tracing::debug!("Iteration: {} justify_qc: {:?}", round, justify_qc);
+                    tracing::debug!("Iteration: {round} justify_qc: {justify_qc:?}");
 
                     let quorum_proposal = QuorumProposalWrapper::<TestTypes> {
                         proposal: QuorumProposal2::<TestTypes> {

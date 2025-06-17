@@ -120,7 +120,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
         let _version = match self.upgrade_lock.version(block_view).await {
             Ok(v) => v,
             Err(e) => {
-                tracing::error!("Failed to calculate version: {:?}", e);
+                tracing::error!("Failed to calculate version: {e:?}");
                 return None;
             },
         };
@@ -268,11 +268,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
         {
             Ok(epoch_stake_table) => epoch_stake_table.total_nodes().await,
             Err(e) => {
-                tracing::warn!(
-                    "Failed to get num_storage_nodes for epoch {:?}: {}",
-                    block_epoch,
-                    e
-                );
+                tracing::warn!("Failed to get num_storage_nodes for epoch {block_epoch:?}: {e}");
                 return;
             },
         };

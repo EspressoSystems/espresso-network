@@ -46,17 +46,37 @@ pub struct DecideMessage<Types: NodeType> {
     pub latest_decide_view_number: Types::View,
 }
 /// DA Proposal Message to be put on the da proposal channel
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct DaProposalMessage<Types: NodeType> {
     pub proposal: Arc<Proposal<Types, DaProposal2<Types>>>,
     pub sender: Types::SignatureKey,
 }
+
+impl<Types: NodeType> Debug for DaProposalMessage<Types> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DaProposalMessage")
+            .field("proposal", &self.proposal)
+            .field("sender", &format_args!("{}", self.sender))
+            .finish()
+    }
+}
+
 /// Quorum proposal message to be put on the quorum proposal channel
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct QuorumProposalMessage<Types: NodeType> {
     pub proposal: Arc<Proposal<Types, QuorumProposalWrapper<Types>>>,
     pub sender: Types::SignatureKey,
 }
+
+impl<Types: NodeType> Debug for QuorumProposalMessage<Types> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QuorumProposalMessage")
+            .field("proposal", &self.proposal)
+            .field("sender", &format_args!("{}", self.sender))
+            .finish()
+    }
+}
+
 /// Request Message to be put on the request channel
 #[derive(Clone, Debug)]
 pub struct RequestMessage<Types: NodeType> {
@@ -420,8 +440,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
         let payload_builder_commitment = block_payload.builder_commitment(metadata);
 
         tracing::debug!(
-            "Extracted builder commitment from the da proposal: {:?}",
-            payload_builder_commitment
+            "Extracted builder commitment from the da proposal: {payload_builder_commitment:?}"
         );
 
         // form the DA proposal info
@@ -461,8 +480,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
         }
 
         tracing::info!(
-            "Spawning a clone from process DA proposal for view number: {:?}",
-            view_number
+            "Spawning a clone from process DA proposal for view number: {view_number:?}"
         );
         // remove this entry from quorum_proposal_payload_commit_to_quorum_proposal
         self.quorum_proposal_payload_commit_to_quorum_proposal
@@ -492,8 +510,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
         let payload_builder_commitment = quorum_proposal.data.block_header().builder_commitment();
 
         tracing::debug!(
-            "Extracted payload builder commitment from the quorum proposal: {:?}",
-            payload_builder_commitment
+            "Extracted payload builder commitment from the quorum proposal: {payload_builder_commitment:?}"
         );
 
         let std::collections::hash_map::Entry::Vacant(e) = self
@@ -526,8 +543,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
         }
 
         tracing::info!(
-            "Spawning a clone from process quorum proposal for view number: {:?}",
-            view_number
+            "Spawning a clone from process quorum proposal for view number: {view_number:?}"
         );
 
         self.spawn_clone_that_extends_self(da_proposal_info, quorum_proposal.clone())
@@ -645,8 +661,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
                 .contains_key(&builder_state_id)
             {
                 tracing::warn!(
-                    "Aborting spawn_clone, builder state already exists in spawned_builder_states: {:?}",
-                    builder_state_id
+                    "Aborting spawn_clone, builder state already exists in spawned_builder_states: {builder_state_id:?}"
                 );
                 return;
             }
@@ -904,7 +919,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
                                     );
                                     self.process_block_request(req).await;
                                 } else {
-                                    tracing::warn!("Unexpected message on requests channel: {:?}", req);
+                                    tracing::warn!("Unexpected message on requests channel: {req:?}");
                                 }
                             }
                             None => {
@@ -919,7 +934,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
                                     tracing::debug!("Received da proposal msg in builder {:?}:\n {:?}", self.parent_block_references, rda_msg.proposal.data.view_number);
                                     self.process_da_proposal(rda_msg).await;
                                 } else {
-                                    tracing::warn!("Unexpected message on da proposals channel: {:?}", da);
+                                    tracing::warn!("Unexpected message on da proposals channel: {da:?}");
                                 }
                             }
                             None => {
@@ -934,7 +949,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
                                     tracing::debug!("Received quorum proposal msg in builder {:?}:\n {:?} for view ", self.parent_block_references, rquorum_msg.proposal.data.view_number());
                                     self.process_quorum_proposal(rquorum_msg).await;
                                 } else {
-                                    tracing::warn!("Unexpected message on quorum proposals channel: {:?}", quorum);
+                                    tracing::warn!("Unexpected message on quorum proposals channel: {quorum:?}");
                                 }
                             }
                             None => {
@@ -970,7 +985,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
                                         }
                                     }
                                 } else {
-                                    tracing::warn!("Unexpected message on decide channel: {:?}", decide);
+                                    tracing::warn!("Unexpected message on decide channel: {decide:?}");
                                 }
                             }
                             None => {

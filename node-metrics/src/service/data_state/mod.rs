@@ -213,10 +213,10 @@ impl std::fmt::Display for ProcessLeafError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ProcessLeafError::BlockSendError(err) => {
-                write!(f, "error sending block detail to sender: {}", err)
+                write!(f, "error sending block detail to sender: {err}")
             },
             ProcessLeafError::VotersSendError(err) => {
-                write!(f, "error sending voters to sender: {}", err)
+                write!(f, "error sending voters to sender: {err}")
             },
             ProcessLeafError::FailedToGetNewStakeTable => {
                 write!(f, "error getting new stake table from sequencer")
@@ -286,7 +286,7 @@ async fn perform_stake_table_epoch_check_and_update(
 ) -> Result<(), ProcessLeafError> {
     // Are we in a new epoch?
     // Do we need to replace our stake table?
-    tracing::debug!("processing block height: {}", block_height);
+    tracing::debug!("processing block height: {block_height}");
     if let (Some(epoch_starting_block), Some(num_blocks_per_epoch)) = (
         hotshot_config.epoch_start_block,
         hotshot_config.epoch_height,
@@ -313,7 +313,7 @@ async fn perform_stake_table_epoch_check_and_update(
             {
                 Ok(stake_table) => stake_table,
                 Err(err) => {
-                    tracing::error!("process_incoming_leaf_and_block: error getting stake table from sequencer: {}", err);
+                    tracing::error!("process_incoming_leaf_and_block: error getting stake table from sequencer: {err}");
                     return Err(ProcessLeafError::FailedToGetNewStakeTable);
                 },
             };
@@ -526,20 +526,20 @@ impl ProcessLeafAndBlockPairStreamTask {
             .await
             {
                 // We have an error that prevents us from continuing
-                tracing::error!("process leaf stream: error processing leaf: {}", err);
+                tracing::error!("process leaf stream: error processing leaf: {err}");
 
                 // At the moment, all underlying errors are due to `SendError`
                 // which will ultimately mean that further processing attempts
                 // will fail, and be fruitless.
                 match err {
                     ProcessLeafError::BlockSendError(_) => {
-                        panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying sink is closed, blocks will stagnate: {}", err)
+                        panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying sink is closed, blocks will stagnate: {err}")
                     },
                     ProcessLeafError::VotersSendError(_) => {
-                        panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying sink is closed, voters will stagnate: {}", err)
+                        panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying sink is closed, voters will stagnate: {err}")
                     },
                     ProcessLeafError::FailedToGetNewStakeTable => {
-                        panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying stake table is closed, blocks will stagnate: {}", err)
+                        panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying stake table is closed, blocks will stagnate: {err}")
                     },
                 }
             }
@@ -569,7 +569,7 @@ impl std::fmt::Display for ProcessNodeIdentityError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ProcessNodeIdentityError::SendError(err) => {
-                write!(f, "error sending node identity to sender: {}", err)
+                write!(f, "error sending node identity to sender: {err}")
             },
         }
     }
@@ -677,15 +677,14 @@ impl ProcessNodeIdentityStreamTask {
             {
                 // We have an error that prevents us from continuing
                 tracing::error!(
-                    "process node identity stream: error processing node identity: {}",
-                    err
+                    "process node identity stream: error processing node identity: {err}"
                 );
 
                 // The only underlying class of errors that can be returned from
                 // `process_incoming_node_identity` are due to `SendError` which
                 // will ultimately mean that further processing attempts will fail
                 // and be fruitless.
-                panic!("ProcessNodeIdentityStreamTask: process_incoming_node_identity failed, underlying sink is closed, node identities will stagnate: {}", err);
+                panic!("ProcessNodeIdentityStreamTask: process_incoming_node_identity failed, underlying sink is closed, node identities will stagnate: {err}");
             }
         }
     }
@@ -744,7 +743,7 @@ mod tests {
         let process_leaf_err = super::ProcessLeafError::BlockSendError(err);
 
         assert_eq!(
-            format!("{:?}", process_leaf_err),
+            format!("{process_leaf_err:?}"),
             "BlockSendError(SendError { kind: Disconnected })"
         );
     }

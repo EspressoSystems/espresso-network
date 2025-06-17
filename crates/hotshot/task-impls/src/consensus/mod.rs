@@ -177,7 +177,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                 let next_epoch = TYPES::Epoch::new(cert_epoch + 1);
                 broadcast_view_change(&sender, cert_view + 1, Some(next_epoch), self.first_epoch)
                     .await;
-                tracing::info!("Entering new epoch: {:?}", next_epoch);
+                tracing::info!("Entering new epoch: {next_epoch:?}");
                 tracing::info!(
                     "Stake table for epoch {:?}:\n\n{:?}",
                     next_epoch,
@@ -244,7 +244,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                 if high_qc_updated || next_high_qc_updated {
                     // Send ViewChange indicating new view and new epoch.
                     let next_epoch = high_qc.data.epoch().map(|x| x + 1);
-                    tracing::info!("Entering new epoch: {:?}", next_epoch);
+                    tracing::info!("Entering new epoch: {next_epoch:?}");
                     broadcast_view_change(
                         &sender,
                         high_qc.view_number() + 1,
