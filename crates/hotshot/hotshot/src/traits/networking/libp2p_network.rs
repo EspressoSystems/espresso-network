@@ -413,6 +413,8 @@ impl<T: NodeType> Libp2pNetwork<T> {
         // Derive our Libp2p keypair from our supplied private key
         let keypair = derive_libp2p_keypair::<T::SignatureKey>(priv_key)?;
 
+        info!("mine: {} -> {}", pub_key, keypair.public().to_peer_id());
+
         // Build our libp2p configuration
         let mut config_builder = NetworkNodeConfigBuilder::default();
 
