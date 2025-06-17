@@ -725,17 +725,17 @@ impl TestNetwork {
 
         let mut states = Vec::new();
 
-        for node in self.da_nodes.iter().chain(self.regular_nodes.iter()) {
-            states.push((
-                node.node_id().expect("Node id not found"),
-                node.reference_state.read().await.clone(),
-            ));
-        }
+        let mut nodes_iter = self.da_nodes.iter().chain(self.regular_nodes.iter());
+
+        let first_node = nodes_iter.next().unwrap();
+        let ref_id = first_node.node_id().expect("Node id not found");
+        let ref_state = first_node.reference_state.read().await.clone();
 
         // assert that all the nodes have same leaves from their event streams
         // this also ensures validated state consistency
-        let (ref_id, ref_state) = &states[0];
-        for (node_id, state) in &states[1..] {
+        while let Some(node) = nodes_iter.next {
+            let node_id = node.node_id().expect("Node id not found");
+            let state = node.reference_state.read().await.clone();
             assert_eq!(
                 state, ref_state,
                 "State mismatch between node {node_id} and reference node {ref_id}"
