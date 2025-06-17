@@ -39,8 +39,7 @@ pub async fn fetch_stake_table_from_sequencer(
 
     loop {
         match epoch {
-            Some(epoch) => 
-                match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
+            Some(epoch) => match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
                 sequencer_url.clone(),
             )
             .get::<Vec<PeerConfig<SeqTypes>>>(&format!("node/stake-table/{}", epoch.u64()))
@@ -54,8 +53,7 @@ pub async fn fetch_stake_table_from_sequencer(
                     sleep(Duration::from_secs(5)).await;
                 },
             },
-            None => 
-                match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
+            None => match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
                 sequencer_url.clone(),
             )
             .get::<PublicNetworkConfig>("config/hotshot")
