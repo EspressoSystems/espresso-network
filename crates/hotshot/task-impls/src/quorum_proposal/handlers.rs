@@ -640,7 +640,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
 
     fn print_proposal_events(&self, res: &[Vec<Vec<Arc<HotShotEvent<TYPES>>>>]) {
         let events: Vec<_> = res.iter().flatten().flatten().map(Arc::as_ref).collect();
-        tracing::error!("Failed to propose, events: {:#?}", events);
+        tracing::warn!("Failed to propose, events: {:#?}", events);
     }
 }
 
