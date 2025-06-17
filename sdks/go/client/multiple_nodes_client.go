@@ -18,7 +18,7 @@ var _ QueryService = (*MultipleNodesClient)(nil)
 var _ SubmitAPI = (*MultipleNodesClient)(nil)
 var _ EspressoClient = (*MultipleNodesClient)(nil)
 
-var IncorrectUrlAmountErr = errors.New("The MultipleNodesClient must be constructed with more than one node url")
+var IncorrectUrlAmountErr = errors.New("the MultipleNodesClient must be constructed with more than one node url")
 
 type MultipleNodesClient struct {
 	nodes []*Client
@@ -36,13 +36,16 @@ func NewMultipleNodesClient(urls []string) (*MultipleNodesClient, error) {
 }
 
 func (c *MultipleNodesClient) FetchLatestBlockHeight(ctx context.Context) (uint64, error) {
+	var errs []error
 	for _, node := range c.nodes {
 		height, err := node.FetchLatestBlockHeight(ctx)
 		if err == nil {
 			return height, nil
+		} else {
+			errs = append(errs, err)
 		}
 	}
-	return 0, errors.New("fetch latest block height failed with all nodes")
+	return 0, fmt.Errorf("fetch latest block height failed with all nodes, Errors: %v\n", errs)
 }
 
 func (c *MultipleNodesClient) FetchHeaderByHeight(ctx context.Context, height uint64) (types.HeaderImpl, error) {
@@ -129,13 +132,16 @@ func (c *MultipleNodesClient) FetchVidCommonByHeight(ctx context.Context, blockH
 
 func (c *MultipleNodesClient) SubmitTransaction(ctx context.Context, tx common.Transaction) (*common.TaggedBase64, error) {
 	// Check if one node is successfully able to submit the transaction
+	var errs []error
 	for _, node := range c.nodes {
 		hash, err := node.SubmitTransaction(ctx, tx)
 		if err == nil {
 			return hash, nil
+		} else {
+			errs = append(errs, err)
 		}
 	}
-	return nil, errors.New("submit transaction failed with all nodes")
+	return nil, fmt.Errorf("encountered an error with all nodes while attempting to SubmitTransaction.\n Errors: %v \n", errs)
 }
 
 func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T) (json.RawMessage, error)) (json.RawMessage, error) {
@@ -158,6 +164,7 @@ func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T
 		}(node)
 	}
 
+	var errs []error
 	var valueCount sync.Map
 	majorityCount := (len(nodes) / 2) + 1
 	responseCount := 0
@@ -173,6 +180,7 @@ func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T
 				// and if it is, we increase the count and check for majority
 				if err != nil {
 					fmt.Printf("error: failed to normalize json value: %v, error: %v", res.value, err)
+					errs = append(errs, err)
 				} else {
 					count, _ := valueCount.LoadOrStore(hash, 0)
 					if countInt, ok := count.(int); ok {
@@ -184,10 +192,13 @@ func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T
 					}
 
 				}
+			} else {
+				errs = append(errs, res.err)
 			}
+
 			responseCount++
 			if responseCount == len(nodes) {
-				return json.RawMessage{}, errors.New("no majority consensus reached")
+				return json.RawMessage{}, fmt.Errorf("no majority consensus reached with potential errors. Errors: %v\n", errs)
 			}
 		case <-ctx.Done():
 			return json.RawMessage{}, ctx.Err()

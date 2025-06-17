@@ -5,6 +5,7 @@ use std::{
     ops::RangeInclusive,
     path::{Path, PathBuf},
     sync::Arc,
+    time::Instant,
 };
 
 use anyhow::{anyhow, Context};
@@ -36,6 +37,7 @@ use hotshot_types::{
     },
     traits::{
         block_contents::{BlockHeader, BlockPayload},
+        metrics::Metrics,
         node_implementation::{ConsensusTime, NodeType},
     },
     vote::HasViewNumber,
@@ -43,7 +45,10 @@ use hotshot_types::{
 use indexmap::IndexMap;
 use itertools::Itertools;
 
-use crate::{ViewNumber, RECENT_STAKE_TABLES_LIMIT};
+use crate::{
+    persistence::persistence_metrics::PersistenceMetricsValue, ViewNumber,
+    RECENT_STAKE_TABLES_LIMIT,
+};
 
 /// Options for file system backed persistence.
 #[derive(Parser, Clone, Debug)]
@@ -119,6 +124,7 @@ impl PersistenceOptions for Options {
                 migrated,
                 view_retention,
             })),
+            metrics: Arc::new(PersistenceMetricsValue::default()),
         })
     }
 
@@ -134,6 +140,8 @@ pub struct Persistence {
     // implementation does not support transaction isolation for concurrent reads and writes. We can
     // improve this in the future by switching to a SQLite-based file system implementation.
     inner: Arc<RwLock<Inner>>,
+    /// A reference to the metrics trait
+    metrics: Arc<PersistenceMetricsValue>,
 }
 
 #[derive(Debug)]
@@ -728,7 +736,11 @@ impl SequencerPersistence for Persistence {
                 let proposal: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
                     convert_proposal(proposal.clone());
                 let proposal_bytes = bincode::serialize(&proposal).context("serialize proposal")?;
+                let now = Instant::now();
                 file.write_all(&proposal_bytes)?;
+                self.metrics
+                    .internal_append_vid_duration
+                    .add_point(now.elapsed().as_secs_f64());
                 Ok(())
             },
         )
@@ -758,7 +770,11 @@ impl SequencerPersistence for Persistence {
                 let proposal: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
                     convert_proposal(proposal.clone());
                 let proposal_bytes = bincode::serialize(&proposal).context("serialize proposal")?;
+                let now = Instant::now();
                 file.write_all(&proposal_bytes)?;
+                self.metrics
+                    .internal_append_vid2_duration
+                    .add_point(now.elapsed().as_secs_f64());
                 Ok(())
             },
         )
@@ -785,7 +801,11 @@ impl SequencerPersistence for Persistence {
             },
             |mut file| {
                 let proposal_bytes = bincode::serialize(&proposal).context("serialize proposal")?;
+                let now = Instant::now();
                 file.write_all(&proposal_bytes)?;
+                self.metrics
+                    .internal_append_da_duration
+                    .add_point(now.elapsed().as_secs_f64());
                 Ok(())
             },
         )
@@ -865,8 +885,11 @@ impl SequencerPersistence for Persistence {
             },
             |mut file| {
                 let proposal_bytes = bincode::serialize(&proposal).context("serialize proposal")?;
-
+                let now = Instant::now();
                 file.write_all(&proposal_bytes)?;
+                self.metrics
+                    .internal_append_quorum2_duration
+                    .add_point(now.elapsed().as_secs_f64());
                 Ok(())
             },
         )
@@ -1019,7 +1042,11 @@ impl SequencerPersistence for Persistence {
             },
             |mut file| {
                 let proposal_bytes = bincode::serialize(&proposal).context("serialize proposal")?;
+                let now = Instant::now();
                 file.write_all(&proposal_bytes)?;
+                self.metrics
+                    .internal_append_da2_duration
+                    .add_point(now.elapsed().as_secs_f64());
                 Ok(())
             },
         )
@@ -1476,6 +1503,10 @@ impl SequencerPersistence for Persistence {
 
         Ok(result)
     }
+
+    fn enable_metrics(&mut self, _metrics: &dyn Metrics) {
+        // todo!()
+    }
 }
 
 #[async_trait]
@@ -1896,11 +1927,14 @@ mod test {
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_query_service::testing::mocks::MockVersions;
     use hotshot_types::{
-        data::{vid_commitment, QuorumProposal2},
+        data::QuorumProposal2,
         light_client::LightClientState,
         simple_certificate::QuorumCertificate,
         simple_vote::QuorumData,
-        traits::{node_implementation::Versions, EncodeBytes},
+        traits::{
+            block_contents::GENESIS_VID_NUM_STORAGE_NODES, node_implementation::Versions,
+            EncodeBytes,
+        },
         vid::advz::advz_scheme,
     };
     use jf_vid::VidScheme;
@@ -2055,22 +2089,11 @@ mod test {
                 Payload::from_transactions([], &validated_state, &instance_state)
                     .await
                     .unwrap();
-            let builder_commitment = payload.builder_commitment(&metadata);
+
             let payload_bytes = payload.encode();
 
-            let payload_commitment = vid_commitment::<TestVersions>(
-                &payload_bytes,
-                &metadata.encode(),
-                4,
-                <TestVersions as Versions>::Base::VERSION,
-            );
-
-            let block_header = Header::genesis(
-                &instance_state,
-                payload_commitment,
-                builder_commitment,
-                metadata,
-            );
+            let block_header =
+                Header::genesis::<TestVersions>(&instance_state, payload.clone(), &metadata);
 
             let state_cert = LightClientStateUpdateCertificate::<SeqTypes> {
                 epoch: EpochNumber::new(i),
@@ -2117,7 +2140,7 @@ mod test {
             let mut leaf = Leaf::from_quorum_proposal(&quorum_proposal);
             leaf.fill_block_payload::<TestVersions>(
                 payload,
-                4,
+                GENESIS_VID_NUM_STORAGE_NODES,
                 <TestVersions as Versions>::Base::VERSION,
             )
             .unwrap();
@@ -2162,7 +2185,9 @@ mod test {
                 .unwrap();
 
             drop(inner);
-            let disperse = advz_scheme(4).disperse(payload_bytes.clone()).unwrap();
+            let disperse = advz_scheme(GENESIS_VID_NUM_STORAGE_NODES)
+                .disperse(payload_bytes.clone())
+                .unwrap();
 
             let vid = ADVZDisperseShare::<SeqTypes> {
                 view_number: ViewNumber::new(i),

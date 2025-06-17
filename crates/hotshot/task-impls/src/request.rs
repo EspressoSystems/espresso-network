@@ -209,6 +209,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for NetworkRequest
                 if view > self.view {
                     self.view = view;
                 }
+                // Clean old tasks' handles
+                self.spawned_tasks
+                    .range_mut(..self.view)
+                    .for_each(|(_, handles)| {
+                        handles.retain(|handle| !handle.is_finished());
+                    });
+                self.spawned_tasks
+                    .retain(|view, handles| view >= &self.view || !handles.is_empty());
                 Ok(())
             },
             _ => Ok(()),

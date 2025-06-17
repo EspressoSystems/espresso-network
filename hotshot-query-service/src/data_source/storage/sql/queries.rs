@@ -32,8 +32,8 @@ use sqlx::{Arguments, FromRow, Row};
 use super::{Database, Db, Query, QueryAs, Transaction};
 use crate::{
     availability::{
-        BlockId, BlockQueryData, LeafQueryData, PayloadQueryData, QueryablePayload,
-        StateCertQueryData, VidCommonQueryData,
+        BlockId, BlockQueryData, LeafQueryData, PayloadQueryData, QueryableHeader,
+        QueryablePayload, StateCertQueryData, VidCommonQueryData,
     },
     data_source::storage::{PayloadMetadata, VidCommonMetadata},
     Header, Leaf2, Payload, QueryError, QueryResult,
@@ -189,6 +189,7 @@ const BLOCK_COLUMNS: &str =
 impl<'r, Types> FromRow<'r, <Db as Database>::Row> for BlockQueryData<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
@@ -225,6 +226,7 @@ const PAYLOAD_COLUMNS: &str = BLOCK_COLUMNS;
 impl<'r, Types> FromRow<'r, <Db as Database>::Row> for PayloadQueryData<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
@@ -238,6 +240,7 @@ const PAYLOAD_METADATA_COLUMNS: &str =
 impl<'r, Types> FromRow<'r, <Db as Database>::Row> for PayloadMetadata<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
 {
     fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
         Ok(Self {
@@ -256,6 +259,9 @@ where
             num_transactions: row
                 .try_get::<Option<i32>, _>("num_transactions")?
                 .ok_or(sqlx::Error::RowNotFound)? as u64,
+
+            // Per-namespace info must be loaded in a separate query.
+            namespaces: Default::default(),
         })
     }
 }
@@ -265,6 +271,7 @@ const VID_COMMON_COLUMNS: &str = "h.height AS height, h.hash AS block_hash, h.pa
 impl<'r, Types> FromRow<'r, <Db as Database>::Row> for VidCommonQueryData<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
@@ -293,6 +300,7 @@ const VID_COMMON_METADATA_COLUMNS: &str =
 impl<'r, Types> FromRow<'r, <Db as Database>::Row> for VidCommonMetadata<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {

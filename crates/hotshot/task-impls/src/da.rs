@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{marker::PhantomData, sync::Arc};
+use std::{marker::PhantomData, sync::Arc, time::Instant};
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
@@ -17,6 +17,7 @@ use hotshot_types::{
     message::{Proposal, UpgradeLock},
     simple_certificate::DaCertificate2,
     simple_vote::{DaData2, DaVote2},
+    storage_metrics::StorageMetricsValue,
     traits::{
         network::ConnectedNetwork,
         node_implementation::{NodeImplementation, NodeType, Versions},
@@ -74,6 +75,9 @@ pub struct DaTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Version
 
     /// This node's storage ref
     pub storage: I::Storage,
+
+    /// Storage metrics
+    pub storage_metrics: Arc<StorageMetricsValue>,
 
     /// Lock for a decided upgrade
     pub upgrade_lock: UpgradeLock<TYPES, V>,
@@ -223,11 +227,16 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     None
                 };
 
+                let now = Instant::now();
                 self.storage
                     .append_da2(proposal, payload_commitment)
                     .await
                     .wrap()
                     .context(error!("Failed to append DA proposal to storage"))?;
+                self.storage_metrics
+                    .append_da_duration
+                    .add_point(now.elapsed().as_secs_f64());
+
                 // Generate and send vote
                 let vote = DaVote2::create_signed_vote(
                     DaData2 {

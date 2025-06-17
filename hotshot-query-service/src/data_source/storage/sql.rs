@@ -46,7 +46,7 @@ use crate::{
     metrics::PrometheusMetrics,
     node::BlockId,
     status::HasMetrics,
-    QueryError, QueryResult, VidCommon,
+    Header, QueryError, QueryResult, VidCommon,
 };
 pub extern crate sqlx;
 pub use sqlx::{Database, Sqlite};
@@ -665,10 +665,11 @@ impl SqlStorage {
     }
 
     /// Get the stored VID share for a given block, if one exists.
-    pub async fn get_vid_share<Types: NodeType>(
-        &self,
-        block_id: BlockId<Types>,
-    ) -> QueryResult<VidShare> {
+    pub async fn get_vid_share<Types>(&self, block_id: BlockId<Types>) -> QueryResult<VidShare>
+    where
+        Types: NodeType,
+        Header<Types>: QueryableHeader<Types>,
+    {
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
             message: err.to_string(),
         })?;
@@ -1068,7 +1069,7 @@ pub mod testing {
     use tokio::{net::TcpStream, time::timeout};
 
     use super::Config;
-    use crate::{availability::query_data::QueryableHeader, testing::sleep};
+    use crate::testing::sleep;
     #[derive(Debug)]
     pub struct TmpDb {
         #[cfg(not(feature = "embedded-db"))]
@@ -1365,10 +1366,10 @@ mod test {
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
-        data::{vid_commitment, QuorumProposal, ViewNumber},
+        data::{QuorumProposal, ViewNumber},
         simple_vote::QuorumData,
         traits::{
-            block_contents::BlockHeader,
+            block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
             node_implementation::{ConsensusTime, Versions},
             EncodeBytes,
         },
@@ -1383,7 +1384,7 @@ mod test {
 
     use super::{testing::TmpDb, *};
     use crate::{
-        availability::{LeafQueryData, QueryableHeader},
+        availability::LeafQueryData,
         data_source::storage::{pruning::PrunedHeightStorage, UpdateAvailabilityStorage},
         merklized_state::{MerklizedState, UpdateStateData},
         testing::{
@@ -1426,12 +1427,12 @@ mod test {
         // The SQL commands used here will fail if not run in order.
         let migrations = vec![
             Migration::unapplied(
-                "V999__create_test_table.sql",
+                "V9999__create_test_table.sql",
                 "ALTER TABLE test ADD COLUMN data INTEGER;",
             )
             .unwrap(),
             Migration::unapplied(
-                "V998__create_test_table.sql",
+                "V9998__create_test_table.sql",
                 "CREATE TABLE test (x bigint);",
             )
             .unwrap(),
@@ -1790,22 +1791,11 @@ mod test {
             )
             .await
             .unwrap();
-            let builder_commitment =
-                <MockPayload as BlockPayload<MockTypes>>::builder_commitment(&payload, &metadata);
-            let payload_bytes = payload.encode();
 
-            let payload_commitment = vid_commitment::<MockVersions>(
-                &payload_bytes,
-                &metadata.encode(),
-                4,
-                <MockVersions as Versions>::Base::VERSION,
-            );
-
-            let mut block_header = <MockHeader as BlockHeader<MockTypes>>::genesis(
+            let mut block_header = <MockHeader as BlockHeader<MockTypes>>::genesis::<MockVersions>(
                 &instance_state,
-                payload_commitment,
-                builder_commitment,
-                metadata,
+                payload.clone(),
+                &metadata,
             );
 
             block_header.block_number = i;
@@ -1833,7 +1823,7 @@ mod test {
             let mut leaf = Leaf::from_quorum_proposal(&quorum_proposal);
             leaf.fill_block_payload::<MockVersions>(
                 payload.clone(),
-                4,
+                GENESIS_VID_NUM_STORAGE_NODES,
                 <MockVersions as Versions>::Base::VERSION,
             )
             .unwrap();
@@ -1860,7 +1850,7 @@ mod test {
                     leaf.block_header().commit().to_string(),
                     payload_commitment.to_string(),
                     header_json,
-                    leaf.block_header().timestamp() as i64,
+                    <MockHeader as BlockHeader<MockTypes>>::timestamp(leaf.block_header()) as i64,
                 )],
             )
             .await

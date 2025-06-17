@@ -4,10 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{
-    cmp::max,
-    collections::{BTreeMap, BTreeSet},
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use alloy::primitives::U256;
 use hotshot_types::{
@@ -226,26 +223,30 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
     /// Get the voting success threshold for the committee
     fn success_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
         self.check_first_epoch(epoch);
-        U256::from(((self.stake_table.len() as u64 * 2) / 3) + 1)
+        ((self.total_stake(epoch) * U256::from(2)) / U256::from(3)) + U256::from(1)
     }
 
     /// Get the voting success threshold for the committee
     fn da_success_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
         self.check_first_epoch(epoch);
-        U256::from(((self.da_stake_table.len() as u64 * 2) / 3) + 1)
+        ((self.total_da_stake(epoch) * U256::from(2)) / U256::from(3)) + U256::from(1)
     }
 
     /// Get the voting failure threshold for the committee
     fn failure_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
         self.check_first_epoch(epoch);
-        U256::from(((self.stake_table.len() as u64) / 3) + 1)
+        (self.total_stake(epoch) / U256::from(3)) + U256::from(1)
     }
 
     /// Get the voting upgrade threshold for the committee
     fn upgrade_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
         self.check_first_epoch(epoch);
-        let len = self.stake_table.len();
-        U256::from(max((len as u64 * 9) / 10, ((len as u64 * 2) / 3) + 1))
+        let len = self.total_stake(epoch);
+
+        U256::max(
+            (len * U256::from(9)) / U256::from(10),
+            ((len * U256::from(2)) / U256::from(3)) + U256::from(1),
+        )
     }
     fn has_stake_table(&self, _epoch: TYPES::Epoch) -> bool {
         true

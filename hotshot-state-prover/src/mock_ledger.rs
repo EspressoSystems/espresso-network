@@ -12,9 +12,7 @@ use ark_std::{
 use espresso_types::SeqTypes;
 use hotshot_contract_adapter::{field_to_u256, jellyfish::open_key};
 use hotshot_types::{
-    light_client::{
-        GenericLightClientState, GenericPublicInput, GenericStakeTableState, LightClientState,
-    },
+    light_client::{GenericLightClientState, GenericStakeTableState, LightClientState},
     stake_table::{HSStakeTable, StakeTableEntry},
     utils::{epoch_from_block_number, is_epoch_root, is_ge_epoch_root, is_last_block},
     PeerConfig,
@@ -33,7 +31,9 @@ use jf_signature::{
 };
 use jf_utils::test_rng;
 
-use crate::{generate_state_update_proof, preprocess, Proof, VerifyingKey};
+use crate::{
+    circuit::GenericPublicInput, generate_state_update_proof, preprocess, Proof, VerifyingKey,
+};
 
 type F = ark_ed_on_bn254::Fq;
 type SchnorrVerKey = jf_signature::schnorr::VerKey<EdwardsConfig>;
@@ -321,8 +321,8 @@ impl MockLedger {
                 powers_of_h: vec![srs.h, srs.beta_h],
             }
         };
-        let (pk, _) = preprocess(&srs, STAKE_TABLE_CAPACITY_FOR_TEST)
-            .expect("Fail to preprocess state prover circuit");
+        let (pk, _) =
+            preprocess(&srs, self.pp.st_cap).expect("Fail to preprocess state prover circuit");
         let stake_table_entries = st
             .into_iter()
             .map(|(_, stake_amount, schnorr_key)| (schnorr_key, stake_amount))
@@ -335,7 +335,7 @@ impl MockLedger {
             &sigs,
             &self.state,
             &voting_st_state,
-            STAKE_TABLE_CAPACITY_FOR_TEST,
+            self.pp.st_cap,
             &next_st_state,
         )
         .expect("Fail to generate state proof");
@@ -351,10 +351,9 @@ impl MockLedger {
     ) -> (GenericPublicInput<F>, Proof, GenericStakeTableState<F>) {
         let new_state = self.state;
 
-        let (adv_qc_keys, adv_state_keys) =
-            key_pairs_for_testing(STAKE_TABLE_CAPACITY_FOR_TEST, &mut self.rng);
+        let (adv_qc_keys, adv_state_keys) = key_pairs_for_testing(self.pp.st_cap, &mut self.rng);
         let adv_st = stake_table_for_testing(&adv_qc_keys, &adv_state_keys);
-        let adv_st_state = adv_st.commitment(STAKE_TABLE_CAPACITY_FOR_TEST).unwrap();
+        let adv_st_state = adv_st.commitment(self.pp.st_cap).unwrap();
 
         // replace new state with adversarial stake table commitment
         let mut msg = Vec::with_capacity(7);
@@ -364,7 +363,7 @@ impl MockLedger {
         msg.extend_from_slice(&adv_st_state_msg);
 
         // every fake stakers sign on the adverarial new state
-        let bit_vec = vec![true; STAKE_TABLE_CAPACITY_FOR_TEST];
+        let bit_vec = vec![true; self.pp.st_cap];
         let sigs = adv_state_keys
             .iter()
             .map(|(sk, _)| {
@@ -386,8 +385,8 @@ impl MockLedger {
                 powers_of_h: vec![srs.h, srs.beta_h],
             }
         };
-        let (pk, _) = preprocess(&srs, STAKE_TABLE_CAPACITY_FOR_TEST)
-            .expect("Fail to preprocess state prover circuit");
+        let (pk, _) =
+            preprocess(&srs, self.pp.st_cap).expect("Fail to preprocess state prover circuit");
         let stake_table_entries = adv_st
             .0
             .into_iter()
@@ -401,7 +400,7 @@ impl MockLedger {
             &sigs,
             &new_state,
             &adv_st_state,
-            STAKE_TABLE_CAPACITY_FOR_TEST,
+            self.pp.st_cap,
             &adv_st_state,
         )
         .expect("Fail to generate state proof");
@@ -412,7 +411,7 @@ impl MockLedger {
     /// Returns the stake table state for current voting
     pub fn voting_stake_table_state(&self) -> GenericStakeTableState<F> {
         self.voting_st
-            .commitment(STAKE_TABLE_CAPACITY_FOR_TEST)
+            .commitment(self.pp.st_cap)
             .expect("Failed to compute stake table commitment")
     }
 
@@ -421,7 +420,7 @@ impl MockLedger {
     pub fn next_stake_table_state(&self) -> GenericStakeTableState<F> {
         if self.epoch_activated() && self.is_ge_epoch_root() {
             self.next_voting_st
-                .commitment(STAKE_TABLE_CAPACITY_FOR_TEST)
+                .commitment(self.pp.st_cap)
                 .expect("Failed to compute stake table commitment")
         } else {
             self.voting_stake_table_state()

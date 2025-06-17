@@ -27,9 +27,9 @@ use super::{
 };
 use crate::{
     availability::{
-        BlockId, BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, QueryableHeader,
-        QueryablePayload, StateCertQueryData, TransactionHash, TransactionQueryData,
-        VidCommonQueryData,
+        BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceInfo, NamespaceMap,
+        PayloadQueryData, QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
+        TransactionQueryData, VidCommonQueryData,
     },
     data_source::storage::{
         sql::sqlx::Row, AvailabilityStorage, PayloadMetadata, VidCommonMetadata,
@@ -123,7 +123,10 @@ where
             .fetch_optional(self.as_mut())
             .await?
             .context(MissingSnafu)?;
-        let payload = PayloadMetadata::from_row(&row)?;
+        let mut payload = PayloadMetadata::from_row(&row)?;
+        payload.namespaces = self
+            .load_namespaces::<Types>(payload.height(), payload.size)
+            .await?;
         Ok(payload)
     }
 
@@ -279,13 +282,24 @@ where
               {where_clause} AND p.num_transactions IS NOT NULL
               ORDER BY h.height ASC"
         );
-        Ok(query
+        let rows = query
             .query(&sql)
             .fetch(self.as_mut())
-            .map(|res| PayloadMetadata::from_row(&res?))
-            .map_err(QueryError::from)
-            .collect()
-            .await)
+            .collect::<Vec<_>>()
+            .await;
+        let mut payloads = vec![];
+        for row in rows {
+            let res = async {
+                let mut meta = PayloadMetadata::from_row(&row?)?;
+                meta.namespaces = self
+                    .load_namespaces::<Types>(meta.height(), meta.size)
+                    .await?;
+                Ok(meta)
+            }
+            .await;
+            payloads.push(res);
+        }
+        Ok(payloads)
     }
 
     async fn get_vid_common_range<R>(
@@ -353,7 +367,7 @@ where
                 JOIN payload AS p ON h.height = p.height
                 JOIN transactions AS t ON t.block_height = h.height
                 WHERE t.hash = {hash_param}
-                ORDER BY t.block_height, t.namespace, t.position
+                ORDER BY t.block_height, t.ns_id, t.position
                 LIMIT 1"
         );
         let row = query.query(&sql).fetch_one(self.as_mut()).await?;
@@ -388,5 +402,49 @@ where
         .fetch_one(self.as_mut())
         .await?;
         Ok(StateCertQueryData::from_row(&row)?)
+    }
+}
+
+impl<Mode> Transaction<Mode>
+where
+    Mode: TransactionMode,
+{
+    async fn load_namespaces<Types>(
+        &mut self,
+        height: u64,
+        payload_size: u64,
+    ) -> QueryResult<NamespaceMap<Types>>
+    where
+        Types: NodeType,
+        Header<Types>: QueryableHeader<Types>,
+        Payload<Types>: QueryablePayload<Types>,
+    {
+        let header = self
+            .get_header(BlockId::<Types>::from(height as usize))
+            .await?;
+        let map = query(
+            "SELECT ns_id, ns_index, max(position) + 1 AS count
+               FROM  transactions
+               WHERE block_height = $1
+               GROUP BY ns_id, ns_index",
+        )
+        .bind(height as i64)
+        .fetch(self.as_mut())
+        .map_ok(|row| {
+            let ns = row.get::<i64, _>("ns_index").into();
+            let id = row.get::<i64, _>("ns_id").into();
+            let num_transactions = row.get::<i64, _>("count") as u64;
+            let size = header.namespace_size(&ns, payload_size as usize);
+            (
+                id,
+                NamespaceInfo {
+                    num_transactions,
+                    size,
+                },
+            )
+        })
+        .try_collect()
+        .await?;
+        Ok(map)
     }
 }

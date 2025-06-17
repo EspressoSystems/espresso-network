@@ -53,8 +53,9 @@ jobs:
           comment_on_pr: false
 
       - name: Build and archive tests
-        # hotshot-testing is tested in hotshot.yml, exclude from compilation
-        run: cargo nextest archive --locked --workspace --exclude hotshot-testing --archive-file nextest-archive-postgres.tar.zst
+        # hotshot-testing is tested in hotshot.yml -> exclude
+        # sequencer-sqlite will enable embedded-db feature -> exclude
+        run: cargo nextest archive --locked --workspace --exclude sequencer-sqlite --exclude hotshot-testing --archive-file nextest-archive-postgres.tar.zst
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v4
@@ -72,6 +73,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+        
       - name: Install nextest
         uses: taiki-e/install-action@nextest
 
@@ -92,7 +94,7 @@ jobs:
           comment_on_pr: false
 
       - name: Build and archive tests
-        # hotshot-testing is tested in hotshot.yml, exclude from compilation
+        # hotshot-testing is tested in hotshot.yml -> exclude
         run: cargo nextest archive --locked --features "embedded-db testing" --workspace --exclude hotshot-testing --archive-file nextest-archive-sqlite.tar.zst
 
       - name: Upload archive to workflow
@@ -166,7 +168,7 @@ jobs:
 
       - name: Build sequencer-sqlite binary
         run: |
-          cargo build --locked --profile test --manifest-path ./sequencer-sqlite/Cargo.toml --target-dir ./target
+          cargo build --locked --profile test -p sequencer-sqlite
         timeout-minutes: 30
 
       - name: Upload archive to workflow
@@ -219,6 +221,9 @@ jobs:
 
       - uses: actions/checkout@v4
 
+      - name: Install node deps
+        run: yarn
+
       - name: Install nextest
         uses: taiki-e/install-action@nextest
       - name: Download archive
@@ -249,6 +254,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - name: Install node deps
+        run: yarn
 
       - name: Install nextest
         uses: taiki-e/install-action@nextest

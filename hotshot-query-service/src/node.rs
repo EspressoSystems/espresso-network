@@ -30,7 +30,7 @@ use snafu::{ResultExt, Snafu};
 use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, StatusCode};
 use vbs::version::StaticVersionType;
 
-use crate::{api::load_api, QueryError};
+use crate::{api::load_api, availability::QueryableHeader, Header, QueryError};
 
 pub(crate) mod data_source;
 pub(crate) mod query_data;
@@ -112,12 +112,14 @@ impl Error {
     }
 }
 
-pub fn define_api<State, Types: NodeType, Ver: StaticVersionType + 'static>(
+pub fn define_api<State, Types, Ver: StaticVersionType + 'static>(
     options: &Options,
     _: Ver,
     api_ver: semver::Version,
 ) -> Result<Api<State, Error, Ver>, ApiError>
 where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     State: 'static + Send + Sync + ReadState,
     <State as ReadState>::State: NodeDataSource<Types> + Send + Sync,
 {
@@ -141,7 +143,12 @@ where
                     Some(to) => Bound::Included(to),
                     None => Bound::Unbounded,
                 };
-                Ok(state.count_transactions_in_range((from, to)).await?)
+
+                let ns = req.opt_integer_param::<_, i64>("namespace")?;
+
+                Ok(state
+                    .count_transactions_in_range((from, to), ns.map(Into::into))
+                    .await?)
             }
             .boxed()
         })?
@@ -155,7 +162,12 @@ where
                     Some(to) => Bound::Included(to),
                     None => Bound::Unbounded,
                 };
-                Ok(state.payload_size_in_range((from, to)).await?)
+
+                let ns = req.opt_integer_param::<_, i64>("namespace")?;
+
+                Ok(state
+                    .payload_size_in_range((from, to), ns.map(Into::into))
+                    .await?)
             }
             .boxed()
         })?

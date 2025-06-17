@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::marker::PhantomData;
+use std::{hash::Hash, marker::PhantomData};
 
 pub use hotshot::traits::election::helpers::{
     RandomOverlapQuorumFilterConfig, StableQuorumFilterConfig,
@@ -24,7 +24,10 @@ use hotshot_types::{
     constants::TEST_UPGRADE_CONSTANTS,
     data::{EpochNumber, ViewNumber},
     signature_key::{BLSPubKey, BuilderKey, SchnorrPubKey},
-    traits::node_implementation::{NodeType, Versions},
+    traits::{
+        node_implementation::{NodeType, Versions},
+        signature_key::SignatureKey,
+    },
     upgrade_config::UpgradeConstants,
 };
 use serde::{Deserialize, Serialize};
@@ -113,8 +116,25 @@ impl NodeType for TestTypesRandomizedLeader {
     serde::Serialize,
     serde::Deserialize,
 )]
-pub struct TestTypesEpochCatchupTypes;
-impl NodeType for TestTypesEpochCatchupTypes {
+pub struct TestTypesEpochCatchupTypes<V: Versions, InnerTypes: NodeType> {
+    _ph: PhantomData<V>,
+    _pd: PhantomData<InnerTypes>,
+}
+impl<V: Versions + Default + Ord + Hash, InnerTypes: NodeType> NodeType
+    for TestTypesEpochCatchupTypes<V, InnerTypes>
+where
+    InnerTypes::Epoch: From<EpochNumber>,
+    EpochNumber: From<InnerTypes::Epoch>,
+    InnerTypes::View: From<ViewNumber>,
+    BLSPubKey: From<InnerTypes::SignatureKey>,
+    for<'a> &'a InnerTypes::SignatureKey: From<&'a BLSPubKey>,
+    <InnerTypes::SignatureKey as SignatureKey>::StakeTableEntry:
+        From<<BLSPubKey as SignatureKey>::StakeTableEntry>,
+    InnerTypes::StateSignatureKey: From<SchnorrPubKey>,
+    <BLSPubKey as SignatureKey>::StakeTableEntry:
+        From<<InnerTypes::SignatureKey as SignatureKey>::StakeTableEntry>,
+    SchnorrPubKey: From<InnerTypes::StateSignatureKey>,
+{
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
     type View = ViewNumber;
@@ -125,7 +145,8 @@ impl NodeType for TestTypesEpochCatchupTypes {
     type Transaction = TestTransaction;
     type ValidatedState = TestValidatedState;
     type InstanceState = TestInstanceState;
-    type Membership = DummyCatchupCommittee<TestTypesEpochCatchupTypes>;
+    type Membership =
+        DummyCatchupCommittee<TestTypesEpochCatchupTypes<V, InnerTypes>, V, InnerTypes>;
     type BuilderSignatureKey = BuilderKey;
     type StateSignatureKey = SchnorrPubKey;
 }
@@ -145,11 +166,17 @@ impl NodeType for TestTypesEpochCatchupTypes {
 )]
 /// filler struct to implement node type and allow us
 /// to select our traits
-pub struct TestTypesRandomizedCommitteeMembers<CONFIG: QuorumFilterConfig> {
+pub struct TestTypesRandomizedCommitteeMembers<
+    CONFIG: QuorumFilterConfig,
+    DaConfig: QuorumFilterConfig,
+> {
     _pd: PhantomData<CONFIG>,
+    _dd: PhantomData<DaConfig>,
 }
 
-impl<CONFIG: QuorumFilterConfig> NodeType for TestTypesRandomizedCommitteeMembers<CONFIG> {
+impl<CONFIG: QuorumFilterConfig, DaConfig: QuorumFilterConfig> NodeType
+    for TestTypesRandomizedCommitteeMembers<CONFIG, DaConfig>
+{
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
     type View = ViewNumber;
@@ -160,8 +187,11 @@ impl<CONFIG: QuorumFilterConfig> NodeType for TestTypesRandomizedCommitteeMember
     type Transaction = TestTransaction;
     type ValidatedState = TestValidatedState;
     type InstanceState = TestInstanceState;
-    type Membership =
-        RandomizedCommitteeMembers<TestTypesRandomizedCommitteeMembers<CONFIG>, CONFIG>;
+    type Membership = RandomizedCommitteeMembers<
+        TestTypesRandomizedCommitteeMembers<CONFIG, DaConfig>,
+        CONFIG,
+        DaConfig,
+    >;
     type BuilderSignatureKey = BuilderKey;
     type StateSignatureKey = SchnorrPubKey;
 }
@@ -285,9 +315,10 @@ impl Versions for TestVersions {
     ];
 
     type Epochs = StaticVersion<0, 4>;
+    type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
 }
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug, Copy, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EpochsTestVersions {}
 
 impl Versions for EpochsTestVersions {
@@ -299,6 +330,7 @@ impl Versions for EpochsTestVersions {
     ];
 
     type Epochs = StaticVersion<0, 3>;
+    type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
 }
 
 #[derive(Clone, Debug, Copy)]
@@ -313,6 +345,7 @@ impl Versions for EpochUpgradeTestVersions {
     ];
 
     type Epochs = StaticVersion<0, 4>;
+    type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
 }
 
 #[cfg(test)]

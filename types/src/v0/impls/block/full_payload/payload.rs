@@ -44,9 +44,9 @@ impl Payload {
     /// Like [`QueryablePayload::transaction_with_proof`] except without the
     /// proof.
     pub fn transaction(&self, index: &Index) -> Option<Transaction> {
-        let ns = NsIndex(index.namespace as usize);
-        let ns_id = self.ns_table.read_ns_id(&ns)?;
-        let ns_payload = self.ns_payload(&ns);
+        let ns = &index.ns_index;
+        let ns_id = self.ns_table.read_ns_id(ns)?;
+        let ns_payload = self.ns_payload(ns);
         ns_payload.export_tx(&ns_id, &TxIndex(index.position as usize))
     }
 
@@ -80,7 +80,7 @@ impl Payload {
     > {
         // accounting for block byte length limit
         let max_block_byte_len = u64::from(chain_config.max_block_size);
-        let mut block_byte_len = NsTableBuilder::header_byte_len() as u64;
+        let mut block_byte_len = 0;
 
         // add each tx to its namespace
         let mut ns_builders = BTreeMap::<NamespaceId, NsPayloadBuilder>::new();
@@ -201,6 +201,10 @@ impl BlockPayload<SeqTypes> for Payload {
         metadata: &'a Self::Metadata,
     ) -> impl 'a + Iterator<Item = Self::Transaction> {
         self.enumerate(metadata).map(|(_, t)| t)
+    }
+
+    fn txn_bytes(&self) -> usize {
+        self.raw_payload.len()
     }
 }
 

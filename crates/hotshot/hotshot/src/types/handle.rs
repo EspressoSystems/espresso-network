@@ -22,6 +22,7 @@ use hotshot_types::{
     error::HotShotError,
     message::{Message, MessageKind, Proposal, RecipientList},
     request_response::ProposalRequestPayload,
+    storage_metrics::StorageMetricsValue,
     traits::{
         consensus_api::ConsensusApi,
         network::{BroadcastDelay, ConnectedNetwork, Topic},
@@ -343,5 +344,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
     #[must_use]
     pub fn storage(&self) -> I::Storage {
         self.storage.clone()
+    }
+
+    /// Returns a reference to the storage metrics
+    #[must_use]
+    pub fn storage_metrics(&self) -> Arc<StorageMetricsValue> {
+        Arc::clone(&self.hotshot.storage_metrics)
     }
 }
