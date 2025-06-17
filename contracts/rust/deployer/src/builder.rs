@@ -58,6 +58,14 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     token_name: Option<String>,
     #[builder(default)]
     token_symbol: Option<String>,
+    #[builder(default)]
+    timelock_admin: Option<Address>,
+    #[builder(default)]
+    timelock_delay: Option<U256>,
+    #[builder(default)]
+    timelock_executors: Option<Vec<Address>>,
+    #[builder(default)]
+    timelock_proposers: Option<Vec<Address>>,
 }
 
 impl<P: Provider + WalletProvider> DeployerArgs<P> {
@@ -93,6 +101,34 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
 
                 if let Some(multisig) = self.multisig {
                     crate::transfer_ownership(provider, target, addr, multisig).await?;
+                }
+            },
+            Contract::EspTokenV2 => {
+                let use_multisig = self.use_multisig;
+
+                if use_multisig {
+                    crate::upgrade_esp_token_v2_multisig_owner(
+                        provider,
+                        contracts,
+                        self.rpc_url.clone(),
+                        Some(self.dry_run),
+                    )
+                    .await?;
+                } else {
+                    crate::upgrade_esp_token_v2(provider, contracts).await?;
+
+                    if let Some(multisig) = self.multisig {
+                        let token_proxy = contracts
+                            .address(Contract::EspTokenProxy)
+                            .expect("fail to get EspTokenProxy address");
+                        crate::transfer_ownership(
+                            provider,
+                            Contract::EspTokenProxy,
+                            token_proxy,
+                            multisig,
+                        )
+                        .await?;
+                    }
                 }
             },
             Contract::LightClientProxy => {
@@ -213,6 +249,17 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     )
                     .await?;
                 }
+            },
+            Contract::Timelock => {
+                crate::deploy_timelock(
+                    provider,
+                    contracts,
+                    self.timelock_delay.unwrap(),
+                    self.timelock_proposers.clone().unwrap(),
+                    self.timelock_executors.clone().unwrap(),
+                    self.timelock_admin.unwrap(),
+                )
+                .await?;
             },
             _ => {
                 panic!("Deploying {} not supported.", target);

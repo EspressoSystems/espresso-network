@@ -11,7 +11,6 @@ use std::{
     sync::Arc,
 };
 
-use alloy::primitives::U256;
 use async_broadcast::{broadcast, Receiver, Sender};
 use async_lock::RwLock;
 use futures::future::join_all;
@@ -33,6 +32,7 @@ use hotshot_types::{
     drb::INITIAL_DRB_RESULT,
     epoch_membership::EpochMembershipCoordinator,
     simple_certificate::QuorumCertificate2,
+    storage_metrics::StorageMetricsValue,
     traits::{
         election::Membership,
         network::ConnectedNetwork,
@@ -192,6 +192,7 @@ where
             restart_contexts: HashMap::new(),
             channel_generator: launcher.resource_generators.channel_generator,
             state_cert: None,
+            node_stakes: launcher.metadata.node_stakes.clone(),
         };
         let spinning_task = TestTask::<SpinningTask<TYPES, N, I, V>>::new(
             spinning_task_state,
@@ -415,7 +416,7 @@ where
                     let validator_config = ValidatorConfig::generated_from_seed_indexed(
                         [0u8; 32],
                         node_id,
-                        U256::from(1),
+                        self.launcher.metadata.node_stakes.get(node_id),
                         is_da,
                     );
 
@@ -544,6 +545,7 @@ where
             initializer,
             ConsensusMetricsValue::default(),
             storage,
+            StorageMetricsValue::default(),
         )
         .await
     }
@@ -583,6 +585,7 @@ where
             initializer,
             ConsensusMetricsValue::default(),
             storage,
+            StorageMetricsValue::default(),
             internal_channel,
             external_channel,
         )

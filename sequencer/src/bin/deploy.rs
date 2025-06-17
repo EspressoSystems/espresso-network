@@ -106,11 +106,15 @@ struct Options {
     /// Option to deploy esp token
     #[clap(long, default_value = "false")]
     deploy_esp_token: bool,
-    /// Option to deploy stake table
+    /// Option to deploy StakeTable V1 and proxy
     #[clap(long, default_value = "false")]
     deploy_stake_table: bool,
+    /// Option to upgrade to StakeTable V2
     #[clap(long, default_value = "false")]
     upgrade_stake_table_v2: bool,
+    /// Option to deploy timelock
+    #[clap(long, default_value = "false")]
+    deploy_timelock: bool,
 
     /// Write deployment results to OUT as a .env file.
     ///
@@ -188,6 +192,22 @@ struct Options {
     #[clap(long, env = "ESP_TOKEN_SYMBOL", default_value = "ESP")]
     token_symbol: String,
 
+    /// The admin of the timelock
+    #[clap(long, env = "ESPRESSO_TIMELOCK_ADMIN")]
+    timelock_admin: Option<Address>,
+
+    /// The delay of the timelock
+    #[clap(long, env = "ESPRESSO_TIMELOCK_DELAY")]
+    timelock_delay: Option<u64>,
+
+    /// The executor(s) of the timelock
+    #[clap(long, env = "ESPRESSO_TIMELOCK_EXECUTORS")]
+    timelock_executors: Option<Vec<Address>>,
+
+    /// The proposer(s) of the timelock
+    #[clap(long, env = "ESPRESSO_TIMELOCK_PROPOSERS")]
+    timelock_proposers: Option<Vec<Address>>,
+
     #[clap(flatten)]
     logging: logging::Config,
 }
@@ -202,7 +222,12 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let mut contracts = Contracts::from(opt.contracts);
-    let provider = build_provider(opt.mnemonic, opt.account_index, opt.rpc_url.clone());
+    let provider = build_provider(
+        opt.mnemonic,
+        opt.account_index,
+        opt.rpc_url.clone(),
+        Some(opt.l1_polling_interval),
+    );
 
     // First use builder to build constructor input arguments
     let mut args_builder = DeployerArgsBuilder::default();
@@ -275,6 +300,24 @@ async fn main() -> anyhow::Result<()> {
             args_builder.exit_escrow_period(U256::from(escrow_period.as_secs()));
         }
     }
+    if opt.deploy_timelock {
+        let timelock_admin = opt
+            .timelock_admin
+            .expect("Must provide --timelock-admin when deploying timelock");
+        args_builder.timelock_admin(timelock_admin);
+        let timelock_delay = opt
+            .timelock_delay
+            .expect("Must provide --timelock-delay when deploying timelock");
+        args_builder.timelock_delay(U256::from(timelock_delay));
+        let timelock_executors = opt
+            .timelock_executors
+            .expect("Must provide --timelock-executors when deploying timelock");
+        args_builder.timelock_executors(timelock_executors.into_iter().collect());
+        let timelock_proposers = opt
+            .timelock_proposers
+            .expect("Must provide --timelock-proposers when deploying timelock");
+        args_builder.timelock_proposers(timelock_proposers.into_iter().collect());
+    }
 
     // then deploy specified contracts
     let args = args_builder.build()?;
@@ -298,6 +341,9 @@ async fn main() -> anyhow::Result<()> {
     }
     if opt.upgrade_stake_table_v2 {
         args.deploy(&mut contracts, Contract::StakeTableV2).await?;
+    }
+    if opt.deploy_timelock {
+        args.deploy(&mut contracts, Contract::Timelock).await?;
     }
 
     // finally print out or persist deployed addresses

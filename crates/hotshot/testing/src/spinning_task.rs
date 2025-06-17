@@ -9,7 +9,6 @@ use std::{
     sync::Arc,
 };
 
-use alloy::primitives::U256;
 use async_broadcast::broadcast;
 use async_lock::RwLock;
 use async_trait::async_trait;
@@ -43,6 +42,7 @@ use hotshot_types::{
 use hotshot_utils::anytrace::*;
 
 use crate::{
+    node_stake::TestNodeStakes,
     test_launcher::Network,
     test_runner::{LateNodeContext, LateNodeContextParameters, LateStartNode, Node, TestRunner},
     test_task::{TestResult, TestTaskState},
@@ -86,6 +86,8 @@ pub struct SpinningTask<
     pub(crate) channel_generator: AsyncGenerator<Network<TYPES, I>>,
     /// The light client state update certificate
     pub(crate) state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
+    /// Node stakes
+    pub(crate) node_stakes: TestNodeStakes,
 }
 
 #[async_trait]
@@ -184,7 +186,7 @@ where
                                             ValidatorConfig::generated_from_seed_indexed(
                                                 [0u8; 32],
                                                 node_id,
-                                                U256::from(1),
+                                                self.node_stakes.get(node_id),
                                                 // For tests, make the node DA based on its index
                                                 node_id < config.da_staked_committee_size as u64,
                                             );
@@ -302,7 +304,7 @@ where
                                 let validator_config = ValidatorConfig::generated_from_seed_indexed(
                                     [0u8; 32],
                                     node_id,
-                                    U256::from(1),
+                                    self.node_stakes.get(node_id),
                                     // For tests, make the node DA based on its index
                                     node_id < config.da_staked_committee_size as u64,
                                 );

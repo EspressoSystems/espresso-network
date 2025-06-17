@@ -615,8 +615,9 @@ mod test {
     use crate::{
         availability::{
             AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch, FetchStream, LeafId,
-            LeafQueryData, PayloadMetadata, PayloadQueryData, StateCertQueryData, TransactionHash,
-            TransactionQueryData, UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
+            LeafQueryData, NamespaceId, PayloadMetadata, PayloadQueryData, StateCertQueryData,
+            TransactionHash, TransactionQueryData, UpdateAvailabilityData, VidCommonMetadata,
+            VidCommonQueryData,
         },
         metrics::PrometheusMetrics,
         node::{NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
@@ -796,14 +797,20 @@ mod test {
         async fn count_transactions_in_range(
             &self,
             range: impl RangeBounds<usize> + Send,
+            namespace: Option<NamespaceId<MockTypes>>,
         ) -> QueryResult<usize> {
-            self.hotshot_qs.count_transactions_in_range(range).await
+            self.hotshot_qs
+                .count_transactions_in_range(range, namespace)
+                .await
         }
         async fn payload_size_in_range(
             &self,
             range: impl RangeBounds<usize> + Send,
+            namespace: Option<NamespaceId<MockTypes>>,
         ) -> QueryResult<usize> {
-            self.hotshot_qs.payload_size_in_range(range).await
+            self.hotshot_qs
+                .payload_size_in_range(range, namespace)
+                .await
         }
         async fn vid_share<ID>(&self, id: ID) -> QueryResult<VidShare>
         where
