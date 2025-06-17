@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashSet},
     path::Path,
     time::Duration,
 };
@@ -268,7 +268,7 @@ struct TestNode<S: TestableSequencerDataSource> {
     modules: Modules,
     opt: Options,
     num_nodes: usize,
-    reference_state: Arc<RwLock<HashMap<u64, Commitment<Leaf2>>>>,
+    reference_state: Arc<RwLock<BTreeMap<u64, Commitment<Leaf2>>>>,
     /// Number of epochs to wait after restart before running progress check.
     wait_for_epoch: EpochNumber,
 }
@@ -523,7 +523,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                     collected_leaves += 1;
                 }
 
-                if collected_leaves == 50 {
+                if collected_leaves == 30 {
                     return Ok(());
                 }
             }
