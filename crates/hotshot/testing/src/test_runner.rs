@@ -32,6 +32,7 @@ use hotshot_types::{
     drb::INITIAL_DRB_RESULT,
     epoch_membership::EpochMembershipCoordinator,
     simple_certificate::QuorumCertificate2,
+    storage_metrics::StorageMetricsValue,
     traits::{
         election::Membership,
         network::ConnectedNetwork,
@@ -544,6 +545,7 @@ where
             initializer,
             ConsensusMetricsValue::default(),
             storage,
+            StorageMetricsValue::default(),
         )
         .await
     }
@@ -583,6 +585,7 @@ where
             initializer,
             ConsensusMetricsValue::default(),
             storage,
+            StorageMetricsValue::default(),
             internal_channel,
             external_channel,
         )

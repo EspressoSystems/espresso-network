@@ -42,7 +42,14 @@ while [[ $# -gt 0 ]]; do
       usage
       exit 0
       ;;
-    --image)
+    -i|--image)
+      # abort if specified multiple times
+      if [[ -n "${image:-}" ]]; then
+        >&2 echo "Error: --image option specified multiple times"
+        >&2 echo ""
+        usage
+        exit 1
+      fi
       image="$2"
       shift 2
       ;;

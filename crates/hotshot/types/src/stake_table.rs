@@ -20,7 +20,7 @@ use crate::{
 };
 
 /// Stake table entry
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Hash, Eq)]
+#[derive(Serialize, Deserialize, PartialEq, Clone, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct StakeTableEntry<K: SignatureKey> {
     /// The public key
@@ -45,6 +45,15 @@ impl<K: SignatureKey> StakeTableEntry<K> {
     /// Get the public key
     pub fn key(&self) -> &K {
         &self.stake_key
+    }
+}
+
+impl<K: SignatureKey> std::fmt::Debug for StakeTableEntry<K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StakeTableEntry")
+            .field("stake_key", &format_args!("{}", self.stake_key))
+            .field("stake_amount", &self.stake_amount)
+            .finish()
     }
 }
 
