@@ -234,7 +234,12 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let mut contracts = Contracts::from(opt.contracts);
-    let provider = build_provider(opt.mnemonic, opt.account_index, opt.rpc_url.clone());
+    let provider = build_provider(
+        opt.mnemonic,
+        opt.account_index,
+        opt.rpc_url.clone(),
+        Some(opt.l1_polling_interval),
+    );
 
     // First use builder to build constructor input arguments
     let mut args_builder = DeployerArgsBuilder::default();

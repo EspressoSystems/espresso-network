@@ -13,6 +13,7 @@ use espresso_types::v0_3::ChainConfig;
 
 pub mod fs;
 pub mod no_storage;
+mod persistence_metrics;
 pub mod sql;
 
 #[async_trait]

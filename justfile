@@ -7,7 +7,21 @@ doc *args:
     cargo doc --no-deps --document-private-items {{args}}
 
 demo *args:
-    docker compose up {{args}}
+    #!/usr/bin/env bash
+    # The TUI wouldn't work on the CI
+    CI=${CI:-false}
+    if [ "$CI" = "true" ]; then
+        docker compose up {{args}}
+    else
+        trap "exit" INT TERM
+        trap cleanup EXIT
+        cleanup(){
+            docker compose down -v
+        }
+        >/dev/null 2>&1 docker compose up {{args}} &
+        lazydocker
+    fi
+
 
 demo-native *args: (build "test")
     scripts/demo-native {{args}}

@@ -23,6 +23,7 @@ use hotshot_types::{
         MessageKind, Proposal, SequencingMessage, UpgradeLock,
     },
     simple_vote::HasEpoch,
+    storage_metrics::StorageMetricsValue,
     traits::{
         network::{
             BroadcastDelay, ConnectedNetwork, RequestKind, ResponseMessage, Topic, TransmitType,
@@ -34,7 +35,7 @@ use hotshot_types::{
     vote::{HasViewNumber, Vote},
 };
 use hotshot_utils::anytrace::*;
-use tokio::{spawn, task::JoinHandle};
+use tokio::{spawn, task::JoinHandle, time::Instant};
 use tracing::instrument;
 
 use crate::{
@@ -517,6 +518,9 @@ pub struct NetworkEventTaskState<
 
     /// Storage to store actionable events
     pub storage: S,
+
+    /// Storage metrics
+    pub storage_metrics: Arc<StorageMetricsValue>,
 
     /// Shared consensus state
     pub consensus: OuterConsensus<TYPES>,
@@ -1246,6 +1250,7 @@ impl<
         let da_committee = mem.da_committee_members(view_number).await;
         let network = Arc::clone(&self.network);
         let storage = self.storage.clone();
+        let storage_metrics = Arc::clone(&self.storage_metrics);
         let consensus = OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus));
         let upgrade_lock = self.upgrade_lock.clone();
         let handle = spawn(async move {
@@ -1265,6 +1270,7 @@ impl<
                 GeneralConsensusMessage::Proposal(prop),
             )) = &message.kind
             {
+                let now = Instant::now();
                 if storage
                     .append_proposal2(&convert_proposal(prop.clone()))
                     .await
@@ -1272,6 +1278,9 @@ impl<
                 {
                     return;
                 }
+                storage_metrics
+                    .append_quorum_duration
+                    .add_point(now.elapsed().as_secs_f64());
             }
 
             let serialized_message = match upgrade_lock.serialize(&message).await {

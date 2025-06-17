@@ -247,6 +247,7 @@ mod test {
             "test test test test test test test test test test test junk".to_string(),
             1,
             system.rpc_url.clone(),
+            /* polling_interval */ None,
         );
         let validator_address = provider.default_signer_address();
         let (_, bls_key_pair, schnorr_key_pair) =
