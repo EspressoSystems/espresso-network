@@ -13,7 +13,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{ensure, Context, Result};
 use async_broadcast::{Receiver, Sender};
 use committable::{Commitment, Committable};
 use hotshot_task::dependency_task::HandleDepOutput;
@@ -642,14 +641,8 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         let events: Vec<_> = res.iter().flatten().flatten().map(Arc::as_ref).collect();
         tracing::warn!("Failed to propose, events: {:#?}", events);
     }
-}
 
-impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<TYPES, V> {
-    type Output = Vec<Vec<Vec<Arc<HotShotEvent<TYPES>>>>>;
-
-    #[allow(clippy::no_effect_underscore_binding, clippy::too_many_lines)]
-    #[instrument(skip_all, fields(id = self.id, view_number = *self.view_number, latest_proposed_view = *self.latest_proposed_view))]
-    async fn handle_dep_result(self, res: Self::Output) {
+    async fn handle_proposal_deps(&self, res: &[Vec<Vec<Arc<HotShotEvent<TYPES>>>>]) -> Result<()> {
         let mut commit_and_metadata: Option<CommitmentAndMetadata<TYPES>> = None;
         let mut timeout_certificate = None;
         let mut view_sync_finalize_cert = None;
@@ -700,12 +693,10 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
         }
 
         let Ok(version) = self.upgrade_lock.version(self.view_number).await else {
-            tracing::error!(
+            bail!(error!(
                 "Failed to get version for view {:?}, not proposing",
                 self.view_number
-            );
-            self.print_proposal_events(&res);
-            return;
+            ));
         };
 
         let mut maybe_epoch = None;
@@ -731,12 +722,10 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                     .as_ref()
                     .is_none_or(|neqc| neqc.data.leaf_commit != qc.data.leaf_commit)
             {
-                tracing::error!(
+                bail!(error!(
                     "We've formed a transition QC but we haven't formed \
                     the corresponding next epoch QC. Do not propose."
-                );
-                self.print_proposal_events(&res);
-                return;
+                ));
             }
             (qc, next_epoch_qc, state_cert)
         } else if version < V::Epochs::VERSION {
@@ -745,11 +734,9 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
             // If we have a view change evidence, we need to wait to propose with the transition QC
             if let Ok(Some((qc, next_epoch_qc))) = self.wait_for_transition_qc().await {
                 let Some(epoch) = maybe_epoch else {
-                    tracing::error!(
+                    bail!(error!(
                         "No epoch found on view change evidence, but we are in epoch mode"
-                    );
-                    self.print_proposal_events(&res);
-                    return;
+                    ));
                 };
                 if qc
                     .data
@@ -763,9 +750,7 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                             (qc, maybe_next_epoch_qc, maybe_state_cert)
                         },
                         Err(e) => {
-                            tracing::error!("Error while waiting for highest QC: {e:?}");
-                            self.print_proposal_events(&res);
-                            return;
+                            bail!(error!("Error while waiting for highest QC: {e:?}"));
                         },
                     }
                 }
@@ -773,17 +758,13 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                 let Ok((qc, maybe_next_epoch_qc, maybe_state_cert)) =
                     self.wait_for_highest_qc().await
                 else {
-                    tracing::error!("Error while waiting for highest QC");
-                    self.print_proposal_events(&res);
-                    return;
+                    bail!(error!("Error while waiting for highest QC"));
                 };
                 if qc.data.block_number.is_some_and(|bn| {
                     is_epoch_transition(bn, self.epoch_height)
                         && !is_last_block(bn, self.epoch_height)
                 }) {
-                    tracing::error!("High is in transition but we need to propose with transition QC, do nothing");
-                    self.print_proposal_events(&res);
-                    return;
+                    bail!(error!("High is in transition but we need to propose with transition QC, do nothing"));
                 }
                 (qc, maybe_next_epoch_qc, maybe_state_cert)
             }
@@ -793,41 +774,46 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                     (qc, maybe_next_epoch_qc, maybe_state_cert)
                 },
                 Err(e) => {
-                    tracing::error!("Error while waiting for highest QC: {e:?}");
-                    self.print_proposal_events(&res);
-                    return;
+                    bail!(error!("Error while waiting for highest QC: {e:?}"));
                 },
             }
         };
 
-        if commit_and_metadata.is_none() {
-            tracing::error!(
+        ensure!(
+            commit_and_metadata.is_some(),
+            error!(
                 "Somehow completed the proposal dependency task without a commitment and metadata"
-            );
-            self.print_proposal_events(&res);
-            return;
-        }
-
-        if vid_share.is_none() {
-            tracing::error!("Somehow completed the proposal dependency task without a VID share");
-            self.print_proposal_events(&res);
-            return;
-        }
-
-        if let Err(e) = self
-            .publish_proposal(
-                commit_and_metadata.unwrap(),
-                vid_share.unwrap(),
-                proposal_cert,
-                self.formed_upgrade_certificate.clone(),
-                parent_qc,
-                maybe_next_epoch_qc,
-                maybe_state_cert,
             )
-            .await
-        {
-            tracing::error!("Failed to publish proposal; error = {e:#}");
-            self.print_proposal_events(&res);
+        );
+
+        ensure!(
+            vid_share.is_some(),
+            error!("Somehow completed the proposal dependency task without a VID share")
+        );
+
+        self.publish_proposal(
+            commit_and_metadata.unwrap(),
+            vid_share.unwrap(),
+            proposal_cert,
+            self.formed_upgrade_certificate.clone(),
+            parent_qc,
+            maybe_next_epoch_qc,
+            maybe_state_cert,
+        )
+        .await
+    }
+}
+
+impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<TYPES, V> {
+    type Output = Vec<Vec<Vec<Arc<HotShotEvent<TYPES>>>>>;
+
+    #[allow(clippy::no_effect_underscore_binding, clippy::too_many_lines)]
+    #[instrument(skip_all, fields(id = self.id, view_number = *self.view_number, latest_proposed_view = *self.latest_proposed_view))]
+    async fn handle_dep_result(self, res: Self::Output) {
+        let result = self.handle_proposal_deps(&res).await;
+        if result.is_err() {
+            log!(result);
+            self.print_proposal_events(&res)
         }
     }
 }
