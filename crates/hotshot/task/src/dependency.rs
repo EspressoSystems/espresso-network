@@ -200,22 +200,35 @@ mod tests {
 
     use super::{AndDependency, Dependency, EventDependency, OrDependency};
 
-    fn eq_dep(rx: Receiver<usize>, val: usize) -> EventDependency<usize> {
+    fn eq_dep(
+        rx: Receiver<usize>,
+        cancel_rx: Receiver<()>,
+        dep_name: String,
+        val: usize,
+    ) -> EventDependency<usize> {
         EventDependency {
             event_rx: rx,
             match_fn: Box::new(move |v| *v == val),
             completed_dependency: None,
+            dependency_name: dep_name,
+            cancel_receiver: cancel_rx,
         }
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn it_works() {
         let (tx, rx) = broadcast(10);
+        let (_, cancel_rx) = broadcast(1);
 
         let mut deps = vec![];
         for i in 0..5 {
             tx.broadcast(i).await.unwrap();
-            deps.push(eq_dep(rx.clone(), 5));
+            deps.push(eq_dep(
+                rx.clone(),
+                cancel_rx.clone(),
+                format!("it_works {}", i),
+                5,
+            ));
         }
 
         let and = AndDependency::from_deps(deps);
@@ -227,11 +240,17 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn or_dep() {
         let (tx, rx) = broadcast(10);
+        let (_, cancel_rx) = broadcast(1);
 
         tx.broadcast(5).await.unwrap();
         let mut deps = vec![];
-        for _ in 0..5 {
-            deps.push(eq_dep(rx.clone(), 5));
+        for i in 0..5 {
+            deps.push(eq_dep(
+                rx.clone(),
+                cancel_rx.clone(),
+                format!("or_dep {}", i),
+                5,
+            ));
         }
         let or = OrDependency::from_deps(deps);
         let result = or.completed().await;
@@ -241,6 +260,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn and_or_dep() {
         let (tx, rx) = broadcast(10);
+        let (_, cancel_rx) = broadcast(1);
 
         tx.broadcast(1).await.unwrap();
         tx.broadcast(2).await.unwrap();
@@ -248,8 +268,40 @@ mod tests {
         tx.broadcast(5).await.unwrap();
         tx.broadcast(6).await.unwrap();
 
-        let or1 = OrDependency::from_deps([eq_dep(rx.clone(), 4), eq_dep(rx.clone(), 6)].into());
-        let or2 = OrDependency::from_deps([eq_dep(rx.clone(), 4), eq_dep(rx.clone(), 5)].into());
+        let or1 = OrDependency::from_deps(
+            [
+                eq_dep(
+                    rx.clone(),
+                    cancel_rx.clone(),
+                    format!("and_or_dep or1 {}", 4),
+                    4,
+                ),
+                eq_dep(
+                    rx.clone(),
+                    cancel_rx.clone(),
+                    format!("and_or_dep or1 {}", 6),
+                    6,
+                ),
+            ]
+            .into(),
+        );
+        let or2 = OrDependency::from_deps(
+            [
+                eq_dep(
+                    rx.clone(),
+                    cancel_rx.clone(),
+                    format!("and_or_dep or2 {}", 4),
+                    4,
+                ),
+                eq_dep(
+                    rx.clone(),
+                    cancel_rx.clone(),
+                    format!("and_or_dep or2 {}", 5),
+                    5,
+                ),
+            ]
+            .into(),
+        );
         let and = AndDependency::from_deps([or1, or2].into());
         let result = and.completed().await;
         assert_eq!(result, Some(vec![6, 5]));
@@ -258,6 +310,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn or_and_dep() {
         let (tx, rx) = broadcast(10);
+        let (_, cancel_rx) = broadcast(1);
 
         tx.broadcast(1).await.unwrap();
         tx.broadcast(2).await.unwrap();
@@ -265,8 +318,30 @@ mod tests {
         tx.broadcast(4).await.unwrap();
         tx.broadcast(5).await.unwrap();
 
-        let and1 = eq_dep(rx.clone(), 4).and(eq_dep(rx.clone(), 6));
-        let and2 = eq_dep(rx.clone(), 4).and(eq_dep(rx.clone(), 5));
+        let and1 = eq_dep(
+            rx.clone(),
+            cancel_rx.clone(),
+            format!("or_and_dep and1 {}", 4),
+            4,
+        )
+        .and(eq_dep(
+            rx.clone(),
+            cancel_rx.clone(),
+            format!("or_and_dep and1 {}", 6),
+            6,
+        ));
+        let and2 = eq_dep(
+            rx.clone(),
+            cancel_rx.clone(),
+            format!("or_and_dep and2 {}", 4),
+            4,
+        )
+        .and(eq_dep(
+            rx.clone(),
+            cancel_rx.clone(),
+            format!("or_and_dep and2 {}", 5),
+            5,
+        ));
         let or = and1.or(and2);
         let result = or.completed().await;
         assert_eq!(result, Some(vec![4, 5]));
@@ -275,6 +350,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn many_and_dep() {
         let (tx, rx) = broadcast(10);
+        let (_, cancel_rx) = broadcast(1);
 
         tx.broadcast(1).await.unwrap();
         tx.broadcast(2).await.unwrap();
@@ -283,10 +359,115 @@ mod tests {
         tx.broadcast(5).await.unwrap();
         tx.broadcast(6).await.unwrap();
 
-        let mut and1 = eq_dep(rx.clone(), 4).and(eq_dep(rx.clone(), 6));
-        let and2 = eq_dep(rx.clone(), 4).and(eq_dep(rx.clone(), 5));
+        let mut and1 = eq_dep(
+            rx.clone(),
+            cancel_rx.clone(),
+            format!("many_and_dep and1 {}", 4),
+            4,
+        )
+        .and(eq_dep(
+            rx.clone(),
+            cancel_rx.clone(),
+            format!("many_and_dep and1 {}", 6),
+            6,
+        ));
+        let and2 = eq_dep(
+            rx.clone(),
+            cancel_rx.clone(),
+            format!("many_and_dep and2 {}", 4),
+            4,
+        )
+        .and(eq_dep(
+            rx.clone(),
+            cancel_rx.clone(),
+            format!("many_and_dep and2 {}", 5),
+            5,
+        ));
         and1.add_deps(and2);
         let result = and1.completed().await;
         assert_eq!(result, Some(vec![4, 6, 4, 5]));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancel_event_dep() {
+        let (tx, rx) = broadcast(10);
+        let (cancel_tx, cancel_rx) = broadcast(1);
+
+        for i in 0..=5 {
+            tx.broadcast(i).await.unwrap();
+        }
+        cancel_tx.broadcast(()).await.unwrap();
+        let dep = eq_dep(
+            rx.clone(),
+            cancel_rx.clone(),
+            format!("cancel_event_dep {}", 6),
+            6,
+        );
+        let result = dep.completed().await;
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn drop_cancel_dep() {
+        let (tx, rx) = broadcast(10);
+        let (cancel_tx, cancel_rx) = broadcast(1);
+
+        for i in 0..=5 {
+            tx.broadcast(i).await.unwrap();
+        }
+        drop(cancel_tx);
+        let dep = eq_dep(
+            rx.clone(),
+            cancel_rx.clone(),
+            format!("drop_cancel_dep {}", 6),
+            6,
+        );
+        let result = dep.completed().await;
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancel_and_dep() {
+        let (tx, rx) = broadcast(10);
+        let (cancel_tx, cancel_rx) = broadcast(1);
+
+        let mut deps = vec![];
+        for i in 0..=5 {
+            tx.broadcast(i).await.unwrap();
+            deps.push(eq_dep(
+                rx.clone(),
+                cancel_rx.clone(),
+                format!("cancel_and_dep {}", i),
+                i,
+            ))
+        }
+        deps.push(eq_dep(
+            rx.clone(),
+            cancel_rx.clone(),
+            format!("cancel_and_dep {}", 6),
+            6,
+        ));
+        cancel_tx.broadcast(()).await.unwrap();
+        let result = AndDependency::from_deps(deps).completed().await;
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancel_or_dep() {
+        let (tx, rx) = broadcast(10);
+        let (cancel_tx, cancel_rx) = broadcast(1);
+
+        let mut deps = vec![];
+        for i in 0..=5 {
+            deps.push(eq_dep(
+                rx.clone(),
+                cancel_rx.clone(),
+                format!("cancel_event_dep {}", i),
+                i,
+            ))
+        }
+        cancel_tx.broadcast(()).await.unwrap();
+        let result = OrDependency::from_deps(deps).completed().await;
+        assert_eq!(result, None);
     }
 }

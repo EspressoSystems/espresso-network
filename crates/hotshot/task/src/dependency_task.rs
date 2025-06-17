@@ -79,8 +79,13 @@ mod test {
         }
     }
 
-    fn eq_dep(rx: Receiver<usize>, val: usize) -> EventDependency<usize> {
-        EventDependency::new(rx, Box::new(move |v| *v == val))
+    fn eq_dep(
+        rx: Receiver<usize>,
+        cancel_rx: Receiver<()>,
+        dep_name: String,
+        val: usize,
+    ) -> EventDependency<usize> {
+        EventDependency::new(rx, cancel_rx, dep_name, Box::new(move |v| *v == val))
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -88,8 +93,9 @@ mod test {
     #[allow(unused_must_use)]
     async fn it_works() {
         let (tx, rx) = broadcast(10);
+        let (_, cancel_rx) = broadcast(1);
         let (res_tx, mut res_rx) = broadcast(10);
-        let dep = eq_dep(rx, 2);
+        let dep = eq_dep(rx, cancel_rx, format!("it_works {}", 2), 2);
         let handle = DummyHandle { sender: res_tx };
         let join_handle = DependencyTask { dep, handle }.run();
         tx.broadcast(2).await.unwrap();
@@ -102,10 +108,16 @@ mod test {
     async fn many_works() {
         let (tx, rx) = broadcast(20);
         let (res_tx, mut res_rx) = broadcast(20);
+        let (_, cancel_rx) = broadcast(1);
 
         let mut handles = vec![];
         for i in 0..10 {
-            let dep = eq_dep(rx.clone(), i);
+            let dep = eq_dep(
+                rx.clone(),
+                cancel_rx.clone(),
+                format!("many_works {}", i),
+                i,
+            );
             let handle = DummyHandle {
                 sender: res_tx.clone(),
             };
