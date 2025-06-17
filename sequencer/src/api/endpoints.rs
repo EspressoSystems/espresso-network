@@ -582,6 +582,14 @@ where
                 })
         }
         .boxed()
+    })?
+    .at("current_proposal_participation", |_, state| {
+        async move {
+            Ok(state
+                .read(|state| state.current_proposal_participation().boxed())
+                .await)
+        }
+        .boxed()
     })?;
 
     Ok(api)

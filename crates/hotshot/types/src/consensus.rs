@@ -298,7 +298,15 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
         }
     }
 
-    fn update_participation(&mut self, key: TYPES::SignatureKey, proposed: bool) {
+    fn update_participation(
+        &mut self,
+        key: TYPES::SignatureKey,
+        epoch: TYPES::Epoch,
+        proposed: bool,
+    ) {
+        if epoch != self.epoch {
+            return;
+        }
         let entry = self
             .current_epoch_participation
             .entry(key)
@@ -332,6 +340,13 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
             current_epoch_participation_ratio,
             last_epoch_participation_ratio,
         )
+    }
+
+    fn current_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
+        self.current_epoch_participation
+            .iter()
+            .map(|(key, (leader, proposed))| (key.clone(), *leader as f64 / *proposed as f64))
+            .collect()
     }
 }
 
@@ -699,9 +714,14 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     }
 
     /// Update the validator participation
-    pub fn update_validator_participation(&mut self, key: TYPES::SignatureKey, proposed: bool) {
+    pub fn update_validator_participation(
+        &mut self,
+        key: TYPES::SignatureKey,
+        epoch: TYPES::Epoch,
+        proposed: bool,
+    ) {
         self.validator_participation
-            .update_participation(key, proposed);
+            .update_participation(key, epoch, proposed);
     }
 
     /// Update the validator participation epoch
@@ -713,6 +733,12 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     /// Get the validator participation
     pub fn get_validator_participation(&self, key: TYPES::SignatureKey) -> (f64, Option<f64>) {
         self.validator_participation.get_participation(key)
+    }
+
+    /// Get the current proposal participation
+    pub fn current_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
+        self.validator_participation
+            .current_proposal_participation()
     }
 
     /// Get the parent Leaf Info from a given leaf and our public key.

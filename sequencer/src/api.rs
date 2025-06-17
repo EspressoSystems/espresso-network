@@ -1,4 +1,4 @@
-use std::{pin::Pin, sync::Arc, time::Duration};
+use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
 use alloy::primitives::Address;
 use anyhow::{bail, Context};
@@ -227,6 +227,11 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
         self.as_ref().get_validators(epoch).await
     }
+
+    /// Get all the validator participation for the current epoch
+    async fn current_proposal_participation(&self) -> HashMap<BLSPubKey, f64> {
+        self.as_ref().current_proposal_participation().await
+    }
 }
 
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
@@ -291,6 +296,18 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
 
         let r = mem.coordinator.membership().read().await;
         r.validators(&epoch)
+    }
+
+    /// Get the current proposal participation.
+    async fn current_proposal_participation(&self) -> HashMap<BLSPubKey, f64> {
+        self.consensus()
+            .await
+            .read()
+            .await
+            .consensus()
+            .read()
+            .await
+            .current_proposal_participation()
     }
 }
 

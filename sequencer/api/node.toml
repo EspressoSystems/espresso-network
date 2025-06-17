@@ -11,3 +11,11 @@ DOC = "Get the stake table for the given epoch"
 PATH = ["validators/:epoch_number"]
 ":epoch_number" = "Integer"
 DOC = "Get the validators map for the given epoch."
+
+[route.current_proposal_participation]
+PATH = ["/current-proposal-participation"]
+DOC = """
+Get the mapping from leader key to participation rate.
+
+Returns a map from BLS key to the fraction of views with key proposed properly as leader, as a floating point number.
+"""
