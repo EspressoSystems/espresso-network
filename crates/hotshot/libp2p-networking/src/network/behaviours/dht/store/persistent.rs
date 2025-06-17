@@ -12,10 +12,16 @@ use std::{
 use anyhow::Context;
 use async_trait::async_trait;
 use delegate::delegate;
-use libp2p::kad::store::{RecordStore, Result};
+use hotshot_types::{signature_key::BLSPubKey, traits::signature_key::SignatureKey};
+use libp2p::{
+    kad::store::{RecordStore, Result},
+    PeerId,
+};
 use serde::{Deserialize, Serialize};
 use tokio::{sync::Semaphore, time::timeout};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
+
+use crate::network::behaviours::dht::record::{RecordKey, RecordValue};
 
 /// A trait that we use to save and load the DHT to a file on disk
 /// or other storage medium
@@ -328,6 +334,21 @@ impl<R: RecordStore, D: DhtPersistentStorage> PersistentStore<R, D> {
             // Convert the serializable record back to a `libp2p::kad::Record`
             match libp2p::kad::Record::try_from(serializable_record) {
                 Ok(record) => {
+                    let key = RecordKey::try_from_bytes(&record.key.to_vec())
+                        .with_context(|| "Failed to convert record key to record key")?;
+                    let value: RecordValue<BLSPubKey> = bincode::deserialize(&record.value)
+                        .with_context(|| "Failed to convert record value to record value")?;
+
+                    let pub_key = BLSPubKey::from_bytes(&key.key.to_vec())?;
+
+                    let peer_id = PeerId::from_bytes(&value.value())
+                        .with_context(|| "Failed to convert record value to record value")?;
+
+                    info!(
+                        "Record: {} -> {}. Publisher: {:?}, expires: {:?}",
+                        pub_key, peer_id, record.publisher, record.expires
+                    );
+
                     // Put the record into the new store
                     if let Err(err) = self.underlying_record_store.put(record) {
                         warn!(
