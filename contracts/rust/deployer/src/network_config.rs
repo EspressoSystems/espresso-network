@@ -37,9 +37,10 @@ pub async fn fetch_stake_table_from_sequencer(
 ) -> Result<HSStakeTable<SeqTypes>> {
     tracing::info!("Initializing stake table from node for epoch {epoch:?}");
 
-    match epoch {
-        Some(epoch) => loop {
-            match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
+    loop {
+        match epoch {
+            Some(epoch) => 
+                match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
                 sequencer_url.clone(),
             )
             .get::<Vec<PeerConfig<SeqTypes>>>(&format!("node/stake-table/{}", epoch.u64()))
@@ -48,13 +49,13 @@ pub async fn fetch_stake_table_from_sequencer(
             {
                 Ok(resp) => break Ok(resp.into()),
                 Err(e) => {
-                    tracing::error!("Failed to fetch the stake table: {e}");
+                    let url = sequencer_url.join(&format!("node/stake-table/{}", epoch.u64())).unwrap();
+                    tracing::error!(%url, "Failed to fetch the stake table: {e}");
                     sleep(Duration::from_secs(5)).await;
                 },
-            }
-        },
-        None => loop {
-            match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
+            },
+            None => 
+                match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
                 sequencer_url.clone(),
             )
             .get::<PublicNetworkConfig>("config/hotshot")
@@ -63,11 +64,12 @@ pub async fn fetch_stake_table_from_sequencer(
             {
                 Ok(resp) => break Ok(resp.hotshot_config().known_nodes_with_stake().into()),
                 Err(e) => {
-                    tracing::error!("Failed to fetch the network config: {e}");
+                    let url = sequencer_url.join("config/hotshot").unwrap();
+                    tracing::error!(%url, "Failed to fetch the network config: {e}");
                     sleep(Duration::from_secs(5)).await;
                 },
             }
-        },
+        }
     }
 }
 
@@ -110,7 +112,8 @@ pub async fn fetch_epoch_config_from_sequencer(sequencer_url: &Url) -> anyhow::R
                 break (config.blocks_per_epoch(), config.epoch_start_block());
             },
             Err(e) => {
-                tracing::error!("Failed to fetch the network config: {e}");
+                let url = sequencer_url.join("config/hotshot").unwrap();
+                tracing::error!(%url, "Failed to fetch the network config: {e}");
                 sleep(Duration::from_secs(5)).await;
             },
         }
