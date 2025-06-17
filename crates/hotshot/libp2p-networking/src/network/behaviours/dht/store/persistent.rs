@@ -346,7 +346,10 @@ impl<R: RecordStore, D: DhtPersistentStorage> PersistentStore<R, D> {
 
                     info!(
                         "Record: {} -> {}. Publisher: {:?}, expires: {:?}",
-                        pub_key, peer_id, record.publisher, record.expires
+                        pub_key,
+                        peer_id,
+                        record.publisher,
+                        record.expires.map(|e| e.duration_since(Instant::now()))
                     );
 
                     // Put the record into the new store
