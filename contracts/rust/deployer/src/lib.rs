@@ -3,6 +3,7 @@ use std::{
     io::Write,
     path::PathBuf,
     process::{Command, Stdio},
+    time::Duration,
 };
 
 use alloy::{
@@ -15,7 +16,7 @@ use alloy::{
         utils::JoinedRecommendedFillers,
         Provider, ProviderBuilder, RootProvider,
     },
-    rpc::types::TransactionReceipt,
+    rpc::{client::RpcClient, types::TransactionReceipt},
     signers::local::{coins_bip39::English, MnemonicBuilder, PrivateKeySigner},
     transports::http::reqwest::Url,
 };
@@ -38,10 +39,27 @@ pub type HttpProviderWithWallet = FillProvider<
 
 /// a handy thin wrapper around wallet builder and provider builder that directly
 /// returns an instantiated `Provider` with default fillers with wallet, ready to send tx
-pub fn build_provider(mnemonic: String, account_index: u32, url: Url) -> HttpProviderWithWallet {
+pub fn build_provider(
+    mnemonic: String,
+    account_index: u32,
+    url: Url,
+    poll_interval: Option<Duration>,
+) -> HttpProviderWithWallet {
     let signer = build_signer(mnemonic, account_index);
     let wallet = EthereumWallet::from(signer);
-    ProviderBuilder::new().wallet(wallet).on_http(url)
+
+    // alloy sets the polling interval automatically. It tries to guess if an RPC is local, but this
+    // guess is wrong when the RPC is running inside docker. This results to 7 second polling
+    // intervals on a chain with 1s block time. Therefore, allow overriding the polling interval
+    // with a custom value.
+    if let Some(interval) = poll_interval {
+        tracing::info!("Using custom L1 poll interval: {interval:?}");
+        let client = RpcClient::new_http(url.clone()).with_poll_interval(interval);
+        ProviderBuilder::new().wallet(wallet).on_client(client)
+    } else {
+        tracing::info!("Using default L1 poll interval");
+        ProviderBuilder::new().wallet(wallet).on_http(url)
+    }
 }
 
 pub fn build_signer(mnemonic: String, account_index: u32) -> PrivateKeySigner {

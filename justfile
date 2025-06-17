@@ -7,7 +7,14 @@ doc *args:
     cargo doc --no-deps --document-private-items {{args}}
 
 demo *args:
-    docker compose up {{args}}
+    #!/usr/bin/env bash
+    trap "exit" INT TERM
+    trap cleanup EXIT
+    cleanup(){
+        docker compose down -v
+    }
+    >/dev/null 2>&1 docker compose up {{args}} &
+    lazydocker
 
 demo-native *args: (build "test")
     scripts/demo-native {{args}}
