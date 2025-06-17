@@ -5,7 +5,7 @@ use std::{
     path::Path,
     time::Duration,
 };
-use committable::Committable;
+
 use alloy::node_bindings::{Anvil, AnvilInstance};
 use anyhow::bail;
 use async_lock::RwLockUpgradableReadGuard;
@@ -15,7 +15,7 @@ use cdn_broker::{
 };
 use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
-use committable::Commitment;
+use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_types::{
     eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig, FeeAccount,
@@ -493,7 +493,6 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             };
 
             {
-                
                 for leaf in leaf_chain.iter() {
                     let leaf = leaf.leaf.clone();
                     let height = leaf.height();
@@ -727,7 +726,10 @@ impl TestNetwork {
         let mut states = Vec::new();
 
         for node in self.da_nodes.iter().chain(self.regular_nodes.iter()) {
-            states.push((node.node_id().expect("Node id not found"), node.reference_state.read().await.clone()));
+            states.push((
+                node.node_id().expect("Node id not found"),
+                node.reference_state.read().await.clone(),
+            ));
         }
 
         // assert that all the nodes have same leaves from their event streams
