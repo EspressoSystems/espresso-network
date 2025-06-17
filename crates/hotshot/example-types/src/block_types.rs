@@ -287,13 +287,16 @@ impl TestBlockHeader {
     ) -> Self {
         let parent = parent_leaf.block_header();
 
-        let mut timestamp = OffsetDateTime::now_utc().unix_timestamp() as u64;
+        let time = OffsetDateTime::now_utc();
+
+        let mut timestamp = time.unix_timestamp() as u64;
+        let mut timestamp_nanos = time.unix_timestamp_nanos();
+
         if timestamp < parent.timestamp {
             // Prevent decreasing timestamps.
             timestamp = parent.timestamp;
         }
 
-        let mut timestamp_nanos = OffsetDateTime::now_utc().unix_timestamp_nanos();
         if timestamp_nanos < parent.timestamp_nanos {
             // Prevent decreasing timestamps.
             timestamp_nanos = parent.timestamp_nanos;
