@@ -101,7 +101,7 @@ impl SimulatedChainState {
             payload_commitment: block_vid_commitment,
             builder_commitment: block_builder_commitment,
             timestamp: self.round.u64(),
-            timestamp_nanos: self.round.u64() as i128 * 1_000_000_000,
+            timestamp_millis: self.round.u64() * 1_000,
             metadata,
             random: 1, // arbitrary
         };

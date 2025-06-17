@@ -181,7 +181,7 @@ mod tests {
                         payload_commitment: previous_commitment,
                         builder_commitment: BuilderCommitment::from_bytes([]),
                         timestamp: 0,
-                        timestamp_nanos: 0,
+                        timestamp_millis: 0,
                         metadata: TestMetadata {
                             num_transactions: 0,
                         },
@@ -359,7 +359,7 @@ mod tests {
                         payload_commitment: block_payload_commitment,
                         builder_commitment,
                         timestamp: round as u64,
-                        timestamp_nanos: round as i128 * 1_000_000_000,
+                        timestamp_millis: round as u64 * 1_000,
                         metadata,
                         random: 1, // arbitrary
                     };

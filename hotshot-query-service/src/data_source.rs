@@ -996,7 +996,7 @@ pub mod node_tests {
                 block_number: i,
                 payload_commitment,
                 timestamp: i,
-                timestamp_nanos: i as i128 * 1_000_000_000,
+                timestamp_millis: i * 1_000,
                 builder_commitment:
                     <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(
                         &payload, &metadata,

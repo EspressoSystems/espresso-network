@@ -437,7 +437,7 @@ impl TestView {
         let block_header = TestBlockHeader {
             block_number: *next_view,
             timestamp: *next_view,
-            timestamp_nanos: *next_view as i128 * 1_000_000_000,
+            timestamp_millis: *next_view * 1_000,
             payload_commitment,
             builder_commitment,
             metadata,

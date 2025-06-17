@@ -119,10 +119,10 @@ pub enum ProposalValidationError {
         system: u64,
         diff: u64,
     },
-    #[error("Inconsistent timestamps on header: timestamp:={timestamp}, timestamp_nanos={timestamp_nanos}")]
+    #[error("Inconsistent timestamps on header: timestamp:={timestamp}, timestamp_millis={timestamp_millis}")]
     InconsistentTimestamps {
         timestamp: u64,
-        timestamp_nanos: i128,
+        timestamp_millis: u64,
     },
     #[error("l1_finalized has `None` value")]
     L1FinalizedNotFound,
@@ -412,12 +412,12 @@ impl<'a> Proposal<'a> {
         Ok(())
     }
 
-    /// The `timestamp` and `timestamp_nanos` fields must be coherent
+    /// The `timestamp` and `timestamp_millis` fields must be coherent
     fn validate_timestamp_consistency(&self) -> Result<(), ProposalValidationError> {
-        if self.header.timestamp() as i128 != self.header.timestamp_nanos() / 1_000_000_000 {
+        if self.header.timestamp() != self.header.timestamp_millis() / 1_000 {
             return Err(ProposalValidationError::InconsistentTimestamps {
                 timestamp: self.header.timestamp(),
-                timestamp_nanos: self.header.timestamp_nanos(),
+                timestamp_millis: self.header.timestamp_millis(),
             });
         }
 
@@ -1164,7 +1164,7 @@ mod test {
     use super::*;
     use crate::{
         eth_signature_key::EthKeyPair, v0_1, v0_2, v0_3, v0_4, BlockSize, FeeAccountProof,
-        FeeMerkleProof, Leaf, Payload, Transaction,
+        FeeMerkleProof, Leaf, Payload, TimestampMillis, Transaction,
     };
 
     impl Transaction {
@@ -1187,7 +1187,7 @@ mod test {
         fn next(self) -> Self {
             let time = OffsetDateTime::now_utc();
             let timestamp = time.unix_timestamp() as u64;
-            let timestamp_nanos = time.unix_timestamp_nanos();
+            let timestamp_millis = TimestampMillis::from_time(&time);
 
             match self {
                 Header::V1(_) => panic!("You called `Header.next()` on unimplemented version (v1)"),
@@ -1204,7 +1204,7 @@ mod test {
                 Header::V4(parent) => Header::V4(v0_4::Header {
                     height: parent.height + 1,
                     timestamp,
-                    timestamp_nanos,
+                    timestamp_millis,
                     ..parent.clone()
                 }),
             }
@@ -1572,10 +1572,10 @@ mod test {
 
         let time = OffsetDateTime::now_utc();
         let timestamp: u64 = time.unix_timestamp() as u64;
-        let timestamp_nanos: i128 = time.unix_timestamp_nanos();
+        let timestamp_millis = TimestampMillis::from_time(&time).u64();
 
         let mut header = parent.clone();
-        header.set_timestamp(timestamp - 13, timestamp_nanos - 13_000_000_000);
+        header.set_timestamp(timestamp - 13, timestamp_millis - 13_000);
         let proposal = Proposal::new(&header, block_size);
 
         let err = proposal.validate_timestamp_drift(timestamp).unwrap_err();
@@ -1591,15 +1591,15 @@ mod test {
 
         // Success cases.
         let mut header = parent.clone();
-        header.set_timestamp(timestamp, timestamp_nanos);
+        header.set_timestamp(timestamp, timestamp_millis);
         let proposal = Proposal::new(&header, block_size);
         proposal.validate_timestamp_drift(timestamp).unwrap();
 
-        header.set_timestamp(timestamp - 11, timestamp_nanos - 11_000_000_000);
+        header.set_timestamp(timestamp - 11, timestamp_millis - 11_000);
         let proposal = Proposal::new(&header, block_size);
         proposal.validate_timestamp_drift(timestamp).unwrap();
 
-        header.set_timestamp(timestamp - 12, timestamp_nanos - 12_000_000_000);
+        header.set_timestamp(timestamp - 12, timestamp_millis - 12_000);
         let proposal = Proposal::new(&header, block_size);
         proposal.validate_timestamp_drift(timestamp).unwrap();
     }

@@ -39,7 +39,7 @@ use crate::{
     },
     v0_1, v0_2, v0_3, v0_4, BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
     FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable,
-    PayloadByteLen, SeqTypes, UpgradeType,
+    PayloadByteLen, SeqTypes, TimestampMillis, UpgradeType,
 };
 
 impl v0_1::Header {
@@ -270,7 +270,7 @@ impl Header {
         chain_config: ChainConfig,
         height: u64,
         timestamp: u64,
-        timestamp_nanos: i128,
+        timestamp_millis: u64,
         l1_head: u64,
         l1_finalized: Option<L1BlockInfo>,
         payload_commitment: VidCommitment,
@@ -338,7 +338,7 @@ impl Header {
                 chain_config: chain_config.into(),
                 height,
                 timestamp,
-                timestamp_nanos,
+                timestamp_millis: TimestampMillis::from_millis(timestamp_millis),
                 l1_head,
                 l1_finalized,
                 payload_commitment,
@@ -392,7 +392,7 @@ impl Header {
         l1_deposits: &[FeeInfo],
         builder_fee: Vec<BuilderFee<SeqTypes>>,
         mut timestamp: u64,
-        mut timestamp_nanos: i128,
+        mut timestamp_millis: u64,
         mut state: ValidatedState,
         chain_config: ChainConfig,
         version: Version,
@@ -419,12 +419,12 @@ impl Header {
             timestamp = parent_header.timestamp();
         }
 
-        if timestamp_nanos < parent_header.timestamp_nanos() {
+        if timestamp_millis < parent_header.timestamp_millis() {
             tracing::warn!(
                 "Espresso timestamp {timestamp} behind parent {}, local clock may be out of sync",
-                parent_header.timestamp_nanos()
+                parent_header.timestamp_millis()
             );
-            timestamp_nanos = parent_header.timestamp_nanos();
+            timestamp_millis = parent_header.timestamp_millis();
         }
 
         // Ensure the L1 block references don't decrease. Again, we can trust `parent.l1_*` are
@@ -455,12 +455,11 @@ impl Header {
                 timestamp = l1_timestamp;
             }
 
-            let l1_timestamp_nanos = OffsetDateTime::from_unix_timestamp(l1_timestamp as i64)
-                .context("Unconvertable `l1_timestamp` {l1_timestamp}")?
-                .unix_timestamp_nanos();
-            if timestamp_nanos < l1_timestamp_nanos {
-                tracing::warn!("Espresso timestamp_nanos {timestamp_nanos} behind L1 timestamp {l1_timestamp_nanos}, local clock may be out of sync");
-                timestamp_nanos = l1_timestamp_nanos;
+            let l1_timestamp_millis = l1_timestamp * 1_000;
+
+            if timestamp_millis < l1_timestamp_millis {
+                tracing::warn!("Espresso timestamp_millis {timestamp_millis} behind L1 timestamp {l1_timestamp_millis}, local clock may be out of sync");
+                timestamp_millis = l1_timestamp_millis;
             }
         }
 
@@ -566,7 +565,7 @@ impl Header {
                 chain_config: chain_config.into(),
                 height,
                 timestamp,
-                timestamp_nanos,
+                timestamp_millis: TimestampMillis::from_millis(timestamp_millis),
                 l1_head: l1.head,
                 l1_finalized: l1.finalized,
                 payload_commitment,
@@ -640,16 +639,16 @@ impl Header {
         }
     }
 
-    pub fn timestamp_nanos_internal(&self) -> i128 {
+    pub fn timestamp_millis_internal(&self) -> u64 {
         match self {
-            Self::V1(fields) => fields.timestamp as i128 * 1_000_000_000,
-            Self::V2(fields) => fields.timestamp as i128 * 1_000_000_000,
-            Self::V3(fields) => fields.timestamp as i128 * 1_000_000_000,
-            Self::V4(fields) => fields.timestamp_nanos,
+            Self::V1(fields) => fields.timestamp * 1_000,
+            Self::V2(fields) => fields.timestamp * 1_000,
+            Self::V3(fields) => fields.timestamp * 1_000,
+            Self::V4(fields) => fields.timestamp_millis.u64(),
         }
     }
 
-    pub fn set_timestamp(&mut self, timestamp: u64, timestamp_nanos: i128) {
+    pub fn set_timestamp(&mut self, timestamp: u64, timestamp_millis: u64) {
         match self {
             Self::V1(fields) => {
                 fields.timestamp = timestamp;
@@ -662,7 +661,7 @@ impl Header {
             },
             Self::V4(fields) => {
                 fields.timestamp = timestamp;
-                fields.timestamp_nanos = timestamp_nanos;
+                fields.timestamp_millis = TimestampMillis::from_millis(timestamp_millis);
             },
         };
     }
@@ -966,7 +965,7 @@ impl BlockHeader<SeqTypes> for Header {
         let now = OffsetDateTime::now_utc();
 
         let timestamp = now.unix_timestamp() as u64;
-        let timestamp_nanos = now.unix_timestamp_nanos();
+        let timestamp_millis = TimestampMillis::from_time(&now).u64();
 
         Ok(Self::from_info(
             payload_commitment,
@@ -977,7 +976,7 @@ impl BlockHeader<SeqTypes> for Header {
             &l1_deposits,
             vec![builder_fee],
             timestamp,
-            timestamp_nanos,
+            timestamp_millis,
             validated_state,
             chain_config,
             version,
@@ -1015,7 +1014,7 @@ impl BlockHeader<SeqTypes> for Header {
         let time = instance_state.genesis_header.timestamp;
 
         let timestamp = time.unix_timestamp();
-        let timestamp_nanos = time.unix_timestamp_nanos();
+        let timestamp_millis = time.unix_timestamp_millis();
 
         //  The Header is versioned,
         //  so we create the genesis header for the current version of the sequencer.
@@ -1023,7 +1022,7 @@ impl BlockHeader<SeqTypes> for Header {
             instance_state.chain_config,
             0,
             timestamp,
-            timestamp_nanos,
+            timestamp_millis,
             instance_state
                 .l1_genesis
                 .map(|block| block.number)
@@ -1045,8 +1044,8 @@ impl BlockHeader<SeqTypes> for Header {
         self.timestamp_internal()
     }
 
-    fn timestamp_nanos(&self) -> i128 {
-        self.timestamp_nanos_internal()
+    fn timestamp_millis(&self) -> u64 {
+        self.timestamp_millis_internal()
     }
 
     fn block_number(&self) -> u64 {
@@ -1159,7 +1158,7 @@ mod test_headers {
     struct TestCase {
         // Parent header info.
         parent_timestamp: u64,
-        parent_timestamp_nanos: i128,
+        parent_timestamp_millis: u64,
         parent_l1_head: u64,
         parent_l1_finalized: Option<L1BlockInfo>,
 
@@ -1167,12 +1166,12 @@ mod test_headers {
         l1_head: u64,
         l1_finalized: Option<L1BlockInfo>,
         timestamp: u64,
-        timestamp_nanos: i128,
+        timestamp_millis: u64,
         l1_deposits: Vec<FeeInfo>,
 
         // Expected new header info.
         expected_timestamp: u64,
-        expected_timestamp_nanos: i128,
+        expected_timestamp_millis: u64,
         expected_l1_head: u64,
         expected_l1_finalized: Option<L1BlockInfo>,
     }
@@ -1183,13 +1182,13 @@ mod test_headers {
 
             // Check test case validity.
             assert!(self.expected_timestamp >= self.parent_timestamp);
-            assert!(self.expected_timestamp_nanos >= self.parent_timestamp_nanos);
+            assert!(self.expected_timestamp_millis >= self.parent_timestamp_millis);
             assert!(self.expected_l1_head >= self.parent_l1_head);
             assert!(self.expected_l1_finalized >= self.parent_l1_finalized);
 
             let genesis = GenesisForTest::default().await;
             let mut parent = genesis.header.clone();
-            parent.set_timestamp(self.parent_timestamp, self.parent_timestamp_nanos);
+            parent.set_timestamp(self.parent_timestamp, self.parent_timestamp_millis);
             *parent.l1_head_mut() = self.parent_l1_head;
             *parent.l1_finalized_mut() = self.parent_l1_finalized;
 
@@ -1243,7 +1242,7 @@ mod test_headers {
                     fee_signature,
                 }],
                 self.timestamp,
-                self.timestamp_nanos,
+                self.timestamp_millis,
                 validated_state.clone(),
                 genesis.instance_state.chain_config,
                 Version { major: 0, minor: 1 },
@@ -1252,7 +1251,7 @@ mod test_headers {
             .unwrap();
             assert_eq!(header.height(), parent.height() + 1);
             assert_eq!(header.timestamp(), self.expected_timestamp);
-            assert_eq!(header.timestamp_nanos(), self.expected_timestamp_nanos);
+            assert_eq!(header.timestamp_millis(), self.expected_timestamp_millis);
             assert_eq!(header.l1_head(), self.expected_l1_head);
             assert_eq!(header.l1_finalized(), self.expected_l1_finalized);
 
@@ -1289,9 +1288,9 @@ mod test_headers {
     async fn test_new_header_advance_timestamp() {
         TestCase {
             timestamp: 1,
-            timestamp_nanos: 1_000_000_000,
+            timestamp_millis: 1_000,
             expected_timestamp: 1,
-            expected_timestamp_nanos: 1_000_000_000,
+            expected_timestamp_millis: 1_000,
             ..Default::default()
         }
         .run()
@@ -1338,12 +1337,12 @@ mod test_headers {
             l1_head: 1,
             l1_finalized,
             timestamp: 0,
-            timestamp_nanos: 0,
+            timestamp_millis: 0,
 
             expected_l1_head: 1,
             expected_l1_finalized: l1_finalized,
             expected_timestamp: 1,
-            expected_timestamp_nanos: 1_000_000_000,
+            expected_timestamp_millis: 1_000,
 
             ..Default::default()
         }
@@ -1355,11 +1354,11 @@ mod test_headers {
     async fn test_new_header_timestamp_behind() {
         TestCase {
             parent_timestamp: 1,
-            parent_timestamp_nanos: 1_000_000_000,
+            parent_timestamp_millis: 1_000,
             timestamp: 0,
-            timestamp_nanos: 0,
+            timestamp_millis: 0,
             expected_timestamp: 1,
-            expected_timestamp_nanos: 1_000_000_000,
+            expected_timestamp_millis: 1_000,
 
             ..Default::default()
         }
