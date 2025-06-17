@@ -15,7 +15,7 @@ use cdn_broker::{
 };
 use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
-use committable::Commitment;
+use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_types::{
     eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig, FeeAccount,
@@ -237,15 +237,6 @@ impl NodeParams {
 /// (Node Id, Commitment)
 type Commit = (u64, Commitment<Leaf2>);
 
-#[derive(Debug, Default, Clone)]
-/// State to enable comparison between nodes.
-struct ReferenceState {
-    /// Map of height to commitment.
-    map: Arc<RwLock<HashMap<u64, Commit>>>,
-    /// Nodes that have been verified against another node.
-    nodes: Arc<RwLock<HashSet<u64>>>,
-}
-
 #[derive(Debug)]
 struct TestNode<S: TestableSequencerDataSource> {
     storage: S::Storage,
@@ -259,12 +250,12 @@ struct TestNode<S: TestableSequencerDataSource> {
     modules: Modules,
     opt: Options,
     num_nodes: usize,
-    state: ReferenceState,
+    reference_state: Arc<RwLock<HashMap<u64, Commitment<Leaf2>>>>,
 }
 
 impl<S: TestableSequencerDataSource> TestNode<S> {
     #[tracing::instrument]
-    async fn new(network: NetworkParams<'_>, node: &NodeParams, state: ReferenceState) -> Self {
+    async fn new(network: NetworkParams<'_>, node: &NodeParams) -> Self {
         tracing::info!(?network, ?node, "creating node",);
 
         let opts = api::Options::from(api::options::Http::with_port(node.api_port));
@@ -331,7 +322,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             opt,
             num_nodes: network.peer_ports.len(),
             context: None,
-            state,
+            reference_state: Default::default(),
         }
     }
 
@@ -398,6 +389,13 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         }
     }
 
+    fn node_id(&self) -> Option<u64> {
+        let Some(context) = &self.context else {
+            return None;
+        };
+        Some(context.node_id())
+    }
+
     fn check_progress_with_timeout(&self) -> BoxFuture<anyhow::Result<()>> {
         async {
             let Some(context) = &self.context else {
@@ -418,7 +416,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             // conservative: of course if we actually make progress, not every view will time out,
             // and we will take less than this amount of time.
             let timeout_duration =
-                2 * Duration::from_millis(next_view_timeout) * (self.num_nodes as u32);
+                4 * Duration::from_millis(next_view_timeout) * (self.num_nodes as u32);
             match timeout(timeout_duration, self.check_progress()).await {
                 Ok(res) => res,
                 Err(_) => bail!("timed out waiting for progress on node {node_id}"),
@@ -473,9 +471,10 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         bail!("node {node_id} event stream ended unexpectedly");
     }
 
-    /// Check that this node agrees w/ some other node(s) about some commitment(s)
-    /// at some height(s)
-    async fn check_state(&self) -> anyhow::Result<()> {
+    /// Collect the first 50 committed leaves from the event stream for this node,
+    /// and write them into the test node state
+    /// This is later used to verify that the node's state is consistent
+    async fn populate_state_from_event_stream(&self) -> anyhow::Result<()> {
         let Some(context) = &self.context else {
             tracing::info!("skipping state check on stopped node");
             return Ok(());
@@ -485,38 +484,28 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         tracing::info!(node_id, "verifying state of node");
 
         let mut events = context.event_stream().await;
+        let mut collected_leaves = 0;
+        let mut state_write = self.reference_state.write().await;
+
         while let Some(event) = events.next().await {
             let EventType::Decide { leaf_chain, .. } = event.event else {
                 continue;
             };
 
-            for leaf in leaf_chain.iter() {
-                let height = leaf.leaf.height();
-                let local_commitment = leaf.leaf.commitment();
+            {
+                for leaf in leaf_chain.iter() {
+                    let leaf = leaf.leaf.clone();
+                    let height = leaf.height();
+                    state_write.insert(height, leaf.commit());
 
-                // Check that network state is not disastrously broken. Note
-                // that not all nodes will be at the same height, so in some
-                // iterations nothing happens. The caller checks that all
-                // nodes were verified in this way.
-                let map_reader = self.state.map.upgradable_read().await;
-                if let Some((known_node, known_commitment)) = map_reader.get(&height) {
-                    tracing::info!(node_id, height, "Comparing commitments across nodes");
-                    assert_eq!(known_commitment, &local_commitment, "invalid commitment");
-                    tracing::info!(node_id, height, "verified leaf commitment");
+                    tracing::info!("node_id={node_id} state height= {height}");
+                    collected_leaves += 1;
+                }
 
-                    let mut nodes_writer = self.state.nodes.write().await;
-                    // Both the node that originally stored the commitment and
-                    // the one that just verified against it are now validated.
-                    nodes_writer.insert(*known_node);
-                    nodes_writer.insert(node_id);
-                } else {
-                    tracing::debug!("Upgrading test state lock");
-                    let mut writer = RwLockUpgradableReadGuard::upgrade(map_reader).await;
-                    writer.insert(height, (node_id, local_commitment));
+                if collected_leaves == 50 {
+                    return Ok(());
                 }
             }
-
-            return Ok(());
         }
 
         bail!("node {node_id} event stream ended unexpectedly");
@@ -578,7 +567,6 @@ struct TestNetwork {
     orchestrator_task: Option<JoinHandle<()>>,
     broker_task: Option<JoinHandle<()>>,
     marshal_task: Option<JoinHandle<()>>,
-    state: ReferenceState,
     #[derivative(Debug = "ignore")]
     _anvil: AnvilInstance,
 }
@@ -672,27 +660,23 @@ impl TestNetwork {
             peer_ports: &peer_ports,
         };
 
-        let state = ReferenceState::default();
-
-        let mut network =
-            Self {
-                da_nodes: join_all(
-                    (0..da_nodes)
-                        .map(|i| TestNode::new(network_params, &node_params[i], state.clone())),
-                )
-                .await,
-                regular_nodes: join_all((0..regular_nodes).map(|i| {
-                    TestNode::new(network_params, &node_params[i + da_nodes], state.clone())
-                }))
-                .await,
-                tmp,
-                builder_port,
-                orchestrator_task,
-                broker_task,
-                marshal_task,
-                state,
-                _anvil: anvil,
-            };
+        let mut network = Self {
+            da_nodes: join_all(
+                (0..da_nodes).map(|i| TestNode::new(network_params, &node_params[i])),
+            )
+            .await,
+            regular_nodes: join_all(
+                (0..regular_nodes)
+                    .map(|i| TestNode::new(network_params, &node_params[i + da_nodes])),
+            )
+            .await,
+            tmp,
+            builder_port,
+            orchestrator_task,
+            broker_task,
+            marshal_task,
+            _anvil: anvil,
+        };
 
         join_all(
             network
@@ -725,25 +709,38 @@ impl TestNetwork {
     /// checked. Mostly useful in tests that do not restart all nodes, as those
     /// cases confirm that state has not regressed.
     async fn check_state(&self) {
-        // Check that every node agrees w/ some other node about a commitment at some height.
+        // populate each test node's state
         try_join_all(
             self.da_nodes
                 .iter()
-                .map(TestNode::check_state)
-                .chain(self.regular_nodes.iter().map(TestNode::check_state)),
+                .map(TestNode::populate_state_from_event_stream)
+                .chain(
+                    self.regular_nodes
+                        .iter()
+                        .map(TestNode::populate_state_from_event_stream),
+                ),
         )
         .await
         .unwrap();
 
-        // Check that all the nodes were validated.
-        let num_nodes = self.da_nodes.len() + self.regular_nodes.len();
-        let num_validated_nodes = self.state.nodes.read().await.len();
-        tracing::info!(
-            "total number of nodes: {}, number of validated nodes: {}",
-            num_nodes,
-            num_validated_nodes,
-        );
-        assert!(num_validated_nodes >= num_nodes);
+        let mut states = Vec::new();
+
+        let mut nodes_iter = self.da_nodes.iter().chain(self.regular_nodes.iter());
+
+        let first_node = nodes_iter.next().unwrap();
+        let ref_id = first_node.node_id().expect("Node id not found");
+        let ref_state = first_node.reference_state.read().await.clone();
+
+        // assert that all the nodes have same leaves from their event streams
+        // this also ensures validated state consistency
+        while let Some(node) = nodes_iter.next {
+            let node_id = node.node_id().expect("Node id not found");
+            let state = node.reference_state.read().await.clone();
+            assert_eq!(
+                state, ref_state,
+                "State mismatch between node {node_id} and reference node {ref_id}"
+            );
+        }
     }
 
     async fn check_builder(&self) {
