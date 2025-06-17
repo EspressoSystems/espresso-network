@@ -93,7 +93,7 @@ mod test {
     #[allow(unused_must_use)]
     async fn it_works() {
         let (tx, rx) = broadcast(10);
-        let (_, cancel_rx) = broadcast(1);
+        let (_cancel_tx, cancel_rx) = broadcast(1);
         let (res_tx, mut res_rx) = broadcast(10);
         let dep = eq_dep(rx, cancel_rx, format!("it_works {}", 2), 2);
         let handle = DummyHandle { sender: res_tx };
@@ -108,7 +108,7 @@ mod test {
     async fn many_works() {
         let (tx, rx) = broadcast(20);
         let (res_tx, mut res_rx) = broadcast(20);
-        let (_, cancel_rx) = broadcast(1);
+        let (_cancel_tx, cancel_rx) = broadcast(1);
 
         let mut handles = vec![];
         for i in 0..10 {

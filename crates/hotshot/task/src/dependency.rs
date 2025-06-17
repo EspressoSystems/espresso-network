@@ -218,7 +218,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn it_works() {
         let (tx, rx) = broadcast(10);
-        let (_, cancel_rx) = broadcast(1);
+        let (_cancel_tx, cancel_rx) = broadcast(1);
 
         let mut deps = vec![];
         for i in 0..5 {
@@ -240,7 +240,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn or_dep() {
         let (tx, rx) = broadcast(10);
-        let (_, cancel_rx) = broadcast(1);
+        let (_cancel_tx, cancel_rx) = broadcast(1);
 
         tx.broadcast(5).await.unwrap();
         let mut deps = vec![];
@@ -260,7 +260,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn and_or_dep() {
         let (tx, rx) = broadcast(10);
-        let (_, cancel_rx) = broadcast(1);
+        let (_cancel_tx, cancel_rx) = broadcast(1);
 
         tx.broadcast(1).await.unwrap();
         tx.broadcast(2).await.unwrap();
@@ -310,7 +310,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn or_and_dep() {
         let (tx, rx) = broadcast(10);
-        let (_, cancel_rx) = broadcast(1);
+        let (_cancel_tx, cancel_rx) = broadcast(1);
 
         tx.broadcast(1).await.unwrap();
         tx.broadcast(2).await.unwrap();
@@ -350,7 +350,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn many_and_dep() {
         let (tx, rx) = broadcast(10);
-        let (_, cancel_rx) = broadcast(1);
+        let (_cancel_tx, cancel_rx) = broadcast(1);
 
         tx.broadcast(1).await.unwrap();
         tx.broadcast(2).await.unwrap();
