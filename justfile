@@ -8,13 +8,20 @@ doc *args:
 
 demo *args:
     #!/usr/bin/env bash
-    trap "exit" INT TERM
-    trap cleanup EXIT
-    cleanup(){
-        docker compose down -v
-    }
-    >/dev/null 2>&1 docker compose up {{args}} &
-    lazydocker
+    # The TUI wouldn't work on the CI
+    CI=${CI:-false}
+    if [ "$CI" = "true" ]; then
+        docker compose up {{args}}
+    else
+        trap "exit" INT TERM
+        trap cleanup EXIT
+        cleanup(){
+            docker compose down -v
+        }
+        >/dev/null 2>&1 docker compose up {{args}} &
+        lazydocker
+    fi
+
 
 demo-native *args: (build "test")
     scripts/demo-native {{args}}
