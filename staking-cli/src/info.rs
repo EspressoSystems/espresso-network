@@ -1,7 +1,7 @@
 use alloy::primitives::{utils::format_ether, Address};
 use anyhow::Result;
 use espresso_types::{
-    v0_3::{StakeTableFetcher, Validator},
+    v0_3::{Fetcher, Validator},
     L1Client,
 };
 use hotshot_types::signature_key::BLSPubKey;
@@ -16,7 +16,7 @@ pub async fn stake_table_info(
 ) -> Result<Vec<Validator<BLSPubKey>>> {
     let l1 = L1Client::new(vec![l1_url])?;
     let validators =
-        StakeTableFetcher::fetch_all_validators(l1, stake_table_address, l1_block_number).await?;
+        Fetcher::fetch_all_validators(l1, stake_table_address, l1_block_number).await?;
 
     Ok(validators
         .into_iter()

@@ -7,7 +7,9 @@ use committable::Commitment;
 use espresso_types::{
     config::PublicNetworkConfig,
     v0::traits::{PersistenceOptions, SequencerPersistence},
-    v0_1::{RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardMerkleTree},
+    v0_1::{
+        RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardAmount, RewardMerkleTree,
+    },
     v0_3::{ChainConfig, Validator},
     FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
 };
@@ -148,6 +150,7 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     fn previous_proposal_participation(
         &self,
     ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
+    fn get_block_reward(&self) -> impl Send + Future<Output = anyhow::Result<RewardAmount>>;
 }
 
 pub(crate) trait CatchupDataSource: Sync {

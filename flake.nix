@@ -147,13 +147,6 @@
               types_or = [ "toml" ];
               pass_filenames = false;
             };
-            cargo-lock-sqlite = {
-              enable = true;
-              description = "Ensure Cargo.lock is compatible with Cargo.toml";
-              entry = "cargo update --manifest-path sequencer-sqlite/Cargo.toml --workspace --verbose";
-              types_or = [ "toml" ];
-              pass_filenames = false;
-            };
             forge-fmt = {
               enable = true;
               description = "Enforce forge fmt";
@@ -227,6 +220,7 @@
             nixpkgs-fmt
             entr
             process-compose
+            lazydocker # a docker compose TUI
             # `postgresql` defaults to an older version (15), so we select the latest version (16)
             # explicitly.
             postgresql_16
@@ -242,6 +236,7 @@
             nodePackages.prettier
             solhint
             (python3.withPackages (ps: with ps; [ black ]))
+            libusb1
             yarn
 
             go
@@ -253,6 +248,9 @@
           ++ lib.optionals (!stdenv.isDarwin) [ cargo-watch ] # broken on OSX
           ;
           shellHook = ''
+            # Add the local scripts to the PATH
+            export PATH="$PWD/scripts:$PATH"
+
             # Add node binaries to PATH for development
             export PATH="$PWD/node_modules/.bin:$PATH"
 

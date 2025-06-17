@@ -15,7 +15,7 @@ use espresso_types::{
     config::PublicNetworkConfig,
     retain_accounts,
     v0::traits::SequencerPersistence,
-    v0_1::{RewardAccount, RewardMerkleTree},
+    v0_1::{RewardAccount, RewardAmount, RewardMerkleTree},
     v0_3::{ChainConfig, Validator},
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction,
@@ -235,6 +235,9 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     async fn previous_proposal_participation(&self) -> HashMap<BLSPubKey, f64> {
         self.as_ref().previous_proposal_participation().await
     }
+    async fn get_block_reward(&self) -> anyhow::Result<RewardAmount> {
+        self.as_ref().get_block_reward().await
+    }
 }
 
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
@@ -280,6 +283,20 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             epoch,
             stake_table: self.get_stake_table(epoch).await?,
         })
+    }
+
+    async fn get_block_reward(&self) -> anyhow::Result<RewardAmount> {
+        let coordinator = self
+            .consensus()
+            .await
+            .read()
+            .await
+            .membership_coordinator
+            .clone();
+
+        let membership = coordinator.membership().read().await;
+
+        Ok(membership.block_reward())
     }
 
     /// Get the whole validators map
@@ -1594,7 +1611,7 @@ mod api_tests {
         assert_eq!(txn.commit(), hash);
 
         // Wait for a Decide event containing transaction matching the one we sent
-        let block_height = wait_for_decide_on_handle(&mut events, &txn).await as usize;
+        let block_height = wait_for_decide_on_handle(&mut events, &txn).await.0 as usize;
         tracing::info!(block_height, "transaction sequenced");
 
         // Wait for the query service to update to this block height.
@@ -2038,25 +2055,37 @@ mod test {
         time::Duration,
     };
 
-    use alloy::primitives::U256;
+    use alloy::{
+        eips::BlockId,
+        network::EthereumWallet,
+        primitives::U256,
+        providers::{Provider, ProviderBuilder},
+    };
+    use async_lock::Mutex;
     use committable::{Commitment, Committable};
+    use espresso_contract_deployer::{
+        builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
+        Contract, Contracts,
+    };
     use espresso_types::{
         config::PublicHotShotConfig,
-        traits::NullEventConsumer,
-        v0_1::{block_reward, RewardAmount, COMMISSION_BASIS_POINTS},
-        v0_3::StakeTableFetcher,
+        traits::{NullEventConsumer, PersistenceOptions},
+        v0_1::{RewardAmount, COMMISSION_BASIS_POINTS},
+        v0_3::Fetcher,
         validators_from_l1_events, EpochVersion, FeeAmount, FeeVersion, Header, L1ClientOptions,
-        MockSequencerVersions, SequencerVersions, ValidatedState,
+        MockSequencerVersions, NamespaceId, RewardDistributor, SequencerVersions, ValidatedState,
     };
     use futures::{
         future::{self, join_all},
         stream::{StreamExt, TryStreamExt},
     };
     use hotshot::types::EventType;
+    use hotshot_contract_adapter::sol_types::{EspToken, StakeTableV2};
     use hotshot_example_types::node_types::EpochsTestVersions;
     use hotshot_query_service::{
-        availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
+        availability::{BlockQueryData, BlockSummaryQueryData, LeafQueryData, VidCommonQueryData},
         data_source::{sql::Config, storage::SqlStorage, VersionedDataSource},
+        explorer::TransactionSummariesResponse,
         types::HeightIndexed,
     };
     use hotshot_types::{
@@ -2089,10 +2118,11 @@ mod test {
         api::{
             options::Query,
             sql::{impl_testable_data_source::tmp_options, reconstruct_state},
+            test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
         },
         catchup::{NullStateCatchup, StatePeers},
         persistence::no_storage,
-        testing::{TestConfig, TestConfigBuilder},
+        testing::{wait_for_decide_on_handle, TestConfig, TestConfigBuilder},
     };
 
     #[tokio::test(flavor = "multi_thread")]
@@ -3197,7 +3227,7 @@ mod test {
             .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, PosVersion::new()).await;
+        let network = TestNetwork::new(config, PosVersion::new()).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -3234,8 +3264,14 @@ mod test {
         tracing::info!("amount={amount:?}");
 
         let epoch_start_block = 40;
+
+        let node_state = network.server.node_state();
+        let membership = node_state.coordinator.membership().read().await;
+        let block_reward = membership.block_reward();
+        drop(membership);
+
         // The validator gets all the block reward so we can calculate the expected amount
-        let expected_amount = block_reward().0 * (U256::from(block_height - epoch_start_block));
+        let expected_amount = block_reward.0 * (U256::from(block_height - epoch_start_block));
 
         assert_eq!(amount.0, expected_amount, "reward amount don't match");
 
@@ -3289,7 +3325,11 @@ mod test {
             .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, PosVersion::new()).await;
+        let network = TestNetwork::new(config, PosVersion::new()).await;
+        let node_state = network.server.node_state();
+        let membership = node_state.coordinator.membership().read().await;
+        let block_reward = membership.block_reward();
+        drop(membership);
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -3354,7 +3394,7 @@ mod test {
             }
 
             // assert cumulative reward is equal to block reward
-            assert_eq!(cumulative_amount - prev_cumulative_amount, block_reward().0);
+            assert_eq!(cumulative_amount - prev_cumulative_amount, block_reward.0);
             tracing::info!("cumulative_amount is correct for block={block}");
             prev_cumulative_amount = cumulative_amount;
         }
@@ -3436,7 +3476,7 @@ mod test {
             }
             let l1_block = header.l1_finalized().expect("l1 block not found");
 
-            let events = StakeTableFetcher::fetch_events_from_contract(
+            let events = Fetcher::fetch_events_from_contract(
                 l1_client.clone(),
                 stake_table,
                 None,
@@ -3599,6 +3639,11 @@ mod test {
         let node_state = network.server.node_state();
         let coordinator = node_state.coordinator;
 
+        let membership = coordinator.membership().read().await;
+        let block_reward = membership.block_reward();
+
+        drop(membership);
+
         let mut rewards_map = HashMap::new();
 
         for leaf in leaves {
@@ -3611,6 +3656,7 @@ mod test {
                 .leader(leaf.leaf().view_number(), Some(epoch_number))
                 .expect("leader");
             let leader_eth_address = membership.address(&epoch_number, leader).expect("address");
+
             drop(membership);
 
             let validators = client
@@ -3623,6 +3669,7 @@ mod test {
                 .get(&leader_eth_address)
                 .expect("leader not found");
 
+            let distributor = RewardDistributor::new(leader_validator.clone(), block_reward);
             // Verify that the sum of delegator stakes equals the validator's total stake.
             for validator in validators.values() {
                 let delegator_stake_sum: U256 = validator.delegators.values().cloned().sum();
@@ -3630,9 +3677,7 @@ mod test {
                 assert_eq!(delegator_stake_sum, validator.stake);
             }
 
-            let computed_rewards = leader_validator
-                .compute_rewards()
-                .expect("reward computation");
+            let computed_rewards = distributor.compute_rewards().expect("reward computation");
 
             // Verify that the leader commission amount is within the tolerated range.
             // Due to potential rounding errors in decimal calculations for delegator rewards,
@@ -3640,7 +3685,7 @@ mod test {
             // amount may differ very slightly from the calculated value.
             // this asserts that it is within 10wei tolerance level.
             // 10 wei is 10* 10E-18
-            let total_reward = block_reward().0;
+            let total_reward = block_reward.0;
             let leader_commission_basis_points = U256::from(leader_validator.commission);
             let calculated_leader_commission_reward = leader_commission_basis_points
                 .checked_mul(total_reward)
@@ -4547,5 +4592,436 @@ mod test {
                 }
             }
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_block_reward_api() -> anyhow::Result<()> {
+        setup_test();
+        let epoch_height = 10;
+
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(epoch_height)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        const NUM_NODES: usize = 1;
+        // Initialize nodes.
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config.clone())
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<PosVersion>(DelegationConfig::VariableAmounts, Default::default())
+            .await
+            .unwrap()
+            .build();
+
+        let _network = TestNetwork::new(config, PosVersion::new()).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        let _blocks = client
+            .socket("availability/stream/blocks/0")
+            .subscribe::<BlockQueryData<SeqTypes>>()
+            .await
+            .unwrap()
+            .take(3)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        let block_reward = client
+            .get::<RewardAmount>("node/block-reward")
+            .send()
+            .await
+            .expect("failed to get block reward");
+        tracing::info!("block_reward={block_reward:?}");
+
+        assert!(block_reward.0 > U256::ZERO);
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_scanning_token_contract_initialized_event() -> anyhow::Result<()> {
+        use espresso_types::v0_3::ChainConfig;
+
+        setup_test();
+
+        let blocks_per_epoch = 10;
+
+        let network_config = TestConfigBuilder::<1>::default()
+            .epoch_height(blocks_per_epoch)
+            .build();
+
+        let (genesis_state, genesis_stake) = light_client_genesis_from_stake_table(
+            &network_config.hotshot_config().hotshot_stake_table(),
+            STAKE_TABLE_CAPACITY_FOR_TEST,
+        )
+        .unwrap();
+
+        let deployer = ProviderBuilder::new()
+            .wallet(EthereumWallet::from(network_config.signer().clone()))
+            .on_http(network_config.l1_url().clone());
+
+        let mut contracts = Contracts::new();
+        let args = DeployerArgsBuilder::default()
+            .deployer(deployer.clone())
+            .mock_light_client(true)
+            .genesis_lc_state(genesis_state)
+            .genesis_st_state(genesis_stake)
+            .blocks_per_epoch(blocks_per_epoch)
+            .epoch_start_block(1)
+            .build()
+            .unwrap();
+
+        args.deploy_all(&mut contracts).await.unwrap();
+
+        let st_addr = contracts
+            .address(Contract::StakeTableProxy)
+            .expect("StakeTableProxy deployed");
+
+        let l1_url = network_config.l1_url().clone();
+
+        let storage = SqlDataSource::create_storage().await;
+        let mut opt = <SqlDataSource as TestableSequencerDataSource>::persistence_options(&storage);
+        let persistence = opt.create().await.unwrap();
+
+        let l1_client = L1ClientOptions {
+            stake_table_update_interval: Duration::from_secs(7),
+            l1_retry_delay: Duration::from_millis(10),
+            l1_events_max_block_range: 10000,
+            ..Default::default()
+        }
+        .connect(vec![l1_url])
+        .unwrap();
+        l1_client.spawn_tasks().await;
+
+        let fetcher = Fetcher::new(
+            Arc::new(NullStateCatchup::default()),
+            Arc::new(Mutex::new(persistence.clone())),
+            l1_client.clone(),
+            ChainConfig {
+                stake_table_contract: Some(st_addr),
+                base_fee: 0.into(),
+                ..Default::default()
+            },
+        );
+
+        let provider = l1_client.provider;
+        let stake_table = StakeTableV2::new(st_addr, provider.clone());
+
+        let stake_table_init_block = stake_table
+            .initializedAtBlock()
+            .block(BlockId::finalized())
+            .call()
+            .await?
+            ._0
+            .to::<u64>();
+
+        tracing::info!("stake table init block ={stake_table_init_block}");
+
+        let token_address = stake_table
+            .token()
+            .block(BlockId::finalized())
+            .call()
+            .await
+            .context("Failed to get token address")?
+            ._0;
+
+        let token = EspToken::new(token_address, provider.clone());
+
+        let init_log = fetcher
+            .scan_token_contract_initialized_event_log(stake_table_init_block, token)
+            .await
+            .unwrap();
+
+        let init_tx = provider
+            .get_transaction_receipt(
+                init_log
+                    .transaction_hash
+                    .context(format!("transaction hash not found. init_log={init_log:?}"))?,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        let mint_transfer = init_tx.decoded_log::<EspToken::Transfer>().unwrap();
+
+        assert!(mint_transfer.value > U256::ZERO);
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_tx_metadata() {
+        setup_test();
+
+        let port = pick_unused_port().expect("No ports free");
+
+        let url = format!("http://localhost:{port}").parse().unwrap();
+        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+
+        let storage = SqlDataSource::create_storage().await;
+        let network_config = TestConfigBuilder::default().build();
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(
+                SqlDataSource::options(&storage, Options::with_port(port))
+                    .submit(Default::default())
+                    .explorer(Default::default()),
+            )
+            .network_config(network_config)
+            .build();
+        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let mut events = network.server.event_stream().await;
+
+        client.connect(None).await;
+
+        // Submit a few transactions in different namespaces.
+        let namespace_counts = [(101, 1), (102, 2), (103, 3)];
+        for (ns, count) in &namespace_counts {
+            for i in 0..*count {
+                let ns_id = NamespaceId::from(*ns as u64);
+                let txn = Transaction::new(ns_id, vec![*ns, i]);
+                client
+                    .post::<()>("submit/submit")
+                    .body_json(&txn)
+                    .unwrap()
+                    .send()
+                    .await
+                    .unwrap();
+                let (block, _) = wait_for_decide_on_handle(&mut events, &txn).await;
+
+                // Block summary should contain information about the namespace.
+                let summary: BlockSummaryQueryData<SeqTypes> = client
+                    .get(&format!("availability/block/summary/{block}"))
+                    .send()
+                    .await
+                    .unwrap();
+                let ns_info = summary.namespaces();
+                assert_eq!(ns_info.len(), 1);
+                assert_eq!(ns_info.keys().copied().collect::<Vec<_>>(), vec![ns_id]);
+                assert_eq!(ns_info[&ns_id].num_transactions, 1);
+                assert_eq!(ns_info[&ns_id].size, txn.size_in_block(true));
+            }
+        }
+
+        // List transactions in each namespace.
+        for (ns, count) in &namespace_counts {
+            tracing::info!(ns, "list transactions in namespace");
+
+            let ns_id = NamespaceId::from(*ns as u64);
+            let summaries: TransactionSummariesResponse<SeqTypes> = client
+                .get(&format!(
+                    "explorer/transactions/latest/{count}/namespace/{ns_id}"
+                ))
+                .send()
+                .await
+                .unwrap();
+            let txs = summaries.transaction_summaries;
+            assert_eq!(txs.len(), *count as usize);
+
+            // Check that transactions are listed in descending order.
+            for i in 0..*count {
+                let summary = &txs[i as usize];
+                let expected = Transaction::new(ns_id, vec![*ns, count - i - 1]);
+                assert_eq!(summary.rollups, vec![ns_id]);
+                assert_eq!(summary.hash, expected.commit());
+            }
+        }
+    }
+
+    use std::time::Instant;
+
+    use rand::thread_rng;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_aggregator_namespace_endpoints() {
+        setup_test();
+
+        let mut rng = thread_rng();
+
+        let port = pick_unused_port().expect("No ports free");
+
+        let url = format!("http://localhost:{port}").parse().unwrap();
+        tracing::info!("Sequencer URL = {url}");
+        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+
+        let options = Options::with_port(port).submit(Default::default());
+        const NUM_NODES: usize = 2;
+        // Initialize storage for each node
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+
+        let persistence_options: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let network_config = TestConfigBuilder::default().build();
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(SqlDataSource::options(&storage[0], options))
+            .network_config(network_config)
+            .persistences(persistence_options.clone())
+            .build();
+        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let mut events = network.server.event_stream().await;
+        let start = Instant::now();
+        let mut total_transactions = 0;
+        let mut tx_heights = Vec::new();
+        let mut sizes = HashMap::new();
+        // inserting transactions for some namespaces
+        // the number of transactions inserted is equal to namespace number.
+        for namespace in 1..=4 {
+            for _count in 0..namespace {
+                // Generate a random payload length between 4 and 10 bytes
+                let payload_len = rng.gen_range(4..=10);
+                let payload: Vec<u8> = (0..payload_len).map(|_| rng.gen()).collect();
+
+                let txn = Transaction::new(NamespaceId::from(namespace as u32), payload);
+
+                client.connect(None).await;
+
+                let hash = client
+                    .post("submit/submit")
+                    .body_json(&txn)
+                    .unwrap()
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(txn.commit(), hash);
+
+                // Wait for a Decide event containing transaction matching the one we sent
+                let (height, size) = wait_for_decide_on_handle(&mut events, &txn).await;
+                tx_heights.push(height);
+                total_transactions += 1;
+                *sizes.entry(namespace).or_insert(0) += size;
+            }
+        }
+
+        let duration = start.elapsed();
+
+        println!("Time elapsed to submit transactions: {:?}", duration);
+
+        let last_tx_height = tx_heights.last().unwrap();
+        for namespace in 1..=4 {
+            let count = client
+                .get::<u64>(&format!("node/transactions/count/namespace/{namespace}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                count, namespace as u64,
+                "Incorrect transaction count for namespace {}: expected {}, got {}",
+                namespace, namespace, count,
+            );
+
+            // check the range endpoint
+            let to_endpoint_count = client
+                .get::<u64>(&format!(
+                    "node/transactions/count/namespace/{namespace}/{last_tx_height}"
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(to_endpoint_count, namespace as u64, "Incorrect transaction count for range endpoint (to only) for namespace {}: expected {}, got {}",
+            namespace, namespace, to_endpoint_count,);
+
+            // check the range endpoint
+            let from_to_endpoint_count = client
+                .get::<u64>(&format!(
+                    "node/transactions/count/namespace/{namespace}/0/{last_tx_height}"
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(from_to_endpoint_count, namespace as u64, "Incorrect transaction count for range endpoint (from-to) for namespace {}: expected {}, got {}", 
+            namespace, namespace, from_to_endpoint_count,);
+
+            let ns_size = client
+                .get::<usize>(&format!("node/payloads/size/namespace/{namespace}"))
+                .send()
+                .await
+                .unwrap();
+
+            let expected_ns_size = *sizes.get(&namespace).unwrap();
+            assert_eq!(
+                ns_size, expected_ns_size,
+                "Incorrect payload size for namespace {}: expected {}, got {}",
+                namespace, expected_ns_size, ns_size,
+            );
+
+            let ns_size_to = client
+                .get::<usize>(&format!(
+                    "node/payloads/size/namespace/{namespace}/{last_tx_height}"
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                ns_size_to, expected_ns_size,
+                "Incorrect payload size for namespace {} up to height {}: expected {}, got {}",
+                namespace, last_tx_height, expected_ns_size, ns_size_to,
+            );
+
+            let ns_size_from_to = client
+                .get::<usize>(&format!(
+                    "node/payloads/size/namespace/{namespace}/0/{last_tx_height}"
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                ns_size_from_to, expected_ns_size,
+                "Incorrect payload size for namespace {} from 0 to height {}: expected {}, got {}",
+                namespace, last_tx_height, expected_ns_size, ns_size_from_to,
+            );
+        }
+
+        let total_tx_count = client
+            .get::<u64>("node/transactions/count")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            total_tx_count, total_transactions,
+            "Incorrect total transaction count: expected {}, got {}",
+            total_transactions, total_tx_count,
+        );
+
+        let total_payload_size = client
+            .get::<usize>("node/payloads/size")
+            .send()
+            .await
+            .unwrap();
+
+        let expected_total_size: usize = sizes.values().copied().sum();
+        assert_eq!(
+            total_payload_size, expected_total_size,
+            "Incorrect total payload size: expected {}, got {}",
+            expected_total_size, total_payload_size,
+        );
     }
 }

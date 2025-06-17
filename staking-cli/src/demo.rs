@@ -276,6 +276,7 @@ pub async fn stake_for_demo(
         config.signer.mnemonic.clone().unwrap(),
         config.signer.account_index.unwrap(),
         config.rpc_url.clone(),
+        /* polling_interval */ None,
     );
 
     tracing::info!(

@@ -27,6 +27,7 @@ use hotshot_types::{
     data::{Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     network::NetworkConfig,
+    storage_metrics::StorageMetricsValue,
     traits::{metrics::Metrics, network::ConnectedNetwork, node_implementation::Versions},
     PeerConfig, ValidatorConfig,
 };
@@ -145,6 +146,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             initializer,
             ConsensusMetricsValue::new(metrics),
             Arc::clone(&persistence),
+            StorageMetricsValue::new(metrics),
         )
         .await?
         .0;

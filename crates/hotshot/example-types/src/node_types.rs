@@ -315,6 +315,7 @@ impl Versions for TestVersions {
     ];
 
     type Epochs = StaticVersion<0, 4>;
+    type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
 }
 
 #[derive(Clone, Debug, Copy, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -329,6 +330,7 @@ impl Versions for EpochsTestVersions {
     ];
 
     type Epochs = StaticVersion<0, 3>;
+    type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
 }
 
 #[derive(Clone, Debug, Copy)]
@@ -343,6 +345,7 @@ impl Versions for EpochUpgradeTestVersions {
     ];
 
     type Epochs = StaticVersion<0, 4>;
+    type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
 }
 
 #[cfg(test)]

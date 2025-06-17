@@ -45,6 +45,7 @@ pub mod simple_vote;
 pub mod stake_table;
 pub mod traits;
 
+pub mod storage_metrics;
 /// Holds the upgrade configuration specification for HotShot nodes.
 pub mod upgrade_config;
 pub mod utils;
@@ -124,7 +125,7 @@ impl<TYPES: NodeType> Default for ValidatorConfig<TYPES> {
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Display, PartialEq, Eq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Display, PartialEq, Eq, Hash)]
 #[serde(bound(deserialize = ""))]
 /// structure of peers' config, including public key, stake value, and state key.
 pub struct PeerConfig<TYPES: NodeType> {
@@ -168,6 +169,15 @@ impl<TYPES: NodeType> Default for PeerConfig<TYPES> {
     fn default() -> Self {
         let default_validator_config = ValidatorConfig::<TYPES>::default();
         default_validator_config.public_config()
+    }
+}
+
+impl<TYPES: NodeType> Debug for PeerConfig<TYPES> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PeerConfig")
+            .field("stake_table_entry", &self.stake_table_entry)
+            .field("state_ver_key", &format_args!("{}", self.state_ver_key))
+            .finish()
     }
 }
 
@@ -227,6 +237,8 @@ pub struct HotShotConfig<TYPES: NodeType> {
     pub stake_table_capacity: usize,
     /// number of iterations in the DRB calculation
     pub drb_difficulty: u64,
+    /// number of iterations in the DRB calculation
+    pub drb_upgrade_difficulty: u64,
 }
 
 fn default_epoch_start_block() -> u64 {

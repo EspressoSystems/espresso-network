@@ -62,7 +62,7 @@ async fn test_network_task() {
         all_nodes.clone(),
         all_nodes,
     )));
-    let coordinator = EpochMembershipCoordinator::new(membership, config.epoch_height, &storage.clone(), config.drb_difficulty);
+    let coordinator = EpochMembershipCoordinator::new(membership, config.epoch_height, &storage.clone());
     let network_state: NetworkEventTaskState<TestTypes, TestVersions, MemoryNetwork<_>, _> =
         NetworkEventTaskState {
             id: node_id,
@@ -72,6 +72,7 @@ async fn test_network_task() {
             membership_coordinator: coordinator.clone(),
             upgrade_lock: upgrade_lock.clone(),
             storage,
+            storage_metrics: handle.storage_metrics(),
             consensus,
             transmit_tasks: BTreeMap::new(),
             epoch_height: 0u64,
@@ -238,7 +239,7 @@ async fn test_network_storage_fail() {
         all_nodes.clone(),
         all_nodes,
     )));
-    let coordinator = EpochMembershipCoordinator::new(membership, config.epoch_height, &storage.clone(), config.drb_difficulty);
+    let coordinator = EpochMembershipCoordinator::new(membership, config.epoch_height, &storage.clone());
     let network_state: NetworkEventTaskState<TestTypes, TestVersions, MemoryNetwork<_>, _> =
         NetworkEventTaskState {
             id: node_id,
@@ -248,6 +249,7 @@ async fn test_network_storage_fail() {
             membership_coordinator: coordinator.clone(),
             upgrade_lock: upgrade_lock.clone(),
             storage,
+            storage_metrics: handle.storage_metrics(),
             consensus,
             transmit_tasks: BTreeMap::new(),
             epoch_height: 0u64,

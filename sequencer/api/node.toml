@@ -27,3 +27,6 @@ Get the mapping from leader key to participation rate for the previous epoch.
 
 Returns a map from BLS key to the fraction of views with key proposed properly as leader, as a floating point number.
 """
+[route.get_block_reward]
+PATH = ["block-reward"]
+DOC = "get the block reward"

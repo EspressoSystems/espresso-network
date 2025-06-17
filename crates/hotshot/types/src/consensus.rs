@@ -21,7 +21,10 @@ use vec1::Vec1;
 
 pub use crate::utils::{View, ViewInner};
 use crate::{
-    data::{Leaf2, QuorumProposalWrapper, VidCommitment, VidDisperse, VidDisperseShare},
+    data::{
+        Leaf2, QuorumProposalWrapper, VidCommitment, VidDisperse, VidDisperseAndDuration,
+        VidDisperseShare,
+    },
     drb::DrbResults,
     epoch_membership::EpochMembershipCoordinator,
     error::HotShotError,
@@ -420,6 +423,9 @@ pub struct Consensus<TYPES: NodeType> {
     /// Number of iterations for the DRB calculation, taken from HotShotConfig
     pub drb_difficulty: u64,
 
+    /// Number of iterations for the DRB calculation post-difficulty upgrade, taken from HotShotConfig
+    pub drb_upgrade_difficulty: u64,
+
     /// Tables for the DRB seeds and results.
     pub drb_results: DrbResults<TYPES>,
 
@@ -481,6 +487,12 @@ pub struct ConsensusMetricsValue {
     pub previous_proposal_to_proposal_time: Box<dyn Histogram>,
     /// Finalized bytes per view
     pub finalized_bytes: Box<dyn Histogram>,
+    /// The duration of the validate and apply header
+    pub validate_and_apply_header_duration: Box<dyn Histogram>,
+    /// The duration of update leaf
+    pub update_leaf_duration: Box<dyn Histogram>,
+    /// The time it took to calculate the disperse
+    pub vid_disperse_duration: Box<dyn Histogram>,
 }
 
 impl ConsensusMetricsValue {
@@ -517,6 +529,18 @@ impl ConsensusMetricsValue {
             previous_proposal_to_proposal_time: metrics
                 .create_histogram(String::from("previous_proposal_to_proposal_time"), None),
             finalized_bytes: metrics.create_histogram(String::from("finalized_bytes"), None),
+            validate_and_apply_header_duration: metrics.create_histogram(
+                String::from("validate_and_apply_header_duration"),
+                Some("seconds".to_string()),
+            ),
+            update_leaf_duration: metrics.create_histogram(
+                String::from("update_leaf_duration"),
+                Some("seconds".to_string()),
+            ),
+            vid_disperse_duration: metrics.create_histogram(
+                String::from("vid_disperse_duration"),
+                Some("seconds".to_string()),
+            ),
         }
     }
 }
@@ -547,6 +571,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         epoch_height: u64,
         state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
         drb_difficulty: u64,
+        drb_upgrade_difficulty: u64,
     ) -> Self {
         let transition_qc = if let Some(ref next_epoch_high_qc) = next_epoch_high_qc {
             if high_qc
@@ -588,6 +613,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             state_cert,
             drb_difficulty,
             validator_participation: ValidatorParticipation::new(),
+            drb_upgrade_difficulty,
         }
     }
 
@@ -1294,7 +1320,10 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             .view_inner
             .epoch()?;
 
-        let vid = VidDisperse::calculate_vid_disperse::<V>(
+        let VidDisperseAndDuration {
+            disperse: vid,
+            duration: disperse_duration,
+        } = VidDisperse::calculate_vid_disperse::<V>(
             &payload_with_metadata.payload,
             &membership_coordinator,
             view,
@@ -1308,6 +1337,10 @@ impl<TYPES: NodeType> Consensus<TYPES> {
 
         let shares = VidDisperseShare::from_vid_disperse(vid);
         let mut consensus_writer = consensus.write().await;
+        consensus_writer
+            .metrics
+            .vid_disperse_duration
+            .add_point(disperse_duration.as_secs_f64());
         for share in shares {
             if let Some(prop) = share.to_proposal(private_key) {
                 consensus_writer.update_vid_shares(view, prop);

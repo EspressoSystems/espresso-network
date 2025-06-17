@@ -12,7 +12,7 @@
 
 //! Availability storage implementation for a database query engine.
 
-use std::{collections::HashMap, ops::RangeBounds};
+use std::ops::RangeBounds;
 
 use async_trait::async_trait;
 use futures::stream::{StreamExt, TryStreamExt};
@@ -27,8 +27,8 @@ use super::{
 };
 use crate::{
     availability::{
-        BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceInfo, PayloadQueryData,
-        QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
+        BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceInfo, NamespaceMap,
+        PayloadQueryData, QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
         TransactionQueryData, VidCommonQueryData,
     },
     data_source::storage::{
@@ -367,7 +367,7 @@ where
                 JOIN payload AS p ON h.height = p.height
                 JOIN transactions AS t ON t.block_height = h.height
                 WHERE t.hash = {hash_param}
-                ORDER BY t.block_height, t.namespace, t.position
+                ORDER BY t.block_height, t.ns_id, t.position
                 LIMIT 1"
         );
         let row = query.query(&sql).fetch_one(self.as_mut()).await?;
@@ -413,7 +413,7 @@ where
         &mut self,
         height: u64,
         payload_size: u64,
-    ) -> QueryResult<HashMap<u32, NamespaceInfo>>
+    ) -> QueryResult<NamespaceMap<Types>>
     where
         Types: NodeType,
         Header<Types>: QueryableHeader<Types>,
@@ -423,17 +423,18 @@ where
             .get_header(BlockId::<Types>::from(height as usize))
             .await?;
         let map = query(
-            "SELECT namespace, max(position) + 1 AS count
+            "SELECT ns_id, ns_index, max(position) + 1 AS count
                FROM  transactions
                WHERE block_height = $1
-               GROUP BY namespace",
+               GROUP BY ns_id, ns_index",
         )
         .bind(height as i64)
         .fetch(self.as_mut())
         .map_ok(|row| {
-            let id = row.get::<i64, _>("namespace") as u32;
+            let ns = row.get::<i64, _>("ns_index").into();
+            let id = row.get::<i64, _>("ns_id").into();
             let num_transactions = row.get::<i64, _>("count") as u64;
-            let size = header.namespace_size(id, payload_size as usize);
+            let size = header.namespace_size(&ns, payload_size as usize);
             (
                 id,
                 NamespaceInfo {

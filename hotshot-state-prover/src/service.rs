@@ -10,7 +10,7 @@ use alloy::{
     network::EthereumWallet,
     primitives::{utils::format_units, Address, U256},
     providers::{Provider, ProviderBuilder},
-    rpc::types::TransactionReceipt,
+    rpc::{client::RpcClient, types::TransactionReceipt},
     signers::{k256::ecdsa::SigningKey, local::LocalSigner},
 };
 use anyhow::{anyhow, Context, Result};
@@ -62,8 +62,8 @@ pub struct StateProverConfig {
     pub update_interval: Duration,
     /// Interval between retries if a state update fails
     pub retry_interval: Duration,
-    /// URL of the chain (layer 1  or any layer 2) JSON-RPC provider.
-    pub provider_endpoint: Url,
+    /// RPC client to the L1 (or L2) provider
+    pub l1_rpc_client: RpcClient,
     /// Address of LightClient proxy contract
     pub light_client_address: Address,
     /// Transaction signing key for Ethereum or any other layer 2
@@ -135,7 +135,7 @@ impl ProverServiceState {
 
 impl StateProverConfig {
     pub async fn validate_light_client_contract(&self) -> anyhow::Result<()> {
-        let provider = ProviderBuilder::new().on_http(self.provider_endpoint.clone());
+        let provider = ProviderBuilder::new().on_client(self.l1_rpc_client.clone());
 
         if !is_proxy_contract(&provider, self.light_client_address).await? {
             anyhow::bail!(
@@ -352,7 +352,7 @@ async fn generate_proof(
 /// It returns the final stake table state at the target epoch.
 async fn advance_epoch(
     state: &mut ProverServiceState,
-    provider: &impl Provider,
+    provider: impl Provider,
     light_client_address: Address,
     mut cur_st_state: StakeTableState,
     proving_key: &ProvingKey,
@@ -398,7 +398,7 @@ async fn advance_epoch(
         )
         .await?;
 
-        submit_state_and_proof(provider, light_client_address, proof, public_input).await?;
+        submit_state_and_proof(&provider, light_client_address, proof, public_input).await?;
         tracing::info!("Epoch root state update successfully for epoch {epoch}.");
 
         state
@@ -420,7 +420,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     let wallet = EthereumWallet::from(state.config.signer.clone());
     let provider = ProviderBuilder::new()
         .wallet(wallet)
-        .on_http(state.config.provider_endpoint.clone());
+        .on_client(state.config.l1_rpc_client.clone());
 
     // only sync light client state when gas price is sane
     if let Some(max_gas_price) = state.config.max_gas_price {
@@ -441,12 +441,6 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
             return Err(ProverError::GasPriceTooHigh(cur_gwei, max_gwei));
         }
     }
-
-    tracing::info!(
-        ?light_client_address,
-        "Start syncing light client state for provider: {}",
-        state.config.provider_endpoint,
-    );
 
     let blocks_per_epoch = state.config.blocks_per_epoch;
     let epoch_start_block = state.config.epoch_start_block;
@@ -682,6 +676,8 @@ pub enum ProverError {
     NetworkError(anyhow::Error),
     /// Abort due to high gas price: current {0} gwei, max allowed: {1} gwei
     GasPriceTooHigh(String, String),
+    /// Epoch has already started on block {0}, please upgrade the contract to V2.
+    EpochAlreadyStarted(u64),
 }
 
 impl From<ServerError> for ProverError {
@@ -701,7 +697,11 @@ impl std::error::Error for ProverError {}
 #[cfg(test)]
 mod test {
 
-    use alloy::{node_bindings::Anvil, providers::layers::AnvilProvider, sol_types::SolValue};
+    use alloy::{
+        node_bindings::Anvil,
+        providers::{layers::AnvilProvider, ProviderBuilder},
+        sol_types::SolValue,
+    };
     use anyhow::Result;
     use espresso_contract_deployer::{
         deploy_light_client_proxy, upgrade_light_client_v2, Contracts,

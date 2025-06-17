@@ -14,6 +14,7 @@ use std::{
     hash::Hash,
     marker::PhantomData,
     sync::Arc,
+    time::Duration,
 };
 
 use async_lock::RwLock;
@@ -205,7 +206,7 @@ where
 }
 
 /// VID Commitment type
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Ord, PartialOrd)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, Ord, PartialOrd)]
 #[serde(
     try_from = "tagged_base64::TaggedBase64",
     into = "tagged_base64::TaggedBase64"
@@ -224,6 +225,12 @@ impl Default for VidCommitment {
 impl Display for VidCommitment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::write!(f, "{}", TaggedBase64::from(self))
+    }
+}
+
+impl Debug for VidCommitment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
     }
 }
 
@@ -373,6 +380,14 @@ impl From<AvidMShare> for VidShare {
 pub mod ns_table;
 pub mod vid_disperse;
 
+/// A helper struct to hold the disperse data and the time it took to calculate the disperse
+pub struct VidDisperseAndDuration<TYPES: NodeType> {
+    /// The disperse data
+    pub disperse: VidDisperse<TYPES>,
+    /// The time it took to calculate the disperse
+    pub duration: Duration,
+}
+
 /// VID dispersal data
 ///
 /// Like [`DaProposal`].
@@ -432,7 +447,7 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
         data_epoch: Option<TYPES::Epoch>,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
         upgrade_lock: &UpgradeLock<TYPES, V>,
-    ) -> Result<Self> {
+    ) -> Result<VidDisperseAndDuration<TYPES>> {
         let version = upgrade_lock.version_infallible(view).await;
         if version < V::Epochs::VERSION {
             ADVZDisperse::calculate_vid_disperse(
@@ -443,7 +458,10 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
                 data_epoch,
             )
             .await
-            .map(|disperse| Self::V0(disperse))
+            .map(|(disperse, duration)| VidDisperseAndDuration {
+                disperse: Self::V0(disperse),
+                duration,
+            })
         } else {
             AvidMDisperse::calculate_vid_disperse(
                 payload,
@@ -454,7 +472,10 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
                 metadata,
             )
             .await
-            .map(|disperse| Self::V1(disperse))
+            .map(|(disperse, duration)| VidDisperseAndDuration {
+                disperse: Self::V1(disperse),
+                duration,
+            })
         }
     }
 
@@ -1912,5 +1933,35 @@ impl<TYPES: NodeType> PackedBundle<TYPES> {
             epoch_number,
             sequencing_fees,
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_vid_commitment_display() {
+        let vc = VidCommitment::V0(ADVZCommitment::default());
+        assert_eq!(
+            format!("{vc}"),
+            "HASH~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI"
+        );
+        assert_eq!(
+            format!("{vc:?}"),
+            "HASH~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI"
+        );
+
+        let vc = VidCommitment::V1(AvidMCommitment {
+            commit: Default::default(),
+        });
+        assert_eq!(
+            format!("{vc}"),
+            "AvidMCommit~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADr"
+        );
+        assert_eq!(
+            format!("{vc:?}"),
+            "AvidMCommit~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADr"
+        );
     }
 }

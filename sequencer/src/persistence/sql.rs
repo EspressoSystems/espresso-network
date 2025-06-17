@@ -1,4 +1,10 @@
-use std::{collections::BTreeMap, path::PathBuf, str::FromStr, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    path::PathBuf,
+    str::FromStr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
@@ -52,6 +58,7 @@ use hotshot_types::{
     },
     traits::{
         block_contents::{BlockHeader, BlockPayload},
+        metrics::Metrics,
         node_implementation::ConsensusTime,
     },
     vote::HasViewNumber,
@@ -60,7 +67,10 @@ use indexmap::IndexMap;
 use itertools::Itertools;
 use sqlx::{query, Executor, Row};
 
-use crate::{catchup::SqlStateCatchup, NodeType, SeqTypes, ViewNumber, RECENT_STAKE_TABLES_LIMIT};
+use crate::{
+    catchup::SqlStateCatchup, persistence::persistence_metrics::PersistenceMetricsValue, NodeType,
+    SeqTypes, ViewNumber, RECENT_STAKE_TABLES_LIMIT,
+};
 
 /// Options for Postgres-backed persistence.
 #[derive(Parser, Clone, Derivative)]
@@ -583,6 +593,7 @@ impl PersistenceOptions for Options {
         let persistence = Persistence {
             db: SqlStorage::connect(config).await?,
             gc_opt: self.consensus_pruning,
+            internal_metrics: PersistenceMetricsValue::default(),
         };
         persistence.migrate_quorum_proposal_leaf_hashes().await?;
         self.pool = Some(persistence.db.pool());
@@ -600,6 +611,8 @@ impl PersistenceOptions for Options {
 pub struct Persistence {
     db: SqlStorage,
     gc_opt: ConsensusPruningOptions,
+    /// A reference to the internal metrics
+    internal_metrics: PersistenceMetricsValue,
 }
 
 impl Persistence {
@@ -1222,6 +1235,7 @@ impl SequencerPersistence for Persistence {
             convert_proposal(proposal.clone());
         let data_bytes = bincode::serialize(&proposal).unwrap();
 
+        let now = Instant::now();
         let mut tx = self.db.write().await?;
         tx.upsert(
             "vid_share2",
@@ -1230,7 +1244,11 @@ impl SequencerPersistence for Persistence {
             [(view as i64, data_bytes, payload_hash.to_string())],
         )
         .await?;
-        tx.commit().await
+        let res = tx.commit().await;
+        self.internal_metrics
+            .internal_append_vid_duration
+            .add_point(now.elapsed().as_secs_f64());
+        res
     }
     async fn append_vid2(
         &self,
@@ -1242,6 +1260,7 @@ impl SequencerPersistence for Persistence {
             convert_proposal(proposal.clone());
         let data_bytes = bincode::serialize(&proposal).unwrap();
 
+        let now = Instant::now();
         let mut tx = self.db.write().await?;
         tx.upsert(
             "vid_share2",
@@ -1250,7 +1269,11 @@ impl SequencerPersistence for Persistence {
             [(view as i64, data_bytes, payload_hash.to_string())],
         )
         .await?;
-        tx.commit().await
+        let res = tx.commit().await;
+        self.internal_metrics
+            .internal_append_vid2_duration
+            .add_point(now.elapsed().as_secs_f64());
+        res
     }
 
     async fn append_da(
@@ -1262,6 +1285,7 @@ impl SequencerPersistence for Persistence {
         let view = data.view_number().u64();
         let data_bytes = bincode::serialize(proposal).unwrap();
 
+        let now = Instant::now();
         let mut tx = self.db.write().await?;
         tx.upsert(
             "da_proposal",
@@ -1270,7 +1294,11 @@ impl SequencerPersistence for Persistence {
             [(view as i64, data_bytes, vid_commit.to_string())],
         )
         .await?;
-        tx.commit().await
+        let res = tx.commit().await;
+        self.internal_metrics
+            .internal_append_da_duration
+            .add_point(now.elapsed().as_secs_f64());
+        res
     }
 
     async fn record_action(
@@ -1313,6 +1341,8 @@ impl SequencerPersistence for Persistence {
 
         let proposal_bytes = bincode::serialize(&proposal).context("serializing proposal")?;
         let leaf_hash = Committable::commit(&Leaf2::from_quorum_proposal(&proposal.data));
+
+        let now = Instant::now();
         let mut tx = self.db.write().await?;
         tx.upsert(
             "quorum_proposals2",
@@ -1336,8 +1366,11 @@ impl SequencerPersistence for Persistence {
             )],
         )
         .await?;
-
-        tx.commit().await
+        let res = tx.commit().await;
+        self.internal_metrics
+            .internal_append_quorum2_duration
+            .add_point(now.elapsed().as_secs_f64());
+        res
     }
 
     async fn load_upgrade_certificate(
@@ -1920,6 +1953,7 @@ impl SequencerPersistence for Persistence {
         let view = data.view_number().u64();
         let data_bytes = bincode::serialize(proposal).unwrap();
 
+        let now = Instant::now();
         let mut tx = self.db.write().await?;
         tx.upsert(
             "da_proposal2",
@@ -1928,7 +1962,11 @@ impl SequencerPersistence for Persistence {
             [(view as i64, data_bytes, vid_commit.to_string())],
         )
         .await?;
-        tx.commit().await
+        let res = tx.commit().await;
+        self.internal_metrics
+            .internal_append_da2_duration
+            .add_point(now.elapsed().as_secs_f64());
+        res
     }
 
     async fn store_drb_result(
@@ -2096,6 +2134,10 @@ impl SequencerPersistence for Persistence {
                 Ok(None) => None,
             })
             .collect()
+    }
+
+    fn enable_metrics(&mut self, metrics: &dyn Metrics) {
+        self.internal_metrics = PersistenceMetricsValue::new(metrics);
     }
 }
 
@@ -3209,5 +3251,145 @@ mod test {
         );
 
         storage.migrate_consensus().await.unwrap();
+    }
+}
+
+#[cfg(test)]
+#[cfg(not(feature = "embedded-db"))]
+mod postgres_tests {
+    use espresso_types::{FeeAccount, Header, Leaf, NodeState, Transaction as Tx};
+    use hotshot_example_types::node_types::TestVersions;
+    use hotshot_query_service::{
+        availability::BlockQueryData, data_source::storage::UpdateAvailabilityStorage,
+    };
+    use hotshot_types::{
+        data::vid_commitment,
+        simple_certificate::QuorumCertificate,
+        traits::{
+            block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
+            election::Membership,
+            signature_key::BuilderSignatureKey,
+            EncodeBytes,
+        },
+    };
+    use sequencer_utils::test_utils::setup_test;
+
+    use super::*;
+    use crate::persistence::tests::TestablePersistence as _;
+
+    async fn test_postgres_read_ns_table(instance_state: NodeState) {
+        setup_test();
+
+        instance_state
+            .coordinator
+            .membership()
+            .write()
+            .await
+            .set_first_epoch(EpochNumber::genesis(), Default::default());
+
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        let storage = opt.create().await.unwrap();
+
+        let txs = [
+            Tx::new(10001u32.into(), vec![1, 2, 3]),
+            Tx::new(10001u32.into(), vec![4, 5, 6]),
+            Tx::new(10009u32.into(), vec![7, 8, 9]),
+        ];
+
+        let validated_state = Default::default();
+        let justify_qc =
+            QuorumCertificate::genesis::<TestVersions>(&validated_state, &instance_state).await;
+        let view_number: ViewNumber = justify_qc.view_number + 1;
+        let parent_leaf = Leaf::genesis::<TestVersions>(&validated_state, &instance_state)
+            .await
+            .into();
+
+        let (payload, ns_table) =
+            Payload::from_transactions(txs.clone(), &validated_state, &instance_state)
+                .await
+                .unwrap();
+        let payload_bytes = payload.encode();
+        let payload_commitment = vid_commitment::<TestVersions>(
+            &payload_bytes,
+            &ns_table.encode(),
+            GENESIS_VID_NUM_STORAGE_NODES,
+            instance_state.current_version,
+        );
+        let builder_commitment = payload.builder_commitment(&ns_table);
+        let (fee_account, fee_key) = FeeAccount::generated_from_seed_indexed([0; 32], 0);
+        let fee_amount = 0;
+        let fee_signature = FeeAccount::sign_fee(&fee_key, fee_amount, &ns_table).unwrap();
+        let block_header = Header::new(
+            &validated_state,
+            &instance_state,
+            &parent_leaf,
+            payload_commitment,
+            builder_commitment,
+            ns_table,
+            BuilderFee {
+                fee_amount,
+                fee_account,
+                fee_signature,
+            },
+            instance_state.current_version,
+            view_number.u64(),
+        )
+        .await
+        .unwrap();
+        let proposal = QuorumProposal {
+            block_header: block_header.clone(),
+            view_number,
+            justify_qc: justify_qc.clone(),
+            upgrade_certificate: None,
+            proposal_certificate: None,
+        };
+        let leaf: Leaf2 = Leaf::from_quorum_proposal(&proposal).into();
+        let mut qc = justify_qc.to_qc2();
+        qc.data.leaf_commit = leaf.commit();
+        qc.view_number = view_number;
+
+        let mut tx = storage.db.write().await.unwrap();
+        tx.insert_leaf(LeafQueryData::new(leaf, qc).unwrap())
+            .await
+            .unwrap();
+        tx.insert_block(BlockQueryData::<SeqTypes>::new(block_header, payload))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let mut tx = storage.db.read().await.unwrap();
+        let rows = query(
+            "
+            SELECT ns_id, read_ns_id(get_ns_table(h.data), t.ns_index) AS read_ns_id
+              FROM header AS h
+              JOIN transactions AS t ON t.block_height = h.height
+              ORDER BY t.ns_index, t.position
+        ",
+        )
+        .fetch_all(tx.as_mut())
+        .await
+        .unwrap();
+        assert_eq!(rows.len(), txs.len());
+        for (i, row) in rows.into_iter().enumerate() {
+            let ns = u64::from(txs[i].namespace()) as i64;
+            assert_eq!(row.get::<i64, _>("ns_id"), ns);
+            assert_eq!(row.get::<i64, _>("read_ns_id"), ns);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_postgres_read_ns_table_v0_1() {
+        test_postgres_read_ns_table(NodeState::mock()).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_postgres_read_ns_table_v0_2() {
+        test_postgres_read_ns_table(NodeState::mock_v2()).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_postgres_read_ns_table_v0_3() {
+        test_postgres_read_ns_table(NodeState::mock_v3().with_epoch_height(0)).await;
     }
 }
