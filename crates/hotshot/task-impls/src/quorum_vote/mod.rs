@@ -22,6 +22,7 @@ use hotshot_types::{
     message::UpgradeLock,
     simple_vote::HasEpoch,
     stake_table::StakeTableEntries,
+    storage_metrics::StorageMetricsValue,
     traits::{
         block_contents::BlockHeader,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
@@ -74,6 +75,9 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V
 
     /// Reference to the storage.
     pub storage: I::Storage,
+
+    /// Storage metrics
+    pub storage_metrics: Arc<StorageMetricsValue>,
 
     /// View number to vote on.
     pub view_number: TYPES::View,
@@ -141,12 +145,18 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                         tracing::warn!("Proposed leaf parent commitment does not match parent leaf payload commitment. Aborting vote.");
                         return;
                     }
+
+                    let now = Instant::now();
                     // Update our persistent storage of the proposal. If we cannot store the proposal return
                     // and error so we don't vote
                     if let Err(e) = self.storage.append_proposal_wrapper(proposal).await {
                         tracing::error!("failed to store proposal, not voting.  error = {e:#}");
                         return;
                     }
+                    self.storage_metrics
+                        .append_quorum_duration
+                        .add_point(now.elapsed().as_secs_f64());
+
                     leaf = Some(proposed_leaf);
                     parent_view_number = Some(parent_leaf.view_number());
                 },
@@ -371,6 +381,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                 self.upgrade_lock.clone(),
                 self.view_number,
                 self.storage.clone(),
+                self.storage_metrics,
                 leaf,
                 maybe_current_epoch_vid_share.unwrap_or(vid_share),
                 is_vote_leaf_extended,
@@ -423,6 +434,9 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
 
     /// Reference to the storage.
     pub storage: I::Storage,
+
+    /// Storage metrics
+    pub storage_metrics: Arc<StorageMetricsValue>,
 
     /// Lock for a decided upgrade
     pub upgrade_lock: UpgradeLock<TYPES, V>,
@@ -536,6 +550,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 instance_state: Arc::clone(&self.instance_state),
                 membership_coordinator: self.membership.clone(),
                 storage: self.storage.clone(),
+                storage_metrics: Arc::clone(&self.storage_metrics),
                 view_number,
                 sender: event_sender.clone(),
                 receiver: event_receiver.clone().deactivate(),
