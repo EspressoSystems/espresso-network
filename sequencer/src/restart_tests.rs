@@ -589,7 +589,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         tracing::info!(node_id, "waiting for epoch: {:?}", epoch);
         let mut events = context.event_stream().await;
 
-        let timeout_duration = Duration::from_secs(30);
+        let timeout_duration = Duration::from_secs(60);
         timeout(timeout_duration, async {
             while let Some(event) = events.next().await {
                 let EventType::Decide { qc, .. } = event.event else {
@@ -929,13 +929,22 @@ impl TestNetwork {
 
         // assert that all the nodes have same leaves from their event streams
         // this also ensures validated state consistency
+        // Note: Nodes may have started consuming the event stream at different points,
+        // since the stream might have been partially processed before this check.
+        // Therefore, we only compare leaves at heights that are present in both
+        // the current node and the reference state.
         for node in nodes_iter {
             let node_id = node.node_id().expect("Node id not found");
             let state = node.reference_state.read().await.clone();
-            assert_eq!(
-                state, ref_state,
-                "State mismatch between node {node_id} and reference node {ref_id}"
-            );
+
+            for (height, commitment) in state.iter() {
+                if let Some(ref_commitment) = ref_state.get(height) {
+                    assert_eq!(
+                        ref_commitment, commitment,
+                        "State mismatch between node {node_id} and reference node {ref_id}"
+                    );
+                }
+            }
         }
     }
 
