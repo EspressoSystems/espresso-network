@@ -143,6 +143,11 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     fn current_proposal_participation(
         &self,
     ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
+
+    /// Get the previous proposal participation.
+    fn previous_proposal_participation(
+        &self,
+    ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
 }
 
 pub(crate) trait CatchupDataSource: Sync {

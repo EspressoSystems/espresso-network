@@ -348,6 +348,12 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
             .map(|(key, (leader, proposed))| (key.clone(), *leader as f64 / *proposed as f64))
             .collect()
     }
+    fn previous_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
+        self.last_epoch_participation
+            .iter()
+            .map(|(key, (leader, proposed))| (key.clone(), *leader as f64 / *proposed as f64))
+            .collect()
+    }
 }
 
 /// A reference to the consensus algorithm
@@ -739,6 +745,12 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     pub fn current_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
         self.validator_participation
             .current_proposal_participation()
+    }
+
+    /// Get the previous proposal participation
+    pub fn previous_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
+        self.validator_participation
+            .previous_proposal_participation()
     }
 
     /// Get the parent Leaf Info from a given leaf and our public key.

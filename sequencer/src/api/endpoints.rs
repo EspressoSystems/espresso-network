@@ -590,6 +590,14 @@ where
                 .await)
         }
         .boxed()
+    })?
+    .at("previous_proposal_participation", |_, state| {
+        async move {
+            Ok(state
+                .read(|state| state.previous_proposal_participation().boxed())
+                .await)
+        }
+        .boxed()
     })?;
 
     Ok(api)

@@ -232,6 +232,9 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     async fn current_proposal_participation(&self) -> HashMap<BLSPubKey, f64> {
         self.as_ref().current_proposal_participation().await
     }
+    async fn previous_proposal_participation(&self) -> HashMap<BLSPubKey, f64> {
+        self.as_ref().previous_proposal_participation().await
+    }
 }
 
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
@@ -308,6 +311,18 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             .read()
             .await
             .current_proposal_participation()
+    }
+
+    /// Get the previous proposal participation.
+    async fn previous_proposal_participation(&self) -> HashMap<BLSPubKey, f64> {
+        self.consensus()
+            .await
+            .read()
+            .await
+            .consensus()
+            .read()
+            .await
+            .previous_proposal_participation()
     }
 }
 

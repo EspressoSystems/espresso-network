@@ -19,3 +19,11 @@ Get the mapping from leader key to participation rate.
 
 Returns a map from BLS key to the fraction of views with key proposed properly as leader, as a floating point number.
 """
+
+[route.previous_proposal_participation]
+PATH = ["/previous-proposal-participation"]
+DOC = """
+Get the mapping from leader key to participation rate for the previous epoch.
+
+Returns a map from BLS key to the fraction of views with key proposed properly as leader, as a floating point number.
+"""
