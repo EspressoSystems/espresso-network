@@ -19,7 +19,6 @@ use alloy::{
     signers::local::LocalSigner,
 };
 use anyhow::bail;
-use async_lock::RwLockUpgradableReadGuard;
 use cdn_broker::{
     reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
     Broker, Config as BrokerConfig,
@@ -34,7 +33,7 @@ use espresso_contract_deployer::{
 };
 use espresso_types::{
     eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig, FeeAccount,
-    Leaf2, MockSequencerVersions, PrivKey, PubKey, SeqTypes, Transaction,
+    L1Client, Leaf2, MockSequencerVersions, PrivKey, PubKey, SeqTypes, Transaction,
 };
 use futures::{
     future::{join_all, try_join_all, BoxFuture, FutureExt},
@@ -43,7 +42,6 @@ use futures::{
 use hotshot::traits::implementations::derive_libp2p_peer_id;
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_orchestrator::run_orchestrator;
-use hotshot_query_service::Resolvable;
 use hotshot_testing::{
     block_builder::{SimpleBuilderImplementation, TestBuilderImplementation},
     test_builder::BuilderChange,
@@ -82,8 +80,6 @@ use crate::{
     testing::{staking_priv_keys, wait_for_decide_on_handle},
     SequencerApiVersion,
 };
-
-type MockSequencerVersions = SequencerVersions<EpochVersion, V0_0>;
 
 async fn test_restart_helper(network: (usize, usize), restart: (usize, usize), cdn: bool) {
     setup_test();
@@ -258,8 +254,6 @@ impl NodeParams {
         }
     }
 }
-/// (Node Id, Commitment)
-type Commit = (u64, Commitment<Leaf2>);
 
 #[derive(Debug)]
 struct TestNode<S: TestableSequencerDataSource> {
@@ -927,8 +921,6 @@ impl TestNetwork {
         .await
         .unwrap();
 
-        let mut states = Vec::new();
-
         let mut nodes_iter = self.da_nodes.iter().chain(self.regular_nodes.iter());
 
         let first_node = nodes_iter.next().unwrap();
@@ -937,7 +929,7 @@ impl TestNetwork {
 
         // assert that all the nodes have same leaves from their event streams
         // this also ensures validated state consistency
-        while let Some(node) = nodes_iter.next {
+        for node in nodes_iter {
             let node_id = node.node_id().expect("Node id not found");
             let state = node.reference_state.read().await.clone();
             assert_eq!(
