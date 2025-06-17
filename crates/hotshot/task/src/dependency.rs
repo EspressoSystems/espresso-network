@@ -129,16 +129,27 @@ pub struct EventDependency<T: Clone + Send + Sync> {
     /// The potentially externally completed dependency. If the dependency was seeded from an event
     /// message, we can mark it as already done in lieu of other events still pending.
     completed_dependency: Option<T>,
+
+    cancel_receiver: Receiver<()>,
+
+    dependency_name: String,
 }
 
 impl<T: Clone + Send + Sync + 'static> EventDependency<T> {
     /// Create a new `EventDependency`
     #[must_use]
-    pub fn new(receiver: Receiver<T>, match_fn: Box<dyn Fn(&T) -> bool + Send>) -> Self {
+    pub fn new(
+        receiver: Receiver<T>,
+        cancel_receiver: Receiver<()>,
+        dependency_name: String,
+        match_fn: Box<dyn Fn(&T) -> bool + Send>,
+    ) -> Self {
         Self {
             event_rx: receiver,
             match_fn: Box::new(match_fn),
             completed_dependency: None,
+            cancel_receiver,
+            dependency_name,
         }
     }
 
@@ -158,18 +169,26 @@ impl<T: Clone + Send + Sync + 'static> Dependency<T> for EventDependency<T> {
                 return Some(dependency);
             }
 
-            match self.event_rx.recv_direct().await {
-                Ok(event) => {
-                    if (self.match_fn)(&event) {
-                        return Some(event);
+            tokio::select! {
+                recv_event = self.event_rx.recv() => {
+                    match recv_event {
+                        Ok(event) => {
+                            if (self.match_fn)(&event) {
+                                return Some(event);
+                            }
+                        },
+                        Err(RecvError::Overflowed(n)) => {
+                            tracing::error!("Dependency Task overloaded, skipping {} events", n);
+                        },
+                        Err(RecvError::Closed) => {
+                            return None;
+                        },
                     }
-                },
-                Err(RecvError::Overflowed(n)) => {
-                    tracing::error!("Dependency Task overloaded, skipping {} events", n);
-                },
-                Err(RecvError::Closed) => {
-                    return None;
-                },
+                }
+                _ = self.cancel_receiver.recv() => {
+                   tracing::error!("{} dependency cancelled", self.dependency_name);
+                   return None;
+                }
             }
         }
     }
