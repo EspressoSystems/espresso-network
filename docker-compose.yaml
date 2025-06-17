@@ -114,8 +114,6 @@ services:
         condition: service_completed_successfully
       sequencer1:
         condition: service_healthy
-      fund-builder:
-        condition: service_completed_successfully
 
   orchestrator:
     image: ghcr.io/espressosystems/espresso-sequencer/orchestrator:${DOCKER_TAG:-main}
