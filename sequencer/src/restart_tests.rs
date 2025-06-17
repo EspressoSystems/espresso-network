@@ -32,8 +32,8 @@ use espresso_contract_deployer::{
     Contracts,
 };
 use espresso_types::{
-    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig, FeeAccount,
-    L1Client, Leaf2, MockSequencerVersions, PrivKey, PubKey, SeqTypes, Transaction,
+    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig, EpochVersion,
+    FeeAccount, L1Client, Leaf2, PrivKey, PubKey, SeqTypes, SequencerVersions, Transaction, V0_0,
 };
 use futures::{
     future::{join_all, try_join_all, BoxFuture, FutureExt},
@@ -80,7 +80,7 @@ use crate::{
     testing::{staking_priv_keys, wait_for_decide_on_handle},
     SequencerApiVersion,
 };
-
+type MockSequencerVersions = SequencerVersions<EpochVersion, V0_0>;
 async fn test_restart_helper(network: (usize, usize), restart: (usize, usize), cdn: bool) {
     setup_test();
 
