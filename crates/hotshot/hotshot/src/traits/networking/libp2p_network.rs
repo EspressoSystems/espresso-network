@@ -883,16 +883,6 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
             return Err(NetworkError::NotReadyYet);
         };
 
-        // short circuit if we're dming ourselves
-        if recipient == self.inner.pk {
-            // panic if we already shut down?
-            self.inner.sender.try_send(message).map_err(|_x| {
-                self.inner.metrics.num_failed_messages.add(1);
-                NetworkError::ShutDown
-            })?;
-            return Ok(());
-        }
-
         let pid = match self
             .inner
             .handle
@@ -907,6 +897,18 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
                 )));
             },
         };
+
+        info!("{} -> {}", recipient, pid);
+
+        // short circuit if we're dming ourselves
+        if recipient == self.inner.pk {
+            // panic if we already shut down?
+            self.inner.sender.try_send(message).map_err(|_x| {
+                self.inner.metrics.num_failed_messages.add(1);
+                NetworkError::ShutDown
+            })?;
+            return Ok(());
+        }
 
         let connected_pids = self.inner.handle.connected_pids().await.unwrap();
         println!(
