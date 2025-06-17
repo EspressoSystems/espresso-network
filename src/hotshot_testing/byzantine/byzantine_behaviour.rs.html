@@ -346,88 +346,89 @@
 <a href=#346 id=346 data-nosnippet>346</a>            epoch: <span class="prelude-val">None</span>,
 <a href=#347 id=347 data-nosnippet>347</a>            membership_coordinator: handle.membership_coordinator.clone(),
 <a href=#348 id=348 data-nosnippet>348</a>            storage: handle.storage(),
-<a href=#349 id=349 data-nosnippet>349</a>            consensus: OuterConsensus::new(handle.consensus()),
-<a href=#350 id=350 data-nosnippet>350</a>            upgrade_lock: handle.hotshot.upgrade_lock.clone(),
-<a href=#351 id=351 data-nosnippet>351</a>            transmit_tasks: BTreeMap::new(),
-<a href=#352 id=352 data-nosnippet>352</a>            epoch_height: handle.epoch_height,
-<a href=#353 id=353 data-nosnippet>353</a>            id: handle.hotshot.id,
-<a href=#354 id=354 data-nosnippet>354</a>        };
-<a href=#355 id=355 data-nosnippet>355</a>        <span class="kw">let </span>modified_network_state = NetworkEventTaskStateModifier {
-<a href=#356 id=356 data-nosnippet>356</a>            network_event_task_state: network_state,
-<a href=#357 id=357 data-nosnippet>357</a>            modifier: Arc::clone(<span class="kw-2">&amp;</span><span class="self">self</span>.modifier),
-<a href=#358 id=358 data-nosnippet>358</a>        };
-<a href=#359 id=359 data-nosnippet>359</a>        handle.add_task(modified_network_state);
-<a href=#360 id=360 data-nosnippet>360</a>    }
-<a href=#361 id=361 data-nosnippet>361</a>}
-<a href=#362 id=362 data-nosnippet>362</a>
-<a href=#363 id=363 data-nosnippet>363</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; std::fmt::Debug <span class="kw">for </span>DishonestVoting&lt;TYPES&gt; {
-<a href=#364 id=364 data-nosnippet>364</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
-<a href=#365 id=365 data-nosnippet>365</a>        f.debug_struct(<span class="string">"DishonestVoting"</span>)
-<a href=#366 id=366 data-nosnippet>366</a>            .field(<span class="string">"view_increment"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.view_increment)
-<a href=#367 id=367 data-nosnippet>367</a>            .finish_non_exhaustive()
-<a href=#368 id=368 data-nosnippet>368</a>    }
-<a href=#369 id=369 data-nosnippet>369</a>}
-<a href=#370 id=370 data-nosnippet>370</a>
-<a href=#371 id=371 data-nosnippet>371</a><span class="attr">#[derive(Debug)]
-<a href=#372 id=372 data-nosnippet>372</a></span><span class="doccomment">/// An `EventHandlerState` that will send a vote for a bad proposal
-<a href=#373 id=373 data-nosnippet>373</a></span><span class="kw">pub struct </span>DishonestVoter&lt;TYPES: NodeType&gt; {
-<a href=#374 id=374 data-nosnippet>374</a>    <span class="doccomment">/// Collect all votes the node sends
-<a href=#375 id=375 data-nosnippet>375</a>    </span><span class="kw">pub </span>votes_sent: Vec&lt;QuorumVote2&lt;TYPES&gt;&gt;,
-<a href=#376 id=376 data-nosnippet>376</a>    <span class="doccomment">/// Shared state with views numbers that leaders were dishonest at
-<a href=#377 id=377 data-nosnippet>377</a>    </span><span class="kw">pub </span>dishonest_proposal_view_numbers: Arc&lt;RwLock&lt;HashSet&lt;TYPES::View&gt;&gt;&gt;,
-<a href=#378 id=378 data-nosnippet>378</a>}
-<a href=#379 id=379 data-nosnippet>379</a>
-<a href=#380 id=380 data-nosnippet>380</a><span class="attr">#[async_trait]
-<a href=#381 id=381 data-nosnippet>381</a></span><span class="kw">impl</span>&lt;TYPES: NodeType, I: NodeImplementation&lt;TYPES&gt; + std::fmt::Debug, V: Versions&gt;
-<a href=#382 id=382 data-nosnippet>382</a>    EventTransformerState&lt;TYPES, I, V&gt; <span class="kw">for </span>DishonestVoter&lt;TYPES&gt;
-<a href=#383 id=383 data-nosnippet>383</a>{
-<a href=#384 id=384 data-nosnippet>384</a>    <span class="kw">async fn </span>recv_handler(<span class="kw-2">&amp;mut </span><span class="self">self</span>, event: <span class="kw-2">&amp;</span>HotShotEvent&lt;TYPES&gt;) -&gt; Vec&lt;HotShotEvent&lt;TYPES&gt;&gt; {
-<a href=#385 id=385 data-nosnippet>385</a>        <span class="macro">vec!</span>[event.clone()]
-<a href=#386 id=386 data-nosnippet>386</a>    }
-<a href=#387 id=387 data-nosnippet>387</a>
-<a href=#388 id=388 data-nosnippet>388</a>    <span class="kw">async fn </span>send_handler(
-<a href=#389 id=389 data-nosnippet>389</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#390 id=390 data-nosnippet>390</a>        event: <span class="kw-2">&amp;</span>HotShotEvent&lt;TYPES&gt;,
-<a href=#391 id=391 data-nosnippet>391</a>        public_key: <span class="kw-2">&amp;</span>TYPES::SignatureKey,
-<a href=#392 id=392 data-nosnippet>392</a>        private_key: <span class="kw-2">&amp;</span>&lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::PrivateKey,
-<a href=#393 id=393 data-nosnippet>393</a>        upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;TYPES, V&gt;,
-<a href=#394 id=394 data-nosnippet>394</a>        _consensus: Arc&lt;RwLock&lt;Consensus&lt;TYPES&gt;&gt;&gt;,
-<a href=#395 id=395 data-nosnippet>395</a>    ) -&gt; Vec&lt;HotShotEvent&lt;TYPES&gt;&gt; {
-<a href=#396 id=396 data-nosnippet>396</a>        <span class="kw">match </span>event {
-<a href=#397 id=397 data-nosnippet>397</a>            HotShotEvent::QuorumProposalRecv(proposal, _sender) =&gt; {
-<a href=#398 id=398 data-nosnippet>398</a>                <span class="comment">// Check if view is a dishonest proposal, if true send a vote
-<a href=#399 id=399 data-nosnippet>399</a>                </span><span class="kw">let </span>dishonest_proposals = <span class="self">self</span>.dishonest_proposal_view_numbers.read().<span class="kw">await</span>;
-<a href=#400 id=400 data-nosnippet>400</a>                <span class="kw">if </span>dishonest_proposals.contains(<span class="kw-2">&amp;</span>proposal.data.view_number()) {
-<a href=#401 id=401 data-nosnippet>401</a>                    <span class="comment">// Create a vote using data from most recent vote and the current event number
-<a href=#402 id=402 data-nosnippet>402</a>                    // We wont update internal consensus state for this Byzantine replica but we are at least
-<a href=#403 id=403 data-nosnippet>403</a>                    // Going to send a vote to the next honest leader
-<a href=#404 id=404 data-nosnippet>404</a>                    </span><span class="kw">let </span>vote = QuorumVote2::&lt;TYPES&gt;::create_signed_vote(
-<a href=#405 id=405 data-nosnippet>405</a>                        <span class="self">self</span>.votes_sent.last().unwrap().data.clone(),
-<a href=#406 id=406 data-nosnippet>406</a>                        event.view_number().unwrap(),
-<a href=#407 id=407 data-nosnippet>407</a>                        public_key,
-<a href=#408 id=408 data-nosnippet>408</a>                        private_key,
-<a href=#409 id=409 data-nosnippet>409</a>                        upgrade_lock,
-<a href=#410 id=410 data-nosnippet>410</a>                    )
-<a href=#411 id=411 data-nosnippet>411</a>                    .<span class="kw">await
-<a href=#412 id=412 data-nosnippet>412</a>                    </span>.context(<span class="string">"Failed to sign vote"</span>)
-<a href=#413 id=413 data-nosnippet>413</a>                    .unwrap();
-<a href=#414 id=414 data-nosnippet>414</a>                    <span class="kw">return </span><span class="macro">vec!</span>[HotShotEvent::QuorumVoteSend(vote)];
-<a href=#415 id=415 data-nosnippet>415</a>                }
-<a href=#416 id=416 data-nosnippet>416</a>            },
-<a href=#417 id=417 data-nosnippet>417</a>            HotShotEvent::TimeoutVoteSend(vote) =&gt; {
-<a href=#418 id=418 data-nosnippet>418</a>                <span class="comment">// Check if this view was a dishonest proposal view, if true dont send timeout
-<a href=#419 id=419 data-nosnippet>419</a>                </span><span class="kw">let </span>dishonest_proposals = <span class="self">self</span>.dishonest_proposal_view_numbers.read().<span class="kw">await</span>;
-<a href=#420 id=420 data-nosnippet>420</a>                <span class="kw">if </span>dishonest_proposals.contains(<span class="kw-2">&amp;</span>vote.view_number) {
-<a href=#421 id=421 data-nosnippet>421</a>                    <span class="comment">// We craft the vote upon `QuorumProposalRecv` and send out a vote.
-<a href=#422 id=422 data-nosnippet>422</a>                    // So, dont send the timeout to the next leader from this byzantine replica
-<a href=#423 id=423 data-nosnippet>423</a>                    </span><span class="kw">return </span><span class="macro">vec!</span>[];
-<a href=#424 id=424 data-nosnippet>424</a>                }
-<a href=#425 id=425 data-nosnippet>425</a>            },
-<a href=#426 id=426 data-nosnippet>426</a>            HotShotEvent::QuorumVoteSend(vote) =&gt; {
-<a href=#427 id=427 data-nosnippet>427</a>                <span class="self">self</span>.votes_sent.push(vote.clone());
-<a href=#428 id=428 data-nosnippet>428</a>            },
-<a href=#429 id=429 data-nosnippet>429</a>            <span class="kw">_ </span>=&gt; {},
-<a href=#430 id=430 data-nosnippet>430</a>        }
-<a href=#431 id=431 data-nosnippet>431</a>        <span class="macro">vec!</span>[event.clone()]
-<a href=#432 id=432 data-nosnippet>432</a>    }
-<a href=#433 id=433 data-nosnippet>433</a>}</code></pre></div></section></main></body></html>
+<a href=#349 id=349 data-nosnippet>349</a>            storage_metrics: handle.storage_metrics(),
+<a href=#350 id=350 data-nosnippet>350</a>            consensus: OuterConsensus::new(handle.consensus()),
+<a href=#351 id=351 data-nosnippet>351</a>            upgrade_lock: handle.hotshot.upgrade_lock.clone(),
+<a href=#352 id=352 data-nosnippet>352</a>            transmit_tasks: BTreeMap::new(),
+<a href=#353 id=353 data-nosnippet>353</a>            epoch_height: handle.epoch_height,
+<a href=#354 id=354 data-nosnippet>354</a>            id: handle.hotshot.id,
+<a href=#355 id=355 data-nosnippet>355</a>        };
+<a href=#356 id=356 data-nosnippet>356</a>        <span class="kw">let </span>modified_network_state = NetworkEventTaskStateModifier {
+<a href=#357 id=357 data-nosnippet>357</a>            network_event_task_state: network_state,
+<a href=#358 id=358 data-nosnippet>358</a>            modifier: Arc::clone(<span class="kw-2">&amp;</span><span class="self">self</span>.modifier),
+<a href=#359 id=359 data-nosnippet>359</a>        };
+<a href=#360 id=360 data-nosnippet>360</a>        handle.add_task(modified_network_state);
+<a href=#361 id=361 data-nosnippet>361</a>    }
+<a href=#362 id=362 data-nosnippet>362</a>}
+<a href=#363 id=363 data-nosnippet>363</a>
+<a href=#364 id=364 data-nosnippet>364</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; std::fmt::Debug <span class="kw">for </span>DishonestVoting&lt;TYPES&gt; {
+<a href=#365 id=365 data-nosnippet>365</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
+<a href=#366 id=366 data-nosnippet>366</a>        f.debug_struct(<span class="string">"DishonestVoting"</span>)
+<a href=#367 id=367 data-nosnippet>367</a>            .field(<span class="string">"view_increment"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.view_increment)
+<a href=#368 id=368 data-nosnippet>368</a>            .finish_non_exhaustive()
+<a href=#369 id=369 data-nosnippet>369</a>    }
+<a href=#370 id=370 data-nosnippet>370</a>}
+<a href=#371 id=371 data-nosnippet>371</a>
+<a href=#372 id=372 data-nosnippet>372</a><span class="attr">#[derive(Debug)]
+<a href=#373 id=373 data-nosnippet>373</a></span><span class="doccomment">/// An `EventHandlerState` that will send a vote for a bad proposal
+<a href=#374 id=374 data-nosnippet>374</a></span><span class="kw">pub struct </span>DishonestVoter&lt;TYPES: NodeType&gt; {
+<a href=#375 id=375 data-nosnippet>375</a>    <span class="doccomment">/// Collect all votes the node sends
+<a href=#376 id=376 data-nosnippet>376</a>    </span><span class="kw">pub </span>votes_sent: Vec&lt;QuorumVote2&lt;TYPES&gt;&gt;,
+<a href=#377 id=377 data-nosnippet>377</a>    <span class="doccomment">/// Shared state with views numbers that leaders were dishonest at
+<a href=#378 id=378 data-nosnippet>378</a>    </span><span class="kw">pub </span>dishonest_proposal_view_numbers: Arc&lt;RwLock&lt;HashSet&lt;TYPES::View&gt;&gt;&gt;,
+<a href=#379 id=379 data-nosnippet>379</a>}
+<a href=#380 id=380 data-nosnippet>380</a>
+<a href=#381 id=381 data-nosnippet>381</a><span class="attr">#[async_trait]
+<a href=#382 id=382 data-nosnippet>382</a></span><span class="kw">impl</span>&lt;TYPES: NodeType, I: NodeImplementation&lt;TYPES&gt; + std::fmt::Debug, V: Versions&gt;
+<a href=#383 id=383 data-nosnippet>383</a>    EventTransformerState&lt;TYPES, I, V&gt; <span class="kw">for </span>DishonestVoter&lt;TYPES&gt;
+<a href=#384 id=384 data-nosnippet>384</a>{
+<a href=#385 id=385 data-nosnippet>385</a>    <span class="kw">async fn </span>recv_handler(<span class="kw-2">&amp;mut </span><span class="self">self</span>, event: <span class="kw-2">&amp;</span>HotShotEvent&lt;TYPES&gt;) -&gt; Vec&lt;HotShotEvent&lt;TYPES&gt;&gt; {
+<a href=#386 id=386 data-nosnippet>386</a>        <span class="macro">vec!</span>[event.clone()]
+<a href=#387 id=387 data-nosnippet>387</a>    }
+<a href=#388 id=388 data-nosnippet>388</a>
+<a href=#389 id=389 data-nosnippet>389</a>    <span class="kw">async fn </span>send_handler(
+<a href=#390 id=390 data-nosnippet>390</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#391 id=391 data-nosnippet>391</a>        event: <span class="kw-2">&amp;</span>HotShotEvent&lt;TYPES&gt;,
+<a href=#392 id=392 data-nosnippet>392</a>        public_key: <span class="kw-2">&amp;</span>TYPES::SignatureKey,
+<a href=#393 id=393 data-nosnippet>393</a>        private_key: <span class="kw-2">&amp;</span>&lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::PrivateKey,
+<a href=#394 id=394 data-nosnippet>394</a>        upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;TYPES, V&gt;,
+<a href=#395 id=395 data-nosnippet>395</a>        _consensus: Arc&lt;RwLock&lt;Consensus&lt;TYPES&gt;&gt;&gt;,
+<a href=#396 id=396 data-nosnippet>396</a>    ) -&gt; Vec&lt;HotShotEvent&lt;TYPES&gt;&gt; {
+<a href=#397 id=397 data-nosnippet>397</a>        <span class="kw">match </span>event {
+<a href=#398 id=398 data-nosnippet>398</a>            HotShotEvent::QuorumProposalRecv(proposal, _sender) =&gt; {
+<a href=#399 id=399 data-nosnippet>399</a>                <span class="comment">// Check if view is a dishonest proposal, if true send a vote
+<a href=#400 id=400 data-nosnippet>400</a>                </span><span class="kw">let </span>dishonest_proposals = <span class="self">self</span>.dishonest_proposal_view_numbers.read().<span class="kw">await</span>;
+<a href=#401 id=401 data-nosnippet>401</a>                <span class="kw">if </span>dishonest_proposals.contains(<span class="kw-2">&amp;</span>proposal.data.view_number()) {
+<a href=#402 id=402 data-nosnippet>402</a>                    <span class="comment">// Create a vote using data from most recent vote and the current event number
+<a href=#403 id=403 data-nosnippet>403</a>                    // We wont update internal consensus state for this Byzantine replica but we are at least
+<a href=#404 id=404 data-nosnippet>404</a>                    // Going to send a vote to the next honest leader
+<a href=#405 id=405 data-nosnippet>405</a>                    </span><span class="kw">let </span>vote = QuorumVote2::&lt;TYPES&gt;::create_signed_vote(
+<a href=#406 id=406 data-nosnippet>406</a>                        <span class="self">self</span>.votes_sent.last().unwrap().data.clone(),
+<a href=#407 id=407 data-nosnippet>407</a>                        event.view_number().unwrap(),
+<a href=#408 id=408 data-nosnippet>408</a>                        public_key,
+<a href=#409 id=409 data-nosnippet>409</a>                        private_key,
+<a href=#410 id=410 data-nosnippet>410</a>                        upgrade_lock,
+<a href=#411 id=411 data-nosnippet>411</a>                    )
+<a href=#412 id=412 data-nosnippet>412</a>                    .<span class="kw">await
+<a href=#413 id=413 data-nosnippet>413</a>                    </span>.context(<span class="string">"Failed to sign vote"</span>)
+<a href=#414 id=414 data-nosnippet>414</a>                    .unwrap();
+<a href=#415 id=415 data-nosnippet>415</a>                    <span class="kw">return </span><span class="macro">vec!</span>[HotShotEvent::QuorumVoteSend(vote)];
+<a href=#416 id=416 data-nosnippet>416</a>                }
+<a href=#417 id=417 data-nosnippet>417</a>            },
+<a href=#418 id=418 data-nosnippet>418</a>            HotShotEvent::TimeoutVoteSend(vote) =&gt; {
+<a href=#419 id=419 data-nosnippet>419</a>                <span class="comment">// Check if this view was a dishonest proposal view, if true dont send timeout
+<a href=#420 id=420 data-nosnippet>420</a>                </span><span class="kw">let </span>dishonest_proposals = <span class="self">self</span>.dishonest_proposal_view_numbers.read().<span class="kw">await</span>;
+<a href=#421 id=421 data-nosnippet>421</a>                <span class="kw">if </span>dishonest_proposals.contains(<span class="kw-2">&amp;</span>vote.view_number) {
+<a href=#422 id=422 data-nosnippet>422</a>                    <span class="comment">// We craft the vote upon `QuorumProposalRecv` and send out a vote.
+<a href=#423 id=423 data-nosnippet>423</a>                    // So, dont send the timeout to the next leader from this byzantine replica
+<a href=#424 id=424 data-nosnippet>424</a>                    </span><span class="kw">return </span><span class="macro">vec!</span>[];
+<a href=#425 id=425 data-nosnippet>425</a>                }
+<a href=#426 id=426 data-nosnippet>426</a>            },
+<a href=#427 id=427 data-nosnippet>427</a>            HotShotEvent::QuorumVoteSend(vote) =&gt; {
+<a href=#428 id=428 data-nosnippet>428</a>                <span class="self">self</span>.votes_sent.push(vote.clone());
+<a href=#429 id=429 data-nosnippet>429</a>            },
+<a href=#430 id=430 data-nosnippet>430</a>            <span class="kw">_ </span>=&gt; {},
+<a href=#431 id=431 data-nosnippet>431</a>        }
+<a href=#432 id=432 data-nosnippet>432</a>        <span class="macro">vec!</span>[event.clone()]
+<a href=#433 id=433 data-nosnippet>433</a>    }
+<a href=#434 id=434 data-nosnippet>434</a>}</code></pre></div></section></main></body></html>

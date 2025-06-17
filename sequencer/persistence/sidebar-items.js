@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["fs","no_storage","sql"],"trait":["ChainConfigPersistence"]};
+window.SIDEBAR_ITEMS = {"mod":["fs","no_storage","persistence_metrics","sql"],"trait":["ChainConfigPersistence"]};
