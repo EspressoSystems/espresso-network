@@ -30,7 +30,7 @@ CREATE TABLE header_p15 PARTITION OF header FOR VALUES FROM (7500000) TO (800000
 CREATE INDEX header2_timestamp_idx ON header (timestamp);
 CREATE INDEX header2_payload_hash_idx ON header (payload_hash);
 
--- migrate data to paritioned table
+-- -- migrate data to paritioned table
 -- INSERT INTO header
 -- SELECT * FROM header_unpartitioned;
 
@@ -62,7 +62,7 @@ CREATE TABLE payload_p14 PARTITION OF payload FOR VALUES FROM (7000000) TO (7500
 CREATE TABLE payload_p15 PARTITION OF payload FOR VALUES FROM (7500000) TO (8000000);
 
 -- migrate data
--- INSERT INTO payload SELECT * FROM payload_unpartitioned;
+INSERT INTO payload SELECT * FROM payload_unpartitioned;
 
 ALTER TABLE leaf2 RENAME TO leaf2_unpartitioned;
 
@@ -93,11 +93,8 @@ CREATE TABLE leaf2_p14 PARTITION OF leaf2 FOR VALUES FROM (7000000) TO (7500000)
 CREATE TABLE leaf2_p15 PARTITION OF leaf2 FOR VALUES FROM (7500000) TO (8000000);
 
 -- migrate data
--- INSERT INTO leaf2 SELECT * FROM leaf2_unpartitioned;
-
-
+INSERT INTO leaf2 SELECT * FROM leaf2_unpartitioned;
 ALTER TABLE vid2 RENAME TO vid2_unpartitioned;
-
 
 CREATE TABLE vid2 (
     height BIGINT PRIMARY KEY REFERENCES header(height) ON DELETE CASCADE,
@@ -124,4 +121,4 @@ CREATE TABLE vid2_p14 PARTITION OF vid2 FOR VALUES FROM (7000000) TO (7500000);
 CREATE TABLE vid2_p15 PARTITION OF vid2 FOR VALUES FROM (7500000) TO (8000000);
 
 -- -- migrate data
--- INSERT INTO vid2 SELECT * FROM vid2_unpartitioned;
+INSERT INTO vid2 SELECT * FROM vid2_unpartitioned;
