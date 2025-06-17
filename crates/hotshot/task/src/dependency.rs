@@ -454,7 +454,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn cancel_or_dep() {
-        let (tx, rx) = broadcast(10);
+        let (_, rx) = broadcast(10);
         let (cancel_tx, cancel_rx) = broadcast(1);
 
         let mut deps = vec![];

@@ -429,7 +429,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
         self.proposal_dependencies
             .insert(view_number, cancel_sender);
 
-        let _ = dependency_task.run();
+        dependency_task.run();
 
         Ok(())
     }
