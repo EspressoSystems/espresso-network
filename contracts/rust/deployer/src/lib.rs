@@ -27,6 +27,7 @@ use hotshot_contract_adapter::sol_types::*;
 
 pub mod builder;
 pub mod network_config;
+pub mod proposals;
 
 /// Type alias that connects to providers with recommended fillers and wallet
 /// use `<HttpProviderWithWallet as WalletProvider>::wallet()` to access internal wallet

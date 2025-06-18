@@ -1,3 +1,5 @@
+use std::process::Output;
+
 use super::*;
 
 #[derive(Clone)]
@@ -51,29 +53,29 @@ pub async fn call_transfer_ownership_script(
 pub async fn transfer_ownership_from_multisig_to_timelock(
     provider: impl Provider,
     contracts: &mut Contracts,
-    contract_type: Contract,
+    contract: Contract,
     params: TransferOwnershipParams,
 ) -> Result<Output> {
     tracing::info!(
         "Proposing ownership transfer for {} from multisig {} to timelock {}",
-        target_contract,
-        multisig,
-        timelock_controller
+        contract,
+        params.safe_addr,
+        params.new_owner
     );
 
-    let (proxy_addr, proxy_instance) = match contract_type {
+    let (proxy_addr, proxy_instance) = match contract {
         Contract::LightClientProxy
         | Contract::FeeContractProxy
         | Contract::EspTokenProxy
         | Contract::StakeTableProxy => {
-            let addr = contracts.address(contract_type).ok_or_else(|| {
-                anyhow!("{contract_type} (multisig owner) not found, can't upgrade")
-            })?;
+            let addr = contracts
+                .address(contract)
+                .ok_or_else(|| anyhow!("{contract} (multisig owner) not found, can't upgrade"))?;
             (addr, OwnableUpgradeable::new(addr, &provider))
         },
         _ => anyhow::bail!("Not a proxy contract, can't transfer ownership"),
     };
-    tracing::info!("{} found at {proxy_addr:#x}", contract_type);
+    tracing::info!("{} found at {proxy_addr:#x}", contract);
 
     let owner_addr = proxy_instance.owner().call().await?._0;
 
@@ -91,7 +93,7 @@ pub async fn transfer_ownership_from_multisig_to_timelock(
         );
     }
 
-    tracing::info!("Transfer Ownership proposal sent to {}", contract_type);
+    tracing::info!("Transfer Ownership proposal sent to {}", contract);
     tracing::info!("Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}", params.safe_addr);
 
     // IDEA: add a function to wait for the proposal to be executed
