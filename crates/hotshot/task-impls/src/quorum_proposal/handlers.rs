@@ -620,7 +620,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             _pd: PhantomData,
         };
         tracing::info!(
-            "Sending proposal for view {:?}, height {:?}, justify_qc view: {:?}",
+            "Sending proposal for view {}, height {}, justify_qc view: {}",
             proposed_leaf.view_number(),
             proposed_leaf.height(),
             proposed_leaf.justify_qc().view_number()

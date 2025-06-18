@@ -218,8 +218,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                 ensure!(
                     self.cur_view != TYPES::View::genesis() && *view >= self.cur_view.saturating_sub(1),
                     warn!(
-                      "Discarding old upgrade proposal; the proposal is for view {:?}, but the current view is {:?}.",
-                      view,
+                      "Discarding old upgrade proposal; the proposal is for view {view}, but the current view is {}.",
                       self.cur_view
                     )
                 );

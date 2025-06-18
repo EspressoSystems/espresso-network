@@ -170,16 +170,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     return Ok(());
                 };
                 let cert_epoch = epoch_from_block_number(cert_block_number, self.epoch_height);
-                tracing::error!(
-                    "Formed Extended QC for view {cert_view:?} and epoch {cert_epoch:?}."
-                );
+                tracing::error!("Formed Extended QC for view {cert_view} and epoch {cert_epoch}.");
                 // Transition to the new epoch by sending ViewChange
                 let next_epoch = TYPES::Epoch::new(cert_epoch + 1);
                 broadcast_view_change(&sender, cert_view + 1, Some(next_epoch), self.first_epoch)
                     .await;
-                tracing::info!("Entering new epoch: {next_epoch:?}");
+                tracing::info!("Entering new epoch: {next_epoch}");
                 tracing::info!(
-                    "Stake table for epoch {:?}:\n\n{:?}",
+                    "Stake table for epoch {}:\n\n{:?}",
                     next_epoch,
                     self.membership_coordinator
                         .stake_table_for_epoch(Some(next_epoch))
@@ -188,7 +186,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                         .await
                 );
                 tracing::info!(
-                    "Stake table for epoch {:?}:\n\n{:?}",
+                    "Stake table for epoch {}:\n\n{:?}",
                     next_epoch + 1,
                     self.membership_coordinator
                         .stake_table_for_epoch(Some(next_epoch + 1))
@@ -237,7 +235,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     .map_err(|_| warn!("Failed to update next epoch high QC"))?;
 
                 tracing::debug!(
-                    "Received Extended QC for view {:?} and epoch {:?}.",
+                    "Received Extended QC for view {} and epoch {:?}.",
                     high_qc.view_number(),
                     high_qc.epoch()
                 );

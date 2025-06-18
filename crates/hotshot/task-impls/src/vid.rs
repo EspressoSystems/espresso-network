@@ -184,7 +184,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 }
 
                 if *view - *self.cur_view > 1 {
-                    info!("View changed by more than 1 going to view {view:?}");
+                    info!("View changed by more than 1 going to view {view}");
                 }
                 self.cur_view = view;
 

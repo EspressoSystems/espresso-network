@@ -1233,7 +1233,7 @@ async fn load_start_epoch_info<TYPES: NodeType>(
     let first_epoch_number =
         TYPES::Epoch::new(epoch_from_block_number(epoch_start_block, epoch_height));
 
-    tracing::warn!("Calling set_first_epoch for epoch {first_epoch_number:?}");
+    tracing::warn!("Calling set_first_epoch for epoch {first_epoch_number}");
     membership
         .write()
         .await
@@ -1241,7 +1241,7 @@ async fn load_start_epoch_info<TYPES: NodeType>(
 
     for epoch_info in start_epoch_info {
         if let Some(block_header) = &epoch_info.block_header {
-            tracing::info!("Calling add_epoch_root for epoch {:?}", epoch_info.epoch);
+            tracing::info!("Calling add_epoch_root for epoch {}", epoch_info.epoch);
 
             Membership::add_epoch_root(
                 Arc::clone(membership),
@@ -1252,16 +1252,15 @@ async fn load_start_epoch_info<TYPES: NodeType>(
             .unwrap_or_else(|err| {
                 // REVIEW NOTE: Should we panic here? a failure here seems like it should be fatal
                 tracing::error!(
-                    "Failed to add epoch root for epoch {:?}: {}",
-                    epoch_info.epoch,
-                    err
+                    "Failed to add epoch root for epoch {}: {err}",
+                    epoch_info.epoch
                 );
             });
         }
     }
 
     for epoch_info in start_epoch_info {
-        tracing::info!("Calling add_drb_result for epoch {:?}", epoch_info.epoch);
+        tracing::info!("Calling add_drb_result for epoch {}", epoch_info.epoch);
         membership
             .write()
             .await

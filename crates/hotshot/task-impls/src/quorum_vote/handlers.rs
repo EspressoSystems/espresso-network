@@ -410,7 +410,7 @@ pub(crate) async fn update_shared_state<
     };
 
     let parent = maybe_parent.context(info!(
-        "Proposal's parent missing from storage with commitment: {:?}, proposal view {:?}",
+        "Proposal's parent missing from storage with commitment: {:?}, proposal view {}",
         justify_qc.data.leaf_commit,
         proposed_leaf.view_number(),
     ))?;
@@ -501,7 +501,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
 
     ensure!(
         committee_member_in_current_epoch || committee_member_in_next_epoch,
-        info!("We were not chosen for quorum committee on {view_number:?}")
+        info!("We were not chosen for quorum committee on {view_number}")
     );
 
     let height = if membership.epoch().is_some() {

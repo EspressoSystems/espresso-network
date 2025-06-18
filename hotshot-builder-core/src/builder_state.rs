@@ -392,17 +392,17 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
         tracing::debug!(
             "{}@{} thinks these are the best builder states to extend from: {:?} for proposal {}@{}",
             self.parent_block_references.vid_commitment,
-            self.parent_block_references.view_number.u64(),
+            self.parent_block_references.view_number,
             best_builder_states_to_extend
                 .iter()
                 .map(|builder_state_id| format!(
                     "{}@{}",
                     builder_state_id.parent_commitment,
-                    builder_state_id.parent_view.u64()
+                    builder_state_id.parent_view
                 ))
                 .collect::<Vec<String>>(),
             quorum_proposal.data.block_header().payload_commitment(),
-            quorum_proposal.data.view_number().u64(),
+            quorum_proposal.data.view_number(),
         );
 
         // We are a best fit if we are contained within the returned set of
@@ -418,7 +418,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
                                     fields(builder_parent_block_references = %self.parent_block_references))]
     async fn process_da_proposal(&mut self, da_msg: DaProposalMessage<Types>) {
         tracing::debug!(
-            "Builder Received DA message for view {:?}",
+            "Builder Received DA message for view {}",
             da_msg.proposal.data.view_number
         );
 
@@ -479,9 +479,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
             return;
         }
 
-        tracing::info!(
-            "Spawning a clone from process DA proposal for view number: {view_number:?}"
-        );
+        tracing::info!("Spawning a clone from process DA proposal for view number: {view_number}");
         // remove this entry from quorum_proposal_payload_commit_to_quorum_proposal
         self.quorum_proposal_payload_commit_to_quorum_proposal
             .remove(&(payload_builder_commitment.clone(), view_number));
@@ -495,7 +493,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
                                     fields(builder_parent_block_references = %self.parent_block_references))]
     async fn process_quorum_proposal(&mut self, quorum_msg: QuorumProposalMessage<Types>) {
         tracing::debug!(
-            "Builder Received Quorum proposal message for view {:?}",
+            "Builder Received Quorum proposal message for view {}",
             quorum_msg.proposal.data.view_number()
         );
 
@@ -543,7 +541,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
         }
 
         tracing::info!(
-            "Spawning a clone from process quorum proposal for view number: {view_number:?}"
+            "Spawning a clone from process quorum proposal for view number: {view_number}"
         );
 
         self.spawn_clone_that_extends_self(da_proposal_info, quorum_proposal.clone())
@@ -570,7 +568,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
                 "{} is not the best fit for forking, {}@{}, so ignoring the quorum proposal, and leaving it to another BuilderState",
                 self.parent_block_references,
                 quorum_proposal.data.block_header().payload_commitment(),
-                quorum_proposal.data.view_number().u64(),
+                quorum_proposal.data.view_number(),
             );
             return;
         }
@@ -581,7 +579,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
             "extending BuilderState with a clone from {} with new proposal {}@{}",
             self.parent_block_references,
             quorum_proposal.data.block_header().payload_commitment(),
-            quorum_proposal.data.view_number().u64()
+            quorum_proposal.data.view_number()
         );
         // We literally fork ourselves
         self.clone_with_receiver(req_receiver)
@@ -605,18 +603,14 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
             .remove_handles(decide_view_number);
         if self.parent_block_references.view_number < retained_view_cutoff {
             tracing::info!(
-                "Decide@{:?}; Task@{:?} exiting; views < {:?} being reclaimed",
-                decide_view_number.u64(),
-                self.parent_block_references.view_number.u64(),
-                retained_view_cutoff.u64(),
+                "Decide@{decide_view_number}; Task@{} exiting; views < {retained_view_cutoff} being reclaimed",
+                self.parent_block_references.view_number,
             );
             return Some(Status::ShouldExit);
         }
         tracing::info!(
-            "Decide@{:?}; Task@{:?} not exiting; views >= {:?} being retained",
-            decide_view_number.u64(),
-            self.parent_block_references.view_number.u64(),
-            retained_view_cutoff.u64(),
+            "Decide@{decide_view_number}; Task@{} not exiting; views >= {retained_view_cutoff} being retained",
+            self.parent_block_references.view_number,
         );
 
         Some(Status::ShouldContinue)
@@ -804,7 +798,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
         let (trigger_send, _) = oneshot::channel();
 
         tracing::info!(
-            "Builder view num {:?}, building block with {:?} txns, with builder hash {:?}",
+            "Builder view {}, building block with {:?} txns, with builder hash {:?}",
             self.parent_block_references.view_number,
             actual_txn_count,
             builder_hash
@@ -852,7 +846,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
         }
 
         tracing::info!(
-            "Request for parent {} handled by builder with view {:?}",
+            "Request for parent {} handled by builder with view {}",
             req.state_id,
             self.parent_block_references.view_number,
         );
@@ -962,15 +956,15 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
                             Some(decide) => {
                                 if let MessageType::DecideMessage(rdecide_msg) = decide {
                                     let latest_decide_view_num = rdecide_msg.latest_decide_view_number;
-                                    tracing::debug!("Received decide msg view {:?} in builder {:?}",
-                                        &latest_decide_view_num,
+                                    tracing::debug!("Received decide msg view {} in builder {:?}",
+                                        latest_decide_view_num,
                                         self.parent_block_references);
                                     let decide_status = self.process_decide_event(rdecide_msg).await;
                                     match decide_status{
                                         Some(Status::ShouldExit) => {
-                                            tracing::info!("Exiting builder {:?} with decide view {:?}",
+                                            tracing::info!("Exiting builder {:?} with decide view {}",
                                                 self.parent_block_references,
-                                                &latest_decide_view_num);
+                                                latest_decide_view_num);
                                             return;
                                         }
                                         Some(Status::ShouldContinue) => {

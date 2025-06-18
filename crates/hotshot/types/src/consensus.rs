@@ -594,7 +594,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     ) {
         if next_epoch_qc.data.leaf_commit != qc.data().leaf_commit {
             tracing::error!(
-                "Next epoch QC for view {:?} has different leaf commit {:?} to {:?}",
+                "Next epoch QC for view {} has different leaf commit {:?} to {:?}",
                 qc.view_number(),
                 next_epoch_qc.data.leaf_commit,
                 qc.data().leaf_commit
@@ -1054,12 +1054,12 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let mut next_leaf = if let Some(view) = self.validated_state_map.get(&start_from) {
             view.leaf_commitment().ok_or_else(|| {
                 HotShotError::InvalidState(format!(
-                    "Visited failed view {start_from:?} leaf. Expected successful leaf"
+                    "Visited failed view {start_from} leaf. Expected successful leaf"
                 ))
             })?
         } else {
             return Err(HotShotError::InvalidState(format!(
-                "View {start_from:?} leaf does not exist in state map "
+                "View {start_from} leaf does not exist in state map "
             )));
         };
 
@@ -1088,7 +1088,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
                 }
             } else {
                 return Err(HotShotError::InvalidState(format!(
-                    "View {view:?} state does not exist in state map"
+                    "View {view} state does not exist in state map"
                 )));
             }
         }

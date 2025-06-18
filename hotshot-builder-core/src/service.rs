@@ -647,7 +647,7 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
                     != global_state.last_garbage_collected_view_num
             {
                 tracing::warn!(
-                    "Requesting for view {:?}, last decide-triggered cleanup on view {:?}, highest view num is {:?}",
+                    "Requesting for view {}, last decide-triggered cleanup on view {}, highest view num is {}",
                     view_num,
                     global_state.last_garbage_collected_view_num,
                     global_state.highest_view_num_builder_id.parent_view
@@ -997,7 +997,7 @@ impl<Types: NodeType> AcceptsTxnSubmits<Types> for ProxyGlobalState<Types> {
         txns: Vec<<Types as NodeType>::Transaction>,
     ) -> Result<Vec<Commitment<<Types as NodeType>::Transaction>>, BuildError> {
         tracing::debug!(
-            "Submitting {:?} transactions to the builder states{:?}",
+            "Submitting {} transactions to the builder states{:?}",
             txns.len(),
             txns.iter().map(|txn| txn.commit()).collect::<Vec<_>>()
         );
@@ -1210,8 +1210,7 @@ async fn handle_da_event_implementation<Types: NodeType>(
     sender: <Types as NodeType>::SignatureKey,
 ) -> Result<(), HandleDaEventError<Types>> {
     tracing::debug!(
-        "DaProposal: Leader: {:?} for the view: {:?}",
-        sender,
+        "DaProposal: Leader: {sender} for the view: {}",
         da_proposal.data.view_number
     );
 
@@ -1221,9 +1220,8 @@ async fn handle_da_event_implementation<Types: NodeType>(
 
     if !sender.validate(&da_proposal.signature, &encoded_txns_hash) {
         tracing::error!(
-            "Validation Failure on DaProposal for view {:?}: Leader: {:?}",
-            da_proposal.data.view_number,
-            sender
+            "Validation Failure on DaProposal for view {}: Leader: {sender}",
+            da_proposal.data.view_number
         );
         return Err(HandleDaEventError::SignatureValidationFailed);
     }
@@ -1234,14 +1232,14 @@ async fn handle_da_event_implementation<Types: NodeType>(
     };
 
     let view_number = da_msg.proposal.data.view_number;
-    tracing::debug!("Sending DA proposal to the builder states for view {view_number:?}");
+    tracing::debug!("Sending DA proposal to the builder states for view {view_number}");
 
     if let Err(e) = da_channel_sender
         .broadcast(MessageType::DaProposalMessage(da_msg))
         .await
     {
         tracing::warn!(
-            "Error {e}, failed to send DA proposal to builder states for view {view_number:?}"
+            "Error {e}, failed to send DA proposal to builder states for view {view_number}"
         );
 
         return Err(HandleDaEventError::BroadcastFailed(e));
@@ -1292,8 +1290,7 @@ async fn handle_quorum_event_implementation<Types: NodeType>(
     sender: <Types as NodeType>::SignatureKey,
 ) -> Result<(), HandleQuorumEventError<Types>> {
     tracing::debug!(
-        "QuorumProposal: Leader: {:?} for the view: {:?}",
-        sender,
+        "QuorumProposal: Leader: {sender} for the view: {}",
         quorum_proposal.data.view_number()
     );
 
@@ -1301,9 +1298,8 @@ async fn handle_quorum_event_implementation<Types: NodeType>(
 
     if !sender.validate(&quorum_proposal.signature, leaf.commit().as_ref()) {
         tracing::error!(
-            "Validation Failure on QuorumProposal for view {:?}: Leader for the current view: {:?}",
-            quorum_proposal.data.view_number(),
-            sender
+            "Validation Failure on QuorumProposal for view {}: Leader for the current view: {sender}",
+            quorum_proposal.data.view_number()
         );
         return Err(HandleQuorumEventError::SignatureValidationFailed);
     }
@@ -1313,14 +1309,14 @@ async fn handle_quorum_event_implementation<Types: NodeType>(
         sender,
     };
     let view_number = quorum_msg.proposal.data.view_number();
-    tracing::debug!("Sending Quorum proposal to the builder states for view {view_number:?}");
+    tracing::debug!("Sending Quorum proposal to the builder states for view {view_number}");
 
     if let Err(e) = quorum_channel_sender
         .broadcast(MessageType::QuorumProposalMessage(quorum_msg))
         .await
     {
         tracing::warn!(
-            "Error {e}, failed to send Quorum proposal to builder states for view {view_number:?}"
+            "Error {e}, failed to send Quorum proposal to builder states for view {view_number}"
         );
         return Err(HandleQuorumEventError::BroadcastFailed(e));
     }
@@ -1335,15 +1331,13 @@ async fn handle_decide_event<Types: NodeType>(
     let decide_msg: DecideMessage<Types> = DecideMessage::<Types> {
         latest_decide_view_number,
     };
-    tracing::debug!(
-        "Sending Decide event to builder states for view {latest_decide_view_number:?}"
-    );
+    tracing::debug!("Sending Decide event to builder states for view {latest_decide_view_number}");
     if let Err(e) = decide_channel_sender
         .broadcast(MessageType::DecideMessage(decide_msg))
         .await
     {
         tracing::warn!(
-            "Error {e}, failed to send Decide event to builder states for view {latest_decide_view_number:?}"
+            "Error {e}, failed to send Decide event to builder states for view {latest_decide_view_number}"
         );
     }
 }

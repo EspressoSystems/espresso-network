@@ -657,7 +657,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
             .state(view)
             .await
             .context(format!(
-                "state not available for height {height}, view {view:?}"
+                "state not available for height {height}, view {view}"
             ))?;
         retain_accounts(&state.fee_merkle_tree, accounts.iter().copied())
     }
@@ -677,7 +677,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
             .state(view)
             .await
             .context(format!(
-                "state not available for height {height}, view {view:?}"
+                "state not available for height {height}, view {view}"
             ))?;
         let tree = &state.block_merkle_tree;
         let frontier = tree.lookup(tree.num_leaves() - 1).expect_ok()?.1;
@@ -756,7 +756,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
             .state(view)
             .await
             .context(format!(
-                "state not available for height {height}, view {view:?}"
+                "state not available for height {height}, view {view}"
             ))?;
 
         retain_reward_accounts(&state.reward_merkle_tree, accounts.iter().copied())
