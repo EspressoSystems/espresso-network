@@ -2181,7 +2181,7 @@ mod tests {
             std::path::Path::new("../../../scripts/multisig-upgrade-entrypoint").exists(),
             "Script not found!"
         );
-        let mut sepolia_rpc_url = "http://localhost:8545".to_string();
+        let mut sepolia_rpc_url = "http://127.0.0.1:8545".to_string();
         let mut multisig_admin = Address::random();
         let mut timelock = Address::random();
         let mut mnemonic =
@@ -2320,35 +2320,37 @@ mod tests {
         )
         .await?;
         assert!(result.status.success());
-        if dry_run {
-            let data: serde_json::Value =
-                serde_json::from_str(&String::from_utf8_lossy(&result.stdout))?;
-            assert_eq!(data["rpcUrl"], sepolia_rpc_url);
-            assert_eq!(data["safeAddress"], multisig_admin.to_string());
+        tracing::info!("Transfer ownership output: {:?}", result);
 
-            let expected_init_data = match contract_type {
-                Contract::LightClientProxy => LightClient::new(proxy_addr, &provider)
-                    .transferOwnership(timelock)
-                    .calldata()
-                    .to_string(),
-                Contract::FeeContractProxy => FeeContract::new(proxy_addr, &provider)
-                    .transferOwnership(timelock)
-                    .calldata()
-                    .to_string(),
-                Contract::EspTokenProxy => EspToken::new(proxy_addr, &provider)
-                    .transferOwnership(timelock)
-                    .calldata()
-                    .to_string(),
-                Contract::StakeTableProxy => StakeTable::new(proxy_addr, &provider)
-                    .transferOwnership(timelock)
-                    .calldata()
-                    .to_string(),
-                _ => "0x".to_string(),
-            };
+        let stdout = String::from_utf8_lossy(&result.stdout);
+        let first_line = stdout.lines().next().unwrap();
+        let data: serde_json::Value = serde_json::from_str(first_line)?;
+        assert_eq!(data["rpcUrl"], sepolia_rpc_url);
+        assert_eq!(data["safeAddress"], multisig_admin.to_string());
 
-            assert_eq!(data["initData"], expected_init_data);
-            assert_eq!(data["useHardwareWallet"], false);
-        }
+        let expected_init_data = match contract_type {
+            Contract::LightClientProxy => LightClient::new(proxy_addr, &provider)
+                .transferOwnership(timelock)
+                .calldata()
+                .to_string(),
+            Contract::FeeContractProxy => FeeContract::new(proxy_addr, &provider)
+                .transferOwnership(timelock)
+                .calldata()
+                .to_string(),
+            Contract::EspTokenProxy => EspToken::new(proxy_addr, &provider)
+                .transferOwnership(timelock)
+                .calldata()
+                .to_string(),
+            Contract::StakeTableProxy => StakeTable::new(proxy_addr, &provider)
+                .transferOwnership(timelock)
+                .calldata()
+                .to_string(),
+            _ => "0x".to_string(),
+        };
+
+        assert_eq!(data["initData"], expected_init_data);
+        assert_eq!(data["useHardwareWallet"], false);
+        // }
         // v1 state persistence cannot be tested here because the upgrade proposal is not yet executed
         // One has to test that the upgrade proposal is available via the Safe UI
         // and then test that the v1 state is persisted
@@ -2375,6 +2377,23 @@ mod tests {
             UpgradeTestOptions {
                 is_mock: false,
                 run_mode: RunMode::DryRun,
+                upgrade_count: UpgradeCount::Once,
+            },
+        )
+        .await
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_transfer_ownership_fee_contract_proxy_real_proposal() -> Result<()> {
+        println!("Starting test_transfer_ownership_fee_contract_proxy_real_proposal");
+        tracing::info!("Starting test_transfer_ownership_fee_contract_proxy_real_proposal");
+
+        test_transfer_ownership_helper(
+            Contract::FeeContractProxy,
+            UpgradeTestOptions {
+                is_mock: false,
+                run_mode: RunMode::RealRun,
                 upgrade_count: UpgradeCount::Once,
             },
         )

@@ -20,15 +20,15 @@ async function main() {
 
   try {
     const [transferOwnershipData, dryRun] = processCommandLineArguments();
-    if (dryRun) {
-      // Prepare the transaction data to upgrade the proxy
-      const abi = ["function transferOwnership(address)"];
-      // Encode the function call with the new implementation address and its init data
-      transferOwnershipData.initData = new ethers.Interface(abi).encodeFunctionData("transferOwnership", [
-        transferOwnershipData.newOwner,
-      ]);
+    // Prepare the transaction data to upgrade the proxy
+    const abi = ["function transferOwnership(address)"];
+    // Encode the function call with the new implementation address and its init data
+    transferOwnershipData.initData = new ethers.Interface(abi).encodeFunctionData("transferOwnership", [
+      transferOwnershipData.newOwner,
+    ]);
 
-      console.log(JSON.stringify(transferOwnershipData));
+    console.log(JSON.stringify(transferOwnershipData));
+    if (dryRun) {
       return;
     }
 
@@ -51,14 +51,7 @@ async function main() {
       const safeSdk = await Safe.create({ ethAdapter, safeAddress: transferOwnershipData.safeAddress });
       const orchestratorSignerAddress = await orchestratorSigner.getAddress();
 
-      await proposeTransferOwnershipTransaction(
-        safeSdk,
-        safeService,
-        orchestratorSignerAddress,
-        transferOwnershipData.safeAddress,
-        transferOwnershipData.newOwner,
-        transferOwnershipData.useHardwareWallet,
-      );
+      await proposeTransferOwnershipTransaction(safeSdk, safeService, orchestratorSignerAddress, transferOwnershipData);
 
       console.log(
         `The other owners of the Safe Multisig wallet need to sign the transaction via the Safe UI https://app.safe.global/transactions/queue?safe=sep:${transferOwnershipData.safeAddress}`,
@@ -171,26 +164,24 @@ async function proposeTransferOwnershipTransaction(
   safeSDK: Safe,
   safeService: SafeApiKit,
   signerAddress: string,
-  safeAddress: string,
-  newOwner: string,
-  useHardwareWallet: boolean,
+  transferOwnershipData: TransferOwnershipData,
 ) {
   // Prepare the transaction data to upgrade the proxy
   const abi = ["function transferOwnership(address)"];
   // Encode the function call with the new implementation address and its init data
-  const data = new ethers.Interface(abi).encodeFunctionData("transferOwnership", [newOwner]);
+  const data = new ethers.Interface(abi).encodeFunctionData("transferOwnership", [transferOwnershipData.newOwner]);
 
   // Create & Sign the Safe Transaction Object
   const { safeTransaction, safeTxHash, senderSignature } = await createAndSignSafeTransaction(
     safeSDK,
-    safeAddress,
+    transferOwnershipData.proxyAddress,
     data,
-    useHardwareWallet,
+    transferOwnershipData.useHardwareWallet,
   );
 
   // Propose the transaction which can be signed by other owners via the Safe UI
   await safeService.proposeTransaction({
-    safeAddress: safeAddress,
+    safeAddress: transferOwnershipData.safeAddress,
     safeTransactionData: safeTransaction.data,
     safeTxHash: safeTxHash,
     senderAddress: signerAddress,
