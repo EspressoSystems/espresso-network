@@ -310,7 +310,7 @@
 <a href=#310 id=310 data-nosnippet>310</a>    .with_context(|| <span class="string">"Failed to derive Libp2p peer ID"</span>)<span class="question-mark">?</span>;
 <a href=#311 id=311 data-nosnippet>311</a>
 <a href=#312 id=312 data-nosnippet>312</a>    <span class="comment">// Print the libp2p public key
-<a href=#313 id=313 data-nosnippet>313</a>    </span><span class="macro">info!</span>(<span class="string">"Starting Libp2p with PeerID: {}"</span>, libp2p_public_key);
+<a href=#313 id=313 data-nosnippet>313</a>    </span><span class="macro">info!</span>(<span class="string">"Starting Libp2p with PeerID: {libp2p_public_key}"</span>);
 <a href=#314 id=314 data-nosnippet>314</a>
 <a href=#315 id=315 data-nosnippet>315</a>    <span class="kw">let </span>(<span class="kw-2">mut </span>network_config, wait_for_orchestrator) = <span class="kw">match </span>(
 <a href=#316 id=316 data-nosnippet>316</a>        persistence.load_config().<span class="kw">await</span><span class="question-mark">?</span>,
@@ -933,7 +933,7 @@
 <a href=#933 id=933 data-nosnippet>933</a>
 <a href=#934 id=934 data-nosnippet>934</a>                    Upgrade::pos_view_based(st_addr)
 <a href=#935 id=935 data-nosnippet>935</a>                },
-<a href=#936 id=936 data-nosnippet>936</a>                <span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">"Upgrade not configured for version {:?}"</span>, version),
+<a href=#936 id=936 data-nosnippet>936</a>                <span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">"Upgrade not configured for version {version:?}"</span>),
 <a href=#937 id=937 data-nosnippet>937</a>            };
 <a href=#938 id=938 data-nosnippet>938</a>
 <a href=#939 id=939 data-nosnippet>939</a>            <span class="kw">let </span><span class="kw-2">mut </span>upgrades = std::collections::BTreeMap::new();

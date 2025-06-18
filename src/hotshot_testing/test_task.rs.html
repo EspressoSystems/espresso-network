@@ -163,7 +163,7 @@
 <a href=#163 id=163 data-nosnippet>163</a>                            </span>.inspect_err(|e| <span class="macro">tracing::error!</span>(<span class="string">"{e}"</span>));
 <a href=#164 id=164 data-nosnippet>164</a>                    },
 <a href=#165 id=165 data-nosnippet>165</a>                    <span class="prelude-val">Ok</span>((<span class="prelude-val">Err</span>(e), _id, <span class="kw">_</span>)) =&gt; {
-<a href=#166 id=166 data-nosnippet>166</a>                        <span class="macro">error!</span>(<span class="string">"Error from one channel in test task {:?}"</span>, e);
+<a href=#166 id=166 data-nosnippet>166</a>                        <span class="macro">error!</span>(<span class="string">"Error from one channel in test task {e:?}"</span>);
 <a href=#167 id=167 data-nosnippet>167</a>                        sleep(Duration::from_millis(<span class="number">4000</span>)).<span class="kw">await</span>;
 <a href=#168 id=168 data-nosnippet>168</a>                    },
 <a href=#169 id=169 data-nosnippet>169</a>                    <span class="kw">_ </span>=&gt; {},
@@ -205,7 +205,7 @@
 <a href=#205 id=205 data-nosnippet>205</a>            </span><span class="kw">let </span>message = <span class="kw">match </span>network.recv_message().<span class="kw">await </span>{
 <a href=#206 id=206 data-nosnippet>206</a>                <span class="prelude-val">Ok</span>(message) =&gt; message,
 <a href=#207 id=207 data-nosnippet>207</a>                <span class="prelude-val">Err</span>(e) =&gt; {
-<a href=#208 id=208 data-nosnippet>208</a>                    <span class="macro">error!</span>(<span class="string">"Failed to receive message: {:?}"</span>, e);
+<a href=#208 id=208 data-nosnippet>208</a>                    <span class="macro">error!</span>(<span class="string">"Failed to receive message: {e:?}"</span>);
 <a href=#209 id=209 data-nosnippet>209</a>                    <span class="kw">continue</span>;
 <a href=#210 id=210 data-nosnippet>210</a>                },
 <a href=#211 id=211 data-nosnippet>211</a>            };
@@ -215,7 +215,7 @@
 <a href=#215 id=215 data-nosnippet>215</a>                <span class="kw">match </span>upgrade_lock.deserialize(<span class="kw-2">&amp;</span>message).<span class="kw">await </span>{
 <a href=#216 id=216 data-nosnippet>216</a>                    <span class="prelude-val">Ok</span>(message) =&gt; message,
 <a href=#217 id=217 data-nosnippet>217</a>                    <span class="prelude-val">Err</span>(e) =&gt; {
-<a href=#218 id=218 data-nosnippet>218</a>                        <span class="macro">tracing::error!</span>(<span class="string">"Failed to deserialize message: {:?}"</span>, e);
+<a href=#218 id=218 data-nosnippet>218</a>                        <span class="macro">tracing::error!</span>(<span class="string">"Failed to deserialize message: {e:?}"</span>);
 <a href=#219 id=219 data-nosnippet>219</a>                        <span class="kw">continue</span>;
 <a href=#220 id=220 data-nosnippet>220</a>                    },
 <a href=#221 id=221 data-nosnippet>221</a>                };

@@ -82,7 +82,7 @@
 <a href=#82 id=82 data-nosnippet>82</a>    .wrap()
 <a href=#83 id=83 data-nosnippet>83</a>    .context(<span class="macro">error!</span>(<span class="string">"Failed to sign proposal. This should never happen."</span>))<span class="question-mark">?</span>;
 <a href=#84 id=84 data-nosnippet>84</a>
-<a href=#85 id=85 data-nosnippet>85</a>    <span class="macro">tracing::info!</span>(<span class="string">"Sending proposal request for view {}"</span>, view_number);
+<a href=#85 id=85 data-nosnippet>85</a>    <span class="macro">tracing::info!</span>(<span class="string">"Sending proposal request for view {view_number}"</span>);
 <a href=#86 id=86 data-nosnippet>86</a>
 <a href=#87 id=87 data-nosnippet>87</a>    <span class="comment">// First, broadcast that we need a proposal to the current leader
 <a href=#88 id=88 data-nosnippet>88</a>    </span>broadcast_event(
@@ -1029,7 +1029,7 @@
 <a href=#1029 id=1029 data-nosnippet>1029</a>                .<span class="kw">await</span>;
 <a href=#1030 id=1030 data-nosnippet>1030</a>            }
 <a href=#1031 id=1031 data-nosnippet>1031</a>
-<a href=#1032 id=1032 data-nosnippet>1032</a>            <span class="macro">error!</span>(<span class="string">"Failed safety and liveness check \n High QC is {:?}  Proposal QC is {:?}  Locked view is {:?}"</span>, consensus_reader.high_qc(), proposal.data.clone(), consensus_reader.locked_view())
+<a href=#1032 id=1032 data-nosnippet>1032</a>            <span class="macro">error!</span>(<span class="string">"Failed safety and liveness check \n High QC is {:?}  Proposal QC is {:?}  Locked view is {:?}"</span>, consensus_reader.high_qc(), proposal.data, consensus_reader.locked_view())
 <a href=#1033 id=1033 data-nosnippet>1033</a>        });
 <a href=#1034 id=1034 data-nosnippet>1034</a>    }
 <a href=#1035 id=1035 data-nosnippet>1035</a>
@@ -1375,14 +1375,10 @@
 <a href=#1375 id=1375 data-nosnippet>1375</a>            broadcast_epoch = <span class="prelude-val">Some</span>(first_epoch);
 <a href=#1376 id=1376 data-nosnippet>1376</a>        }
 <a href=#1377 id=1377 data-nosnippet>1377</a>    }
-<a href=#1378 id=1378 data-nosnippet>1378</a>    <span class="macro">tracing::trace!</span>(
-<a href=#1379 id=1379 data-nosnippet>1379</a>        <span class="string">"Sending ViewChange for view {} and epoch {:?}"</span>,
-<a href=#1380 id=1380 data-nosnippet>1380</a>        new_view_number,
-<a href=#1381 id=1381 data-nosnippet>1381</a>        broadcast_epoch
-<a href=#1382 id=1382 data-nosnippet>1382</a>    );
-<a href=#1383 id=1383 data-nosnippet>1383</a>    broadcast_event(
-<a href=#1384 id=1384 data-nosnippet>1384</a>        Arc::new(HotShotEvent::ViewChange(new_view_number, broadcast_epoch)),
-<a href=#1385 id=1385 data-nosnippet>1385</a>        sender,
-<a href=#1386 id=1386 data-nosnippet>1386</a>    )
-<a href=#1387 id=1387 data-nosnippet>1387</a>    .<span class="kw">await
-<a href=#1388 id=1388 data-nosnippet>1388</a></span>}</code></pre></div></section></main></body></html>
+<a href=#1378 id=1378 data-nosnippet>1378</a>    <span class="macro">tracing::trace!</span>(<span class="string">"Sending ViewChange for view {new_view_number} and epoch {broadcast_epoch:?}"</span>);
+<a href=#1379 id=1379 data-nosnippet>1379</a>    broadcast_event(
+<a href=#1380 id=1380 data-nosnippet>1380</a>        Arc::new(HotShotEvent::ViewChange(new_view_number, broadcast_epoch)),
+<a href=#1381 id=1381 data-nosnippet>1381</a>        sender,
+<a href=#1382 id=1382 data-nosnippet>1382</a>    )
+<a href=#1383 id=1383 data-nosnippet>1383</a>    .<span class="kw">await
+<a href=#1384 id=1384 data-nosnippet>1384</a></span>}</code></pre></div></section></main></body></html>

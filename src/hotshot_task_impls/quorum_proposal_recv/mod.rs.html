@@ -150,14 +150,14 @@
 <a href=#150 id=150 data-nosnippet>150</a>        <span class="kw">match </span>event.as_ref() {
 <a href=#151 id=151 data-nosnippet>151</a>            HotShotEvent::QuorumProposalRecv(proposal, sender) =&gt; {
 <a href=#152 id=152 data-nosnippet>152</a>                <span class="macro">tracing::debug!</span>(
-<a href=#153 id=153 data-nosnippet>153</a>                    <span class="string">"Quorum proposal recv for view {:?}"</span>,
+<a href=#153 id=153 data-nosnippet>153</a>                    <span class="string">"Quorum proposal recv for view {}"</span>,
 <a href=#154 id=154 data-nosnippet>154</a>                    proposal.data.view_number()
 <a href=#155 id=155 data-nosnippet>155</a>                );
 <a href=#156 id=156 data-nosnippet>156</a>                <span class="kw">if </span><span class="self">self</span>.consensus.read().<span class="kw">await</span>.cur_view() &gt; proposal.data.view_number()
 <a href=#157 id=157 data-nosnippet>157</a>                    || <span class="self">self</span>.cur_view &gt; proposal.data.view_number()
 <a href=#158 id=158 data-nosnippet>158</a>                {
 <a href=#159 id=159 data-nosnippet>159</a>                    <span class="macro">tracing::warn!</span>(
-<a href=#160 id=160 data-nosnippet>160</a>                        <span class="string">"Throwing away old proposal for view {:?}"</span>,
+<a href=#160 id=160 data-nosnippet>160</a>                        <span class="string">"Throwing away old proposal for view {}"</span>,
 <a href=#161 id=161 data-nosnippet>161</a>                        proposal.data.view_number()
 <a href=#162 id=162 data-nosnippet>162</a>                    );
 <a href=#163 id=163 data-nosnippet>163</a>                    <span class="kw">return</span>;

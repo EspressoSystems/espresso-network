@@ -60,10 +60,10 @@
 <a href=#60 id=60 data-nosnippet>60</a>
 <a href=#61 id=61 data-nosnippet>61</a>    <span class="comment">// Configure the broker
 <a href=#62 id=62 data-nosnippet>62</a>    </span><span class="kw">let </span>broker_config: BrokerConfig&lt;TestingDef&lt;SeqTypes&gt;&gt; = BrokerConfig {
-<a href=#63 id=63 data-nosnippet>63</a>        public_advertise_endpoint: <span class="macro">format!</span>(<span class="string">"127.0.0.1:{}"</span>, broker_public_port),
-<a href=#64 id=64 data-nosnippet>64</a>        public_bind_endpoint: <span class="macro">format!</span>(<span class="string">"127.0.0.1:{}"</span>, broker_public_port),
-<a href=#65 id=65 data-nosnippet>65</a>        private_advertise_endpoint: <span class="macro">format!</span>(<span class="string">"127.0.0.1:{}"</span>, broker_private_port),
-<a href=#66 id=66 data-nosnippet>66</a>        private_bind_endpoint: <span class="macro">format!</span>(<span class="string">"127.0.0.1:{}"</span>, broker_private_port),
+<a href=#63 id=63 data-nosnippet>63</a>        public_advertise_endpoint: <span class="macro">format!</span>(<span class="string">"127.0.0.1:{broker_public_port}"</span>),
+<a href=#64 id=64 data-nosnippet>64</a>        public_bind_endpoint: <span class="macro">format!</span>(<span class="string">"127.0.0.1:{broker_public_port}"</span>),
+<a href=#65 id=65 data-nosnippet>65</a>        private_advertise_endpoint: <span class="macro">format!</span>(<span class="string">"127.0.0.1:{broker_private_port}"</span>),
+<a href=#66 id=66 data-nosnippet>66</a>        private_bind_endpoint: <span class="macro">format!</span>(<span class="string">"127.0.0.1:{broker_private_port}"</span>),
 <a href=#67 id=67 data-nosnippet>67</a>
 <a href=#68 id=68 data-nosnippet>68</a>        metrics_bind_endpoint: <span class="prelude-val">None</span>,
 <a href=#69 id=69 data-nosnippet>69</a>        discovery_endpoint: discovery_endpoint.clone(),

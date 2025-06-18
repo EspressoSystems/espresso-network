@@ -172,8 +172,8 @@
 <a href=#172 id=172 data-nosnippet>172</a>        <span class="kw">let </span>spinning_task_state = SpinningTask {
 <a href=#173 id=173 data-nosnippet>173</a>            epoch_height: launcher.metadata.test_config.epoch_height,
 <a href=#174 id=174 data-nosnippet>174</a>            epoch_start_block: launcher.metadata.test_config.epoch_start_block,
-<a href=#175 id=175 data-nosnippet>175</a>            start_epoch_info: Vec::new(), <span class="comment">// #2652 REVIEW NOTE: Same as other instances of start_epoch_info
-<a href=#176 id=176 data-nosnippet>176</a>            </span>handles: Arc::clone(<span class="kw-2">&amp;</span>handles),
+<a href=#175 id=175 data-nosnippet>175</a>            start_epoch_info: Vec::new(),
+<a href=#176 id=176 data-nosnippet>176</a>            handles: Arc::clone(<span class="kw-2">&amp;</span>handles),
 <a href=#177 id=177 data-nosnippet>177</a>            late_start,
 <a href=#178 id=178 data-nosnippet>178</a>            latest_view: <span class="prelude-val">None</span>,
 <a href=#179 id=179 data-nosnippet>179</a>            changes,
@@ -279,7 +279,7 @@
 <a href=#279 id=279 data-nosnippet>279</a>                    TestResult::Fail(e) =&gt; error_list.push(e),
 <a href=#280 id=280 data-nosnippet>280</a>                },
 <a href=#281 id=281 data-nosnippet>281</a>                <span class="prelude-val">Err</span>(e) =&gt; {
-<a href=#282 id=282 data-nosnippet>282</a>                    <span class="macro">tracing::error!</span>(<span class="string">"Error Joining the test task {:?}"</span>, e);
+<a href=#282 id=282 data-nosnippet>282</a>                    <span class="macro">tracing::error!</span>(<span class="string">"Error Joining the test task {e:?}"</span>);
 <a href=#283 id=283 data-nosnippet>283</a>                },
 <a href=#284 id=284 data-nosnippet>284</a>            }
 <a href=#285 id=285 data-nosnippet>285</a>        }
@@ -360,7 +360,7 @@
 <a href=#360 id=360 data-nosnippet>360</a>            }
 <a href=#361 id=361 data-nosnippet>361</a>            <span class="kw">let </span>node_id = <span class="self">self</span>.next_node_id;
 <a href=#362 id=362 data-nosnippet>362</a>            <span class="self">self</span>.next_node_id += <span class="number">1</span>;
-<a href=#363 id=363 data-nosnippet>363</a>            <span class="macro">tracing::debug!</span>(<span class="string">"launch node {}"</span>, i);
+<a href=#363 id=363 data-nosnippet>363</a>            <span class="macro">tracing::debug!</span>(<span class="string">"launch node {i}"</span>);
 <a href=#364 id=364 data-nosnippet>364</a>
 <a href=#365 id=365 data-nosnippet>365</a>            config.builder_urls = builder_urls
 <a href=#366 id=366 data-nosnippet>366</a>                .clone()

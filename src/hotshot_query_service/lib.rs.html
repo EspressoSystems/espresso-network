@@ -948,11 +948,11 @@
 <a href=#948 id=948 data-nosnippet>948</a>        <span class="kw">let </span>port = pick_unused_port().unwrap();
 <a href=#949 id=949 data-nosnippet>949</a>        <span class="kw">let </span>_server = BackgroundTask::spawn(
 <a href=#950 id=950 data-nosnippet>950</a>            <span class="string">"server"</span>,
-<a href=#951 id=951 data-nosnippet>951</a>            app.serve(<span class="macro">format!</span>(<span class="string">"0.0.0.0:{}"</span>, port), MockBase::instance()),
+<a href=#951 id=951 data-nosnippet>951</a>            app.serve(<span class="macro">format!</span>(<span class="string">"0.0.0.0:{port}"</span>), MockBase::instance()),
 <a href=#952 id=952 data-nosnippet>952</a>        );
 <a href=#953 id=953 data-nosnippet>953</a>
 <a href=#954 id=954 data-nosnippet>954</a>        <span class="kw">let </span>client =
-<a href=#955 id=955 data-nosnippet>955</a>            Client::&lt;Error, MockBase&gt;::new(<span class="macro">format!</span>(<span class="string">"http://localhost:{}"</span>, port).parse().unwrap());
+<a href=#955 id=955 data-nosnippet>955</a>            Client::&lt;Error, MockBase&gt;::new(<span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap());
 <a href=#956 id=956 data-nosnippet>956</a>        <span class="macro">assert!</span>(client.connect(<span class="prelude-val">Some</span>(Duration::from_secs(<span class="number">60</span>))).<span class="kw">await</span>);
 <a href=#957 id=957 data-nosnippet>957</a>
 <a href=#958 id=958 data-nosnippet>958</a>        client.post::&lt;()&gt;(<span class="string">"mod/ext/42"</span>).send().<span class="kw">await</span>.unwrap();

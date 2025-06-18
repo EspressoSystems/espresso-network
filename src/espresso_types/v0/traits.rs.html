@@ -115,7 +115,7 @@
 <a href=#115 id=115 data-nosnippet>115</a>                        .<span class="kw">await
 <a href=#116 id=116 data-nosnippet>116</a>                        </span>.map_err(|err| {
 <a href=#117 id=117 data-nosnippet>117</a>                            err.context(<span class="macro">format!</span>(
-<a href=#118 id=118 data-nosnippet>118</a>                                <span class="string">"fetching accounts {accounts:?}, height {height}, view {view:?}"
+<a href=#118 id=118 data-nosnippet>118</a>                                <span class="string">"fetching accounts {accounts:?}, height {height}, view {view}"
 <a href=#119 id=119 data-nosnippet>119</a>                            </span>))
 <a href=#120 id=120 data-nosnippet>120</a>                        })
 <a href=#121 id=121 data-nosnippet>121</a>                }
@@ -209,7 +209,7 @@
 <a href=#209 id=209 data-nosnippet>209</a>                        .<span class="kw">await
 <a href=#210 id=210 data-nosnippet>210</a>                        </span>.map_err(|err| {
 <a href=#211 id=211 data-nosnippet>211</a>                            err.context(<span class="macro">format!</span>(
-<a href=#212 id=212 data-nosnippet>212</a>                                <span class="string">"fetching reward accounts {accounts:?}, height {height}, view {view:?}"
+<a href=#212 id=212 data-nosnippet>212</a>                                <span class="string">"fetching reward accounts {accounts:?}, height {height}, view {view}"
 <a href=#213 id=213 data-nosnippet>213</a>                            </span>))
 <a href=#214 id=214 data-nosnippet>214</a>                        })
 <a href=#215 id=215 data-nosnippet>215</a>                }
@@ -530,7 +530,7 @@
 <a href=#530 id=530 data-nosnippet>530</a>                <span class="macro">ensure!</span>(
 <a href=#531 id=531 data-nosnippet>531</a>                    leaf.view_number() == high_qc.view_number,
 <a href=#532 id=532 data-nosnippet>532</a>                    <span class="macro">format!</span>(
-<a href=#533 id=533 data-nosnippet>533</a>                        <span class="string">"loaded anchor leaf from view {:?}, but high QC is from view {:?}"</span>,
+<a href=#533 id=533 data-nosnippet>533</a>                        <span class="string">"loaded anchor leaf from view {}, but high QC is from view {}"</span>,
 <a href=#534 id=534 data-nosnippet>534</a>                        leaf.view_number(),
 <a href=#535 id=535 data-nosnippet>535</a>                        high_qc.view_number
 <a href=#536 id=536 data-nosnippet>536</a>                    )

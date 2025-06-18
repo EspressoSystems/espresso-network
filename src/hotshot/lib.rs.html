@@ -259,7 +259,7 @@
 <a href=#259 id=259 data-nosnippet>259</a>    ) -&gt; Arc&lt;<span class="self">Self</span>&gt; {
 <a href=#260 id=260 data-nosnippet>260</a>        <span class="macro">debug!</span>(<span class="string">"Creating a new hotshot"</span>);
 <a href=#261 id=261 data-nosnippet>261</a>
-<a href=#262 id=262 data-nosnippet>262</a>        <span class="macro">tracing::warn!</span>(<span class="string">"Starting consensus with HotShotConfig:\n\n {:?}"</span>, config);
+<a href=#262 id=262 data-nosnippet>262</a>        <span class="macro">tracing::warn!</span>(<span class="string">"Starting consensus with HotShotConfig:\n\n {config:?}"</span>);
 <a href=#263 id=263 data-nosnippet>263</a>
 <a href=#264 id=264 data-nosnippet>264</a>        <span class="kw">let </span>consensus_metrics = Arc::new(consensus_metrics);
 <a href=#265 id=265 data-nosnippet>265</a>        <span class="kw">let </span>storage_metrics = Arc::new(storage_metrics);
@@ -1233,7 +1233,7 @@
 <a href=#1233 id=1233 data-nosnippet>1233</a>    <span class="kw">let </span>first_epoch_number =
 <a href=#1234 id=1234 data-nosnippet>1234</a>        TYPES::Epoch::new(epoch_from_block_number(epoch_start_block, epoch_height));
 <a href=#1235 id=1235 data-nosnippet>1235</a>
-<a href=#1236 id=1236 data-nosnippet>1236</a>    <span class="macro">tracing::warn!</span>(<span class="string">"Calling set_first_epoch for epoch {:?}"</span>, first_epoch_number);
+<a href=#1236 id=1236 data-nosnippet>1236</a>    <span class="macro">tracing::warn!</span>(<span class="string">"Calling set_first_epoch for epoch {first_epoch_number}"</span>);
 <a href=#1237 id=1237 data-nosnippet>1237</a>    membership
 <a href=#1238 id=1238 data-nosnippet>1238</a>        .write()
 <a href=#1239 id=1239 data-nosnippet>1239</a>        .<span class="kw">await
@@ -1241,7 +1241,7 @@
 <a href=#1241 id=1241 data-nosnippet>1241</a>
 <a href=#1242 id=1242 data-nosnippet>1242</a>    <span class="kw">for </span>epoch_info <span class="kw">in </span>start_epoch_info {
 <a href=#1243 id=1243 data-nosnippet>1243</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(block_header) = <span class="kw-2">&amp;</span>epoch_info.block_header {
-<a href=#1244 id=1244 data-nosnippet>1244</a>            <span class="macro">tracing::info!</span>(<span class="string">"Calling add_epoch_root for epoch {:?}"</span>, epoch_info.epoch);
+<a href=#1244 id=1244 data-nosnippet>1244</a>            <span class="macro">tracing::info!</span>(<span class="string">"Calling add_epoch_root for epoch {}"</span>, epoch_info.epoch);
 <a href=#1245 id=1245 data-nosnippet>1245</a>
 <a href=#1246 id=1246 data-nosnippet>1246</a>            Membership::add_epoch_root(
 <a href=#1247 id=1247 data-nosnippet>1247</a>                Arc::clone(membership),
@@ -1252,19 +1252,18 @@
 <a href=#1252 id=1252 data-nosnippet>1252</a>            </span>.unwrap_or_else(|err| {
 <a href=#1253 id=1253 data-nosnippet>1253</a>                <span class="comment">// REVIEW NOTE: Should we panic here? a failure here seems like it should be fatal
 <a href=#1254 id=1254 data-nosnippet>1254</a>                </span><span class="macro">tracing::error!</span>(
-<a href=#1255 id=1255 data-nosnippet>1255</a>                    <span class="string">"Failed to add epoch root for epoch {:?}: {}"</span>,
-<a href=#1256 id=1256 data-nosnippet>1256</a>                    epoch_info.epoch,
-<a href=#1257 id=1257 data-nosnippet>1257</a>                    err
-<a href=#1258 id=1258 data-nosnippet>1258</a>                );
-<a href=#1259 id=1259 data-nosnippet>1259</a>            });
-<a href=#1260 id=1260 data-nosnippet>1260</a>        }
-<a href=#1261 id=1261 data-nosnippet>1261</a>    }
-<a href=#1262 id=1262 data-nosnippet>1262</a>
-<a href=#1263 id=1263 data-nosnippet>1263</a>    <span class="kw">for </span>epoch_info <span class="kw">in </span>start_epoch_info {
-<a href=#1264 id=1264 data-nosnippet>1264</a>        <span class="macro">tracing::info!</span>(<span class="string">"Calling add_drb_result for epoch {:?}"</span>, epoch_info.epoch);
-<a href=#1265 id=1265 data-nosnippet>1265</a>        membership
-<a href=#1266 id=1266 data-nosnippet>1266</a>            .write()
-<a href=#1267 id=1267 data-nosnippet>1267</a>            .<span class="kw">await
-<a href=#1268 id=1268 data-nosnippet>1268</a>            </span>.add_drb_result(epoch_info.epoch, epoch_info.drb_result);
-<a href=#1269 id=1269 data-nosnippet>1269</a>    }
-<a href=#1270 id=1270 data-nosnippet>1270</a>}</code></pre></div></section></main></body></html>
+<a href=#1255 id=1255 data-nosnippet>1255</a>                    <span class="string">"Failed to add epoch root for epoch {}: {err}"</span>,
+<a href=#1256 id=1256 data-nosnippet>1256</a>                    epoch_info.epoch
+<a href=#1257 id=1257 data-nosnippet>1257</a>                );
+<a href=#1258 id=1258 data-nosnippet>1258</a>            });
+<a href=#1259 id=1259 data-nosnippet>1259</a>        }
+<a href=#1260 id=1260 data-nosnippet>1260</a>    }
+<a href=#1261 id=1261 data-nosnippet>1261</a>
+<a href=#1262 id=1262 data-nosnippet>1262</a>    <span class="kw">for </span>epoch_info <span class="kw">in </span>start_epoch_info {
+<a href=#1263 id=1263 data-nosnippet>1263</a>        <span class="macro">tracing::info!</span>(<span class="string">"Calling add_drb_result for epoch {}"</span>, epoch_info.epoch);
+<a href=#1264 id=1264 data-nosnippet>1264</a>        membership
+<a href=#1265 id=1265 data-nosnippet>1265</a>            .write()
+<a href=#1266 id=1266 data-nosnippet>1266</a>            .<span class="kw">await
+<a href=#1267 id=1267 data-nosnippet>1267</a>            </span>.add_drb_result(epoch_info.epoch, epoch_info.drb_result);
+<a href=#1268 id=1268 data-nosnippet>1268</a>    }
+<a href=#1269 id=1269 data-nosnippet>1269</a>}</code></pre></div></section></main></body></html>

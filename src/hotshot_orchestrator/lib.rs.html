@@ -885,6 +885,6 @@
 <a href=#885 id=885 data-nosnippet>885</a>    <span class="kw">let </span><span class="kw-2">mut </span>app = App::&lt;RwLock&lt;OrchestratorState&lt;TYPES&gt;&gt;, ServerError&gt;::with_state(state);
 <a href=#886 id=886 data-nosnippet>886</a>    app.register_module::&lt;ServerError, OrchestratorVersion&gt;(<span class="string">"api"</span>, web_api.unwrap())
 <a href=#887 id=887 data-nosnippet>887</a>        .expect(<span class="string">"Error registering api"</span>);
-<a href=#888 id=888 data-nosnippet>888</a>    <span class="macro">tracing::error!</span>(<span class="string">"listening on {:?}"</span>, url);
+<a href=#888 id=888 data-nosnippet>888</a>    <span class="macro">tracing::error!</span>(<span class="string">"listening on {url:?}"</span>);
 <a href=#889 id=889 data-nosnippet>889</a>    app.serve(url, ORCHESTRATOR_VERSION).<span class="kw">await
 <a href=#890 id=890 data-nosnippet>890</a></span>}</code></pre></div></section></main></body></html>

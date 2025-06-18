@@ -122,7 +122,7 @@
 <a href=#122 id=122 data-nosnippet>122</a>            </span>.wrap()
 <a href=#123 id=123 data-nosnippet>123</a>            .context(<span class="macro">error!</span>(<span class="string">"Join error"</span>))<span class="question-mark">?
 <a href=#124 id=124 data-nosnippet>124</a>            </span>.wrap()
-<a href=#125 id=125 data-nosnippet>125</a>            .context(|err| <span class="macro">error!</span>(<span class="string">"Failed to calculate VID disperse. Error: {}"</span>, err))<span class="question-mark">?</span>;
+<a href=#125 id=125 data-nosnippet>125</a>            .context(|err| <span class="macro">error!</span>(<span class="string">"Failed to calculate VID disperse. Error: {err}"</span>))<span class="question-mark">?</span>;
 <a href=#126 id=126 data-nosnippet>126</a>        <span class="kw">let </span>advz_scheme_duration = now.elapsed();
 <a href=#127 id=127 data-nosnippet>127</a>
 <a href=#128 id=128 data-nosnippet>128</a>        <span class="prelude-val">Ok</span>((
@@ -437,7 +437,7 @@
 <a href=#437 id=437 data-nosnippet>437</a>        </span>.wrap()
 <a href=#438 id=438 data-nosnippet>438</a>        .context(<span class="macro">error!</span>(<span class="string">"Join error"</span>))<span class="question-mark">?
 <a href=#439 id=439 data-nosnippet>439</a>        </span>.wrap()
-<a href=#440 id=440 data-nosnippet>440</a>        .context(|err| <span class="macro">error!</span>(<span class="string">"Failed to calculate VID disperse. Error: {}"</span>, err))<span class="question-mark">?</span>;
+<a href=#440 id=440 data-nosnippet>440</a>        .context(|err| <span class="macro">error!</span>(<span class="string">"Failed to calculate VID disperse. Error: {err}"</span>))<span class="question-mark">?</span>;
 <a href=#441 id=441 data-nosnippet>441</a>        <span class="kw">let </span>ns_disperse_duration = now.elapsed();
 <a href=#442 id=442 data-nosnippet>442</a>
 <a href=#443 id=443 data-nosnippet>443</a>        <span class="prelude-val">Ok</span>((

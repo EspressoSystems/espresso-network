@@ -309,7 +309,7 @@
 <a href=#309 id=309 data-nosnippet>309</a>            .iter()
 <a href=#310 id=310 data-nosnippet>310</a>        {
 <a href=#311 id=311 data-nosnippet>311</a>            <span class="kw">if </span>!recipients.contains(<span class="kw-2">&amp;</span>node.<span class="number">0</span>) {
-<a href=#312 id=312 data-nosnippet>312</a>                <span class="macro">tracing::trace!</span>(<span class="string">"Skipping node because not in recipient list: {:?}"</span>, <span class="kw-2">&amp;</span>node.<span class="number">0</span>);
+<a href=#312 id=312 data-nosnippet>312</a>                <span class="macro">tracing::trace!</span>(<span class="string">"Skipping node because not in recipient list: {:?}"</span>, node.<span class="number">0</span>);
 <a href=#313 id=313 data-nosnippet>313</a>                <span class="kw">continue</span>;
 <a href=#314 id=314 data-nosnippet>314</a>            }
 <a href=#315 id=315 data-nosnippet>315</a>            <span class="comment">// TODO delay/drop etc here

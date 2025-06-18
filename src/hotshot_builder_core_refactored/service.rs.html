@@ -205,7 +205,7 @@
 <a href=#205 id=205 data-nosnippet>205</a>
 <a href=#206 id=206 data-nosnippet>206</a>            <span class="kw">match </span>event.event {
 <a href=#207 id=207 data-nosnippet>207</a>                EventType::Error { error } =&gt; {
-<a href=#208 id=208 data-nosnippet>208</a>                    <span class="macro">error!</span>(<span class="string">"Error event in HotShot: {:?}"</span>, error);
+<a href=#208 id=208 data-nosnippet>208</a>                    <span class="macro">error!</span>(<span class="string">"Error event in HotShot: {error:?}"</span>);
 <a href=#209 id=209 data-nosnippet>209</a>                },
 <a href=#210 id=210 data-nosnippet>210</a>                EventType::Transactions { transactions } =&gt; {
 <a href=#211 id=211 data-nosnippet>211</a>                    <span class="kw">let </span>this = Arc::clone(<span class="kw-2">&amp;</span><span class="self">self</span>);
@@ -550,7 +550,7 @@
 <a href=#550 id=550 data-nosnippet>550</a>            sender: pub_key,
 <a href=#551 id=551 data-nosnippet>551</a>        };
 <a href=#552 id=552 data-nosnippet>552</a>
-<a href=#553 id=553 data-nosnippet>553</a>        <span class="macro">info!</span>(<span class="string">"Sending Claim Block data for {block_id}"</span>,);
+<a href=#553 id=553 data-nosnippet>553</a>        <span class="macro">info!</span>(<span class="string">"Sending Claim Block data for {block_id}"</span>);
 <a href=#554 id=554 data-nosnippet>554</a>        <span class="prelude-val">Ok</span>(block_data)
 <a href=#555 id=555 data-nosnippet>555</a>    }
 <a href=#556 id=556 data-nosnippet>556</a>

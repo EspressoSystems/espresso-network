@@ -691,7 +691,7 @@
 <a href=#691 id=691 data-nosnippet>691</a>            </span>v <span class="kw">if </span>v == V::Base::VERSION =&gt; Serializer::&lt;V::Base&gt;::serialize(<span class="kw-2">&amp;</span>message),
 <a href=#692 id=692 data-nosnippet>692</a>            v <span class="kw">if </span>v == V::Upgrade::VERSION =&gt; Serializer::&lt;V::Upgrade&gt;::serialize(<span class="kw-2">&amp;</span>message),
 <a href=#693 id=693 data-nosnippet>693</a>            v =&gt; {
-<a href=#694 id=694 data-nosnippet>694</a>                <span class="macro">bail!</span>(<span class="string">"Attempted to serialize with version {}, which is incompatible. This should be impossible."</span>, v);
+<a href=#694 id=694 data-nosnippet>694</a>                <span class="macro">bail!</span>(<span class="string">"Attempted to serialize with version {v}, which is incompatible. This should be impossible."</span>);
 <a href=#695 id=695 data-nosnippet>695</a>            },
 <a href=#696 id=696 data-nosnippet>696</a>        };
 <a href=#697 id=697 data-nosnippet>697</a>
@@ -718,7 +718,7 @@
 <a href=#718 id=718 data-nosnippet>718</a>            v <span class="kw">if </span>v == V::Base::VERSION =&gt; Serializer::&lt;V::Base&gt;::deserialize(message),
 <a href=#719 id=719 data-nosnippet>719</a>            v <span class="kw">if </span>v == V::Upgrade::VERSION =&gt; Serializer::&lt;V::Upgrade&gt;::deserialize(message),
 <a href=#720 id=720 data-nosnippet>720</a>            v =&gt; {
-<a href=#721 id=721 data-nosnippet>721</a>                <span class="macro">bail!</span>(<span class="string">"Cannot deserialize message with stated version {}"</span>, v);
+<a href=#721 id=721 data-nosnippet>721</a>                <span class="macro">bail!</span>(<span class="string">"Cannot deserialize message with stated version {v}"</span>);
 <a href=#722 id=722 data-nosnippet>722</a>            },
 <a href=#723 id=723 data-nosnippet>723</a>        }
 <a href=#724 id=724 data-nosnippet>724</a>        .wrap()

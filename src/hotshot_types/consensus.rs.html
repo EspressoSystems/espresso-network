@@ -594,7 +594,7 @@
 <a href=#594 id=594 data-nosnippet>594</a>    ) {
 <a href=#595 id=595 data-nosnippet>595</a>        <span class="kw">if </span>next_epoch_qc.data.leaf_commit != qc.data().leaf_commit {
 <a href=#596 id=596 data-nosnippet>596</a>            <span class="macro">tracing::error!</span>(
-<a href=#597 id=597 data-nosnippet>597</a>                <span class="string">"Next epoch QC for view {:?} has different leaf commit {:?} to {:?}"</span>,
+<a href=#597 id=597 data-nosnippet>597</a>                <span class="string">"Next epoch QC for view {} has different leaf commit {:?} to {:?}"</span>,
 <a href=#598 id=598 data-nosnippet>598</a>                qc.view_number(),
 <a href=#599 id=599 data-nosnippet>599</a>                next_epoch_qc.data.leaf_commit,
 <a href=#600 id=600 data-nosnippet>600</a>                qc.data().leaf_commit
@@ -1054,12 +1054,12 @@
 <a href=#1054 id=1054 data-nosnippet>1054</a>        <span class="kw">let </span><span class="kw-2">mut </span>next_leaf = <span class="kw">if let </span><span class="prelude-val">Some</span>(view) = <span class="self">self</span>.validated_state_map.get(<span class="kw-2">&amp;</span>start_from) {
 <a href=#1055 id=1055 data-nosnippet>1055</a>            view.leaf_commitment().ok_or_else(|| {
 <a href=#1056 id=1056 data-nosnippet>1056</a>                HotShotError::InvalidState(<span class="macro">format!</span>(
-<a href=#1057 id=1057 data-nosnippet>1057</a>                    <span class="string">"Visited failed view {start_from:?} leaf. Expected successful leaf"
+<a href=#1057 id=1057 data-nosnippet>1057</a>                    <span class="string">"Visited failed view {start_from} leaf. Expected successful leaf"
 <a href=#1058 id=1058 data-nosnippet>1058</a>                </span>))
 <a href=#1059 id=1059 data-nosnippet>1059</a>            })<span class="question-mark">?
 <a href=#1060 id=1060 data-nosnippet>1060</a>        </span>} <span class="kw">else </span>{
 <a href=#1061 id=1061 data-nosnippet>1061</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(HotShotError::InvalidState(<span class="macro">format!</span>(
-<a href=#1062 id=1062 data-nosnippet>1062</a>                <span class="string">"View {start_from:?} leaf does not exist in state map "
+<a href=#1062 id=1062 data-nosnippet>1062</a>                <span class="string">"View {start_from} leaf does not exist in state map "
 <a href=#1063 id=1063 data-nosnippet>1063</a>            </span>)));
 <a href=#1064 id=1064 data-nosnippet>1064</a>        };
 <a href=#1065 id=1065 data-nosnippet>1065</a>
@@ -1088,7 +1088,7 @@
 <a href=#1088 id=1088 data-nosnippet>1088</a>                }
 <a href=#1089 id=1089 data-nosnippet>1089</a>            } <span class="kw">else </span>{
 <a href=#1090 id=1090 data-nosnippet>1090</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(HotShotError::InvalidState(<span class="macro">format!</span>(
-<a href=#1091 id=1091 data-nosnippet>1091</a>                    <span class="string">"View {view:?} state does not exist in state map"
+<a href=#1091 id=1091 data-nosnippet>1091</a>                    <span class="string">"View {view} state does not exist in state map"
 <a href=#1092 id=1092 data-nosnippet>1092</a>                </span>)));
 <a href=#1093 id=1093 data-nosnippet>1093</a>            }
 <a href=#1094 id=1094 data-nosnippet>1094</a>        }
