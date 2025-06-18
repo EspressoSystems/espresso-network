@@ -12,10 +12,7 @@ use std::{
 use anyhow::Context;
 use async_trait::async_trait;
 use delegate::delegate;
-use hotshot_types::{
-    constants::KAD_DEFAULT_REPUB_INTERVAL_SEC, signature_key::BLSPubKey,
-    traits::signature_key::SignatureKey,
-};
+use hotshot_types::{signature_key::BLSPubKey, traits::signature_key::SignatureKey};
 use libp2p::{
     kad::store::{RecordStore, Result},
     PeerId,

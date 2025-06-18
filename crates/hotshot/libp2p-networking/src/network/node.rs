@@ -15,9 +15,11 @@ use std::{
     collections::{HashMap, HashSet},
     iter,
     num::{NonZeroU32, NonZeroUsize},
+    sync::Arc,
     time::Duration,
 };
 
+use dashmap::DashMap;
 use futures::{channel::mpsc, SinkExt, StreamExt};
 use hotshot_types::{
     constants::KAD_DEFAULT_REPUB_INTERVAL_SEC, traits::node_implementation::NodeType,
@@ -168,6 +170,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
     pub async fn new(
         config: NetworkNodeConfig<T>,
         dht_persistent_storage: D,
+        consensus_key_to_p2p_map: Arc<DashMap<T::SignatureKey, PeerId>>,
     ) -> Result<Self, NetworkError> {
         // Generate a random `KeyPair` if one is not specified
         let keypair = config
@@ -178,13 +181,9 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
         // Get the `PeerId` from the `KeyPair`
         let peer_id = PeerId::from(keypair.public());
 
-        // Generate the transport from the keypair, membership, and auth message
-        let transport: BoxedTransport = gen_transport::<T>(
-            keypair.clone(),
-            config.membership.clone(),
-            config.auth_message.clone(),
-        )
-        .await?;
+        // Generate the transport from the keypair and auth message
+        let transport: BoxedTransport =
+            gen_transport::<T>(keypair.clone(), config.auth_message.clone(), consensus_key_to_p2p_map).await?;
 
         // Generate the swarm
         let mut swarm: Swarm<NetworkDef<T::SignatureKey, D>> = {

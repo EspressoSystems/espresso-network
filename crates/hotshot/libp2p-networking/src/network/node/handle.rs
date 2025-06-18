@@ -4,8 +4,10 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{collections::HashSet, fmt::Debug, time::Duration};
+use hotshot_types::traits::signature_key::SignatureKey;
+use std::{collections::HashSet, fmt::Debug, sync::Arc, time::Duration};
 
+use dashmap::DashMap;
 use hotshot_types::traits::{network::NetworkError, node_implementation::NodeType};
 use libp2p::{request_response::ResponseChannel, Multiaddr};
 use libp2p_identity::PeerId;
@@ -36,6 +38,9 @@ pub struct NetworkNodeHandle<T: NodeType> {
 
     /// the local address we're listening on
     listen_addr: Multiaddr,
+
+    /// The consensus key to p2p map
+    consensus_key_to_p2p_map: Arc<DashMap<T::SignatureKey, PeerId>>,
 
     /// the peer id of the networkbehaviour
     peer_id: PeerId,
@@ -83,11 +88,16 @@ impl NetworkNodeReceiver {
 pub async fn spawn_network_node<T: NodeType, D: DhtPersistentStorage>(
     config: NetworkNodeConfig<T>,
     dht_persistent_storage: D,
+    consensus_key_to_p2p_map: Arc<DashMap<T::SignatureKey, PeerId>>,
     id: usize,
 ) -> Result<(NetworkNodeReceiver, NetworkNodeHandle<T>), NetworkError> {
-    let mut network = NetworkNode::new(config.clone(), dht_persistent_storage)
-        .await
-        .map_err(|e| NetworkError::ConfigError(format!("failed to create network node: {e}")))?;
+    let mut network = NetworkNode::new(
+        config.clone(),
+        dht_persistent_storage,
+        consensus_key_to_p2p_map.clone(),
+    )
+    .await
+    .map_err(|e| NetworkError::ConfigError(format!("failed to create network node: {e}")))?;
     // randomly assigned port
     let listen_addr = config
         .bind_address
@@ -112,6 +122,7 @@ pub async fn spawn_network_node<T: NodeType, D: DhtPersistentStorage>(
         send_network: send_chan,
         listen_addr,
         peer_id,
+        consensus_key_to_p2p_map,
         id,
     };
     Ok((receiver, handle))
@@ -204,6 +215,15 @@ impl<T: NodeType> NetworkNodeHandle<T> {
         key: &[u8],
         dht_timeout: Duration,
     ) -> Result<PeerId, NetworkError> {
+        // First try to deserialize the key as a consensus key
+        let consensus_key = T::SignatureKey::from_bytes(key)
+            .map_err(|err| NetworkError::FailedToDeserialize(err.to_string()))?;
+
+        // First look up the consensus key in our local map
+        if let Some(p2p_id) = self.consensus_key_to_p2p_map.get(&consensus_key) {
+            return Ok(p2p_id.clone());
+        }
+
         // Create the record key
         let key = RecordKey::new(Namespace::Lookup, key.to_vec());
 

@@ -18,8 +18,10 @@ alloy = { workspace = true }
 anyhow = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
+parking_lot = { workspace = true }
 bincode = { workspace = true }
 blake3 = { workspace = true }
+dashmap = { workspace = true }
 cbor4ii = { workspace = true }
 delegate = "0.13"
 derive_builder = { workspace = true }

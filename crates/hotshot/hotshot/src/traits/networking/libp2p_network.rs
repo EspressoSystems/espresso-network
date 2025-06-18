@@ -26,6 +26,7 @@ use anyhow::{anyhow, Context};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use bimap::BiHashMap;
+use dashmap::DashMap;
 use futures::future::join_all;
 #[cfg(feature = "hotshot-testing")]
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtNoPersistence;
@@ -528,20 +529,22 @@ impl<T: NodeType> Libp2pNetwork<T> {
         id: usize,
         #[cfg(feature = "hotshot-testing")] reliability_config: Option<Box<dyn NetworkReliability>>,
     ) -> Result<Libp2pNetwork<T>, NetworkError> {
-        let (mut rx, network_handle) =
-            spawn_network_node::<T, D>(config.clone(), dht_persistent_storage, id)
-                .await
-                .map_err(|e| {
-                    NetworkError::ConfigError(format!("failed to spawn network node: {e}"))
-                })?;
+        // Create our local-only map of consensus public keys to Libp2p Peer IDs
+        let consensus_key_to_p2p_map = Arc::new(DashMap::new());
+
+        let (mut rx, network_handle) = spawn_network_node::<T, D>(
+            config.clone(),
+            dht_persistent_storage,
+            consensus_key_to_p2p_map,
+            id,
+        )
+        .await
+        .map_err(|e| NetworkError::ConfigError(format!("failed to spawn network node: {e}")))?;
 
         // Add our own address to the bootstrap addresses
         let addr = network_handle.listen_addr();
         let pid = network_handle.peer_id();
         bootstrap_addrs.write().await.push((pid, addr));
-
-        let mut pubkey_pid_map = BiHashMap::new();
-        pubkey_pid_map.insert(pk.clone(), network_handle.peer_id());
 
         // Subscribe to the relevant topics
         let subscribed_topics = HashSet::from_iter(vec![QC_TOPIC.to_string()]);
