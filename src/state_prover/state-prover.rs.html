@@ -112,7 +112,7 @@
 <a href=#112 id=112 data-nosnippet>112</a>
 <a href=#113 id=113 data-nosnippet>113</a>    <span class="comment">// prepare config for state prover from user options
 <a href=#114 id=114 data-nosnippet>114</a>    </span><span class="kw">let </span>transport = SwitchingTransport::new(args.l1_options, args.l1_provider_url)
-<a href=#115 id=115 data-nosnippet>115</a>        .expect(<span class="string">"failed to create switching transport"</span>);
+<a href=#115 id=115 data-nosnippet>115</a>        .expect(<span class="string">"failed to create switching transport, check your l1 provider urls"</span>);
 <a href=#116 id=116 data-nosnippet>116</a>    <span class="kw">let </span>rpc_client = RpcClient::new(transport.clone(), <span class="bool-val">false</span>);
 <a href=#117 id=117 data-nosnippet>117</a>    <span class="kw">let </span>l1_provider = ProviderBuilder::new().on_client(rpc_client.clone());
 <a href=#118 id=118 data-nosnippet>118</a>    <span class="kw">let </span>chain_id = l1_provider.get_chain_id().<span class="kw">await</span>.unwrap();
@@ -179,7 +179,7 @@
 <a href=#179 id=179 data-nosnippet>179</a>    </span>{
 <a href=#180 id=180 data-nosnippet>180</a>        <span class="prelude-val">Ok</span>(is_legacy) =&gt; is_legacy,
 <a href=#181 id=181 data-nosnippet>181</a>        <span class="prelude-val">Err</span>(err) =&gt; {
-<a href=#182 id=182 data-nosnippet>182</a>            <span class="macro">tracing::error!</span>(<span class="string">"Error checking with the contract: {:?}"</span>, err);
+<a href=#182 id=182 data-nosnippet>182</a>            <span class="macro">tracing::error!</span>(<span class="string">"Error checking the contract version: {err}"</span>);
 <a href=#183 id=183 data-nosnippet>183</a>            <span class="kw">return</span>;
 <a href=#184 id=184 data-nosnippet>184</a>        },
 <a href=#185 id=185 data-nosnippet>185</a>    };
@@ -199,7 +199,7 @@
 <a href=#199 id=199 data-nosnippet>199</a>            hotshot_state_prover::service::run_prover_service(config, bind_version).<span class="kw">await
 <a href=#200 id=200 data-nosnippet>200</a>        </span>};
 <a href=#201 id=201 data-nosnippet>201</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = result {
-<a href=#202 id=202 data-nosnippet>202</a>            <span class="macro">tracing::error!</span>(<span class="string">"Error running prover service: {:?}"</span>, err);
+<a href=#202 id=202 data-nosnippet>202</a>            <span class="macro">tracing::error!</span>(<span class="string">"Error running prover service: {err}"</span>);
 <a href=#203 id=203 data-nosnippet>203</a>        };
 <a href=#204 id=204 data-nosnippet>204</a>    } <span class="kw">else </span>{
 <a href=#205 id=205 data-nosnippet>205</a>        <span class="comment">// Run light client state update once
@@ -209,7 +209,7 @@
 <a href=#209 id=209 data-nosnippet>209</a>            hotshot_state_prover::service::run_prover_once(config, bind_version).<span class="kw">await
 <a href=#210 id=210 data-nosnippet>210</a>        </span>};
 <a href=#211 id=211 data-nosnippet>211</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = result {
-<a href=#212 id=212 data-nosnippet>212</a>            <span class="macro">tracing::error!</span>(<span class="string">"Error running prover once: {:?}"</span>, err);
+<a href=#212 id=212 data-nosnippet>212</a>            <span class="macro">tracing::error!</span>(<span class="string">"Error running prover once: {err}"</span>);
 <a href=#213 id=213 data-nosnippet>213</a>        }
 <a href=#214 id=214 data-nosnippet>214</a>    }
 <a href=#215 id=215 data-nosnippet>215</a>}</code></pre></div></section></main></body></html>
