@@ -216,6 +216,7 @@ impl StakeTableState {
                 let stake_table_key: BLSPubKey = blsVk.into();
                 let state_ver_key: SchnorrPubKey = schnorrVk.into();
 
+                // The stake table contract enforces that each bls key is only used once.
                 if !self.used_bls_keys.insert(stake_table_key) {
                     tracing::warn!(
                         stake_table_key = %stake_table_key,
@@ -226,6 +227,7 @@ impl StakeTableState {
                     ));
                 }
 
+                // The contract does *not* enforce that each schnorr key is only used once.
                 if !self.used_schnorr_keys.insert(state_ver_key.clone()) {
                     tracing::warn!(
                         schnorr_key = %state_ver_key,
@@ -254,6 +256,8 @@ impl StakeTableState {
             },
 
             StakeTableEvent::RegisterV2(reg) => {
+                // Signature authentication is performed right after fetching, if we get an
+                // unauthenticated event here, something went wrong, we abort early.
                 reg.authenticate()
                     .map_err(|e| StakeTableError::AuthenticationFailed(e.to_string()))?;
 
@@ -268,6 +272,7 @@ impl StakeTableState {
                 let stake_table_key: BLSPubKey = blsVK.into();
                 let state_ver_key: SchnorrPubKey = schnorrVK.into();
 
+                // The stake table contract enforces that each bls key is only used once.
                 if !self.used_bls_keys.insert(stake_table_key) {
                     tracing::warn!(
                         stake_table_key = %stake_table_key,
@@ -278,6 +283,7 @@ impl StakeTableState {
                     ));
                 }
 
+                // The contract does *not* enforce that each schnorr key is only used once.
                 if !self.used_schnorr_keys.insert(state_ver_key.clone()) {
                     tracing::warn!(
                         schnorr_key = %state_ver_key,
@@ -331,6 +337,8 @@ impl StakeTableState {
                 }
 
                 val.stake += amount;
+                // Insert the delegator with the given stake
+                // or increase the stake if already present
                 val.delegators
                     .entry(delegator)
                     .and_modify(|s| *s += amount)
@@ -397,6 +405,8 @@ impl StakeTableState {
                     ));
                 }
 
+                // The contract does *not* enforce that each schnorr key is only used once,
+                // therefore it's possible to have multiple validators with the same schnorr key.
                 if !self.used_schnorr_keys.insert(state_ver_key.clone()) {
                     tracing::warn!(
                         schnorr_key = %state_ver_key,
@@ -414,6 +424,8 @@ impl StakeTableState {
             },
 
             StakeTableEvent::KeyUpdateV2(update) => {
+                // Signature authentication is performed right after fetching, if we get an
+                // unauthenticated event here, something went wrong, we abort early.
                 update
                     .authenticate()
                     .map_err(|e| StakeTableError::AuthenticationFailed(e.to_string()))?;
@@ -433,6 +445,7 @@ impl StakeTableState {
                 let stake_table_key: BLSPubKey = blsVK.into();
                 let state_ver_key: SchnorrPubKey = schnorrVK.into();
 
+                // The stake table contract enforces that each bls key is only used once.
                 if !self.used_bls_keys.insert(stake_table_key) {
                     tracing::warn!(
                         stake_table_key = %stake_table_key,
@@ -443,6 +456,8 @@ impl StakeTableState {
                     ));
                 }
 
+                // The contract does *not* enforce that each schnorr key is only used once,
+                // therefore it's possible to have multiple validators with the same schnorr key.
                 if !self.used_schnorr_keys.insert(state_ver_key.clone()) {
                     tracing::warn!(
                         schnorr_key = %state_ver_key,
@@ -529,12 +544,14 @@ pub(crate) fn select_active_validator_set(
         "Number of validators above minimum stake threshold"
     );
 
+    // Sort by stake (descending order)
     valid_stakers.sort_by_key(|(_, stake)| std::cmp::Reverse(*stake));
 
     if valid_stakers.len() > 100 {
         valid_stakers.truncate(100);
     }
 
+    // Retain only the selected validators
     let selected_addresses: HashSet<_> = valid_stakers.iter().map(|(addr, _)| *addr).collect();
     validators.retain(|address, _| selected_addresses.contains(address));
 
@@ -1118,6 +1135,7 @@ impl Fetcher {
             },
         };
 
+        // Get the transaction that emitted the Initialized event
         let tx_hash =
             init_log
                 .transaction_hash
