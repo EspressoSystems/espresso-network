@@ -347,12 +347,12 @@ impl<R: RecordStore, D: DhtPersistentStorage> PersistentStore<R, D> {
                     let peer_id = PeerId::from_bytes(&value.value())
                         .with_context(|| "Failed to convert record value to record value")?;
 
-                    record.expires = Some(record.expires.unwrap_or(
-                        Instant::now() + Duration::from_secs(KAD_DEFAULT_REPUB_INTERVAL_SEC),
-                    ));
+                    if record.expires.is_none() {
+                        continue;
+                    }
 
                     info!(
-                        "Record: {} -> {}. Publisher: {:?}, expires: {:?}",
+                        "Loaded record: {} -> {}. Publisher: {:?}, expires: {:?}",
                         pub_key,
                         peer_id,
                         record.publisher,
@@ -377,6 +377,30 @@ impl<R: RecordStore, D: DhtPersistentStorage> PersistentStore<R, D> {
 
         Ok(())
     }
+
+    fn print_records(&self) -> anyhow::Result<()> {
+        for record in self.underlying_record_store.records() {
+            let key = RecordKey::try_from_bytes(&record.key.to_vec())
+                .with_context(|| "Failed to convert record key to record key")?;
+            let value: RecordValue<BLSPubKey> = bincode::deserialize(&record.value)
+                .with_context(|| "Failed to convert record value to record value")?;
+
+            let pub_key = BLSPubKey::from_bytes(&key.key.to_vec())?;
+
+            let peer_id = PeerId::from_bytes(&value.value())
+                .with_context(|| "Failed to convert record value to record value")?;
+
+            info!(
+                "Record: {} -> {}. Publisher: {:?}, expires: {:?}",
+                pub_key,
+                peer_id,
+                record.publisher,
+                record.expires.map(|e| e.duration_since(Instant::now()))
+            );
+        }
+
+        Ok(())
+    }
 }
 
 /// Implement the `RecordStore` trait for `PersistentStore`
@@ -395,7 +419,6 @@ impl<R: RecordStore, D: DhtPersistentStorage> RecordStore for PersistentStore<R,
     delegate! {
         to self.underlying_record_store {
             fn add_provider(&mut self, record: libp2p::kad::ProviderRecord) -> libp2p::kad::store::Result<()>;
-            fn get(&self, k: &libp2p::kad::RecordKey) -> Option<std::borrow::Cow<'_, libp2p::kad::Record>>;
             fn provided(&self) -> Self::ProvidedIter<'_>;
             fn providers(&self, key: &libp2p::kad::RecordKey) -> Vec<libp2p::kad::ProviderRecord>;
             fn records(&self) -> Self::RecordsIter<'_>;
@@ -421,6 +444,22 @@ impl<R: RecordStore, D: DhtPersistentStorage> RecordStore for PersistentStore<R,
         }
 
         result
+    }
+
+    /// Overwrite the `get` method to potentially print the entire table
+    fn get(&self, k: &libp2p::kad::RecordKey) -> Option<std::borrow::Cow<'_, libp2p::kad::Record>> {
+        static LAST_PRINT_TIME: AtomicU64 = AtomicU64::new(0);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        if now - LAST_PRINT_TIME.load(Ordering::Relaxed) > 120 {
+            self.print_records().unwrap();
+            LAST_PRINT_TIME.store(now, Ordering::Relaxed);
+        }
+
+        self.underlying_record_store.get(k)
     }
 
     /// Overwrite the `remove` method to potentially sync the DHT to the persistent store

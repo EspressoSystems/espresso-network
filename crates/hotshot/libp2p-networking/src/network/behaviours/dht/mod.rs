@@ -270,8 +270,12 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
             Some(query) => match record_results {
                 Ok(results) => match results {
                     GetRecordOk::FoundRecord(record) => {
-                        query.records.push(record.record);
-                        true
+                        if record.record.expires.is_some() {
+                            query.records.push(record.record);
+                            true
+                        } else {
+                            false
+                        }
                     },
                     GetRecordOk::FinishedWithNoAdditionalRecord {
                         cache_candidates: _,
@@ -320,11 +324,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                 }
 
                 // Find the record with the highest expiry
-                if let Some(record) = records.into_iter().max_by_key(|r| {
-                    r.expires.unwrap_or(
-                        Instant::now() + Duration::from_secs(KAD_DEFAULT_REPUB_INTERVAL_SEC),
-                    )
-                }) {
+                if let Some(record) = records.into_iter().max_by_key(|r| r.expires.unwrap()) {
                     // Only return the record if we can store it (validation passed)
                     if store.put(record.clone()).is_ok() {
                         // Send the record to all channels that are still open
