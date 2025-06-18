@@ -37,13 +37,13 @@ type EpochSender<TYPES> = (
 
 /// Struct to Coordinate membership catchup
 pub struct EpochMembershipCoordinator<TYPES: NodeType> {
-    /// The underlying membhersip
+    /// The underlying membership
     membership: Arc<RwLock<TYPES::Membership>>,
 
     /// Any in progress attempts at catching up are stored in this map
-    /// Any new callers wantin an `EpochMembership` will await on the signal
+    /// Any new callers wanting an `EpochMembership` will await on the signal
     /// alerting them the membership is ready.  The first caller for an epoch will
-    /// wait for the actual catchup and allert future callers when it's done
+    /// wait for the actual catchup and alert future callers when it's done
     catchup_map: Arc<Mutex<EpochMap<TYPES>>>,
 
     /// Number of blocks in an epoch
