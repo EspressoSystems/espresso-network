@@ -15,10 +15,10 @@ use clap::Parser;
 use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
-    Leaf, Leaf2, NetworkConfig, Payload, SeqTypes,
+    v0_3::{EventKey, IndexedStake, StakeTableEvent},
+    Leaf, Leaf2, NetworkConfig, Payload, SeqTypes, ValidatorMap,
 };
-use hotshot::{types::BLSPubKey, InitializerEpochInfo};
+use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
     DhtPersistentStorage, SerializableRecord,
 };
@@ -42,7 +42,6 @@ use hotshot_types::{
     },
     vote::HasViewNumber,
 };
-use indexmap::IndexMap;
 use itertools::Itertools;
 
 use crate::{
@@ -1511,10 +1510,7 @@ impl SequencerPersistence for Persistence {
 
 #[async_trait]
 impl MembershipPersistence for Persistence {
-    async fn load_stake(
-        &self,
-        epoch: EpochNumber,
-    ) -> anyhow::Result<Option<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>>> {
+    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<ValidatorMap>> {
         let inner = self.inner.read().await;
         let path = &inner.stake_table_dir_path();
         let file_path = path.join(epoch.to_string()).with_extension("txt");
@@ -1542,11 +1538,7 @@ impl MembershipPersistence for Persistence {
             .collect()
     }
 
-    async fn store_stake(
-        &self,
-        epoch: EpochNumber,
-        stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
-    ) -> anyhow::Result<()> {
+    async fn store_stake(&self, epoch: EpochNumber, stake: ValidatorMap) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
         let dir_path = &inner.stake_table_dir_path();
 
