@@ -129,7 +129,31 @@ impl PersistenceOptions for Options {
     }
 
     async fn reset(self) -> anyhow::Result<()> {
-        todo!()
+        // Get the path to the storage directory
+        let path = self.inner.read().await.path.clone();
+        
+        // Check if the directory exists
+        if path.exists() {
+            // Remove all contents of the directory while preserving the directory itself
+            for entry in std::fs::read_dir(&path)? {
+                let entry = entry?;
+                let entry_path = entry.path();
+                
+                if entry_path.is_dir() {
+                    std::fs::remove_dir_all(entry_path)?;
+                } else {
+                    std::fs::remove_file(entry_path)?;
+                }
+            }
+            
+            tracing::info!("Reset file system storage at {}", path.display());
+        } else {
+            // Create the directory if it doesn't exist
+            std::fs::create_dir_all(&path)?;
+            tracing::info!("Created empty file system storage at {}", path.display());
+        }
+        
+        Ok(())
     }
 }
 
@@ -2416,5 +2440,50 @@ mod test {
                 .into_iter()
                 .collect::<BTreeMap<_, _>>()
         );
+    }
+
+    #[tokio::test]
+    async fn test_reset() {
+        use super::*;
+        use std::fs::File;
+        use std::io::Write;
+
+        // Create a temporary directory for testing
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().to_path_buf();
+        
+        // Create some files and directories for testing
+        let test_file_path = path.join("test_file.txt");
+        let test_dir_path = path.join("test_dir");
+        let test_nested_file_path = path.join("test_dir").join("nested_file.txt");
+        
+        std::fs::create_dir_all(&test_dir_path).unwrap();
+        
+        let mut file = File::create(&test_file_path).unwrap();
+        file.write_all(b"test content").unwrap();
+        
+        let mut nested_file = File::create(&test_nested_file_path).unwrap();
+        nested_file.write_all(b"nested content").unwrap();
+        
+        // Verify that files and directories exist
+        assert!(test_file_path.exists());
+        assert!(test_dir_path.exists());
+        assert!(test_nested_file_path.exists());
+        
+        // Create a Persistence instance
+        let mut options = Options::default();
+        options.path = path.clone();
+        let persistence = options.create().await.unwrap();
+        
+        // Call the reset method
+        persistence.reset().await.unwrap();
+        
+        // Verify that all files and directories were deleted
+        assert!(!test_file_path.exists());
+        assert!(!test_dir_path.exists());
+        assert!(!test_nested_file_path.exists());
+        
+        // Verify that the main directory still exists
+        assert!(path.exists());
     }
 }
