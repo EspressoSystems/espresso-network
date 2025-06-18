@@ -36,10 +36,6 @@ pub mod record;
 /// Additional DHT store functionality
 pub mod store;
 
-/// the number of nodes required to get an answer from
-/// in order to trust that the answer is correct when retrieving from the DHT
-pub(crate) const NUM_REPLICATED_TO_TRUST: usize = 2;
-
 lazy_static! {
     /// the maximum number of nodes to query in the DHT at any one time
     static ref MAX_DHT_QUERY_SIZE: NonZeroUsize = NonZeroUsize::new(50).unwrap();
@@ -174,7 +170,6 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
         &mut self,
         key: Vec<u8>,
         chans: Vec<Sender<Vec<u8>>>,
-        factor: NonZeroUsize,
         backoff: ExponentialBackoff,
         retry_count: u8,
         kad: &mut KademliaBehaviour<PersistentStore<ValidatedStore<MemoryStore, K>, D>>,
@@ -211,10 +206,9 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                     backoff,
                     progress: DHTProgress::InProgress(qid),
                     notify: chans,
-                    num_replicas: factor,
                     key: key.clone(),
                     retry_count: retry_count - 1,
-                    records: HashMap::default(),
+                    records: Vec::new(),
                 };
 
                 // Add the key to the outstanding queries and in-progress queries
@@ -265,20 +259,16 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
         id: QueryId,
         mut last: bool,
     ) {
-        let num = match self.in_progress_record_queries.get_mut(&id) {
+        let found = match self.in_progress_record_queries.get_mut(&id) {
             Some(query) => match record_results {
                 Ok(results) => match results {
                     GetRecordOk::FoundRecord(record) => {
-                        match query.records.entry(record.record.value) {
-                            std::collections::hash_map::Entry::Occupied(mut o) => {
-                                let num_entries = o.get_mut();
-                                *num_entries += 1;
-                                *num_entries
-                            },
-                            std::collections::hash_map::Entry::Vacant(v) => {
-                                v.insert(1);
-                                1
-                            },
+                        // Only add the record if it has an expiration time
+                        if record.record.expires.is_some() {
+                            query.records.push(record.record);
+                            true
+                        } else {
+                            false
                         }
                     },
                     GetRecordOk::FinishedWithNoAdditionalRecord {
@@ -286,12 +276,12 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                     } => {
                         tracing::debug!("GetRecord Finished with No Additional Record");
                         last = true;
-                        0
+                        false
                     },
                 },
                 Err(err) => {
                     warn!("Error in Kademlia query: {:?}", err);
-                    0
+                    false
                 },
             },
             None => {
@@ -301,15 +291,13 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
             },
         };
 
-        // if the query has completed and we need to retry
-        // or if the query has enough replicas to return to the client
-        // trigger retry or completion logic
-        if num >= NUM_REPLICATED_TO_TRUST || last {
+        // If we have more than one record or the query has completed, we can return the record to the client.
+        // All records are valid so we don't need to
+        if found || last {
             if let Some(KadGetQuery {
                 backoff,
                 progress,
                 notify,
-                num_replicas,
                 key,
                 retry_count,
                 records,
@@ -329,28 +317,13 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                     return;
                 }
 
-                // NOTE case where multiple nodes agree on different
-                // values is not handled because it can't be hit.
-                // We optimistically choose whichever record returns the most trusted entries first
-
-                // iterate through the records and find an value that has enough replicas
-                // to trust the value
-                if let Some((r, _)) = records
-                    .into_iter()
-                    .find(|(_, v)| *v >= NUM_REPLICATED_TO_TRUST)
-                {
-                    let record = Record {
-                        key: key.into(),
-                        value: r.clone(),
-                        publisher: None,
-                        expires: None,
-                    };
-
+                // Find the record with the highest expiry
+                if let Some(record) = records.into_iter().max_by_key(|r| r.expires.unwrap()) {
                     // Only return the record if we can store it (validation passed)
-                    if store.put(record).is_ok() {
+                    if store.put(record.clone()).is_ok() {
                         // Send the record to all channels that are still open
                         for n in notify {
-                            if n.send(r.clone()).is_err() {
+                            if n.send(record.value.clone()).is_err() {
                                 warn!("Get DHT: channel closed before get record request result could be sent");
                             }
                         }
@@ -365,18 +338,13 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                     if retry_count > 0 {
                         let new_retry_count = retry_count - 1;
                         warn!("Get DHT: Internal disagreement for get dht request {:?}! requerying with more nodes. {:?} retries left", progress, new_retry_count);
-                        let new_factor = NonZeroUsize::max(
-                            NonZeroUsize::new(num_replicas.get() + 1).unwrap_or(num_replicas),
-                            *MAX_DHT_QUERY_SIZE,
-                        );
                         self.retry_get(KadGetQuery {
                             backoff,
                             progress: DHTProgress::NotStarted,
                             notify,
-                            num_replicas: new_factor,
                             key,
                             retry_count: new_retry_count,
-                            records: HashMap::default(),
+                            records: Vec::new(),
                         });
                     }
                     warn!("Get DHT: Internal disagreement for get dht request {:?}! Giving up because out of retries. ", progress);
@@ -534,14 +502,12 @@ pub(crate) struct KadGetQuery {
     pub(crate) progress: DHTProgress,
     /// The channels to notify of the result
     pub(crate) notify: Vec<Sender<Vec<u8>>>,
-    /// number of replicas required to replicate over
-    pub(crate) num_replicas: NonZeroUsize,
     /// the key to look up
     pub(crate) key: Vec<u8>,
     /// the number of remaining retries before giving up
     pub(crate) retry_count: u8,
     /// already received records
-    pub(crate) records: HashMap<Vec<u8>, usize>,
+    pub(crate) records: Vec<Record>,
 }
 
 /// Metadata holder for get query

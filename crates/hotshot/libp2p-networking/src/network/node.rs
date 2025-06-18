@@ -15,7 +15,7 @@ use std::{
     collections::{HashMap, HashSet},
     iter,
     num::{NonZeroU32, NonZeroUsize},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use futures::{channel::mpsc, SinkExt, StreamExt};
@@ -69,7 +69,7 @@ use super::{
     NetworkEventInternal,
 };
 use crate::network::behaviours::{
-    dht::{DHTBehaviour, DHTProgress, KadPutQuery, NUM_REPLICATED_TO_TRUST},
+    dht::{DHTBehaviour, DHTProgress, KadPutQuery},
     direct_message::{DMBehaviour, DMRequest},
     exponential_backoff::ExponentialBackoff,
 };
@@ -90,6 +90,8 @@ pub struct NetworkNode<T: NodeType, D: DhtPersistentStorage> {
     /// the swarm of networkbehaviours
     #[debug(skip)]
     swarm: Swarm<NetworkDef<T::SignatureKey, D>>,
+    /// The Kademlia record TTL
+    kademlia_record_ttl: Duration,
     /// the listener id we are listening on, if it exists
     listener_id: Option<ListenerId>,
     /// Handler for direct messages
@@ -186,6 +188,16 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
         )
         .await?;
 
+        // Calculate the record republication interval
+        let kademlia_record_republication_interval = config
+            .republication_interval
+            .unwrap_or(Duration::from_secs(KAD_DEFAULT_REPUB_INTERVAL_SEC));
+
+        // Calculate the Kademlia record TTL
+        let kademlia_ttl = config
+            .ttl
+            .unwrap_or(16 * kademlia_record_republication_interval);
+
         // Generate the swarm
         let mut swarm: Swarm<NetworkDef<T::SignatureKey, D>> = {
             // Use the `Blake3` hash of the message's contents as the ID
@@ -244,16 +256,11 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
 
             // - Build DHT needed for peer discovery
             let mut kconfig = Config::new(StreamProtocol::new("/ipfs/kad/1.0.0"));
-            // 8 hours by default
-            let record_republication_interval = config
-                .republication_interval
-                .unwrap_or(Duration::from_secs(KAD_DEFAULT_REPUB_INTERVAL_SEC));
-            let ttl = Some(config.ttl.unwrap_or(16 * record_republication_interval));
             kconfig
                 .set_parallelism(NonZeroUsize::new(5).unwrap())
-                .set_provider_publication_interval(Some(record_republication_interval))
-                .set_publication_interval(Some(record_republication_interval))
-                .set_record_ttl(ttl);
+                .set_provider_publication_interval(Some(kademlia_record_republication_interval))
+                .set_publication_interval(Some(kademlia_record_republication_interval))
+                .set_record_ttl(Some(kademlia_ttl));
 
             // allowing panic here because something is very wrong if this fales
             #[allow(clippy::panic)]
@@ -328,6 +335,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
         Ok(Self {
             peer_id,
             swarm,
+            kademlia_record_ttl: kademlia_ttl,
             listener_id: None,
             direct_message_state: DMBehaviour::default(),
             dht_handler: DHTBehaviour::new(
@@ -345,7 +353,12 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
     /// # Panics
     /// If the default replication factor is `None`
     pub fn put_record(&mut self, mut query: KadPutQuery) {
-        let record = Record::new(query.key.clone(), query.value.clone());
+        // Create the new record
+        let mut record = Record::new(query.key.clone(), query.value.clone());
+
+        // Set the record's expiration time to the proper time
+        record.expires = Some(Instant::now() + self.kademlia_record_ttl);
+
         match self.swarm.behaviour_mut().dht.put_record(
             record,
             libp2p::kad::Quorum::N(
@@ -432,7 +445,6 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                         self.dht_handler.get_record(
                             key,
                             notify,
-                            NonZeroUsize::new(NUM_REPLICATED_TO_TRUST).unwrap(),
                             ExponentialBackoff::default(),
                             retry_count,
                             &mut self.swarm.behaviour_mut().dht,
