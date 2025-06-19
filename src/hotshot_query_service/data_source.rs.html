@@ -996,502 +996,503 @@
 <a href=#996 id=996 data-nosnippet>996</a>                block_number: i,
 <a href=#997 id=997 data-nosnippet>997</a>                payload_commitment,
 <a href=#998 id=998 data-nosnippet>998</a>                timestamp: i,
-<a href=#999 id=999 data-nosnippet>999</a>                builder_commitment:
-<a href=#1000 id=1000 data-nosnippet>1000</a>                    &lt;TestBlockPayload <span class="kw">as </span>BlockPayload&lt;TestTypes&gt;&gt;::builder_commitment(
-<a href=#1001 id=1001 data-nosnippet>1001</a>                        <span class="kw-2">&amp;</span>payload, <span class="kw-2">&amp;</span>metadata,
-<a href=#1002 id=1002 data-nosnippet>1002</a>                    ),
-<a href=#1003 id=1003 data-nosnippet>1003</a>                metadata: TestMetadata {
-<a href=#1004 id=1004 data-nosnippet>1004</a>                    num_transactions: <span class="number">7</span>, <span class="comment">// arbitrary
-<a href=#1005 id=1005 data-nosnippet>1005</a>                </span>},
-<a href=#1006 id=1006 data-nosnippet>1006</a>                random: <span class="number">1</span>, <span class="comment">// arbitrary
-<a href=#1007 id=1007 data-nosnippet>1007</a>            </span>};
-<a href=#1008 id=1008 data-nosnippet>1008</a>
-<a href=#1009 id=1009 data-nosnippet>1009</a>            <span class="kw">let </span><span class="kw-2">mut </span>leaf = LeafQueryData::&lt;MockTypes&gt;::genesis::&lt;TestVersions&gt;(
-<a href=#1010 id=1010 data-nosnippet>1010</a>                <span class="kw-2">&amp;</span>TestValidatedState::default(),
-<a href=#1011 id=1011 data-nosnippet>1011</a>                <span class="kw-2">&amp;</span>TestInstanceState::default(),
-<a href=#1012 id=1012 data-nosnippet>1012</a>            )
-<a href=#1013 id=1013 data-nosnippet>1013</a>            .<span class="kw">await</span>;
-<a href=#1014 id=1014 data-nosnippet>1014</a>            <span class="kw-2">*</span>leaf.leaf.block_header_mut() = header.clone();
-<a href=#1015 id=1015 data-nosnippet>1015</a>            <span class="kw">let </span>block = BlockQueryData::new(header, payload);
-<a href=#1016 id=1016 data-nosnippet>1016</a>            ds.append(BlockInfo::new(leaf, <span class="prelude-val">Some</span>(block.clone()), <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>))
-<a href=#1017 id=1017 data-nosnippet>1017</a>                .<span class="kw">await
-<a href=#1018 id=1018 data-nosnippet>1018</a>                </span>.unwrap();
-<a href=#1019 id=1019 data-nosnippet>1019</a>            <span class="macro">assert_eq!</span>(
-<a href=#1020 id=1020 data-nosnippet>1020</a>                NodeDataSource::&lt;MockTypes&gt;::block_height(<span class="kw-2">&amp;</span>ds)
-<a href=#1021 id=1021 data-nosnippet>1021</a>                    .<span class="kw">await
-<a href=#1022 id=1022 data-nosnippet>1022</a>                    </span>.unwrap(),
-<a href=#1023 id=1023 data-nosnippet>1023</a>                (i + <span class="number">1</span>) <span class="kw">as </span>usize,
-<a href=#1024 id=1024 data-nosnippet>1024</a>            );
-<a href=#1025 id=1025 data-nosnippet>1025</a>
-<a href=#1026 id=1026 data-nosnippet>1026</a>            total_transactions += <span class="number">1</span>;
-<a href=#1027 id=1027 data-nosnippet>1027</a>            total_size += encoded.len();
-<a href=#1028 id=1028 data-nosnippet>1028</a>
-<a href=#1029 id=1029 data-nosnippet>1029</a>            <span class="comment">// Allow some time for the aggregator to update.
-<a href=#1030 id=1030 data-nosnippet>1030</a>            </span><span class="kw">for </span>retry <span class="kw">in </span><span class="number">0</span>..<span class="number">5 </span>{
-<a href=#1031 id=1031 data-nosnippet>1031</a>                <span class="kw">let </span>ds_transactions = ds.count_transactions().<span class="kw">await</span>.unwrap();
-<a href=#1032 id=1032 data-nosnippet>1032</a>                <span class="kw">let </span>ds_payload_size = ds.payload_size().<span class="kw">await</span>.unwrap();
-<a href=#1033 id=1033 data-nosnippet>1033</a>                <span class="kw">if </span>ds_transactions != total_transactions || ds_payload_size != total_size {
-<a href=#1034 id=1034 data-nosnippet>1034</a>                    <span class="macro">tracing::info!</span>(
-<a href=#1035 id=1035 data-nosnippet>1035</a>                        i,
-<a href=#1036 id=1036 data-nosnippet>1036</a>                        retry,
-<a href=#1037 id=1037 data-nosnippet>1037</a>                        total_transactions,
-<a href=#1038 id=1038 data-nosnippet>1038</a>                        ds_transactions,
-<a href=#1039 id=1039 data-nosnippet>1039</a>                        total_size,
-<a href=#1040 id=1040 data-nosnippet>1040</a>                        ds_payload_size,
-<a href=#1041 id=1041 data-nosnippet>1041</a>                        <span class="string">"waiting for statistics to update"
-<a href=#1042 id=1042 data-nosnippet>1042</a>                    </span>);
-<a href=#1043 id=1043 data-nosnippet>1043</a>                    sleep(Duration::from_secs(<span class="number">1</span>)).<span class="kw">await</span>;
-<a href=#1044 id=1044 data-nosnippet>1044</a>                } <span class="kw">else </span>{
-<a href=#1045 id=1045 data-nosnippet>1045</a>                    <span class="kw">continue </span><span class="lifetime">'outer</span>;
-<a href=#1046 id=1046 data-nosnippet>1046</a>                }
-<a href=#1047 id=1047 data-nosnippet>1047</a>            }
-<a href=#1048 id=1048 data-nosnippet>1048</a>            <span class="macro">panic!</span>(<span class="string">"counters did not update in time"</span>);
-<a href=#1049 id=1049 data-nosnippet>1049</a>        }
-<a href=#1050 id=1050 data-nosnippet>1050</a>    }
-<a href=#1051 id=1051 data-nosnippet>1051</a>
-<a href=#1052 id=1052 data-nosnippet>1052</a>    <span class="attr">#[tokio::test(flavor = <span class="string">"multi_thread"</span>)]
-<a href=#1053 id=1053 data-nosnippet>1053</a>    </span><span class="kw">pub async fn </span>test_vid_shares&lt;D: TestableDataSource&gt;()
-<a href=#1054 id=1054 data-nosnippet>1054</a>    <span class="kw">where
-<a href=#1055 id=1055 data-nosnippet>1055</a>        for</span>&lt;<span class="lifetime">'a</span>&gt; D::ReadOnly&lt;<span class="lifetime">'a</span>&gt;: NodeStorage&lt;MockTypes&gt;,
-<a href=#1056 id=1056 data-nosnippet>1056</a>    {
-<a href=#1057 id=1057 data-nosnippet>1057</a>        setup_test();
-<a href=#1058 id=1058 data-nosnippet>1058</a>
-<a href=#1059 id=1059 data-nosnippet>1059</a>        <span class="kw">let </span><span class="kw-2">mut </span>network = MockNetwork::&lt;D, MockVersions&gt;::init().<span class="kw">await</span>;
-<a href=#1060 id=1060 data-nosnippet>1060</a>        <span class="kw">let </span>ds = network.data_source();
-<a href=#1061 id=1061 data-nosnippet>1061</a>
-<a href=#1062 id=1062 data-nosnippet>1062</a>        network.start().<span class="kw">await</span>;
-<a href=#1063 id=1063 data-nosnippet>1063</a>
-<a href=#1064 id=1064 data-nosnippet>1064</a>        <span class="comment">// Check VID shares for a few blocks.
-<a href=#1065 id=1065 data-nosnippet>1065</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>leaves = ds.subscribe_leaves(<span class="number">0</span>).<span class="kw">await</span>.take(<span class="number">3</span>);
-<a href=#1066 id=1066 data-nosnippet>1066</a>        <span class="kw">while let </span><span class="prelude-val">Some</span>(leaf) = leaves.next().<span class="kw">await </span>{
-<a href=#1067 id=1067 data-nosnippet>1067</a>            <span class="macro">tracing::info!</span>(<span class="string">"got leaf {}"</span>, leaf.height());
-<a href=#1068 id=1068 data-nosnippet>1068</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = ds.read().<span class="kw">await</span>.unwrap();
-<a href=#1069 id=1069 data-nosnippet>1069</a>            <span class="kw">let </span>share = tx.vid_share(leaf.height() <span class="kw">as </span>usize).<span class="kw">await</span>.unwrap();
-<a href=#1070 id=1070 data-nosnippet>1070</a>            <span class="macro">assert_eq!</span>(share, tx.vid_share(leaf.block_hash()).<span class="kw">await</span>.unwrap());
-<a href=#1071 id=1071 data-nosnippet>1071</a>            <span class="macro">assert_eq!</span>(
-<a href=#1072 id=1072 data-nosnippet>1072</a>                share,
-<a href=#1073 id=1073 data-nosnippet>1073</a>                tx.vid_share(BlockId::PayloadHash(leaf.payload_hash()))
-<a href=#1074 id=1074 data-nosnippet>1074</a>                    .<span class="kw">await
-<a href=#1075 id=1075 data-nosnippet>1075</a>                    </span>.unwrap()
-<a href=#1076 id=1076 data-nosnippet>1076</a>            );
-<a href=#1077 id=1077 data-nosnippet>1077</a>        }
-<a href=#1078 id=1078 data-nosnippet>1078</a>    }
-<a href=#1079 id=1079 data-nosnippet>1079</a>
-<a href=#1080 id=1080 data-nosnippet>1080</a>    <span class="attr">#[tokio::test(flavor = <span class="string">"multi_thread"</span>)]
-<a href=#1081 id=1081 data-nosnippet>1081</a>    </span><span class="kw">pub async fn </span>test_vid_monotonicity&lt;D: TestableDataSource&gt;()
-<a href=#1082 id=1082 data-nosnippet>1082</a>    <span class="kw">where
-<a href=#1083 id=1083 data-nosnippet>1083</a>        for</span>&lt;<span class="lifetime">'a</span>&gt; D::Transaction&lt;<span class="lifetime">'a</span>&gt;: UpdateAvailabilityStorage&lt;MockTypes&gt;,
-<a href=#1084 id=1084 data-nosnippet>1084</a>        <span class="kw">for</span>&lt;<span class="lifetime">'a</span>&gt; D::ReadOnly&lt;<span class="lifetime">'a</span>&gt;: NodeStorage&lt;MockTypes&gt;,
-<a href=#1085 id=1085 data-nosnippet>1085</a>    {
-<a href=#1086 id=1086 data-nosnippet>1086</a>        <span class="kw">use </span>hotshot_example_types::node_types::TestVersions;
-<a href=#1087 id=1087 data-nosnippet>1087</a>
-<a href=#1088 id=1088 data-nosnippet>1088</a>        setup_test();
-<a href=#1089 id=1089 data-nosnippet>1089</a>
-<a href=#1090 id=1090 data-nosnippet>1090</a>        <span class="kw">let </span>storage = D::create(<span class="number">0</span>).<span class="kw">await</span>;
-<a href=#1091 id=1091 data-nosnippet>1091</a>        <span class="kw">let </span>ds = D::connect(<span class="kw-2">&amp;</span>storage).<span class="kw">await</span>;
-<a href=#1092 id=1092 data-nosnippet>1092</a>
-<a href=#1093 id=1093 data-nosnippet>1093</a>        <span class="comment">// Generate some test VID data.
-<a href=#1094 id=1094 data-nosnippet>1094</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>vid = advz_scheme(<span class="number">2</span>);
-<a href=#1095 id=1095 data-nosnippet>1095</a>        <span class="kw">let </span>disperse = vid.disperse([]).unwrap();
-<a href=#1096 id=1096 data-nosnippet>1096</a>
-<a href=#1097 id=1097 data-nosnippet>1097</a>        <span class="comment">// Insert test data with VID common and a share.
-<a href=#1098 id=1098 data-nosnippet>1098</a>        </span><span class="kw">let </span>leaf = LeafQueryData::&lt;MockTypes&gt;::genesis::&lt;TestVersions&gt;(
-<a href=#1099 id=1099 data-nosnippet>1099</a>            <span class="kw-2">&amp;</span>TestValidatedState::default(),
-<a href=#1100 id=1100 data-nosnippet>1100</a>            <span class="kw-2">&amp;</span>TestInstanceState::default(),
-<a href=#1101 id=1101 data-nosnippet>1101</a>        )
-<a href=#1102 id=1102 data-nosnippet>1102</a>        .<span class="kw">await</span>;
-<a href=#1103 id=1103 data-nosnippet>1103</a>        <span class="kw">let </span>common = VidCommonQueryData::new(leaf.header().clone(), VidCommon::V0(disperse.common));
-<a href=#1104 id=1104 data-nosnippet>1104</a>        ds.append(BlockInfo::new(
-<a href=#1105 id=1105 data-nosnippet>1105</a>            leaf,
-<a href=#1106 id=1106 data-nosnippet>1106</a>            <span class="prelude-val">None</span>,
-<a href=#1107 id=1107 data-nosnippet>1107</a>            <span class="prelude-val">Some</span>(common.clone()),
-<a href=#1108 id=1108 data-nosnippet>1108</a>            <span class="prelude-val">Some</span>(VidShare::V0(disperse.shares[<span class="number">0</span>].clone())),
-<a href=#1109 id=1109 data-nosnippet>1109</a>            <span class="prelude-val">None</span>,
-<a href=#1110 id=1110 data-nosnippet>1110</a>        ))
-<a href=#1111 id=1111 data-nosnippet>1111</a>        .<span class="kw">await
-<a href=#1112 id=1112 data-nosnippet>1112</a>        </span>.unwrap();
-<a href=#1113 id=1113 data-nosnippet>1113</a>
-<a href=#1114 id=1114 data-nosnippet>1114</a>        {
-<a href=#1115 id=1115 data-nosnippet>1115</a>            <span class="macro">assert_eq!</span>(ds.get_vid_common(<span class="number">0</span>).<span class="kw">await</span>.<span class="kw">await</span>, common);
-<a href=#1116 id=1116 data-nosnippet>1116</a>            <span class="macro">assert_eq!</span>(
-<a href=#1117 id=1117 data-nosnippet>1117</a>                ds.vid_share(<span class="number">0</span>).<span class="kw">await</span>.unwrap(),
-<a href=#1118 id=1118 data-nosnippet>1118</a>                VidShare::V0(disperse.shares[<span class="number">0</span>].clone())
-<a href=#1119 id=1119 data-nosnippet>1119</a>            );
-<a href=#1120 id=1120 data-nosnippet>1120</a>        }
-<a href=#1121 id=1121 data-nosnippet>1121</a>
-<a href=#1122 id=1122 data-nosnippet>1122</a>        <span class="comment">// Re-insert the common data, without a share. This should not overwrite the share we
-<a href=#1123 id=1123 data-nosnippet>1123</a>        // already have.
-<a href=#1124 id=1124 data-nosnippet>1124</a>        </span>{
-<a href=#1125 id=1125 data-nosnippet>1125</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = ds.write().<span class="kw">await</span>.unwrap();
-<a href=#1126 id=1126 data-nosnippet>1126</a>            tx.insert_vid(common.clone(), <span class="prelude-val">None</span>).<span class="kw">await</span>.unwrap();
-<a href=#1127 id=1127 data-nosnippet>1127</a>            tx.commit().<span class="kw">await</span>.unwrap();
-<a href=#1128 id=1128 data-nosnippet>1128</a>        }
-<a href=#1129 id=1129 data-nosnippet>1129</a>        {
-<a href=#1130 id=1130 data-nosnippet>1130</a>            <span class="macro">assert_eq!</span>(ds.get_vid_common(<span class="number">0</span>).<span class="kw">await</span>.<span class="kw">await</span>, common);
-<a href=#1131 id=1131 data-nosnippet>1131</a>            <span class="macro">assert_eq!</span>(
-<a href=#1132 id=1132 data-nosnippet>1132</a>                ds.vid_share(<span class="number">0</span>).<span class="kw">await</span>.unwrap(),
-<a href=#1133 id=1133 data-nosnippet>1133</a>                VidShare::V0(disperse.shares[<span class="number">0</span>].clone())
-<a href=#1134 id=1134 data-nosnippet>1134</a>            );
-<a href=#1135 id=1135 data-nosnippet>1135</a>        }
-<a href=#1136 id=1136 data-nosnippet>1136</a>    }
-<a href=#1137 id=1137 data-nosnippet>1137</a>
-<a href=#1138 id=1138 data-nosnippet>1138</a>    <span class="attr">#[tokio::test(flavor = <span class="string">"multi_thread"</span>)]
-<a href=#1139 id=1139 data-nosnippet>1139</a>    </span><span class="kw">pub async fn </span>test_vid_recovery&lt;D: TestableDataSource&gt;()
-<a href=#1140 id=1140 data-nosnippet>1140</a>    <span class="kw">where
-<a href=#1141 id=1141 data-nosnippet>1141</a>        for</span>&lt;<span class="lifetime">'a</span>&gt; D::ReadOnly&lt;<span class="lifetime">'a</span>&gt;: NodeStorage&lt;MockTypes&gt;,
-<a href=#1142 id=1142 data-nosnippet>1142</a>    {
-<a href=#1143 id=1143 data-nosnippet>1143</a>        setup_test();
-<a href=#1144 id=1144 data-nosnippet>1144</a>
-<a href=#1145 id=1145 data-nosnippet>1145</a>        <span class="kw">let </span><span class="kw-2">mut </span>network = MockNetwork::&lt;D, MockVersions&gt;::init().<span class="kw">await</span>;
-<a href=#1146 id=1146 data-nosnippet>1146</a>        <span class="kw">let </span>ds = network.data_source();
-<a href=#1147 id=1147 data-nosnippet>1147</a>
-<a href=#1148 id=1148 data-nosnippet>1148</a>        network.start().<span class="kw">await</span>;
-<a href=#1149 id=1149 data-nosnippet>1149</a>
-<a href=#1150 id=1150 data-nosnippet>1150</a>        <span class="comment">// Submit a transaction so we can try to recover a non-empty block.
-<a href=#1151 id=1151 data-nosnippet>1151</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>blocks = ds.subscribe_blocks(<span class="number">0</span>).<span class="kw">await</span>;
-<a href=#1152 id=1152 data-nosnippet>1152</a>        <span class="kw">let </span>txn = mock_transaction(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);
-<a href=#1153 id=1153 data-nosnippet>1153</a>        network.submit_transaction(txn.clone()).<span class="kw">await</span>;
-<a href=#1154 id=1154 data-nosnippet>1154</a>
-<a href=#1155 id=1155 data-nosnippet>1155</a>        <span class="comment">// Wait for the transaction to be finalized.
-<a href=#1156 id=1156 data-nosnippet>1156</a>        </span><span class="kw">let </span>block = <span class="kw">loop </span>{
-<a href=#1157 id=1157 data-nosnippet>1157</a>            <span class="macro">tracing::info!</span>(<span class="string">"waiting for transaction"</span>);
-<a href=#1158 id=1158 data-nosnippet>1158</a>            <span class="kw">let </span>block = blocks.next().<span class="kw">await</span>.unwrap();
-<a href=#1159 id=1159 data-nosnippet>1159</a>            <span class="kw">if </span>!block.is_empty() {
-<a href=#1160 id=1160 data-nosnippet>1160</a>                <span class="macro">tracing::info!</span>(height = block.height(), <span class="string">"transaction sequenced"</span>);
-<a href=#1161 id=1161 data-nosnippet>1161</a>                <span class="kw">break </span>block;
-<a href=#1162 id=1162 data-nosnippet>1162</a>            }
-<a href=#1163 id=1163 data-nosnippet>1163</a>            <span class="macro">tracing::info!</span>(height = block.height(), <span class="string">"empty block"</span>);
-<a href=#1164 id=1164 data-nosnippet>1164</a>        };
-<a href=#1165 id=1165 data-nosnippet>1165</a>        <span class="kw">let </span>height = block.height() <span class="kw">as </span>usize;
-<a href=#1166 id=1166 data-nosnippet>1166</a>        <span class="kw">let </span>commit = <span class="kw">if let </span>VidCommitment::V0(commit) = block.payload_hash() {
-<a href=#1167 id=1167 data-nosnippet>1167</a>            commit
-<a href=#1168 id=1168 data-nosnippet>1168</a>        } <span class="kw">else </span>{
-<a href=#1169 id=1169 data-nosnippet>1169</a>            <span class="macro">panic!</span>(<span class="string">"expect ADVZ commitment"</span>)
-<a href=#1170 id=1170 data-nosnippet>1170</a>        };
-<a href=#1171 id=1171 data-nosnippet>1171</a>
-<a href=#1172 id=1172 data-nosnippet>1172</a>        <span class="comment">// Set up a test VID scheme.
-<a href=#1173 id=1173 data-nosnippet>1173</a>        </span><span class="kw">let </span>vid = advz_scheme(network.num_nodes());
-<a href=#1174 id=1174 data-nosnippet>1174</a>
-<a href=#1175 id=1175 data-nosnippet>1175</a>        <span class="comment">// Get VID common data and verify it.
-<a href=#1176 id=1176 data-nosnippet>1176</a>        </span><span class="macro">tracing::info!</span>(<span class="string">"fetching common data"</span>);
-<a href=#1177 id=1177 data-nosnippet>1177</a>        <span class="kw">let </span>common = ds.get_vid_common(height).<span class="kw">await</span>.<span class="kw">await</span>;
-<a href=#1178 id=1178 data-nosnippet>1178</a>        <span class="kw">let </span>VidCommon::V0(common) = <span class="kw-2">&amp;</span>common.common() <span class="kw">else </span>{
-<a href=#1179 id=1179 data-nosnippet>1179</a>            <span class="macro">panic!</span>(<span class="string">"expect ADVZ common"</span>);
-<a href=#1180 id=1180 data-nosnippet>1180</a>        };
-<a href=#1181 id=1181 data-nosnippet>1181</a>        ADVZScheme::is_consistent(<span class="kw-2">&amp;</span>commit, common).unwrap();
-<a href=#1182 id=1182 data-nosnippet>1182</a>
-<a href=#1183 id=1183 data-nosnippet>1183</a>        <span class="comment">// Collect shares from each node.
-<a href=#1184 id=1184 data-nosnippet>1184</a>        </span><span class="macro">tracing::info!</span>(<span class="string">"fetching shares"</span>);
-<a href=#1185 id=1185 data-nosnippet>1185</a>        <span class="kw">let </span>network = <span class="kw-2">&amp;</span>network;
-<a href=#1186 id=1186 data-nosnippet>1186</a>        <span class="kw">let </span>vid = <span class="kw-2">&amp;</span>vid;
-<a href=#1187 id=1187 data-nosnippet>1187</a>        <span class="kw">let </span>shares: Vec&lt;<span class="kw">_</span>&gt; = join_all((<span class="number">0</span>..network.num_nodes()).map(|i| <span class="kw">async move </span>{
-<a href=#1188 id=1188 data-nosnippet>1188</a>            <span class="kw">let </span>ds = network.data_source_index(i);
-<a href=#1189 id=1189 data-nosnippet>1189</a>
-<a href=#1190 id=1190 data-nosnippet>1190</a>            <span class="comment">// Wait until the node has processed up to the desired block; since we have thus far
-<a href=#1191 id=1191 data-nosnippet>1191</a>            // only interacted with node 0, it is possible other nodes are slightly behind.
-<a href=#1192 id=1192 data-nosnippet>1192</a>            </span><span class="kw">let </span><span class="kw-2">mut </span>leaves = ds.subscribe_leaves(height).<span class="kw">await</span>;
-<a href=#1193 id=1193 data-nosnippet>1193</a>            <span class="kw">let </span>leaf = leaves.next().<span class="kw">await</span>.unwrap();
-<a href=#1194 id=1194 data-nosnippet>1194</a>            <span class="macro">assert_eq!</span>(leaf.height(), height <span class="kw">as </span>u64);
-<a href=#1195 id=1195 data-nosnippet>1195</a>            <span class="macro">assert_eq!</span>(leaf.payload_hash(), VidCommitment::V0(commit));
-<a href=#1196 id=1196 data-nosnippet>1196</a>
-<a href=#1197 id=1197 data-nosnippet>1197</a>            <span class="kw">let </span>share = <span class="kw">if let </span>VidShare::V0(share) = ds.vid_share(height).<span class="kw">await</span>.unwrap() {
-<a href=#1198 id=1198 data-nosnippet>1198</a>                share
-<a href=#1199 id=1199 data-nosnippet>1199</a>            } <span class="kw">else </span>{
-<a href=#1200 id=1200 data-nosnippet>1200</a>                <span class="macro">panic!</span>(<span class="string">"expect ADVZ share"</span>)
-<a href=#1201 id=1201 data-nosnippet>1201</a>            };
-<a href=#1202 id=1202 data-nosnippet>1202</a>            vid.verify_share(<span class="kw-2">&amp;</span>share, common, <span class="kw-2">&amp;</span>commit).unwrap().unwrap();
-<a href=#1203 id=1203 data-nosnippet>1203</a>            share
-<a href=#1204 id=1204 data-nosnippet>1204</a>        }))
-<a href=#1205 id=1205 data-nosnippet>1205</a>        .<span class="kw">await</span>;
-<a href=#1206 id=1206 data-nosnippet>1206</a>
-<a href=#1207 id=1207 data-nosnippet>1207</a>        <span class="comment">// Recover payload.
-<a href=#1208 id=1208 data-nosnippet>1208</a>        </span><span class="macro">tracing::info!</span>(<span class="string">"recovering payload"</span>);
-<a href=#1209 id=1209 data-nosnippet>1209</a>        <span class="kw">let </span>bytes = vid.recover_payload(<span class="kw-2">&amp;</span>shares, common).unwrap();
-<a href=#1210 id=1210 data-nosnippet>1210</a>        <span class="kw">let </span>recovered = &lt;MockPayload <span class="kw">as </span>BlockPayload&lt;TestTypes&gt;&gt;::from_bytes(
-<a href=#1211 id=1211 data-nosnippet>1211</a>            <span class="kw-2">&amp;</span>bytes,
-<a href=#1212 id=1212 data-nosnippet>1212</a>            <span class="kw-2">&amp;</span>TestMetadata {
-<a href=#1213 id=1213 data-nosnippet>1213</a>                num_transactions: <span class="number">7</span>, <span class="comment">// arbitrary
-<a href=#1214 id=1214 data-nosnippet>1214</a>            </span>},
-<a href=#1215 id=1215 data-nosnippet>1215</a>        );
-<a href=#1216 id=1216 data-nosnippet>1216</a>        <span class="macro">assert_eq!</span>(recovered, <span class="kw-2">*</span>block.payload());
-<a href=#1217 id=1217 data-nosnippet>1217</a>        <span class="macro">assert_eq!</span>(recovered.transactions, <span class="macro">vec!</span>[txn]);
-<a href=#1218 id=1218 data-nosnippet>1218</a>    }
-<a href=#1219 id=1219 data-nosnippet>1219</a>
-<a href=#1220 id=1220 data-nosnippet>1220</a>    <span class="attr">#[tokio::test(flavor = <span class="string">"multi_thread"</span>)]
-<a href=#1221 id=1221 data-nosnippet>1221</a>    </span><span class="kw">pub async fn </span>test_timestamp_window&lt;D: TestableDataSource&gt;() {
-<a href=#1222 id=1222 data-nosnippet>1222</a>        setup_test();
-<a href=#1223 id=1223 data-nosnippet>1223</a>
-<a href=#1224 id=1224 data-nosnippet>1224</a>        <span class="kw">let </span><span class="kw-2">mut </span>network = MockNetwork::&lt;D, MockVersions&gt;::init().<span class="kw">await</span>;
-<a href=#1225 id=1225 data-nosnippet>1225</a>        <span class="kw">let </span>ds = network.data_source();
-<a href=#1226 id=1226 data-nosnippet>1226</a>
-<a href=#1227 id=1227 data-nosnippet>1227</a>        network.start().<span class="kw">await</span>;
-<a href=#1228 id=1228 data-nosnippet>1228</a>
-<a href=#1229 id=1229 data-nosnippet>1229</a>        <span class="comment">// Wait for blocks with at least three different timestamps to be sequenced. This lets us
-<a href=#1230 id=1230 data-nosnippet>1230</a>        // test all the edge cases.
-<a href=#1231 id=1231 data-nosnippet>1231</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>leaves = ds.subscribe_leaves(<span class="number">0</span>).<span class="kw">await</span>;
-<a href=#1232 id=1232 data-nosnippet>1232</a>        <span class="comment">// `test_blocks` is a list of lists of headers with the same timestamp. The flattened list
-<a href=#1233 id=1233 data-nosnippet>1233</a>        // of headers is contiguous.
-<a href=#1234 id=1234 data-nosnippet>1234</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>test_blocks: Vec&lt;Vec&lt;Header&lt;MockTypes&gt;&gt;&gt; = <span class="macro">vec!</span>[];
-<a href=#1235 id=1235 data-nosnippet>1235</a>        <span class="kw">while </span>test_blocks.len() &lt; <span class="number">3 </span>{
-<a href=#1236 id=1236 data-nosnippet>1236</a>            <span class="comment">// Wait for the next block to be sequenced.
-<a href=#1237 id=1237 data-nosnippet>1237</a>            </span><span class="kw">let </span>leaf = leaves.next().<span class="kw">await</span>.unwrap();
-<a href=#1238 id=1238 data-nosnippet>1238</a>            <span class="kw">let </span>header = leaf.header().clone();
-<a href=#1239 id=1239 data-nosnippet>1239</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(last_timestamp) = test_blocks.last_mut() {
-<a href=#1240 id=1240 data-nosnippet>1240</a>                <span class="kw">if </span>&lt;TestBlockHeader <span class="kw">as </span>BlockHeader&lt;MockTypes&gt;&gt;::timestamp(<span class="kw-2">&amp;</span>last_timestamp[<span class="number">0</span>])
-<a href=#1241 id=1241 data-nosnippet>1241</a>                    == &lt;TestBlockHeader <span class="kw">as </span>BlockHeader&lt;MockTypes&gt;&gt;::timestamp(<span class="kw-2">&amp;</span>header)
-<a href=#1242 id=1242 data-nosnippet>1242</a>                {
-<a href=#1243 id=1243 data-nosnippet>1243</a>                    last_timestamp.push(header);
-<a href=#1244 id=1244 data-nosnippet>1244</a>                } <span class="kw">else </span>{
-<a href=#1245 id=1245 data-nosnippet>1245</a>                    test_blocks.push(<span class="macro">vec!</span>[header]);
-<a href=#1246 id=1246 data-nosnippet>1246</a>                }
-<a href=#1247 id=1247 data-nosnippet>1247</a>            } <span class="kw">else </span>{
-<a href=#1248 id=1248 data-nosnippet>1248</a>                test_blocks.push(<span class="macro">vec!</span>[header]);
-<a href=#1249 id=1249 data-nosnippet>1249</a>            }
-<a href=#1250 id=1250 data-nosnippet>1250</a>        }
-<a href=#1251 id=1251 data-nosnippet>1251</a>        <span class="macro">tracing::info!</span>(<span class="string">"blocks for testing: {test_blocks:#?}"</span>);
-<a href=#1252 id=1252 data-nosnippet>1252</a>
-<a href=#1253 id=1253 data-nosnippet>1253</a>        <span class="comment">// Define invariants that every response should satisfy.
-<a href=#1254 id=1254 data-nosnippet>1254</a>        </span><span class="kw">let </span>check_invariants =
-<a href=#1255 id=1255 data-nosnippet>1255</a>            |res: <span class="kw-2">&amp;</span>TimeWindowQueryData&lt;Header&lt;MockTypes&gt;&gt;, start, end, check_prev| {
-<a href=#1256 id=1256 data-nosnippet>1256</a>                <span class="kw">let </span><span class="kw-2">mut </span>prev = res.prev.as_ref();
-<a href=#1257 id=1257 data-nosnippet>1257</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(prev) = prev {
-<a href=#1258 id=1258 data-nosnippet>1258</a>                    <span class="kw">if </span>check_prev {
-<a href=#1259 id=1259 data-nosnippet>1259</a>                        <span class="macro">assert!</span>(block_header_timestamp(prev) &lt; start);
-<a href=#1260 id=1260 data-nosnippet>1260</a>                    }
-<a href=#1261 id=1261 data-nosnippet>1261</a>                } <span class="kw">else </span>{
-<a href=#1262 id=1262 data-nosnippet>1262</a>                    <span class="comment">// `prev` can only be `None` if the first block in the window is the genesis
-<a href=#1263 id=1263 data-nosnippet>1263</a>                    // block.
-<a href=#1264 id=1264 data-nosnippet>1264</a>                    </span><span class="macro">assert_eq!</span>(res.from().unwrap(), <span class="number">0</span>);
-<a href=#1265 id=1265 data-nosnippet>1265</a>                };
-<a href=#1266 id=1266 data-nosnippet>1266</a>                <span class="kw">for </span>header <span class="kw">in </span><span class="kw-2">&amp;</span>res.window {
-<a href=#1267 id=1267 data-nosnippet>1267</a>                    <span class="macro">assert!</span>(start &lt;= block_header_timestamp(header));
-<a href=#1268 id=1268 data-nosnippet>1268</a>                    <span class="macro">assert!</span>(block_header_timestamp(header) &lt; end);
-<a href=#1269 id=1269 data-nosnippet>1269</a>                    <span class="kw">if let </span><span class="prelude-val">Some</span>(prev) = prev {
-<a href=#1270 id=1270 data-nosnippet>1270</a>                        <span class="macro">assert!</span>(
-<a href=#1271 id=1271 data-nosnippet>1271</a>                            &lt;TestBlockHeader <span class="kw">as </span>BlockHeader&lt;MockTypes&gt;&gt;::timestamp(prev)
-<a href=#1272 id=1272 data-nosnippet>1272</a>                                &lt;= &lt;TestBlockHeader <span class="kw">as </span>BlockHeader&lt;MockTypes&gt;&gt;::timestamp(header)
-<a href=#1273 id=1273 data-nosnippet>1273</a>                        );
-<a href=#1274 id=1274 data-nosnippet>1274</a>                    }
-<a href=#1275 id=1275 data-nosnippet>1275</a>                    prev = <span class="prelude-val">Some</span>(header);
-<a href=#1276 id=1276 data-nosnippet>1276</a>                }
-<a href=#1277 id=1277 data-nosnippet>1277</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(next) = <span class="kw-2">&amp;</span>res.next {
-<a href=#1278 id=1278 data-nosnippet>1278</a>                    <span class="macro">assert!</span>(&lt;TestBlockHeader <span class="kw">as </span>BlockHeader&lt;MockTypes&gt;&gt;::timestamp(next) &gt;= end);
-<a href=#1279 id=1279 data-nosnippet>1279</a>                    <span class="comment">// If there is a `next`, there must be at least one previous block (either `prev`
-<a href=#1280 id=1280 data-nosnippet>1280</a>                    // itself or the last block if the window is nonempty), so we can `unwrap` here.
-<a href=#1281 id=1281 data-nosnippet>1281</a>                    </span><span class="macro">assert!</span>(block_header_timestamp(next) &gt;= block_header_timestamp(prev.unwrap()));
-<a href=#1282 id=1282 data-nosnippet>1282</a>                }
-<a href=#1283 id=1283 data-nosnippet>1283</a>            };
-<a href=#1284 id=1284 data-nosnippet>1284</a>
-<a href=#1285 id=1285 data-nosnippet>1285</a>        <span class="kw">let </span>get_window = |start, end| {
-<a href=#1286 id=1286 data-nosnippet>1286</a>            <span class="kw">let </span>ds = ds.clone();
-<a href=#1287 id=1287 data-nosnippet>1287</a>            <span class="kw">async move </span>{
-<a href=#1288 id=1288 data-nosnippet>1288</a>                <span class="kw">let </span>window = ds
-<a href=#1289 id=1289 data-nosnippet>1289</a>                    .get_header_window(WindowStart::Time(start), end, i64::MAX <span class="kw">as </span>usize)
-<a href=#1290 id=1290 data-nosnippet>1290</a>                    .<span class="kw">await
-<a href=#1291 id=1291 data-nosnippet>1291</a>                    </span>.unwrap();
-<a href=#1292 id=1292 data-nosnippet>1292</a>                <span class="macro">tracing::info!</span>(<span class="string">"window for timestamp range {start}-{end}: {window:#?}"</span>);
-<a href=#1293 id=1293 data-nosnippet>1293</a>                check_invariants(<span class="kw-2">&amp;</span>window, start, end, <span class="bool-val">true</span>);
-<a href=#1294 id=1294 data-nosnippet>1294</a>                window
-<a href=#1295 id=1295 data-nosnippet>1295</a>            }
-<a href=#1296 id=1296 data-nosnippet>1296</a>        };
-<a href=#1297 id=1297 data-nosnippet>1297</a>
-<a href=#1298 id=1298 data-nosnippet>1298</a>        <span class="comment">// Case 0: happy path. All blocks are available, including prev and next.
-<a href=#1299 id=1299 data-nosnippet>1299</a>        </span><span class="kw">let </span>start = &lt;TestBlockHeader <span class="kw">as </span>BlockHeader&lt;MockTypes&gt;&gt;::timestamp(<span class="kw-2">&amp;</span>test_blocks[<span class="number">1</span>][<span class="number">0</span>]);
-<a href=#1300 id=1300 data-nosnippet>1300</a>        <span class="kw">let </span>end = start + <span class="number">1</span>;
-<a href=#1301 id=1301 data-nosnippet>1301</a>        <span class="kw">let </span>res = get_window(start, end).<span class="kw">await</span>;
-<a href=#1302 id=1302 data-nosnippet>1302</a>        <span class="macro">assert_eq!</span>(res.prev.unwrap(), <span class="kw-2">*</span>test_blocks[<span class="number">0</span>].last().unwrap());
-<a href=#1303 id=1303 data-nosnippet>1303</a>        <span class="macro">assert_eq!</span>(res.window, test_blocks[<span class="number">1</span>]);
-<a href=#1304 id=1304 data-nosnippet>1304</a>        <span class="macro">assert_eq!</span>(res.next.unwrap(), test_blocks[<span class="number">2</span>][<span class="number">0</span>]);
-<a href=#1305 id=1305 data-nosnippet>1305</a>
-<a href=#1306 id=1306 data-nosnippet>1306</a>        <span class="comment">// Case 1: no `prev`, start of window is before genesis.
-<a href=#1307 id=1307 data-nosnippet>1307</a>        </span><span class="kw">let </span>start = <span class="number">0</span>;
-<a href=#1308 id=1308 data-nosnippet>1308</a>        <span class="kw">let </span>end = &lt;TestBlockHeader <span class="kw">as </span>BlockHeader&lt;MockTypes&gt;&gt;::timestamp(<span class="kw-2">&amp;</span>test_blocks[<span class="number">0</span>][<span class="number">0</span>]) + <span class="number">1</span>;
-<a href=#1309 id=1309 data-nosnippet>1309</a>        <span class="kw">let </span>res = get_window(start, end).<span class="kw">await</span>;
-<a href=#1310 id=1310 data-nosnippet>1310</a>        <span class="macro">assert_eq!</span>(res.prev, <span class="prelude-val">None</span>);
-<a href=#1311 id=1311 data-nosnippet>1311</a>        <span class="macro">assert_eq!</span>(res.window, test_blocks[<span class="number">0</span>]);
-<a href=#1312 id=1312 data-nosnippet>1312</a>        <span class="macro">assert_eq!</span>(res.next.unwrap(), test_blocks[<span class="number">1</span>][<span class="number">0</span>]);
-<a href=#1313 id=1313 data-nosnippet>1313</a>
-<a href=#1314 id=1314 data-nosnippet>1314</a>        <span class="comment">// Case 2: no `next`, end of window is after the most recently sequenced block.
-<a href=#1315 id=1315 data-nosnippet>1315</a>        </span><span class="kw">let </span>start = &lt;TestBlockHeader <span class="kw">as </span>BlockHeader&lt;MockTypes&gt;&gt;::timestamp(<span class="kw-2">&amp;</span>test_blocks[<span class="number">2</span>][<span class="number">0</span>]);
-<a href=#1316 id=1316 data-nosnippet>1316</a>        <span class="kw">let </span>end = i64::MAX <span class="kw">as </span>u64;
-<a href=#1317 id=1317 data-nosnippet>1317</a>        <span class="kw">let </span>res = get_window(start, end).<span class="kw">await</span>;
-<a href=#1318 id=1318 data-nosnippet>1318</a>        <span class="macro">assert_eq!</span>(res.prev.unwrap(), <span class="kw-2">*</span>test_blocks[<span class="number">1</span>].last().unwrap());
-<a href=#1319 id=1319 data-nosnippet>1319</a>        <span class="comment">// There may have been more blocks sequenced since we grabbed `test_blocks`, so just check
-<a href=#1320 id=1320 data-nosnippet>1320</a>        // that the prefix of the window is correct.
-<a href=#1321 id=1321 data-nosnippet>1321</a>        </span><span class="macro">assert_eq!</span>(res.window[..test_blocks[<span class="number">2</span>].len()], test_blocks[<span class="number">2</span>]);
-<a href=#1322 id=1322 data-nosnippet>1322</a>        <span class="macro">assert_eq!</span>(res.next, <span class="prelude-val">None</span>);
-<a href=#1323 id=1323 data-nosnippet>1323</a>        <span class="comment">// Fetch more blocks using the `from` form of the endpoint. Start from the last block we had
-<a href=#1324 id=1324 data-nosnippet>1324</a>        // previously (ie fetch a slightly overlapping window) to ensure there is at least one block
-<a href=#1325 id=1325 data-nosnippet>1325</a>        // in the new window.
-<a href=#1326 id=1326 data-nosnippet>1326</a>        </span><span class="kw">let </span>from = test_blocks.iter().flatten().count() - <span class="number">1</span>;
-<a href=#1327 id=1327 data-nosnippet>1327</a>        <span class="kw">let </span>more = ds
-<a href=#1328 id=1328 data-nosnippet>1328</a>            .get_header_window(WindowStart::Height(from <span class="kw">as </span>u64), end, i64::MAX <span class="kw">as </span>usize)
-<a href=#1329 id=1329 data-nosnippet>1329</a>            .<span class="kw">await
-<a href=#1330 id=1330 data-nosnippet>1330</a>            </span>.unwrap();
-<a href=#1331 id=1331 data-nosnippet>1331</a>        check_invariants(<span class="kw-2">&amp;</span>more, start, end, <span class="bool-val">false</span>);
-<a href=#1332 id=1332 data-nosnippet>1332</a>        <span class="macro">assert_eq!</span>(
-<a href=#1333 id=1333 data-nosnippet>1333</a>            more.prev.as_ref().unwrap(),
-<a href=#1334 id=1334 data-nosnippet>1334</a>            test_blocks.iter().flatten().nth(from - <span class="number">1</span>).unwrap()
-<a href=#1335 id=1335 data-nosnippet>1335</a>        );
-<a href=#1336 id=1336 data-nosnippet>1336</a>        <span class="macro">assert_eq!</span>(
-<a href=#1337 id=1337 data-nosnippet>1337</a>            more.window[..res.window.len() - test_blocks[<span class="number">2</span>].len() + <span class="number">1</span>],
-<a href=#1338 id=1338 data-nosnippet>1338</a>            res.window[test_blocks[<span class="number">2</span>].len() - <span class="number">1</span>..]
-<a href=#1339 id=1339 data-nosnippet>1339</a>        );
-<a href=#1340 id=1340 data-nosnippet>1340</a>        <span class="macro">assert_eq!</span>(res.next, <span class="prelude-val">None</span>);
-<a href=#1341 id=1341 data-nosnippet>1341</a>        <span class="comment">// We should get the same result whether we query by block height or hash.
-<a href=#1342 id=1342 data-nosnippet>1342</a>        </span><span class="kw">let </span>more2 = ds
-<a href=#1343 id=1343 data-nosnippet>1343</a>            .get_header_window(
-<a href=#1344 id=1344 data-nosnippet>1344</a>                test_blocks[<span class="number">2</span>].last().unwrap().commit(),
-<a href=#1345 id=1345 data-nosnippet>1345</a>                end,
-<a href=#1346 id=1346 data-nosnippet>1346</a>                i64::MAX <span class="kw">as </span>usize,
-<a href=#1347 id=1347 data-nosnippet>1347</a>            )
-<a href=#1348 id=1348 data-nosnippet>1348</a>            .<span class="kw">await
-<a href=#1349 id=1349 data-nosnippet>1349</a>            </span>.unwrap();
-<a href=#1350 id=1350 data-nosnippet>1350</a>        check_invariants(<span class="kw-2">&amp;</span>more2, start, end, <span class="bool-val">false</span>);
-<a href=#1351 id=1351 data-nosnippet>1351</a>        <span class="macro">assert_eq!</span>(more2.from().unwrap(), more.from().unwrap());
-<a href=#1352 id=1352 data-nosnippet>1352</a>        <span class="macro">assert_eq!</span>(more2.prev, more.prev);
-<a href=#1353 id=1353 data-nosnippet>1353</a>        <span class="macro">assert_eq!</span>(more2.next, more.next);
-<a href=#1354 id=1354 data-nosnippet>1354</a>        <span class="macro">assert_eq!</span>(more2.window[..more.window.len()], more.window);
-<a href=#1355 id=1355 data-nosnippet>1355</a>
-<a href=#1356 id=1356 data-nosnippet>1356</a>        <span class="comment">// Case 3: the window is empty.
-<a href=#1357 id=1357 data-nosnippet>1357</a>        </span><span class="kw">let </span>start = &lt;TestBlockHeader <span class="kw">as </span>BlockHeader&lt;MockTypes&gt;&gt;::timestamp(<span class="kw-2">&amp;</span>test_blocks[<span class="number">1</span>][<span class="number">0</span>]);
-<a href=#1358 id=1358 data-nosnippet>1358</a>        <span class="kw">let </span>end = start;
-<a href=#1359 id=1359 data-nosnippet>1359</a>        <span class="kw">let </span>res = get_window(start, end).<span class="kw">await</span>;
-<a href=#1360 id=1360 data-nosnippet>1360</a>        <span class="macro">assert_eq!</span>(res.prev.unwrap(), <span class="kw-2">*</span>test_blocks[<span class="number">0</span>].last().unwrap());
-<a href=#1361 id=1361 data-nosnippet>1361</a>        <span class="macro">assert_eq!</span>(res.next.unwrap(), test_blocks[<span class="number">1</span>][<span class="number">0</span>]);
-<a href=#1362 id=1362 data-nosnippet>1362</a>        <span class="macro">assert_eq!</span>(res.window, <span class="macro">vec!</span>[]);
-<a href=#1363 id=1363 data-nosnippet>1363</a>
-<a href=#1364 id=1364 data-nosnippet>1364</a>        <span class="comment">// Case 4: no relevant blocks are available yet.
-<a href=#1365 id=1365 data-nosnippet>1365</a>        </span>ds.get_header_window(
-<a href=#1366 id=1366 data-nosnippet>1366</a>            WindowStart::Time((i64::MAX - <span class="number">1</span>) <span class="kw">as </span>u64),
-<a href=#1367 id=1367 data-nosnippet>1367</a>            i64::MAX <span class="kw">as </span>u64,
-<a href=#1368 id=1368 data-nosnippet>1368</a>            i64::MAX <span class="kw">as </span>usize,
-<a href=#1369 id=1369 data-nosnippet>1369</a>        )
-<a href=#1370 id=1370 data-nosnippet>1370</a>        .<span class="kw">await
-<a href=#1371 id=1371 data-nosnippet>1371</a>        </span>.unwrap_err();
-<a href=#1372 id=1372 data-nosnippet>1372</a>
-<a href=#1373 id=1373 data-nosnippet>1373</a>        <span class="comment">// Case 5: limits.
-<a href=#1374 id=1374 data-nosnippet>1374</a>        </span><span class="kw">let </span>blocks = [test_blocks[<span class="number">0</span>].clone(), test_blocks[<span class="number">1</span>].clone()]
-<a href=#1375 id=1375 data-nosnippet>1375</a>            .into_iter()
-<a href=#1376 id=1376 data-nosnippet>1376</a>            .flatten()
-<a href=#1377 id=1377 data-nosnippet>1377</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-<a href=#1378 id=1378 data-nosnippet>1378</a>        <span class="comment">// Make a query that would return everything, but gets limited.
-<a href=#1379 id=1379 data-nosnippet>1379</a>        </span><span class="kw">let </span>start = block_header_timestamp(<span class="kw-2">&amp;</span>blocks[<span class="number">0</span>]);
-<a href=#1380 id=1380 data-nosnippet>1380</a>        <span class="kw">let </span>end = block_header_timestamp(<span class="kw-2">&amp;</span>test_blocks[<span class="number">2</span>][<span class="number">0</span>]);
-<a href=#1381 id=1381 data-nosnippet>1381</a>        <span class="kw">let </span>res = ds
-<a href=#1382 id=1382 data-nosnippet>1382</a>            .get_header_window(WindowStart::Time(start), end, <span class="number">1</span>)
-<a href=#1383 id=1383 data-nosnippet>1383</a>            .<span class="kw">await
-<a href=#1384 id=1384 data-nosnippet>1384</a>            </span>.unwrap();
-<a href=#1385 id=1385 data-nosnippet>1385</a>        <span class="macro">assert_eq!</span>(res.prev, <span class="prelude-val">None</span>);
-<a href=#1386 id=1386 data-nosnippet>1386</a>        <span class="macro">assert_eq!</span>(res.window, [blocks[<span class="number">0</span>].clone()]);
-<a href=#1387 id=1387 data-nosnippet>1387</a>        <span class="macro">assert_eq!</span>(res.next, <span class="prelude-val">None</span>);
-<a href=#1388 id=1388 data-nosnippet>1388</a>        <span class="comment">// Query the next page of results, get limited again.
-<a href=#1389 id=1389 data-nosnippet>1389</a>        </span><span class="kw">let </span>res = ds
-<a href=#1390 id=1390 data-nosnippet>1390</a>            .get_header_window(WindowStart::Height(blocks[<span class="number">0</span>].height() + <span class="number">1</span>), end, <span class="number">1</span>)
-<a href=#1391 id=1391 data-nosnippet>1391</a>            .<span class="kw">await
-<a href=#1392 id=1392 data-nosnippet>1392</a>            </span>.unwrap();
-<a href=#1393 id=1393 data-nosnippet>1393</a>        <span class="macro">assert_eq!</span>(res.window, [blocks[<span class="number">1</span>].clone()]);
-<a href=#1394 id=1394 data-nosnippet>1394</a>        <span class="macro">assert_eq!</span>(res.next, <span class="prelude-val">None</span>);
-<a href=#1395 id=1395 data-nosnippet>1395</a>        <span class="comment">// Get the rest of the results.
-<a href=#1396 id=1396 data-nosnippet>1396</a>        </span><span class="kw">let </span>res = ds
-<a href=#1397 id=1397 data-nosnippet>1397</a>            .get_header_window(
-<a href=#1398 id=1398 data-nosnippet>1398</a>                WindowStart::Height(blocks[<span class="number">1</span>].height() + <span class="number">1</span>),
-<a href=#1399 id=1399 data-nosnippet>1399</a>                end,
-<a href=#1400 id=1400 data-nosnippet>1400</a>                blocks.len() - <span class="number">1</span>,
-<a href=#1401 id=1401 data-nosnippet>1401</a>            )
-<a href=#1402 id=1402 data-nosnippet>1402</a>            .<span class="kw">await
-<a href=#1403 id=1403 data-nosnippet>1403</a>            </span>.unwrap();
-<a href=#1404 id=1404 data-nosnippet>1404</a>        <span class="macro">assert_eq!</span>(res.window, blocks[<span class="number">2</span>..].to_vec());
-<a href=#1405 id=1405 data-nosnippet>1405</a>        <span class="macro">assert_eq!</span>(res.next, <span class="prelude-val">Some</span>(test_blocks[<span class="number">2</span>][<span class="number">0</span>].clone()));
-<a href=#1406 id=1406 data-nosnippet>1406</a>    }
-<a href=#1407 id=1407 data-nosnippet>1407</a>}
-<a href=#1408 id=1408 data-nosnippet>1408</a>
-<a href=#1409 id=1409 data-nosnippet>1409</a><span class="doccomment">/// Generic tests we can instantiate for all the status data sources.
-<a href=#1410 id=1410 data-nosnippet>1410</a></span><span class="attr">#[cfg(any(test, feature = <span class="string">"testing"</span>))]
-<a href=#1411 id=1411 data-nosnippet>1411</a>#[espresso_macros::generic_tests]
-<a href=#1412 id=1412 data-nosnippet>1412</a></span><span class="kw">pub mod </span>status_tests {
-<a href=#1413 id=1413 data-nosnippet>1413</a>    <span class="kw">use </span>std::time::Duration;
-<a href=#1414 id=1414 data-nosnippet>1414</a>
-<a href=#1415 id=1415 data-nosnippet>1415</a>    <span class="kw">use crate</span>::{
-<a href=#1416 id=1416 data-nosnippet>1416</a>        status::StatusDataSource,
-<a href=#1417 id=1417 data-nosnippet>1417</a>        testing::{
-<a href=#1418 id=1418 data-nosnippet>1418</a>            consensus::{DataSourceLifeCycle, MockNetwork},
-<a href=#1419 id=1419 data-nosnippet>1419</a>            mocks::{mock_transaction, MockVersions},
-<a href=#1420 id=1420 data-nosnippet>1420</a>            setup_test, sleep,
-<a href=#1421 id=1421 data-nosnippet>1421</a>        },
-<a href=#1422 id=1422 data-nosnippet>1422</a>    };
-<a href=#1423 id=1423 data-nosnippet>1423</a>
-<a href=#1424 id=1424 data-nosnippet>1424</a>    <span class="attr">#[tokio::test(flavor = <span class="string">"multi_thread"</span>)]
-<a href=#1425 id=1425 data-nosnippet>1425</a>    </span><span class="kw">pub async fn </span>test_metrics&lt;D: DataSourceLifeCycle + StatusDataSource&gt;() {
-<a href=#1426 id=1426 data-nosnippet>1426</a>        setup_test();
-<a href=#1427 id=1427 data-nosnippet>1427</a>
-<a href=#1428 id=1428 data-nosnippet>1428</a>        <span class="kw">let </span><span class="kw-2">mut </span>network = MockNetwork::&lt;D, MockVersions&gt;::init().<span class="kw">await</span>;
-<a href=#1429 id=1429 data-nosnippet>1429</a>        <span class="kw">let </span>ds = network.data_source();
-<a href=#1430 id=1430 data-nosnippet>1430</a>
-<a href=#1431 id=1431 data-nosnippet>1431</a>        {
-<a href=#1432 id=1432 data-nosnippet>1432</a>            <span class="comment">// Check that block height is initially zero.
-<a href=#1433 id=1433 data-nosnippet>1433</a>            </span><span class="macro">assert_eq!</span>(ds.block_height().<span class="kw">await</span>.unwrap(), <span class="number">0</span>);
-<a href=#1434 id=1434 data-nosnippet>1434</a>            <span class="comment">// With consensus paused, check that the success rate returns NAN (since the block
-<a href=#1435 id=1435 data-nosnippet>1435</a>            // height, the numerator, is 0, and the view number, the denominator, is 0).
-<a href=#1436 id=1436 data-nosnippet>1436</a>            </span><span class="macro">assert!</span>(ds.success_rate().<span class="kw">await</span>.unwrap().is_nan());
-<a href=#1437 id=1437 data-nosnippet>1437</a>            <span class="comment">// Since there is no block produced, "last_decided_time" metric is 0.
-<a href=#1438 id=1438 data-nosnippet>1438</a>            // Therefore, the elapsed time since the last block should be close to the time elapsed since the Unix epoch.
-<a href=#1439 id=1439 data-nosnippet>1439</a>            </span><span class="macro">assert!</span>(
-<a href=#1440 id=1440 data-nosnippet>1440</a>                (ds.elapsed_time_since_last_decide().<span class="kw">await</span>.unwrap() <span class="kw">as </span>i64
-<a href=#1441 id=1441 data-nosnippet>1441</a>                    - chrono::Utc::now().timestamp())
-<a href=#1442 id=1442 data-nosnippet>1442</a>                .abs()
-<a href=#1443 id=1443 data-nosnippet>1443</a>                    &lt;= <span class="number">1</span>,
-<a href=#1444 id=1444 data-nosnippet>1444</a>                <span class="string">"time elapsed since last_decided_time is not within 1s"
-<a href=#1445 id=1445 data-nosnippet>1445</a>            </span>);
-<a href=#1446 id=1446 data-nosnippet>1446</a>        }
-<a href=#1447 id=1447 data-nosnippet>1447</a>
-<a href=#1448 id=1448 data-nosnippet>1448</a>        <span class="comment">// Submit a transaction
-<a href=#1449 id=1449 data-nosnippet>1449</a>        </span><span class="kw">let </span>txn = mock_transaction(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);
-<a href=#1450 id=1450 data-nosnippet>1450</a>        network.submit_transaction(txn.clone()).<span class="kw">await</span>;
-<a href=#1451 id=1451 data-nosnippet>1451</a>
-<a href=#1452 id=1452 data-nosnippet>1452</a>        <span class="comment">// Start consensus and wait for the transaction to be finalized.
-<a href=#1453 id=1453 data-nosnippet>1453</a>        </span>network.start().<span class="kw">await</span>;
-<a href=#1454 id=1454 data-nosnippet>1454</a>
-<a href=#1455 id=1455 data-nosnippet>1455</a>        <span class="comment">// Now wait for at least one non-genesis block to be finalized.
-<a href=#1456 id=1456 data-nosnippet>1456</a>        </span><span class="kw">loop </span>{
-<a href=#1457 id=1457 data-nosnippet>1457</a>            <span class="kw">let </span>height = ds.block_height().<span class="kw">await</span>.unwrap();
-<a href=#1458 id=1458 data-nosnippet>1458</a>            <span class="kw">if </span>height &gt; <span class="number">1 </span>{
-<a href=#1459 id=1459 data-nosnippet>1459</a>                <span class="kw">break</span>;
-<a href=#1460 id=1460 data-nosnippet>1460</a>            }
-<a href=#1461 id=1461 data-nosnippet>1461</a>            <span class="macro">tracing::info!</span>(height, <span class="string">"waiting for a block to be finalized"</span>);
-<a href=#1462 id=1462 data-nosnippet>1462</a>            sleep(Duration::from_secs(<span class="number">1</span>)).<span class="kw">await</span>;
-<a href=#1463 id=1463 data-nosnippet>1463</a>        }
-<a href=#1464 id=1464 data-nosnippet>1464</a>
-<a href=#1465 id=1465 data-nosnippet>1465</a>        {
-<a href=#1466 id=1466 data-nosnippet>1466</a>            <span class="comment">// Check that the success rate has been updated. Note that we can only check if success
-<a href=#1467 id=1467 data-nosnippet>1467</a>            // rate is positive. We don't know exactly what it is because we can't know how many
-<a href=#1468 id=1468 data-nosnippet>1468</a>            // views have elapsed without race conditions.
-<a href=#1469 id=1469 data-nosnippet>1469</a>            </span><span class="kw">let </span>success_rate = ds.success_rate().<span class="kw">await</span>.unwrap();
-<a href=#1470 id=1470 data-nosnippet>1470</a>            <span class="macro">assert!</span>(success_rate.is_finite(), <span class="string">"{success_rate}"</span>);
-<a href=#1471 id=1471 data-nosnippet>1471</a>            <span class="macro">assert!</span>(success_rate &gt; <span class="number">0.0</span>, <span class="string">"{success_rate}"</span>);
-<a href=#1472 id=1472 data-nosnippet>1472</a>        }
-<a href=#1473 id=1473 data-nosnippet>1473</a>
-<a href=#1474 id=1474 data-nosnippet>1474</a>        {
-<a href=#1475 id=1475 data-nosnippet>1475</a>            <span class="comment">// Shutting down the consensus to halt block production
-<a href=#1476 id=1476 data-nosnippet>1476</a>            // Introducing a delay of 3 seconds to ensure that elapsed time since last block is atleast 3seconds
-<a href=#1477 id=1477 data-nosnippet>1477</a>            </span>network.shut_down().<span class="kw">await</span>;
-<a href=#1478 id=1478 data-nosnippet>1478</a>            sleep(Duration::from_secs(<span class="number">3</span>)).<span class="kw">await</span>;
-<a href=#1479 id=1479 data-nosnippet>1479</a>            <span class="comment">// Asserting that the elapsed time since the last block is at least 3 seconds
-<a href=#1480 id=1480 data-nosnippet>1480</a>            </span><span class="macro">assert!</span>(ds.elapsed_time_since_last_decide().<span class="kw">await</span>.unwrap() &gt;= <span class="number">3</span>);
-<a href=#1481 id=1481 data-nosnippet>1481</a>        }
-<a href=#1482 id=1482 data-nosnippet>1482</a>    }
-<a href=#1483 id=1483 data-nosnippet>1483</a>}
-<a href=#1484 id=1484 data-nosnippet>1484</a>
-<a href=#1485 id=1485 data-nosnippet>1485</a><span class="attr">#[macro_export]
-<a href=#1486 id=1486 data-nosnippet>1486</a></span><span class="macro">macro_rules!</span> instantiate_data_source_tests {
-<a href=#1487 id=1487 data-nosnippet>1487</a>    (<span class="macro-nonterminal">$t</span>:ty) =&gt; {
-<a href=#1488 id=1488 data-nosnippet>1488</a>        <span class="kw">use </span><span class="macro-nonterminal">$crate::data_source</span>::{
-<a href=#1489 id=1489 data-nosnippet>1489</a>            availability_tests, node_tests, persistence_tests, status_tests,
-<a href=#1490 id=1490 data-nosnippet>1490</a>        };
-<a href=#1491 id=1491 data-nosnippet>1491</a>
-<a href=#1492 id=1492 data-nosnippet>1492</a>        <span class="macro">instantiate_availability_tests!</span>(<span class="macro-nonterminal">$t</span>);
-<a href=#1493 id=1493 data-nosnippet>1493</a>        <span class="macro">instantiate_persistence_tests!</span>(<span class="macro-nonterminal">$t</span>);
-<a href=#1494 id=1494 data-nosnippet>1494</a>        <span class="macro">instantiate_node_tests!</span>(<span class="macro-nonterminal">$t</span>);
-<a href=#1495 id=1495 data-nosnippet>1495</a>        <span class="macro">instantiate_status_tests!</span>(<span class="macro-nonterminal">$t</span>);
-<a href=#1496 id=1496 data-nosnippet>1496</a>    };
-<a href=#1497 id=1497 data-nosnippet>1497</a>}</code></pre></div></section></main></body></html>
+<a href=#999 id=999 data-nosnippet>999</a>                timestamp_millis: i * <span class="number">1_000</span>,
+<a href=#1000 id=1000 data-nosnippet>1000</a>                builder_commitment:
+<a href=#1001 id=1001 data-nosnippet>1001</a>                    &lt;TestBlockPayload <span class="kw">as </span>BlockPayload&lt;TestTypes&gt;&gt;::builder_commitment(
+<a href=#1002 id=1002 data-nosnippet>1002</a>                        <span class="kw-2">&amp;</span>payload, <span class="kw-2">&amp;</span>metadata,
+<a href=#1003 id=1003 data-nosnippet>1003</a>                    ),
+<a href=#1004 id=1004 data-nosnippet>1004</a>                metadata: TestMetadata {
+<a href=#1005 id=1005 data-nosnippet>1005</a>                    num_transactions: <span class="number">7</span>, <span class="comment">// arbitrary
+<a href=#1006 id=1006 data-nosnippet>1006</a>                </span>},
+<a href=#1007 id=1007 data-nosnippet>1007</a>                random: <span class="number">1</span>, <span class="comment">// arbitrary
+<a href=#1008 id=1008 data-nosnippet>1008</a>            </span>};
+<a href=#1009 id=1009 data-nosnippet>1009</a>
+<a href=#1010 id=1010 data-nosnippet>1010</a>            <span class="kw">let </span><span class="kw-2">mut </span>leaf = LeafQueryData::&lt;MockTypes&gt;::genesis::&lt;TestVersions&gt;(
+<a href=#1011 id=1011 data-nosnippet>1011</a>                <span class="kw-2">&amp;</span>TestValidatedState::default(),
+<a href=#1012 id=1012 data-nosnippet>1012</a>                <span class="kw-2">&amp;</span>TestInstanceState::default(),
+<a href=#1013 id=1013 data-nosnippet>1013</a>            )
+<a href=#1014 id=1014 data-nosnippet>1014</a>            .<span class="kw">await</span>;
+<a href=#1015 id=1015 data-nosnippet>1015</a>            <span class="kw-2">*</span>leaf.leaf.block_header_mut() = header.clone();
+<a href=#1016 id=1016 data-nosnippet>1016</a>            <span class="kw">let </span>block = BlockQueryData::new(header, payload);
+<a href=#1017 id=1017 data-nosnippet>1017</a>            ds.append(BlockInfo::new(leaf, <span class="prelude-val">Some</span>(block.clone()), <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>))
+<a href=#1018 id=1018 data-nosnippet>1018</a>                .<span class="kw">await
+<a href=#1019 id=1019 data-nosnippet>1019</a>                </span>.unwrap();
+<a href=#1020 id=1020 data-nosnippet>1020</a>            <span class="macro">assert_eq!</span>(
+<a href=#1021 id=1021 data-nosnippet>1021</a>                NodeDataSource::&lt;MockTypes&gt;::block_height(<span class="kw-2">&amp;</span>ds)
+<a href=#1022 id=1022 data-nosnippet>1022</a>                    .<span class="kw">await
+<a href=#1023 id=1023 data-nosnippet>1023</a>                    </span>.unwrap(),
+<a href=#1024 id=1024 data-nosnippet>1024</a>                (i + <span class="number">1</span>) <span class="kw">as </span>usize,
+<a href=#1025 id=1025 data-nosnippet>1025</a>            );
+<a href=#1026 id=1026 data-nosnippet>1026</a>
+<a href=#1027 id=1027 data-nosnippet>1027</a>            total_transactions += <span class="number">1</span>;
+<a href=#1028 id=1028 data-nosnippet>1028</a>            total_size += encoded.len();
+<a href=#1029 id=1029 data-nosnippet>1029</a>
+<a href=#1030 id=1030 data-nosnippet>1030</a>            <span class="comment">// Allow some time for the aggregator to update.
+<a href=#1031 id=1031 data-nosnippet>1031</a>            </span><span class="kw">for </span>retry <span class="kw">in </span><span class="number">0</span>..<span class="number">5 </span>{
+<a href=#1032 id=1032 data-nosnippet>1032</a>                <span class="kw">let </span>ds_transactions = ds.count_transactions().<span class="kw">await</span>.unwrap();
+<a href=#1033 id=1033 data-nosnippet>1033</a>                <span class="kw">let </span>ds_payload_size = ds.payload_size().<span class="kw">await</span>.unwrap();
+<a href=#1034 id=1034 data-nosnippet>1034</a>                <span class="kw">if </span>ds_transactions != total_transactions || ds_payload_size != total_size {
+<a href=#1035 id=1035 data-nosnippet>1035</a>                    <span class="macro">tracing::info!</span>(
+<a href=#1036 id=1036 data-nosnippet>1036</a>                        i,
+<a href=#1037 id=1037 data-nosnippet>1037</a>                        retry,
+<a href=#1038 id=1038 data-nosnippet>1038</a>                        total_transactions,
+<a href=#1039 id=1039 data-nosnippet>1039</a>                        ds_transactions,
+<a href=#1040 id=1040 data-nosnippet>1040</a>                        total_size,
+<a href=#1041 id=1041 data-nosnippet>1041</a>                        ds_payload_size,
+<a href=#1042 id=1042 data-nosnippet>1042</a>                        <span class="string">"waiting for statistics to update"
+<a href=#1043 id=1043 data-nosnippet>1043</a>                    </span>);
+<a href=#1044 id=1044 data-nosnippet>1044</a>                    sleep(Duration::from_secs(<span class="number">1</span>)).<span class="kw">await</span>;
+<a href=#1045 id=1045 data-nosnippet>1045</a>                } <span class="kw">else </span>{
+<a href=#1046 id=1046 data-nosnippet>1046</a>                    <span class="kw">continue </span><span class="lifetime">'outer</span>;
+<a href=#1047 id=1047 data-nosnippet>1047</a>                }
+<a href=#1048 id=1048 data-nosnippet>1048</a>            }
+<a href=#1049 id=1049 data-nosnippet>1049</a>            <span class="macro">panic!</span>(<span class="string">"counters did not update in time"</span>);
+<a href=#1050 id=1050 data-nosnippet>1050</a>        }
+<a href=#1051 id=1051 data-nosnippet>1051</a>    }
+<a href=#1052 id=1052 data-nosnippet>1052</a>
+<a href=#1053 id=1053 data-nosnippet>1053</a>    <span class="attr">#[tokio::test(flavor = <span class="string">"multi_thread"</span>)]
+<a href=#1054 id=1054 data-nosnippet>1054</a>    </span><span class="kw">pub async fn </span>test_vid_shares&lt;D: TestableDataSource&gt;()
+<a href=#1055 id=1055 data-nosnippet>1055</a>    <span class="kw">where
+<a href=#1056 id=1056 data-nosnippet>1056</a>        for</span>&lt;<span class="lifetime">'a</span>&gt; D::ReadOnly&lt;<span class="lifetime">'a</span>&gt;: NodeStorage&lt;MockTypes&gt;,
+<a href=#1057 id=1057 data-nosnippet>1057</a>    {
+<a href=#1058 id=1058 data-nosnippet>1058</a>        setup_test();
+<a href=#1059 id=1059 data-nosnippet>1059</a>
+<a href=#1060 id=1060 data-nosnippet>1060</a>        <span class="kw">let </span><span class="kw-2">mut </span>network = MockNetwork::&lt;D, MockVersions&gt;::init().<span class="kw">await</span>;
+<a href=#1061 id=1061 data-nosnippet>1061</a>        <span class="kw">let </span>ds = network.data_source();
+<a href=#1062 id=1062 data-nosnippet>1062</a>
+<a href=#1063 id=1063 data-nosnippet>1063</a>        network.start().<span class="kw">await</span>;
+<a href=#1064 id=1064 data-nosnippet>1064</a>
+<a href=#1065 id=1065 data-nosnippet>1065</a>        <span class="comment">// Check VID shares for a few blocks.
+<a href=#1066 id=1066 data-nosnippet>1066</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>leaves = ds.subscribe_leaves(<span class="number">0</span>).<span class="kw">await</span>.take(<span class="number">3</span>);
+<a href=#1067 id=1067 data-nosnippet>1067</a>        <span class="kw">while let </span><span class="prelude-val">Some</span>(leaf) = leaves.next().<span class="kw">await </span>{
+<a href=#1068 id=1068 data-nosnippet>1068</a>            <span class="macro">tracing::info!</span>(<span class="string">"got leaf {}"</span>, leaf.height());
+<a href=#1069 id=1069 data-nosnippet>1069</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = ds.read().<span class="kw">await</span>.unwrap();
+<a href=#1070 id=1070 data-nosnippet>1070</a>            <span class="kw">let </span>share = tx.vid_share(leaf.height() <span class="kw">as </span>usize).<span class="kw">await</span>.unwrap();
+<a href=#1071 id=1071 data-nosnippet>1071</a>            <span class="macro">assert_eq!</span>(share, tx.vid_share(leaf.block_hash()).<span class="kw">await</span>.unwrap());
+<a href=#1072 id=1072 data-nosnippet>1072</a>            <span class="macro">assert_eq!</span>(
+<a href=#1073 id=1073 data-nosnippet>1073</a>                share,
+<a href=#1074 id=1074 data-nosnippet>1074</a>                tx.vid_share(BlockId::PayloadHash(leaf.payload_hash()))
+<a href=#1075 id=1075 data-nosnippet>1075</a>                    .<span class="kw">await
+<a href=#1076 id=1076 data-nosnippet>1076</a>                    </span>.unwrap()
+<a href=#1077 id=1077 data-nosnippet>1077</a>            );
+<a href=#1078 id=1078 data-nosnippet>1078</a>        }
+<a href=#1079 id=1079 data-nosnippet>1079</a>    }
+<a href=#1080 id=1080 data-nosnippet>1080</a>
+<a href=#1081 id=1081 data-nosnippet>1081</a>    <span class="attr">#[tokio::test(flavor = <span class="string">"multi_thread"</span>)]
+<a href=#1082 id=1082 data-nosnippet>1082</a>    </span><span class="kw">pub async fn </span>test_vid_monotonicity&lt;D: TestableDataSource&gt;()
+<a href=#1083 id=1083 data-nosnippet>1083</a>    <span class="kw">where
+<a href=#1084 id=1084 data-nosnippet>1084</a>        for</span>&lt;<span class="lifetime">'a</span>&gt; D::Transaction&lt;<span class="lifetime">'a</span>&gt;: UpdateAvailabilityStorage&lt;MockTypes&gt;,
+<a href=#1085 id=1085 data-nosnippet>1085</a>        <span class="kw">for</span>&lt;<span class="lifetime">'a</span>&gt; D::ReadOnly&lt;<span class="lifetime">'a</span>&gt;: NodeStorage&lt;MockTypes&gt;,
+<a href=#1086 id=1086 data-nosnippet>1086</a>    {
+<a href=#1087 id=1087 data-nosnippet>1087</a>        <span class="kw">use </span>hotshot_example_types::node_types::TestVersions;
+<a href=#1088 id=1088 data-nosnippet>1088</a>
+<a href=#1089 id=1089 data-nosnippet>1089</a>        setup_test();
+<a href=#1090 id=1090 data-nosnippet>1090</a>
+<a href=#1091 id=1091 data-nosnippet>1091</a>        <span class="kw">let </span>storage = D::create(<span class="number">0</span>).<span class="kw">await</span>;
+<a href=#1092 id=1092 data-nosnippet>1092</a>        <span class="kw">let </span>ds = D::connect(<span class="kw-2">&amp;</span>storage).<span class="kw">await</span>;
+<a href=#1093 id=1093 data-nosnippet>1093</a>
+<a href=#1094 id=1094 data-nosnippet>1094</a>        <span class="comment">// Generate some test VID data.
+<a href=#1095 id=1095 data-nosnippet>1095</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>vid = advz_scheme(<span class="number">2</span>);
+<a href=#1096 id=1096 data-nosnippet>1096</a>        <span class="kw">let </span>disperse = vid.disperse([]).unwrap();
+<a href=#1097 id=1097 data-nosnippet>1097</a>
+<a href=#1098 id=1098 data-nosnippet>1098</a>        <span class="comment">// Insert test data with VID common and a share.
+<a href=#1099 id=1099 data-nosnippet>1099</a>        </span><span class="kw">let </span>leaf = LeafQueryData::&lt;MockTypes&gt;::genesis::&lt;TestVersions&gt;(
+<a href=#1100 id=1100 data-nosnippet>1100</a>            <span class="kw-2">&amp;</span>TestValidatedState::default(),
+<a href=#1101 id=1101 data-nosnippet>1101</a>            <span class="kw-2">&amp;</span>TestInstanceState::default(),
+<a href=#1102 id=1102 data-nosnippet>1102</a>        )
+<a href=#1103 id=1103 data-nosnippet>1103</a>        .<span class="kw">await</span>;
+<a href=#1104 id=1104 data-nosnippet>1104</a>        <span class="kw">let </span>common = VidCommonQueryData::new(leaf.header().clone(), VidCommon::V0(disperse.common));
+<a href=#1105 id=1105 data-nosnippet>1105</a>        ds.append(BlockInfo::new(
+<a href=#1106 id=1106 data-nosnippet>1106</a>            leaf,
+<a href=#1107 id=1107 data-nosnippet>1107</a>            <span class="prelude-val">None</span>,
+<a href=#1108 id=1108 data-nosnippet>1108</a>            <span class="prelude-val">Some</span>(common.clone()),
+<a href=#1109 id=1109 data-nosnippet>1109</a>            <span class="prelude-val">Some</span>(VidShare::V0(disperse.shares[<span class="number">0</span>].clone())),
+<a href=#1110 id=1110 data-nosnippet>1110</a>            <span class="prelude-val">None</span>,
+<a href=#1111 id=1111 data-nosnippet>1111</a>        ))
+<a href=#1112 id=1112 data-nosnippet>1112</a>        .<span class="kw">await
+<a href=#1113 id=1113 data-nosnippet>1113</a>        </span>.unwrap();
+<a href=#1114 id=1114 data-nosnippet>1114</a>
+<a href=#1115 id=1115 data-nosnippet>1115</a>        {
+<a href=#1116 id=1116 data-nosnippet>1116</a>            <span class="macro">assert_eq!</span>(ds.get_vid_common(<span class="number">0</span>).<span class="kw">await</span>.<span class="kw">await</span>, common);
+<a href=#1117 id=1117 data-nosnippet>1117</a>            <span class="macro">assert_eq!</span>(
+<a href=#1118 id=1118 data-nosnippet>1118</a>                ds.vid_share(<span class="number">0</span>).<span class="kw">await</span>.unwrap(),
+<a href=#1119 id=1119 data-nosnippet>1119</a>                VidShare::V0(disperse.shares[<span class="number">0</span>].clone())
+<a href=#1120 id=1120 data-nosnippet>1120</a>            );
+<a href=#1121 id=1121 data-nosnippet>1121</a>        }
+<a href=#1122 id=1122 data-nosnippet>1122</a>
+<a href=#1123 id=1123 data-nosnippet>1123</a>        <span class="comment">// Re-insert the common data, without a share. This should not overwrite the share we
+<a href=#1124 id=1124 data-nosnippet>1124</a>        // already have.
+<a href=#1125 id=1125 data-nosnippet>1125</a>        </span>{
+<a href=#1126 id=1126 data-nosnippet>1126</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = ds.write().<span class="kw">await</span>.unwrap();
+<a href=#1127 id=1127 data-nosnippet>1127</a>            tx.insert_vid(common.clone(), <span class="prelude-val">None</span>).<span class="kw">await</span>.unwrap();
+<a href=#1128 id=1128 data-nosnippet>1128</a>            tx.commit().<span class="kw">await</span>.unwrap();
+<a href=#1129 id=1129 data-nosnippet>1129</a>        }
+<a href=#1130 id=1130 data-nosnippet>1130</a>        {
+<a href=#1131 id=1131 data-nosnippet>1131</a>            <span class="macro">assert_eq!</span>(ds.get_vid_common(<span class="number">0</span>).<span class="kw">await</span>.<span class="kw">await</span>, common);
+<a href=#1132 id=1132 data-nosnippet>1132</a>            <span class="macro">assert_eq!</span>(
+<a href=#1133 id=1133 data-nosnippet>1133</a>                ds.vid_share(<span class="number">0</span>).<span class="kw">await</span>.unwrap(),
+<a href=#1134 id=1134 data-nosnippet>1134</a>                VidShare::V0(disperse.shares[<span class="number">0</span>].clone())
+<a href=#1135 id=1135 data-nosnippet>1135</a>            );
+<a href=#1136 id=1136 data-nosnippet>1136</a>        }
+<a href=#1137 id=1137 data-nosnippet>1137</a>    }
+<a href=#1138 id=1138 data-nosnippet>1138</a>
+<a href=#1139 id=1139 data-nosnippet>1139</a>    <span class="attr">#[tokio::test(flavor = <span class="string">"multi_thread"</span>)]
+<a href=#1140 id=1140 data-nosnippet>1140</a>    </span><span class="kw">pub async fn </span>test_vid_recovery&lt;D: TestableDataSource&gt;()
+<a href=#1141 id=1141 data-nosnippet>1141</a>    <span class="kw">where
+<a href=#1142 id=1142 data-nosnippet>1142</a>        for</span>&lt;<span class="lifetime">'a</span>&gt; D::ReadOnly&lt;<span class="lifetime">'a</span>&gt;: NodeStorage&lt;MockTypes&gt;,
+<a href=#1143 id=1143 data-nosnippet>1143</a>    {
+<a href=#1144 id=1144 data-nosnippet>1144</a>        setup_test();
+<a href=#1145 id=1145 data-nosnippet>1145</a>
+<a href=#1146 id=1146 data-nosnippet>1146</a>        <span class="kw">let </span><span class="kw-2">mut </span>network = MockNetwork::&lt;D, MockVersions&gt;::init().<span class="kw">await</span>;
+<a href=#1147 id=1147 data-nosnippet>1147</a>        <span class="kw">let </span>ds = network.data_source();
+<a href=#1148 id=1148 data-nosnippet>1148</a>
+<a href=#1149 id=1149 data-nosnippet>1149</a>        network.start().<span class="kw">await</span>;
+<a href=#1150 id=1150 data-nosnippet>1150</a>
+<a href=#1151 id=1151 data-nosnippet>1151</a>        <span class="comment">// Submit a transaction so we can try to recover a non-empty block.
+<a href=#1152 id=1152 data-nosnippet>1152</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>blocks = ds.subscribe_blocks(<span class="number">0</span>).<span class="kw">await</span>;
+<a href=#1153 id=1153 data-nosnippet>1153</a>        <span class="kw">let </span>txn = mock_transaction(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);
+<a href=#1154 id=1154 data-nosnippet>1154</a>        network.submit_transaction(txn.clone()).<span class="kw">await</span>;
+<a href=#1155 id=1155 data-nosnippet>1155</a>
+<a href=#1156 id=1156 data-nosnippet>1156</a>        <span class="comment">// Wait for the transaction to be finalized.
+<a href=#1157 id=1157 data-nosnippet>1157</a>        </span><span class="kw">let </span>block = <span class="kw">loop </span>{
+<a href=#1158 id=1158 data-nosnippet>1158</a>            <span class="macro">tracing::info!</span>(<span class="string">"waiting for transaction"</span>);
+<a href=#1159 id=1159 data-nosnippet>1159</a>            <span class="kw">let </span>block = blocks.next().<span class="kw">await</span>.unwrap();
+<a href=#1160 id=1160 data-nosnippet>1160</a>            <span class="kw">if </span>!block.is_empty() {
+<a href=#1161 id=1161 data-nosnippet>1161</a>                <span class="macro">tracing::info!</span>(height = block.height(), <span class="string">"transaction sequenced"</span>);
+<a href=#1162 id=1162 data-nosnippet>1162</a>                <span class="kw">break </span>block;
+<a href=#1163 id=1163 data-nosnippet>1163</a>            }
+<a href=#1164 id=1164 data-nosnippet>1164</a>            <span class="macro">tracing::info!</span>(height = block.height(), <span class="string">"empty block"</span>);
+<a href=#1165 id=1165 data-nosnippet>1165</a>        };
+<a href=#1166 id=1166 data-nosnippet>1166</a>        <span class="kw">let </span>height = block.height() <span class="kw">as </span>usize;
+<a href=#1167 id=1167 data-nosnippet>1167</a>        <span class="kw">let </span>commit = <span class="kw">if let </span>VidCommitment::V0(commit) = block.payload_hash() {
+<a href=#1168 id=1168 data-nosnippet>1168</a>            commit
+<a href=#1169 id=1169 data-nosnippet>1169</a>        } <span class="kw">else </span>{
+<a href=#1170 id=1170 data-nosnippet>1170</a>            <span class="macro">panic!</span>(<span class="string">"expect ADVZ commitment"</span>)
+<a href=#1171 id=1171 data-nosnippet>1171</a>        };
+<a href=#1172 id=1172 data-nosnippet>1172</a>
+<a href=#1173 id=1173 data-nosnippet>1173</a>        <span class="comment">// Set up a test VID scheme.
+<a href=#1174 id=1174 data-nosnippet>1174</a>        </span><span class="kw">let </span>vid = advz_scheme(network.num_nodes());
+<a href=#1175 id=1175 data-nosnippet>1175</a>
+<a href=#1176 id=1176 data-nosnippet>1176</a>        <span class="comment">// Get VID common data and verify it.
+<a href=#1177 id=1177 data-nosnippet>1177</a>        </span><span class="macro">tracing::info!</span>(<span class="string">"fetching common data"</span>);
+<a href=#1178 id=1178 data-nosnippet>1178</a>        <span class="kw">let </span>common = ds.get_vid_common(height).<span class="kw">await</span>.<span class="kw">await</span>;
+<a href=#1179 id=1179 data-nosnippet>1179</a>        <span class="kw">let </span>VidCommon::V0(common) = <span class="kw-2">&amp;</span>common.common() <span class="kw">else </span>{
+<a href=#1180 id=1180 data-nosnippet>1180</a>            <span class="macro">panic!</span>(<span class="string">"expect ADVZ common"</span>);
+<a href=#1181 id=1181 data-nosnippet>1181</a>        };
+<a href=#1182 id=1182 data-nosnippet>1182</a>        ADVZScheme::is_consistent(<span class="kw-2">&amp;</span>commit, common).unwrap();
+<a href=#1183 id=1183 data-nosnippet>1183</a>
+<a href=#1184 id=1184 data-nosnippet>1184</a>        <span class="comment">// Collect shares from each node.
+<a href=#1185 id=1185 data-nosnippet>1185</a>        </span><span class="macro">tracing::info!</span>(<span class="string">"fetching shares"</span>);
+<a href=#1186 id=1186 data-nosnippet>1186</a>        <span class="kw">let </span>network = <span class="kw-2">&amp;</span>network;
+<a href=#1187 id=1187 data-nosnippet>1187</a>        <span class="kw">let </span>vid = <span class="kw-2">&amp;</span>vid;
+<a href=#1188 id=1188 data-nosnippet>1188</a>        <span class="kw">let </span>shares: Vec&lt;<span class="kw">_</span>&gt; = join_all((<span class="number">0</span>..network.num_nodes()).map(|i| <span class="kw">async move </span>{
+<a href=#1189 id=1189 data-nosnippet>1189</a>            <span class="kw">let </span>ds = network.data_source_index(i);
+<a href=#1190 id=1190 data-nosnippet>1190</a>
+<a href=#1191 id=1191 data-nosnippet>1191</a>            <span class="comment">// Wait until the node has processed up to the desired block; since we have thus far
+<a href=#1192 id=1192 data-nosnippet>1192</a>            // only interacted with node 0, it is possible other nodes are slightly behind.
+<a href=#1193 id=1193 data-nosnippet>1193</a>            </span><span class="kw">let </span><span class="kw-2">mut </span>leaves = ds.subscribe_leaves(height).<span class="kw">await</span>;
+<a href=#1194 id=1194 data-nosnippet>1194</a>            <span class="kw">let </span>leaf = leaves.next().<span class="kw">await</span>.unwrap();
+<a href=#1195 id=1195 data-nosnippet>1195</a>            <span class="macro">assert_eq!</span>(leaf.height(), height <span class="kw">as </span>u64);
+<a href=#1196 id=1196 data-nosnippet>1196</a>            <span class="macro">assert_eq!</span>(leaf.payload_hash(), VidCommitment::V0(commit));
+<a href=#1197 id=1197 data-nosnippet>1197</a>
+<a href=#1198 id=1198 data-nosnippet>1198</a>            <span class="kw">let </span>share = <span class="kw">if let </span>VidShare::V0(share) = ds.vid_share(height).<span class="kw">await</span>.unwrap() {
+<a href=#1199 id=1199 data-nosnippet>1199</a>                share
+<a href=#1200 id=1200 data-nosnippet>1200</a>            } <span class="kw">else </span>{
+<a href=#1201 id=1201 data-nosnippet>1201</a>                <span class="macro">panic!</span>(<span class="string">"expect ADVZ share"</span>)
+<a href=#1202 id=1202 data-nosnippet>1202</a>            };
+<a href=#1203 id=1203 data-nosnippet>1203</a>            vid.verify_share(<span class="kw-2">&amp;</span>share, common, <span class="kw-2">&amp;</span>commit).unwrap().unwrap();
+<a href=#1204 id=1204 data-nosnippet>1204</a>            share
+<a href=#1205 id=1205 data-nosnippet>1205</a>        }))
+<a href=#1206 id=1206 data-nosnippet>1206</a>        .<span class="kw">await</span>;
+<a href=#1207 id=1207 data-nosnippet>1207</a>
+<a href=#1208 id=1208 data-nosnippet>1208</a>        <span class="comment">// Recover payload.
+<a href=#1209 id=1209 data-nosnippet>1209</a>        </span><span class="macro">tracing::info!</span>(<span class="string">"recovering payload"</span>);
+<a href=#1210 id=1210 data-nosnippet>1210</a>        <span class="kw">let </span>bytes = vid.recover_payload(<span class="kw-2">&amp;</span>shares, common).unwrap();
+<a href=#1211 id=1211 data-nosnippet>1211</a>        <span class="kw">let </span>recovered = &lt;MockPayload <span class="kw">as </span>BlockPayload&lt;TestTypes&gt;&gt;::from_bytes(
+<a href=#1212 id=1212 data-nosnippet>1212</a>            <span class="kw-2">&amp;</span>bytes,
+<a href=#1213 id=1213 data-nosnippet>1213</a>            <span class="kw-2">&amp;</span>TestMetadata {
+<a href=#1214 id=1214 data-nosnippet>1214</a>                num_transactions: <span class="number">7</span>, <span class="comment">// arbitrary
+<a href=#1215 id=1215 data-nosnippet>1215</a>            </span>},
+<a href=#1216 id=1216 data-nosnippet>1216</a>        );
+<a href=#1217 id=1217 data-nosnippet>1217</a>        <span class="macro">assert_eq!</span>(recovered, <span class="kw-2">*</span>block.payload());
+<a href=#1218 id=1218 data-nosnippet>1218</a>        <span class="macro">assert_eq!</span>(recovered.transactions, <span class="macro">vec!</span>[txn]);
+<a href=#1219 id=1219 data-nosnippet>1219</a>    }
+<a href=#1220 id=1220 data-nosnippet>1220</a>
+<a href=#1221 id=1221 data-nosnippet>1221</a>    <span class="attr">#[tokio::test(flavor = <span class="string">"multi_thread"</span>)]
+<a href=#1222 id=1222 data-nosnippet>1222</a>    </span><span class="kw">pub async fn </span>test_timestamp_window&lt;D: TestableDataSource&gt;() {
+<a href=#1223 id=1223 data-nosnippet>1223</a>        setup_test();
+<a href=#1224 id=1224 data-nosnippet>1224</a>
+<a href=#1225 id=1225 data-nosnippet>1225</a>        <span class="kw">let </span><span class="kw-2">mut </span>network = MockNetwork::&lt;D, MockVersions&gt;::init().<span class="kw">await</span>;
+<a href=#1226 id=1226 data-nosnippet>1226</a>        <span class="kw">let </span>ds = network.data_source();
+<a href=#1227 id=1227 data-nosnippet>1227</a>
+<a href=#1228 id=1228 data-nosnippet>1228</a>        network.start().<span class="kw">await</span>;
+<a href=#1229 id=1229 data-nosnippet>1229</a>
+<a href=#1230 id=1230 data-nosnippet>1230</a>        <span class="comment">// Wait for blocks with at least three different timestamps to be sequenced. This lets us
+<a href=#1231 id=1231 data-nosnippet>1231</a>        // test all the edge cases.
+<a href=#1232 id=1232 data-nosnippet>1232</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>leaves = ds.subscribe_leaves(<span class="number">0</span>).<span class="kw">await</span>;
+<a href=#1233 id=1233 data-nosnippet>1233</a>        <span class="comment">// `test_blocks` is a list of lists of headers with the same timestamp. The flattened list
+<a href=#1234 id=1234 data-nosnippet>1234</a>        // of headers is contiguous.
+<a href=#1235 id=1235 data-nosnippet>1235</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>test_blocks: Vec&lt;Vec&lt;Header&lt;MockTypes&gt;&gt;&gt; = <span class="macro">vec!</span>[];
+<a href=#1236 id=1236 data-nosnippet>1236</a>        <span class="kw">while </span>test_blocks.len() &lt; <span class="number">3 </span>{
+<a href=#1237 id=1237 data-nosnippet>1237</a>            <span class="comment">// Wait for the next block to be sequenced.
+<a href=#1238 id=1238 data-nosnippet>1238</a>            </span><span class="kw">let </span>leaf = leaves.next().<span class="kw">await</span>.unwrap();
+<a href=#1239 id=1239 data-nosnippet>1239</a>            <span class="kw">let </span>header = leaf.header().clone();
+<a href=#1240 id=1240 data-nosnippet>1240</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(last_timestamp) = test_blocks.last_mut() {
+<a href=#1241 id=1241 data-nosnippet>1241</a>                <span class="kw">if </span>&lt;TestBlockHeader <span class="kw">as </span>BlockHeader&lt;MockTypes&gt;&gt;::timestamp(<span class="kw-2">&amp;</span>last_timestamp[<span class="number">0</span>])
+<a href=#1242 id=1242 data-nosnippet>1242</a>                    == &lt;TestBlockHeader <span class="kw">as </span>BlockHeader&lt;MockTypes&gt;&gt;::timestamp(<span class="kw-2">&amp;</span>header)
+<a href=#1243 id=1243 data-nosnippet>1243</a>                {
+<a href=#1244 id=1244 data-nosnippet>1244</a>                    last_timestamp.push(header);
+<a href=#1245 id=1245 data-nosnippet>1245</a>                } <span class="kw">else </span>{
+<a href=#1246 id=1246 data-nosnippet>1246</a>                    test_blocks.push(<span class="macro">vec!</span>[header]);
+<a href=#1247 id=1247 data-nosnippet>1247</a>                }
+<a href=#1248 id=1248 data-nosnippet>1248</a>            } <span class="kw">else </span>{
+<a href=#1249 id=1249 data-nosnippet>1249</a>                test_blocks.push(<span class="macro">vec!</span>[header]);
+<a href=#1250 id=1250 data-nosnippet>1250</a>            }
+<a href=#1251 id=1251 data-nosnippet>1251</a>        }
+<a href=#1252 id=1252 data-nosnippet>1252</a>        <span class="macro">tracing::info!</span>(<span class="string">"blocks for testing: {test_blocks:#?}"</span>);
+<a href=#1253 id=1253 data-nosnippet>1253</a>
+<a href=#1254 id=1254 data-nosnippet>1254</a>        <span class="comment">// Define invariants that every response should satisfy.
+<a href=#1255 id=1255 data-nosnippet>1255</a>        </span><span class="kw">let </span>check_invariants =
+<a href=#1256 id=1256 data-nosnippet>1256</a>            |res: <span class="kw-2">&amp;</span>TimeWindowQueryData&lt;Header&lt;MockTypes&gt;&gt;, start, end, check_prev| {
+<a href=#1257 id=1257 data-nosnippet>1257</a>                <span class="kw">let </span><span class="kw-2">mut </span>prev = res.prev.as_ref();
+<a href=#1258 id=1258 data-nosnippet>1258</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(prev) = prev {
+<a href=#1259 id=1259 data-nosnippet>1259</a>                    <span class="kw">if </span>check_prev {
+<a href=#1260 id=1260 data-nosnippet>1260</a>                        <span class="macro">assert!</span>(block_header_timestamp(prev) &lt; start);
+<a href=#1261 id=1261 data-nosnippet>1261</a>                    }
+<a href=#1262 id=1262 data-nosnippet>1262</a>                } <span class="kw">else </span>{
+<a href=#1263 id=1263 data-nosnippet>1263</a>                    <span class="comment">// `prev` can only be `None` if the first block in the window is the genesis
+<a href=#1264 id=1264 data-nosnippet>1264</a>                    // block.
+<a href=#1265 id=1265 data-nosnippet>1265</a>                    </span><span class="macro">assert_eq!</span>(res.from().unwrap(), <span class="number">0</span>);
+<a href=#1266 id=1266 data-nosnippet>1266</a>                };
+<a href=#1267 id=1267 data-nosnippet>1267</a>                <span class="kw">for </span>header <span class="kw">in </span><span class="kw-2">&amp;</span>res.window {
+<a href=#1268 id=1268 data-nosnippet>1268</a>                    <span class="macro">assert!</span>(start &lt;= block_header_timestamp(header));
+<a href=#1269 id=1269 data-nosnippet>1269</a>                    <span class="macro">assert!</span>(block_header_timestamp(header) &lt; end);
+<a href=#1270 id=1270 data-nosnippet>1270</a>                    <span class="kw">if let </span><span class="prelude-val">Some</span>(prev) = prev {
+<a href=#1271 id=1271 data-nosnippet>1271</a>                        <span class="macro">assert!</span>(
+<a href=#1272 id=1272 data-nosnippet>1272</a>                            &lt;TestBlockHeader <span class="kw">as </span>BlockHeader&lt;MockTypes&gt;&gt;::timestamp(prev)
+<a href=#1273 id=1273 data-nosnippet>1273</a>                                &lt;= &lt;TestBlockHeader <span class="kw">as </span>BlockHeader&lt;MockTypes&gt;&gt;::timestamp(header)
+<a href=#1274 id=1274 data-nosnippet>1274</a>                        );
+<a href=#1275 id=1275 data-nosnippet>1275</a>                    }
+<a href=#1276 id=1276 data-nosnippet>1276</a>                    prev = <span class="prelude-val">Some</span>(header);
+<a href=#1277 id=1277 data-nosnippet>1277</a>                }
+<a href=#1278 id=1278 data-nosnippet>1278</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(next) = <span class="kw-2">&amp;</span>res.next {
+<a href=#1279 id=1279 data-nosnippet>1279</a>                    <span class="macro">assert!</span>(&lt;TestBlockHeader <span class="kw">as </span>BlockHeader&lt;MockTypes&gt;&gt;::timestamp(next) &gt;= end);
+<a href=#1280 id=1280 data-nosnippet>1280</a>                    <span class="comment">// If there is a `next`, there must be at least one previous block (either `prev`
+<a href=#1281 id=1281 data-nosnippet>1281</a>                    // itself or the last block if the window is nonempty), so we can `unwrap` here.
+<a href=#1282 id=1282 data-nosnippet>1282</a>                    </span><span class="macro">assert!</span>(block_header_timestamp(next) &gt;= block_header_timestamp(prev.unwrap()));
+<a href=#1283 id=1283 data-nosnippet>1283</a>                }
+<a href=#1284 id=1284 data-nosnippet>1284</a>            };
+<a href=#1285 id=1285 data-nosnippet>1285</a>
+<a href=#1286 id=1286 data-nosnippet>1286</a>        <span class="kw">let </span>get_window = |start, end| {
+<a href=#1287 id=1287 data-nosnippet>1287</a>            <span class="kw">let </span>ds = ds.clone();
+<a href=#1288 id=1288 data-nosnippet>1288</a>            <span class="kw">async move </span>{
+<a href=#1289 id=1289 data-nosnippet>1289</a>                <span class="kw">let </span>window = ds
+<a href=#1290 id=1290 data-nosnippet>1290</a>                    .get_header_window(WindowStart::Time(start), end, i64::MAX <span class="kw">as </span>usize)
+<a href=#1291 id=1291 data-nosnippet>1291</a>                    .<span class="kw">await
+<a href=#1292 id=1292 data-nosnippet>1292</a>                    </span>.unwrap();
+<a href=#1293 id=1293 data-nosnippet>1293</a>                <span class="macro">tracing::info!</span>(<span class="string">"window for timestamp range {start}-{end}: {window:#?}"</span>);
+<a href=#1294 id=1294 data-nosnippet>1294</a>                check_invariants(<span class="kw-2">&amp;</span>window, start, end, <span class="bool-val">true</span>);
+<a href=#1295 id=1295 data-nosnippet>1295</a>                window
+<a href=#1296 id=1296 data-nosnippet>1296</a>            }
+<a href=#1297 id=1297 data-nosnippet>1297</a>        };
+<a href=#1298 id=1298 data-nosnippet>1298</a>
+<a href=#1299 id=1299 data-nosnippet>1299</a>        <span class="comment">// Case 0: happy path. All blocks are available, including prev and next.
+<a href=#1300 id=1300 data-nosnippet>1300</a>        </span><span class="kw">let </span>start = &lt;TestBlockHeader <span class="kw">as </span>BlockHeader&lt;MockTypes&gt;&gt;::timestamp(<span class="kw-2">&amp;</span>test_blocks[<span class="number">1</span>][<span class="number">0</span>]);
+<a href=#1301 id=1301 data-nosnippet>1301</a>        <span class="kw">let </span>end = start + <span class="number">1</span>;
+<a href=#1302 id=1302 data-nosnippet>1302</a>        <span class="kw">let </span>res = get_window(start, end).<span class="kw">await</span>;
+<a href=#1303 id=1303 data-nosnippet>1303</a>        <span class="macro">assert_eq!</span>(res.prev.unwrap(), <span class="kw-2">*</span>test_blocks[<span class="number">0</span>].last().unwrap());
+<a href=#1304 id=1304 data-nosnippet>1304</a>        <span class="macro">assert_eq!</span>(res.window, test_blocks[<span class="number">1</span>]);
+<a href=#1305 id=1305 data-nosnippet>1305</a>        <span class="macro">assert_eq!</span>(res.next.unwrap(), test_blocks[<span class="number">2</span>][<span class="number">0</span>]);
+<a href=#1306 id=1306 data-nosnippet>1306</a>
+<a href=#1307 id=1307 data-nosnippet>1307</a>        <span class="comment">// Case 1: no `prev`, start of window is before genesis.
+<a href=#1308 id=1308 data-nosnippet>1308</a>        </span><span class="kw">let </span>start = <span class="number">0</span>;
+<a href=#1309 id=1309 data-nosnippet>1309</a>        <span class="kw">let </span>end = &lt;TestBlockHeader <span class="kw">as </span>BlockHeader&lt;MockTypes&gt;&gt;::timestamp(<span class="kw-2">&amp;</span>test_blocks[<span class="number">0</span>][<span class="number">0</span>]) + <span class="number">1</span>;
+<a href=#1310 id=1310 data-nosnippet>1310</a>        <span class="kw">let </span>res = get_window(start, end).<span class="kw">await</span>;
+<a href=#1311 id=1311 data-nosnippet>1311</a>        <span class="macro">assert_eq!</span>(res.prev, <span class="prelude-val">None</span>);
+<a href=#1312 id=1312 data-nosnippet>1312</a>        <span class="macro">assert_eq!</span>(res.window, test_blocks[<span class="number">0</span>]);
+<a href=#1313 id=1313 data-nosnippet>1313</a>        <span class="macro">assert_eq!</span>(res.next.unwrap(), test_blocks[<span class="number">1</span>][<span class="number">0</span>]);
+<a href=#1314 id=1314 data-nosnippet>1314</a>
+<a href=#1315 id=1315 data-nosnippet>1315</a>        <span class="comment">// Case 2: no `next`, end of window is after the most recently sequenced block.
+<a href=#1316 id=1316 data-nosnippet>1316</a>        </span><span class="kw">let </span>start = &lt;TestBlockHeader <span class="kw">as </span>BlockHeader&lt;MockTypes&gt;&gt;::timestamp(<span class="kw-2">&amp;</span>test_blocks[<span class="number">2</span>][<span class="number">0</span>]);
+<a href=#1317 id=1317 data-nosnippet>1317</a>        <span class="kw">let </span>end = i64::MAX <span class="kw">as </span>u64;
+<a href=#1318 id=1318 data-nosnippet>1318</a>        <span class="kw">let </span>res = get_window(start, end).<span class="kw">await</span>;
+<a href=#1319 id=1319 data-nosnippet>1319</a>        <span class="macro">assert_eq!</span>(res.prev.unwrap(), <span class="kw-2">*</span>test_blocks[<span class="number">1</span>].last().unwrap());
+<a href=#1320 id=1320 data-nosnippet>1320</a>        <span class="comment">// There may have been more blocks sequenced since we grabbed `test_blocks`, so just check
+<a href=#1321 id=1321 data-nosnippet>1321</a>        // that the prefix of the window is correct.
+<a href=#1322 id=1322 data-nosnippet>1322</a>        </span><span class="macro">assert_eq!</span>(res.window[..test_blocks[<span class="number">2</span>].len()], test_blocks[<span class="number">2</span>]);
+<a href=#1323 id=1323 data-nosnippet>1323</a>        <span class="macro">assert_eq!</span>(res.next, <span class="prelude-val">None</span>);
+<a href=#1324 id=1324 data-nosnippet>1324</a>        <span class="comment">// Fetch more blocks using the `from` form of the endpoint. Start from the last block we had
+<a href=#1325 id=1325 data-nosnippet>1325</a>        // previously (ie fetch a slightly overlapping window) to ensure there is at least one block
+<a href=#1326 id=1326 data-nosnippet>1326</a>        // in the new window.
+<a href=#1327 id=1327 data-nosnippet>1327</a>        </span><span class="kw">let </span>from = test_blocks.iter().flatten().count() - <span class="number">1</span>;
+<a href=#1328 id=1328 data-nosnippet>1328</a>        <span class="kw">let </span>more = ds
+<a href=#1329 id=1329 data-nosnippet>1329</a>            .get_header_window(WindowStart::Height(from <span class="kw">as </span>u64), end, i64::MAX <span class="kw">as </span>usize)
+<a href=#1330 id=1330 data-nosnippet>1330</a>            .<span class="kw">await
+<a href=#1331 id=1331 data-nosnippet>1331</a>            </span>.unwrap();
+<a href=#1332 id=1332 data-nosnippet>1332</a>        check_invariants(<span class="kw-2">&amp;</span>more, start, end, <span class="bool-val">false</span>);
+<a href=#1333 id=1333 data-nosnippet>1333</a>        <span class="macro">assert_eq!</span>(
+<a href=#1334 id=1334 data-nosnippet>1334</a>            more.prev.as_ref().unwrap(),
+<a href=#1335 id=1335 data-nosnippet>1335</a>            test_blocks.iter().flatten().nth(from - <span class="number">1</span>).unwrap()
+<a href=#1336 id=1336 data-nosnippet>1336</a>        );
+<a href=#1337 id=1337 data-nosnippet>1337</a>        <span class="macro">assert_eq!</span>(
+<a href=#1338 id=1338 data-nosnippet>1338</a>            more.window[..res.window.len() - test_blocks[<span class="number">2</span>].len() + <span class="number">1</span>],
+<a href=#1339 id=1339 data-nosnippet>1339</a>            res.window[test_blocks[<span class="number">2</span>].len() - <span class="number">1</span>..]
+<a href=#1340 id=1340 data-nosnippet>1340</a>        );
+<a href=#1341 id=1341 data-nosnippet>1341</a>        <span class="macro">assert_eq!</span>(res.next, <span class="prelude-val">None</span>);
+<a href=#1342 id=1342 data-nosnippet>1342</a>        <span class="comment">// We should get the same result whether we query by block height or hash.
+<a href=#1343 id=1343 data-nosnippet>1343</a>        </span><span class="kw">let </span>more2 = ds
+<a href=#1344 id=1344 data-nosnippet>1344</a>            .get_header_window(
+<a href=#1345 id=1345 data-nosnippet>1345</a>                test_blocks[<span class="number">2</span>].last().unwrap().commit(),
+<a href=#1346 id=1346 data-nosnippet>1346</a>                end,
+<a href=#1347 id=1347 data-nosnippet>1347</a>                i64::MAX <span class="kw">as </span>usize,
+<a href=#1348 id=1348 data-nosnippet>1348</a>            )
+<a href=#1349 id=1349 data-nosnippet>1349</a>            .<span class="kw">await
+<a href=#1350 id=1350 data-nosnippet>1350</a>            </span>.unwrap();
+<a href=#1351 id=1351 data-nosnippet>1351</a>        check_invariants(<span class="kw-2">&amp;</span>more2, start, end, <span class="bool-val">false</span>);
+<a href=#1352 id=1352 data-nosnippet>1352</a>        <span class="macro">assert_eq!</span>(more2.from().unwrap(), more.from().unwrap());
+<a href=#1353 id=1353 data-nosnippet>1353</a>        <span class="macro">assert_eq!</span>(more2.prev, more.prev);
+<a href=#1354 id=1354 data-nosnippet>1354</a>        <span class="macro">assert_eq!</span>(more2.next, more.next);
+<a href=#1355 id=1355 data-nosnippet>1355</a>        <span class="macro">assert_eq!</span>(more2.window[..more.window.len()], more.window);
+<a href=#1356 id=1356 data-nosnippet>1356</a>
+<a href=#1357 id=1357 data-nosnippet>1357</a>        <span class="comment">// Case 3: the window is empty.
+<a href=#1358 id=1358 data-nosnippet>1358</a>        </span><span class="kw">let </span>start = &lt;TestBlockHeader <span class="kw">as </span>BlockHeader&lt;MockTypes&gt;&gt;::timestamp(<span class="kw-2">&amp;</span>test_blocks[<span class="number">1</span>][<span class="number">0</span>]);
+<a href=#1359 id=1359 data-nosnippet>1359</a>        <span class="kw">let </span>end = start;
+<a href=#1360 id=1360 data-nosnippet>1360</a>        <span class="kw">let </span>res = get_window(start, end).<span class="kw">await</span>;
+<a href=#1361 id=1361 data-nosnippet>1361</a>        <span class="macro">assert_eq!</span>(res.prev.unwrap(), <span class="kw-2">*</span>test_blocks[<span class="number">0</span>].last().unwrap());
+<a href=#1362 id=1362 data-nosnippet>1362</a>        <span class="macro">assert_eq!</span>(res.next.unwrap(), test_blocks[<span class="number">1</span>][<span class="number">0</span>]);
+<a href=#1363 id=1363 data-nosnippet>1363</a>        <span class="macro">assert_eq!</span>(res.window, <span class="macro">vec!</span>[]);
+<a href=#1364 id=1364 data-nosnippet>1364</a>
+<a href=#1365 id=1365 data-nosnippet>1365</a>        <span class="comment">// Case 4: no relevant blocks are available yet.
+<a href=#1366 id=1366 data-nosnippet>1366</a>        </span>ds.get_header_window(
+<a href=#1367 id=1367 data-nosnippet>1367</a>            WindowStart::Time((i64::MAX - <span class="number">1</span>) <span class="kw">as </span>u64),
+<a href=#1368 id=1368 data-nosnippet>1368</a>            i64::MAX <span class="kw">as </span>u64,
+<a href=#1369 id=1369 data-nosnippet>1369</a>            i64::MAX <span class="kw">as </span>usize,
+<a href=#1370 id=1370 data-nosnippet>1370</a>        )
+<a href=#1371 id=1371 data-nosnippet>1371</a>        .<span class="kw">await
+<a href=#1372 id=1372 data-nosnippet>1372</a>        </span>.unwrap_err();
+<a href=#1373 id=1373 data-nosnippet>1373</a>
+<a href=#1374 id=1374 data-nosnippet>1374</a>        <span class="comment">// Case 5: limits.
+<a href=#1375 id=1375 data-nosnippet>1375</a>        </span><span class="kw">let </span>blocks = [test_blocks[<span class="number">0</span>].clone(), test_blocks[<span class="number">1</span>].clone()]
+<a href=#1376 id=1376 data-nosnippet>1376</a>            .into_iter()
+<a href=#1377 id=1377 data-nosnippet>1377</a>            .flatten()
+<a href=#1378 id=1378 data-nosnippet>1378</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#1379 id=1379 data-nosnippet>1379</a>        <span class="comment">// Make a query that would return everything, but gets limited.
+<a href=#1380 id=1380 data-nosnippet>1380</a>        </span><span class="kw">let </span>start = block_header_timestamp(<span class="kw-2">&amp;</span>blocks[<span class="number">0</span>]);
+<a href=#1381 id=1381 data-nosnippet>1381</a>        <span class="kw">let </span>end = block_header_timestamp(<span class="kw-2">&amp;</span>test_blocks[<span class="number">2</span>][<span class="number">0</span>]);
+<a href=#1382 id=1382 data-nosnippet>1382</a>        <span class="kw">let </span>res = ds
+<a href=#1383 id=1383 data-nosnippet>1383</a>            .get_header_window(WindowStart::Time(start), end, <span class="number">1</span>)
+<a href=#1384 id=1384 data-nosnippet>1384</a>            .<span class="kw">await
+<a href=#1385 id=1385 data-nosnippet>1385</a>            </span>.unwrap();
+<a href=#1386 id=1386 data-nosnippet>1386</a>        <span class="macro">assert_eq!</span>(res.prev, <span class="prelude-val">None</span>);
+<a href=#1387 id=1387 data-nosnippet>1387</a>        <span class="macro">assert_eq!</span>(res.window, [blocks[<span class="number">0</span>].clone()]);
+<a href=#1388 id=1388 data-nosnippet>1388</a>        <span class="macro">assert_eq!</span>(res.next, <span class="prelude-val">None</span>);
+<a href=#1389 id=1389 data-nosnippet>1389</a>        <span class="comment">// Query the next page of results, get limited again.
+<a href=#1390 id=1390 data-nosnippet>1390</a>        </span><span class="kw">let </span>res = ds
+<a href=#1391 id=1391 data-nosnippet>1391</a>            .get_header_window(WindowStart::Height(blocks[<span class="number">0</span>].height() + <span class="number">1</span>), end, <span class="number">1</span>)
+<a href=#1392 id=1392 data-nosnippet>1392</a>            .<span class="kw">await
+<a href=#1393 id=1393 data-nosnippet>1393</a>            </span>.unwrap();
+<a href=#1394 id=1394 data-nosnippet>1394</a>        <span class="macro">assert_eq!</span>(res.window, [blocks[<span class="number">1</span>].clone()]);
+<a href=#1395 id=1395 data-nosnippet>1395</a>        <span class="macro">assert_eq!</span>(res.next, <span class="prelude-val">None</span>);
+<a href=#1396 id=1396 data-nosnippet>1396</a>        <span class="comment">// Get the rest of the results.
+<a href=#1397 id=1397 data-nosnippet>1397</a>        </span><span class="kw">let </span>res = ds
+<a href=#1398 id=1398 data-nosnippet>1398</a>            .get_header_window(
+<a href=#1399 id=1399 data-nosnippet>1399</a>                WindowStart::Height(blocks[<span class="number">1</span>].height() + <span class="number">1</span>),
+<a href=#1400 id=1400 data-nosnippet>1400</a>                end,
+<a href=#1401 id=1401 data-nosnippet>1401</a>                blocks.len() - <span class="number">1</span>,
+<a href=#1402 id=1402 data-nosnippet>1402</a>            )
+<a href=#1403 id=1403 data-nosnippet>1403</a>            .<span class="kw">await
+<a href=#1404 id=1404 data-nosnippet>1404</a>            </span>.unwrap();
+<a href=#1405 id=1405 data-nosnippet>1405</a>        <span class="macro">assert_eq!</span>(res.window, blocks[<span class="number">2</span>..].to_vec());
+<a href=#1406 id=1406 data-nosnippet>1406</a>        <span class="macro">assert_eq!</span>(res.next, <span class="prelude-val">Some</span>(test_blocks[<span class="number">2</span>][<span class="number">0</span>].clone()));
+<a href=#1407 id=1407 data-nosnippet>1407</a>    }
+<a href=#1408 id=1408 data-nosnippet>1408</a>}
+<a href=#1409 id=1409 data-nosnippet>1409</a>
+<a href=#1410 id=1410 data-nosnippet>1410</a><span class="doccomment">/// Generic tests we can instantiate for all the status data sources.
+<a href=#1411 id=1411 data-nosnippet>1411</a></span><span class="attr">#[cfg(any(test, feature = <span class="string">"testing"</span>))]
+<a href=#1412 id=1412 data-nosnippet>1412</a>#[espresso_macros::generic_tests]
+<a href=#1413 id=1413 data-nosnippet>1413</a></span><span class="kw">pub mod </span>status_tests {
+<a href=#1414 id=1414 data-nosnippet>1414</a>    <span class="kw">use </span>std::time::Duration;
+<a href=#1415 id=1415 data-nosnippet>1415</a>
+<a href=#1416 id=1416 data-nosnippet>1416</a>    <span class="kw">use crate</span>::{
+<a href=#1417 id=1417 data-nosnippet>1417</a>        status::StatusDataSource,
+<a href=#1418 id=1418 data-nosnippet>1418</a>        testing::{
+<a href=#1419 id=1419 data-nosnippet>1419</a>            consensus::{DataSourceLifeCycle, MockNetwork},
+<a href=#1420 id=1420 data-nosnippet>1420</a>            mocks::{mock_transaction, MockVersions},
+<a href=#1421 id=1421 data-nosnippet>1421</a>            setup_test, sleep,
+<a href=#1422 id=1422 data-nosnippet>1422</a>        },
+<a href=#1423 id=1423 data-nosnippet>1423</a>    };
+<a href=#1424 id=1424 data-nosnippet>1424</a>
+<a href=#1425 id=1425 data-nosnippet>1425</a>    <span class="attr">#[tokio::test(flavor = <span class="string">"multi_thread"</span>)]
+<a href=#1426 id=1426 data-nosnippet>1426</a>    </span><span class="kw">pub async fn </span>test_metrics&lt;D: DataSourceLifeCycle + StatusDataSource&gt;() {
+<a href=#1427 id=1427 data-nosnippet>1427</a>        setup_test();
+<a href=#1428 id=1428 data-nosnippet>1428</a>
+<a href=#1429 id=1429 data-nosnippet>1429</a>        <span class="kw">let </span><span class="kw-2">mut </span>network = MockNetwork::&lt;D, MockVersions&gt;::init().<span class="kw">await</span>;
+<a href=#1430 id=1430 data-nosnippet>1430</a>        <span class="kw">let </span>ds = network.data_source();
+<a href=#1431 id=1431 data-nosnippet>1431</a>
+<a href=#1432 id=1432 data-nosnippet>1432</a>        {
+<a href=#1433 id=1433 data-nosnippet>1433</a>            <span class="comment">// Check that block height is initially zero.
+<a href=#1434 id=1434 data-nosnippet>1434</a>            </span><span class="macro">assert_eq!</span>(ds.block_height().<span class="kw">await</span>.unwrap(), <span class="number">0</span>);
+<a href=#1435 id=1435 data-nosnippet>1435</a>            <span class="comment">// With consensus paused, check that the success rate returns NAN (since the block
+<a href=#1436 id=1436 data-nosnippet>1436</a>            // height, the numerator, is 0, and the view number, the denominator, is 0).
+<a href=#1437 id=1437 data-nosnippet>1437</a>            </span><span class="macro">assert!</span>(ds.success_rate().<span class="kw">await</span>.unwrap().is_nan());
+<a href=#1438 id=1438 data-nosnippet>1438</a>            <span class="comment">// Since there is no block produced, "last_decided_time" metric is 0.
+<a href=#1439 id=1439 data-nosnippet>1439</a>            // Therefore, the elapsed time since the last block should be close to the time elapsed since the Unix epoch.
+<a href=#1440 id=1440 data-nosnippet>1440</a>            </span><span class="macro">assert!</span>(
+<a href=#1441 id=1441 data-nosnippet>1441</a>                (ds.elapsed_time_since_last_decide().<span class="kw">await</span>.unwrap() <span class="kw">as </span>i64
+<a href=#1442 id=1442 data-nosnippet>1442</a>                    - chrono::Utc::now().timestamp())
+<a href=#1443 id=1443 data-nosnippet>1443</a>                .abs()
+<a href=#1444 id=1444 data-nosnippet>1444</a>                    &lt;= <span class="number">1</span>,
+<a href=#1445 id=1445 data-nosnippet>1445</a>                <span class="string">"time elapsed since last_decided_time is not within 1s"
+<a href=#1446 id=1446 data-nosnippet>1446</a>            </span>);
+<a href=#1447 id=1447 data-nosnippet>1447</a>        }
+<a href=#1448 id=1448 data-nosnippet>1448</a>
+<a href=#1449 id=1449 data-nosnippet>1449</a>        <span class="comment">// Submit a transaction
+<a href=#1450 id=1450 data-nosnippet>1450</a>        </span><span class="kw">let </span>txn = mock_transaction(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);
+<a href=#1451 id=1451 data-nosnippet>1451</a>        network.submit_transaction(txn.clone()).<span class="kw">await</span>;
+<a href=#1452 id=1452 data-nosnippet>1452</a>
+<a href=#1453 id=1453 data-nosnippet>1453</a>        <span class="comment">// Start consensus and wait for the transaction to be finalized.
+<a href=#1454 id=1454 data-nosnippet>1454</a>        </span>network.start().<span class="kw">await</span>;
+<a href=#1455 id=1455 data-nosnippet>1455</a>
+<a href=#1456 id=1456 data-nosnippet>1456</a>        <span class="comment">// Now wait for at least one non-genesis block to be finalized.
+<a href=#1457 id=1457 data-nosnippet>1457</a>        </span><span class="kw">loop </span>{
+<a href=#1458 id=1458 data-nosnippet>1458</a>            <span class="kw">let </span>height = ds.block_height().<span class="kw">await</span>.unwrap();
+<a href=#1459 id=1459 data-nosnippet>1459</a>            <span class="kw">if </span>height &gt; <span class="number">1 </span>{
+<a href=#1460 id=1460 data-nosnippet>1460</a>                <span class="kw">break</span>;
+<a href=#1461 id=1461 data-nosnippet>1461</a>            }
+<a href=#1462 id=1462 data-nosnippet>1462</a>            <span class="macro">tracing::info!</span>(height, <span class="string">"waiting for a block to be finalized"</span>);
+<a href=#1463 id=1463 data-nosnippet>1463</a>            sleep(Duration::from_secs(<span class="number">1</span>)).<span class="kw">await</span>;
+<a href=#1464 id=1464 data-nosnippet>1464</a>        }
+<a href=#1465 id=1465 data-nosnippet>1465</a>
+<a href=#1466 id=1466 data-nosnippet>1466</a>        {
+<a href=#1467 id=1467 data-nosnippet>1467</a>            <span class="comment">// Check that the success rate has been updated. Note that we can only check if success
+<a href=#1468 id=1468 data-nosnippet>1468</a>            // rate is positive. We don't know exactly what it is because we can't know how many
+<a href=#1469 id=1469 data-nosnippet>1469</a>            // views have elapsed without race conditions.
+<a href=#1470 id=1470 data-nosnippet>1470</a>            </span><span class="kw">let </span>success_rate = ds.success_rate().<span class="kw">await</span>.unwrap();
+<a href=#1471 id=1471 data-nosnippet>1471</a>            <span class="macro">assert!</span>(success_rate.is_finite(), <span class="string">"{success_rate}"</span>);
+<a href=#1472 id=1472 data-nosnippet>1472</a>            <span class="macro">assert!</span>(success_rate &gt; <span class="number">0.0</span>, <span class="string">"{success_rate}"</span>);
+<a href=#1473 id=1473 data-nosnippet>1473</a>        }
+<a href=#1474 id=1474 data-nosnippet>1474</a>
+<a href=#1475 id=1475 data-nosnippet>1475</a>        {
+<a href=#1476 id=1476 data-nosnippet>1476</a>            <span class="comment">// Shutting down the consensus to halt block production
+<a href=#1477 id=1477 data-nosnippet>1477</a>            // Introducing a delay of 3 seconds to ensure that elapsed time since last block is atleast 3seconds
+<a href=#1478 id=1478 data-nosnippet>1478</a>            </span>network.shut_down().<span class="kw">await</span>;
+<a href=#1479 id=1479 data-nosnippet>1479</a>            sleep(Duration::from_secs(<span class="number">3</span>)).<span class="kw">await</span>;
+<a href=#1480 id=1480 data-nosnippet>1480</a>            <span class="comment">// Asserting that the elapsed time since the last block is at least 3 seconds
+<a href=#1481 id=1481 data-nosnippet>1481</a>            </span><span class="macro">assert!</span>(ds.elapsed_time_since_last_decide().<span class="kw">await</span>.unwrap() &gt;= <span class="number">3</span>);
+<a href=#1482 id=1482 data-nosnippet>1482</a>        }
+<a href=#1483 id=1483 data-nosnippet>1483</a>    }
+<a href=#1484 id=1484 data-nosnippet>1484</a>}
+<a href=#1485 id=1485 data-nosnippet>1485</a>
+<a href=#1486 id=1486 data-nosnippet>1486</a><span class="attr">#[macro_export]
+<a href=#1487 id=1487 data-nosnippet>1487</a></span><span class="macro">macro_rules!</span> instantiate_data_source_tests {
+<a href=#1488 id=1488 data-nosnippet>1488</a>    (<span class="macro-nonterminal">$t</span>:ty) =&gt; {
+<a href=#1489 id=1489 data-nosnippet>1489</a>        <span class="kw">use </span><span class="macro-nonterminal">$crate::data_source</span>::{
+<a href=#1490 id=1490 data-nosnippet>1490</a>            availability_tests, node_tests, persistence_tests, status_tests,
+<a href=#1491 id=1491 data-nosnippet>1491</a>        };
+<a href=#1492 id=1492 data-nosnippet>1492</a>
+<a href=#1493 id=1493 data-nosnippet>1493</a>        <span class="macro">instantiate_availability_tests!</span>(<span class="macro-nonterminal">$t</span>);
+<a href=#1494 id=1494 data-nosnippet>1494</a>        <span class="macro">instantiate_persistence_tests!</span>(<span class="macro-nonterminal">$t</span>);
+<a href=#1495 id=1495 data-nosnippet>1495</a>        <span class="macro">instantiate_node_tests!</span>(<span class="macro-nonterminal">$t</span>);
+<a href=#1496 id=1496 data-nosnippet>1496</a>        <span class="macro">instantiate_status_tests!</span>(<span class="macro-nonterminal">$t</span>);
+<a href=#1497 id=1497 data-nosnippet>1497</a>    };
+<a href=#1498 id=1498 data-nosnippet>1498</a>}</code></pre></div></section></main></body></html>

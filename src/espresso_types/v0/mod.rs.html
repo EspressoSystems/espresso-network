@@ -37,7 +37,7 @@
 <a href=#37 id=37 data-nosnippet>37</a>// instead we write `with_minor_versions!(some_macro!(args))`.
 <a href=#38 id=38 data-nosnippet>38</a></span><span class="macro">macro_rules!</span> with_minor_versions {
 <a href=#39 id=39 data-nosnippet>39</a>    (<span class="macro-nonterminal">$m</span>:<span class="macro">ident!</span>($(<span class="macro-nonterminal">$arg</span>:tt),<span class="kw-2">*</span>)) =&gt; {
-<a href=#40 id=40 data-nosnippet>40</a>        <span class="macro-nonterminal">$</span><span class="macro">m!</span>($(<span class="macro-nonterminal">$arg</span>,)* v0_1, v0_2, v0_3);
+<a href=#40 id=40 data-nosnippet>40</a>        <span class="macro-nonterminal">$</span><span class="macro">m!</span>($(<span class="macro-nonterminal">$arg</span>,)* v0_1, v0_2, v0_3, v0_4);
 <a href=#41 id=41 data-nosnippet>41</a>    };
 <a href=#42 id=42 data-nosnippet>42</a>}
 <a href=#43 id=43 data-nosnippet>43</a>
@@ -169,7 +169,7 @@
 <a href=#169 id=169 data-nosnippet>169</a>    ];
 <a href=#170 id=170 data-nosnippet>170</a>
 <a href=#171 id=171 data-nosnippet>171</a>    <span class="kw">type </span>Epochs = EpochVersion;
-<a href=#172 id=172 data-nosnippet>172</a>    <span class="kw">type </span>DrbAndHeaderUpgrade = DrbDifficultyUpgradeVersion;
+<a href=#172 id=172 data-nosnippet>172</a>    <span class="kw">type </span>DrbAndHeaderUpgrade = DrbAndHeaderUpgradeVersion;
 <a href=#173 id=173 data-nosnippet>173</a>}
 <a href=#174 id=174 data-nosnippet>174</a>
 <a href=#175 id=175 data-nosnippet>175</a><span class="kw">pub type </span>MockSequencerVersions = SequencerVersions&lt;StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;, StaticVersion&lt;<span class="number">0</span>, <span class="number">2</span>&gt;&gt;;
@@ -178,7 +178,7 @@
 <a href=#178 id=178 data-nosnippet>178</a><span class="kw">pub type </span>V0_1 = StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;;
 <a href=#179 id=179 data-nosnippet>179</a><span class="kw">pub type </span>FeeVersion = StaticVersion&lt;<span class="number">0</span>, <span class="number">2</span>&gt;;
 <a href=#180 id=180 data-nosnippet>180</a><span class="kw">pub type </span>EpochVersion = StaticVersion&lt;<span class="number">0</span>, <span class="number">3</span>&gt;;
-<a href=#181 id=181 data-nosnippet>181</a><span class="kw">pub type </span>DrbDifficultyUpgradeVersion = StaticVersion&lt;<span class="number">0</span>, <span class="number">4</span>&gt;;
+<a href=#181 id=181 data-nosnippet>181</a><span class="kw">pub type </span>DrbAndHeaderUpgradeVersion = StaticVersion&lt;<span class="number">0</span>, <span class="number">4</span>&gt;;
 <a href=#182 id=182 data-nosnippet>182</a>
 <a href=#183 id=183 data-nosnippet>183</a><span class="kw">pub type </span>Leaf = hotshot_types::data::Leaf&lt;SeqTypes&gt;;
 <a href=#184 id=184 data-nosnippet>184</a><span class="kw">pub type </span>Leaf2 = hotshot_types::data::Leaf2&lt;SeqTypes&gt;;
