@@ -15,9 +15,11 @@ use std::{
     collections::{HashMap, HashSet},
     iter,
     num::{NonZeroU32, NonZeroUsize},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
+use bimap::BiMap;
 use futures::{channel::mpsc, SinkExt, StreamExt};
 use hotshot_types::{
     constants::KAD_DEFAULT_REPUB_INTERVAL_SEC, traits::node_implementation::NodeType,
@@ -42,6 +44,7 @@ use libp2p::{
     Multiaddr, StreamProtocol, Swarm, SwarmBuilder,
 };
 use libp2p_identity::PeerId;
+use parking_lot::Mutex;
 use rand::{prelude::SliceRandom, thread_rng};
 use tokio::{
     select, spawn,
@@ -92,6 +95,8 @@ pub struct NetworkNode<T: NodeType, D: DhtPersistentStorage> {
     swarm: Swarm<NetworkDef<T::SignatureKey, D>>,
     /// The Kademlia record TTL
     kademlia_record_ttl: Duration,
+    /// The map from consensus keys to peer IDs
+    consensus_key_to_pid_map: Arc<Mutex<BiMap<T::SignatureKey, PeerId>>>,
     /// the listener id we are listening on, if it exists
     listener_id: Option<ListenerId>,
     /// Handler for direct messages
@@ -170,6 +175,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
     pub async fn new(
         config: NetworkNodeConfig<T>,
         dht_persistent_storage: D,
+        consensus_key_to_pid_map: Arc<Mutex<BiMap<T::SignatureKey, PeerId>>>,
     ) -> Result<Self, NetworkError> {
         // Generate a random `KeyPair` if one is not specified
         let keypair = config
@@ -185,6 +191,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             keypair.clone(),
             config.membership.clone(),
             config.auth_message.clone(),
+            Arc::clone(&consensus_key_to_pid_map),
         )
         .await?;
 
@@ -336,6 +343,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             peer_id,
             swarm,
             kademlia_record_ttl: kademlia_ttl,
+            consensus_key_to_pid_map,
             listener_id: None,
             direct_message_state: DMBehaviour::default(),
             dht_handler: DHTBehaviour::new(
@@ -569,6 +577,13 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                         "Connection closed with {:?} at {:?} due to {:?}",
                         peer_id, endpoint, cause
                     );
+                }
+
+                // If we are no longer connected to the peer, remove the consensus key from the map
+                if num_established == 0 {
+                    self.consensus_key_to_pid_map
+                        .lock()
+                        .remove_by_right(&peer_id);
                 }
 
                 // Send the number of connected peers to the client

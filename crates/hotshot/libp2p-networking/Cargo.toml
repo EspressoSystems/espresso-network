@@ -19,6 +19,8 @@ anyhow = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
+parking_lot = { workspace = true }
+bimap = "0.6"
 blake3 = { workspace = true }
 cbor4ii = { workspace = true }
 delegate = "0.13"
