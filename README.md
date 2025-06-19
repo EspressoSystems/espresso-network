@@ -189,11 +189,11 @@ You can run the deployer in a container but you need to stand up all services vi
 
 ```bash
 just pull
-just demo
-docker compose run --rm deploy-prover-contracts /bin/deploy --deploy-light-client-v1
+just demo deploy-prover-contracts
 ```
 
-If making dev changes locally run, `./scripts/build-docker-images-native` instead of `just pull`.
+If making dev changes locally run, `./scripts/build-docker-images-native --image $IMAGE_TO_BE_REBUILT` instead of
+`just pull`.
 
 #### Dry run upgrades via Docker
 
@@ -202,7 +202,11 @@ You can only run a dry run for multisig upgrades but you need to stand up all se
 ```bash
 just pull
 just demo
+<<<<<<< HEAD
 docker compose run --rm -e ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS=<address> deploy-sequencer-contracts /bin/deploy --upgrade-light-client-v2 --dry-run --use-multisig
+=======
+docker compose run --rm upgrade-prover-contracts-v2 /bin/deploy --upgrade-light-client-v2 --dry-run --use-multisig
+>>>>>>> main
 ```
 
 If making dev changes locally run, `./scripts/build-docker-images-native` instead of `just pull`.
