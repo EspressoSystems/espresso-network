@@ -202,7 +202,7 @@ You can only run a dry run for multisig upgrades but you need to stand up all se
 ```bash
 just pull
 just demo
-docker compose run --rm upgrade-prover-contracts /bin/deploy --upgrade-light-client-v2 --dry-run --use-multisig
+docker compose run --rm -e ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS=<address> deploy-sequencer-contracts /bin/deploy --upgrade-light-client-v2 --dry-run --use-multisig
 ```
 
 If making dev changes locally run, `./scripts/build-docker-images-native` instead of `just pull`.
