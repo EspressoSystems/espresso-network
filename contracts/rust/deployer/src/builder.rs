@@ -69,6 +69,14 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     timelock_executors: Option<Vec<Address>>,
     #[builder(default)]
     timelock_proposers: Option<Vec<Address>>,
+    #[builder(default)]
+    token_timelock_admin: Option<Address>,
+    #[builder(default)]
+    token_timelock_delay: Option<U256>,
+    #[builder(default)]
+    token_timelock_executors: Option<Vec<Address>>,
+    #[builder(default)]
+    token_timelock_proposers: Option<Vec<Address>>,
 }
 
 impl<P: Provider + WalletProvider> DeployerArgs<P> {
@@ -299,6 +307,31 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 )
                 .await?;
             },
+            Contract::TokenTimelock => {
+                let timelock_delay = self
+                    .token_timelock_delay
+                    .context("TokenTimelock delay must be set when deploying TokenTimelock")?;
+                let timelock_proposers = self
+                    .token_timelock_proposers
+                    .clone()
+                    .context("TokenTimelock proposers must be set when deploying TokenTimelock")?;
+                let timelock_executors = self
+                    .token_timelock_executors
+                    .clone()
+                    .context("TokenTimelock executors must be set when deploying TokenTimelock")?;
+                let timelock_admin = self
+                    .token_timelock_admin
+                    .context("TokenTimelock admin must be set when deploying TokenTimelock")?;
+                crate::deploy_token_timelock(
+                    provider,
+                    contracts,
+                    timelock_delay,
+                    timelock_proposers,
+                    timelock_executors,
+                    timelock_admin,
+                )
+                .await?;
+            },
             _ => {
                 panic!("Deploying {} not supported.", target);
             },
@@ -313,6 +346,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         self.deploy(contracts, Contract::LightClientProxy).await?;
         self.deploy(contracts, Contract::LightClientV2).await?;
         self.deploy(contracts, Contract::StakeTableProxy).await?;
+        self.deploy(contracts, Contract::Timelock).await?;
+        self.deploy(contracts, Contract::TokenTimelock).await?;
         Ok(())
     }
 

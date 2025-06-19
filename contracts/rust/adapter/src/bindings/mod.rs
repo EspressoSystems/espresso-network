@@ -19,3 +19,4 @@ pub mod r#plonkverifierv2;
 pub mod r#staketable;
 pub mod r#staketablev2;
 pub mod r#timelock;
+pub mod r#tokentimelock;
