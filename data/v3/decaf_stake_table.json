@@ -1,0 +1,1050 @@
+{
+  "0x902fdb7c1eabfccb08321db1fb5b54099a473ce1": {
+    "account": "0x902fdb7c1eabfccb08321db1fb5b54099a473ce1",
+    "stake_table_key": "BLS_VER_KEY~r6b-Cwzp-b3czlt0MHmYPJIow5kMsXbrNmZsLSYg9RV49oCCO4WEeCRFR02x9bqLCa_sgNFMrIeNdEa11qNiBAohApYFIvrSa-zP5QGj3xbZaMOCrshxYit6E2TR-XsWvv6gjOrypmugjyTAth-iqQzTboSfmO9DD1-gjJIdCaD7",
+    "state_ver_key": "SCHNORR_VER_KEY~qMfMj1c1hRVTnugvz3MKNnVC5JA9jvZcV3ZCLL_J4Ap-u0i6ulGWveTk3OOelZj2-kd_WD5ojtYGWV1jHx9wCaA",
+    "stake": "0x0",
+    "commission": 1234,
+    "delegators": {}
+  },
+  "0xd06d62c23f8aa3e3e6deca70ae38b1d172a3f8db": {
+    "account": "0xd06d62c23f8aa3e3e6deca70ae38b1d172a3f8db",
+    "stake_table_key": "BLS_VER_KEY~t6p2dVtQe5OvEZYyWZ96Y3rO2Osz42EGXeS54_lWLgJFsQ3zs2UHWpGZq-bQjS5wOPy-mCvQNB7mTpYBMktgBk_gbqf0G0YIEnXz8URj50CTh_J-QkSGPcl9OgnLv1YpoK623ez2uhV9tRVS_GJNJ48Vaq0-8FHkwCQY4w3j9phq",
+    "state_ver_key": "SCHNORR_VER_KEY~s3kjnjN7xWZUCdl0ujhQ98cdH2ZjOZAPmfZDImlIoAmTsFJD4DAngmXuWQccpH6MzoWyLt6vO3Yc1ubgU9dEG1M",
+    "stake": "0x0",
+    "commission": 512,
+    "delegators": {}
+  },
+  "0x6f8f2264a128dfbb71acab9a20bf4924731f8543": {
+    "account": "0x6f8f2264a128dfbb71acab9a20bf4924731f8543",
+    "stake_table_key": "BLS_VER_KEY~djaSkJW0mHxhwmP9HYPxmaTGJOwKMQD28ei3hSQPZRWbZNPjF_aQW_cs2LHjua271MNf-jOKeOa7C116zmd9J6xXpRn_SWbto57HPbH826yKYeILjWM-GauLrTKhv-UbHKvusIyBkEa9l0Hin0TxPXZxt3-UclB7zNc84U3h4gzm",
+    "state_ver_key": "SCHNORR_VER_KEY~xLTPqlvZ1oaMlhHWr8GkHA7hgaFHLyKIX_Qh-GrptS6yr7uqKKsd6mzgHENPG3xWL4WOIalzvM-vPjzOcGSSAd0",
+    "stake": "0x0",
+    "commission": 512,
+    "delegators": {}
+  },
+  "0xc20e8168ce6a1960caad5f741147706eb37c769f": {
+    "account": "0xc20e8168ce6a1960caad5f741147706eb37c769f",
+    "stake_table_key": "BLS_VER_KEY~AL9WLHThbEsTTGnQ3fMSqpfpsNiglvpiapNJZg-7JB4BVsm5M70lsi1DN1TIC5fO5X0njDi9a7MpiAD3Tah8BPbVSI-L160cEZmle8SG0M3Z0iCQuO7Is1zYhBUrI_0Wi0-FYigciQWKXYbWIY_AEqLES0v_W-Q1S7KfjZ79YgVu",
+    "state_ver_key": "SCHNORR_VER_KEY~XftrWWKXwhvHhWvKsZdOVFNMexH2E0WW3j12h0ZkPwiawaz1ZQrMVOrMX0Dqv16qXO5FXx3G9sQdYyVziMtIGw0",
+    "stake": "0x0",
+    "commission": 512,
+    "delegators": {}
+  },
+  "0xf98c05c30a3a0b6e62aea6c91862ee8c36be9588": {
+    "account": "0xf98c05c30a3a0b6e62aea6c91862ee8c36be9588",
+    "stake_table_key": "BLS_VER_KEY~_Fc7Cn24dbMg_HWV3PEON39ke5C2kB4nHbbsmwnvtRh8O5Yxc5R019ctutbLPB_46dLZ0pw5SHNY5AqsWTl6HkhgVtxYoE1H1syb7RbpcqyVzdT7tE3__tkMqB_4XEUVAe6qRjS-oCXWCHSXBQp732VC1Uw4PQjantQX-SlB9hT9",
+    "state_ver_key": "SCHNORR_VER_KEY~Z9mmBT4Rm91H5NuXa6UOsG6TsHcArgy0JfGV8a5elwqQGeljiwPWa30SH8iLR3snPCzdztEpBm4mFozTE379KAQ",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1234,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x05ba535dd36641d95f35b7342baf9a2e5f767fd9": {
+    "account": "0x05ba535dd36641d95f35b7342baf9a2e5f767fd9",
+    "stake_table_key": "BLS_VER_KEY~sec0luILbfqRgaWyccWTjyDEUuHm6KIBcD6WkpP4DQuSa3TOeQbj4uuSKTkzr-Vv3xIYjlZmVprWKAq7A3a8IOx9zX5KeQBHsn5hAyIXdgnSGzjQXVugzhPhHa3A72sV-nKydqZGtOIGk9_91nwVdkuqrTIHAKYedfbPQi7yJhX6",
+    "state_ver_key": "SCHNORR_VER_KEY~WET-NBLBvZAR5BFysYPvYn_ZxRPI8_Q-NxjH9n7tDx3tISmYpL9UGPxeEQ_HtCVLUjwB7YQF7Euul1enUbbZDfk",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1234,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x39eb442a9480737456565b6a1f60014037289097": {
+    "account": "0x39eb442a9480737456565b6a1f60014037289097",
+    "stake_table_key": "BLS_VER_KEY~GGXttnAU_MTMTovuCHUhRB97LldgOn8EXR-27Jb_QBs-nsQ8ENuIumPKTSvDec8D0_7CAerHWz9Wv3HF-rHyI9TrKFXKL1OsEfZGaxPzDPeMXzN0laN9JvF2W2fN5cgJvHscdhuqMbaPOUhlt7-fFdbHsJj9q81qjFClGaJnjqTf",
+    "state_ver_key": "SCHNORR_VER_KEY~WntqgShFtK9pn-g2keDWmz_cHWWHvbeIZ08R8QAmPQPNVJfR_1f4WywFrTECr_Qyy7BK6rLclhps2sWziw2PHBs",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1234,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x29b4ec1be1cddc1c74a4f55baf373d54d3c5bef6": {
+    "account": "0x29b4ec1be1cddc1c74a4f55baf373d54d3c5bef6",
+    "stake_table_key": "BLS_VER_KEY~7mY8q8AgG-TUEb4LzSVZVqLcPh7Gyx6mX6R-FQW1DBU2VJA8vpHdELJXkDDm4MRhddMYevszVIqKmSmPXD1VD4xgFN9WQ75EkziG4xt2SbkpeBXNsQn9iPiLX3_-MtoJVXRy2a6sP9qhyo5GEtEklVyz5y7l5XlAeH4SKAjm4Z6t",
+    "state_ver_key": "SCHNORR_VER_KEY~nUeZ_AnmrO2MScMCNRUjOjUtNAxwP2TWwjiTxYkqzCUqG4ApMmsHoFrrnfFNbEdTbbBqCUWdpFq2d2L7GzBCJAw",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1234,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x6afbad8b8ec93d9aeac0bc0e94d3911324e44f22": {
+    "account": "0x6afbad8b8ec93d9aeac0bc0e94d3911324e44f22",
+    "stake_table_key": "BLS_VER_KEY~RgiTWS37Qpx_vgywyBJGsBCptTVGBbS-K7u0swfZDRJq1F2LAcSvi7OQDXoHy-VzvgYZHbGCNYe5je23gjrWIz4FPTz0XDCFczyoCGNScFdBszCO31_mddQpgLztmZEOBbTdFo4JZVzrFnsqlmUpk749aQpvDAaTGZnLA0r-5aPV",
+    "state_ver_key": "SCHNORR_VER_KEY~MGUjlE8xpdlYL4f9FbIOfW4RJ3lTL69lugMIkRf-qgy2ZsJ0fdFLti4uMrOPvtiNN9iIQGllzE8RfFR-tcw-LYs",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1234,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x8cf56afa1b3c9b6ff148b77929678e271d6e1f5a": {
+    "account": "0x8cf56afa1b3c9b6ff148b77929678e271d6e1f5a",
+    "stake_table_key": "BLS_VER_KEY~0wa6jYXTUF06cycXuBgYpfLdXfVawweEvkUi7z2J9AW0RMFdavQgJVZvYIUXRxkpjIMh8UnAWpf8qUEzw6LoH0rBxSokrloqcv9rFPCS0ejVgtddCdabn80ESCjt9EISyCmX-ERLDr4I3hRM8t0a_5v1e2ptewxgmS5-Wmp486Ks",
+    "state_ver_key": "SCHNORR_VER_KEY~5NzS3ktlp40jbXGd38hpBL-OZ2XxQQ4iRejvJH5twiKAhFVYD7CIKhC5CFF2NeCaOeAaM6iGHs9iCm11eAtwKgU",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1234,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x1c22119fbb5eb16e3f3f11c1a162f28db7e72f67": {
+    "account": "0x1c22119fbb5eb16e3f3f11c1a162f28db7e72f67",
+    "stake_table_key": "BLS_VER_KEY~R7foRJ5cerUNhshzuiKIsc_Li7DQPmuQSaaX6x7O-iooGigj-joVCE3csi92Sh2wGg3yfVDdsuiXrfiEw9yRKyPeOS7PKI0JqKIZxlR8f0AOQHFEN0QJhkp7qjThkccaZbXEXXMD74iDXpPKyrzZ-hxnMhWhZoiONovVL8GzjgAw",
+    "state_ver_key": "SCHNORR_VER_KEY~OOmySveKmCw0johwblz2QmNBLecxJVVfH7f-uw5RuCFK8STuBlPDj0H1zWRMYwiVQBCR6tVxDbCjCZUEUzEPFAM",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1234,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xb14217e8a9be87351970ce15790a853b6d7c5f8d": {
+    "account": "0xb14217e8a9be87351970ce15790a853b6d7c5f8d",
+    "stake_table_key": "BLS_VER_KEY~KmA99cDgGWVlvTFaoVl0CEgrs8U4qKOY-9GihUwPwCC73PclCenTUnsza_uRoc1KVj0i9TOvRQQ67Q2zxediJbHHhCnP8NaEQR33Cdc7kfqtznk44D4wioZsr6uyiJ0JhVpFTg7mq8YXddTdvNzKIUk4jc9lRsZMfN3KTf25aKAt",
+    "state_ver_key": "SCHNORR_VER_KEY~B8_7NFofI3iYs-kQMnMv7ioampOpA209npgv5jkyDygmRSzwzqbDK52LeASzRSrxjqte2n5YDK592japqTmdDmQ",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1234,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x6103c13c8b0b609a247fb8e00f088924139f6390": {
+    "account": "0x6103c13c8b0b609a247fb8e00f088924139f6390",
+    "stake_table_key": "BLS_VER_KEY~Xg6hmC1UqlUIq9X1fK4T7BhLfP4h_5rpCrZiiRETCCLdDcCKqZzckT8AwVo0Hkhzcfw8tB75mje-K7X_7wBzD8DC57BMn259tIniQsIMUU4EQZMU--fZCldXdrOzN6cPDE7rSCbWtpe8lWzqay7ixJgmPJBWpAORMHHqYOZ9wAKC",
+    "state_ver_key": "SCHNORR_VER_KEY~tBVAc5OGb1QHoliKo0J2fySvAerxtt5nEcTPKl64uQ3_u2rs2ZOOqO9QNkUCcU6fl1D91g2dBud4QXiFyAyiFd4",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1234,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xceaa793079b49346b7d9ce74a4aafa0623270f72": {
+    "account": "0xceaa793079b49346b7d9ce74a4aafa0623270f72",
+    "stake_table_key": "BLS_VER_KEY~a2oIE-Vw0wzfcoSr9Tu0gSs6-nR17iEEtFtCwkno8RK1EtvKg-P6t1eGpCwjUfTRFydw8mddA2lLs2lwXxViLraLbqp6gvc9p1qxlMind_nMyKg-OfgTRVLTdleknz8nfeVyQ_tqVWxn_QEU-49z6u05YwFzO__pfNy012pX1Juv",
+    "state_ver_key": "SCHNORR_VER_KEY~i7KVEBh5Dx61LEUfH_imwPSqMSz0nbn-t6jTqzkkHwqcKPnwdzYwOUy7Khzzb_L-Ux-7kA76tEMa5hsddCdqLSw",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1234,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x96c7b78b7db245c9728823250f4544ccb2e0464b": {
+    "account": "0x96c7b78b7db245c9728823250f4544ccb2e0464b",
+    "stake_table_key": "BLS_VER_KEY~_5dSrDuVTbHCw4nDqj0hc_83fOFKVryIOkEvOzrbhiJ-VBnVL0_S_7weruXcxOBhyr-yBmM8nX5DT7hpNHRYEsd8NDl1LO_BWw9D1nQFq7IUfenmiB7m-QpWbeEzz10h8EB2PAbuAba5JbhXq3eO8NiANZb1fhiLeD-_HqVk7qNV",
+    "state_ver_key": "SCHNORR_VER_KEY~C216v8z9imh4otKDDr96IiSZ--wAlS8VMr46pHIfwy2aol7i-ca8HUArmw_ogyCPoqPKiA94Pq4hP-Lvj5NWApQ",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1234,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xb714cb37e89b8e9bbaaea11ed07ad7e1a91d42c8": {
+    "account": "0xb714cb37e89b8e9bbaaea11ed07ad7e1a91d42c8",
+    "stake_table_key": "BLS_VER_KEY~hyEAQSV4gZaJ8Ovx_59dTl5n95FI0jgTS3-cLbXZGBZG7arxiaV3HBLvLmNyknHqRpnj6dD3_5Q8yVNUzrGjK82HSdNKND89tds5PemJcG6DvQhaqemsTSaqWgS2NBoAzpPIUj3Cn7z7jO9x6muCdPmzQO-OZi3B-ONzAD1hGai7",
+    "state_ver_key": "SCHNORR_VER_KEY~yJ4YhfcA_KWh0RPlmW9we6PJGnB3nlGcKmgiheWrpQZAKw4EgaARye4bPtQ4rguOz5TLZC5yO9vOa-LLNPmOIU0",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1234,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x90004b687ca04570a58d8ef6a14d11ed38513a88": {
+    "account": "0x90004b687ca04570a58d8ef6a14d11ed38513a88",
+    "stake_table_key": "BLS_VER_KEY~9i9VQHkvo_UfUaXLhlU5xYmTJzpEK6-PrzeBryDXngXFHnDEur8yGwxV51auqdW-7z5gs41XMZpmv-ZNqy6AEY1MgFaG5Kq9K29FbVXwWRBqSEH9qTedaGdhxZ8K76sAo4KxAd5vSY_yioQEisH1tMxj_veUpurz-P9sONfoOa8A",
+    "state_ver_key": "SCHNORR_VER_KEY~LVlIIjTLpagLMOGHca8Gv9Y4uuPI3p8GXO35eJkSNhCWGvPrgt-USShCWh4StLn5npDSwAkUobgbYArY5X0RAHk",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1234,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x40bfa267e95fc5b7e97264432022df7f00927928": {
+    "account": "0x40bfa267e95fc5b7e97264432022df7f00927928",
+    "stake_table_key": "BLS_VER_KEY~j2N0ufxQDkpbnPI3YMwk7VVzA7ZzCYf8Kfck-e3cyiA5XuGELY0UIyve56hak1-Ci1Dk4d2opkkYEhtzxVOlKK4Tx0FljazeLLjlxuyDmsbYwPZt3hHQGYyrYWLcY5IeZM9gzQiC_tSV9iK9FNHs89Yf3UCWaLeeXsU1AxUwIwfg",
+    "state_ver_key": "SCHNORR_VER_KEY~LN9War8PX85SCBr0g-UEEV4AGD5XNcoTuyZspiBN3QlaCDKfwj2TV9FUaWM1vE-2RKrTBDQsL9SkC1jta2XdGec",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1234,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x4819dc94efcc3b708276ed5c7506822e20f91ded": {
+    "account": "0x4819dc94efcc3b708276ed5c7506822e20f91ded",
+    "stake_table_key": "BLS_VER_KEY~Ag7ZTZ402hlyMw-XMulvid-I0ydSAPRtxGZ8iwDwmiIu1ej3BYNRPy7YbUo6Z9teeUZBnoqvhvjfDnnzXRJ3ANdaT7yuw2_CWpL_F-NKwm2-fwRH5RLogiNMn7IqZ6cZniH02yRsArhHcMCam9g_sfxWnNxAa6LLaeDf1jqzZAdK",
+    "state_ver_key": "SCHNORR_VER_KEY~wE9kEoMWep-5gcSR8At4ATl0aGScyAajJsITkmY1ihGNUOeArjVLwRnNQIQXu21akHYHDHZgZ4JojaHwDayPH_o",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1234,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x5f512c708a395e0e9ee0c76d69506d42ff178ae1": {
+    "account": "0x5f512c708a395e0e9ee0c76d69506d42ff178ae1",
+    "stake_table_key": "BLS_VER_KEY~jUScIPveq726Fvms4m9j988jAVAGAc6LBZgLDRXDdAVodZQmsqv7fvSZd5J5LLmvHKRsqJJM1_aFsVzBGaoIJ6_CxCmhTWXyLoa1YyzBdbSFDQtlAKbC3yOSyqdUcywMeG077FZaFbSxJZPZoQrmU_IVXVfrrr6SP6QUCYwJLhCK",
+    "state_ver_key": "SCHNORR_VER_KEY~AQCY54jSRy7IhkUInPswidBCR04ZAtnnjOnqmIsJ2B2LIBQgwSew9DM3ruGlpeCluyZUMCuE_k3rX4yzN7V8Kbw",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xe9c2ff55589510bfa27e41af6564f31496e7266a": {
+    "account": "0xe9c2ff55589510bfa27e41af6564f31496e7266a",
+    "stake_table_key": "BLS_VER_KEY~X0g-32IHDYb62DMa8aYfehsqdEcdPIAuJg0pl0HRSSR-Un3fsX1BF9cikgflcxXlGD9YT-myDy_PoavdP7gSKmdK6Q69bZdA-INyu1cTQuOroyDlVbV1umWzoMgGwIwb9AhrR3ai5mfhleKtqm4GR7nZcwTNTMaWHvxAGYWJiQMS",
+    "state_ver_key": "SCHNORR_VER_KEY~0cmLKy5PUNin8EXLI0mfMT858KZ4-wV_u-fnJge0pRKQCfrxpXzJ_JzZA1l9oEIXaCrS0ZTrtk0GEK62CS_pI1o",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x76ddab5fd7777c73e1b91be24b7ef187ab7934ba": {
+    "account": "0x76ddab5fd7777c73e1b91be24b7ef187ab7934ba",
+    "stake_table_key": "BLS_VER_KEY~FwnRMoBL5yLRQzFNnDAK5Abgi13m8DKommAo_VMUOBmlAs3KFzHXnR1l5WVtttUhf1ZQdZi2XqzIARhEbVw9DCLZl-4M9TJpwacoXVakSu40upTtnAlw85loTX295xQe9R_fO6q1QTkL0QAbwSGr-p90CFhbBHvlva_joTzLBQP6",
+    "state_ver_key": "SCHNORR_VER_KEY~cnCBl0EMfJmHNCuSjpbiEdO5teYR_mu8NR1Jgu4ETgaajGwGdLtI5iziNohsKzQcvDo-nSGhFjTLbet0a-lxJLY",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x0ac5ab782b21028d0626a9db3602b66541359765": {
+    "account": "0x0ac5ab782b21028d0626a9db3602b66541359765",
+    "stake_table_key": "BLS_VER_KEY~yqHUxlPOoNphPAQw60Da5XMfaH1hRAgIrd0xSuSrVgna1fZ962uBR4gXVlo6xpwRmSj59bYdLmDacblSbWJ3GZAGfIuTMLgBh8nlZGVKidKBPfDz3qA-QcxPNPH0gYQvxG_N_j-nzW7ykvfM6jrZ7J3kL1522D_h07MIjxxh150Z",
+    "state_ver_key": "SCHNORR_VER_KEY~HGVieMEIc735-zWDGy9ByeJzKJxAqWvCyHJusGpfei55WzYAzq65lk0Nqq16ldN1w5YaJPpJ83_qeu0QMVYIGfQ",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xd0a4a9eeac9a8b56b13aa7d4202396eea75a955a": {
+    "account": "0xd0a4a9eeac9a8b56b13aa7d4202396eea75a955a",
+    "stake_table_key": "BLS_VER_KEY~DhJ0pvwU_43YjktfPo_aXxC_fFDT04DmNLCoSMuFJA9gZrNVyHG_hol59dJ9uhV-S-kKDFBP1oMmxFZxU1CiC6H0QqgrpfQtxI3HJUyhGECMNZw5CTKlLgJhQabUyYQcrLNGWGZ2Jx4loDmdq_3IeLRT38w-vNZuUPnLY-4hNaeB",
+    "state_ver_key": "SCHNORR_VER_KEY~pcUmUb64fdFiPr_GnthlOCiTyFxd9zdAcuyjWVUKDBijtDWHstVWh7IROPbrYe6rcKVLRxId6nvAR3l8l7HtC9Y",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xe5e3ca133e4aa45ee7d788c559747fb3dfc3d5ec": {
+    "account": "0xe5e3ca133e4aa45ee7d788c559747fb3dfc3d5ec",
+    "stake_table_key": "BLS_VER_KEY~34N4V-TvftptS3IeWDdqlEgkINjhQV-RZiR8cSIQzQEFvkMcVg5bAZJUdtzBjVq4uOCZX48SSKq0XD5VqfH2Fm5wezuHy70AkENAS1rkzyZn8tzR9sqLSUvjD-cFa6QbrZco2EYdSOc_AihHnHxWZvBQthO1IYpeWRL2qLHqdQeh",
+    "state_ver_key": "SCHNORR_VER_KEY~GaDfpud0_1TG0AQgxzdJNo7B_B_f0PeelQCO_dWihiSvBRA5U-UNxc6IqF4lZxeGHodwIXWP3WrbJABQroV8J8U",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x73d41fbabc30dea1a0f87dc8d83756b62936731a": {
+    "account": "0x73d41fbabc30dea1a0f87dc8d83756b62936731a",
+    "stake_table_key": "BLS_VER_KEY~wAzmrdbZassM3uJz8-4skCL2KM84_K99zlWyEqqE2Qe63tUe-hiUPP24nCc_2WKqij-7YE1SCQsyA98yaEmwB1UM0SmQ4o1Xfx6RysWWc9noI8QnKHIHJ9FOGFT9Mqcq4dRV5sk5ia_2nBSp-m5Uev1PXfaE4ZmHu7l3cu-PlxST",
+    "state_ver_key": "SCHNORR_VER_KEY~cDYJ0it01uLDI1PczMcbB8qSpt8APtPpgIP1WXYYKB5rV5KCHPhMmwwWDruxDfuKIWT81vxF1lEcmnOCQ4fFBwc",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x2e5133efce9abdf03a578710c52c006a6b46a549": {
+    "account": "0x2e5133efce9abdf03a578710c52c006a6b46a549",
+    "stake_table_key": "BLS_VER_KEY~p9zh8HdONBOT7_atNVfqWB8gptpOXjg2ABR2M0_8NAxP3FNGo3eJe1jteVKVO2nCQG64Wzed-K9sUfUtOUdaHXpN6PsFtyJLGcXqKE0Sx81tkpZgDaNVGp1WzqMmv3sOvBN_yv1rS4IZoSkdNEs5dfirwBD28nDZy4VNymkDxRRb",
+    "state_ver_key": "SCHNORR_VER_KEY~KQMik17TU_UlpkGjkTe06-mUUfWCZb-IRe50zIH0FiH4AAUszBpPd6yDMy6BsWpU-DROG_wfZ5MkKNFg0KuUGoU",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x334615ccdb4fad02208ad8a6f590819cb5ef056e": {
+    "account": "0x334615ccdb4fad02208ad8a6f590819cb5ef056e",
+    "stake_table_key": "BLS_VER_KEY~oAyxZ0UaOEhhpsLc7-iQIj6MooesNOtodruPmB8vwxs2gfnmFId3fgGW69eWoDqBze3GBrKKMHJngvtLaPwyCXFMPtGHNH8M-zRIK4x2PbFh8TPkLzkGw-w4izkaquESjEwNQsB7REXTq_P8mkrsez2Jbm_8TAilVHN1f2B1MKxI",
+    "state_ver_key": "SCHNORR_VER_KEY~sGLz8wQ6c5wfytXiWNRaCudoSlz5bXdqbypO8OnlTS8l01RPqtlCwCQNbWd2AEbHueD4xY9jy1eBB00vQ1WiKUI",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 2000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xc0e00ce63f94f3b7ab2d96a61d7e36131b6f8f35": {
+    "account": "0xc0e00ce63f94f3b7ab2d96a61d7e36131b6f8f35",
+    "stake_table_key": "BLS_VER_KEY~s7xp-okzkOhh7Y3XZNiA0sRP6YdKdEkNA4kMaip-PxVr_OZyaHtpdCh1tXE_tLMlugN7J2ibu4Qse8z7rOQBKgs4fQ79L1vdj4dMJXHVUbw8eiQOTkNuRta0iFdOjOYvwOEZRvRnR5d5NWlgOButA13XoYZZeeTroMNU5oe7ywU3",
+    "state_ver_key": "SCHNORR_VER_KEY~xgoBgBJgjGYxguWFkgAZ-y5gJ9D0uxWRfjw7hbl-EAn2FZQ1eCtQM1zPWb-NEzQNAcPYlQ9gey6FnX264RGSDy4",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 2000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xd1245becaa8cae37d792a47eb363f032d7e0a9ec": {
+    "account": "0xd1245becaa8cae37d792a47eb363f032d7e0a9ec",
+    "stake_table_key": "BLS_VER_KEY~sevw4pU1kysH3raOFtZQXt59ByYGNWY4qTWKeEbBSy1E5cbxqknDQbU3RXLU7h9X4txjChQHRZv_Ej3fOg8OKKa9PPbz0vDx2lwbqYri5ufIDZS5Z0Eh9t8YkqFvsYAn2SBAH5kU7zr-n48YlT41kR-B60pnQ_Qnk9ErE8mrlgzM",
+    "state_ver_key": "SCHNORR_VER_KEY~zaBG-Oky2Hu5Lpjyf_tCD_Z3cmjqf9niuQqVKO3lfSljHpmRdgAGiiJ1UkVgo5vx5F9iOsnqAq9xGVt6Q4woDr4",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 2000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x0255f0cea86911fdf32d34feec50f8003dee7306": {
+    "account": "0x0255f0cea86911fdf32d34feec50f8003dee7306",
+    "stake_table_key": "BLS_VER_KEY~8JABaufYs8qRgkQvgvf8niIxKIAv8g9x5225qS-9viQdtMAGWTYRFzTX7HQeZStMiv7lefAjwO4TVALC7rA4MOJrJUZivhgeePbhgfCpJ5zbieg8gDOiudXJPSlnUJwIEWZW_QlcVz3oyiD1czPJcGrihC7jLkYBcEPFxQXQb50M",
+    "state_ver_key": "SCHNORR_VER_KEY~DEGKUu5AfHfa4hGyJ94nJ_uN2Yat5ZGho9YWN_auhwKdgCOCq81UxUL-3Tcz-CqgtZoJnEPoiHLVI1C4e3-gCu4",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 2000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xbca2502d399c95f39fcdacb600a683079597afc3": {
+    "account": "0xbca2502d399c95f39fcdacb600a683079597afc3",
+    "stake_table_key": "BLS_VER_KEY~IN8Vu1rrwMYONUJxX1unTWOiMjxeO4FtBJzAIYdSMgPOvtG_D0jhZZhr6oP6FkhTC4xbn0d_NFG4z1-xF2Q8DI6ScCF7peO5ST-cKIoTjyfKoXm_M2KSoJm4kqtBGGgSllxLtndUJEffe1waR4z0CoRfB4MqeQw34fvGV7GcnBDc",
+    "state_ver_key": "SCHNORR_VER_KEY~8jthb3D-lRmAOlU9sakAtaSuB1Kc3McYoh-tCJUqJBaUBewmj30380xMzid8iPgbx_HTIV1Ogyvzwx7H1lBCH5c",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xfe4e2884c3d2126dd54e31d1c481f2c4a83ebec0": {
+    "account": "0xfe4e2884c3d2126dd54e31d1c481f2c4a83ebec0",
+    "stake_table_key": "BLS_VER_KEY~Mi7FBtuLAiQl4t1HtoaJ1ibGc5m6HyxpOknRw_jQ-yRI3_10BhVLrwM9M6fYUr_U9B2uhUYcfjJ51sLMV6LEB4rfWLc9bue_gqlKjf-yUKf-Gy_tTABKwXkW-uxsUjITBD7nF064LNEngiBX6TGWQ3IcJJ0zC1k-LoifOe6dIqW1",
+    "state_ver_key": "SCHNORR_VER_KEY~ZNqGiePUToBC9TmD4DCPUiAShMoOqQhW5mOWXG6_aw-wsljhgtbz28D9nO55KmtQ0fg4xTHpIeecKDarvNETALw",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x34e4ae250e67a23b4aa61135fec285a19a145af2": {
+    "account": "0x34e4ae250e67a23b4aa61135fec285a19a145af2",
+    "stake_table_key": "BLS_VER_KEY~wsLst-v47Adr5roG04p8MYD3WrANbGIR0_yD4DvZySefJmurZaMu1MLysIjt1BiOKwDjUWeejfRNDImZDaugByNVG8VZMFyGI44OzWlvJGkoQIC0dNIXSpZNRhi9OokaZG4CJM-bCLPJkHmRumkwpZVtbvgSqYgwakbgBKrzCxgb",
+    "state_ver_key": "SCHNORR_VER_KEY~LsH26tynGXUkhET4OBBVCLXMYem-QY9ypvHP2ddZww2QmhnqajRX9nUNlpffbjdKE2BjNBe8YiKU_umiFQTvK9Y",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xca685f5e35bee0567447600d4fbc818671d059c1": {
+    "account": "0xca685f5e35bee0567447600d4fbc818671d059c1",
+    "stake_table_key": "BLS_VER_KEY~FeeholW-p0kpXJztQT3ImLu4pqlPIDdXUMT_9IgQSimVasWiqw2CpOlqdw_fYvKXIgZdHMok-ua6BxDeC-GsD_7YFbgsncDCbh4D1x0VT_iezK7BzRJCmScF5G1YOGoI8zC2kjSKHfCePEbKfuoYUnpMvRCWV3EOrFmYf4tbwqye",
+    "state_ver_key": "SCHNORR_VER_KEY~f2sPcq9MqUmOCf_cjCeeQvTIzORRmSzqI1LO_BXzKhcovoRCQeuIyhRslXoiroZzoMNpSNm6AeYqHCsCJHvoG-Q",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x6b456a7cac52836a57c654b17ce2c51f6c2df141": {
+    "account": "0x6b456a7cac52836a57c654b17ce2c51f6c2df141",
+    "stake_table_key": "BLS_VER_KEY~sEzTzJhGQwHXO19i9soKet9og9vRYEyWkNnupm6Cqg6RIppUlbdPIHc0gNNHAKd5qvZuzHmDezH33rnI26AEKrp01_YjtqhWDm0VVuq4kWoKq2KcJ0PbI71F7K3OFnMGjvaSEVLePMGqRRT7mdgviXw1VgY4xQcRyUM4VqvPlAQi",
+    "state_ver_key": "SCHNORR_VER_KEY~9M9b19KNmLlV6dVofRzu5pqbPIQmrZk-olmBH44mCiiVPkNBEJ469ngj6PqFiEapPHsRLp1xxX_YtAIxs54PHZc",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1234,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x9d9ca895f1a1e4e759c0cf4f716bc8b1dfbe1789": {
+    "account": "0x9d9ca895f1a1e4e759c0cf4f716bc8b1dfbe1789",
+    "stake_table_key": "BLS_VER_KEY~Zt_Fmad5OuUt5nb1Rwu2odIoYl1uzP4bsak0eCooMwgginGBEq9Pwbf2cUID9-8WXYSOTyteHxdW-Ae7uLPWFCpH4gSpPE21ZT-QaDpjNUWkJY7_TBRqrAPxIdIlUuYFUF1MTMEKa-dyzkEeTd4JJc23IISNTJFhuYqGm4fKpA8c",
+    "state_ver_key": "SCHNORR_VER_KEY~BYaU-vo-RepLB6HGwtWvZ27ly_Rsr5muER4RK2KlcAPnUheFaZumcw75kibpFI0gUzqk3PnNs4PgoOqEnmjFJrs",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1234,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x88313555fafc5fb1c22c17fd77b87bf00079746b": {
+    "account": "0x88313555fafc5fb1c22c17fd77b87bf00079746b",
+    "stake_table_key": "BLS_VER_KEY~spfYvYx27CO5s_HrdbYbkZkwE_pyFlCZcZQi1jWpJggvYUKJKsDeRtxSkbU21M_GWz7q6ym5rT8C9v_97aj9F_v7O-BEpAOj0Oe4QMVu1oBvJgYzRV5WpPbjLXlHsCYB773EfQdGlr100qTghrGk3Fp4MxTy8nAa-yPvh6MluwpR",
+    "state_ver_key": "SCHNORR_VER_KEY~pz7i_XuekPFIM0grvuMH-_uevsrLxVH4axHW_pvqLAfzIwn0KpNzgJ_GwpcH03ErIrtnLniEFJ5RH_wWW1JzLXU",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1234,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x1b1658a5c3dcbb970c18bd1ef628110dadeb4c6a": {
+    "account": "0x1b1658a5c3dcbb970c18bd1ef628110dadeb4c6a",
+    "stake_table_key": "BLS_VER_KEY~1ASa7s-Ge8NfXdr-HHnTnPEeb8-8st4XkcDMr5dLzQQuAEU41E3vgzJjARsWIrRJiGcbER8Gr8zNl6CF1-D_B9RTujMitkAFOvh2hMUQyc7Udn0EJkRwib2SxsnkxIsrQqOCZMD5slN__AMhvBqe79sIQgzrKBV1kYQjZXgRY5lG",
+    "state_ver_key": "SCHNORR_VER_KEY~8pD_FCFQNQJvvldPcqcDkS0rjNneSMWogLRqzgdL1wd-KlDGzd8HiiGqxErzfpuMY-Ywl9F3dvdhBCXjMMMRFmI",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1234,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x183a0dd3dca62c46ef47b94b412b80e7c1b7fa5a": {
+    "account": "0x183a0dd3dca62c46ef47b94b412b80e7c1b7fa5a",
+    "stake_table_key": "BLS_VER_KEY~DUzVS6V6bxjrniqDI-uWRlBf8SQ87RBsywl9X7GYIA0ZTEcQ4rIhVep8JQi1qFDH4gfN4HG61jmFIiytmXMTIatH18kwztXY7uzQze5i75r-xpi3m5K_oz5mDnq-hpMNCn-Ha1m7NEZJAl6AAmX3vhHJK9QqWoLM5eT4gFwjhBeo",
+    "state_ver_key": "SCHNORR_VER_KEY~M3saSwxD2BEYTyDKGcJix-F7w9qJwN5ylbvTXYRzKip-EGrZL_e8sZElPYq_tdAKGaK0GLTQlz0ygLNsWYM8KFw",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x25125271e928934819f9a1078e6dc0b37c98f02e": {
+    "account": "0x25125271e928934819f9a1078e6dc0b37c98f02e",
+    "stake_table_key": "BLS_VER_KEY~MLsbsJunba5g_LmpzdPIQW9RYnABPTeHBVtNGjh4xCTmekmvarwGICvSVH4vy_GEkxXXZ4oGDi0-n895maoDHd8NFHMmlDC_o4PrKzm7yE1TsJRiIgBS_aXPcDRjBhIEpH-XPcYL17KobWuGT_5g6N08j9LeLwOs30v1EPFyixAo",
+    "state_ver_key": "SCHNORR_VER_KEY~Axd4Rq42ghDDlI0dMUVQFDciCzxvBpH6txxfUQAnDiOrGdFoPhN87CppDWnTBo3H35JlHZxd-LcNBfbvLYQdFsI",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x3cf01fa2d1ddf6a59b63ab3ab0ccbc95d2438fd0": {
+    "account": "0x3cf01fa2d1ddf6a59b63ab3ab0ccbc95d2438fd0",
+    "stake_table_key": "BLS_VER_KEY~gGnnJWIFkwGr_yHjIGnWgBYPztrv6NH1lSbswTvbKxklPVhrWu_Q0aR3U1ADOviOuuYfXL15QODo_Ww_eXPeBc9V8bUZNIhgsURCvYeg2t3bQbXKKhLnbL-wi5DIdtETLWxthXm8aDF77KYvxWdb2I7ZWSS70rZwscehV1e1jwmX",
+    "state_ver_key": "SCHNORR_VER_KEY~PW9YTHG-9F2fLKGGjRYGp8F-rfGS5EuDcdoNsA8RfhuiXg9ocsjoDsz2IsZFrKWdW2s_OWRSHH0WJIrWREDgDZ8",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x50c483b6af26614f37ce90df0b0fb9dbb392a46c": {
+    "account": "0x50c483b6af26614f37ce90df0b0fb9dbb392a46c",
+    "stake_table_key": "BLS_VER_KEY~I4ji-6a0TuT6-sbozKrnDjP7YWBXN5UJ9QC6csDvHBhwhnwb1HgZIRhLJQlWQgSfQb7JbBsb2rk0Yfe-htzMHS9j__spazD-TNCCXwYK5C-5h4ZKZg6bCQPb3SAOQmgAKKHkfftwYoO_R_KrX6LTaYUTa1MXPdX66YHLUg0I7hIu",
+    "state_ver_key": "SCHNORR_VER_KEY~yFAIjLcihr3LnRI0ZQyKenhTmwVSn6lxMTmYPDcezRp6ykjAnObOq3JCkKhZdtzJXaWaUx-O6918hY9D-11lJco",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xbf74084c57a6f84db029dd94b26cff4ed841c131": {
+    "account": "0xbf74084c57a6f84db029dd94b26cff4ed841c131",
+    "stake_table_key": "BLS_VER_KEY~hYckw_PdQaRtb2TLBQBoxr_YzQPaDbEPyO7BAj3EMBzIzkM-rmMywieBoEi1ixErvLrnKeMtH1Bn2Iv6H9S-F61qGHJRFbcrKjdKJlYmeT6JhNOmcXirucvxdrQdedoOA3ACSzv1lNEbKimIaL6E6y9MJDfitff2HT8FNyqKphJR",
+    "state_ver_key": "SCHNORR_VER_KEY~op-aOVkvg-77tqq9rKQM96Z3F6oGTMsLFb1yTT6QdAhi3u3-6vPRjG-Slu1nOC5OHpSVCXn6iqQwBKqdXQWjHxs",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xfad0a5b248b1822f8cdf9ad68671a45017418c05": {
+    "account": "0xfad0a5b248b1822f8cdf9ad68671a45017418c05",
+    "stake_table_key": "BLS_VER_KEY~Zu2uTZzTAdHKQbJuo3e1oQB0mYjYueUXx1-I6nZgxg7Pp2SnG8OQXqsdz7n1dmg_oFlCAt2sr33f0nW_Z-zdA6kIgFwqLYWPehfKPdczCeEAsMk1esVimpNkAt7PyyUInlk8M6ueGKCJhdRKqWxfobgRzGAueiaW5QNiWtiKsABt",
+    "state_ver_key": "SCHNORR_VER_KEY~UZzkFutXBtCe4PFjld0l7ypf-mJobtUoPxzsqhxqFSuy7R7owTKvxl_FanPToERXQj2ifWyzQPzroOCshYR3HYo",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x35b136cb030eec900b4d30b02d8d53a6aadb446c": {
+    "account": "0x35b136cb030eec900b4d30b02d8d53a6aadb446c",
+    "stake_table_key": "BLS_VER_KEY~fxZF3ABhBbyZEboMyoxVCbgGUuQD9fXj-9kZXurVWyQFzvQxXEfnKOINp8tEAkS21vhqsXM0vTasxx0NrGCXFIJCPkg-Q4_LaWhGW9hLK4V0pCUbGWxIvopa_DWbZhgJ-vaeUp1rstp4PTzlcvTn73yx5TiGEt7ob4ifrZLKXhWB",
+    "state_ver_key": "SCHNORR_VER_KEY~Rcb5-paoS-In7f8ZjiXBiRCGcnE33axM2Mt4s5apvgXGiCSAQPBQWNS8Zj81GSrUo_e1fPWiQSClNgN6FGj3Ajg",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xdf30ac3b38bf198c1ca2cf20d99d7ba0287fd2ec": {
+    "account": "0xdf30ac3b38bf198c1ca2cf20d99d7ba0287fd2ec",
+    "stake_table_key": "BLS_VER_KEY~qj1BbyLirqiZshR1WznBG2Nmd2J44foVClzkK3oKFy0llBv0ktCUOfjBDtbmV-QjVGPJJhgc8sP-WHUQoowHCJ_He_VGbjzVGsx7lIi9pl0XRSz4NOeAxZflQX1dUqIuIhs-DJZQIITjZcAwCI4PfqDaVNtCOjr6WG-vibebtxUz",
+    "state_ver_key": "SCHNORR_VER_KEY~giCS_y9meCCBIAqzzFoH7OEIc8yCwyW6EV_R6SeTxA8RCGohILp8HkzrABbSE0IadEB5G1d5X5ouI2IgKuc4I5w",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x4664bcbf4560ad9145984955269989bc32d19b2e": {
+    "account": "0x4664bcbf4560ad9145984955269989bc32d19b2e",
+    "stake_table_key": "BLS_VER_KEY~dAWIBOPHU5eVkYQUHQKF2bhyQHmsxDXfj1WH1LHMkAOqHk1peoMMo_KndFGSXAkzZUgFCX7A2xCrO_92w8GfApmuV9v6PO6z7iM8eqVBvwNe_ju_k7-hTiOz2eHQj-UGU7e-gxfVgCeuOGTVrgXt8Dl1V-1-yAo8todWys6EHwe2",
+    "state_ver_key": "SCHNORR_VER_KEY~5Ag3hBmZ3S5Nkrrzkm4hbL1Y8Q_MWDMgTfo278wZyg-KlhF0mXFHuabHi9xkdhU4jIJKDgfO0x60n68UiXJPBBQ",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x4adf51ed73b75d17570cd55869f9bb21c4b28ffc": {
+    "account": "0x4adf51ed73b75d17570cd55869f9bb21c4b28ffc",
+    "stake_table_key": "BLS_VER_KEY~XIbEeTjJyVdWHegWnWriE2L1HK_C-PdnUE332JFImQagpcjVtFtBzzvR_vArWXgT2680o4XfKd02zsrsP6blJzsWp4NOLWVfnGA60B_L5fwrZM6N3Pc0wkiauLYnPVkgRhR6Nc1obElSEpFm7GRpGrV34gO4xmHGgKD4olsmPQ9U",
+    "state_ver_key": "SCHNORR_VER_KEY~GpPjp823UYLPJTt6wtVehklwq9IubgP6x3zJXGiLKCqg5MIJEB2N8vYPDTXPuSSQsm0pEpUk7Bli5ngpAL40Fk0",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xa654127cb989a192ba63e5bb249f4bbe03664e26": {
+    "account": "0xa654127cb989a192ba63e5bb249f4bbe03664e26",
+    "stake_table_key": "BLS_VER_KEY~iBnrn62OXkVpiTJqWp4rUmBVYB9LrAoE8hcvZlBj9QH8ETLrLtegkm6JgmOp3Er24Jlj0oeyCYrg2b8eeIhBHFf6e48pN_nEg_PyMacHJ3dVTBqHZtuDFJIeQ-LTF6Arsj4FMmtS_ea8y5fh42kSwqD0FfdebXwfc4HtnYLfvKLs",
+    "state_ver_key": "SCHNORR_VER_KEY~EKAO2nRa-KZwEeA5X3EM-AH-sEOzuUlUwjRfvQD01gW-1J_WPXFMQUcUpdpvYnUwt3LkfNEuW5ECtIGtv1wSClI",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x8ad38f8924fb5cb10ac36e22eacec65ad6181a9c": {
+    "account": "0x8ad38f8924fb5cb10ac36e22eacec65ad6181a9c",
+    "stake_table_key": "BLS_VER_KEY~d50aavGH0MsASIUFKhnmb49-oT3tiBsOGB3t6WzBgwjtDbzcypvTTbsu8pdne48ZhKp6dAm-w5g15KOU8wgYFFuwB6XW9UG2bMNfPZz9jnL3QIw2CYpC5C966s3GqxYV9jM1WJj8_zvzl9aKDpq_jKIx8h-ja1wJUJpwasXSyBO1",
+    "state_ver_key": "SCHNORR_VER_KEY~0d4cy5ohP-bMDfD9zW-pFQTdyncjsHn1Bi_Y1xth_xG_5Afs6oNZ3UJ8DACx-ycjnuwOwkubtZOyfXOsRtMiITA",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x85058595f51b4b98b6c3ebf7a34c3505c6caf420": {
+    "account": "0x85058595f51b4b98b6c3ebf7a34c3505c6caf420",
+    "stake_table_key": "BLS_VER_KEY~-Wp2Wf1dfSBbBPKmGt2MRGlxspgopylFYb_Nm_xFuB1c4JdHGXp2GGl-BJyByexp3GXhUMrtcKjc1A-egq15K2FvgVvmX5iMAAhVLLSqTo7HqACcYmXQe_Y9MfBO-_otfBsTbtGtsjnDI0Rb5-9XHD9-oj7KviBQBeZeGa1xUaDi",
+    "state_ver_key": "SCHNORR_VER_KEY~39fGYzg6fEDSEXN_utg81oDQ2PlHE_mhOKV-GA7CFQvuq4XCJ0DiOk9hWJznsAyaaS20gR1fcQt2C0-XWElMIys",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xbc997b59f2a03fc03b9288c2bf9a9cbeb9dfc561": {
+    "account": "0xbc997b59f2a03fc03b9288c2bf9a9cbeb9dfc561",
+    "stake_table_key": "BLS_VER_KEY~qzcoZN5DBJYxheRZfxgO9rddi9hNKFEpJpDDJ5iOoCZgNyGNvDYdWaXd-W9nCegyXMPSVYAv2GcVvvaS-XVGI6xDZEoUfu7dPbAT-jpOmKiRqOUxhnjflTYgD4E1GeAkTWCpm7-_qjjUB0sTgHRCf9Y4N7BMcJUIFU4G_7t3Tw5b",
+    "state_ver_key": "SCHNORR_VER_KEY~1qRll0hYhQGV4OYyk5cuXDCAkACAESnz9bNskTIU1w1alU0eRtuIUvc6w3iNn4cCPN8HFXZ0h64vq3Cu5y_FEMk",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xd4b31d8a197f3c56f621c5052c11b76995a76ddd": {
+    "account": "0xd4b31d8a197f3c56f621c5052c11b76995a76ddd",
+    "stake_table_key": "BLS_VER_KEY~VWlRzE_suT3LOeGha1IXbeAeG4rs-Y6M3Ldq9kfutSO94g5lOKyH9CLgyQjNzDVL81m2q2uOglFEsNRmNkccKaTdnhei7Bg6jlWxdgXKbVfHCwj-n16vizdXNVvceRkrw_yDAt05jg9Ih6jQRXPSdogr2OFfHlVk7Dd2IO2Tvxcb",
+    "state_ver_key": "SCHNORR_VER_KEY~acCI10xk_uOB-VsaB9fae8xkkGD1Jis3GdT6ueQokgJQ6DyqEaC7_LEIxnH32V9C37L5erwIUuXSZOXsynR_Iak",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xa3eaa8a8936e3847ad9487ead4d749a83e8f710c": {
+    "account": "0xa3eaa8a8936e3847ad9487ead4d749a83e8f710c",
+    "stake_table_key": "BLS_VER_KEY~CL-PUuNbfiwW-wzLCpTQksa3bddU9mVHnIjwY6EHFxeNj-YTB8qrbN-orYO18lXJgzqmRHYf3tru3Vv6XWl7LouY3WejkbEj7Iq4z-XLE_q42PbSII40iRuKCQpUuxYrbcwoN-pq2EWVb8Y3NPv9DthRxR0XyVL0krDiSmNDVJyU",
+    "state_ver_key": "SCHNORR_VER_KEY~KG7NrN5ljVAyl_ROl3WL8PtavBkm4htsBs7-YC8OZywrda4UgxoWYF-joh6BTxcjkCRgnfQPZvdn-M04pFU4BRI",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xd232c63314f41ade3fd417d7fd5c13e5377ec16a": {
+    "account": "0xd232c63314f41ade3fd417d7fd5c13e5377ec16a",
+    "stake_table_key": "BLS_VER_KEY~sW8Wo51FuJGKHAVQrPGM2YkRNwoDgOUzrOGn4ap4cwL_aNXx9X8BoyejhJChcYli-YoHucQGsGeoLtX9k17LC349Gk1g6lUJ2fyFWDBDt19NqJuQANLCYIkA2sMekvgq3JsI-l7TIEVQqNR64ww480qw3z23fHbYUdZhJ2qHdhGb",
+    "state_ver_key": "SCHNORR_VER_KEY~59X6rVc5rP0T9eaXp4a9i4GTphPNmNZH3f3gHwdRqSPMzOjKxqCFxj4LWEfFoypJ-XA5tu_ZWg4jgQ_d6qCtHDM",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x737ad9930853942601f55250a73bc8db5fe41de6": {
+    "account": "0x737ad9930853942601f55250a73bc8db5fe41de6",
+    "stake_table_key": "BLS_VER_KEY~KFNlUb9JienjbfFVXqaRVSUNTJQR3r6TxPvZw7PU_w6Ww4jLtWOuEbnEfxIXIFhXXNJufdxHICwvezdUANQSAdwSFIKnwDddJ7WSg_IaNj-YKeze9HC2G2-hMtORfBwSx9BImfDKcmoRmW0UVeUZ-pFELWb_e9tOQR7cyQh74heI",
+    "state_ver_key": "SCHNORR_VER_KEY~N1rRQUxPmRap36U85lkDnpa2094F7E76sMela_0fWCdiLayzZ4c441K_PIp49ZXcoWRPv3bJ3cmh-emUFCU9I6Y",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x11e382f1fd209c45794da60988a5aa2e671924fd": {
+    "account": "0x11e382f1fd209c45794da60988a5aa2e671924fd",
+    "stake_table_key": "BLS_VER_KEY~PJw-s3rrUXkQBKKi2veAJnQloM77VR7vN_vFCy5owAaqVHq5RDgfkKKQdggaFCk-mjhx7aCocrnZhndTsYieHOQCP8dF2hUinqsAlMy4TkFyQ5hV__QdW8xgv_16xFwfSGEd24S7pqfW1poCshMUCg1rK8TertdZ5jt1iRawiKDm",
+    "state_ver_key": "SCHNORR_VER_KEY~bDLrFut-7YHGwInyRIns0B5Cy5nSr0xbuGZqdUNXmBAhmWmVlr11tFTKbQ4tJe-B8yGRhiOgnHE3M_Pw-YkgF9A",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x0cb40b43d63014b1ea9f6fbbf5df2b8739126fc2": {
+    "account": "0x0cb40b43d63014b1ea9f6fbbf5df2b8739126fc2",
+    "stake_table_key": "BLS_VER_KEY~ZztuQj5ojbEevtkYpkOiYkI3qTkNOescGSGfOLOymB074aAiPJ8TJEtAEqDKI2yyseGHFre6Mmh_caRdob8fIG4wTmaLPQNEJLM7r_2t6KAlJSR8DXG2C5zl2e9rygcSggVlKUq50Nlnz0fJ1ARWOvQUtNx7Mlvg4sV6TcI6g5ou",
+    "state_ver_key": "SCHNORR_VER_KEY~-71gzUe6oKEqNKwj40xbyfWHi2_EFvtsKk0E5tOCOQ9BHor1_-9FYItP0bth1hMdcCy3gFpH_R2YLcBhnmuTKEE",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xf90d4c7a5aa3cec802ecb7977754c05d3623e423": {
+    "account": "0xf90d4c7a5aa3cec802ecb7977754c05d3623e423",
+    "stake_table_key": "BLS_VER_KEY~f4x_6PoPSVJxWFMYNm8jCzi66t0LY-3mWp7w-wctNBl9PXXa3qlNvpL3Z2J51hoJ3S9GqNo1GYtTwg2t34kaHQmLX3OyjFd98ydvfshc_2XCqvcfOht2i5SehF6wsv4lXIsXsvLxkcG9coeDP9ycnGs9SXEN5gcQzEqktgkPsBcH",
+    "state_ver_key": "SCHNORR_VER_KEY~O9A8AWPuQ12chIKUtz8fXezc_AOM-m6FdFf-gt1naClHNdBGCTdV-AXnZS2FVb01U-eFzDWVMDUp-N5x7fHEJQg",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x2a8b6a37d15168e3338a1f8aaed71a05ad8fa60f": {
+    "account": "0x2a8b6a37d15168e3338a1f8aaed71a05ad8fa60f",
+    "stake_table_key": "BLS_VER_KEY~FGpmI8YhoDsarI1CfAcmEL3nnfPYFMkEr9-KEVrS1w0CGnXH8_aqPogggze5LYYVFiZTbw6zaZS_iFKpQ8ZxHemHNRHFU7lKRVn0IbY_8Jtvt1nrGGiyiUiGem2hkFMd9MMuoTgj0f1XS66o64wzauS2IqwQ_7D1OtPCtTp54qhv",
+    "state_ver_key": "SCHNORR_VER_KEY~W7vwuHXv9ceigz2_C1_SP63uZ-VJYOz-wSrvYdfxpyuCEH064Qg_KTkysqlPz8P2_Tih-WRHJFzAP6hAtBMDLzU",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xdeb6596c66aa13566fd6592569001a7b1005d75c": {
+    "account": "0xdeb6596c66aa13566fd6592569001a7b1005d75c",
+    "stake_table_key": "BLS_VER_KEY~88w5tRpO_jTxgbPNkggWWm8V4jeSUasET2M_0jldpQnuB77kWhilLNSctg3wxMAp7xEj__WXbEHuqHmi1pfADb1JGqqcwEszYFGn7cOtHzSUiGhRm9FQsuC2Fsl10ysnuC9obHXA2yxV-tUNeVSOe59_75ia5_dtQ0ynS787JKyB",
+    "state_ver_key": "SCHNORR_VER_KEY~UmUJaKQOkjsFYm7uowVJgyxffU29gf1bjNymFV3SIgqX496XneDqKMwS2SxD2pYJAlipqLkkY29JB2r3XGsCEJs",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x80d39bc1301b29e141ed7f6ad9382960a12d0edd": {
+    "account": "0x80d39bc1301b29e141ed7f6ad9382960a12d0edd",
+    "stake_table_key": "BLS_VER_KEY~8wSaKQQts9nh812ScFw25T7xsa1rB0xImy-RWewwbiOUbWKN1wTKlWxiyQmp33Czv7rq3b3kXvIWtnAtJKzIBwhaW1vQy0j8OqJXTjHKq3MXONZ7Wdu7rc1e0cbMOmgSav03Cz0pf6WsoYaSFUcmm-F1nKTsQ9uf3Bcc3e6p9KIS",
+    "state_ver_key": "SCHNORR_VER_KEY~3XJwCTlA7KPgFhQcZivpIghdjmaf1GUyTqDRAMz8ZhUD8pzr9FaqiEa7VWyWmqqCm8Ogwh0vOVY8V75H-e7tJ4c",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xb079d8c8668923bdc1b196372296170285791f78": {
+    "account": "0xb079d8c8668923bdc1b196372296170285791f78",
+    "stake_table_key": "BLS_VER_KEY~Ny0Z1hu5LZL5OWv2oH9VrymN1SzO2kuJJYONQFhyZhKQGI0P6W59BkbjhQT1uRn2PQ61Vx_WuD9jSBcU-YfII28pQtRwcVWtgpwW70Ildqjmp90tCtmZ4jJyLFKx5-IV13LoB5vaIS1bcBv8gsuiadYobOz8PHizXMbm3QC8dAZY",
+    "state_ver_key": "SCHNORR_VER_KEY~5Ib0sFp7T9FMiYYkvkpkYd13hB-rvrAJxuPbWeVLvy29yBrJr1_g1xrDq4BEaSD_bX79USL-JnEfY6lVaYCBCUg",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xd9c6b8b69a0004f43c63d83831b2fdd483ec8076": {
+    "account": "0xd9c6b8b69a0004f43c63d83831b2fdd483ec8076",
+    "stake_table_key": "BLS_VER_KEY~8TxG_dCMT37TIRCKvUxTKF_157TF8ZgMIqhjci_5Ow1RufN7XLgo5DEasrDOdSDbAjIP6eqfDa2kBxFykSpJI81bz4Mnw_kVR66xPScBDNzvTK0q4bZhgP_j9xfzdpETeHcoBzOTWUnf0mlGpaGq0X-rrO0AoUF-A9oMgw9CEp6E",
+    "state_ver_key": "SCHNORR_VER_KEY~YdBq4pfySrMynSLrGrwVVTQnpL8E_dTy2-icB7RDNhSaMmVE37KjTnL80fKodDnMZoL8IN5yvkmuJ0SI9tybFp4",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1234,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x55c9360500d02e1eb1f6f0d890fa5ffb70e7dbac": {
+    "account": "0x55c9360500d02e1eb1f6f0d890fa5ffb70e7dbac",
+    "stake_table_key": "BLS_VER_KEY~0DLu-c8UQyPXVbPv7XgvDZA-ANNsOHAIZC6sF4yXfh2L76OxyLk5G_-sBnxxRU2-sOuy0VSuH0JvQKJiSXXnAtYtGv5BJn7dn_Qzalmw7lvtuhT1N1sWs2DXPwkR2TgLIa3rsQmDp78Q5v7Pnr4szYlpSAeSaJ0aqoOOx7PELQF9",
+    "state_ver_key": "SCHNORR_VER_KEY~a8j8BCWR5K6SmuH3sCj2XMhcLSnsbPS1YR8gxUu1sAcmw0eJ5Yah1xb-ZMVsOKTCRsp4q7gI9T1fjX1-QJKcIok",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1234,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xae9afbb012bc9a968c56cebaf461ec4996527a39": {
+    "account": "0xae9afbb012bc9a968c56cebaf461ec4996527a39",
+    "stake_table_key": "BLS_VER_KEY~6TN2w5fmbE28It67pLjDhH_gO3LATL_embVgi5QkQhXydCKo4qEGbajkJFvPmipuxpMeCRtPHPkCr8CJqXWOKJSV8dhaAO_CegF2teK0h0vsJhvvu0KZvKkiEzrUX7AsuMimaRAyu7PO3X6Ip20LP9Wn7dnQ9hl-TE3jjQ2FnZiE",
+    "state_ver_key": "SCHNORR_VER_KEY~1_UFa9Q_Km7mQJ2hN6gIcBtcOsJhqoaYPnfzZMvEPSiTsP0MFm-4F5SfEmLLOUrb57ZlpWe48qkAT8HZwRMBIdQ",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1234,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x5ff36e0d0988483833d3e1d99dea4a7456a322ed": {
+    "account": "0x5ff36e0d0988483833d3e1d99dea4a7456a322ed",
+    "stake_table_key": "BLS_VER_KEY~ugKL_iuOMtoBXX-xCyp8wrSM4K05X3GP7epEI3wp2gGfRz4OePsT-kxAiMexvlVg0Pvk_RFpkEm3BBKPyLH4HSzTnawipjjz0nphcwMPGBUGVf_FV1xFjPScbY4FdoUshflYFwNXg_cT7FtFfd0Iz7XxzlYO8aHiZjyzEA8KQApS",
+    "state_ver_key": "SCHNORR_VER_KEY~tVa4AyJiqc8HV-kibLCKAfTJMtwl_BNYP_vyoTUZgwXS4IHcYKa8YzXPdd-uO1JepllzEaM9k0L7qPBIFDutCOo",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1234,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x6dbee56aa3aac553ec771970e0d705be0acb5d5b": {
+    "account": "0x6dbee56aa3aac553ec771970e0d705be0acb5d5b",
+    "stake_table_key": "BLS_VER_KEY~-ZEkaaHcrtli_FQPqw6GQ5xiOusRqFR6bU0LiMeoRiyQd68X5I4aemy9P_ScY_P-PKw5Ybl2hvRwnGwcGPCVI3GXcFZSe3wKEZSuwj_uLDP4J_HvqISdfHh5YsGTTcIveNqaMEFSIQqhWmJLUgBwdzU36wEOkr1YYIXOLQcVUJ3f",
+    "state_ver_key": "SCHNORR_VER_KEY~dm8pg8sL5_IvUI9OMc9cy_0cfwwZCBq3eUj8EBp3yh--F4h6VTfDbFQU7vR5ZKe2Y5mfmLSkxckURVmNl2ssCiI",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 700,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x83deef0e75e975de1239c189c7024d5f38d85908": {
+    "account": "0x83deef0e75e975de1239c189c7024d5f38d85908",
+    "stake_table_key": "BLS_VER_KEY~CW-rd0Sx4SwTauX5EmABh8W1g_EmoYZrAOo2LoVpnSfdR0Sp4JMc9kYAYGkJyV41HiJpQbcci6oGDlwpmTgrEPtr6c8jHOL-Z1EKPtuD2bzNX4g0p3IzZMO0FHVsTcEnrk6DkX3uoj1x-7DQFBBLORZeicnfcmlfZn3mmu2EsBQu",
+    "state_ver_key": "SCHNORR_VER_KEY~zCd6TrfWOBNdI4C47RNw-_GaGqCSmKbVC9NpVZLiTBZlABqf_Yr2vweGiuIwhewk2nbBZzkpx53TFHJnvSFdAHo",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x5a5a819efe1c38dcbc2fcc0cea9034b4742244ba": {
+    "account": "0x5a5a819efe1c38dcbc2fcc0cea9034b4742244ba",
+    "stake_table_key": "BLS_VER_KEY~3u4_nXFWXIPI_wR64jnxDK_DY2MxXFI0kpqUrnGxlykcyjyJu1l5hU-LHkin-N0p0lVbPAz4Knp70f-saUA8MGikoIAX9pfzlV0L17CUR31rG3nAkrEAxZemO3uhN8oHOJLuZG_Oz3kvQ_KGIH0pnMZY4Zaz3iWROzuhpl2Jj6U-",
+    "state_ver_key": "SCHNORR_VER_KEY~njpgFPYOCSs8TbyL3ZNU08Kiv_uRIEtgXOf3FVNp-B_f6WzCAZvEyuJ4lt5COrKH7o5k3aAjNRpUaysItG8UIuA",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x3c6deba25bab50f93eb8b0c8bd518babab6aa184": {
+    "account": "0x3c6deba25bab50f93eb8b0c8bd518babab6aa184",
+    "stake_table_key": "BLS_VER_KEY~PpVT7FLgARxdndOHsuUdz5Z1pjyAiwwDzEILGGZhQAhv5ecDihFEBQsIHinpid-SWc0lpjbGsC0f81cf5HuJATjj2-FlpOPbQ90yPrGO0y8AcA0AhZksfUFqyRLPn5Ab5xME9SylRisZ4fbuz-7Dl26qarUXZimFEy7O5V30uZ9J",
+    "state_ver_key": "SCHNORR_VER_KEY~qmEqPaINrX-8t6aSCK7E97-UIJ6MlIQ0zB-KbILkLyxfdxfqfIWXJP_DqL_5nBudxhZB8J4nA0SIxc9g5bf9F9w",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x6fce5864f48a9a5caa6c9b60ddbdf73253550377": {
+    "account": "0x6fce5864f48a9a5caa6c9b60ddbdf73253550377",
+    "stake_table_key": "BLS_VER_KEY~uZ8ojQ0EaDW2RcTNL9CxSy6eT-HykipA1A8b8tZMzizPktwwcXSCwZ46O3_oCDx6J-lCbtb2QuWGhsy8Ydi1Ayb1HE3ucub-u3GLzS9Re1TRi-FqcKAj-SK520EJRgIA2lmkSQ454v4-chUHXKR5mx6TnvUpChO3zCtHpxWO46om",
+    "state_ver_key": "SCHNORR_VER_KEY~EhZmVnzLNkiJUOBBYSJk79ltptddDjOUfCi3PwgOyBWT3IONE4ntSyxXd-u0f6zezqmDvDyEfqmTXYz_ybDLKag",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x1975198063dab03c2f41b5dcf8380b4ee9799557": {
+    "account": "0x1975198063dab03c2f41b5dcf8380b4ee9799557",
+    "stake_table_key": "BLS_VER_KEY~DxWV_-9Ez21a_pXSN8fyvDMyhfJ3bTz3MULz-vlbuSPSYQ2ZV5WOAUndcGj4ipQdR2EMRnr1qfAGmR4MEHrgCshKFhXPe_GRZv5B7JKu9ZVkx6adOlTgu4jMtmj0JRsICsBK_SjoMUhrqqbsMTrhCJvtugQwM7EcwUVO1J1WdKQH",
+    "state_ver_key": "SCHNORR_VER_KEY~02aX1AZp4NSFMo0HrvFBAkU_ntsU0x49ADefNf3hhxdpZN_oFSjP4Op79T74g0U1fFrDezifDIl2XJp_h1wyJIg",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 700,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xc7edb5ea4454eb812cf123def3d96a30cf8a5c9c": {
+    "account": "0xc7edb5ea4454eb812cf123def3d96a30cf8a5c9c",
+    "stake_table_key": "BLS_VER_KEY~kLoKQ9SvN2lnf61onm_01yo26mLytu--mqTku7gTfyX4T4EKFxVIiqDoqoZbmULPChKCGmbLh9e5j7kBpibeHf4UEIHZn6dEka_SfEv7-yJNVykVbbamo3KIQehg5kIPf-1Ppo3d0SqWiox2sTefOJKy8JnJ55cKTdTYwEG6baiT",
+    "state_ver_key": "SCHNORR_VER_KEY~66TRKQkrP_L5rs1Z8At8Ny6Pv4GC2MpYoe4N7WE4WQ27wZ-CuhUXRP0jrYXuXO35cUB2tpv-3jYSYCJFX5KtKgM",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x42645071cc71d9413dd433da398279c805995b8b": {
+    "account": "0x42645071cc71d9413dd433da398279c805995b8b",
+    "stake_table_key": "BLS_VER_KEY~Rak0lNThKo5ru2WPZhvc0ZiMdn09FBy054fGWtEZ2xbCCozSknh_tvtAPbesO6GFKqocrBFf2qxpDAS6ZpvCCzwPaCERM0qKae4GdujX1n-vWSFCwpogf2OWlfd821UhOIf-iOP5rkXOYOXEnNE4dLdNyJ9N2qRtintxMCMOJAHS",
+    "state_ver_key": "SCHNORR_VER_KEY~3He9DNl9c_xoJvAGDBd_qlKcfr6uqY9h7aBFw9xJ8hqoi_2R4Vjqhr6qPgdYUaUSW5f27rr6EMaRPICNmc_YDUs",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x685e03207e722a62fedf7fd6b0d1d869209b4017": {
+    "account": "0x685e03207e722a62fedf7fd6b0d1d869209b4017",
+    "stake_table_key": "BLS_VER_KEY~-Yy54LwWVeFAGwQR3EcgkpmyGar3CUeB4s6LreZKnRs1bOc0XlSLOMy4O8O4gXsJKjvz3v2KKArmRXn24QL3JBh3_cGfqqYNym-f0Tf0jBLemUOnHJRc2urwQGCj6vwkqw13IukOD5g8H1VEi8TPAz11Y6El4nxA54exp3STGaTU",
+    "state_ver_key": "SCHNORR_VER_KEY~lzy0qxDlnFqcTR7Vvt6yQtXNIuFEMkfOv6e9zpDEWgrUb1GgsMddokJB-PHhYVvkb7QP8WMapo6w0Oe7lWuiDBI",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xd4ac369083683a180e8dc3e19bb9398748d677b0": {
+    "account": "0xd4ac369083683a180e8dc3e19bb9398748d677b0",
+    "stake_table_key": "BLS_VER_KEY~widXdplI_m2zFsHBNxCmo5GfJa0VZtkPI88pRal6eRP9ZDwZth4iMXHTruzDFhnJW6-g3LVr3JJHUG6P3-IVECesRGFjvOEM4TofF2CCPD16uSGYJMpbgWKyw1x2OQYpZTkfDqtwTUtCWRrTNiFfJZYEJfyeQwUACFfF8fCNFwJZ",
+    "state_ver_key": "SCHNORR_VER_KEY~2uH8ruAJYdzY9bfLqq_wctz276_0rEZGh4hQX8CXJxSuUarUVky-g4XASUy2B2lTM6gh8EKo2e3hHmRoJgDbD20",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xa10bc3249329a978a245dc74b1dfbbd3eaacec96": {
+    "account": "0xa10bc3249329a978a245dc74b1dfbbd3eaacec96",
+    "stake_table_key": "BLS_VER_KEY~tK46FjhkzJrbdAnTjB2ZkRpXl1Dcbr2Hinu5PGi9aSjI3UaFsazDRPke2RrQ3ooJnfHpYuiaUh6TloMo1G2AAVU_7_hRu5qUNHt9hCuiCvLfXaokaOoI6QzhdRKkHDcrggMTn1_GJ83U8HK1HXJyo7cvOm_kqrdmJq4dr4rlVgoL",
+    "state_ver_key": "SCHNORR_VER_KEY~u2Ne1ZXqdNUs_SWNM1rBC44fGsWsmFQ43vlXXLzLXAA4Mk5LNykx-tpYIkW_LC_H3Zy3X3FpPWHhOnuQwbokEow",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x21bb73833454c3b3522de8f009550e78981053dd": {
+    "account": "0x21bb73833454c3b3522de8f009550e78981053dd",
+    "stake_table_key": "BLS_VER_KEY~VbTfoVdZmeJUiHebyyBezOApsjmmta0UoL9zu11P1RNC3ULFX3lz7q-xDa0E9o0Ree0a1gRp0No4jP_W8Bg6BDN6eupTvYJB1OENCql8w_MIIEzMuTh8dVND1-kfyucenqbrO8Gk39DTvKUqY7-cENpGJ7112L2tutALjttJRADF",
+    "state_ver_key": "SCHNORR_VER_KEY~uargB4B6KyIOOWSE269Pb4jaWZcgYseSBbwn-NVHXgrtnKH4x07vearbLbb11tr3COCYa3QgeoNYK-W3AUa0JhM",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x0baf9218f2dec1dae5413a6339b29e80cd92e0ca": {
+    "account": "0x0baf9218f2dec1dae5413a6339b29e80cd92e0ca",
+    "stake_table_key": "BLS_VER_KEY~N0szIJmmza5LthwFpW9_rcMUDY_o-ZJdkIdGWxTrBRGduWYaymdehhktVsIcI2_x65fKOJXgci8CiP6tJhFOA70ZiFFZUB884RUgzka7X7pRFxj4Xa66ef8ZeZwSfuweDmokKaOM6uBLfuhYqaibThzJ6QwI0ZXAf42efy6jUJmD",
+    "state_ver_key": "SCHNORR_VER_KEY~um75bTfqEWLc-1rG8s-G74TmHOXNKSS4DUjRE7fOrCTAVXlKlsslT_I02Q2YnwnQCWagUVMSAGZkrHU-q7OGD0M",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 700,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x3482ceae67d08a683015312dfc2d1e5ca8b5b1d8": {
+    "account": "0x3482ceae67d08a683015312dfc2d1e5ca8b5b1d8",
+    "stake_table_key": "BLS_VER_KEY~phIQjtmRyEYMX3UmUXOjg1mUqltw9c7mHyJ822PNVyb9Z8YCdwJHX8Y3RS4lkB7uBDLHnkPxR0cKdwYVvoF0Klxrq1hUZrjplyKW3fZKZPQtmdtQfkxAPdhEvsabdYguwisl2Gnk4HPHt3hZQ6v1f8_NPIf12ngmUYTrRCnPuJ-R",
+    "state_ver_key": "SCHNORR_VER_KEY~KuCNFdYY8GHvFavpE6byPWUF1ToTv-a-pXZksxBovwJO1OTKTxzUdfYTVuk2N3sE5IRamhYI9K6aZpNafbK7BKQ",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xcf0a04799ad52e86afc5877df79bdf8668194457": {
+    "account": "0xcf0a04799ad52e86afc5877df79bdf8668194457",
+    "stake_table_key": "BLS_VER_KEY~ZfQRsbKq8fZCt-x6hL0wdx5V3HhfcZuPCAyDzWaspgzDfX7VSQr6BBhV97FSjjj8AqWWRkDdP6o0LGB600SJFEWlZs6uhBO5Q1E78TMMaYu9RfNWBvERg-qlWQNn018a1LnhkSz-NFMvZWkMlI8igwm-ovZQvLNmpufTO5s_PqGE",
+    "state_ver_key": "SCHNORR_VER_KEY~_OoqYcwn3nyGKEnEEIO0K4LVyfSEflBqJY-B8lltgC-CRieEbzDH2dJh7EHBPVPizxyXXEdeHeARo2uQF515Hx4",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 700,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xfee09ab5c19a16638369ebacb55438f8978c377e": {
+    "account": "0xfee09ab5c19a16638369ebacb55438f8978c377e",
+    "stake_table_key": "BLS_VER_KEY~BpawGuzJhQCQynhkkoCcpj2LaagJ2Eo0NCbQ5UrJkiSK6Y6hjAeFcTMXeoAqc9nw6JPYL4kvSr7136DUhWBOCvacjblKdKorrIQT_pB9NIV5vW2BjbEaFBLSX73f-O8h-Sqh_0-BMQp0OxIid9ODyJ5o4ifOP4VHYn_vvGM1Q6MF",
+    "state_ver_key": "SCHNORR_VER_KEY~sSc8qRP6eS12xR1CzzBP3OvZxp_pHpNDHA4NfL5HRxPpeBUvV4J-Co3PY5Q6ITQxh4TFobZPd99zVrpe4yiBDZg",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xd445beb88ac21a44bdcb4362e15f2587bf03b510": {
+    "account": "0xd445beb88ac21a44bdcb4362e15f2587bf03b510",
+    "stake_table_key": "BLS_VER_KEY~djp-oj20QbFKHhateUcr4GW6EE4OfNU6dX-BxgE6ESqR_9BijhPfkt0S2Hp11AzJ1XKcc5KFTL0JQ9yUe54gJF-ToyoXqVFUJVWwG0FTlRqLgI4yIg_j8fNu7Z8V75gIYwj6bUKG3CyJpZC2wHqxwk1HplywmiG4qeaiz1xzrJls",
+    "state_ver_key": "SCHNORR_VER_KEY~kZD4LxBbEdIDpd2rzkldO1NZW2rsd61itF3kKRGZChW-8XFsqv51iG8egIfnwFsLc4VpcwljyyHpdCPcuhByBr0",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 500,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xc8216bcc1a3497aa1fc901a702619533dd8ae467": {
+    "account": "0xc8216bcc1a3497aa1fc901a702619533dd8ae467",
+    "stake_table_key": "BLS_VER_KEY~VWRCX1EOBfhMQF145zVNQoubGrT_iajVCIvsFoFPhy_W_TosDRU7_AQPlSRB47Lvh4oSB4eRYKaTDzwQTtAQHdZbtKt9R8FkQ-SIdHfjTcRUBAIdb7iGZLCNOHj33b4ff7L4YVjK4WTyGBhBsGUEuDcJwyuE321m4pCpfaryTxVl",
+    "state_ver_key": "SCHNORR_VER_KEY~3up1omUY-muw5O_UYHrA1zqunAHWbgmxTwodB1OmBQ7UJuR53kqLeUJFDDPQypvDaYOtKGz1SIHAaTrSN5qSGHA",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 500,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xc1ce82654d541decf0c956d2f78e658e154c5399": {
+    "account": "0xc1ce82654d541decf0c956d2f78e658e154c5399",
+    "stake_table_key": "BLS_VER_KEY~Hou58bkxAh8YudxRT7umjAzLSLHKYnp5ERxHh9bLIRUquOC54wVvht4yO8XAf3_nuu9m-vn-p8onqGraYx9oCMup7xI1kP5JiPBD2wIe2vuKSGAfn9jM9_QDNpg76RsoobhWdnWmAYDolVeVaO3APacODZAqMS7kqMYPFqUuvRZ_",
+    "state_ver_key": "SCHNORR_VER_KEY~7aD9ijaFXn70fQDQI-n1zT8SlMfIRAw62aOU1DdrGA1xAlDCWBQ8bpyxFI6uFRp5mCO-x5_4Z6PeATAJoKbhARs",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 500,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xc7ec6244823372d93cc5f417d582f2b17378699b": {
+    "account": "0xc7ec6244823372d93cc5f417d582f2b17378699b",
+    "stake_table_key": "BLS_VER_KEY~wT9nAy4-Wqtz-VMzOM0vaSJ1zwJ9ou5yenxYi5pYlyTtST69g9NHOHtelvylPxMGYjD6g6eHcoSWcqZsEl7fKzlm6365UWs7f0A9bK2FfExv69YLi8f233I6BJ-N2LAU5CElkYyjU3jo3QKMOHoeJX4vQ4j6DQ6LYWYl7m5vo5oH",
+    "state_ver_key": "SCHNORR_VER_KEY~Mbb4cfFTwEuzhmAvAp9-33Vc-itx5mqIw8x_wJmq6Q8lDiAgoyVW6-38gc8Oc4gYGFataSwtiomk0Y-EG6eQD2c",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 500,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x320debb9f7da6f5d0042e27903b2c456763aee18": {
+    "account": "0x320debb9f7da6f5d0042e27903b2c456763aee18",
+    "stake_table_key": "BLS_VER_KEY~rDFy49RAbswCUFvawo_oUDfutZVY8rjDlYyNJ2acWANvT6DoOi_VOZzlBxgPAAFmy4rQihlNmHqk_-LdOsUQL6ANqhGUO3--1F9sseLqGDptPzOoiBn1Y38J-pe6OLYNRhP_4ZL2FbxMfCSD4IJnBI-0fgE1YjUOY9VXej7dIqTo",
+    "state_ver_key": "SCHNORR_VER_KEY~8-2GgswvPu_bMe-bt4H8XxZlpRkv9VWQsmoFpc9IFiLHnXNKH1XGZN77lwlvQtcfsBk6dV0aKonFzwKm1fJ4JAo",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xc9fe898b87fcffec6be6c922f9aca0450482fc50": {
+    "account": "0xc9fe898b87fcffec6be6c922f9aca0450482fc50",
+    "stake_table_key": "BLS_VER_KEY~AcqqsIRohcyIsQWGz8yLVJTX7oIIyH2Bb9s5jB0fkBzQ4wfdrFC8K1nfe6CpWVM-MIKuCJo9UXeHs0gHE-e6Ii-eOo0kuVEuDm_okqM34V2XLdGJ1DvCvZqcrS7Dd1khRj8V8aQY71ju7fMThV4hSLFHkHp8u8sDCFCUYOiSk6oT",
+    "state_ver_key": "SCHNORR_VER_KEY~lpgX__UHWmtI0m6pj-ekaKz4qPxTjfTXhUB2kfqklySlVA5jh-z1DZGH3hheqkrM04HvoW89F2Jo9ch72AkhBPs",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x87b9b06b1d77c537e9ada4e97f6ba892754bcd0c": {
+    "account": "0x87b9b06b1d77c537e9ada4e97f6ba892754bcd0c",
+    "stake_table_key": "BLS_VER_KEY~VnuJaFRM0FWvCZmGLvMtFnQA5C-5quejMsD5YAlKwARF8Sl478kjXlnPShEX0-ZvD3jrfiUbipZdTMoekYKoCqWH8jyFzeGFnChEBOeEktVwuK6l33iIEDOYBiFc-S8tVeVttfBRJLe5q5gt45cj7GSv5txwWVVVggz-gtPYOqed",
+    "state_ver_key": "SCHNORR_VER_KEY~vVF5ZlRMuUtauX4Q-GaAcuMqr4sEoQcNl-n9gh71ZgKsWr16YbHAzkO9hcbq5IZH3Yzh9MtBGmkDhoMGOP0ZIZ4",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xb7ee9d4d6c1421fb7779a9577394c8f0d5aeab9f": {
+    "account": "0xb7ee9d4d6c1421fb7779a9577394c8f0d5aeab9f",
+    "stake_table_key": "BLS_VER_KEY~pG8gkS57hU-4VLyr_K4P9GZ9yCWDdOBt-nkG37QKExZ5Pu-aQNKmvzAPU1sAlAsuNl3wVct7_7X1uddh_JL5GYrMrJgEGLjC3awSVdWWejioClU4kjNf7Y_IEiYG0wYZEu3rtMoDT58q2Vq9NDFvltE80p9awVXLFRWQXDHDiwU2",
+    "state_ver_key": "SCHNORR_VER_KEY~s9XAIs0ru9lmPoPCAlmIBct1rpi3kuQep-RfGXj-JA0sPx0RLBGQklBqCVJ5TlFSdaa5gihSyjZkajNwWIRiBm0",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x169dadc749e50981c8ecc570c42842fca032c99a": {
+    "account": "0x169dadc749e50981c8ecc570c42842fca032c99a",
+    "stake_table_key": "BLS_VER_KEY~BcXXz2MO--4N8CyWKls1LPuHF2jnT2b2v8HSzfsqbB6OlRTrhTiQVcRvpZNaXapwniokBQ-yWGRofX7wVBaACeEU-OX5WtJokpX1l9HdroJtR1g94ByceeuCUAi52PEeblby16_JyrT-CxFIkhs6owgiUAIIzZr-vKdOCJa3FJ2H",
+    "state_ver_key": "SCHNORR_VER_KEY~xPgp9Iu8fhK6LIamh6AYFohIXcphv-ncrUy-jb5ryiu2x3DJGpctKqUbUpz8iabHtqKGQXEjeDKBZ1sYC36oCy0",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x4461d19e36b60ab07377e9398bd80cef9c229c41": {
+    "account": "0x4461d19e36b60ab07377e9398bd80cef9c229c41",
+    "stake_table_key": "BLS_VER_KEY~vaq6tdYr5ULbq-hlAgcur1l98-YwNCExnRS245jnEy33qDkirMWIfOrASeKB__D58DtAIpL0ffgKE7hlN9PGGa9_wK3toH0NZLf7nmcTnOnJy1WK_7bGe0uQPX4YIRUrS4AD61GvYWw4PDfl-4fBjnegkBFI2cpFGeYWZCpu4JxS",
+    "state_ver_key": "SCHNORR_VER_KEY~9mW7p3nVhYnosVwMfI6j_fAb71A8dICctX5n5nmgOSm729BIX8nA57syKK-t-c9nOYjFxJNILJQia9xBVxXSLnA",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xd18302a3e2a25c369936be2657a045fea594b89f": {
+    "account": "0xd18302a3e2a25c369936be2657a045fea594b89f",
+    "stake_table_key": "BLS_VER_KEY~sarws9QqOl9SujiX1Af90GZclpN5_y_XS1Vjh9AUUQ1q5podk5_PhKE2Euo1No_9Xrgw0wtUTjiFFUUrTLQxGuYgTvxbPK5CuyEXjmqyCRMtcrquWd2oCLMK5felt1QXsmxT4Xrty4b2DUVpbBd9dG5U7NRv1lqknHCMFLUfY5n2",
+    "state_ver_key": "SCHNORR_VER_KEY~0kad8JYJNdP-JK5uk3_Wct2nV3-55jSxqJ1CVL8Uvy_Co3Pm1l-Enakiij126G7KTVgHI99axJMgJRCxoSMhBEg",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xf0ef08333382ccd75eb97f8c5065633b418e268e": {
+    "account": "0xf0ef08333382ccd75eb97f8c5065633b418e268e",
+    "stake_table_key": "BLS_VER_KEY~UIXxUp_waXkltrcHL3fg2nbkZrJOkG1jMxxxTuA36CKU53okXxGW1ZPD4nZMnBoLyXeG8wFskeqjx1KJVsyiEBjGTd63ZrEGChbKf8FALCUvSU2k5Y0PzIXuTP7jZWQumK7r8XFkjhaJPasmVfFtsFsVgIxFB48YsM9eTZFhA67L",
+    "state_ver_key": "SCHNORR_VER_KEY~fq7InLeaQTv2sHdhlQG8MEyCQv9qHBDgM5QdzTeNNCkZl6E1oG9hVVGnX65fLzDuRKGClMB6Qyug3dvkNSOmAZk",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xbf7e5949ebf57004ce9592796b77dbeba675d148": {
+    "account": "0xbf7e5949ebf57004ce9592796b77dbeba675d148",
+    "stake_table_key": "BLS_VER_KEY~nFy4OT_BXxDFsI3g3hG_NmyxcIThNqI-MiKXToT0VSHJh631nS_tABU8tedfEneF_eSbkh_N5KvqLTWLjCzTGIy3IAOxlkvYgj64dKDkQ3TKTFwNhiPjlXVoE7pxdGsk0ul3m7bihsqzjlTRkOR7gb5VfHDLv8GtafVmPKoVfq9e",
+    "state_ver_key": "SCHNORR_VER_KEY~9ByvrBgI7ZpDQH7gqHCGAAwyo6uma6WI1ENf4OgiTylyOGagP9I8VcjYTQjRflsqo6I1XzQLans_v0o-LUSFBrE",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0xaa4b2a257e6a97dfc652a35bf4f14ac4d28c5101": {
+    "account": "0xaa4b2a257e6a97dfc652a35bf4f14ac4d28c5101",
+    "stake_table_key": "BLS_VER_KEY~ci1EK-eFGMToEUXUPhYBMJAe-K61z7-Y3uPqc3hdDRZji1ZEo1HmNa4J_m5tV5Ib_s33SedJZkPXXK93v5PFLzSn4C-Ve9kWqvEjM4oB-bqVl5yrsG6SBoyOTEWYgJgspqUL9yBPPO4-02HYh2lLWBcpTGb_HoD5TiEe_sq_kQ5l",
+    "state_ver_key": "SCHNORR_VER_KEY~Ec-zbsu8xGuDZhSNLDMaiosDa_iSHpEo0poEDbJqsQ3Bm47MCMaRFFHHFB5D-L-uOuGupqea8IP7XvEs1Pf7D8M",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x8c195e9574a24eac651c6126be6978d52bc66e6d": {
+    "account": "0x8c195e9574a24eac651c6126be6978d52bc66e6d",
+    "stake_table_key": "BLS_VER_KEY~A9nS0RAqOGzJ4Y3F2r7Tg0i-VC_3zTXWwuU5YWne3QhFKXuZL6Vk9MedBJj0-FA4BT24tMBtHt1IRuZKusPcIj03-WrUFAZMJX-LeN5Xk8M2eggJsIs2DS731vFzLPMptzbIAFEnjevSRWBFaZvN57bbvqMjRECHDAdyyAesXRMY",
+    "state_ver_key": "SCHNORR_VER_KEY~7anAcXpO122kjU_RXiTyd9cyLOzChxFv5I60J2He1Q3y1BUVxI-dZzTJjmmsqlKh7dQplOpnyj4PjRyWAxGnKMo",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1034,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x3b708c9e46798a23243e69446d229bb575528a7c": {
+    "account": "0x3b708c9e46798a23243e69446d229bb575528a7c",
+    "stake_table_key": "BLS_VER_KEY~eSdQYkXd0Mn3HuVA9xwpjhUPjlFJYE7A_U5ddRySrgZEOds4B8aiQxa4N9VFCwEJ7bXS_7Ttpj4m2QOAg_0PHukm-e7C7bcghfT5XhFozY_UIss-SEPIT8tQw7hW-Jsjcx3KTJOmMD0H9YvYguLKC1ZgyHhNU7gy8qEWnrV1XqoU",
+    "state_ver_key": "SCHNORR_VER_KEY~lyNawzJ3meaEesJn3A4sX23H-ZqEFlxrjBOQK_cZhgLmYzlTsOs7sNhO7wxGZEeYIE4ndkZkH1mWx807k4eMGAc",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x9e19d0e69f5f527e06fa32d5d0b07680ef2ab10e": {
+    "account": "0x9e19d0e69f5f527e06fa32d5d0b07680ef2ab10e",
+    "stake_table_key": "BLS_VER_KEY~qM3lv6RduAQ-Mt3wQ42ug-kSjlSGkF4zoVEleX_b0iBfW3bJu_eixgnolc-oZ5XliTg7G91uX75KvV75VoTLIGDU16OJde-PN19vr-ioqQlciGbUqPTSTpzzdd1Fw5AWOrgKqwBS_WGKO8Ian3F3D83m6oTBgTEFJKYekrNlNpm4",
+    "state_ver_key": "SCHNORR_VER_KEY~3AbammTeTGOxkcKl6MhR61XtUaRCefLybtcE3epDKQRwRfFIeuUWOpCqZhJMYsGjsnFHyFFgkrbcBVLEVPI5CRU",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x042d22347a88436195a2450ee9803da2a88cc0a9": {
+    "account": "0x042d22347a88436195a2450ee9803da2a88cc0a9",
+    "stake_table_key": "BLS_VER_KEY~FdoNPuHJmSm2otHrz0hBwGR0kIa_nRduX0sjticD0AVoot1zeNwuH4PmTgBeAdLUH1R3-seYrswMz0Tyb9qyFDGgcLgOHEWd0oqjSjtmXRW2J1BfQXjO5arOfbaNffgQ2Kyidkk7KYElQ9YOIlv_E71MtLUv3RbFLdP48QUUmpoU",
+    "state_ver_key": "SCHNORR_VER_KEY~wLXFDcm49GN2FR7OoSFzUb5jp7sGIrBbxCUJyOe55yKo6ki4hH1dmboZb_cGfrpJPvpY3X_6tgYdV40Fq6VQLYc",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x9edbbbd70d51b2e103714f467637106d8055f85b": {
+    "account": "0x9edbbbd70d51b2e103714f467637106d8055f85b",
+    "stake_table_key": "BLS_VER_KEY~baypZQ34XjVz4Lqp0TH2yt6oS8-UTuCmXdqDnp-2BSRYHVN5EsFPFA6CnwL1619buVMtSq59f1lX9RulN7kaJM2MTxaB32ye4Skkn9Y3O3XY2ru-YukTq-IG1eoLe5gE47I8FY4CrNx5JR__b2xClp5gv1m3T5mpJJK0GRXWRqn8",
+    "state_ver_key": "SCHNORR_VER_KEY~3WdhdRVCfHRzmCi6VcGgO78md7rrpWK_yMGmDW_Rtgu1J8YHePGNB-OcnVfeygQZZywWc71tgc1Ho5We5ysdEgk",
+    "stake": "0x3635c9adc5dea00000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
+    }
+  },
+  "0x746dc398b16e88838329045c0c66b6255a307c4f": {
+    "account": "0x746dc398b16e88838329045c0c66b6255a307c4f",
+    "stake_table_key": "BLS_VER_KEY~kq4Npa8qX_mfHMXQCQK0wDe0qKNQ3Gn5HTsnbf6s4x6u51zpl9ot_3dS1DoIQhWquJMpMQaaVZY_Dw_2p8ILGIIM8NEGLmjNuV3ng5pvj4AIsBr_dtoWZ8lm5aDlsNwHHlqF9mlsU-noal6YxTgCGmb1WHQc-D5kdcIZ5uYZkqds",
+    "state_ver_key": "SCHNORR_VER_KEY~PUVLATPjqUXaJq7p6FoRrFgtpSGhJOugWSzWljYKyQJ29A2hZLE4sqQvs3Zqgt7GNXamSuqAXpm91AljCG87HgI",
+    "stake": "0x56bc75e2d63100000",
+    "commission": 1000,
+    "delegators": {
+      "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x56bc75e2d63100000"
+    }
+  },
+  "0xdae8c2d3ebf306f4505843921bf95e615c6e34a1": {
+    "account": "0xdae8c2d3ebf306f4505843921bf95e615c6e34a1",
+    "stake_table_key": "BLS_VER_KEY~vdH5On2RneVAeZ9DkdeNsqEZfsW2ojAp5ztiG7ngdARre0irpFXPaMdfGXUNPA-NVfUKiKZD7EuxLWx7dQyYBLcRpnLpcRvQ7vqR6AX4AHYdjw0vrTp_HoTXpcWPaZUPdDLb5aRKmjvJ7uBXfMdXUlPGCF-IBTI8hjtySVq8Hhho",
+    "state_ver_key": "SCHNORR_VER_KEY~enpynT_augKxFVyjvF_yRjUgdViTR-nWd_sJtEZFShXuiAfa9UVzCcADvMy9Hj-GY4TlmND0d8HberGDMIOTElA",
+    "stake": "0x0",
+    "commission": 50,
+    "delegators": {}
+  },
+  "0xe3577dc47b22e2998353d546fcffc640de87041f": {
+    "account": "0xe3577dc47b22e2998353d546fcffc640de87041f",
+    "stake_table_key": "BLS_VER_KEY~MwwHQ3CVrvJNmjrVxI1rlOT8GQeiPgvXS2ZsyO08-Q_WjS6sU4_-0_tAzEqz7cFEU71oC5FTeAMPt08ogWp2KPjYB2sbaqnTdLN4FBgoKXHoRbA-1EkP6I33sLxDsh0usg53jd4TRLXqXYCCATybOkPWNzt6BPjKlynGayonn5gP",
+    "state_ver_key": "SCHNORR_VER_KEY~EmuIdT5e3dgmAR018C0qkWSW4VRcmkrSybjetBo0Wg3ZjECDuy5JrZUiwNC2Fl3wp2GmYCJZtvALmZffds1xGz8",
+    "stake": "0x0",
+    "commission": 12,
+    "delegators": {}
+  }
+}

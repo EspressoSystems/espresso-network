@@ -2510,4 +2510,27 @@ mod tests {
         }));
         assert!(matches!(result, Err(StakeTableError::InsufficientStake)));
     }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_decaf_stake_table_stake_table() {
+        setup_test();
+
+        let events_json =
+            std::fs::read_to_string("../data/v3/decaf_stake_table_events.json").unwrap();
+        let events: Vec<(EventKey, StakeTableEvent)> = serde_json::from_str(&events_json).unwrap();
+
+        // Reconstruct stake table from events
+        let reconstructed_stake_table =
+            validators_from_l1_events(events.into_iter().map(|(_, e)| e)).unwrap();
+
+        let stake_table_json =
+            std::fs::read_to_string("../data/v3/decaf_stake_table.json").unwrap();
+        let expected: IndexMap<Address, Validator<BLSPubKey>> =
+            serde_json::from_str(&stake_table_json).unwrap();
+
+        assert_eq!(
+            reconstructed_stake_table, expected,
+            "Stake table reconstructed from events does not match the expected stake table "
+        );
+    }
 }
