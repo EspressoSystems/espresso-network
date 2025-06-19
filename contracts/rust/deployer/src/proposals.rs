@@ -81,7 +81,7 @@ pub async fn transfer_ownership_from_multisig_to_timelock(
 
     if !params.dry_run && !super::is_contract(provider, owner_addr).await? {
         tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
-        anyhow::bail!("Proxy owner is not a contract");
+        anyhow::bail!("Proxy owner is not a contract. Expected: {owner_addr:#x}. Use --dry-run to skip this check.");
     }
 
     // invoke upgrade on proxy via the safeSDK
@@ -93,9 +93,12 @@ pub async fn transfer_ownership_from_multisig_to_timelock(
         );
     }
 
-    tracing::info!("Transfer Ownership proposal sent to {}", contract);
-    tracing::info!("Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}", params.safe_addr);
-
-    // IDEA: add a function to wait for the proposal to be executed
+    if !params.dry_run {
+        tracing::info!("Transfer Ownership proposal sent to {}", contract);
+        tracing::info!("Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}", params.safe_addr);
+        // IDEA: add a function to wait for the proposal to be executed
+    } else {
+        tracing::info!("Dry run, skipping proposal");
+    }
     Ok(result)
 }

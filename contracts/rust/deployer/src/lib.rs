@@ -591,7 +591,7 @@ pub async fn upgrade_light_client_v2_multisig_owner(
 
     if !dry_run && !is_contract(&provider, owner_addr).await? {
         tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
-        anyhow::bail!("Proxy owner is not a contract");
+        anyhow::bail!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
     }
 
     // Prepare addresses
