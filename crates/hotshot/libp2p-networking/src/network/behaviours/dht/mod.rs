@@ -299,7 +299,6 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
         };
 
         // If we have more than one record or the query has completed, we can return the record to the client.
-        // All records are valid so we don't need to
         if found || last {
             if let Some(KadGetQuery {
                 backoff,

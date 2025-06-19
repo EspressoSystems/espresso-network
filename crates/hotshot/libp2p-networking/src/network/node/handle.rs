@@ -216,7 +216,7 @@ impl<T: NodeType> NetworkNodeHandle<T> {
         consensus_key: &T::SignatureKey,
         dht_timeout: Duration,
     ) -> Result<PeerId, NetworkError> {
- /*        // First check if we already have an open connection to the peer
+        // First check if we already have an open connection to the peer
         if let Some(pid) = self
             .consensus_key_to_pid_map
             .lock()
@@ -224,7 +224,7 @@ impl<T: NodeType> NetworkNodeHandle<T> {
         {
             return Ok(*pid);
         }
- */
+
         // Create the record key
         let key = RecordKey::new(Namespace::Lookup, consensus_key.to_bytes());
 
