@@ -278,7 +278,6 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             Contract::Timelock => {
                 let timelock_delay = self
                     .timelock_delay
-                    .clone()
                     .context("Timelock delay must be set when deploying Timelock")?;
                 let timelock_proposers = self
                     .timelock_proposers
@@ -290,7 +289,6 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     .context("Timelock executors must be set when deploying Timelock")?;
                 let timelock_admin = self
                     .timelock_admin
-                    .clone()
                     .context("Timelock admin must be set when deploying Timelock")?;
                 crate::deploy_timelock(
                     provider,
