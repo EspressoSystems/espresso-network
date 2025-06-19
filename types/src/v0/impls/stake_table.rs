@@ -2304,4 +2304,210 @@ mod tests {
             "Log(block=105,index=112,transaction_hash=0x0000000000000000000000000000000000000000000000000000000000000069)"
         )
     }
+
+    #[test]
+    fn test_register_validator() {
+        let mut state = StakeTableState::new();
+        let val = TestValidator::random();
+        let event = StakeTableEvent::Register((&val).into());
+
+        assert!(state.apply_event(event).is_ok());
+
+        let stored = state.validators.get(&val.account).unwrap();
+        assert_eq!(stored.account, val.account);
+    }
+
+    #[test]
+    fn test_validator_already_registered() {
+        let mut state = StakeTableState::new();
+        let validator = TestValidator::random();
+
+        assert!(state
+            .apply_event(StakeTableEvent::Register((&validator).into()))
+            .is_ok());
+
+        // Second registration with the same validator should fail
+        let result = state.apply_event(StakeTableEvent::Register((&validator).into()));
+        assert!(
+            matches!(result, Err(StakeTableError::AlreadyRegistered(addr)) if addr == validator.account)
+        );
+    }
+
+    #[test]
+    fn test_register_v2_validator() {
+        let mut state = StakeTableState::new();
+        let val = TestValidator::random();
+        let event = StakeTableEvent::RegisterV2((&val).into());
+
+        assert!(state.apply_event(event).is_ok());
+
+        let stored = state.validators.get(&val.account).unwrap();
+        assert_eq!(stored.account, val.account);
+    }
+
+    #[test]
+    fn test_register_validator_v2_auth_fails() {
+        let mut state = StakeTableState::new();
+        let mut val = TestValidator::random();
+        val.bls_sig = Default::default();
+        let event = StakeTableEvent::RegisterV2((&val).into());
+
+        let result = state.apply_event(event);
+        assert!(matches!(
+            result,
+            Err(StakeTableError::AuthenticationFailed(_))
+        ));
+    }
+
+    #[test]
+    fn test_deregister_validator() {
+        let mut state = StakeTableState::new();
+        let val = TestValidator::random();
+
+        let reg = StakeTableEvent::Register((&val).into());
+        state.apply_event(reg).unwrap();
+
+        let dereg = StakeTableEvent::Deregister((&val).into());
+        assert!(state.apply_event(dereg).is_ok());
+        assert!(!state.validators.contains_key(&val.account));
+    }
+
+    #[test]
+    fn test_delegate_and_undelegate() {
+        let mut state = StakeTableState::new();
+        let val = TestValidator::random();
+        state
+            .apply_event(StakeTableEvent::Register((&val).into()))
+            .unwrap();
+
+        let delegator = Address::random();
+        let amount = U256::from(1000);
+        let delegate_event = StakeTableEvent::Delegate(Delegated {
+            delegator,
+            validator: val.account,
+            amount,
+        });
+        assert!(state.apply_event(delegate_event).is_ok());
+
+        let validator = state.validators.get(&val.account).unwrap();
+        assert_eq!(validator.delegators.get(&delegator).cloned(), Some(amount));
+
+        let undelegate_event = StakeTableEvent::Undelegate(Undelegated {
+            delegator,
+            validator: val.account,
+            amount,
+        });
+        assert!(state.apply_event(undelegate_event).is_ok());
+        let validator = state.validators.get(&val.account).unwrap();
+        assert!(!validator.delegators.contains_key(&delegator));
+    }
+
+    #[test]
+    fn test_key_update_v2() {
+        let mut state = StakeTableState::new();
+        let val = TestValidator::random();
+        state
+            .apply_event(StakeTableEvent::Register((&val).into()))
+            .unwrap();
+
+        let new_keys = val.randomize_keys();
+        let event = StakeTableEvent::KeyUpdateV2((&new_keys).into());
+
+        assert!(state.apply_event(event).is_ok());
+
+        let updated = state.validators.get(&val.account).unwrap();
+        assert_eq!(updated.stake_table_key, new_keys.bls_vk.into());
+        assert_eq!(updated.state_ver_key, new_keys.schnorr_vk.into());
+    }
+
+    #[test]
+    fn test_duplicate_bls_key() {
+        let mut state = StakeTableState::new();
+        let val = TestValidator::random();
+        let event1 = StakeTableEvent::Register((&val).into());
+        let mut val2 = TestValidator::random();
+        val2.bls_vk = val.bls_vk;
+        val2.account = Address::random();
+
+        let event2 = StakeTableEvent::Register((&val2).into());
+        assert!(state.apply_event(event1).is_ok());
+        let result = state.apply_event(event2);
+        assert!(matches!(result, Err(StakeTableError::BlsKeyAlreadyUsed(_))));
+    }
+
+    #[test]
+    fn test_duplicate_schnorr_key() {
+        let mut state = StakeTableState::new();
+        let val = TestValidator::random();
+        let event1 = StakeTableEvent::Register((&val).into());
+        let mut val2 = TestValidator::random();
+        val2.schnorr_vk = val.schnorr_vk;
+        val2.account = Address::random();
+        val2.bls_vk = val2.randomize_keys().bls_vk;
+
+        let event2 = StakeTableEvent::Register((&val2).into());
+        assert!(state.apply_event(event1).is_ok());
+        let result = state.apply_event(event2);
+        assert!(matches!(
+            result,
+            Err(StakeTableError::SchnorrKeyAlreadyUsed(_))
+        ));
+    }
+
+    #[test]
+    fn test_register_and_deregister_validator() {
+        let mut state = StakeTableState::new();
+        let validator = TestValidator::random();
+        let event = StakeTableEvent::Register((&validator).into());
+        assert!(state.apply_event(event).is_ok());
+
+        let deregister_event = StakeTableEvent::Deregister((&validator).into());
+        assert!(state.apply_event(deregister_event).is_ok());
+    }
+
+    #[test]
+    fn test_delegate_zero_amount_is_ignored() {
+        let mut state = StakeTableState::new();
+        let validator = TestValidator::random();
+        let account = validator.account;
+        state
+            .apply_event(StakeTableEvent::Register((&validator).into()))
+            .unwrap();
+
+        let delegator = Address::random();
+        let amount = U256::ZERO;
+        let event = StakeTableEvent::Delegate(Delegated {
+            delegator,
+            validator: account,
+            amount,
+        });
+        assert!(state.apply_event(event).is_ok());
+        let val = state.validators.get(&account).unwrap();
+        assert!(val.delegators.get(&delegator).is_none());
+    }
+
+    #[test]
+    fn test_undelegate_more_than_stake_fails() {
+        let mut state = StakeTableState::new();
+        let validator = TestValidator::random();
+        let account = validator.account;
+        state
+            .apply_event(StakeTableEvent::Register((&validator).into()))
+            .unwrap();
+
+        let delegator = Address::random();
+        let event = StakeTableEvent::Delegate(Delegated {
+            delegator,
+            validator: account,
+            amount: U256::from(10u64),
+        });
+        state.apply_event(event).unwrap();
+
+        let result = state.apply_event(StakeTableEvent::Undelegate(Undelegated {
+            delegator,
+            validator: account,
+            amount: U256::from(20u64),
+        }));
+        assert!(matches!(result, Err(StakeTableError::InsufficientStake)));
+    }
 }
