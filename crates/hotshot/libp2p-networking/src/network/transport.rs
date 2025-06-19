@@ -19,9 +19,10 @@ use libp2p::{
     identity::PeerId,
     Transport,
 };
+use parking_lot::Mutex;
 use pin_project::pin_project;
 use serde::{Deserialize, Serialize};
-use tokio::{sync::Mutex, time::timeout};
+use tokio::time::timeout;
 use tracing::warn;
 
 /// The maximum size of an authentication message. This is used to prevent
@@ -136,10 +137,7 @@ impl<T: Transport, S: SignatureKey + 'static, C: StreamMuxer + Unpin>
         }
 
         // If we got here, the peer is authenticated. Add the consensus key to the map
-        consensus_key_to_pid_map
-            .lock()
-            .await
-            .insert(public_key, peer_id);
+        consensus_key_to_pid_map.lock().insert(public_key, peer_id);
 
         Ok(())
     }
@@ -615,7 +613,7 @@ mod test {
         let mut stream = cursor_from!(auth_message);
 
         // Create a map from consensus keys to peer IDs
-        let consensus_key_to_pid_map = Arc::new(Mutex::new(BiMap::new()));
+        let consensus_key_to_pid_map = Arc::new(parking_lot::Mutex::new(BiMap::new()));
 
         // Verify the authentication message
         let result = MockStakeTableAuth::verify_peer_authentication(
@@ -629,7 +627,6 @@ mod test {
         assert!(
             consensus_key_to_pid_map
                 .lock()
-                .await
                 .get_by_left(&keypair.0)
                 .unwrap()
                 == &peer_id,
@@ -654,7 +651,7 @@ mod test {
         let mut stream = cursor_from!(auth_message);
 
         // Create a map from consensus keys to peer IDs
-        let consensus_key_to_pid_map = Arc::new(Mutex::new(BiMap::new()));
+        let consensus_key_to_pid_map = Arc::new(parking_lot::Mutex::new(BiMap::new()));
 
         // Check against the malicious peer ID
         let result = MockStakeTableAuth::verify_peer_authentication(
@@ -675,7 +672,7 @@ mod test {
 
         // Make sure the map does not have the malicious peer ID
         assert!(
-            consensus_key_to_pid_map.lock().await.is_empty(),
+            consensus_key_to_pid_map.lock().is_empty(),
             "Malicious peer ID should not be in the map"
         );
     }

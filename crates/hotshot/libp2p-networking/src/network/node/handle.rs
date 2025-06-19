@@ -12,11 +12,9 @@ use hotshot_types::traits::{
 };
 use libp2p::{request_response::ResponseChannel, Multiaddr};
 use libp2p_identity::PeerId;
+use parking_lot::Mutex;
 use tokio::{
-    sync::{
-        mpsc::{Receiver, UnboundedReceiver, UnboundedSender},
-        Mutex,
-    },
+    sync::mpsc::{Receiver, UnboundedReceiver, UnboundedSender},
     time::{sleep, timeout},
 };
 use tracing::{debug, info, instrument};
@@ -222,7 +220,6 @@ impl<T: NodeType> NetworkNodeHandle<T> {
         if let Some(pid) = self
             .consensus_key_to_pid_map
             .lock()
-            .await
             .get_by_left(consensus_key)
         {
             return Ok(*pid);
