@@ -14,7 +14,7 @@ use libp2p_identity::PeerId;
 use super::MAX_GOSSIP_MSG_SIZE;
 
 /// The default Kademlia replication factor
-pub const DEFAULT_REPLICATION_FACTOR: Option<NonZeroUsize> = NonZeroUsize::new(20);
+pub const DEFAULT_REPLICATION_FACTOR: Option<NonZeroUsize> = NonZeroUsize::new(10);
 
 /// describe the configuration of the network
 #[derive(Default, derive_builder::Builder, derive_more::Debug)]
