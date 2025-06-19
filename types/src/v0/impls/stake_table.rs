@@ -2512,7 +2512,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_decaf_stake_table_stake_table() {
+    async fn test_decaf_stake_table() {
         setup_test();
 
         let events_json =
@@ -2521,7 +2521,7 @@ mod tests {
 
         // Reconstruct stake table from events
         let reconstructed_stake_table =
-            validators_from_l1_events(events.into_iter().map(|(_, e)| e)).unwrap();
+            active_validator_set_from_l1_events(events.into_iter().map(|(_, e)| e)).unwrap();
 
         let stake_table_json =
             std::fs::read_to_string("../data/v3/decaf_stake_table.json").unwrap();
