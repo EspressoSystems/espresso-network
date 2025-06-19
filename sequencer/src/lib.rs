@@ -310,7 +310,7 @@ where
     .with_context(|| "Failed to derive Libp2p peer ID")?;
 
     // Print the libp2p public key
-    info!("Starting Libp2p with PeerID: {}", libp2p_public_key);
+    info!("Starting Libp2p with PeerID: {libp2p_public_key}");
 
     let (mut network_config, wait_for_orchestrator) = match (
         persistence.load_config().await?,
@@ -908,6 +908,7 @@ pub mod testing {
                         .genesis_st_state(genesis_stake)
                         .blocks_per_epoch(blocks_per_epoch)
                         .epoch_start_block(epoch_start_block)
+                        .multisig_pauser(self.signer.address())
                         .build()
                         .unwrap();
                     args.deploy_all(&mut contracts)
@@ -933,7 +934,7 @@ pub mod testing {
 
                     Upgrade::pos_view_based(st_addr)
                 },
-                _ => panic!("Upgrade not configured for version {:?}", version),
+                _ => panic!("Upgrade not configured for version {version:?}"),
             };
 
             let mut upgrades = std::collections::BTreeMap::new();

@@ -29,6 +29,35 @@ pub async fn main() -> anyhow::Result<()> {
     let upgrade = genesis.upgrade_version;
 
     match (base, upgrade) {
+        #[cfg(all(feature = "pos", feature = "drb-and-header"))]
+        (
+            espresso_types::EpochVersion::VERSION,
+            espresso_types::DrbAndHeaderUpgradeVersion::VERSION,
+        ) => {
+            run(
+                genesis,
+                modules,
+                opt,
+                SequencerVersions::<
+                    espresso_types::EpochVersion,
+                    espresso_types::DrbAndHeaderUpgradeVersion,
+                >::new(),
+            )
+            .await
+        },
+        #[cfg(feature = "drb-and-header")]
+        (espresso_types::DrbAndHeaderUpgradeVersion::VERSION, _) => {
+            run(
+                genesis,
+                modules,
+                opt,
+                SequencerVersions::<
+                    espresso_types::DrbAndHeaderUpgradeVersion,
+                    espresso_types::DrbAndHeaderUpgradeVersion,
+                >::new(),
+            )
+            .await
+        },
         #[cfg(all(feature = "fee", feature = "pos"))]
         (FeeVersion::VERSION, espresso_types::EpochVersion::VERSION) => {
             run(

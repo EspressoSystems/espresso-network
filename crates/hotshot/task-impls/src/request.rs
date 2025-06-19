@@ -171,18 +171,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for NetworkRequest
 
                 ensure!(
                     self.spawned_tasks.contains_key(&view),
-                    info!(
-                        "Received VidResponseRecv for view we didn't expect, view {:?}",
-                        view
-                    )
+                    info!("Received VidResponseRecv for view we didn't expect, view {view:?}")
                 );
 
                 ensure!(
                     da_committee_for_view.contains(sender_key),
-                    warn!(
-                        "Received VidResponseRecv from unexpected sender key {:?}",
-                        sender_key
-                    )
+                    warn!("Received VidResponseRecv from unexpected sender key {sender_key:?}")
                 );
 
                 ensure!(
@@ -193,7 +187,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for NetworkRequest
                     warn!("Received VidResponseRecv with invalid signature")
                 );
 
-                tracing::debug!("Received VidResponseRecv {:?}", vid_proposal,);
+                tracing::debug!("Received VidResponseRecv {vid_proposal:?}");
                 broadcast_event(
                     Arc::new(HotShotEvent::VidShareRecv(
                         sender_key.clone(),
@@ -336,11 +330,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
                         // just check for the data at start of loop in `cancel_vid_request_task`
                         continue;
                     }
-                    tracing::debug!(
-                        "Sending VidRequestSend {:?}, my id {:?}",
-                        data_request,
-                        my_id
-                    );
+                    tracing::debug!("Sending VidRequestSend {data_request:?}, my id {my_id:?}");
                     // First send request to a random DA member for the view
                     broadcast_event(
                         HotShotEvent::VidRequestSend(
@@ -381,7 +371,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
             .get(view)
             .and_then(|key_map| key_map.get(public_key));
         if let Some(vid_shares) = maybe_vid_shares {
-            tracing::debug!("Send own vid share: {:?}, my id {:?}", vid_shares, id,);
+            tracing::debug!("Send own vid share: {vid_shares:?}, my id {id:?}");
             for vid_share in vid_shares.values() {
                 broadcast_event(
                     Arc::new(HotShotEvent::VidShareRecv(

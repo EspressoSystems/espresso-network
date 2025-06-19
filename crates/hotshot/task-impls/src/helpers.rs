@@ -82,7 +82,7 @@ pub(crate) async fn fetch_proposal<TYPES: NodeType, V: Versions>(
     .wrap()
     .context(error!("Failed to sign proposal. This should never happen."))?;
 
-    tracing::info!("Sending proposal request for view {}", view_number);
+    tracing::info!("Sending proposal request for view {view_number}");
 
     // First, broadcast that we need a proposal to the current leader
     broadcast_event(
@@ -1029,7 +1029,7 @@ pub async fn validate_proposal_safety_and_liveness<
                 .await;
             }
 
-            error!("Failed safety and liveness check \n High QC is {:?}  Proposal QC is {:?}  Locked view is {:?}", consensus_reader.high_qc(), proposal.data.clone(), consensus_reader.locked_view())
+            error!("Failed safety and liveness check \n High QC is {:?}  Proposal QC is {:?}  Locked view is {:?}", consensus_reader.high_qc(), proposal.data, consensus_reader.locked_view())
         });
     }
 
@@ -1375,11 +1375,7 @@ pub async fn broadcast_view_change<TYPES: NodeType>(
             broadcast_epoch = Some(first_epoch);
         }
     }
-    tracing::trace!(
-        "Sending ViewChange for view {} and epoch {:?}",
-        new_view_number,
-        broadcast_epoch
-    );
+    tracing::trace!("Sending ViewChange for view {new_view_number} and epoch {broadcast_epoch:?}");
     broadcast_event(
         Arc::new(HotShotEvent::ViewChange(new_view_number, broadcast_epoch)),
         sender,

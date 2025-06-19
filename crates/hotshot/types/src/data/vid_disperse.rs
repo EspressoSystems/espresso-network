@@ -122,7 +122,7 @@ impl<TYPES: NodeType> ADVZDisperse<TYPES> {
             .wrap()
             .context(error!("Join error"))?
             .wrap()
-            .context(|err| error!("Failed to calculate VID disperse. Error: {}", err))?;
+            .context(|err| error!("Failed to calculate VID disperse. Error: {err}"))?;
         let advz_scheme_duration = now.elapsed();
 
         Ok((
@@ -437,7 +437,7 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
         .wrap()
         .context(error!("Join error"))?
         .wrap()
-        .context(|err| error!("Failed to calculate VID disperse. Error: {}", err))?;
+        .context(|err| error!("Failed to calculate VID disperse. Error: {err}"))?;
         let ns_disperse_duration = now.elapsed();
 
         Ok((

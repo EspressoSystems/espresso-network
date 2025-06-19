@@ -112,7 +112,7 @@ async fn main() {
 
     // prepare config for state prover from user options
     let transport = SwitchingTransport::new(args.l1_options, args.l1_provider_url)
-        .expect("failed to create switching transport");
+        .expect("failed to create switching transport, check your l1 provider urls");
     let rpc_client = RpcClient::new(transport.clone(), false);
     let l1_provider = ProviderBuilder::new().on_client(rpc_client.clone());
     let chain_id = l1_provider.get_chain_id().await.unwrap();
@@ -179,7 +179,7 @@ async fn main() {
     {
         Ok(is_legacy) => is_legacy,
         Err(err) => {
-            tracing::error!("Error checking with the contract: {:?}", err);
+            tracing::error!("Error checking the contract version: {err}");
             return;
         },
     };
@@ -199,7 +199,7 @@ async fn main() {
             hotshot_state_prover::service::run_prover_service(config, bind_version).await
         };
         if let Err(err) = result {
-            tracing::error!("Error running prover service: {:?}", err);
+            tracing::error!("Error running prover service: {err}");
         };
     } else {
         // Run light client state update once
@@ -209,7 +209,7 @@ async fn main() {
             hotshot_state_prover::service::run_prover_once(config, bind_version).await
         };
         if let Err(err) = result {
-            tracing::error!("Error running prover once: {:?}", err);
+            tracing::error!("Error running prover once: {err}");
         }
     }
 }

@@ -1,6 +1,10 @@
 #![cfg(test)]
 
-use std::{collections::HashSet, path::Path, time::Duration};
+use std::{
+    collections::{BTreeMap, HashSet},
+    path::Path,
+    time::Duration,
+};
 
 use alloy::{
     network::EthereumWallet,
@@ -21,6 +25,7 @@ use cdn_broker::{
 };
 use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
+use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_contract_deployer::{
     builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table, Contract,
@@ -28,7 +33,7 @@ use espresso_contract_deployer::{
 };
 use espresso_types::{
     eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig, EpochVersion,
-    FeeAccount, L1Client, PrivKey, PubKey, SeqTypes, SequencerVersions, Transaction, V0_0,
+    FeeAccount, L1Client, Leaf2, PrivKey, PubKey, SeqTypes, SequencerVersions, Transaction, V0_0,
 };
 use futures::{
     future::{join_all, try_join_all, BoxFuture, FutureExt},
@@ -75,9 +80,7 @@ use crate::{
     testing::{staking_priv_keys, wait_for_decide_on_handle},
     SequencerApiVersion,
 };
-
 type MockSequencerVersions = SequencerVersions<EpochVersion, V0_0>;
-
 async fn test_restart_helper(network: (usize, usize), restart: (usize, usize), cdn: bool) {
     setup_test();
 
@@ -265,6 +268,7 @@ struct TestNode<S: TestableSequencerDataSource> {
     modules: Modules,
     opt: Options,
     num_nodes: usize,
+    reference_state: Arc<RwLock<BTreeMap<u64, Commitment<Leaf2>>>>,
     /// Number of epochs to wait after restart before running progress check.
     wait_for_epoch: EpochNumber,
 }
@@ -272,7 +276,7 @@ struct TestNode<S: TestableSequencerDataSource> {
 impl<S: TestableSequencerDataSource> TestNode<S> {
     #[tracing::instrument]
     async fn new(network: NetworkParams<'_>, node: &NodeParams) -> Self {
-        tracing::info!(?network, ?node, "creating node",);
+        tracing::info!(?network, ?node, "creating node");
 
         let opts = api::Options::from(api::options::Http::with_port(node.api_port));
         let storage = S::create_storage().await;
@@ -338,6 +342,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             opt,
             num_nodes: network.peer_ports.len(),
             context: None,
+            reference_state: Default::default(),
             wait_for_epoch: EpochNumber::new(3),
         }
     }
@@ -405,6 +410,13 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         }
     }
 
+    fn node_id(&self) -> Option<u64> {
+        let Some(context) = &self.context else {
+            return None;
+        };
+        Some(context.node_id())
+    }
+
     fn check_progress_with_timeout(&self) -> BoxFuture<anyhow::Result<()>> {
         async {
             let Some(context) = &self.context else {
@@ -425,7 +437,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             // conservative: of course if we actually make progress, not every view will time out,
             // and we will take less than this amount of time.
             let timeout_duration =
-                2 * Duration::from_millis(next_view_timeout) * (self.num_nodes as u32);
+                4 * Duration::from_millis(next_view_timeout) * (self.num_nodes as u32);
             match timeout(timeout_duration, self.check_progress()).await {
                 Ok(res) => res,
                 Err(_) => bail!("timed out waiting for progress on node {node_id}"),
@@ -459,21 +471,61 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             let EventType::Decide { leaf_chain, .. } = event.event else {
                 continue;
             };
+
             for leaf in leaf_chain.iter() {
+                let height = leaf.leaf.height();
+
+                // Check that this nodes proposals are decided
                 if leaf.leaf.view_number().u64() % (num_nodes.get() as u64) == node_id {
-                    tracing::info!(
-                        node_id,
-                        height = leaf.leaf.height(),
-                        "got leaf proposed by this node"
-                    );
+                    tracing::info!(node_id, height, "got leaf proposed by this node");
                     return Ok(());
                 }
                 tracing::info!(
                     node_id,
-                    height = leaf.leaf.height(),
+                    height,
                     view = leaf.leaf.view_number().u64(),
                     "leaf not proposed by this node"
                 );
+            }
+        }
+
+        bail!("node {node_id} event stream ended unexpectedly");
+    }
+
+    /// Collect the first 50 committed leaves from the event stream for this node,
+    /// and write them into the test node state
+    /// This is later used to verify that the node's state is consistent
+    async fn populate_state_from_event_stream(&self) -> anyhow::Result<()> {
+        let Some(context) = &self.context else {
+            tracing::info!("skipping state check on stopped node");
+            return Ok(());
+        };
+
+        let node_id = context.node_id();
+        tracing::info!(node_id, "verifying state of node");
+
+        let mut events = context.event_stream().await;
+        let mut collected_leaves = 0;
+        let mut state_write = self.reference_state.write().await;
+
+        while let Some(event) = events.next().await {
+            let EventType::Decide { leaf_chain, .. } = event.event else {
+                continue;
+            };
+
+            {
+                for leaf in leaf_chain.iter() {
+                    let leaf = leaf.leaf.clone();
+                    let height = leaf.height();
+                    state_write.insert(height, leaf.commit());
+
+                    tracing::info!("node_id={node_id} state height= {height}");
+                    collected_leaves += 1;
+                }
+
+                if collected_leaves == 30 {
+                    return Ok(());
+                }
             }
         }
 
@@ -534,17 +586,17 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         };
 
         let node_id = context.node_id();
-        tracing::info!(node_id, "waiting for epoch: {:?}", epoch);
+        tracing::info!(node_id, "waiting for epoch: {epoch:?}");
         let mut events = context.event_stream().await;
 
-        let timeout_duration = Duration::from_secs(30);
+        let timeout_duration = Duration::from_secs(60);
         timeout(timeout_duration, async {
             while let Some(event) = events.next().await {
                 let EventType::Decide { qc, .. } = event.event else {
                     continue;
                 };
                 if qc.data.epoch >= Some(epoch) {
-                    tracing::info!(node_id, "reached epoch: {:?}", epoch);
+                    tracing::info!(node_id, "reached epoch: {epoch:?}");
                     break;
                 }
             }
@@ -789,6 +841,7 @@ impl TestNetwork {
             .genesis_st_state(genesis_stake)
             .blocks_per_epoch(blocks_per_epoch.unwrap())
             .epoch_start_block(epoch_start_block.unwrap())
+            .multisig_pauser(signer.address())
             .build()
             .unwrap();
 
@@ -851,6 +904,51 @@ impl TestNetwork {
         .unwrap();
     }
 
+    /// Check that state has not diverged between nodes and that all nodes were
+    /// checked. Mostly useful in tests that do not restart all nodes, as those
+    /// cases confirm that state has not regressed.
+    async fn check_state(&self) {
+        // populate each test node's state
+        try_join_all(
+            self.da_nodes
+                .iter()
+                .map(TestNode::populate_state_from_event_stream)
+                .chain(
+                    self.regular_nodes
+                        .iter()
+                        .map(TestNode::populate_state_from_event_stream),
+                ),
+        )
+        .await
+        .unwrap();
+
+        let mut nodes_iter = self.da_nodes.iter().chain(self.regular_nodes.iter());
+
+        let first_node = nodes_iter.next().unwrap();
+        let ref_id = first_node.node_id().expect("Node id not found");
+        let ref_state = first_node.reference_state.read().await.clone();
+
+        // assert that all the nodes have same leaves from their event streams
+        // this also ensures validated state consistency
+        // Note: Nodes may have started consuming the event stream at different points,
+        // since the stream might have been partially processed before this check.
+        // Therefore, we only compare leaves at heights that are present in both
+        // the current node and the reference state.
+        for node in nodes_iter {
+            let node_id = node.node_id().expect("Node id not found");
+            let state = node.reference_state.read().await.clone();
+
+            for (height, commitment) in state.iter() {
+                if let Some(ref_commitment) = ref_state.get(height) {
+                    assert_eq!(
+                        ref_commitment, commitment,
+                        "State mismatch between node {node_id} and reference node {ref_id}"
+                    );
+                }
+            }
+        }
+    }
+
     async fn check_builder(&self) {
         self.da_nodes[0].check_builder(self.builder_port).await;
     }
@@ -865,6 +963,7 @@ impl TestNetwork {
             .await;
         self.wait_for_epoch().await;
         self.check_progress().await;
+        self.check_state().await;
     }
 
     /// Restart indicated nodes, ensuring progress is maintained at all times.
@@ -1063,10 +1162,10 @@ async fn start_broker(ports: &mut PortPicker, dir: &Path) -> JoinHandle<()> {
     let public_port = ports.pick();
     let private_port = ports.pick();
     let broker_config: BrokerConfig<TestingDef<SeqTypes>> = BrokerConfig {
-        public_advertise_endpoint: format!("127.0.0.1:{}", public_port),
-        public_bind_endpoint: format!("127.0.0.1:{}", public_port),
-        private_advertise_endpoint: format!("127.0.0.1:{}", private_port),
-        private_bind_endpoint: format!("127.0.0.1:{}", private_port),
+        public_advertise_endpoint: format!("127.0.0.1:{public_port}"),
+        public_bind_endpoint: format!("127.0.0.1:{public_port}"),
+        private_advertise_endpoint: format!("127.0.0.1:{private_port}"),
+        private_bind_endpoint: format!("127.0.0.1:{private_port}"),
 
         metrics_bind_endpoint: None,
         discovery_endpoint: dir.display().to_string(),

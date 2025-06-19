@@ -123,7 +123,7 @@ impl Display for EthKeyPair {
 
 impl std::fmt::Debug for EthKeyPair {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self)
+        std::fmt::Display::fmt(self, f)
     }
 }
 

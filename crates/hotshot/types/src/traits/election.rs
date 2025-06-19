@@ -194,7 +194,7 @@ pub fn membership_spawn_add_epoch_root<TYPES: NodeType>(
 ) {
     tokio::spawn(async move {
         if let Err(e) = Membership::<TYPES>::add_epoch_root(membership, epoch, block_header).await {
-            tracing::error!("Failed to add epoch root for epoch {}: {}", epoch, e);
+            tracing::error!("Failed to add epoch root for epoch {epoch}: {e}");
         }
     });
 }

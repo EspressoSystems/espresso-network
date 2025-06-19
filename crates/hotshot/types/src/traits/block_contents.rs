@@ -193,6 +193,9 @@ pub trait BlockHeader<TYPES: NodeType>:
     /// Get the timestamp.
     fn timestamp(&self) -> u64;
 
+    /// Get the timestamp in milliseconds.
+    fn timestamp_millis(&self) -> u64;
+
     /// Get the payload commitment.
     fn payload_commitment(&self) -> VidCommitment;
 

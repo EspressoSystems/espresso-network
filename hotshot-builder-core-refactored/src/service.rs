@@ -205,7 +205,7 @@ where
 
             match event.event {
                 EventType::Error { error } => {
-                    error!("Error event in HotShot: {:?}", error);
+                    error!("Error event in HotShot: {error:?}");
                 },
                 EventType::Transactions { transactions } => {
                     let this = Arc::clone(&self);
@@ -550,7 +550,7 @@ where
             sender: pub_key,
         };
 
-        info!("Sending Claim Block data for {block_id}",);
+        info!("Sending Claim Block data for {block_id}");
         Ok(block_data)
     }
 
