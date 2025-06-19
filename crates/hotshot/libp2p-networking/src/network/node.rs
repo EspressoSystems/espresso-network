@@ -44,11 +44,13 @@ use libp2p::{
     Multiaddr, StreamProtocol, Swarm, SwarmBuilder,
 };
 use libp2p_identity::PeerId;
-use parking_lot::Mutex;
 use rand::{prelude::SliceRandom, thread_rng};
 use tokio::{
     select, spawn,
-    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    sync::{
+        mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+        Mutex,
+    },
 };
 use tracing::{debug, error, info, info_span, instrument, warn, Instrument};
 
@@ -578,6 +580,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 if num_established == 0 {
                     self.consensus_key_to_pid_map
                         .lock()
+                        .await
                         .remove_by_right(&peer_id);
                 }
 

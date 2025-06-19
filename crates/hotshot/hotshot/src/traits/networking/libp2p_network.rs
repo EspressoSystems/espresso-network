@@ -521,7 +521,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
         #[cfg(feature = "hotshot-testing")] reliability_config: Option<Box<dyn NetworkReliability>>,
     ) -> Result<Libp2pNetwork<T>, NetworkError> {
         // Create a map from consensus keys to Libp2p peer IDs
-        let consensus_key_to_pid_map = Arc::new(parking_lot::Mutex::new(BiMap::new()));
+        let consensus_key_to_pid_map = Arc::new(Mutex::new(BiMap::new()));
 
         let (mut rx, network_handle) = spawn_network_node::<T, D>(
             config.clone(),

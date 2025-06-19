@@ -34,8 +34,8 @@ use libp2p::{
     Multiaddr, Transport,
 };
 use libp2p_identity::PeerId;
-use parking_lot::Mutex;
 use quic::tokio::Transport as QuicTransport;
+use tokio::sync::Mutex;
 use tracing::instrument;
 use transport::ConsensusKeyAuthentication;
 
