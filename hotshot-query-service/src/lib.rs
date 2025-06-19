@@ -948,11 +948,11 @@ mod test {
         let port = pick_unused_port().unwrap();
         let _server = BackgroundTask::spawn(
             "server",
-            app.serve(format!("0.0.0.0:{}", port), MockBase::instance()),
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
         );
 
         let client =
-            Client::<Error, MockBase>::new(format!("http://localhost:{}", port).parse().unwrap());
+            Client::<Error, MockBase>::new(format!("http://localhost:{port}").parse().unwrap());
         assert!(client.connect(Some(Duration::from_secs(60))).await);
 
         client.post::<()>("mod/ext/42").send().await.unwrap();

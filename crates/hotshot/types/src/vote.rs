@@ -281,7 +281,7 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
             &vote.light_client_state,
             &vote.next_stake_table_state,
         ) {
-            error!("Invalid light client state update vote {:?}", vote);
+            error!("Invalid light client state update vote {vote:?}");
             return None;
         }
         let (total_stake_casted, vote_map) = self
@@ -291,7 +291,7 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
 
         // Check for duplicate vote
         if vote_map.contains_key(&state_ver_key) {
-            tracing::warn!("Duplicate vote (key: {:?}, vote: {:?})", key, vote);
+            tracing::warn!("Duplicate vote (key: {key:?}, vote: {vote:?})");
             return None;
         }
 

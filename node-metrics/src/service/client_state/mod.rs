@@ -112,7 +112,7 @@ impl std::fmt::Display for HandleConnectedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             HandleConnectedError::ClientSendError(err) => {
-                write!(f, "handle connected error: client send error: {}", err)
+                write!(f, "handle connected error: client send error: {err}")
             },
         }
     }
@@ -233,8 +233,7 @@ impl std::fmt::Display for HandleRequestBlocksSnapshotsError {
             HandleRequestBlocksSnapshotsError::ClientSendError(err) => {
                 write!(
                     f,
-                    "handle request blocks snapshot error: client send error:: {}",
-                    err
+                    "handle request blocks snapshot error: client send error:: {err}"
                 )
             },
         }
@@ -304,8 +303,7 @@ impl std::fmt::Display for HandleRequestNodeIdentitySnapshotError {
             HandleRequestNodeIdentitySnapshotError::ClientSendError(err) => {
                 write!(
                     f,
-                    "handle request node identity snapshot error: client send error: {}",
-                    err
+                    "handle request node identity snapshot error: client send error: {err}"
                 )
             },
         }
@@ -372,8 +370,7 @@ impl std::fmt::Display for HandleRequestHistogramSnapshotError {
             HandleRequestHistogramSnapshotError::ClientSendError(err) => {
                 write!(
                     f,
-                    "handle request histogram snapshot error: client send error: {}",
-                    err
+                    "handle request histogram snapshot error: client send error: {err}"
                 )
             },
         }
@@ -459,8 +456,7 @@ impl std::fmt::Display for HandleRequestVotersSnapshotError {
             HandleRequestVotersSnapshotError::ClientSendError(err) => {
                 write!(
                     f,
-                    "handle request voters snapshot error: client send error: {}",
-                    err
+                    "handle request voters snapshot error: client send error: {err}"
                 )
             },
         }
@@ -557,27 +553,22 @@ impl std::fmt::Display for ProcessClientMessageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ProcessClientMessageError::Connected(err) => {
-                write!(f, "process client message error: connected: {}", err)
+                write!(f, "process client message error: connected: {err}")
             },
             ProcessClientMessageError::BlocksSnapshot(err) => {
-                write!(f, "process client message error: blocks snapshot: {}", err)
+                write!(f, "process client message error: blocks snapshot: {err}")
             },
             ProcessClientMessageError::NodeIdentitySnapshot(err) => {
                 write!(
                     f,
-                    "process client message error: node identity snapshot: {}",
-                    err
+                    "process client message error: node identity snapshot: {err}"
                 )
             },
             ProcessClientMessageError::HistogramSnapshot(err) => {
-                write!(
-                    f,
-                    "process client message error: histogram snapshot: {}",
-                    err
-                )
+                write!(f, "process client message error: histogram snapshot: {err}")
             },
             ProcessClientMessageError::VotersSnapshot(err) => {
-                write!(f, "process client message error: voters snapshot: {}", err)
+                write!(f, "process client message error: voters snapshot: {err}")
             },
         }
     }
@@ -937,10 +928,7 @@ impl InternalClientMessageProcessingTask {
             {
                 // We log this error, but we ignore it so that other connections
                 // are not affected by a single client.
-                tracing::info!(
-                    "internal client message processing encountered an error: {}",
-                    err,
-                );
+                tracing::info!("internal client message processing encountered an error: {err}");
             }
         }
     }
@@ -1006,7 +994,7 @@ impl ProcessDistributeBlockDetailHandlingTask {
                 block_detail
             } else {
                 tracing::error!(
-                    "block detail stream closed.  shutting down client handling stream.",
+                    "block detail stream closed. shutting down client handling stream."
                 );
                 return;
             };
@@ -1076,7 +1064,7 @@ impl ProcessDistributeNodeIdentityHandlingTask {
                 node_identity
             } else {
                 tracing::error!(
-                    "node identity stream closed.  shutting down client handling stream.",
+                    "node identity stream closed. shutting down client handling stream."
                 );
                 return;
             };
@@ -1145,7 +1133,7 @@ impl ProcessDistributeVotersHandlingTask {
             let voters = if let Some(voters) = voters_result {
                 voters
             } else {
-                tracing::error!("voters stream closed.  shutting down client handling stream.",);
+                tracing::error!("voters stream closed. shutting down client handling stream.");
                 return;
             };
 

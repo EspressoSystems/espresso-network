@@ -423,7 +423,7 @@ pub mod mock {
             let src = &self.state[&view].fee_merkle_tree;
             assert_eq!(src.commitment(), fee_merkle_tree_root);
 
-            tracing::info!("catchup: fetching accounts {accounts:?} for view {view:?}");
+            tracing::info!("catchup: fetching accounts {accounts:?} for view {view}");
             let tree = retain_accounts(src, accounts.iter().copied())
                 .with_context(|| "failed to retain accounts")?;
 
@@ -449,7 +449,7 @@ pub mod mock {
             view: ViewNumber,
             mt: &mut BlockMerkleTree,
         ) -> anyhow::Result<()> {
-            tracing::info!("catchup: fetching frontier for view {view:?}");
+            tracing::info!("catchup: fetching frontier for view {view}");
             let src = &self.state[&view].block_merkle_tree;
 
             assert_eq!(src.commitment(), mt.commitment());

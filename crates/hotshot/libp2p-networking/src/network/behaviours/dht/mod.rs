@@ -290,7 +290,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                     },
                 },
                 Err(err) => {
-                    warn!("Error in Kademlia query: {:?}", err);
+                    warn!("Error in Kademlia query: {err:?}");
                     0
                 },
             },
@@ -364,7 +364,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                     // Initiate new query that hits more replicas
                     if retry_count > 0 {
                         let new_retry_count = retry_count - 1;
-                        warn!("Get DHT: Internal disagreement for get dht request {:?}! requerying with more nodes. {:?} retries left", progress, new_retry_count);
+                        warn!("Get DHT: Internal disagreement for get dht request {progress:?}! requerying with more nodes. {new_retry_count:?} retries left");
                         let new_factor = NonZeroUsize::max(
                             NonZeroUsize::new(num_replicas.get() + 1).unwrap_or(num_replicas),
                             *MAX_DHT_QUERY_SIZE,
@@ -379,7 +379,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                             records: HashMap::default(),
                         });
                     }
-                    warn!("Get DHT: Internal disagreement for get dht request {:?}! Giving up because out of retries. ", progress);
+                    warn!("Get DHT: Internal disagreement for get dht request {progress:?}! Giving up because out of retries. ");
                 }
             }
         }
@@ -453,13 +453,13 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                             warn!("DHT: finished query but client was no longer interested");
                         };
                     };
-                    debug!("Successfully got closest peers for key {:?}", key);
+                    debug!("Successfully got closest peers for key {key:?}");
                 },
                 Err(e) => {
                     if let Some(chan) = self.in_progress_get_closest_peers.remove(&query_id) {
                         let _: Result<_, _> = chan.send(());
                     };
-                    warn!("Failed to get closest peers: {:?}", e);
+                    warn!("Failed to get closest peers: {e:?}");
                 },
             },
             KademliaEvent::OutboundQueryProgressed {
@@ -482,7 +482,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                 if num_remaining == 0 {
                     self.finish_bootstrap();
                 } else {
-                    debug!("Bootstrap in progress, {} nodes remaining", num_remaining);
+                    debug!("Bootstrap in progress, {num_remaining} nodes remaining");
                 }
                 return Some(NetworkEvent::IsBootstrapped);
             },
@@ -492,18 +492,18 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
             } => {
                 let BootstrapError::Timeout { num_remaining, .. } = e;
                 if num_remaining.is_none() {
-                    error!("Failed to bootstrap: {:?}", e);
+                    error!("Failed to bootstrap: {e:?}");
                 }
                 self.finish_bootstrap();
             },
             KademliaEvent::RoutablePeer { peer, address: _ } => {
-                debug!("Found routable peer {:?}", peer);
+                debug!("Found routable peer {peer:?}");
             },
             KademliaEvent::PendingRoutablePeer { peer, address: _ } => {
-                debug!("Found pending routable peer {:?}", peer);
+                debug!("Found pending routable peer {peer:?}");
             },
             KademliaEvent::UnroutablePeer { peer } => {
-                debug!("Found unroutable peer {:?}", peer);
+                debug!("Found unroutable peer {peer:?}");
             },
             KademliaEvent::RoutingUpdated {
                 peer: _,
@@ -515,7 +515,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                 debug!("Routing table updated");
             },
             e @ KademliaEvent::OutboundQueryProgressed { .. } => {
-                debug!("Not handling dht event {:?}", e);
+                debug!("Not handling dht event {e:?}");
             },
             e => {
                 debug!("New unhandled swarm event: {e:?}");

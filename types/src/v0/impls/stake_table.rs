@@ -1229,7 +1229,7 @@ impl Fetcher {
         };
 
         let Some(l1_finalized_block_info) = header.l1_finalized() else {
-            bail!("The epoch root for epoch {} is missing the L1 finalized block info. This is a fatal error. Consensus is blocked and will not recover.", epoch);
+            bail!("The epoch root for epoch {epoch} is missing the L1 finalized block info. This is a fatal error. Consensus is blocked and will not recover.");
         };
 
         let events = match self
@@ -1397,7 +1397,7 @@ impl EpochCommittees {
             .clone();
 
         Ok(*mapping.get(&bls_key).context(format!(
-            "failed to get ethereum address for bls key {bls_key}. epoch={epoch:?}"
+            "failed to get ethereum address for bls key {bls_key}. epoch={epoch}"
         ))?)
     }
 
@@ -1514,7 +1514,7 @@ impl EpochCommittees {
                 return;
             },
             Err(e) => {
-                tracing::error!("Failed to load stake table history from persistence: {}", e);
+                tracing::error!("Failed to load stake table history from persistence: {e}");
                 return;
             },
         };
@@ -1863,7 +1863,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         drop(membership_reader);
 
         tracing::debug!(
-            "Getting DRB for epoch {:?}, block height {:?}",
+            "Getting DRB for epoch {}, block height {}",
             epoch,
             block_height
         );
@@ -1885,7 +1885,7 @@ impl Membership<SeqTypes> for EpochCommittees {
 
     fn add_drb_result(&mut self, epoch: Epoch, drb: DrbResult) {
         let Some(raw_stake_table) = self.state.get(&epoch) else {
-            tracing::error!("add_drb_result({}, {:?}) was called, but we do not yet have the stake table for epoch {}", epoch, drb, epoch);
+            tracing::error!("add_drb_result({epoch}, {drb:?}) was called, but we do not yet have the stake table for epoch {epoch}");
             return;
         };
 

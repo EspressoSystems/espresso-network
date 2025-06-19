@@ -111,7 +111,7 @@ pub trait StateCatchup: Send + Sync {
                         .await
                         .map_err(|err| {
                             err.context(format!(
-                                "fetching accounts {accounts:?}, height {height}, view {view:?}"
+                                "fetching accounts {accounts:?}, height {height}, view {view}"
                             ))
                         })
                 }
@@ -205,7 +205,7 @@ pub trait StateCatchup: Send + Sync {
                         .await
                         .map_err(|err| {
                             err.context(format!(
-                                "fetching reward accounts {accounts:?}, height {height}, view {view:?}"
+                                "fetching reward accounts {accounts:?}, height {height}, view {view}"
                             ))
                         })
                 }
@@ -519,7 +519,7 @@ pub trait SequencerPersistence:
                 ensure!(
                     leaf.view_number() == high_qc.view_number,
                     format!(
-                        "loaded anchor leaf from view {:?}, but high QC is from view {:?}",
+                        "loaded anchor leaf from view {}, but high QC is from view {}",
                         leaf.view_number(),
                         high_qc.view_number
                     )

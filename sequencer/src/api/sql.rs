@@ -496,9 +496,7 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
     // Add in all the accounts we will need to replay any of the headers, to ensure that we don't
     // need to do catchup recursively.
     tracing::info!(
-        "reconstructing fee accounts state for from height {} to view {}",
-        from_height,
-        to_view
+        "reconstructing fee accounts state for from height {from_height} to view {to_view}"
     );
 
     let dependencies =
@@ -515,9 +513,7 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
     );
 
     tracing::info!(
-        "reconstructing reward accounts for from height {} to view {}",
-        from_height,
-        to_view
+        "reconstructing reward accounts for from height {from_height} to view {to_view}"
     );
 
     let mut reward_accounts = reward_accounts.iter().copied().collect::<HashSet<_>>();
@@ -686,7 +682,7 @@ async fn reward_header_dependencies(
                 coordinator
                     .wait_for_catchup(proposal_epoch)
                     .await
-                    .context(format!("failed to catchup for epoch={proposal_epoch:?}"))?
+                    .context(format!("failed to catchup for epoch={proposal_epoch}"))?
             },
         };
 

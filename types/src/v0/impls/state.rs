@@ -119,6 +119,11 @@ pub enum ProposalValidationError {
         system: u64,
         diff: u64,
     },
+    #[error("Inconsistent timestamps on header: timestamp:={timestamp}, timestamp_millis={timestamp_millis}")]
+    InconsistentTimestamps {
+        timestamp: u64,
+        timestamp_millis: u64,
+    },
     #[error("l1_finalized has `None` value")]
     L1FinalizedNotFound,
     #[error("l1_finalized height is decreasing: parent={parent:?} proposed={proposed:?}")]
@@ -407,6 +412,18 @@ impl<'a> Proposal<'a> {
         Ok(())
     }
 
+    /// The `timestamp` and `timestamp_millis` fields must be coherent
+    fn validate_timestamp_consistency(&self) -> Result<(), ProposalValidationError> {
+        if self.header.timestamp() != self.header.timestamp_millis() / 1_000 {
+            return Err(ProposalValidationError::InconsistentTimestamps {
+                timestamp: self.header.timestamp(),
+                timestamp_millis: self.header.timestamp_millis(),
+            });
+        }
+
+        Ok(())
+    }
+
     /// The proposed ['BlockMerkleTree'] must match the one in ['ValidatedState'].
     fn validate_block_merkle_tree(
         &self,
@@ -601,6 +618,8 @@ impl<'a> ValidatedTransition<'a> {
     /// currently 12 seconds. This value may be moved to configuration
     /// in the future. Do this check first so we don't add unnecessary drift.
     fn validate_timestamp(&self) -> Result<(), ProposalValidationError> {
+        self.proposal.validate_timestamp_consistency()?;
+
         self.proposal
             .validate_timestamp_non_dec(self.parent.timestamp())?;
 
@@ -865,6 +884,7 @@ impl ValidatedState {
         let cf = match upgrade.upgrade_type {
             UpgradeType::Fee { chain_config } => chain_config,
             UpgradeType::Epoch { chain_config } => chain_config,
+            UpgradeType::DrbAndHeader { chain_config } => chain_config,
         };
 
         self.chain_config = cf.into();
@@ -1143,8 +1163,8 @@ mod test {
 
     use super::*;
     use crate::{
-        eth_signature_key::EthKeyPair, v0_1, v0_2, v0_3, BlockSize, FeeAccountProof,
-        FeeMerkleProof, Leaf, Payload, Transaction,
+        eth_signature_key::EthKeyPair, v0_1, v0_2, v0_3, v0_4, BlockSize, FeeAccountProof,
+        FeeMerkleProof, Leaf, Payload, TimestampMillis, Transaction,
     };
 
     impl Transaction {
@@ -1165,16 +1185,26 @@ mod test {
     impl Header {
         /// Build a new header from parent.
         fn next(self) -> Self {
+            let time = OffsetDateTime::now_utc();
+            let timestamp = time.unix_timestamp() as u64;
+            let timestamp_millis = TimestampMillis::from_time(&time);
+
             match self {
                 Header::V1(_) => panic!("You called `Header.next()` on unimplemented version (v1)"),
                 Header::V2(parent) => Header::V2(v0_2::Header {
                     height: parent.height + 1,
-                    timestamp: OffsetDateTime::now_utc().unix_timestamp() as u64,
+                    timestamp,
                     ..parent.clone()
                 }),
                 Header::V3(parent) => Header::V3(v0_3::Header {
                     height: parent.height + 1,
-                    timestamp: OffsetDateTime::now_utc().unix_timestamp() as u64,
+                    timestamp,
+                    ..parent.clone()
+                }),
+                Header::V4(parent) => Header::V4(v0_4::Header {
+                    height: parent.height + 1,
+                    timestamp,
+                    timestamp_millis,
                     ..parent.clone()
                 }),
             }
@@ -1199,6 +1229,11 @@ mod test {
                     ..header.clone()
                 }),
                 Header::V3(header) => Header::V3(v0_3::Header {
+                    fee_info,
+                    builder_signature: Some(sig),
+                    ..header.clone()
+                }),
+                Header::V4(header) => Header::V4(v0_4::Header {
                     fee_info,
                     builder_signature: Some(sig),
                     ..header.clone()
@@ -1229,6 +1264,11 @@ mod test {
                     ..parent.clone()
                 }),
                 Header::V3(parent) => Header::V3(v0_3::Header {
+                    fee_info,
+                    builder_signature: Some(sig),
+                    ..parent.clone()
+                }),
+                Header::V4(parent) => Header::V4(v0_4::Header {
                     fee_info,
                     builder_signature: Some(sig),
                     ..parent.clone()
@@ -1530,17 +1570,20 @@ mod test {
             err
         );
 
-        let mock_time: u64 = OffsetDateTime::now_utc().unix_timestamp() as u64;
+        let time = OffsetDateTime::now_utc();
+        let timestamp: u64 = time.unix_timestamp() as u64;
+        let timestamp_millis = TimestampMillis::from_time(&time).u64();
+
         let mut header = parent.clone();
-        *header.timestamp_mut() = mock_time - 13;
+        header.set_timestamp(timestamp - 13, timestamp_millis - 13_000);
         let proposal = Proposal::new(&header, block_size);
 
-        let err = proposal.validate_timestamp_drift(mock_time).unwrap_err();
+        let err = proposal.validate_timestamp_drift(timestamp).unwrap_err();
         tracing::info!(%err, "task failed successfully");
         assert_eq!(
             ProposalValidationError::InvalidTimestampDrift {
-                proposal: mock_time - 13,
-                system: mock_time,
+                proposal: timestamp - 13,
+                system: timestamp,
                 diff: 13
             },
             err
@@ -1548,17 +1591,17 @@ mod test {
 
         // Success cases.
         let mut header = parent.clone();
-        *header.timestamp_mut() = mock_time;
+        header.set_timestamp(timestamp, timestamp_millis);
         let proposal = Proposal::new(&header, block_size);
-        proposal.validate_timestamp_drift(mock_time).unwrap();
+        proposal.validate_timestamp_drift(timestamp).unwrap();
 
-        *header.timestamp_mut() = mock_time - 11;
+        header.set_timestamp(timestamp - 11, timestamp_millis - 11_000);
         let proposal = Proposal::new(&header, block_size);
-        proposal.validate_timestamp_drift(mock_time).unwrap();
+        proposal.validate_timestamp_drift(timestamp).unwrap();
 
-        *header.timestamp_mut() = mock_time - 12;
+        header.set_timestamp(timestamp - 12, timestamp_millis - 12_000);
         let proposal = Proposal::new(&header, block_size);
-        proposal.validate_timestamp_drift(mock_time).unwrap();
+        proposal.validate_timestamp_drift(timestamp).unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1811,6 +1854,11 @@ mod test {
                 ..header
             }),
             Header::V3(header) => Header::V3(v0_3::Header {
+                builder_signature: Some(sig),
+                fee_info: FeeInfo::new(account, data),
+                ..header
+            }),
+            Header::V4(header) => Header::V4(v0_4::Header {
                 builder_signature: Some(sig),
                 fee_info: FeeInfo::new(account, data),
                 ..header

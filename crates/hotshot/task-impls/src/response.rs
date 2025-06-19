@@ -90,7 +90,7 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
                             }
                             for vid_share in self.get_or_calc_vid_share(request.view, sender).await
                             {
-                                tracing::debug!("Sending VID response {:?}", vid_share);
+                                tracing::debug!("Sending VID response {vid_share:?}");
                                 broadcast_event(
                                     HotShotEvent::VidResponseSend(
                                         self.pub_key.clone(),

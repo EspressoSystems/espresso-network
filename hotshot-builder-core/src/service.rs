@@ -242,7 +242,7 @@ impl<Types: NodeType> GlobalState<Types> {
                 max_block_size_increment_period,
             ),
             tx_status: RwLock::new(LruCache::new(
-                NonZeroUsize::new(max_txn_num).expect("max_txn_num must be greater than zero "),
+                NonZeroUsize::new(max_txn_num).expect("max_txn_num must be greater than zero"),
             )),
             num_nodes,
         }
@@ -274,8 +274,7 @@ impl<Types: NodeType> GlobalState<Types> {
 
         if let Some(previous_value) = previous_value {
             tracing::warn!(
-                "builder {parent_id} overwrote previous spawned_builder_state entry: {:?}",
-                previous_value
+                "builder {parent_id} overwrote previous spawned_builder_state entry: {previous_value:?}"
             );
         }
 
@@ -336,9 +335,7 @@ impl<Types: NodeType> GlobalState<Types> {
 
         if let Some(previous_builder_state_entry) = previous_builder_state_entry {
             tracing::warn!(
-                "block {id} overwrote previous block: {:?}.  previous cache entry: {:?}",
-                previous_builder_state_entry,
-                previous_cache_entry
+                "block {id} overwrote previous block: {previous_builder_state_entry:?}. previous cache entry: {previous_cache_entry:?}"
             );
         }
     }
@@ -408,26 +405,21 @@ impl<Types: NodeType> GlobalState<Types> {
             let old_status = write_guard.get(&txn_hash);
             match old_status {
                 Some(TransactionStatus::Rejected { reason }) => {
-                    tracing::debug!("Changing the status of a rejected transaction to status {:?}! The reason it is previously rejected is {:?}", txn_status, reason);
+                    tracing::debug!("Changing the status of a rejected transaction to status {txn_status:?}! The reason it is previously rejected is {reason:?}");
                 },
                 Some(TransactionStatus::Sequenced { leaf }) => {
-                    let e = format!("Changing the status of a sequenced transaction to status {:?} is not allowed! The transaction is sequenced in leaf {:?}", txn_status, leaf);
+                    let e = format!("Changing the status of a sequenced transaction to status {txn_status:?} is not allowed! The transaction is sequenced in leaf {leaf:?}");
                     tracing::error!(e);
                     return Err(BuildError::Error(e));
                 },
                 _ => {
                     tracing::debug!(
-                        "change status of transaction {txn_hash} from {:?} to {:?}",
-                        old_status,
-                        txn_status
+                        "change status of transaction {txn_hash} from {old_status:?} to {txn_status:?}"
                     );
                 },
             }
         } else {
-            tracing::debug!(
-                "insert status of a first-seen transaction {txn_hash} : {:?}",
-                txn_status
-            );
+            tracing::debug!("insert status of a first-seen transaction {txn_hash}: {txn_status:?}");
         }
         write_guard.put(txn_hash, txn_status);
         Ok(())
@@ -442,7 +434,7 @@ impl<Types: NodeType> GlobalState<Types> {
         key: &BuilderStateId<Types>,
     ) -> Result<&BroadcastSender<MessageType<Types>>, GetChannelForMatchingBuilderError> {
         if let Some(id_and_sender) = self.spawned_builder_states.get(key) {
-            tracing::info!("Got matching builder for parent {}", key);
+            tracing::info!("Got matching builder for parent {key}");
             Ok(&id_and_sender.1)
         } else {
             tracing::warn!(
@@ -548,7 +540,7 @@ impl<Types: NodeType> From<AvailableBlocksError<Types>> for BuildError {
                 )
             },
             AvailableBlocksError::SigningBlockFailed(e) => {
-                BuildError::Error(format!("Signing over block info failed: {:?}", e))
+                BuildError::Error(format!("Signing over block info failed: {e:?}"))
             },
             AvailableBlocksError::GetChannelForMatchingBuilderError(e) => e.into(),
             AvailableBlocksError::NoBlocksAvailable => {
@@ -582,7 +574,7 @@ impl<Types: NodeType> From<ClaimBlockError<Types>> for BuildError {
                 BuildError::Error("Signature validation failed in claim block".to_string())
             },
             ClaimBlockError::SigningCommitmentFailed(e) => {
-                BuildError::Error(format!("Signing over builder commitment failed: {:?}", e))
+                BuildError::Error(format!("Signing over builder commitment failed: {e:?}"))
             },
             ClaimBlockError::BlockDataNotFound => {
                 BuildError::Error("Block data not found".to_string())
@@ -610,7 +602,7 @@ impl<Types: NodeType> From<ClaimBlockHeaderInputError<Types>> for BuildError {
                 BuildError::Error("Block header not found".to_string())
             },
             ClaimBlockHeaderInputError::FailedToSignFeeInfo(e) => {
-                BuildError::Error(format!("Failed to sign fee info: {:?}", e))
+                BuildError::Error(format!("Failed to sign fee info: {e:?}"))
             },
         }
     }
@@ -655,7 +647,7 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
                     != global_state.last_garbage_collected_view_num
             {
                 tracing::warn!(
-                    "Requesting for view {:?}, last decide-triggered cleanup on view {:?}, highest view num is {:?}",
+                    "Requesting for view {}, last decide-triggered cleanup on view {}, highest view num is {}",
                     view_num,
                     global_state.last_garbage_collected_view_num,
                     global_state.highest_view_num_builder_id.parent_view
@@ -688,7 +680,7 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
 
             if let Some(id_and_sender) = found_builder_state {
                 tracing::info!(
-                    "Got matching BlockBuilder for {state_id}, sending get_available_blocks request",
+                    "Got matching BlockBuilder for {state_id}, sending get_available_blocks request"
                 );
 
                 if let Err(e) = id_and_sender
@@ -696,13 +688,13 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
                     .broadcast(MessageType::RequestMessage(req_msg.clone()))
                     .await
                 {
-                    tracing::warn!("Error {e} sending get_available_blocks request for {state_id}",);
+                    tracing::warn!("Error {e} sending get_available_blocks request for {state_id}");
                 }
                 sent = true;
                 break;
             }
 
-            tracing::info!("Failed to get matching BlockBuilder for {state_id}, will try again",);
+            tracing::info!("Failed to get matching BlockBuilder for {state_id}, will try again");
             sleep(check_duration).await;
         }
 
@@ -860,7 +852,7 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
                 signature: signature_over_builder_commitment,
                 sender: pub_key.clone(),
             };
-            tracing::info!("Sending Claim Block data for {block_id}",);
+            tracing::info!("Sending Claim Block data for {block_id}");
             Ok(block_data)
         } else {
             tracing::warn!("Claim Block not found");
@@ -919,7 +911,7 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
                 fee_signature: signature_over_fee_info,
                 sender: pub_key.clone(),
             };
-            tracing::info!("Sending Claim Block Header Input response for {id}",);
+            tracing::info!("Sending Claim Block Header Input response for {id}");
             Ok(response)
         } else {
             tracing::warn!("Claim Block Header Input not found");
@@ -1005,7 +997,7 @@ impl<Types: NodeType> AcceptsTxnSubmits<Types> for ProxyGlobalState<Types> {
         txns: Vec<<Types as NodeType>::Transaction>,
     ) -> Result<Vec<Commitment<<Types as NodeType>::Transaction>>, BuildError> {
         tracing::debug!(
-            "Submitting {:?} transactions to the builder states{:?}",
+            "Submitting {} transactions to the builder states{:?}",
             txns.len(),
             txns.iter().map(|txn| txn.commit()).collect::<Vec<_>>()
         );
@@ -1039,8 +1031,7 @@ impl<Types: NodeType> AcceptsTxnSubmits<Types> for ProxyGlobalState<Types> {
         }
 
         tracing::debug!(
-            "Transaction submitted to the builder states, sending response: {:?}",
-            response
+            "Transaction submitted to the builder states, sending response: {response:?}"
         );
 
         // NOTE: ideally we want to respond with original Vec<Result>
@@ -1110,7 +1101,7 @@ pub async fn run_non_permissioned_standalone_builder_service<
 
         match event.event {
             EventType::Error { error } => {
-                tracing::error!("Error event in HotShot: {:?}", error);
+                tracing::error!("Error event in HotShot: {error:?}");
             },
             // tx event
             EventType::Transactions { transactions } => {
@@ -1219,8 +1210,7 @@ async fn handle_da_event_implementation<Types: NodeType>(
     sender: <Types as NodeType>::SignatureKey,
 ) -> Result<(), HandleDaEventError<Types>> {
     tracing::debug!(
-        "DaProposal: Leader: {:?} for the view: {:?}",
-        sender,
+        "DaProposal: Leader: {sender} for the view: {}",
         da_proposal.data.view_number
     );
 
@@ -1230,9 +1220,8 @@ async fn handle_da_event_implementation<Types: NodeType>(
 
     if !sender.validate(&da_proposal.signature, &encoded_txns_hash) {
         tracing::error!(
-            "Validation Failure on DaProposal for view {:?}: Leader: {:?}",
-            da_proposal.data.view_number,
-            sender
+            "Validation Failure on DaProposal for view {}: Leader: {sender}",
+            da_proposal.data.view_number
         );
         return Err(HandleDaEventError::SignatureValidationFailed);
     }
@@ -1243,18 +1232,14 @@ async fn handle_da_event_implementation<Types: NodeType>(
     };
 
     let view_number = da_msg.proposal.data.view_number;
-    tracing::debug!(
-        "Sending DA proposal to the builder states for view {:?}",
-        view_number
-    );
+    tracing::debug!("Sending DA proposal to the builder states for view {view_number}");
 
     if let Err(e) = da_channel_sender
         .broadcast(MessageType::DaProposalMessage(da_msg))
         .await
     {
         tracing::warn!(
-            "Error {e}, failed to send DA proposal to builder states for view {:?}",
-            view_number
+            "Error {e}, failed to send DA proposal to builder states for view {view_number}"
         );
 
         return Err(HandleDaEventError::BroadcastFailed(e));
@@ -1305,8 +1290,7 @@ async fn handle_quorum_event_implementation<Types: NodeType>(
     sender: <Types as NodeType>::SignatureKey,
 ) -> Result<(), HandleQuorumEventError<Types>> {
     tracing::debug!(
-        "QuorumProposal: Leader: {:?} for the view: {:?}",
-        sender,
+        "QuorumProposal: Leader: {sender} for the view: {}",
         quorum_proposal.data.view_number()
     );
 
@@ -1314,9 +1298,8 @@ async fn handle_quorum_event_implementation<Types: NodeType>(
 
     if !sender.validate(&quorum_proposal.signature, leaf.commit().as_ref()) {
         tracing::error!(
-            "Validation Failure on QuorumProposal for view {:?}: Leader for the current view: {:?}",
-            quorum_proposal.data.view_number(),
-            sender
+            "Validation Failure on QuorumProposal for view {}: Leader for the current view: {sender}",
+            quorum_proposal.data.view_number()
         );
         return Err(HandleQuorumEventError::SignatureValidationFailed);
     }
@@ -1326,18 +1309,14 @@ async fn handle_quorum_event_implementation<Types: NodeType>(
         sender,
     };
     let view_number = quorum_msg.proposal.data.view_number();
-    tracing::debug!(
-        "Sending Quorum proposal to the builder states for view {:?}",
-        view_number
-    );
+    tracing::debug!("Sending Quorum proposal to the builder states for view {view_number}");
 
     if let Err(e) = quorum_channel_sender
         .broadcast(MessageType::QuorumProposalMessage(quorum_msg))
         .await
     {
         tracing::warn!(
-            "Error {e}, failed to send Quorum proposal to builder states for view {:?}",
-            view_number
+            "Error {e}, failed to send Quorum proposal to builder states for view {view_number}"
         );
         return Err(HandleQuorumEventError::BroadcastFailed(e));
     }
@@ -1352,17 +1331,13 @@ async fn handle_decide_event<Types: NodeType>(
     let decide_msg: DecideMessage<Types> = DecideMessage::<Types> {
         latest_decide_view_number,
     };
-    tracing::debug!(
-        "Sending Decide event to builder states for view {:?}",
-        latest_decide_view_number
-    );
+    tracing::debug!("Sending Decide event to builder states for view {latest_decide_view_number}");
     if let Err(e) = decide_channel_sender
         .broadcast(MessageType::DecideMessage(decide_msg))
         .await
     {
         tracing::warn!(
-            "Error {e}, failed to send Decide event to builder states for view {:?}",
-            latest_decide_view_number
+            "Error {e}, failed to send Decide event to builder states for view {latest_decide_view_number}"
         );
     }
 }
@@ -1387,7 +1362,7 @@ impl<Types: NodeType> From<HandleReceivedTxnsError<Types>> for BuildError {
                 max_txn_len,
             } => BuildError::Error(format!("Transaction too big (estimated length {estimated_length}, currently accepting <= {max_txn_len})")),
             HandleReceivedTxnsError::TooManyTransactions => BuildError::Error("Too many transactions".to_owned()),
-            HandleReceivedTxnsError::Internal(err) => BuildError::Error(format!("Internal error when submitting transaction: {}", err)),
+            HandleReceivedTxnsError::Internal(err) => BuildError::Error(format!("Internal error when submitting transaction: {err}")),
         }
     }
 }
@@ -1513,7 +1488,7 @@ where
             })
             .map(|_| commit)
             .inspect_err(|err| {
-                tracing::warn!("Failed to broadcast txn with commit {:?}: {}", commit, err);
+                tracing::warn!("Failed to broadcast txn with commit {commit:?}: {err}");
             })
             .map_err(HandleReceivedTxnsError::from);
 
@@ -2962,7 +2937,7 @@ mod test {
                 // This message *should* indicate that no blocks were available.
             },
             Err(err) => {
-                panic!("Unexpected error: {:?}", err);
+                panic!("Unexpected error: {err:?}");
             },
             Ok(_) => {
                 panic!("Expected an error, but got a result");
@@ -3034,7 +3009,7 @@ mod test {
                 // did not match the given public key.
             },
             Err(err) => {
-                panic!("Unexpected error: {:?}", err);
+                panic!("Unexpected error: {err:?}");
             },
             Ok(_) => {
                 panic!("Expected an error, but got a result");
@@ -3105,7 +3080,7 @@ mod test {
                 // did not match the given public key.
             },
             Err(err) => {
-                panic!("Unexpected error: {:?}", err);
+                panic!("Unexpected error: {err:?}");
             },
             Ok(_) => {
                 panic!("Expected an error, but got a result");
@@ -3174,7 +3149,7 @@ mod test {
                 // This message *should* indicate that the response channel was closed.
             },
             Err(err) => {
-                panic!("Unexpected error: {:?}", err);
+                panic!("Unexpected error: {err:?}");
             },
             Ok(_) => {
                 panic!("Expected an error, but got a result");
@@ -3292,8 +3267,7 @@ mod test {
             },
             Some(message) => {
                 panic!(
-                    "Expected a request for available blocks, but got a different message: {:?}",
-                    message
+                    "Expected a request for available blocks, but got a different message: {message:?}"
                 );
             },
         };
@@ -3315,7 +3289,7 @@ mod test {
             .expect("get_available_blocks_handle failed");
         match result {
             Err(err) => {
-                panic!("Unexpected error: {:?}", err);
+                panic!("Unexpected error: {err:?}");
             },
             Ok(result) => {
                 assert_eq!(
@@ -3438,8 +3412,7 @@ mod test {
             },
             Some(message) => {
                 panic!(
-                    "Expected a request for available blocks, but got a different message: {:?}",
-                    message
+                    "Expected a request for available blocks, but got a different message: {message:?}"
                 );
             },
         };
@@ -3461,7 +3434,7 @@ mod test {
             .expect("get_available_blocks_handle failed");
         match result {
             Err(err) => {
-                panic!("Unexpected error: {:?}", err);
+                panic!("Unexpected error: {err:?}");
             },
             Ok(result) => {
                 assert_eq!(
@@ -3541,7 +3514,7 @@ mod test {
                 // did not match the given public key.
             },
             Err(err) => {
-                panic!("Unexpected error: {:?}", err);
+                panic!("Unexpected error: {err:?}");
             },
             Ok(_) => {
                 panic!("Expected an error, but got a result");
@@ -3602,7 +3575,7 @@ mod test {
                 // did not match the given public key.
             },
             Err(err) => {
-                panic!("Unexpected error: {:?}", err);
+                panic!("Unexpected error: {err:?}");
             },
             Ok(_) => {
                 panic!("Expected an error, but got a result");
@@ -3697,7 +3670,7 @@ mod test {
 
         match result {
             Err(err) => {
-                panic!("Unexpected error: {:?}", err);
+                panic!("Unexpected error: {err:?}");
             },
             Ok(_) => {
                 // This is expected
@@ -3761,7 +3734,7 @@ mod test {
                 // did not match the given public key.
             },
             Err(err) => {
-                panic!("Unexpected error: {:?}", err);
+                panic!("Unexpected error: {err:?}");
             },
             Ok(_) => {
                 panic!("Expected an error, but got a result");
@@ -3822,7 +3795,7 @@ mod test {
                 // did not match the given public key.
             },
             Err(err) => {
-                panic!("Unexpected error: {:?}", err);
+                panic!("Unexpected error: {err:?}");
             },
             Ok(_) => {
                 panic!("Expected an error, but got a result");
@@ -3886,7 +3859,7 @@ mod test {
 
         match result {
             Err(err) => {
-                panic!("Unexpected error: {:?}", err);
+                panic!("Unexpected error: {err:?}");
             },
             Ok(_) => {
                 // This is expected.
@@ -3949,7 +3922,7 @@ mod test {
                 panic!("expected an error, but received a successful attempt instead")
             },
             Err(err) => {
-                panic!("Unexpected error: {:?}", err);
+                panic!("Unexpected error: {err:?}");
             },
         }
     }
@@ -4008,7 +3981,7 @@ mod test {
                 panic!("Expected an error, but got a result");
             },
             Err(err) => {
-                panic!("Unexpected error: {:?}", err);
+                panic!("Unexpected error: {err:?}");
             },
         }
     }
@@ -4055,7 +4028,7 @@ mod test {
                 // This is expected.
             },
             Err(err) => {
-                panic!("Unexpected error: {:?}", err);
+                panic!("Unexpected error: {err:?}");
             },
         }
 
@@ -4143,7 +4116,7 @@ mod test {
                 panic!("expected an error, but received a successful attempt instead");
             },
             Err(err) => {
-                panic!("Unexpected error: {:?}", err);
+                panic!("Unexpected error: {err:?}");
             },
         }
     }
@@ -4219,7 +4192,7 @@ mod test {
                 panic!("Expected an error, but got a result");
             },
             Err(err) => {
-                panic!("Unexpected error: {:?}", err);
+                panic!("Unexpected error: {err:?}");
             },
         }
     }
@@ -4283,7 +4256,7 @@ mod test {
                 // This is expected.
             },
             Err(err) => {
-                panic!("Unexpected error: {:?}", err);
+                panic!("Unexpected error: {err:?}");
             },
         }
 
@@ -4331,7 +4304,7 @@ mod test {
                     // This is expected,
                 },
                 Some(Err(err)) => {
-                    panic!("Unexpected error: {:?}", err);
+                    panic!("Unexpected error: {err:?}");
                 },
                 Some(Ok(_)) => {
                     panic!("Expected an error, but got a result");
@@ -4384,7 +4357,7 @@ mod test {
                     assert_eq!(max_txn_len, TEST_MAX_TX_LEN);
                 },
                 Some(Err(err)) => {
-                    panic!("Unexpected error: {:?}", err);
+                    panic!("Unexpected error: {err:?}");
                 },
                 Some(Ok(_)) => {
                     panic!("Expected an error, but got a result");
@@ -4439,12 +4412,12 @@ mod test {
                             // This is expected.
                         },
                         _ => {
-                            panic!("Unexpected error: {:?}", err);
+                            panic!("Unexpected error: {err:?}");
                         },
                     }
                 },
                 Some(Err(err)) => {
-                    panic!("Unexpected error: {:?}", err);
+                    panic!("Unexpected error: {err:?}");
                 },
                 Some(Ok(_)) => {
                     panic!("Expected an error, but got a result");
@@ -4481,7 +4454,7 @@ mod test {
                     // This is expected.
                 },
                 Err(err) => {
-                    panic!("Unexpected error: {:?}", err);
+                    panic!("Unexpected error: {err:?}");
                 },
             }
         }
@@ -4561,7 +4534,7 @@ mod test {
                     assert_eq!(txn_status, TransactionStatus::Pending);
                 },
                 e => {
-                    panic!("transaction status should be Pending instead of {:?}", e);
+                    panic!("transaction status should be Pending instead of {e:?}");
                 },
             }
         }
@@ -4602,7 +4575,7 @@ mod test {
                     assert_eq!(txn_status, TransactionStatus::Pending);
                 },
                 e => {
-                    panic!("transaction status should be Pending instead of {:?}", e);
+                    panic!("transaction status should be Pending instead of {e:?}");
                 },
             }
         }
@@ -4620,8 +4593,7 @@ mod test {
                 Ok(txn_status) => {
                     if tx.minimum_block_size() > TEST_PROTOCOL_MAX_BLOCK_SIZE {
                         tracing::debug!(
-                            "In test_get_txn_status(), txn_status of large tx = {:?}",
-                            txn_status
+                            "In test_get_txn_status(), txn_status of large tx = {txn_status:?}"
                         );
                         matches!(txn_status, TransactionStatus::Rejected { .. });
                         if let TransactionStatus::Rejected { reason } = txn_status {
@@ -4632,10 +4604,7 @@ mod test {
                     }
                 },
                 e => {
-                    panic!(
-                        "transaction status should be a valid status instead of {:?}",
-                        e
-                    );
+                    panic!("transaction status should be a valid status instead of {e:?}");
                 },
             }
         }
@@ -4649,7 +4618,7 @@ mod test {
                     .await
                 {
                     Err(err) => {
-                        panic!("Expected a result, but got a error {:?}", err);
+                        panic!("Expected a result, but got a error {err:?}");
                     },
                     _ => {
                         // This is expected
@@ -4661,10 +4630,7 @@ mod test {
                         assert_eq!(txn_status, TransactionStatus::Pending);
                     },
                     e => {
-                        panic!(
-                            "transaction status should be a valid status instead of {:?}",
-                            e
-                        );
+                        panic!("transaction status should be a valid status instead of {e:?}");
                     },
                 }
             }
@@ -4703,7 +4669,7 @@ mod test {
                     assert_eq!(txn_status, TransactionStatus::Unknown);
                 },
                 e => {
-                    panic!("transaction status should be Unknown instead of {:?}", e);
+                    panic!("transaction status should be Unknown instead of {e:?}");
                 },
             }
         }
