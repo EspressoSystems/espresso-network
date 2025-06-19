@@ -240,9 +240,6 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             Contract::StakeTableV2 => {
                 let use_multisig = self.use_multisig;
                 let dry_run = self.dry_run;
-                let multisig = self.multisig.context(
-                    "Multisig address must be set when upgrading to --use-multisig flag is present",
-                )?;
                 let multisig_pauser = self.multisig_pauser.context(
                     "Multisig pauser address must be set for the upgrade to StakeTableV2",
                 )?;
@@ -252,7 +249,9 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         provider,
                         contracts,
                         self.rpc_url.clone(),
-                        multisig,
+                        self.multisig.context(
+                            "Multisig address must be set when upgrading to --use-multisig flag is present",
+                        )?,
                         multisig_pauser,
                         Some(dry_run),
                     )
