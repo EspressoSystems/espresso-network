@@ -6,7 +6,12 @@
 
 /// Task for doing bootstraps at a regular interval
 pub mod bootstrap;
-use std::{collections::HashMap, marker::PhantomData, num::NonZeroUsize, time::Duration};
+use std::{
+    collections::HashMap,
+    marker::PhantomData,
+    num::NonZeroUsize,
+    time::{Duration, Instant},
+};
 
 /// a local caching layer for the DHT key value pairs
 use futures::{
@@ -66,6 +71,8 @@ pub struct DHTBehaviour<K: SignatureKey + 'static, D: DhtPersistentStorage> {
     pub peer_id: PeerId,
     /// replication factor
     pub replication_factor: NonZeroUsize,
+    /// The TTL for records
+    pub record_ttl: Duration,
     /// Sender to retry requests.
     retry_tx: Option<UnboundedSender<ClientRequest>>,
     /// Sender to the bootstrap task
@@ -111,7 +118,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
     }
     /// Create a new DHT behaviour
     #[must_use]
-    pub fn new(pid: PeerId, replication_factor: NonZeroUsize) -> Self {
+    pub fn new(pid: PeerId, replication_factor: NonZeroUsize, record_ttl: Duration) -> Self {
         // needed because otherwise we stay in client mode when testing locally
         // and don't publish keys stuff
         // e.g. dht just doesn't work. We'd need to add mdns and that doesn't seem worth it since
@@ -128,6 +135,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
             },
             in_progress_get_closest_peers: HashMap::default(),
             replication_factor,
+            record_ttl,
             retry_tx: None,
             bootstrap_tx: None,
             phantom: PhantomData,
@@ -262,14 +270,13 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
         let found = match self.in_progress_record_queries.get_mut(&id) {
             Some(query) => match record_results {
                 Ok(results) => match results {
-                    GetRecordOk::FoundRecord(record) => {
-                        // Only add the record if it has an expiration time
-                        if record.record.expires.is_some() {
-                            query.records.push(record.record);
-                            true
-                        } else {
-                            false
+                    GetRecordOk::FoundRecord(mut record) => {
+                        // If the record has no expiration, set it to the current time + the TTL
+                        if record.record.expires.is_none() {
+                            record.record.expires = Some(Instant::now() + self.record_ttl);
                         }
+                        query.records.push(record.record);
+                        true
                     },
                     GetRecordOk::FinishedWithNoAdditionalRecord {
                         cache_candidates: _,

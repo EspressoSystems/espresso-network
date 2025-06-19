@@ -351,6 +351,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 config
                     .replication_factor
                     .unwrap_or(NonZeroUsize::new(4).unwrap()),
+                kademlia_ttl,
             ),
             resend_tx: None,
         })
