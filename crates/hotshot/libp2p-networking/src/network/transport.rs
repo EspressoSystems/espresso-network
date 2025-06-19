@@ -46,7 +46,7 @@ pub struct ConsensusKeyAuthentication<
     /// The underlying transport we are wrapping
     pub inner: T,
 
-    /// A pre-signed message that we send to the remote peer for authentication
+    /// A pre-signed message that we (depending on if it's specified or not) send to the remote peer for authentication
     pub auth_message: Arc<Option<Vec<u8>>>,
 
     /// The (verified) map of consensus keys to peer IDs
@@ -64,7 +64,8 @@ impl<T: Transport, S: SignatureKey + 'static, C: StreamMuxer + Unpin>
     ConsensusKeyAuthentication<T, S, C>
 {
     /// Create a new `ConsensusKeyAuthentication` transport that wraps the given transport
-    /// and authenticates connections against the stake table.
+    /// and authenticates connections against the stake table. If the auth message is `None`,
+    /// the authentication is disabled.
     pub fn new(
         inner: T,
         auth_message: Option<Vec<u8>>,
@@ -85,14 +86,10 @@ impl<T: Transport, S: SignatureKey + 'static, C: StreamMuxer + Unpin>
     /// - If we fail to write the message to the stream
     pub async fn authenticate_with_remote_peer<W: AsyncWrite + Unpin>(
         stream: &mut W,
-        auth_message: Arc<Option<Vec<u8>>>,
+        auth_message: &[u8],
     ) -> AnyhowResult<()> {
-        // If we have an auth message, send it to the remote peer, prefixed with
-        // the message length
-        if let Some(auth_message) = auth_message.as_ref() {
-            // Write the length-delimited message
-            write_length_delimited(stream, auth_message).await?;
-        }
+        // Write the length-delimited message
+        write_length_delimited(stream, &auth_message).await?;
 
         Ok(())
     }
@@ -173,38 +170,41 @@ impl<T: Transport, S: SignatureKey + 'static, C: StreamMuxer + Unpin>
                     poll_fn(|cx| stream.as_connection().poll_inbound_unpin(cx)).await?
                 };
 
-                if outgoing {
-                    // If the connection is outgoing, authenticate with the remote peer first
-                    Self::authenticate_with_remote_peer(&mut substream, auth_message)
+                // Conditionally authenticate depending on whether we specified an auth message
+                if let Some(auth_message) = auth_message.as_ref() {
+                    if outgoing {
+                        // If the connection is outgoing, authenticate with the remote peer first
+                        Self::authenticate_with_remote_peer(&mut substream, auth_message)
+                            .await
+                            .map_err(|e| {
+                                warn!("Failed to authenticate with remote peer: {e:?}");
+                                IoError::other(e)
+                            })?;
+
+                        // Verify the remote peer's authentication
+                        Self::verify_peer_authentication(
+                            &mut substream,
+                            stream.as_peer_id(),
+                            consensus_key_to_pid_map,
+                        )
                         .await
                         .map_err(|e| {
-                            warn!("Failed to authenticate with remote peer: {e:?}");
+                            warn!("Failed to verify remote peer: {e:?}");
                             IoError::other(e)
                         })?;
-
-                    // Verify the remote peer's authentication
-                    Self::verify_peer_authentication(
-                        &mut substream,
-                        stream.as_peer_id(),
-                        consensus_key_to_pid_map,
-                    )
-                    .await
-                    .map_err(|e| {
-                        warn!("Failed to verify remote peer: {e:?}");
-                        IoError::other(e)
-                    })?;
-                } else {
-                    // If it is incoming, verify the remote peer's authentication first
-                    Self::verify_peer_authentication(
-                        &mut substream,
-                        stream.as_peer_id(),
-                        consensus_key_to_pid_map,
-                    )
-                    .await
-                    .map_err(|e| {
-                        warn!("Failed to verify remote peer: {e:?}");
-                        IoError::other(e)
-                    })?;
+                    } else {
+                        // If it is incoming, verify the remote peer's authentication first
+                        Self::verify_peer_authentication(
+                            &mut substream,
+                            stream.as_peer_id(),
+                            consensus_key_to_pid_map,
+                        )
+                        .await
+                        .map_err(|e| {
+                            warn!("Failed to verify remote peer: {e:?}");
+                            IoError::other(e)
+                        })?;
+                    }
 
                     // Authenticate with the remote peer
                     Self::authenticate_with_remote_peer(&mut substream, auth_message)
