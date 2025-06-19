@@ -18,9 +18,8 @@ alloy = { workspace = true }
 anyhow = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
-bincode = { workspace = true }
-parking_lot = { workspace = true }
 bimap = "0.6"
+bincode = { workspace = true }
 blake3 = { workspace = true }
 cbor4ii = { workspace = true }
 delegate = "0.13"
@@ -32,6 +31,7 @@ lazy_static = { workspace = true }
 libp2p = { workspace = true, features = ["tokio"] }
 libp2p-identity = { workspace = true }
 libp2p-swarm-derive = { workspace = true }
+parking_lot = { workspace = true }
 pin-project = "1"
 rand = { workspace = true }
 serde = { workspace = true }
