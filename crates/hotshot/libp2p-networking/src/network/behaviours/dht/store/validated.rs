@@ -74,7 +74,7 @@ where
             if record_value.validate(&record_key) {
                 // Store the record
                 if let Err(err) = self.store.put(record.clone()) {
-                    warn!("Failed to store record: {:?}", err);
+                    warn!("Failed to store record: {err:?}");
                     return Err(Error::MaxRecords);
                 }
             } else {

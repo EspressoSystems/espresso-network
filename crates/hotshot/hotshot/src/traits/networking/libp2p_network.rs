@@ -367,8 +367,7 @@ pub fn derive_libp2p_multiaddr(addr: &String) -> anyhow::Result<Multiaddr> {
             // If it did, warn the user
             if failed {
                 warn!(
-                    "Failed to resolve domain name {}, assuming it has not yet been provisioned",
-                    host
+                    "Failed to resolve domain name {host}, assuming it has not yet been provisioned"
                 );
             }
 
@@ -378,7 +377,7 @@ pub fn derive_libp2p_multiaddr(addr: &String) -> anyhow::Result<Multiaddr> {
 
     // Convert the multiaddr string to a `Multiaddr`
     multiaddr_string.parse().with_context(|| {
-        format!("Failed to convert Multiaddr string to Multiaddr: {multiaddr_string}",)
+        format!("Failed to convert Multiaddr string to Multiaddr: {multiaddr_string}")
     })
 }
 
@@ -598,13 +597,13 @@ impl<T: NodeType> Libp2pNetwork<T> {
                 #[allow(clippy::cast_possible_truncation)]
                 const THRESHOLD: u64 = (LOOK_AHEAD as f64 * 0.8) as u64;
 
-                trace!("Performing lookup for peer {:?}", pk);
+                trace!("Performing lookup for peer {pk}");
 
                 // only run if we are not too close to the next view number
                 if latest_seen_view.load(Ordering::Relaxed) + THRESHOLD <= *view_number {
                     // look up
                     if let Err(err) = handle.lookup_node(&pk.to_bytes(), dht_timeout).await {
-                        warn!("Failed to perform lookup for key {:?}: {}", pk, err);
+                        warn!("Failed to perform lookup for key {pk}: {err}");
                     };
                 }
             }
@@ -652,7 +651,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
 
                 // Wait for the network to connect to at least 1 peer
                 if let Err(e) = handle.wait_to_connect(1, id).await {
-                    error!("Failed to connect to peers: {:?}", e);
+                    error!("Failed to connect to peers: {e:?}");
                     return Err::<(), NetworkError>(e);
                 }
                 info!("Connected to required number of peers");
@@ -821,7 +820,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
                         boxed_sync(async move {
                             if let Err(e) = handle_2.gossip_no_serialize(topic_2, msg) {
                                 metrics_2.num_failed_messages.add(1);
-                                warn!("Failed to broadcast to libp2p: {:?}", e);
+                                warn!("Failed to broadcast to libp2p: {e:?}");
                             }
                         })
                     }),
@@ -917,7 +916,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
                         boxed_sync(async move {
                             if let Err(e) = handle_2.direct_request_no_serialize(pid, msg) {
                                 metrics_2.num_failed_messages.add(1);
-                                warn!("Failed to broadcast to libp2p: {:?}", e);
+                                warn!("Failed to broadcast to libp2p: {e:?}");
                             }
                         })
                     }),
@@ -998,10 +997,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         let future_leader = match membership.leader(future_view).await {
             Ok(l) => l,
             Err(e) => {
-                return tracing::info!(
-                    "Failed to calculate leader for view {:?}: {e}",
-                    future_view
-                );
+                return tracing::info!("Failed to calculate leader for view {future_view}: {e}");
             },
         };
 

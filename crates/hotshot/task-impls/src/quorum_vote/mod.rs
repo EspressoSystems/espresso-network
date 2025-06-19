@@ -221,21 +221,21 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
 
         let Some(vid_share) = vid_share else {
             bail!(error!(
-                "We don't have the VID share for this view {:?}, but we should, because the vote dependencies have completed.",
+                "We don't have the VID share for this view {}, but we should, because the vote dependencies have completed.",
                 self.view_number
             ));
         };
 
         let Some(leaf) = leaf else {
             bail!(error!(
-                "We don't have the leaf for this view {:?}, but we should, because the vote dependencies have completed.",
+                "We don't have the leaf for this view {}, but we should, because the vote dependencies have completed.",
                 self.view_number
             ));
         };
 
         let Some(da_cert) = da_cert else {
             bail!(error!(
-                "We don't have the DA cert for this view {:?}, but we should, because the vote dependencies have completed.",
+                "We don't have the DA cert for this view {}, but we should, because the vote dependencies have completed.",
                 self.view_number
             ));
         };
@@ -352,7 +352,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
             .await?;
 
         let duration = now.elapsed();
-        tracing::info!("membership_for_epoch time: {:?}", duration);
+        tracing::info!("membership_for_epoch time: {duration:?}");
 
         let is_vote_leaf_extended = is_last_block(leaf.height(), self.epoch_height);
         let is_vote_epoch_root = is_epoch_root(leaf.height(), self.epoch_height);
@@ -488,11 +488,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 };
                 if event_view == view_number {
                     tracing::debug!(
-                        "Vote dependency {:?} completed for view {:?}, my id is {:?}",
-                        dependency_type,
-                        view_number,
-                        id,
-                    );
+                        "Vote dependency {dependency_type:?} completed for view {view_number}, my id is {id}");
                     return true;
                 }
                 false
@@ -511,7 +507,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
         event: Arc<HotShotEvent<TYPES>>,
     ) {
         tracing::debug!(
-            "Attempting to make dependency task for view {view_number:?} and event {event:?}"
+            "Attempting to make dependency task for view {view_number} and event {event:?}"
         );
 
         if self.vote_dependencies.contains_key(&view_number) {
@@ -576,7 +572,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             for view in *self.latest_voted_view..(*new_view) {
                 if let Some(dependency) = self.vote_dependencies.remove(&TYPES::View::new(view)) {
                     dependency.abort();
-                    tracing::debug!("Vote dependency removed for view {view:?}");
+                    tracing::debug!("Vote dependency removed for view {view}");
                 }
             }
 

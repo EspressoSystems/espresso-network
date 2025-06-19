@@ -127,7 +127,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 break address;
             }
         };
-        info!("Libp2p listening on {:?}", addr);
+        info!("Libp2p listening on {addr:?}");
         Ok(addr)
     }
 
@@ -360,7 +360,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 error!("Error publishing to DHT: {e:?} for peer {:?}", self.peer_id);
             },
             Ok(qid) => {
-                debug!("Published record to DHT with qid {:?}", qid);
+                debug!("Published record to DHT with qid {qid:?}");
                 let query = KadPutQuery {
                     progress: DHTProgress::InProgress(qid),
                     ..query
@@ -472,7 +472,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                         contents,
                         retry_count,
                     } => {
-                        debug!("Sending direct request to {:?}", pid);
+                        debug!("Sending direct request to {pid:?}");
                         let id = behaviour.add_direct_request(pid, contents.clone());
                         let req = DMRequest {
                             peer_id: pid,
@@ -490,7 +490,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                     },
                     ClientRequest::Prune(pid) => {
                         if self.swarm.disconnect_peer_id(pid).is_err() {
-                            warn!("Could not disconnect from {:?}", pid);
+                            warn!("Could not disconnect from {pid:?}");
                         }
                     },
                 }
@@ -525,13 +525,11 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             } => {
                 if num_established > ESTABLISHED_LIMIT {
                     error!(
-                        "Num concurrent connections to a single peer exceeding {:?} at {:?}!",
-                        ESTABLISHED_LIMIT, num_established
+                        "Num concurrent connections to a single peer exceeding {ESTABLISHED_LIMIT:?} at {num_established:?}!"
                     );
                 } else {
                     debug!(
-                        "Connection established with {:?} at {:?} with {:?} concurrent dial errors",
-                        peer_id, endpoint, concurrent_dial_errors
+                        "Connection established with {peer_id:?} at {endpoint:?} with {concurrent_dial_errors:?} concurrent dial errors"
                     );
                 }
 
@@ -549,14 +547,10 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             } => {
                 if num_established > ESTABLISHED_LIMIT_UNWR {
                     error!(
-                        "Num concurrent connections to a single peer exceeding {:?} at {:?}!",
-                        ESTABLISHED_LIMIT, num_established
+                        "Num concurrent connections to a single peer exceeding {ESTABLISHED_LIMIT:?} at {num_established:?}!"
                     );
                 } else {
-                    debug!(
-                        "Connection closed with {:?} at {:?} due to {:?}",
-                        peer_id, endpoint, cause
-                    );
+                    debug!("Connection closed with {peer_id:?} at {endpoint:?} due to {cause:?}");
                 }
 
                 // Send the number of connected peers to the client
@@ -568,7 +562,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 peer_id,
                 connection_id: _,
             } => {
-                debug!("Attempting to dial {:?}", peer_id);
+                debug!("Attempting to dial {peer_id:?}");
             },
             SwarmEvent::ListenerClosed {
                 listener_id: _,
@@ -627,15 +621,15 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                             message,
                         } => Some(NetworkEvent::GossipMsg(message.data)),
                         GossipEvent::Subscribed { peer_id, topic } => {
-                            debug!("Peer {:?} subscribed to topic {:?}", peer_id, topic);
+                            debug!("Peer {peer_id:?} subscribed to topic {topic:?}");
                             None
                         },
                         GossipEvent::Unsubscribed { peer_id, topic } => {
-                            debug!("Peer {:?} unsubscribed from topic {:?}", peer_id, topic);
+                            debug!("Peer {peer_id:?} unsubscribed from topic {topic:?}");
                             None
                         },
                         GossipEvent::GossipsubNotSupported { peer_id } => {
-                            warn!("Peer {:?} does not support gossipsub", peer_id);
+                            warn!("Peer {peer_id:?} does not support gossipsub");
                             None
                         },
                     },
@@ -654,13 +648,12 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                                     error,
                                 } => {
                                     warn!(
-                                        "AutoNAT Probe failed to peer {:?} with error: {:?}",
-                                        peer, error
+                                        "AutoNAT Probe failed to peer {peer:?} with error: {error:?}"
                                     );
                                 },
                             },
                             autonat::Event::StatusChanged { old, new } => {
-                                debug!("AutoNAT Status changed. Old: {:?}, New: {:?}", old, new);
+                                debug!("AutoNAT Status changed. Old: {old:?}, New: {new:?}");
                             },
                         };
                         None
@@ -679,7 +672,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 peer_id,
                 error,
             } => {
-                warn!("Outgoing connection error to {:?}: {:?}", peer_id, error);
+                warn!("Outgoing connection error to {peer_id:?}: {error:?}");
             },
             SwarmEvent::IncomingConnectionError {
                 connection_id: _,
@@ -687,13 +680,13 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 send_back_addr: _,
                 error,
             } => {
-                warn!("Incoming connection error: {:?}", error);
+                warn!("Incoming connection error: {error:?}");
             },
             SwarmEvent::ListenerError {
                 listener_id: _,
                 error,
             } => {
-                warn!("Listener error: {:?}", error);
+                warn!("Listener error: {error:?}");
             },
             SwarmEvent::ExternalAddrConfirmed { address } => {
                 let my_id = *self.swarm.local_peer_id();
@@ -709,7 +702,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                     .add_address(&peer_id, address.clone());
             },
             _ => {
-                debug!("Unhandled swarm event {:?}", event);
+                debug!("Unhandled swarm event {event:?}");
             },
         }
         Ok(())

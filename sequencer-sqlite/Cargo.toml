@@ -8,7 +8,8 @@ edition = "2021"
 [features]
 fee = ["sequencer/fee"]
 pos = ["sequencer/pos"]
-default = ["embedded-db", "fee", "pos"]
+drb-and-header = ["sequencer/drb-and-header"]
+default = ["embedded-db", "fee", "pos", "drb-and-header"]
 sqlite-unbundled = ["sequencer/sqlite-unbundled"]
 embedded-db = ["sequencer/embedded-db"]
 

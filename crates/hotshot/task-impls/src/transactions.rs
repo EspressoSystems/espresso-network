@@ -120,7 +120,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
         let _version = match self.upgrade_lock.version(block_view).await {
             Ok(v) => v,
             Err(e) => {
-                tracing::error!("Failed to calculate version: {:?}", e);
+                tracing::error!("Failed to calculate version: {e:?}");
                 return None;
             },
         };
@@ -251,7 +251,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
         version: Version,
     ) {
         // If we couldn't get a block, send an empty block
-        tracing::info!("Failed to get a block for view {block_view:?}, proposing empty block");
+        tracing::info!("Failed to get a block for view {block_view}, proposing empty block");
 
         // Increment the metric for number of empty blocks proposed
         self.consensus
@@ -268,11 +268,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
         {
             Ok(epoch_stake_table) => epoch_stake_table.total_nodes().await,
             Err(e) => {
-                tracing::warn!(
-                    "Failed to get num_storage_nodes for epoch {:?}: {}",
-                    block_epoch,
-                    e
-                );
+                tracing::warn!("Failed to get num_storage_nodes for epoch {block_epoch:?}: {e}");
                 return;
             },
         };
@@ -349,9 +345,9 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                 ensure!(
                     *view > *self.cur_view && *epoch >= self.cur_epoch,
                     debug!(
-                      "Received a view change to an older view and epoch: tried to change view to {:?}\
-                      and epoch {:?} though we are at view {:?} and epoch {:?}",
-                        view, epoch, self.cur_view, self.cur_epoch
+                      "Received a view change to an older view and epoch: tried to change view to {view}\
+                      and epoch {epoch:?} though we are at view {} and epoch {:?}",
+                          self.cur_view, self.cur_epoch
                     )
                 );
                 self.cur_view = view;
