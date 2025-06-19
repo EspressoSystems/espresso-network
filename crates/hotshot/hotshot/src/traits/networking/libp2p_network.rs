@@ -435,7 +435,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
 
         let replication_factor = NonZeroUsize::new(min(
             default_replication_factor.get(),
-            config.config.num_nodes_with_stake.get() * 2 / 3,
+            config.config.num_nodes_with_stake.get() / 3,
         ))
         .with_context(|| "Failed to calculate replication factor")?;
 
