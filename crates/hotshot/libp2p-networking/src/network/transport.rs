@@ -89,7 +89,7 @@ impl<T: Transport, S: SignatureKey + 'static, C: StreamMuxer + Unpin>
         auth_message: &[u8],
     ) -> AnyhowResult<()> {
         // Write the length-delimited message
-        write_length_delimited(stream, &auth_message).await?;
+        write_length_delimited(stream, auth_message).await?;
 
         Ok(())
     }
