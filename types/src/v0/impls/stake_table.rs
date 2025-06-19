@@ -2483,7 +2483,7 @@ mod tests {
         });
         assert!(state.apply_event(event).is_ok());
         let val = state.validators.get(&account).unwrap();
-        assert!(val.delegators.get(&delegator).is_none());
+        assert!(!val.delegators.contains_key(&delegator));
     }
 
     #[test]
