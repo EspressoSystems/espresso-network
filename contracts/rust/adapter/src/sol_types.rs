@@ -46,6 +46,7 @@ pub use crate::bindings::{
         BN254::G2Point as G2PointSol,
     },
     timelock::Timelock,
+    tokentimelock::TokenTimelock,
 };
 
 // For types that we need to interact with some functions but their bindings are not generated
