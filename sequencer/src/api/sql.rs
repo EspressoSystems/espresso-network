@@ -443,7 +443,7 @@ async fn load_chain_config<Mode: TransactionMode>(
 /// range of leaves, and the STF requires all associated data to be present in the `ValidatedState`;
 /// otherwise, it will attempt to trigger catchup itself.
 #[tracing::instrument(skip(instance, tx))]
-async fn reconstruct_state<Mode: TransactionMode>(
+pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
     instance: &NodeState,
     tx: &mut Transaction<Mode>,
     from_height: u64,
@@ -496,9 +496,7 @@ async fn reconstruct_state<Mode: TransactionMode>(
     // Add in all the accounts we will need to replay any of the headers, to ensure that we don't
     // need to do catchup recursively.
     tracing::info!(
-        "reconstructing fee accounts state for from height {} to view {}",
-        from_height,
-        to_view
+        "reconstructing fee accounts state for from height {from_height} to view {to_view}"
     );
 
     let dependencies =
@@ -515,9 +513,7 @@ async fn reconstruct_state<Mode: TransactionMode>(
     );
 
     tracing::info!(
-        "reconstructing reward accounts for from height {} to view {}",
-        from_height,
-        to_view
+        "reconstructing reward accounts for from height {from_height} to view {to_view}"
     );
 
     let mut reward_accounts = reward_accounts.iter().copied().collect::<HashSet<_>>();
@@ -686,7 +682,7 @@ async fn reward_header_dependencies(
                 coordinator
                     .wait_for_catchup(proposal_epoch)
                     .await
-                    .context(format!("failed to catchup for epoch={proposal_epoch:?}"))?
+                    .context(format!("failed to catchup for epoch={proposal_epoch}"))?
             },
         };
 
@@ -728,14 +724,14 @@ where
 }
 
 #[cfg(any(test, feature = "testing"))]
-mod impl_testable_data_source {
+pub(crate) mod impl_testable_data_source {
 
     use hotshot_query_service::data_source::storage::sql::testing::TmpDb;
 
     use super::*;
     use crate::api::{self, data_source::testing::TestableSequencerDataSource};
 
-    fn tmp_options(db: &TmpDb) -> Options {
+    pub fn tmp_options(db: &TmpDb) -> Options {
         #[cfg(not(feature = "embedded-db"))]
         {
             let opt = crate::persistence::sql::PostgresOptions {

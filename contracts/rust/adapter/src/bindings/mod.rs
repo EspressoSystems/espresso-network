@@ -5,6 +5,7 @@
 //! These files may be overwritten by the codegen system at any time.
 pub mod r#erc1967proxy;
 pub mod r#esptoken;
+pub mod r#esptokenv2;
 pub mod r#feecontract;
 pub mod r#iplonkverifier;
 pub mod r#lightclient;

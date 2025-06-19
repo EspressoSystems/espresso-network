@@ -104,9 +104,9 @@ pub enum NetworkError {
     #[error("The request was cancelled before it could be fulfilled")]
     RequestCancelled,
 
-    /// The network was not ready yet
-    #[error("The network was not ready yet")]
-    NotReadyYet,
+    /// This node does not have any peers yet
+    #[error("This node does not have any peers yet")]
+    NoPeersYet,
 
     /// Failed to look up a node on the network
     #[error("Node lookup failed: {0}")]
@@ -136,7 +136,7 @@ pub struct DataRequest<TYPES: NodeType> {
 }
 
 /// Underlying data request
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub enum RequestKind<TYPES: NodeType> {
     /// Request VID data by our key and the VID commitment
     Vid(TYPES::View, TYPES::SignatureKey),
@@ -144,6 +144,16 @@ pub enum RequestKind<TYPES: NodeType> {
     DaProposal(TYPES::View),
     /// Request for quorum proposal for a view
     Proposal(TYPES::View),
+}
+
+impl<TYPES: NodeType> std::fmt::Debug for RequestKind<TYPES> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RequestKind::Vid(view, key) => write!(f, "Vid({view:?}, {key})"),
+            RequestKind::DaProposal(view) => write!(f, "DaProposal({view:?})"),
+            RequestKind::Proposal(view) => write!(f, "Proposal({view:?})"),
+        }
+    }
 }
 
 /// A response for a request.  `SequencingMessage` is the same as other network messages

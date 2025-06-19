@@ -45,6 +45,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     light_client::StateKeyPair,
     signature_key::BLSPubKey,
+    storage_metrics::StorageMetricsValue,
     traits::{election::Membership, network::Topic},
     HotShotConfig, PeerConfig,
 };
@@ -219,6 +220,8 @@ async fn init_consensus(
         epoch_height: 0,
         epoch_start_block: 0,
         stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
+        drb_difficulty: 0,
+        drb_upgrade_difficulty: 0,
     };
 
     let nodes = join_all(priv_keys.into_iter().zip(data_sources).enumerate().map(
@@ -265,6 +268,7 @@ async fn init_consensus(
                     .unwrap(),
                     ConsensusMetricsValue::new(&*data_source.populate_metrics()),
                     storage,
+                    StorageMetricsValue::new(&*data_source.populate_metrics()),
                 )
                 .await
                 .unwrap()

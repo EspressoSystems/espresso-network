@@ -4,10 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{
-    cmp::max,
-    collections::{BTreeMap, BTreeSet},
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use alloy::primitives::U256;
 use hotshot_types::{
@@ -43,6 +40,10 @@ pub struct Committee<T: NodeType> {
 
     /// The nodes on the committee and their stake, indexed by public key
     indexed_da_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T>>,
+
+    /// The first epoch which will be encountered. For testing, will panic if an epoch-carrying function is called
+    /// when first_epoch is None or is Some greater than that epoch.
+    first_epoch: Option<T::Epoch>,
 }
 
 impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
@@ -108,6 +109,7 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
             randomized_committee,
             indexed_stake_table,
             indexed_da_stake_table,
+            first_epoch: None,
         }
     }
 
@@ -207,26 +209,28 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
         self.da_stake_table.len()
     }
     /// Get the voting success threshold for the committee
-    fn success_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
-        U256::from(((self.stake_table.len() as u64 * 2) / 3) + 1)
+    fn success_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
+        ((self.total_stake(epoch) * U256::from(2)) / U256::from(3)) + U256::from(1)
     }
 
     /// Get the voting success threshold for the committee
-    fn da_success_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
-        U256::from(((self.da_stake_table.len() as u64 * 2) / 3) + 1)
+    fn da_success_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
+        ((self.total_da_stake(epoch) * U256::from(2)) / U256::from(3)) + U256::from(1)
     }
 
     /// Get the voting failure threshold for the committee
-    fn failure_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
-        U256::from(((self.stake_table.len() as u64) / 3) + 1)
+    fn failure_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
+        (self.total_stake(epoch) / U256::from(3)) + U256::from(1)
     }
 
     /// Get the voting upgrade threshold for the committee
-    fn upgrade_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
-        U256::from(max(
-            (self.stake_table.len() as u64 * 9) / 10,
-            ((self.stake_table.len() as u64 * 2) / 3) + 1,
-        ))
+    fn upgrade_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
+        let len = self.total_stake(epoch);
+
+        U256::max(
+            (len * U256::from(9)) / U256::from(10),
+            ((len * U256::from(2)) / U256::from(3)) + U256::from(1),
+        )
     }
 
     fn has_stake_table(&self, _epoch: TYPES::Epoch) -> bool {
@@ -237,4 +241,12 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
     }
 
     fn add_drb_result(&mut self, _epoch: <TYPES as NodeType>::Epoch, _drb_result: DrbResult) {}
+
+    fn set_first_epoch(&mut self, epoch: TYPES::Epoch, _initial_drb_result: DrbResult) {
+        self.first_epoch = Some(epoch);
+    }
+
+    fn first_epoch(&self) -> Option<TYPES::Epoch> {
+        self.first_epoch
+    }
 }

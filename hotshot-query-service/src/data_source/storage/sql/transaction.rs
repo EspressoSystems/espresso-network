@@ -565,18 +565,23 @@ where
         )
         .await?;
 
-        // Index the transactions in the block.
+        // Index the transactions and namespaces in the block.
         let mut rows = vec![];
         for (txn_ix, txn) in block.enumerate() {
-            let txn_ix =
-                serde_json::to_value(&txn_ix).context("failed to serialize transaction index")?;
-            rows.push((txn.commit().to_string(), height as i64, txn_ix));
+            let ns_id = block.header().namespace_id(&txn_ix.ns_index).unwrap();
+            rows.push((
+                txn.commit().to_string(),
+                height as i64,
+                txn_ix.ns_index.into(),
+                ns_id.into(),
+                txn_ix.position as i64,
+            ));
         }
         if !rows.is_empty() {
             self.upsert(
                 "transactions",
-                ["hash", "block_height", "idx"],
-                ["block_height", "idx"],
+                ["hash", "block_height", "ns_index", "ns_id", "position"],
+                ["block_height", "ns_id", "position"],
                 rows,
             )
             .await?;

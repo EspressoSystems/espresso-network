@@ -10,6 +10,7 @@ use alloy::{
     node_bindings::Anvil,
     primitives::{Address, Bytes, U256},
     providers::{Provider, ProviderBuilder, WalletProvider},
+    rpc::client::RpcClient,
     signers::{
         k256::ecdsa::SigningKey,
         local::{coins_bip39::English, LocalSigner, MnemonicBuilder},
@@ -304,6 +305,7 @@ async fn main() -> anyhow::Result<()> {
     let network_config = TestConfigBuilder::default()
         .epoch_height(epoch_height)
         .builder_port(builder_port)
+        .stake_table_capacity(STAKE_TABLE_CAPACITY_FOR_TEST)
         .state_relay_url(relay_server_url.clone())
         .l1_url(l1_url.clone())
         .l1_opt(l1_opt)
@@ -540,6 +542,7 @@ async fn main() -> anyhow::Result<()> {
         // init the prover config
         let prover_port = prover_port.unwrap_or_else(|| pick_unused_port().unwrap());
         prover_ports.push(prover_port);
+        let l1_rpc_client = RpcClient::new_http(url);
         let prover_config = StateProverConfig {
             relay_server: relay_server_url.clone(),
             update_interval,
@@ -547,7 +550,7 @@ async fn main() -> anyhow::Result<()> {
             sequencer_url: Url::parse(&format!("http://localhost:{sequencer_api_port}/")).unwrap(),
             port: Some(prover_port),
             stake_table_capacity: STAKE_TABLE_CAPACITY_FOR_TEST,
-            provider_endpoint: url.clone(),
+            l1_rpc_client,
             light_client_address: *lc_proxy_addr,
             signer: signer.clone(),
             blocks_per_epoch,

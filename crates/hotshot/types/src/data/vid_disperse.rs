@@ -6,13 +6,13 @@
 
 //! This module provides types for VID disperse related data structures.
 
-use std::{collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData};
+use std::{collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData, time::Duration};
 
 use alloy::primitives::U256;
 use hotshot_utils::anytrace::*;
 use jf_vid::{VidDisperse as JfVidDisperse, VidScheme};
 use serde::{Deserialize, Serialize};
-use tokio::task::spawn_blocking;
+use tokio::{task::spawn_blocking, time::Instant};
 
 use super::ns_table::parse_ns_table;
 use crate::{
@@ -107,7 +107,7 @@ impl<TYPES: NodeType> ADVZDisperse<TYPES> {
         view: TYPES::View,
         target_epoch: Option<TYPES::Epoch>,
         data_epoch: Option<TYPES::Epoch>,
-    ) -> Result<Self> {
+    ) -> Result<(Self, Duration)> {
         let num_nodes = membership
             .stake_table_for_epoch(target_epoch)
             .await?
@@ -116,14 +116,19 @@ impl<TYPES: NodeType> ADVZDisperse<TYPES> {
 
         let txns = payload.encode();
 
+        let now = Instant::now();
         let vid_disperse = spawn_blocking(move || advz_scheme(num_nodes).disperse(&txns))
             .await
             .wrap()
             .context(error!("Join error"))?
             .wrap()
-            .context(|err| error!("Failed to calculate VID disperse. Error: {}", err))?;
+            .context(|err| error!("Failed to calculate VID disperse. Error: {err}"))?;
+        let advz_scheme_duration = now.elapsed();
 
-        Ok(Self::from_membership(view, vid_disperse, membership, target_epoch, data_epoch).await)
+        Ok((
+            Self::from_membership(view, vid_disperse, membership, target_epoch, data_epoch).await,
+            advz_scheme_duration,
+        ))
     }
 
     /// Returns the payload length in bytes.
@@ -369,7 +374,7 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
         let payload_byte_len = shares[0].payload_byte_len();
         let shares = membership
             .coordinator
-            .membership_for_epoch(target_epoch)
+            .stake_table_for_epoch(target_epoch)
             .await
             .unwrap()
             .stake_table()
@@ -405,8 +410,8 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
         target_epoch: Option<TYPES::Epoch>,
         data_epoch: Option<TYPES::Epoch>,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-    ) -> Result<Self> {
-        let target_mem = membership.membership_for_epoch(target_epoch).await?;
+    ) -> Result<(Self, Duration)> {
+        let target_mem = membership.stake_table_for_epoch(target_epoch).await?;
         let stake_table = target_mem.stake_table().await;
         let approximate_weights = approximate_weights(&stake_table);
 
@@ -418,6 +423,8 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
 
         let ns_table = parse_ns_table(num_txns, &metadata.encode());
         let ns_table_clone = ns_table.clone();
+
+        let now = Instant::now();
         let (commit, shares) = spawn_blocking(move || {
             AvidMScheme::ns_disperse(
                 &avidm_param,
@@ -430,18 +437,22 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
         .wrap()
         .context(error!("Join error"))?
         .wrap()
-        .context(|err| error!("Failed to calculate VID disperse. Error: {}", err))?;
+        .context(|err| error!("Failed to calculate VID disperse. Error: {err}"))?;
+        let ns_disperse_duration = now.elapsed();
 
-        Ok(Self::from_membership(
-            view,
-            commit,
-            &shares,
-            common,
-            &target_mem,
-            target_epoch,
-            data_epoch,
-        )
-        .await)
+        Ok((
+            Self::from_membership(
+                view,
+                commit,
+                &shares,
+                common,
+                &target_mem,
+                target_epoch,
+                data_epoch,
+            )
+            .await,
+            ns_disperse_duration,
+        ))
     }
 
     /// Returns the payload length in bytes.

@@ -1,6 +1,8 @@
 base_version = "0.3"
 upgrade_version = "0.3"
+genesis_version = "0.1"
 epoch_height = 3000
+drb_difficulty = 10
 epoch_start_block = 3160636
 
 [stake_table]

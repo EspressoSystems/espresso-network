@@ -143,7 +143,7 @@ pub async fn setup_stake_table_contract_for_test(
             commission,
             validator_address,
             bls_key_pair,
-            state_key_pair.ver_key(),
+            state_key_pair,
         )
         .await?;
         assert!(receipt.status());
@@ -276,6 +276,7 @@ pub async fn stake_for_demo(
         config.signer.mnemonic.clone().unwrap(),
         config.signer.account_index.unwrap(),
         config.rpc_url.clone(),
+        /* polling_interval */ None,
     );
 
     tracing::info!(

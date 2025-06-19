@@ -52,7 +52,7 @@ fn assert_eq_generic_err(err: BuildError, expected_err: Error<TestTypes>) {
     let BuildError::Error(expected_err_str) = expected_err.into() else {
         panic!("Unexpected conversion of Error to BuildError");
     };
-    println!("{:#?}", err);
+    println!("{err:#?}");
     let BuildError::Error(err_str) = err else {
         panic!("Unexpected BuildError by builder");
     };

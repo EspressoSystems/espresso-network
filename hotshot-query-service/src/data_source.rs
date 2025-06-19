@@ -255,7 +255,7 @@ pub mod availability_tests {
             }
 
             for (j, txn) in block.enumerate() {
-                tracing::info!("looking up transaction {i},{j}");
+                tracing::info!("looking up transaction {i},{j:?}");
 
                 // We should be able to look up the transaction by hash unless it is a duplicate.
                 // For duplicate transactions, this function returns the index of the first
@@ -266,14 +266,14 @@ pub mod availability_tests {
                 // available locally.
                 let ix = seen_transactions
                     .entry(txn.commit())
-                    .or_insert((i as u64, j));
+                    .or_insert((i as u64, j.clone()));
                 if let Ok(tx_data) = ds.get_transaction(txn.commit()).await.try_resolve() {
                     assert_eq!(tx_data.transaction(), &txn);
                     assert_eq!(tx_data.block_height(), ix.0);
-                    assert_eq!(tx_data.index(), ix.1 as u64);
+                    assert_eq!(tx_data.index(), ix.1.position as u64);
                 } else {
                     tracing::warn!(
-                        "skipping transaction index check for missing transaction {j} {txn:?}"
+                        "skipping transaction index check for missing transaction {j:?} {txn:?}"
                     );
                     // At least check that _some_ transaction can be fetched.
                     ds.get_transaction(txn.commit()).await.await;
@@ -775,16 +775,17 @@ pub mod node_tests {
     };
     use hotshot_types::{
         data::{vid_commitment, VidCommitment, VidShare},
-        traits::{block_contents::EncodeBytes, node_implementation::Versions},
+        traits::{
+            block_contents::{BlockHeader, EncodeBytes},
+            node_implementation::Versions,
+        },
         vid::advz::{advz_scheme, ADVZScheme},
     };
     use jf_vid::VidScheme;
     use vbs::version::StaticVersionType;
 
     use crate::{
-        availability::{
-            BlockInfo, BlockQueryData, LeafQueryData, QueryableHeader, VidCommonQueryData,
-        },
+        availability::{BlockInfo, BlockQueryData, LeafQueryData, VidCommonQueryData},
         data_source::{
             storage::{NodeStorage, UpdateAvailabilityStorage},
             update::Transaction,
@@ -798,6 +799,10 @@ pub mod node_tests {
         types::HeightIndexed,
         Header, VidCommon,
     };
+
+    fn block_header_timestamp(header: &Header<MockTypes>) -> u64 {
+        <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(header)
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     pub async fn test_sync_status<D: TestableDataSource>()
@@ -991,6 +996,7 @@ pub mod node_tests {
                 block_number: i,
                 payload_commitment,
                 timestamp: i,
+                timestamp_millis: i * 1_000,
                 builder_commitment:
                     <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(
                         &payload, &metadata,
@@ -1232,7 +1238,9 @@ pub mod node_tests {
             let leaf = leaves.next().await.unwrap();
             let header = leaf.header().clone();
             if let Some(last_timestamp) = test_blocks.last_mut() {
-                if last_timestamp[0].timestamp() == header.timestamp() {
+                if <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(&last_timestamp[0])
+                    == <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(&header)
+                {
                     last_timestamp.push(header);
                 } else {
                     test_blocks.push(vec![header]);
@@ -1249,7 +1257,7 @@ pub mod node_tests {
                 let mut prev = res.prev.as_ref();
                 if let Some(prev) = prev {
                     if check_prev {
-                        assert!(prev.timestamp() < start);
+                        assert!(block_header_timestamp(prev) < start);
                     }
                 } else {
                     // `prev` can only be `None` if the first block in the window is the genesis
@@ -1257,18 +1265,21 @@ pub mod node_tests {
                     assert_eq!(res.from().unwrap(), 0);
                 };
                 for header in &res.window {
-                    assert!(start <= header.timestamp());
-                    assert!(header.timestamp() < end);
+                    assert!(start <= block_header_timestamp(header));
+                    assert!(block_header_timestamp(header) < end);
                     if let Some(prev) = prev {
-                        assert!(prev.timestamp() <= header.timestamp());
+                        assert!(
+                            <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(prev)
+                                <= <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(header)
+                        );
                     }
                     prev = Some(header);
                 }
                 if let Some(next) = &res.next {
-                    assert!(next.timestamp() >= end);
+                    assert!(<TestBlockHeader as BlockHeader<MockTypes>>::timestamp(next) >= end);
                     // If there is a `next`, there must be at least one previous block (either `prev`
                     // itself or the last block if the window is nonempty), so we can `unwrap` here.
-                    assert!(next.timestamp() >= prev.unwrap().timestamp());
+                    assert!(block_header_timestamp(next) >= block_header_timestamp(prev.unwrap()));
                 }
             };
 
@@ -1286,7 +1297,7 @@ pub mod node_tests {
         };
 
         // Case 0: happy path. All blocks are available, including prev and next.
-        let start = test_blocks[1][0].timestamp();
+        let start = <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(&test_blocks[1][0]);
         let end = start + 1;
         let res = get_window(start, end).await;
         assert_eq!(res.prev.unwrap(), *test_blocks[0].last().unwrap());
@@ -1295,14 +1306,14 @@ pub mod node_tests {
 
         // Case 1: no `prev`, start of window is before genesis.
         let start = 0;
-        let end = test_blocks[0][0].timestamp() + 1;
+        let end = <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(&test_blocks[0][0]) + 1;
         let res = get_window(start, end).await;
         assert_eq!(res.prev, None);
         assert_eq!(res.window, test_blocks[0]);
         assert_eq!(res.next.unwrap(), test_blocks[1][0]);
 
         // Case 2: no `next`, end of window is after the most recently sequenced block.
-        let start = test_blocks[2][0].timestamp();
+        let start = <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(&test_blocks[2][0]);
         let end = i64::MAX as u64;
         let res = get_window(start, end).await;
         assert_eq!(res.prev.unwrap(), *test_blocks[1].last().unwrap());
@@ -1344,7 +1355,7 @@ pub mod node_tests {
         assert_eq!(more2.window[..more.window.len()], more.window);
 
         // Case 3: the window is empty.
-        let start = test_blocks[1][0].timestamp();
+        let start = <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(&test_blocks[1][0]);
         let end = start;
         let res = get_window(start, end).await;
         assert_eq!(res.prev.unwrap(), *test_blocks[0].last().unwrap());
@@ -1366,8 +1377,8 @@ pub mod node_tests {
             .flatten()
             .collect::<Vec<_>>();
         // Make a query that would return everything, but gets limited.
-        let start = blocks[0].timestamp();
-        let end = test_blocks[2][0].timestamp();
+        let start = block_header_timestamp(&blocks[0]);
+        let end = block_header_timestamp(&test_blocks[2][0]);
         let res = ds
             .get_header_window(WindowStart::Time(start), end, 1)
             .await

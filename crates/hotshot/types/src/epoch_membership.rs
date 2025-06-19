@@ -13,7 +13,7 @@ use hotshot_utils::{
 
 use crate::{
     data::Leaf2,
-    drb::{compute_drb_result, DrbInput, DrbResult},
+    drb::{compute_drb_result, DrbDifficultySelectorFn, DrbInput, DrbResult},
     stake_table::HSStakeTable,
     traits::{
         election::Membership,
@@ -55,6 +55,9 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
 
     /// Callback function to store a drb result in storage when one is calculated during catchup
     store_drb_result_fn: StoreDrbResultFn<TYPES>,
+
+    /// Callback function to select a DRB difficulty based on the view number of the seed
+    pub drb_difficulty_selector: Arc<RwLock<Option<DrbDifficultySelectorFn<TYPES>>>>,
 }
 
 impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
@@ -66,6 +69,7 @@ impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
             store_drb_progress_fn: Arc::clone(&self.store_drb_progress_fn),
             load_drb_progress_fn: Arc::clone(&self.load_drb_progress_fn),
             store_drb_result_fn: self.store_drb_result_fn.clone(),
+            drb_difficulty_selector: Arc::clone(&self.drb_difficulty_selector),
         }
     }
 }
@@ -87,6 +91,7 @@ where
             store_drb_progress_fn: store_drb_progress_fn(storage.clone()),
             load_drb_progress_fn: load_drb_progress_fn(storage.clone()),
             store_drb_result_fn: store_drb_result_fn(storage.clone()),
+            drb_difficulty_selector: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -94,6 +99,16 @@ where
     #[must_use]
     pub fn membership(&self) -> &Arc<RwLock<TYPES::Membership>> {
         &self.membership
+    }
+
+    /// Set the DRB difficulty selector
+    pub async fn set_drb_difficulty_selector(
+        &self,
+        drb_difficulty_selector: DrbDifficultySelectorFn<TYPES>,
+    ) {
+        let mut drb_difficulty_selector_writer = self.drb_difficulty_selector.write().await;
+
+        *drb_difficulty_selector_writer = Some(drb_difficulty_selector);
     }
 
     /// Get a Membership for a given Epoch, which is guaranteed to have a randomized stake
@@ -116,8 +131,7 @@ where
             .has_randomized_stake_table(epoch)
             .map_err(|e| {
                 error!(
-                    "membership_for_epoch failed while called with maybe_epoch {:?} : {}",
-                    maybe_epoch, e
+                    "membership_for_epoch failed while called with maybe_epoch {maybe_epoch:?}: {e}"
                 )
             })?
         {
@@ -125,8 +139,7 @@ where
         }
         if self.catchup_map.lock().await.contains_key(&epoch) {
             return Err(warn!(
-                "Randomized stake table for epoch {:?} unavailable. Catchup already in progress",
-                epoch
+                "Randomized stake table for epoch {epoch:?} unavailable. Catchup already in progress"
             ));
         }
         let coordinator = self.clone();
@@ -135,8 +148,7 @@ where
         spawn_catchup(coordinator, epoch, tx);
 
         Err(warn!(
-            "Randomized stake table for epoch {:?} unavailable. Starting catchup",
-            epoch
+            "Randomized stake table for epoch {epoch:?} unavailable. Starting catchup"
         ))
     }
 
@@ -158,8 +170,7 @@ where
         }
         if self.catchup_map.lock().await.contains_key(&epoch) {
             return Err(warn!(
-                "Stake table for Epoch {:?} Unavailable. Catch up already in Progress",
-                epoch
+                "Stake table for Epoch {epoch:?} Unavailable. Catch up already in Progress"
             ));
         }
         let coordinator = self.clone();
@@ -168,8 +179,7 @@ where
         spawn_catchup(coordinator, epoch, tx);
 
         Err(warn!(
-            "Stake table for Epoch {:?} Unavailable. Starting catchup",
-            epoch
+            "Stake table for Epoch {epoch:?} Unavailable. Starting catchup"
         ))
     }
 
@@ -195,8 +205,7 @@ where
         let maybe_first_epoch = self.membership.read().await.first_epoch();
         let Some(first_epoch) = maybe_first_epoch else {
             let err = anytrace::error!(
-                "We got a catchup request for epoch {:?} but the first epoch is not set",
-                epoch
+                "We got a catchup request for epoch {epoch:?} but the first epoch is not set"
             );
             self.catchup_cleanup(epoch, fetch_epochs, err).await;
             return;
@@ -340,7 +349,7 @@ where
                 );
             }
         }
-        tracing::error!("catchup for epoch {:?} failed: {:?}", req_epoch, err);
+        tracing::error!("catchup for epoch {req_epoch:?} failed: {err:?}");
     }
 
     /// A helper method to the `catchup` method.
@@ -360,10 +369,7 @@ where
         let root_epoch = TYPES::Epoch::new(epoch.saturating_sub(2));
         let Ok(root_membership) = self.stake_table_for_epoch(Some(root_epoch)).await else {
             return Err(anytrace::error!(
-                "We tried to fetch stake table for epoch {:?} \
-                but we don't have its root epoch {:?}. This should not happen",
-                epoch,
-                root_epoch
+                "We tried to fetch stake table for epoch {epoch:?} but we don't have its root epoch {root_epoch:?}. This should not happen"
             ));
         };
 
@@ -374,22 +380,19 @@ where
             .await
         else {
             return Err(anytrace::error!(
-                "get epoch root leaf failed for epoch {:?}",
-                root_epoch
+                "get epoch root leaf failed for epoch {root_epoch:?}"
             ));
         };
 
-        let add_epoch_root_updater = {
-            let membership_read = self.membership.read().await;
-            membership_read
-                .add_epoch_root(epoch, root_leaf.block_header().clone())
-                .await
-        };
-
-        if let Some(updater) = add_epoch_root_updater {
-            let mut membership_write = self.membership.write().await;
-            updater(&mut *(membership_write));
-        };
+        Membership::add_epoch_root(
+            Arc::clone(&self.membership),
+            epoch,
+            root_leaf.block_header().clone(),
+        )
+        .await
+        .map_err(|e| {
+            anytrace::error!("Failed to add epoch root for epoch {epoch:?} to membership: {e}")
+        })?;
 
         Ok(root_leaf)
     }
@@ -418,13 +421,12 @@ where
     ) -> Result<()> {
         let root_epoch = TYPES::Epoch::new(epoch.saturating_sub(2));
         let Ok(root_membership) = self.stake_table_for_epoch(Some(root_epoch)).await else {
-            return Err(anytrace::error!("We tried to fetch drb result for epoch {:?} but we don't have its root epoch {:?}. This should not happen", epoch, root_epoch));
+            return Err(anytrace::error!("We tried to fetch drb result for epoch {epoch:?} but we don't have its root epoch {root_epoch:?}. This should not happen"));
         };
 
         let Ok(drb_membership) = root_membership.next_epoch_stake_table().await else {
             return Err(anytrace::error!(
-                "get drb stake table failed for epoch {:?}",
-                root_epoch
+                "get drb stake table failed for epoch {root_epoch:?}"
             ));
         };
 
@@ -442,10 +444,18 @@ where
             let Ok(drb_seed_input_vec) = bincode::serialize(&root_leaf.justify_qc().signatures)
             else {
                 return Err(anytrace::error!(
-                    "Failed to serialize the QC signature for leaf {:?}",
-                    root_leaf
+                    "Failed to serialize the QC signature for leaf {root_leaf:?}"
                 ));
             };
+
+            let Some(ref drb_difficulty_selector) = *self.drb_difficulty_selector.read().await
+            else {
+                return Err(anytrace::error!(
+                  "The DRB difficulty selector is missing from the epoch membership coordinator. This node will not be able to spawn any DRB calculation tasks from catchup."
+                ));
+            };
+
+            let drb_difficulty = drb_difficulty_selector(root_leaf.view_number()).await;
 
             let mut drb_seed_input = [0u8; 32];
             let len = drb_seed_input_vec.len().min(32);
@@ -454,6 +464,7 @@ where
                 epoch: *epoch,
                 iteration: 0,
                 value: drb_seed_input,
+                difficulty_level: drb_difficulty,
             };
 
             let store_drb_progress_fn = self.store_drb_progress_fn.clone();

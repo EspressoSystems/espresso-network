@@ -4,8 +4,9 @@ use alloy::primitives::{Address, U256};
 use async_lock::Mutex;
 use derive_more::derive::{From, Into};
 use hotshot::types::{BLSPubKey, SignatureKey};
-use hotshot_contract_adapter::sol_types::StakeTable::{
-    ConsensusKeysUpdated, Delegated, Undelegated, ValidatorExit, ValidatorRegistered,
+use hotshot_contract_adapter::sol_types::StakeTableV2::{
+    ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit,
+    ValidatorRegistered, ValidatorRegisteredV2,
 };
 use hotshot_types::{
     data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, PeerConfig,
@@ -64,7 +65,7 @@ pub type IndexedStake = (
 );
 
 #[derive(Clone, derive_more::derive::Debug)]
-pub struct StakeTableFetcher {
+pub struct Fetcher {
     /// Peers for catching up the stake table
     #[debug(skip)]
     pub(crate) peers: Arc<dyn StateCatchup>,
@@ -95,8 +96,10 @@ pub type EventKey = (u64, u64);
 #[derive(Clone, derive_more::From, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum StakeTableEvent {
     Register(ValidatorRegistered),
+    RegisterV2(ValidatorRegisteredV2),
     Deregister(ValidatorExit),
     Delegate(Delegated),
     Undelegate(Undelegated),
     KeyUpdate(ConsensusKeysUpdated),
+    KeyUpdateV2(ConsensusKeysUpdatedV2),
 }

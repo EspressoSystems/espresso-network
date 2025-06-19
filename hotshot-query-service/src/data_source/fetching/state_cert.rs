@@ -20,7 +20,7 @@ use hotshot_types::traits::node_implementation::{ConsensusTime, NodeType};
 
 use super::Storable;
 use crate::{
-    availability::{QueryablePayload, StateCertQueryData},
+    availability::{QueryableHeader, QueryablePayload, StateCertQueryData},
     data_source::{
         fetching::{
             AvailabilityProvider, FetchRequest, Fetchable, Fetcher, Notifiers, PassiveFetch,
@@ -32,7 +32,7 @@ use crate::{
         VersionedDataSource,
     },
     fetching::request::StateCertRequest,
-    Payload, QueryResult,
+    Header, Payload, QueryResult,
 };
 
 impl FetchRequest for StateCertRequest {}
@@ -41,6 +41,7 @@ impl FetchRequest for StateCertRequest {}
 impl<Types> Fetchable<Types> for StateCertQueryData<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     type Request = StateCertRequest;

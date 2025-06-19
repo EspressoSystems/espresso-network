@@ -7,7 +7,6 @@
 #![allow(clippy::panic)]
 use std::{collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData, sync::Arc};
 
-use alloy::primitives::U256;
 use async_broadcast::{Receiver, Sender};
 use async_lock::RwLock;
 use bitvec::bitvec;
@@ -26,12 +25,15 @@ use hotshot_example_types::{
 use hotshot_task_impls::events::HotShotEvent;
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
-    data::{vid_commitment, Leaf2, VidCommitment, VidDisperse, VidDisperseShare},
+    data::{
+        vid_commitment, Leaf2, VidCommitment, VidDisperse, VidDisperseAndDuration, VidDisperseShare,
+    },
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::{Proposal, UpgradeLock},
     simple_certificate::DaCertificate2,
     simple_vote::{DaData2, DaVote2, SimpleVote, VersionedVoteData},
     stake_table::StakeTableEntries,
+    storage_metrics::StorageMetricsValue,
     traits::{
         election::Membership,
         node_implementation::{NodeType, Versions},
@@ -107,8 +109,12 @@ pub async fn build_system_handle_from_launcher<
     let is_da = node_id < hotshot_config.da_staked_committee_size as u64;
 
     // We assign node's public key and stake value rather than read from config file since it's a test
-    let validator_config: ValidatorConfig<TYPES> =
-        ValidatorConfig::generated_from_seed_indexed([0u8; 32], node_id, U256::from(1), is_da);
+    let validator_config: ValidatorConfig<TYPES> = ValidatorConfig::generated_from_seed_indexed(
+        [0u8; 32],
+        node_id,
+        launcher.metadata.node_stakes.get(node_id),
+        is_da,
+    );
     let private_key = validator_config.private_key.clone();
     let public_key = validator_config.public_key.clone();
     let state_private_key = validator_config.state_private_key.clone();
@@ -133,6 +139,7 @@ pub async fn build_system_handle_from_launcher<
         initializer,
         ConsensusMetricsValue::default(),
         storage,
+        StorageMetricsValue::default(),
     )
     .await
     .expect("Could not init hotshot");
@@ -310,7 +317,10 @@ pub async fn build_vid_proposal<TYPES: NodeType, V: Versions>(
     Proposal<TYPES, VidDisperse<TYPES>>,
     Vec<Proposal<TYPES, VidDisperseShare<TYPES>>>,
 ) {
-    let vid_disperse = VidDisperse::calculate_vid_disperse::<V>(
+    let VidDisperseAndDuration {
+        disperse: vid_disperse,
+        duration: _,
+    } = VidDisperse::calculate_vid_disperse::<V>(
         payload,
         &membership.coordinator,
         view_number,

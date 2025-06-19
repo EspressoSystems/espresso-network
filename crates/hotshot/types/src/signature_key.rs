@@ -38,6 +38,8 @@ pub type BLSPubKey = VerKey;
 pub type BLSKeyPair = KeyPair;
 /// Public parameters for BLS signature scheme
 pub type BLSPublicParam = ();
+/// BLS signature type for consensus votes
+pub type BLSSignature = jf_signature::bls_over_bn254::Signature;
 
 impl PrivateSignatureKey for BLSPrivKey {
     fn to_bytes(&self) -> Vec<u8> {
@@ -245,6 +247,23 @@ impl StateSignatureKey for SchnorrPubKey {
         let adv_st_state_msg: [_; 4] = (*next_stake_table_state).into();
         msg.extend_from_slice(&adv_st_state_msg);
         SchnorrSignatureScheme::verify(&(), self, msg, signature).is_ok()
+    }
+
+    fn legacy_sign_state(
+        sk: &Self::StatePrivateKey,
+        light_client_state: &LightClientState,
+    ) -> Result<Self::StateSignature, Self::SignError> {
+        let state_msg: [_; 3] = light_client_state.into();
+        SchnorrSignatureScheme::sign(&(), sk, state_msg, &mut rand::thread_rng())
+    }
+
+    fn legacy_verify_state_sig(
+        &self,
+        signature: &Self::StateSignature,
+        light_client_state: &LightClientState,
+    ) -> bool {
+        let state_msg: [_; 3] = light_client_state.into();
+        SchnorrSignatureScheme::verify(&(), self, state_msg, signature).is_ok()
     }
 
     fn generated_from_seed_indexed(seed: [u8; 32], index: u64) -> (Self, Self::StatePrivateKey) {

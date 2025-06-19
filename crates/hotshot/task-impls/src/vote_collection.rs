@@ -731,7 +731,7 @@ impl<TYPES: NodeType, V: Versions> EpochRootVoteCollectionTaskState<TYPES, V> {
                     state_cert,
                 };
 
-                tracing::debug!("Certificate Formed! {:?}", root_qc);
+                tracing::debug!("Certificate Formed! {root_qc:?}");
 
                 broadcast_event(
                     Arc::new(HotShotEvent::EpochRootQcFormed(root_qc.clone())),

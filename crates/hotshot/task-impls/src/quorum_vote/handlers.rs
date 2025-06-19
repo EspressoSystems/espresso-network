@@ -17,6 +17,7 @@ use hotshot_types::{
     event::{Event, EventType},
     message::{Proposal, UpgradeLock},
     simple_vote::{EpochRootQuorumVote, LightClientStateUpdateVote, QuorumData2, QuorumVote2},
+    storage_metrics::StorageMetricsValue,
     traits::{
         block_contents::BlockHeader,
         election::Membership,
@@ -114,7 +115,7 @@ async fn verify_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
                 .await
                 .context(warn!("DRB result not found"))?;
 
-            ensure!(proposal_result == computed_result, warn!("Our calculated DRB result is {:?}, which does not match the proposed DRB result of {:?}", computed_result, proposal_result));
+            ensure!(proposal_result == computed_result, warn!("Our calculated DRB result is {computed_result:?}, which does not match the proposed DRB result of {proposal_result:?}"));
         }
 
         Ok(())
@@ -201,6 +202,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
                 version >= V::Epochs::VERSION,
                 &task_state.membership,
                 &task_state.storage,
+                &task_state.upgrade_lock,
             )
             .await
         } else {
@@ -216,6 +218,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
             task_state.membership.membership(),
             &task_state.storage,
             task_state.epoch_height,
+            &task_state.upgrade_lock,
         )
         .await
     };
@@ -236,7 +239,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
                 epoch_height,
             ));
 
-            tracing::debug!("Calling set_first_epoch for epoch {:?}", first_epoch_number);
+            tracing::debug!("Calling set_first_epoch for epoch {first_epoch_number:?}");
             task_state
                 .membership
                 .membership()
@@ -276,10 +279,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
         consensus_writer
             .update_last_decided_view(decided_view_number)
             .context(|e| {
-                warn!(
-                    "`update_last_decided_view` failed; this should never happen. Error: {}",
-                    e
-                )
+                warn!("`update_last_decided_view` failed; this should never happen. Error: {e}")
             })?;
 
         consensus_writer
@@ -410,7 +410,7 @@ pub(crate) async fn update_shared_state<
     };
 
     let parent = maybe_parent.context(info!(
-        "Proposal's parent missing from storage with commitment: {:?}, proposal view {:?}",
+        "Proposal's parent missing from storage with commitment: {:?}, proposal view {}",
         justify_qc.data.leaf_commit,
         proposed_leaf.view_number(),
     ))?;
@@ -438,8 +438,8 @@ pub(crate) async fn update_shared_state<
         .await
         .wrap()
         .context(warn!("Block header doesn't extend the proposal!"))?;
-    let duration = now.elapsed();
-    tracing::debug!("Validation time: {:?}", duration);
+    let validation_duration = now.elapsed();
+    tracing::debug!("Validation time: {validation_duration:?}");
 
     let now = Instant::now();
     // Now that we've rounded everyone up, we need to update the shared state
@@ -452,10 +452,18 @@ pub(crate) async fn update_shared_state<
     ) {
         tracing::trace!("{e:?}");
     }
+    let update_leaf_duration = now.elapsed();
 
+    consensus_writer
+        .metrics
+        .validate_and_apply_header_duration
+        .add_point(validation_duration.as_secs_f64());
+    consensus_writer
+        .metrics
+        .update_leaf_duration
+        .add_point(update_leaf_duration.as_secs_f64());
     drop(consensus_writer);
-    let duration = now.elapsed();
-    tracing::debug!("update_leaf time: {:?}", duration);
+    tracing::debug!("update_leaf time: {update_leaf_duration:?}");
 
     Ok(())
 }
@@ -471,6 +479,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     upgrade_lock: UpgradeLock<TYPES, V>,
     view_number: TYPES::View,
     storage: I::Storage,
+    storage_metrics: Arc<StorageMetricsValue>,
     leaf: Leaf2<TYPES>,
     vid_share: Proposal<TYPES, VidDisperseShare<TYPES>>,
     extended_vote: bool,
@@ -492,7 +501,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
 
     ensure!(
         committee_member_in_current_epoch || committee_member_in_next_epoch,
-        info!("We were not chosen for quorum committee on {view_number:?}")
+        info!("We were not chosen for quorum committee on {view_number}")
     );
 
     let height = if membership.epoch().is_some() {
@@ -523,8 +532,11 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         .await
         .wrap()
         .context(error!("Failed to store VID share"))?;
-    let duration = now.elapsed();
-    tracing::debug!("append_vid_general time: {:?}", duration);
+    let append_vid_duration = now.elapsed();
+    storage_metrics
+        .append_vid_duration
+        .add_point(append_vid_duration.as_secs_f64());
+    tracing::debug!("append_vid_general time: {append_vid_duration:?}");
 
     // Make epoch root vote
 

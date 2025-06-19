@@ -9,7 +9,6 @@ use std::{
     sync::Arc,
 };
 
-use alloy::primitives::U256;
 use async_broadcast::broadcast;
 use async_lock::RwLock;
 use async_trait::async_trait;
@@ -43,6 +42,7 @@ use hotshot_types::{
 use hotshot_utils::anytrace::*;
 
 use crate::{
+    node_stake::TestNodeStakes,
     test_launcher::Network,
     test_runner::{LateNodeContext, LateNodeContextParameters, LateStartNode, Node, TestRunner},
     test_task::{TestResult, TestTaskState},
@@ -86,6 +86,8 @@ pub struct SpinningTask<
     pub(crate) channel_generator: AsyncGenerator<Network<TYPES, I>>,
     /// The light client state update certificate
     pub(crate) state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
+    /// Node stakes
+    pub(crate) node_stakes: TestNodeStakes,
 }
 
 #[async_trait]
@@ -128,7 +130,7 @@ where
                 self.high_qc = proposal.data.justify_qc().clone();
             }
         } else if let EventType::ViewTimeout { view_number } = event {
-            tracing::error!("View timeout for view {}", view_number);
+            tracing::error!("View timeout for view {view_number}");
         }
 
         let mut new_nodes = vec![];
@@ -142,7 +144,7 @@ where
                         NodeAction::Up => {
                             let node_id = idx.try_into().unwrap();
                             if let Some(node) = self.late_start.remove(&node_id) {
-                                tracing::error!("Node {} spinning up late", idx);
+                                tracing::error!("Node {idx} spinning up late");
                                 let network = if let Some(network) = node.network {
                                     network
                                 } else {
@@ -184,7 +186,7 @@ where
                                             ValidatorConfig::generated_from_seed_indexed(
                                                 [0u8; 32],
                                                 node_id,
-                                                U256::from(1),
+                                                self.node_stakes.get(node_id),
                                                 // For tests, make the node DA based on its index
                                                 node_id < config.da_staked_committee_size as u64,
                                             );
@@ -222,22 +224,14 @@ where
                         },
                         NodeAction::Down => {
                             if let Some(node) = self.handles.write().await.get_mut(idx) {
-                                tracing::error!(
-                                    "Node {} shutting down in view {}",
-                                    idx,
-                                    view_number
-                                );
+                                tracing::error!("Node {idx} shutting down in view {view_number}");
                                 node.handle.shut_down().await;
                             }
                         },
                         NodeAction::RestartDown(delay_views) => {
                             let node_id = idx.try_into().unwrap();
                             if let Some(node) = self.handles.write().await.get_mut(idx) {
-                                tracing::error!(
-                                    "Node {} shutting down in view {}",
-                                    idx,
-                                    view_number
-                                );
+                                tracing::error!("Node {idx} shutting down in view {view_number}");
                                 node.handle.shut_down().await;
                                 // For restarted nodes generate the network on correct view
                                 let generated_network = (self.channel_generator)(node_id).await;
@@ -302,7 +296,7 @@ where
                                 let validator_config = ValidatorConfig::generated_from_seed_indexed(
                                     [0u8; 32],
                                     node_id,
-                                    U256::from(1),
+                                    self.node_stakes.get(node_id),
                                     // For tests, make the node DA based on its index
                                     node_id < config.da_staked_committee_size as u64,
                                 );
@@ -355,13 +349,13 @@ where
                         },
                         NodeAction::NetworkUp => {
                             if let Some(handle) = self.handles.write().await.get(idx) {
-                                tracing::error!("Node {} networks resuming", idx);
+                                tracing::error!("Node {idx} networks resuming");
                                 handle.network.resume();
                             }
                         },
                         NodeAction::NetworkDown => {
                             if let Some(handle) = self.handles.write().await.get(idx) {
-                                tracing::error!("Node {} networks pausing", idx);
+                                tracing::error!("Node {idx} networks pausing");
                                 handle.network.pause();
                             }
                         },
@@ -381,7 +375,7 @@ where
             while let Some((node, id)) = new_nodes.pop() {
                 let handles = self.handles.clone();
                 let fut = async move {
-                    tracing::info!("Starting node {} back up", id);
+                    tracing::info!("Starting node {id} back up");
                     let handle = node.run_tasks().await;
 
                     // Create the node and add it to the state, so we can shut them

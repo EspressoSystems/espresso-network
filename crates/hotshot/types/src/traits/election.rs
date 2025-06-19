@@ -162,18 +162,13 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         async move { anyhow::bail!("Not implemented") }
     }
 
-    #[allow(clippy::type_complexity)]
-    /// Handles notifications that a new epoch root has been created
-    /// Is called under a read lock to the Membership. Return a callback
-    /// with Some to have that callback invoked under a write lock.
-    ///
-    /// #3967 REVIEW NOTE: this is only called if epoch is Some. Is there any reason to do otherwise?
+    /// Handles notifications that a new epoch root has been created.
     fn add_epoch_root(
-        &self,
+        _membership: Arc<RwLock<Self>>,
         _epoch: TYPES::Epoch,
         _block_header: TYPES::BlockHeader,
-    ) -> impl std::future::Future<Output = Option<Box<dyn FnOnce(&mut Self) + Send>>> + Send {
-        async { None }
+    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send {
+        async { Ok(()) }
     }
 
     /// Called to notify the Membership when a new DRB result has been calculated.
@@ -190,4 +185,16 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     fn first_epoch(&self) -> Option<TYPES::Epoch> {
         None
     }
+}
+
+pub fn membership_spawn_add_epoch_root<TYPES: NodeType>(
+    membership: Arc<RwLock<impl Membership<TYPES> + 'static>>,
+    epoch: TYPES::Epoch,
+    block_header: TYPES::BlockHeader,
+) {
+    tokio::spawn(async move {
+        if let Err(e) = Membership::<TYPES>::add_epoch_root(membership, epoch, block_header).await {
+            tracing::error!("Failed to add epoch root for epoch {epoch}: {e}");
+        }
+    });
 }

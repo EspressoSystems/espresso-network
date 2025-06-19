@@ -56,6 +56,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
     network::{BuilderType, NetworkConfig, NetworkConfigFile, NetworkConfigSource},
+    storage_metrics::StorageMetricsValue,
     traits::{
         block_contents::{BlockHeader, TestableBlock},
         election::Membership,
@@ -389,6 +390,7 @@ pub trait RunDa<
             initializer,
             ConsensusMetricsValue::default(),
             storage,
+            StorageMetricsValue::default(),
         )
         .await
         .expect("Could not init hotshot")
@@ -432,7 +434,7 @@ pub trait RunDa<
                 Some(Event { event, .. }) => {
                     match event {
                         EventType::Error { error } => {
-                            error!("Error in consensus: {:?}", error);
+                            error!("Error in consensus: {error:?}");
                             // TODO what to do here
                         },
                         EventType::Decide {
@@ -489,7 +491,7 @@ pub trait RunDa<
 
                             if let Some(size) = block_size {
                                 total_transactions_committed += size;
-                                debug!("[{node_index}] got block with size: {:?}", size);
+                                debug!("[{node_index}] got block with size: {}", size);
                             }
 
                             num_successful_commits += leaf_chain.len();
@@ -503,10 +505,10 @@ pub trait RunDa<
                             // when we make progress, submit new events
                         },
                         EventType::ReplicaViewTimeout { view_number } => {
-                            warn!("Timed out as a replicas in view {:?}", view_number);
+                            warn!("Timed out as a replicas in view {view_number}");
                         },
                         EventType::ViewTimeout { view_number } => {
-                            warn!("Timed out in view {:?}", view_number);
+                            warn!("Timed out in view {view_number}");
                         },
                         _ => {}, // mostly DA proposal
                     }

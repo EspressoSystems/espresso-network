@@ -25,9 +25,7 @@ use std::{fmt::Debug, path::Path, str::FromStr};
 
 use alloy::primitives::U256;
 use committable::Committable;
-use hotshot_query_service::{
-    availability::QueryablePayload, testing::mocks::MockVersions, VidCommon,
-};
+use hotshot_query_service::{testing::mocks::MockVersions, VidCommon};
 use hotshot_types::{
     data::vid_commitment,
     traits::{signature_key::BuilderSignatureKey, BlockPayload, EncodeBytes},
@@ -49,12 +47,13 @@ use vbs::{
 use crate::{
     v0_1::{self, ADVZNsProof},
     v0_2, ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
-    NamespaceProofQueryData, NsProof, NsTable, Payload, SeqTypes, Transaction, ValidatedState,
+    NamespaceProofQueryData, NsProof, NsTable, Payload, Transaction, ValidatedState,
 };
 
 type V1Serializer = vbs::Serializer<StaticVersion<0, 1>>;
 type V2Serializer = vbs::Serializer<StaticVersion<0, 2>>;
 type V3Serializer = vbs::Serializer<StaticVersion<0, 3>>;
+type V4Serializer = vbs::Serializer<StaticVersion<0, 4>>;
 
 const REFERENCE_NAMESPACE_ID: u32 = 12648430;
 
@@ -208,6 +207,7 @@ async fn reference_header(version: Version) -> Header {
         reference_chain_config(),
         42,
         789,
+        789_000_000_000,
         124,
         Some(reference_l1_block()),
         payload_commitment,
@@ -225,6 +225,7 @@ async fn reference_header(version: Version) -> Header {
 const REFERENCE_V1_HEADER_COMMITMENT: &str = "BLOCK~dh1KpdvvxSvnnPpOi2yI3DOg8h6ltr2Kv13iRzbQvtN2";
 const REFERENCE_V2_HEADER_COMMITMENT: &str = "BLOCK~V0GJjL19nCrlm9n1zZ6gaOKEekSMCT6uR5P-h7Gi6UJR";
 const REFERENCE_V3_HEADER_COMMITMENT: &str = "BLOCK~jcrvSlMuQnR2bK6QtraQ4RhlP_F3-v_vae5Zml0rtPbl";
+const REFERENCE_V4_HEADER_COMMITMENT: &str = "BLOCK~4AAMH8KXLniBkroEACIPb_QSXs0c4IWU1st6KDEq2sfT";
 
 fn reference_transaction<R>(ns_id: NamespaceId, rng: &mut R) -> Transaction
 where
@@ -236,11 +237,6 @@ where
 }
 
 const REFERENCE_TRANSACTION_COMMITMENT: &str = "TX~EikfLslj3g6sIWRZYpN6ZuU1gadN77AHXmRA56yNnPrQ";
-
-async fn reference_tx_index() -> <Payload as QueryablePayload<SeqTypes>>::TransactionIndex {
-    let payload = reference_payload().await;
-    payload.iter(payload.ns_table()).last().unwrap()
-}
 
 fn reference_test_without_committable<T: Serialize + DeserializeOwned + Eq + Debug>(
     version: &str,
@@ -305,6 +301,7 @@ change in the serialization of this data structure.
         "v1" => V1Serializer::serialize(&reference).unwrap(),
         "v2" => V2Serializer::serialize(&reference).unwrap(),
         "v3" => V3Serializer::serialize(&reference).unwrap(),
+        "v4" => V4Serializer::serialize(&reference).unwrap(),
         _ => panic!("invalid version"),
     };
     if actual != expected {
@@ -334,6 +331,7 @@ change in the serialization of this data structure.
         "v1" => V1Serializer::deserialize(&expected).unwrap(),
         "v2" => V2Serializer::deserialize(&expected).unwrap(),
         "v3" => V3Serializer::deserialize(&expected).unwrap(),
+        "v4" => V4Serializer::deserialize(&expected).unwrap(),
         _ => panic!("invalid version"),
     };
 
@@ -382,11 +380,6 @@ Actual: {actual}
 #[tokio::test(flavor = "multi_thread")]
 async fn test_reference_payload() {
     reference_test_without_committable("v1", "payload", &reference_payload().await);
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_reference_tx_index() {
-    reference_test_without_committable("v1", "tx_index", &reference_tx_index().await);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -476,6 +469,16 @@ async fn test_reference_header_v3() {
         "header",
         reference_header(StaticVersion::<0, 3>::version()).await,
         REFERENCE_V3_HEADER_COMMITMENT,
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reference_header_v4() {
+    reference_test(
+        "v4",
+        "header",
+        reference_header(StaticVersion::<0, 4>::version()).await,
+        REFERENCE_V4_HEADER_COMMITMENT,
     );
 }
 

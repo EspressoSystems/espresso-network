@@ -50,7 +50,7 @@ fn sanitize_node_map<TYPES: NodeType>(
             },
             _ => {
                 bail!(
-                    "We have received inconsistent leaves for view {view:?}. Leaves:\n\n{leaves:?}"
+                    "We have received inconsistent leaves for view {view}. Leaves:\n\n{leaves:?}"
                 );
             },
         }
@@ -96,26 +96,17 @@ async fn validate_node_map<TYPES: NodeType, V: Versions>(
     for (parent, child) in leaf_pairs {
         ensure!(
               child.justify_qc().view_number >= parent.view_number(),
-              "The node has provided leaf:\n\n{:?}\n\nbut its quorum certificate points to a view before the most recent leaf:\n\n{:?}",
-              child,
-              parent
+              "The node has provided leaf:\n\n{child:?}\n\nbut its quorum certificate points to a view before the most recent leaf:\n\n{parent:?}"
         );
 
         child
             .extends_upgrade(parent, &upgrade_lock.decided_upgrade_certificate)
             .await
-            .context(|e| {
-                error!(
-                    "Leaf {child:?} does not extend its parent {parent:?}: {}",
-                    e
-                )
-            })?;
+            .context(|e| error!("Leaf {child:?} does not extend its parent {parent:?}: {e}"))?;
 
         ensure!(
           child.height() > parent.height(),
-          "The node has decided leaf\n\n{:?}\n\nextending leaf\n\n{:?}but the block height did not increase.",
-          child,
-          parent
+          "The node has decided leaf\n\n{child:?}\n\nextending leaf\n\n{parent:?}but the block height did not increase."
         );
 
         // We want to make sure the commitment matches,
@@ -154,7 +145,7 @@ fn sanitize_network_map<TYPES: NodeType>(
         result.insert(
             *node,
             sanitize_node_map(node_map)
-                .context(|e| error!("Node {node} produced inconsistent leaves: {}", e))?,
+                .context(|e| error!("Node {node} produced inconsistent leaves: {e}"))?,
         );
     }
 
@@ -175,7 +166,7 @@ async fn invert_network_map<TYPES: NodeType, V: Versions>(
     for (node_id, node_map) in network_map.iter() {
         validate_node_map::<TYPES, V>(node_map)
             .await
-            .context(|e| error!("Node {node_id} has an invalid leaf history: {}", e))?;
+            .context(|e| error!("Node {node_id} has an invalid leaf history: {e}"))?;
 
         // validate each node's leaf map
         for (view, leaf) in node_map.iter() {
@@ -206,7 +197,7 @@ fn sanitize_view_map<TYPES: NodeType>(
                 "The network does not agree on the following views: {}",
                 leaf_map
                     .iter()
-                    .fold(format!("\n\nView {view:?}:"), |acc, (node, leaf)| {
+                    .fold(format!("\n\nView {view}:"), |acc, (node, leaf)| {
                         format!("{acc}\n\nNode {node} sent us leaf:\n\n{leaf:?}")
                     })
             )
@@ -337,10 +328,7 @@ impl<TYPES: NodeType<BlockHeader = TestBlockHeader>, V: Versions> ConsistencyTas
                         .safety_properties
                         .expected_view_failures
                         .contains(view),
-                    "Expected a view failure, but got a decided leaf for view {:?} from node {:?}.\n\nLeaf:\n\n{:?}",
-                    view,
-                    node_id,
-                    leaf
+                    "Expected a view failure, but got a decided leaf for view {view} from node {node_id}.\n\nLeaf:\n\n{leaf:?}"
                 );
             }
         }

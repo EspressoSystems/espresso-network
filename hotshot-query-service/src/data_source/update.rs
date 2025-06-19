@@ -33,10 +33,10 @@ use jf_vid::VidScheme;
 
 use crate::{
     availability::{
-        BlockInfo, BlockQueryData, LeafQueryData, QueryablePayload, StateCertQueryData,
-        UpdateAvailabilityData, VidCommonQueryData,
+        BlockInfo, BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload,
+        StateCertQueryData, UpdateAvailabilityData, VidCommonQueryData,
     },
-    Payload, VidCommon,
+    Header, Payload, VidCommon,
 };
 
 /// An extension trait for types which implement the update trait for each API module.
@@ -75,6 +75,7 @@ pub trait UpdateDataSource<Types: NodeType>: UpdateAvailabilityData<Types> {
 impl<Types: NodeType, T> UpdateDataSource<Types> for T
 where
     T: UpdateAvailabilityData<Types> + Send + Sync,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     async fn update(&self, event: &Event<Types>) -> Result<(), u64> {

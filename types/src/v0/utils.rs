@@ -78,6 +78,10 @@ impl Timestamp {
         self.0.unix_timestamp() as u64
     }
 
+    pub fn unix_timestamp_millis(&self) -> u64 {
+        (self.0.unix_timestamp_nanos() / 1_000_000) as u64
+    }
+
     pub fn max() -> Self {
         Self(OffsetDateTime::new_utc(Date::MAX, time!(23:59)))
     }
@@ -110,6 +114,38 @@ impl FromStringOrInteger for Timestamp {
 
     fn to_string(&self) -> anyhow::Result<String> {
         Ok(format!("{self}"))
+    }
+}
+
+#[derive(
+    Hash,
+    Copy,
+    Clone,
+    Debug,
+    derive_more::Display,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+)]
+#[display("{}", _0)]
+pub struct TimestampMillis(u64);
+
+impl TimestampMillis {
+    pub fn from_time(time: &OffsetDateTime) -> Self {
+        let timestamp = (time.unix_timestamp_nanos() / 1_000_000) as u64;
+
+        Self(timestamp)
+    }
+
+    pub fn from_millis(millis: u64) -> Self {
+        Self(millis)
+    }
+
+    pub fn u64(&self) -> u64 {
+        self.0
     }
 }
 
@@ -213,7 +249,7 @@ pub struct BackoffParams {
     #[clap(
         long = "catchup-base-retry-delay",
         env = "ESPRESSO_SEQUENCER_CATCHUP_BASE_RETRY_DELAY",
-        default_value = "20ms",
+        default_value = "200ms",
         value_parser = parse_duration
     )]
     base: Duration,
