@@ -221,8 +221,9 @@ impl<T: NodeType> NetworkNodeHandle<T> {
             .consensus_key_to_pid_map
             .lock()
             .get_by_left(consensus_key)
+            .cloned()
         {
-            return Ok(*pid);
+            return Ok(pid);
         }
 
         // Create the record key
