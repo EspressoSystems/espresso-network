@@ -216,6 +216,11 @@ impl StakeTableState {
                 let stake_table_key: BLSPubKey = blsVk.into();
                 let state_ver_key: SchnorrPubKey = schnorrVk.into();
 
+                let entry = self.validators.entry(account);
+                if let indexmap::map::Entry::Occupied(_) = entry {
+                    return Err(StakeTableError::AlreadyRegistered(account));
+                }
+
                 // The stake table contract enforces that each bls key is only used once.
                 if !self.used_bls_keys.insert(stake_table_key) {
                     tracing::warn!(
@@ -236,11 +241,6 @@ impl StakeTableState {
                     return Err(StakeTableError::SchnorrKeyAlreadyUsed(
                         state_ver_key.to_string(),
                     ));
-                }
-
-                let entry = self.validators.entry(account);
-                if let indexmap::map::Entry::Occupied(_) = entry {
-                    return Err(StakeTableError::AlreadyRegistered(account));
                 }
 
                 entry.or_insert(Validator {
@@ -2287,12 +2287,12 @@ mod tests {
 
         // add the invalid key update (re-using the same consensus keys)
         let key_update = ConsensusKeysUpdated::from(&val).into();
-        assert!(active_validator_set_from_l1_events(
-            vec![register, delegate, key_update].into_iter()
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("bls key already used"));
+        let err =
+            active_validator_set_from_l1_events(vec![register, delegate, key_update].into_iter())
+                .unwrap_err();
+
+        let bls: BLSPubKey = val.bls_vk.into();
+        assert!(matches!(err, StakeTableError::BlsKeyAlreadyUsed(addr) if addr == bls.to_string()));
     }
 
     #[test]
