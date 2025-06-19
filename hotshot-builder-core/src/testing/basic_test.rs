@@ -181,6 +181,7 @@ mod tests {
                         payload_commitment: previous_commitment,
                         builder_commitment: BuilderCommitment::from_bytes([]),
                         timestamp: 0,
+                        timestamp_millis: 0,
                         metadata: TestMetadata {
                             num_transactions: 0,
                         },
@@ -330,9 +331,7 @@ mod tests {
                     let metadata = claimed_block.metadata;
 
                     tracing::debug!(
-                        "Encoded transactions: {:?} Num nodes:{}",
-                        encoded_transactions,
-                        NUM_NODES_IN_VID_COMPUTATION
+                        "Encoded transactions: {encoded_transactions:?} Num nodes:{NUM_NODES_IN_VID_COMPUTATION}"
                     );
 
                     let block_payload_commitment = vid_commitment::<TestVersions>(
@@ -342,10 +341,7 @@ mod tests {
                         <TestVersions as Versions>::Base::VERSION,
                     );
 
-                    tracing::debug!(
-                        "Block Payload vid commitment: {:?}",
-                        block_payload_commitment
-                    );
+                    tracing::debug!("Block Payload vid commitment: {block_payload_commitment:?}");
 
                     let builder_commitment =
                         <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(
@@ -358,6 +354,7 @@ mod tests {
                         payload_commitment: block_payload_commitment,
                         builder_commitment,
                         timestamp: round as u64,
+                        timestamp_millis: round as u64 * 1_000,
                         metadata,
                         random: 1, // arbitrary
                     };
@@ -395,7 +392,7 @@ mod tests {
                         )
                     };
 
-                    tracing::debug!("Iteration: {} justify_qc: {:?}", round, justify_qc);
+                    tracing::debug!("Iteration: {round} justify_qc: {justify_qc:?}");
 
                     let quorum_proposal = QuorumProposalWrapper::<TestTypes> {
                         proposal: QuorumProposal2::<TestTypes> {

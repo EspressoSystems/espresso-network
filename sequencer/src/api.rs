@@ -251,9 +251,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             .map(|e| e + 1);
         if epoch > highest_epoch {
             return Err(anyhow::anyhow!(
-                "requested stake table for epoch {:?} is beyond the current epoch + 1 {:?}",
-                epoch,
-                highest_epoch
+                "requested stake table for epoch {epoch:?} is beyond the current epoch + 1 {highest_epoch:?}"
             ));
         }
         let mem = self
@@ -659,7 +657,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
             .state(view)
             .await
             .context(format!(
-                "state not available for height {height}, view {view:?}"
+                "state not available for height {height}, view {view}"
             ))?;
         retain_accounts(&state.fee_merkle_tree, accounts.iter().copied())
     }
@@ -679,7 +677,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
             .state(view)
             .await
             .context(format!(
-                "state not available for height {height}, view {view:?}"
+                "state not available for height {height}, view {view}"
             ))?;
         let tree = &state.block_merkle_tree;
         let frontier = tree.lookup(tree.num_leaves() - 1).expect_ok()?.1;
@@ -758,7 +756,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
             .state(view)
             .await
             .context(format!(
-                "state not available for height {height}, view {view:?}"
+                "state not available for height {height}, view {view}"
             ))?;
 
         retain_reward_accounts(&state.reward_merkle_tree, accounts.iter().copied())
@@ -1319,7 +1317,7 @@ pub mod test_helpers {
         }
         // we cannot verify the signature now, because we don't know the stake table
         client
-            .get::<StateSignatureRequestBody>(&format!("state-signature/block/{}", height))
+            .get::<StateSignatureRequestBody>(&format!("state-signature/block/{height}"))
             .send()
             .await
             .unwrap();
@@ -2007,7 +2005,7 @@ mod api_tests {
                 .await
                 .unwrap()
                 .0;
-            tracing::info!("state_cert: {:?}", state_cert);
+            tracing::info!("state_cert: {state_cert:?}");
             assert_eq!(state_cert.epoch.u64(), i);
             assert_eq!(
                 state_cert.light_client_state.block_height,
@@ -2203,7 +2201,7 @@ mod test {
         // testing fee_balance api
         let account = TestConfig::<5>::builder_key().fee_account();
         let amount = client
-            .get::<Option<FeeAmount>>(&format!("fee-state/fee-balance/latest/{}", account))
+            .get::<Option<FeeAmount>>(&format!("fee-state/fee-balance/latest/{account}"))
             .send()
             .await
             .unwrap()
@@ -3032,10 +3030,7 @@ mod test {
         let mut receive_count = 0;
         loop {
             let event = subscribed_events.next().await.unwrap();
-            tracing::info!(
-                "Received event in hotshot event streaming Client 1: {:?}",
-                event
-            );
+            tracing::info!("Received event in hotshot event streaming Client 1: {event:?}");
             receive_count += 1;
             if receive_count > total_count {
                 tracing::info!("Client Received at least desired events, exiting loop");
@@ -3130,7 +3125,7 @@ mod test {
 
                 let expected_epoch =
                     epoch_from_block_number(qc.data.block_number.unwrap(), epoch_height);
-                tracing::debug!("expected epoch: {}, qc epoch: {}", expected_epoch, epoch);
+                tracing::debug!("expected epoch: {expected_epoch}, qc epoch: {epoch}");
 
                 assert_eq!(expected_epoch, epoch);
             }
@@ -3357,7 +3352,7 @@ mod test {
                     .flatten();
 
                 if let Some(amount) = amount {
-                    tracing::info!("address={address}, amount= {amount}");
+                    tracing::info!("address={address}, amount={amount}");
                     cumulative_amount += amount.0;
                 };
             }
@@ -3539,7 +3534,7 @@ mod test {
         while let Some(event) = events.next().await {
             if let EventType::Decide { leaf_chain, .. } = event.event {
                 let height = leaf_chain[0].leaf.height();
-                tracing::info!("Node 0 decided at height: {}", height);
+                tracing::info!("Node 0 decided at height: {height}");
                 if height > EPOCH_HEIGHT * 3 {
                     break;
                 }
@@ -3831,7 +3826,7 @@ mod test {
         while let Some(event) = events.next().await {
             if let EventType::Decide { leaf_chain, .. } = event.event {
                 let height = leaf_chain[0].leaf.height();
-                tracing::info!("Node 0 decided at height: {}", height);
+                tracing::info!("Node 0 decided at height: {height}");
                 if height > EPOCH_HEIGHT * 3 {
                     break;
                 }
@@ -3847,7 +3842,7 @@ mod test {
         while let Some(event) = events.next().await {
             if let EventType::Decide { leaf_chain, .. } = event.event {
                 let height = leaf_chain[0].leaf.height();
-                tracing::info!("Server decided at height: {}", height);
+                tracing::info!("Server decided at height: {height}");
                 //  until 7 epochs
                 if height > EPOCH_HEIGHT * 7 {
                     break;
@@ -3970,7 +3965,7 @@ mod test {
         while let Some(event) = events.next().await {
             if let EventType::Decide { leaf_chain, .. } = event.event {
                 let height = leaf_chain[0].leaf.height();
-                tracing::info!("Node 0 decided at height: {}", height);
+                tracing::info!("Node 0 decided at height: {height}");
                 if height > EPOCH_HEIGHT * 3 {
                     break;
                 }
@@ -3986,7 +3981,7 @@ mod test {
         while let Some(event) = events.next().await {
             if let EventType::Decide { leaf_chain, .. } = event.event {
                 let height = leaf_chain[0].leaf.height();
-                tracing::info!("Server decided at height: {}", height);
+                tracing::info!("Server decided at height: {height}");
                 //  until 7 epochs
                 if height > EPOCH_HEIGHT * 7 {
                     break;
@@ -4708,7 +4703,7 @@ mod test {
             ._0
             .to::<u64>();
 
-        tracing::info!("stake table init block ={stake_table_init_block}");
+        tracing::info!("stake table init block = {stake_table_init_block}");
 
         let token_address = stake_table
             .token()
@@ -4903,8 +4898,7 @@ mod test {
                 .unwrap();
             assert_eq!(
                 count, namespace as u64,
-                "Incorrect transaction count for namespace {}: expected {}, got {}",
-                namespace, namespace, count,
+                "Incorrect transaction count for namespace {namespace}: expected {namespace}, got {count}"
             );
 
             // check the range endpoint
@@ -4915,8 +4909,7 @@ mod test {
                 .send()
                 .await
                 .unwrap();
-            assert_eq!(to_endpoint_count, namespace as u64, "Incorrect transaction count for range endpoint (to only) for namespace {}: expected {}, got {}",
-            namespace, namespace, to_endpoint_count,);
+            assert_eq!(to_endpoint_count, namespace as u64, "Incorrect transaction count for range endpoint (to only) for namespace {namespace}: expected {namespace}, got {to_endpoint_count}");
 
             // check the range endpoint
             let from_to_endpoint_count = client
@@ -4926,8 +4919,7 @@ mod test {
                 .send()
                 .await
                 .unwrap();
-            assert_eq!(from_to_endpoint_count, namespace as u64, "Incorrect transaction count for range endpoint (from-to) for namespace {}: expected {}, got {}", 
-            namespace, namespace, from_to_endpoint_count,);
+            assert_eq!(from_to_endpoint_count, namespace as u64, "Incorrect transaction count for range endpoint (from-to) for namespace {namespace}: expected {namespace}, got {from_to_endpoint_count}");
 
             let ns_size = client
                 .get::<usize>(&format!("node/payloads/size/namespace/{namespace}"))
@@ -4938,8 +4930,7 @@ mod test {
             let expected_ns_size = *sizes.get(&namespace).unwrap();
             assert_eq!(
                 ns_size, expected_ns_size,
-                "Incorrect payload size for namespace {}: expected {}, got {}",
-                namespace, expected_ns_size, ns_size,
+                "Incorrect payload size for namespace {namespace}: expected {expected_ns_size}, got {ns_size}"
             );
 
             let ns_size_to = client
@@ -4951,8 +4942,7 @@ mod test {
                 .unwrap();
             assert_eq!(
                 ns_size_to, expected_ns_size,
-                "Incorrect payload size for namespace {} up to height {}: expected {}, got {}",
-                namespace, last_tx_height, expected_ns_size, ns_size_to,
+                "Incorrect payload size for namespace {namespace} up to height {last_tx_height}: expected {expected_ns_size}, got {ns_size_to}"
             );
 
             let ns_size_from_to = client
@@ -4964,8 +4954,7 @@ mod test {
                 .unwrap();
             assert_eq!(
                 ns_size_from_to, expected_ns_size,
-                "Incorrect payload size for namespace {} from 0 to height {}: expected {}, got {}",
-                namespace, last_tx_height, expected_ns_size, ns_size_from_to,
+                "Incorrect payload size for namespace {namespace} from 0 to height {last_tx_height}: expected {expected_ns_size}, got {ns_size_from_to}"
             );
         }
 
@@ -4976,8 +4965,7 @@ mod test {
             .unwrap();
         assert_eq!(
             total_tx_count, total_transactions,
-            "Incorrect total transaction count: expected {}, got {}",
-            total_transactions, total_tx_count,
+            "Incorrect total transaction count: expected {total_transactions}, got {total_tx_count}"
         );
 
         let total_payload_size = client
@@ -4989,8 +4977,7 @@ mod test {
         let expected_total_size: usize = sizes.values().copied().sum();
         assert_eq!(
             total_payload_size, expected_total_size,
-            "Incorrect total payload size: expected {}, got {}",
-            expected_total_size, total_payload_size,
+            "Incorrect total payload size: expected {expected_total_size}, got {total_payload_size}"
         );
     }
 }

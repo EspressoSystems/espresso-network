@@ -885,6 +885,6 @@ where
     let mut app = App::<RwLock<OrchestratorState<TYPES>>, ServerError>::with_state(state);
     app.register_module::<ServerError, OrchestratorVersion>("api", web_api.unwrap())
         .expect("Error registering api");
-    tracing::error!("listening on {:?}", url);
+    tracing::error!("listening on {url:?}");
     app.serve(url, ORCHESTRATOR_VERSION).await
 }

@@ -131,8 +131,7 @@ where
             .has_randomized_stake_table(epoch)
             .map_err(|e| {
                 error!(
-                    "membership_for_epoch failed while called with maybe_epoch {:?} : {}",
-                    maybe_epoch, e
+                    "membership_for_epoch failed while called with maybe_epoch {maybe_epoch:?}: {e}"
                 )
             })?
         {
@@ -140,8 +139,7 @@ where
         }
         if self.catchup_map.lock().await.contains_key(&epoch) {
             return Err(warn!(
-                "Randomized stake table for epoch {:?} unavailable. Catchup already in progress",
-                epoch
+                "Randomized stake table for epoch {epoch:?} unavailable. Catchup already in progress"
             ));
         }
         let coordinator = self.clone();
@@ -150,8 +148,7 @@ where
         spawn_catchup(coordinator, epoch, tx);
 
         Err(warn!(
-            "Randomized stake table for epoch {:?} unavailable. Starting catchup",
-            epoch
+            "Randomized stake table for epoch {epoch:?} unavailable. Starting catchup"
         ))
     }
 
@@ -173,8 +170,7 @@ where
         }
         if self.catchup_map.lock().await.contains_key(&epoch) {
             return Err(warn!(
-                "Stake table for Epoch {:?} Unavailable. Catch up already in Progress",
-                epoch
+                "Stake table for Epoch {epoch:?} Unavailable. Catch up already in Progress"
             ));
         }
         let coordinator = self.clone();
@@ -183,8 +179,7 @@ where
         spawn_catchup(coordinator, epoch, tx);
 
         Err(warn!(
-            "Stake table for Epoch {:?} Unavailable. Starting catchup",
-            epoch
+            "Stake table for Epoch {epoch:?} Unavailable. Starting catchup"
         ))
     }
 
@@ -210,8 +205,7 @@ where
         let maybe_first_epoch = self.membership.read().await.first_epoch();
         let Some(first_epoch) = maybe_first_epoch else {
             let err = anytrace::error!(
-                "We got a catchup request for epoch {:?} but the first epoch is not set",
-                epoch
+                "We got a catchup request for epoch {epoch:?} but the first epoch is not set"
             );
             self.catchup_cleanup(epoch, fetch_epochs, err).await;
             return;
@@ -355,7 +349,7 @@ where
                 );
             }
         }
-        tracing::error!("catchup for epoch {:?} failed: {:?}", req_epoch, err);
+        tracing::error!("catchup for epoch {req_epoch:?} failed: {err:?}");
     }
 
     /// A helper method to the `catchup` method.
@@ -375,10 +369,7 @@ where
         let root_epoch = TYPES::Epoch::new(epoch.saturating_sub(2));
         let Ok(root_membership) = self.stake_table_for_epoch(Some(root_epoch)).await else {
             return Err(anytrace::error!(
-                "We tried to fetch stake table for epoch {:?} \
-                but we don't have its root epoch {:?}. This should not happen",
-                epoch,
-                root_epoch
+                "We tried to fetch stake table for epoch {epoch:?} but we don't have its root epoch {root_epoch:?}. This should not happen"
             ));
         };
 
@@ -389,8 +380,7 @@ where
             .await
         else {
             return Err(anytrace::error!(
-                "get epoch root leaf failed for epoch {:?}",
-                root_epoch
+                "get epoch root leaf failed for epoch {root_epoch:?}"
             ));
         };
 
@@ -401,11 +391,7 @@ where
         )
         .await
         .map_err(|e| {
-            anytrace::error!(
-                "Failed to add epoch root for epoch {:?} to membership: {}",
-                epoch,
-                e
-            )
+            anytrace::error!("Failed to add epoch root for epoch {epoch:?} to membership: {e}")
         })?;
 
         Ok(root_leaf)
@@ -435,13 +421,12 @@ where
     ) -> Result<()> {
         let root_epoch = TYPES::Epoch::new(epoch.saturating_sub(2));
         let Ok(root_membership) = self.stake_table_for_epoch(Some(root_epoch)).await else {
-            return Err(anytrace::error!("We tried to fetch drb result for epoch {:?} but we don't have its root epoch {:?}. This should not happen", epoch, root_epoch));
+            return Err(anytrace::error!("We tried to fetch drb result for epoch {epoch:?} but we don't have its root epoch {root_epoch:?}. This should not happen"));
         };
 
         let Ok(drb_membership) = root_membership.next_epoch_stake_table().await else {
             return Err(anytrace::error!(
-                "get drb stake table failed for epoch {:?}",
-                root_epoch
+                "get drb stake table failed for epoch {root_epoch:?}"
             ));
         };
 
@@ -459,8 +444,7 @@ where
             let Ok(drb_seed_input_vec) = bincode::serialize(&root_leaf.justify_qc().signatures)
             else {
                 return Err(anytrace::error!(
-                    "Failed to serialize the QC signature for leaf {:?}",
-                    root_leaf
+                    "Failed to serialize the QC signature for leaf {root_leaf:?}"
                 ));
             };
 

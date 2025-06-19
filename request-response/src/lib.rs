@@ -399,7 +399,7 @@ impl<
 
             // Match on the type of request
             if request_type == RequestType::Broadcast {
-                trace!("Sending request {:?} to all participants", request_message,);
+                trace!("Sending request {request_message:?} to all participants");
 
                 // If the message is a broadcast request, just send it to all participants
                 self.sender
@@ -456,9 +456,7 @@ impl<
                                 // Spawn the task that sends the request to the participant
                                 let individual_sending_task = spawn(async move {
                                     trace!(
-                                        "Sending request {:?} to {:?}",
-                                        request_message_clone,
-                                        recipient_clone
+                                        "Sending request {request_message_clone:?} to {recipient_clone:?}"
                                     );
 
                                     let _ = self_clone
@@ -497,8 +495,7 @@ impl<
         .and_then(|result| {
             result.downcast::<O>().map_err(|e| {
                 RequestError::Other(anyhow::anyhow!(
-                    "failed to downcast response to expected type: {:?}",
-                    e
+                    "failed to downcast response to expected type: {e:?}"
                 ))
             })
         })
@@ -639,7 +636,7 @@ impl<
         response: ResponseMessage<Req>,
         incoming_responses: &mut IncomingResponses,
     ) {
-        trace!("Handling response {:?}", response);
+        trace!("Handling response {response:?}");
 
         // Get the entry in the map, ignoring it if it doesn't exist
         let Some(outgoing_request) = self

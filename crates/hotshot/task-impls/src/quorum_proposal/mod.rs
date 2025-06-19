@@ -369,7 +369,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 .next_epoch()
                 .await
                 .context(warn!(
-                    "Missing the randomized stake table for epoch {:?}",
+                    "Missing the randomized stake table for epoch {}",
                     epoch_number.unwrap() + 1
                 ))?
                 .leader(view_number)
@@ -389,7 +389,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
         );
 
         tracing::debug!(
-            "Attempting to make dependency task for view {view_number:?} and event {event:?}"
+            "Attempting to make dependency task for view {view_number} and event {event:?}"
         );
 
         ensure!(
