@@ -87,9 +87,7 @@ struct Options {
 
     /// Address for the multisig wallet that will be the pauser
     ///
-    /// If provided, this the multisig wallet that will be able to upgrade contracts and execute
-    /// admin only functions on contracts. If not provided, admin power for all contracts will be
-    /// held by the account used to deploy the contracts (determined from MNEMONIC, ACCOUNT_INDEX).
+    /// The multisig pauser can pause functions in contracts that have the `whenNotPaused` modifier
     #[clap(
         long,
         name = "MULTISIG_PAUSER_ADDRESS",

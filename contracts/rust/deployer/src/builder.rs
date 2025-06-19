@@ -240,25 +240,26 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             Contract::StakeTableV2 => {
                 let use_multisig = self.use_multisig;
                 let dry_run = self.dry_run;
+                let multisig = self.multisig.context(
+                    "Multisig address must be set when upgrading to --use-multisig flag is present",
+                )?;
+                let multisig_pauser = self.multisig_pauser.context(
+                    "Multisig pauser address must be set for the upgrade to StakeTableV2",
+                )?;
                 tracing::info!(?dry_run, ?use_multisig, "Upgrading to StakeTableV2 with ");
                 if use_multisig {
                     crate::upgrade_stake_table_v2_multisig_owner(
                         provider,
                         contracts,
                         self.rpc_url.clone(),
-                        self.multisig.unwrap(),
-                        self.multisig_pauser.unwrap(),
+                        multisig,
+                        multisig_pauser,
                         Some(dry_run),
                     )
                     .await?;
                 } else {
-                    crate::upgrade_stake_table_v2(
-                        provider,
-                        contracts,
-                        self.multisig_pauser.unwrap(),
-                        admin,
-                    )
-                    .await?;
+                    crate::upgrade_stake_table_v2(provider, contracts, multisig_pauser, admin)
+                        .await?;
 
                     if let Some(multisig) = self.multisig {
                         let stake_table_proxy = contracts
@@ -275,13 +276,29 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 }
             },
             Contract::Timelock => {
+                let timelock_delay = self
+                    .timelock_delay
+                    .clone()
+                    .context("Timelock delay must be set when deploying Timelock")?;
+                let timelock_proposers = self
+                    .timelock_proposers
+                    .clone()
+                    .context("Timelock proposers must be set when deploying Timelock")?;
+                let timelock_executors = self
+                    .timelock_executors
+                    .clone()
+                    .context("Timelock executors must be set when deploying Timelock")?;
+                let timelock_admin = self
+                    .timelock_admin
+                    .clone()
+                    .context("Timelock admin must be set when deploying Timelock")?;
                 crate::deploy_timelock(
                     provider,
                     contracts,
-                    self.timelock_delay.unwrap(),
-                    self.timelock_proposers.clone().unwrap(),
-                    self.timelock_executors.clone().unwrap(),
-                    self.timelock_admin.unwrap(),
+                    timelock_delay,
+                    timelock_proposers,
+                    timelock_executors,
+                    timelock_admin,
                 )
                 .await?;
             },
