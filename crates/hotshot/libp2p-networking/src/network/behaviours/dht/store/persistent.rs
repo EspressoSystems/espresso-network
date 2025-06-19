@@ -444,10 +444,14 @@ mod tests {
         // The value is a random 16-byte array
         let random_value = rand::random::<[u8; 16]>();
 
+        // Create a new record
+        let mut record = libp2p::kad::Record::new(key.clone(), random_value.to_vec());
+
+        // Set the expiry time to 10 seconds in the future
+        record.expires = Some(Instant::now() + Duration::from_secs(10));
+
         // Put a record into the store
-        store
-            .put(libp2p::kad::Record::new(key.clone(), random_value.to_vec()))
-            .expect("Failed to put record into store");
+        store.put(record).expect("Failed to put record into store");
 
         // Try to save the store to a persistent storage
         assert!(store.try_save_to_persistent_storage());
@@ -499,9 +503,13 @@ mod tests {
             keys.push(key.clone());
             values.push(value);
 
-            store
-                .put(libp2p::kad::Record::new(key, value.to_vec()))
-                .expect("Failed to put record into store");
+            // Create a new record
+            let mut record = libp2p::kad::Record::new(key, value.to_vec());
+
+            // Set the expiry time to 10 seconds in the future
+            record.expires = Some(Instant::now() + Duration::from_secs(10));
+
+            store.put(record).expect("Failed to put record into store");
         }
 
         // Create a new store from the allegedly unpersisted DHT
@@ -517,13 +525,14 @@ mod tests {
             assert!(new_store.get(key).is_none());
         }
 
+        // Create a new record
+        let mut record = libp2p::kad::Record::new(keys[0].clone(), values[0].to_vec());
+
+        // Set the expiry time to 10 seconds in the future
+        record.expires = Some(Instant::now() + Duration::from_secs(10));
+
         // Store one more record into the new store
-        store
-            .put(libp2p::kad::Record::new(
-                keys[0].clone(),
-                values[0].to_vec(),
-            ))
-            .expect("Failed to put record into store");
+        store.put(record).expect("Failed to put record into store");
 
         // Wait a bit for the save to complete
         tokio::time::sleep(Duration::from_millis(100)).await;
