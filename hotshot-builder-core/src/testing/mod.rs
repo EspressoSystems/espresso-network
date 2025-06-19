@@ -177,6 +177,7 @@ pub async fn calc_proposal_msg<V: Versions>(
         payload_commitment: block_vid_commitment,
         builder_commitment: block_builder_commitment,
         timestamp: round as u64,
+        timestamp_millis: round as u64 * 1_000,
         metadata,
         random: 1, // arbitrary
     };
@@ -209,7 +210,7 @@ pub async fn calc_proposal_msg<V: Versions>(
         },
     };
 
-    tracing::debug!("Iteration: {} justify_qc: {:?}", round, justify_qc);
+    tracing::debug!("Iteration: {round} justify_qc: {justify_qc:?}");
 
     let quorum_proposal = QuorumProposalWrapper::<TestTypes> {
         proposal: QuorumProposal2::<TestTypes> {

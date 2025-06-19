@@ -691,7 +691,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
             v if v == V::Base::VERSION => Serializer::<V::Base>::serialize(&message),
             v if v == V::Upgrade::VERSION => Serializer::<V::Upgrade>::serialize(&message),
             v => {
-                bail!("Attempted to serialize with version {}, which is incompatible. This should be impossible.", v);
+                bail!("Attempted to serialize with version {v}, which is incompatible. This should be impossible.");
             },
         };
 
@@ -718,7 +718,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
             v if v == V::Base::VERSION => Serializer::<V::Base>::deserialize(message),
             v if v == V::Upgrade::VERSION => Serializer::<V::Upgrade>::deserialize(message),
             v => {
-                bail!("Cannot deserialize message with stated version {}", v);
+                bail!("Cannot deserialize message with stated version {v}");
             },
         }
         .wrap()

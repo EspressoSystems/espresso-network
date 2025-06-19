@@ -172,7 +172,7 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
             self.signatures.as_ref().unwrap(),
         )
         .wrap()
-        .context(|e| warn!("Signature check failed: {}", e))
+        .context(|e| warn!("Signature check failed: {e}"))
     }
     /// Proxy's to `Membership.stake`
     async fn stake_table_entry(
@@ -249,7 +249,7 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2<TY
             self.signatures.as_ref().unwrap(),
         )
         .wrap()
-        .context(|e| warn!("Signature check failed: {}", e))
+        .context(|e| warn!("Signature check failed: {e}"))
     }
     /// Proxy's to `Membership.stake`
     async fn stake_table_entry(
@@ -329,7 +329,7 @@ impl<
             self.signatures.as_ref().unwrap(),
         )
         .wrap()
-        .context(|e| warn!("Signature check failed: {}", e))
+        .context(|e| warn!("Signature check failed: {e}"))
     }
     async fn threshold(membership: &EpochMembership<TYPES>) -> U256 {
         THRESHOLD::threshold(membership).await
@@ -426,7 +426,7 @@ impl<TYPES: NodeType> UpgradeCertificate<TYPES> {
                 upgrade_lock,
             )
             .await
-            .context(|e| warn!("Invalid upgrade certificate: {}", e))?;
+            .context(|e| warn!("Invalid upgrade certificate: {e}"))?;
         }
 
         Ok(())

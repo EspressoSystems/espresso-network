@@ -705,11 +705,7 @@ impl<TYPES: NodeType> Display for HotShotEvent<TYPES> {
                 write!(f, "EpochRootQcRecv(view_number={:?}", cert.view_number())
             },
             HotShotEvent::SetFirstEpoch(view, epoch) => {
-                write!(
-                    f,
-                    "SetFirstEpoch(view_number={:?}, epoch={:?})",
-                    view, epoch
-                )
+                write!(f, "SetFirstEpoch(view_number={view:?}, epoch={epoch:?})")
             },
         }
     }

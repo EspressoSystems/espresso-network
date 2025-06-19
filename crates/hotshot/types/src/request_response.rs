@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::traits::{node_implementation::NodeType, signature_key::SignatureKey};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 /// A signed request for a proposal.
 pub struct ProposalRequestPayload<TYPES: NodeType> {
     /// The view number that we're requesting a proposal for.
@@ -29,5 +29,14 @@ impl<TYPES: NodeType> Committable for ProposalRequestPayload<TYPES> {
             .u64_field("view number", *self.view_number)
             .var_size_bytes(&self.key.to_bytes())
             .finalize()
+    }
+}
+
+impl<TYPES: NodeType> std::fmt::Debug for ProposalRequestPayload<TYPES> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProposalRequestPayload")
+            .field("view_number", &self.view_number)
+            .field("key", &format_args!("{}", self.key))
+            .finish()
     }
 }
