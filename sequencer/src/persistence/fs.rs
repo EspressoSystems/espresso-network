@@ -1863,6 +1863,15 @@ fn migrate_network_config(
         config.insert("epoch_height".into(), 0.into());
     }
 
+    // HotShotConfig was upgraded to include `drb_difficulty` and `drb_upgrade_difficulty` parameters. Initialize with a default
+    // if missing.
+    if !config.contains_key("drb_difficulty") {
+        config.insert("drb_difficulty".into(), 0.into());
+    }
+    if !config.contains_key("drb_upgrade_difficulty") {
+        config.insert("drb_difficulty".into(), 0.into());
+    }
+
     Ok(network_config)
 }
 
