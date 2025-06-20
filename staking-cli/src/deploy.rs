@@ -97,6 +97,7 @@ impl TestSystem {
             .genesis_st_state(genesis_stake)
             .blocks_per_epoch(blocks_per_epoch)
             .epoch_start_block(epoch_start_block)
+            .multisig_pauser(deployer_address)
             .exit_escrow_period(U256::from(exit_escrow_period.as_secs()))
             .build()
             .unwrap();

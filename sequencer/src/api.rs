@@ -1008,6 +1008,7 @@ pub mod test_helpers {
                 .genesis_st_state(genesis_stake)
                 .blocks_per_epoch(blocks_per_epoch)
                 .epoch_start_block(epoch_start_block)
+                .multisig_pauser(signer.address())
                 .build()
                 .unwrap();
 
@@ -4656,6 +4657,7 @@ mod test {
             .genesis_st_state(genesis_stake)
             .blocks_per_epoch(blocks_per_epoch)
             .epoch_start_block(1)
+            .multisig_pauser(network_config.signer().address())
             .build()
             .unwrap();
 
