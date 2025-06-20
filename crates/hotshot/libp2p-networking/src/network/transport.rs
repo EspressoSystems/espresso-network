@@ -204,15 +204,15 @@ impl<T: Transport, S: SignatureKey + 'static, C: StreamMuxer + Unpin>
                             warn!("Failed to verify remote peer: {e:?}");
                             IoError::other(e)
                         })?;
-                    }
 
-                    // Authenticate with the remote peer
-                    Self::authenticate_with_remote_peer(&mut substream, auth_message)
-                        .await
-                        .map_err(|e| {
-                            warn!("Failed to authenticate with remote peer: {e:?}");
-                            IoError::other(e)
-                        })?;
+                        // Authenticate with the remote peer
+                        Self::authenticate_with_remote_peer(&mut substream, auth_message)
+                            .await
+                            .map_err(|e| {
+                                warn!("Failed to authenticate with remote peer: {e:?}");
+                                IoError::other(e)
+                            })?;
+                    }
                 }
 
                 Ok(stream)
