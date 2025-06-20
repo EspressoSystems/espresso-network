@@ -15,9 +15,11 @@ use std::{
     collections::{HashMap, HashSet},
     iter,
     num::{NonZeroU32, NonZeroUsize},
-    time::Duration,
+    sync::Arc,
+    time::{Duration, Instant},
 };
 
+use bimap::BiMap;
 use futures::{channel::mpsc, SinkExt, StreamExt};
 use hotshot_types::{
     constants::KAD_DEFAULT_REPUB_INTERVAL_SEC, traits::node_implementation::NodeType,
@@ -42,6 +44,7 @@ use libp2p::{
     Multiaddr, StreamProtocol, Swarm, SwarmBuilder,
 };
 use libp2p_identity::PeerId;
+use parking_lot::Mutex;
 use rand::{prelude::SliceRandom, thread_rng};
 use tokio::{
     select, spawn,
@@ -69,7 +72,7 @@ use super::{
     NetworkEventInternal,
 };
 use crate::network::behaviours::{
-    dht::{DHTBehaviour, DHTProgress, KadPutQuery, NUM_REPLICATED_TO_TRUST},
+    dht::{DHTBehaviour, DHTProgress, KadPutQuery},
     direct_message::{DMBehaviour, DMRequest},
     exponential_backoff::ExponentialBackoff,
 };
@@ -90,6 +93,10 @@ pub struct NetworkNode<T: NodeType, D: DhtPersistentStorage> {
     /// the swarm of networkbehaviours
     #[debug(skip)]
     swarm: Swarm<NetworkDef<T::SignatureKey, D>>,
+    /// The Kademlia record TTL
+    kademlia_record_ttl: Duration,
+    /// The map from consensus keys to peer IDs
+    consensus_key_to_pid_map: Arc<Mutex<BiMap<T::SignatureKey, PeerId>>>,
     /// the listener id we are listening on, if it exists
     listener_id: Option<ListenerId>,
     /// Handler for direct messages
@@ -168,6 +175,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
     pub async fn new(
         config: NetworkNodeConfig<T>,
         dht_persistent_storage: D,
+        consensus_key_to_pid_map: Arc<Mutex<BiMap<T::SignatureKey, PeerId>>>,
     ) -> Result<Self, NetworkError> {
         // Generate a random `KeyPair` if one is not specified
         let keypair = config
@@ -183,8 +191,19 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             keypair.clone(),
             config.membership.clone(),
             config.auth_message.clone(),
+            Arc::clone(&consensus_key_to_pid_map),
         )
         .await?;
+
+        // Calculate the record republication interval
+        let kademlia_record_republication_interval = config
+            .republication_interval
+            .unwrap_or(Duration::from_secs(KAD_DEFAULT_REPUB_INTERVAL_SEC));
+
+        // Calculate the Kademlia record TTL
+        let kademlia_ttl = config
+            .ttl
+            .unwrap_or(16 * kademlia_record_republication_interval);
 
         // Generate the swarm
         let mut swarm: Swarm<NetworkDef<T::SignatureKey, D>> = {
@@ -244,16 +263,11 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
 
             // - Build DHT needed for peer discovery
             let mut kconfig = Config::new(StreamProtocol::new("/ipfs/kad/1.0.0"));
-            // 8 hours by default
-            let record_republication_interval = config
-                .republication_interval
-                .unwrap_or(Duration::from_secs(KAD_DEFAULT_REPUB_INTERVAL_SEC));
-            let ttl = Some(config.ttl.unwrap_or(16 * record_republication_interval));
             kconfig
                 .set_parallelism(NonZeroUsize::new(5).unwrap())
-                .set_provider_publication_interval(Some(record_republication_interval))
-                .set_publication_interval(Some(record_republication_interval))
-                .set_record_ttl(ttl);
+                .set_provider_publication_interval(Some(kademlia_record_republication_interval))
+                .set_publication_interval(Some(kademlia_record_republication_interval))
+                .set_record_ttl(Some(kademlia_ttl));
 
             // allowing panic here because something is very wrong if this fales
             #[allow(clippy::panic)]
@@ -328,6 +342,8 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
         Ok(Self {
             peer_id,
             swarm,
+            kademlia_record_ttl: kademlia_ttl,
+            consensus_key_to_pid_map,
             listener_id: None,
             direct_message_state: DMBehaviour::default(),
             dht_handler: DHTBehaviour::new(
@@ -345,7 +361,12 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
     /// # Panics
     /// If the default replication factor is `None`
     pub fn put_record(&mut self, mut query: KadPutQuery) {
-        let record = Record::new(query.key.clone(), query.value.clone());
+        // Create the new record
+        let mut record = Record::new(query.key.clone(), query.value.clone());
+
+        // Set the record's expiration time to the proper time
+        record.expires = Some(Instant::now() + self.kademlia_record_ttl);
+
         match self.swarm.behaviour_mut().dht.put_record(
             record,
             libp2p::kad::Quorum::N(
@@ -432,7 +453,6 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                         self.dht_handler.get_record(
                             key,
                             notify,
-                            NonZeroUsize::new(NUM_REPLICATED_TO_TRUST).unwrap(),
                             ExponentialBackoff::default(),
                             retry_count,
                             &mut self.swarm.behaviour_mut().dht,
@@ -551,6 +571,13 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                     );
                 } else {
                     debug!("Connection closed with {peer_id:?} at {endpoint:?} due to {cause:?}");
+                }
+
+                // If we are no longer connected to the peer, remove the consensus key from the map
+                if num_established == 0 {
+                    self.consensus_key_to_pid_map
+                        .lock()
+                        .remove_by_right(&peer_id);
                 }
 
                 // Send the number of connected peers to the client
