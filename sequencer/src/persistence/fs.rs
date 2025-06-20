@@ -1869,7 +1869,7 @@ fn migrate_network_config(
         config.insert("drb_difficulty".into(), 0.into());
     }
     if !config.contains_key("drb_upgrade_difficulty") {
-        config.insert("drb_difficulty".into(), 0.into());
+        config.insert("drb_upgrade_difficulty".into(), 0.into());
     }
 
     Ok(network_config)
