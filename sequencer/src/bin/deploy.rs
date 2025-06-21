@@ -116,6 +116,9 @@ struct Options {
     /// Option to deploy esp token
     #[clap(long, default_value = "false")]
     deploy_esp_token: bool,
+    /// Option to upgrade esp token v2
+    #[clap(long, default_value = "false")]
+    upgrade_esp_token_v2: bool,
     /// Option to deploy StakeTable V1 and proxy
     #[clap(long, default_value = "false")]
     deploy_stake_table: bool,
@@ -191,16 +194,16 @@ struct Options {
     #[clap(long, env = "ESPRESSO_SEQUENCER_EPOCH_START_BLOCK")]
     epoch_start_block: Option<u64>,
     /// The initial supply of the tokens.
-    #[clap(long, env = "ESP_TOKEN_INITIAL_SUPPLY", default_value_t = U256::from(3590000000u64))]
-    initial_token_supply: U256,
+    #[clap(long, env = "ESP_TOKEN_INITIAL_SUPPLY")]
+    initial_token_supply: Option<U256>,
 
     /// The name of the tokens.
-    #[clap(long, env = "ESP_TOKEN_NAME", default_value = "Espresso")]
-    token_name: String,
+    #[clap(long, env = "ESP_TOKEN_NAME")]
+    token_name: Option<String>,
 
     /// The symbol of the tokens.
-    #[clap(long, env = "ESP_TOKEN_SYMBOL", default_value = "ESP")]
-    token_symbol: String,
+    #[clap(long, env = "ESP_TOKEN_SYMBOL")]
+    token_symbol: Option<String>,
 
     /// The admin of the timelock
     #[clap(long, env = "ESPRESSO_TIMELOCK_ADMIN")]
@@ -252,9 +255,6 @@ async fn main() -> anyhow::Result<()> {
     }
     if let Some(multisig_pauser) = opt.multisig_pauser_address {
         args_builder.multisig_pauser(multisig_pauser);
-    }
-    if let Some(token_recipient) = opt.initial_token_grant_recipient {
-        args_builder.token_recipient(token_recipient);
     }
 
     if let Some(blocks_per_epoch) = opt.blocks_per_epoch {
@@ -331,6 +331,24 @@ async fn main() -> anyhow::Result<()> {
             .expect("Must provide --timelock-proposers when deploying timelock");
         args_builder.timelock_proposers(timelock_proposers.into_iter().collect());
     }
+    if opt.deploy_esp_token {
+        let token_recipient = opt
+            .initial_token_grant_recipient
+            .expect("Must provide --initial-token-grant-recipient when deploying esp token");
+        let token_name = opt
+            .token_name
+            .expect("Must provide --token-name when deploying esp token");
+        let token_symbol = opt
+            .token_symbol
+            .expect("Must provide --token-symbol when deploying esp token");
+        let initial_token_supply = opt
+            .initial_token_supply
+            .expect("Must provide --initial-token-supply when deploying esp token");
+        args_builder.token_name(token_name);
+        args_builder.token_symbol(token_symbol);
+        args_builder.initial_token_supply(initial_token_supply);
+        args_builder.token_recipient(token_recipient);
+    }
 
     // then deploy specified contracts
     let args = args_builder.build()?;
@@ -340,6 +358,9 @@ async fn main() -> anyhow::Result<()> {
     }
     if opt.deploy_esp_token {
         args.deploy(&mut contracts, Contract::EspTokenProxy).await?;
+    }
+    if opt.upgrade_esp_token_v2 {
+        args.deploy(&mut contracts, Contract::EspTokenV2).await?;
     }
     if opt.deploy_light_client_v1 {
         args.deploy(&mut contracts, Contract::LightClientProxy)

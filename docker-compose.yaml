@@ -15,7 +15,7 @@ services:
 
   deploy-sequencer-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
-    command: deploy --deploy-timelock --deploy-fee --deploy-esp-token --deploy-stake-table --upgrade-stake-table-v2
+    command: deploy --deploy-timelock --deploy-fee --deploy-esp-token --upgrade-esp-token-v2 --deploy-stake-table --upgrade-stake-table-v2
     environment:
       - ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
       - ESPRESSO_SEQUENCER_L1_PROVIDER
@@ -25,6 +25,9 @@ services:
       - ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS
       - ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS
       - ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS
+      - ESP_TOKEN_INITIAL_SUPPLY
+      - ESP_TOKEN_NAME
+      - ESP_TOKEN_SYMBOL
       - ESPRESSO_TIMELOCK_ADMIN
       - ESPRESSO_TIMELOCK_DELAY
       - ESPRESSO_TIMELOCK_EXECUTORS
