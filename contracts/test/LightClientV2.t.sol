@@ -747,7 +747,7 @@ contract LightClient_StateHistoryTest is LightClientCommonTest {
 
         uint32 curDuration = lc.stateHistoryRetentionPeriod();
         vm.expectRevert(LC.InvalidMaxStateHistory.selector);
-        lc.setstateHistoryRetentionPeriod(curDuration - 1);
+        lc.setStateHistoryRetentionPeriod(curDuration - 1);
     }
 
     function test_CorrectStateHistoryHandling() public {

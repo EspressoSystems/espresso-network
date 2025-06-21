@@ -63,10 +63,10 @@ contract LightClientV2 is LightClient {
         revert DeprecatedApi();
     }
 
-    /// @notice identical as LightClientV1's `setstateHistoryRetentionPeriod()`
+    /// @notice identical as LightClientV1's `setStateHistoryRetentionPeriod()`
     /// but this function name has the correct camelCase
-    function setStateHistoryRetentionPeriod(uint32 historySeconds) public virtual onlyOwner {
-        setstateHistoryRetentionPeriod(historySeconds);
+    function setStateHistoryRetentionPeriod(uint32 historySeconds) public virtual override onlyOwner {
+        super.setStateHistoryRetentionPeriod(historySeconds);
     }
 
     function updateEpochStartBlock(uint64 newEpochStartBlock) public virtual onlyOwner {
@@ -220,7 +220,7 @@ contract LightClientV2 is LightClient {
         }
     }
 
-    /// @notice Decide if a block height is the an "epoch root" (defined as last block in epoch - 5)
+    /// @notice Decide if a block height is an "epoch root" (defined as last block in epoch - 5)
     /// @dev see
     /// <https://github.com/EspressoSystems/espresso-network/blob/2a904fa17838961cef130d0e87d7b371acaaea42/hotshot-types/src/utils.rs#L475>
     function isEpochRoot(uint64 blockHeight) public view virtual returns (bool) {

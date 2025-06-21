@@ -463,7 +463,7 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
     /// the current state history retention period and must be at least 1 hour and max 365 days.
     /// @dev Reverts with `InvalidMaxStateHistory` if the provided value is less than 1 hour,
     /// more than 365 days or less than or equal to the current state history retention period.
-    function setstateHistoryRetentionPeriod(uint32 historySeconds) public onlyOwner {
+    function setStateHistoryRetentionPeriod(uint32 historySeconds) public virtual onlyOwner {
         if (
             historySeconds < 1 hours || historySeconds > 365 days
                 || historySeconds <= stateHistoryRetentionPeriod
