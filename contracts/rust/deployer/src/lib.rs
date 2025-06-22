@@ -17,7 +17,10 @@ use alloy::{
         Provider, ProviderBuilder, RootProvider,
     },
     rpc::{client::RpcClient, types::TransactionReceipt},
-    signers::local::{coins_bip39::English, MnemonicBuilder, PrivateKeySigner},
+    signers::{
+        ledger::LedgerSigner,
+        local::{coins_bip39::English, MnemonicBuilder, PrivateKeySigner},
+    },
     transports::http::reqwest::Url,
 };
 use anyhow::{anyhow, Context, Result};
@@ -27,6 +30,7 @@ use hotshot_contract_adapter::sol_types::*;
 
 pub mod builder;
 pub mod network_config;
+pub mod provider;
 
 /// Type alias that connects to providers with recommended fillers and wallet
 /// use `<HttpProviderWithWallet as WalletProvider>::wallet()` to access internal wallet
@@ -46,6 +50,29 @@ pub fn build_provider(
     poll_interval: Option<Duration>,
 ) -> HttpProviderWithWallet {
     let signer = build_signer(mnemonic, account_index);
+    let wallet = EthereumWallet::from(signer);
+
+    // alloy sets the polling interval automatically. It tries to guess if an RPC is local, but this
+    // guess is wrong when the RPC is running inside docker. This results to 7 second polling
+    // intervals on a chain with 1s block time. Therefore, allow overriding the polling interval
+    // with a custom value.
+    if let Some(interval) = poll_interval {
+        tracing::info!("Using custom L1 poll interval: {interval:?}");
+        let client = RpcClient::new_http(url.clone()).with_poll_interval(interval);
+        ProviderBuilder::new().wallet(wallet).on_client(client)
+    } else {
+        tracing::info!("Using default L1 poll interval");
+        ProviderBuilder::new().wallet(wallet).on_http(url)
+    }
+}
+
+// TODO: tech-debt: provider creation logic should be refactored to handle mnemonic and
+// ledger signers and consolidated with similar code in staking-cli
+pub fn build_provider_ledger(
+    signer: LedgerSigner,
+    url: Url,
+    poll_interval: Option<Duration>,
+) -> HttpProviderWithWallet {
     let wallet = EthereumWallet::from(signer);
 
     // alloy sets the polling interval automatically. It tries to guess if an RPC is local, but this

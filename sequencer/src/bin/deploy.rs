@@ -3,9 +3,10 @@ use std::{fs::File, io::stdout, path::PathBuf, thread::sleep, time::Duration};
 use alloy::primitives::{Address, U256};
 use clap::Parser;
 use espresso_contract_deployer::{
-    build_provider,
+    build_provider, build_provider_ledger,
     builder::DeployerArgsBuilder,
     network_config::{light_client_genesis, light_client_genesis_from_stake_table},
+    provider::connect_ledger,
     verify_node_js_files, Contract, Contracts, DeployedContracts,
 };
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
@@ -69,9 +70,11 @@ struct Options {
         long,
         name = "MNEMONIC",
         env = "ESPRESSO_SEQUENCER_ETH_MNEMONIC",
-        default_value = "test test test test test test test test test test test junk"
+        default_value = "test test test test test test test test test test test junk",
+        conflicts_with = "LEDGER",
+        required_unless_present = "LEDGER"
     )]
-    mnemonic: String,
+    mnemonic: Option<String>,
 
     /// Address for the multisig wallet that will be the admin
     ///
@@ -103,6 +106,18 @@ struct Options {
         default_value = "0"
     )]
     account_index: u32,
+
+    /// Use a ledger device to sign transactions.
+    ///
+    /// NOTE: ledger must be unlocked, Ethereum app open and blind signing must be enabled in the
+    /// Ethereum app settings.
+    #[clap(
+        long,
+        name = "LEDGER",
+        env = "ESPRESSO_DEPLOYER_USE_LEDGER",
+        conflicts_with = "MNEMONIC"
+    )]
+    ledger: Option<bool>,
 
     /// Option to deploy fee contracts
     #[clap(long, default_value = "false")]
@@ -232,12 +247,18 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let mut contracts = Contracts::from(opt.contracts);
-    let provider = build_provider(
-        opt.mnemonic,
-        opt.account_index,
-        opt.rpc_url.clone(),
-        Some(opt.l1_polling_interval),
-    );
+    let provider = if opt.ledger.unwrap_or(false) {
+        let signer = connect_ledger(opt.account_index as usize).await?;
+        build_provider_ledger(signer, opt.rpc_url.clone(), Some(opt.l1_polling_interval))
+    } else {
+        build_provider(
+            opt.mnemonic
+                .expect("Mnemonic provided when not using ledger"),
+            opt.account_index,
+            opt.rpc_url.clone(),
+            Some(opt.l1_polling_interval),
+        )
+    };
 
     // First use builder to build constructor input arguments
     let mut args_builder = DeployerArgsBuilder::default();
