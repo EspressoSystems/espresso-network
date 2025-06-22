@@ -29,8 +29,16 @@ done
 
 cargo build --bin deploy
 
+# start anvil in the background, if there's nothing on port 8545
+if ! cast chain-id >/dev/null 2>&1; then
+    echo "Starting anvil on port 8545"
+    anvil &
+else
+    echo "Using existing node on port 8545"
+fi
+
 echo
-echo "Cheking account, you may have to unlock the ledger device"
+echo "Checking account, you may have to unlock the ledger device"
 account="$(env RUST_LOG=error deploy --ledger --account-index "$account_index" account)"
 cast send "$account" --value 10ether --mnemonic "$test_mnemonic"
 
@@ -43,3 +51,4 @@ cast send "$account" --value 10ether --mnemonic "$test_mnemonic"
 echo
 echo "Deploying contracts, watch your ledger to confirm signatures"
 deploy --ledger --account-index "$account_index" --deploy-esp-token
+echo "Ok"

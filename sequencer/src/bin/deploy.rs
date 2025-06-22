@@ -262,6 +262,7 @@ async fn main() -> anyhow::Result<()> {
     let mut contracts = Contracts::from(opt.contracts);
     let provider = if opt.ledger {
         let signer = connect_ledger(opt.account_index as usize).await?;
+        tracing::info!("Using ledger for signing, watch ledger device for prompts.");
         build_provider_ledger(signer, opt.rpc_url.clone(), Some(opt.l1_polling_interval))
     } else {
         build_provider(
@@ -285,13 +286,20 @@ async fn main() -> anyhow::Result<()> {
                 println!("{account}: {} Eth", format_ether(balance));
                 return Ok(());
             },
-            Command::VerifyNodeJsFiles => verify_node_js_files().await?,
+            Command::VerifyNodeJsFiles => {
+                verify_node_js_files().await?;
+                return Ok(());
+            },
         };
     };
 
     // No subcommand specified. Deploy contracts.
 
     let balance = provider.get_balance(account).await?;
+    tracing::info!(
+        "Using deployer account {account} with balance: {}",
+        format_ether(balance),
+    );
     if balance.is_zero() {
         anyhow::bail!(
             "account_index {}, address={account} has no balance. A funded account is required.",
