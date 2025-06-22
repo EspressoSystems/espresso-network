@@ -1,7 +1,10 @@
 use std::{fs::File, io::stdout, path::PathBuf, thread::sleep, time::Duration};
 
-use alloy::primitives::{Address, U256};
-use clap::Parser;
+use alloy::{
+    primitives::{utils::format_ether, Address, U256},
+    providers::{Provider, WalletProvider},
+};
+use clap::{Parser, Subcommand};
 use espresso_contract_deployer::{
     build_provider, build_provider_ledger,
     builder::DeployerArgsBuilder,
@@ -71,8 +74,7 @@ struct Options {
         name = "MNEMONIC",
         env = "ESPRESSO_SEQUENCER_ETH_MNEMONIC",
         default_value = "test test test test test test test test test test test junk",
-        conflicts_with = "LEDGER",
-        required_unless_present = "LEDGER"
+        conflicts_with = "LEDGER"
     )]
     mnemonic: Option<String>,
 
@@ -235,16 +237,27 @@ struct Options {
 
     #[clap(flatten)]
     logging: logging::Config,
+
+    /// Command to run
+    ///
+    /// For backwards compatibility, the default is to deploy contracts, if no
+    /// subcommand is specified.
+    #[clap(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+enum Command {
+    Address,
+    Balance,
+    VerifyNodeJsFiles,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let opt = Options::parse();
-    opt.logging.init();
 
-    if opt.verify_node_js_files {
-        verify_node_js_files().await?;
-    }
+    opt.logging.init();
 
     let mut contracts = Contracts::from(opt.contracts);
     let provider = if opt.ledger.unwrap_or(false) {
@@ -259,6 +272,32 @@ async fn main() -> anyhow::Result<()> {
             Some(opt.l1_polling_interval),
         )
     };
+
+    let account = provider.default_signer_address();
+    if let Some(command) = &opt.command {
+        match command {
+            Command::Address => {
+                println!("{account}");
+                return Ok(());
+            },
+            Command::Balance => {
+                let balance = provider.get_balance(account).await?;
+                println!("{account}: {} Eth", format_ether(balance));
+                return Ok(());
+            },
+            Command::VerifyNodeJsFiles => verify_node_js_files().await?,
+        };
+    };
+
+    // No subcommand specified. Deploy contracts.
+
+    let balance = provider.get_balance(account).await?;
+    if balance.is_zero() {
+        anyhow::bail!(
+            "account_index {}, address={account} has no balance. A funded account is required.",
+            opt.account_index
+        );
+    }
 
     // First use builder to build constructor input arguments
     let mut args_builder = DeployerArgsBuilder::default();

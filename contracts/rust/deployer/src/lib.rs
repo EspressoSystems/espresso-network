@@ -316,6 +316,7 @@ pub async fn verify_node_js_files() -> Result<()> {
         Some(true),
     )
     .await?;
+    tracing::info!("Ok!");
     Ok(())
 }
 
