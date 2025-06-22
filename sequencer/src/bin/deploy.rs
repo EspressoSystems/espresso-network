@@ -119,7 +119,7 @@ struct Options {
         env = "ESPRESSO_DEPLOYER_USE_LEDGER",
         conflicts_with = "MNEMONIC"
     )]
-    ledger: Option<bool>,
+    ledger: bool,
 
     /// Option to deploy fee contracts
     #[clap(long, default_value = "false")]
@@ -248,7 +248,7 @@ struct Options {
 
 #[derive(Debug, Clone, Subcommand)]
 enum Command {
-    Address,
+    Account,
     Balance,
     VerifyNodeJsFiles,
 }
@@ -260,7 +260,7 @@ async fn main() -> anyhow::Result<()> {
     opt.logging.init();
 
     let mut contracts = Contracts::from(opt.contracts);
-    let provider = if opt.ledger.unwrap_or(false) {
+    let provider = if opt.ledger {
         let signer = connect_ledger(opt.account_index as usize).await?;
         build_provider_ledger(signer, opt.rpc_url.clone(), Some(opt.l1_polling_interval))
     } else {
@@ -276,7 +276,7 @@ async fn main() -> anyhow::Result<()> {
     let account = provider.default_signer_address();
     if let Some(command) = &opt.command {
         match command {
-            Command::Address => {
+            Command::Account => {
                 println!("{account}");
                 return Ok(());
             },

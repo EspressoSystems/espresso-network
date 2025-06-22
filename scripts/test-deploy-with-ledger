@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+#
+# Usage ./scripts/test-deploy-with-ledger [--account-index=0]
+set -euo pipefail
+
+test_mnemonic="test test test test test test test test test test test junk"
+
+account_index=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --account-index)
+            if [[ -z "$2" || ! "$2" =~ ^[0-9]+$ ]]; then
+                echo "Error: --account-index requires a numeric argument."
+                exit 1
+            fi
+            account_index="$2"
+            shift 2
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
+
+cargo build --bin deploy
+
+echo
+echo "Cheking account, you may have to unlock the ledger device"
+account="$(env RUST_LOG=error deploy --ledger --account-index "$account_index" account)"
+cast send "$account" --value 10ether --mnemonic "$test_mnemonic"
+
+# Tests that we can deploy the ESP token
+#
+#TODO: should we deploy the V2 ESP token instead? We can set the correct name on
+# the V1, so using V2 for mainnet deployment is redundant. However it's nice to
+# have the same version on all networks.
+
+echo
+echo "Deploying contracts, watch your ledger to confirm signatures"
+deploy --ledger --account-index "$account_index" --deploy-esp-token
