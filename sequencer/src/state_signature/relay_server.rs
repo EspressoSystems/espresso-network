@@ -125,25 +125,29 @@ impl StateRelayServerState {
         let first_epoch = epoch_from_block_number(epoch_start_block, blocks_per_epoch);
         tracing::info!(%blocks_per_epoch, %epoch_start_block, "Initializing genesis stake table with ");
 
+        self.init_genesis_stake_table().await?;
+
+        // init local state
+        self.thresholds.insert(first_epoch, self.genesis_threshold);
+        self.known_nodes
+            .insert(first_epoch, self.genesis_known_nodes.clone());
+
+        Ok(())
+    }
+
+    async fn init_genesis_stake_table(&mut self) -> anyhow::Result<()> {
         let genesis_stake_table =
             fetch_stake_table_from_sequencer(&self.sequencer_url, None).await?;
         let genesis_total_stake = genesis_stake_table.total_stakes();
-
-        // init local state
-        self.thresholds
-            .insert(first_epoch, one_honest_threshold(genesis_total_stake));
 
         for entry in genesis_stake_table.0 {
             self.genesis_known_nodes
                 .insert(entry.state_ver_key.clone(), entry.stake_table_entry.stake());
         }
 
-        self.known_nodes
-            .insert(first_epoch, self.genesis_known_nodes.clone());
         self.genesis_threshold = one_honest_threshold(genesis_total_stake);
-        self.thresholds.insert(first_epoch, self.genesis_threshold);
 
-        tracing::info!(%first_epoch, "Stake table synced ");
+        tracing::info!("Genesis stake table initialized with total stake {genesis_total_stake}");
         Ok(())
     }
 
@@ -172,7 +176,7 @@ impl StateRelayServerState {
             return Ok(());
         }
 
-        tracing::info!(%epoch,"Syncing stake table ");
+        tracing::info!(%epoch, "Syncing stake table");
 
         if height >= epoch_start_block {
             let peer_configs = {
@@ -338,6 +342,17 @@ impl StateRelayServerDataSource for StateRelayServerState {
     }
 
     async fn post_signature(&mut self, req: StateSignatureRequestBody) -> Result<(), ServerError> {
+        // Initialize the stake table if not yet done
+        if self.genesis_threshold.is_zero() {
+            if let Err(e) = self.init_genesis_stake_table().await {
+                tracing::error!("Failed to initialize genesis stake table: {e}");
+                return Err(ServerError::catch_all(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Relay server is not ready to receive signatures: {e}"),
+                ));
+            }
+        }
+
         // sanity check the signature validity first before adding in
         if !req
             .key
