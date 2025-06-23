@@ -642,6 +642,59 @@ where
         }
         .boxed()
     })?
+    .stream("stream_transactions", move |req, state| {
+        async move {
+            let height = req.integer_param::<_, usize>("height")?;
+
+            let namespace: Option<i64> = req
+                .opt_integer_param::<_, usize>("namespace")?
+                .map(|i| {
+                    i.try_into().map_err(|err| Error::Custom {
+                        message: format!(
+                            "Invalid 'namespace': could not convert usize to i64: {err}"
+                        ),
+                        status: StatusCode::BAD_REQUEST,
+                    })
+                })
+                .transpose()?;
+
+            state
+                .read(|state| {
+                    async move {
+                        Ok(state
+                            .subscribe_blocks(height)
+                            .await
+                            .map(move |block| {
+                                let transactions = block.enumerate().enumerate();
+                                let header = block.header();
+                                let filtered_txs = transactions
+                                    .filter_map(|(i, (index, _tx))| {
+                                        if let Some(requested_ns) = namespace {
+                                            let ns_id = QueryableHeader::<Types>::namespace_id(
+                                                header,
+                                                &index.ns_index,
+                                            )?;
+
+                                            if ns_id.into() != requested_ns {
+                                                return None;
+                                            }
+                                        }
+
+                                        TransactionQueryData::new(&block, index, i as u64)
+                                    })
+                                    .collect::<Vec<_>>();
+
+                                futures::stream::iter(filtered_txs.into_iter().map(Ok))
+                            })
+                            .flatten())
+                    }
+                    .boxed()
+                })
+                .await
+        }
+        .try_flatten_stream()
+        .boxed()
+    })?
     .at("get_block_summary", move |req, state| {
         async move {
             let id: usize = req.integer_param("height")?;
