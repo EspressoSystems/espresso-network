@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
 #
-# Usage ./scripts/test-deploy-with-ledger [--account-index=0]
+# Usage ./scripts/test-deploy-with-ledger [--account-index=0] [--docker]
+#
+# If --docker is specified, it will run the deploy command inside a Docker container,
+# otherwise it will run the deploy command natively.
+#
+# Pre-requisites
+#
+# - Ledger plugged in and unlocked
+# - The ledger Ethereum app must be open
+# - Blind signing enabled in the ledger Ethereum app
 set -euo pipefail
 
 test_mnemonic="test test test test test test test test test test test junk"
 
 account_index=0
+docker=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --account-index)
@@ -15,6 +25,10 @@ while [[ $# -gt 0 ]]; do
             fi
             account_index="$2"
             shift 2
+            ;;
+        --docker)
+            docker=true
+            shift
             ;;
         --)
             shift
@@ -27,28 +41,36 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-cargo build --bin deploy
+
+if $docker; then
+    echo "Using docker to run deploy"
+    cmd="docker run --rm -e RUST_LOG=info --network=host -v /dev/bus/usb:/dev/bus/usb --privileged \
+        -it ghcr.io/espressosystems/espresso-sequencer/deploy:main \
+        deploy --rpc-url http://host.docker.internal:8545"
+else
+    echo "Using native deploy binary"
+    cargo build --bin deploy
+    cmd="deploy"
+fi
 
 # start anvil in the background, if there's nothing on port 8545
 if ! cast chain-id >/dev/null 2>&1; then
     echo "Starting anvil on port 8545"
-    anvil &
+    anvil --host 0.0.0.0 &
 else
     echo "Using existing node on port 8545"
 fi
 
 echo
 echo "Checking account, you may have to unlock the ledger device"
-account="$(env RUST_LOG=error deploy --ledger --account-index "$account_index" account)"
-cast send "$account" --value 10ether --mnemonic "$test_mnemonic"
+account="$($cmd --ledger --account-index "$account_index" account | tail -n1 | tr -d '\r')"
+echo "Account: $account"
 
-# Tests that we can deploy the ESP token
-#
-#TODO: should we deploy the V2 ESP token instead? We can set the correct name on
-# the V1, so using V2 for mainnet deployment is redundant. However it's nice to
-# have the same version on all networks.
+cast send "$account" --value 10ether --mnemonic "$test_mnemonic"
 
 echo
 echo "Deploying contracts, watch your ledger to confirm signatures"
-deploy --ledger --account-index "$account_index" --deploy-esp-token --multisig-address 0xffffffffffffffffffffffffffffffffffffffff
-echo "Ok"
+
+$cmd --ledger --account-index "$account_index" --deploy-esp-token --multisig-address 0xffffffffffffffffffffffffffffffffffffffff
+
+echo "Successfully deployed with ledger!"
