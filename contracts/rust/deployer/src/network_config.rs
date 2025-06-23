@@ -14,6 +14,7 @@ use hotshot_types::{
     traits::node_implementation::{ConsensusTime, NodeType},
     PeerConfig,
 };
+use serde_json::json;
 use tokio::time::sleep;
 use vbs::version::StaticVersion;
 
@@ -56,11 +57,19 @@ pub async fn fetch_stake_table_from_sequencer(
             None => match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
                 sequencer_url.clone(),
             )
-            .get::<PublicNetworkConfig>("config/hotshot")
+            .get::<String>("config/hotshot")
             .send()
             .await
             {
-                Ok(resp) => break Ok(resp.hotshot_config().known_nodes_with_stake().into()),
+                Ok(resp) => {
+                    let obj = json!(resp);
+                    let Ok(known_nodes_with_stake) = serde_json::from_str::<Vec<PeerConfig<SeqTypes>>>(&obj["config"]["known_nodes_with_stake"].to_string()) else {
+                        let url = sequencer_url.join("config/hotshot").unwrap();
+                        tracing::error!(%url, "Failed to parse the network config");
+                        break Err(anyhow::anyhow!("Failed to parse the network config"));
+                    };
+                    break Ok(known_nodes_with_stake.into())
+                },
                 Err(e) => {
                     let url = sequencer_url.join("config/hotshot").unwrap();
                     tracing::error!(%url, "Failed to fetch the network config: {e}");
