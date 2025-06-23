@@ -27,7 +27,7 @@ mod tests {
 
     use alloy::{
         network::EthereumWallet,
-        primitives::Address,
+        primitives::{Address, U256},
         providers::{ext::AnvilApi, Provider, ProviderBuilder},
     };
     use anyhow::bail;
