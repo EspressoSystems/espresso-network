@@ -2,7 +2,10 @@
 
 use std::time::Duration;
 
-use alloy::{primitives::U256, transports::http::reqwest::Url};
+use alloy::{
+    primitives::U256,
+    transports::http::reqwest::{self, Url},
+};
 use anyhow::{Context, Result};
 use espresso_types::{config::PublicNetworkConfig, SeqTypes};
 use hotshot_contract_adapter::{
@@ -14,7 +17,6 @@ use hotshot_types::{
     traits::node_implementation::{ConsensusTime, NodeType},
     PeerConfig,
 };
-use serde_json::json;
 use tokio::time::sleep;
 use vbs::version::StaticVersion;
 
@@ -40,42 +42,43 @@ pub async fn fetch_stake_table_from_sequencer(
 
     loop {
         match epoch {
-            Some(epoch) => match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
-                sequencer_url.clone(),
-            )
+            Some(epoch) => match surf_disco::Client::<
+                tide_disco::error::ServerError,
+                StaticVersion<0, 1>,
+            >::new(sequencer_url.clone())
             .get::<Vec<PeerConfig<SeqTypes>>>(&format!("node/stake-table/{}", epoch.u64()))
             .send()
             .await
             {
                 Ok(resp) => break Ok(resp.into()),
                 Err(e) => {
-                    let url = sequencer_url.join(&format!("node/stake-table/{}", epoch.u64())).unwrap();
+                    let url = sequencer_url
+                        .join(&format!("node/stake-table/{}", epoch.u64()))
+                        .unwrap();
                     tracing::error!(%url, "Failed to fetch the stake table: {e}");
                     sleep(Duration::from_secs(5)).await;
                 },
             },
-            None => match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
-                sequencer_url.clone(),
-            )
-            .get::<String>("config/hotshot")
-            .send()
-            .await
-            {
-                Ok(resp) => {
-                    let obj = json!(resp);
-                    let Ok(known_nodes_with_stake) = serde_json::from_str::<Vec<PeerConfig<SeqTypes>>>(&obj["config"]["known_nodes_with_stake"].to_string()) else {
-                        let url = sequencer_url.join("config/hotshot").unwrap();
-                        tracing::error!(%url, "Failed to parse the network config");
-                        break Err(anyhow::anyhow!("Failed to parse the network config"));
-                    };
-                    break Ok(known_nodes_with_stake.into())
-                },
-                Err(e) => {
-                    let url = sequencer_url.join("config/hotshot").unwrap();
-                    tracing::error!(%url, "Failed to fetch the network config: {e}");
-                    sleep(Duration::from_secs(5)).await;
-                },
-            }
+            None => {
+                let url = sequencer_url.join("config/hotshot").unwrap();
+                match reqwest::get(url.clone()).await {
+                    Ok(resp) => {
+                        let value: serde_json::Value = resp.json().await.with_context(|| {
+                            format!("Failed to parse the json object from url {url}")
+                        })?;
+                        let known_nodes_with_stake =
+                            serde_json::from_str::<Vec<PeerConfig<SeqTypes>>>(
+                                &value["config"]["known_nodes_with_stake"].to_string(),
+                            )
+                            .with_context(|| "Failed to parse the stake table")?;
+                        break Ok(known_nodes_with_stake.into());
+                    },
+                    Err(e) => {
+                        tracing::error!(%url, "Failed to fetch the network config: {e}");
+                        sleep(Duration::from_secs(5)).await;
+                    },
+                }
+            },
         }
     }
 }
