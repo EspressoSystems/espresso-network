@@ -99,6 +99,14 @@ impl TestSystem {
             .epoch_start_block(epoch_start_block)
             .multisig_pauser(deployer_address)
             .exit_escrow_period(U256::from(exit_escrow_period.as_secs()))
+            .timelock_delay(U256::from(0))
+            .timelock_admin(signer.address())
+            .timelock_proposers(vec![signer.address()])
+            .timelock_executors(vec![signer.address()])
+            .token_timelock_delay(U256::from(10))
+            .token_timelock_admin(signer.address())
+            .token_timelock_proposers(vec![signer.address()])
+            .token_timelock_executors(vec![signer.address()])
             .build()
             .unwrap();
 
