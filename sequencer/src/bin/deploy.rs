@@ -4,6 +4,7 @@ use alloy::{
     primitives::{utils::format_ether, Address, U256},
     providers::{Provider, WalletProvider},
 };
+use anyhow::Context as _;
 use clap::{Parser, Subcommand};
 use espresso_contract_deployer::{
     build_provider, build_provider_ledger,
@@ -259,6 +260,11 @@ async fn main() -> anyhow::Result<()> {
 
     opt.logging.init();
 
+    if matches!(opt.command, Some(Command::VerifyNodeJsFiles)) {
+        verify_node_js_files().await?;
+        return Ok(());
+    };
+
     let mut contracts = Contracts::from(opt.contracts);
     let provider = if opt.ledger {
         let signer = connect_ledger(opt.account_index as usize).await?;
@@ -274,6 +280,15 @@ async fn main() -> anyhow::Result<()> {
         )
     };
 
+    // Fail early if we can't connect to the Ethereum RPC.
+    let chain_id = provider.get_chain_id().await.with_context(|| {
+        // The URL may contain a key in the query string.
+        let mut url = opt.rpc_url.clone();
+        url.set_query(None);
+        format!("Unable query Ethereum provider {url}..")
+    })?;
+    tracing::info!("Connected to chain with chain ID: {chain_id}");
+
     let account = provider.default_signer_address();
     if let Some(command) = &opt.command {
         match command {
@@ -286,10 +301,7 @@ async fn main() -> anyhow::Result<()> {
                 println!("{account}: {} Eth", format_ether(balance));
                 return Ok(());
             },
-            Command::VerifyNodeJsFiles => {
-                verify_node_js_files().await?;
-                return Ok(());
-            },
+            _ => unreachable!(),
         };
     };
 

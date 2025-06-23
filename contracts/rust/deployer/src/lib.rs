@@ -287,7 +287,15 @@ impl Contracts {
             return Ok(*addr);
         }
         tracing::info!("deploying {name}");
-        let addr = tx.deploy().await?;
+        let pending_tx = tx.send().await?;
+        let tx_hash = *pending_tx.tx_hash();
+        tracing::info!(%tx_hash, "waiting for tx to be mined");
+        let receipt = pending_tx.get_receipt().await?;
+        tracing::info!(%receipt.gas_used, %tx_hash, "tx mined");
+        let addr = receipt
+            .contract_address
+            .ok_or(alloy::contract::Error::ContractNotDeployed)?;
+
         tracing::info!("deployed {name} at {addr:#x}");
 
         self.0.insert(name, addr);
@@ -1213,6 +1221,8 @@ pub async fn transfer_ownership(
         },
         _ => return Err(anyhow!("Not Ownable, can't transfer ownership!")),
     };
+    let tx_hash = receipt.transaction_hash;
+    tracing::info!(%receipt.gas_used, %tx_hash, "ownership transferred");
     Ok(receipt)
 }
 
