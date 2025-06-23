@@ -79,49 +79,61 @@
 <a href=#79 id=79 data-nosnippet>79</a>        }
 <a href=#80 id=80 data-nosnippet>80</a>    }
 <a href=#81 id=81 data-nosnippet>81</a>
-<a href=#82 id=82 data-nosnippet>82</a>    <span class="kw">fn </span>eq_dep(rx: Receiver&lt;usize&gt;, val: usize) -&gt; EventDependency&lt;usize&gt; {
-<a href=#83 id=83 data-nosnippet>83</a>        EventDependency::new(rx, Box::new(<span class="kw">move </span>|v| <span class="kw-2">*</span>v == val))
-<a href=#84 id=84 data-nosnippet>84</a>    }
-<a href=#85 id=85 data-nosnippet>85</a>
-<a href=#86 id=86 data-nosnippet>86</a>    <span class="attr">#[tokio::test(flavor = <span class="string">"multi_thread"</span>)]
-<a href=#87 id=87 data-nosnippet>87</a>    </span><span class="comment">// allow unused for tokio because it's a test
-<a href=#88 id=88 data-nosnippet>88</a>    </span><span class="attr">#[allow(unused_must_use)]
-<a href=#89 id=89 data-nosnippet>89</a>    </span><span class="kw">async fn </span>it_works() {
-<a href=#90 id=90 data-nosnippet>90</a>        <span class="kw">let </span>(tx, rx) = broadcast(<span class="number">10</span>);
-<a href=#91 id=91 data-nosnippet>91</a>        <span class="kw">let </span>(res_tx, <span class="kw-2">mut </span>res_rx) = broadcast(<span class="number">10</span>);
-<a href=#92 id=92 data-nosnippet>92</a>        <span class="kw">let </span>dep = eq_dep(rx, <span class="number">2</span>);
-<a href=#93 id=93 data-nosnippet>93</a>        <span class="kw">let </span>handle = DummyHandle { sender: res_tx };
-<a href=#94 id=94 data-nosnippet>94</a>        <span class="kw">let </span>join_handle = DependencyTask { dep, handle }.run();
-<a href=#95 id=95 data-nosnippet>95</a>        tx.broadcast(<span class="number">2</span>).<span class="kw">await</span>.unwrap();
-<a href=#96 id=96 data-nosnippet>96</a>        <span class="macro">assert_eq!</span>(res_rx.recv().<span class="kw">await</span>.unwrap(), TaskResult::Success(<span class="number">2</span>));
-<a href=#97 id=97 data-nosnippet>97</a>
-<a href=#98 id=98 data-nosnippet>98</a>        join_handle.<span class="kw">await</span>;
-<a href=#99 id=99 data-nosnippet>99</a>    }
-<a href=#100 id=100 data-nosnippet>100</a>
-<a href=#101 id=101 data-nosnippet>101</a>    <span class="attr">#[tokio::test(flavor = <span class="string">"multi_thread"</span>)]
-<a href=#102 id=102 data-nosnippet>102</a>    </span><span class="kw">async fn </span>many_works() {
-<a href=#103 id=103 data-nosnippet>103</a>        <span class="kw">let </span>(tx, rx) = broadcast(<span class="number">20</span>);
-<a href=#104 id=104 data-nosnippet>104</a>        <span class="kw">let </span>(res_tx, <span class="kw-2">mut </span>res_rx) = broadcast(<span class="number">20</span>);
-<a href=#105 id=105 data-nosnippet>105</a>
-<a href=#106 id=106 data-nosnippet>106</a>        <span class="kw">let </span><span class="kw-2">mut </span>handles = <span class="macro">vec!</span>[];
-<a href=#107 id=107 data-nosnippet>107</a>        <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..<span class="number">10 </span>{
-<a href=#108 id=108 data-nosnippet>108</a>            <span class="kw">let </span>dep = eq_dep(rx.clone(), i);
-<a href=#109 id=109 data-nosnippet>109</a>            <span class="kw">let </span>handle = DummyHandle {
-<a href=#110 id=110 data-nosnippet>110</a>                sender: res_tx.clone(),
-<a href=#111 id=111 data-nosnippet>111</a>            };
-<a href=#112 id=112 data-nosnippet>112</a>            handles.push(DependencyTask { dep, handle }.run());
-<a href=#113 id=113 data-nosnippet>113</a>        }
-<a href=#114 id=114 data-nosnippet>114</a>        <span class="kw">let </span>tx2 = tx.clone();
-<a href=#115 id=115 data-nosnippet>115</a>        spawn(<span class="kw">async move </span>{
-<a href=#116 id=116 data-nosnippet>116</a>            <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..<span class="number">10 </span>{
-<a href=#117 id=117 data-nosnippet>117</a>                tx.broadcast(i).<span class="kw">await</span>.unwrap();
-<a href=#118 id=118 data-nosnippet>118</a>                sleep(Duration::from_millis(<span class="number">10</span>)).<span class="kw">await</span>;
-<a href=#119 id=119 data-nosnippet>119</a>            }
-<a href=#120 id=120 data-nosnippet>120</a>        });
-<a href=#121 id=121 data-nosnippet>121</a>        <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..<span class="number">10 </span>{
-<a href=#122 id=122 data-nosnippet>122</a>            <span class="macro">assert_eq!</span>(res_rx.recv().<span class="kw">await</span>.unwrap(), TaskResult::Success(i));
-<a href=#123 id=123 data-nosnippet>123</a>        }
-<a href=#124 id=124 data-nosnippet>124</a>        tx2.broadcast(<span class="number">100</span>).<span class="kw">await</span>.unwrap();
-<a href=#125 id=125 data-nosnippet>125</a>        FuturesOrdered::from_iter(handles).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;().<span class="kw">await</span>;
-<a href=#126 id=126 data-nosnippet>126</a>    }
-<a href=#127 id=127 data-nosnippet>127</a>}</code></pre></div></section></main></body></html>
+<a href=#82 id=82 data-nosnippet>82</a>    <span class="kw">fn </span>eq_dep(
+<a href=#83 id=83 data-nosnippet>83</a>        rx: Receiver&lt;usize&gt;,
+<a href=#84 id=84 data-nosnippet>84</a>        cancel_rx: Receiver&lt;()&gt;,
+<a href=#85 id=85 data-nosnippet>85</a>        dep_name: String,
+<a href=#86 id=86 data-nosnippet>86</a>        val: usize,
+<a href=#87 id=87 data-nosnippet>87</a>    ) -&gt; EventDependency&lt;usize&gt; {
+<a href=#88 id=88 data-nosnippet>88</a>        EventDependency::new(rx, cancel_rx, dep_name, Box::new(<span class="kw">move </span>|v| <span class="kw-2">*</span>v == val))
+<a href=#89 id=89 data-nosnippet>89</a>    }
+<a href=#90 id=90 data-nosnippet>90</a>
+<a href=#91 id=91 data-nosnippet>91</a>    <span class="attr">#[tokio::test(flavor = <span class="string">"multi_thread"</span>)]
+<a href=#92 id=92 data-nosnippet>92</a>    </span><span class="comment">// allow unused for tokio because it's a test
+<a href=#93 id=93 data-nosnippet>93</a>    </span><span class="attr">#[allow(unused_must_use)]
+<a href=#94 id=94 data-nosnippet>94</a>    </span><span class="kw">async fn </span>it_works() {
+<a href=#95 id=95 data-nosnippet>95</a>        <span class="kw">let </span>(tx, rx) = broadcast(<span class="number">10</span>);
+<a href=#96 id=96 data-nosnippet>96</a>        <span class="kw">let </span>(_cancel_tx, cancel_rx) = broadcast(<span class="number">1</span>);
+<a href=#97 id=97 data-nosnippet>97</a>        <span class="kw">let </span>(res_tx, <span class="kw-2">mut </span>res_rx) = broadcast(<span class="number">10</span>);
+<a href=#98 id=98 data-nosnippet>98</a>        <span class="kw">let </span>dep = eq_dep(rx, cancel_rx, <span class="macro">format!</span>(<span class="string">"it_works {}"</span>, <span class="number">2</span>), <span class="number">2</span>);
+<a href=#99 id=99 data-nosnippet>99</a>        <span class="kw">let </span>handle = DummyHandle { sender: res_tx };
+<a href=#100 id=100 data-nosnippet>100</a>        <span class="kw">let </span>join_handle = DependencyTask { dep, handle }.run();
+<a href=#101 id=101 data-nosnippet>101</a>        tx.broadcast(<span class="number">2</span>).<span class="kw">await</span>.unwrap();
+<a href=#102 id=102 data-nosnippet>102</a>        <span class="macro">assert_eq!</span>(res_rx.recv().<span class="kw">await</span>.unwrap(), TaskResult::Success(<span class="number">2</span>));
+<a href=#103 id=103 data-nosnippet>103</a>
+<a href=#104 id=104 data-nosnippet>104</a>        join_handle.<span class="kw">await</span>;
+<a href=#105 id=105 data-nosnippet>105</a>    }
+<a href=#106 id=106 data-nosnippet>106</a>
+<a href=#107 id=107 data-nosnippet>107</a>    <span class="attr">#[tokio::test(flavor = <span class="string">"multi_thread"</span>)]
+<a href=#108 id=108 data-nosnippet>108</a>    </span><span class="kw">async fn </span>many_works() {
+<a href=#109 id=109 data-nosnippet>109</a>        <span class="kw">let </span>(tx, rx) = broadcast(<span class="number">20</span>);
+<a href=#110 id=110 data-nosnippet>110</a>        <span class="kw">let </span>(res_tx, <span class="kw-2">mut </span>res_rx) = broadcast(<span class="number">20</span>);
+<a href=#111 id=111 data-nosnippet>111</a>        <span class="kw">let </span>(_cancel_tx, cancel_rx) = broadcast(<span class="number">1</span>);
+<a href=#112 id=112 data-nosnippet>112</a>
+<a href=#113 id=113 data-nosnippet>113</a>        <span class="kw">let </span><span class="kw-2">mut </span>handles = <span class="macro">vec!</span>[];
+<a href=#114 id=114 data-nosnippet>114</a>        <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..<span class="number">10 </span>{
+<a href=#115 id=115 data-nosnippet>115</a>            <span class="kw">let </span>dep = eq_dep(
+<a href=#116 id=116 data-nosnippet>116</a>                rx.clone(),
+<a href=#117 id=117 data-nosnippet>117</a>                cancel_rx.clone(),
+<a href=#118 id=118 data-nosnippet>118</a>                <span class="macro">format!</span>(<span class="string">"many_works {}"</span>, i),
+<a href=#119 id=119 data-nosnippet>119</a>                i,
+<a href=#120 id=120 data-nosnippet>120</a>            );
+<a href=#121 id=121 data-nosnippet>121</a>            <span class="kw">let </span>handle = DummyHandle {
+<a href=#122 id=122 data-nosnippet>122</a>                sender: res_tx.clone(),
+<a href=#123 id=123 data-nosnippet>123</a>            };
+<a href=#124 id=124 data-nosnippet>124</a>            handles.push(DependencyTask { dep, handle }.run());
+<a href=#125 id=125 data-nosnippet>125</a>        }
+<a href=#126 id=126 data-nosnippet>126</a>        <span class="kw">let </span>tx2 = tx.clone();
+<a href=#127 id=127 data-nosnippet>127</a>        spawn(<span class="kw">async move </span>{
+<a href=#128 id=128 data-nosnippet>128</a>            <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..<span class="number">10 </span>{
+<a href=#129 id=129 data-nosnippet>129</a>                tx.broadcast(i).<span class="kw">await</span>.unwrap();
+<a href=#130 id=130 data-nosnippet>130</a>                sleep(Duration::from_millis(<span class="number">10</span>)).<span class="kw">await</span>;
+<a href=#131 id=131 data-nosnippet>131</a>            }
+<a href=#132 id=132 data-nosnippet>132</a>        });
+<a href=#133 id=133 data-nosnippet>133</a>        <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..<span class="number">10 </span>{
+<a href=#134 id=134 data-nosnippet>134</a>            <span class="macro">assert_eq!</span>(res_rx.recv().<span class="kw">await</span>.unwrap(), TaskResult::Success(i));
+<a href=#135 id=135 data-nosnippet>135</a>        }
+<a href=#136 id=136 data-nosnippet>136</a>        tx2.broadcast(<span class="number">100</span>).<span class="kw">await</span>.unwrap();
+<a href=#137 id=137 data-nosnippet>137</a>        FuturesOrdered::from_iter(handles).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;().<span class="kw">await</span>;
+<a href=#138 id=138 data-nosnippet>138</a>    }
+<a href=#139 id=139 data-nosnippet>139</a>}</code></pre></div></section></main></body></html>
