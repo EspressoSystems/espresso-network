@@ -70,7 +70,7 @@ contract DeployEspTokenScript is Script {
         uint256 initialSupply,
         string memory name,
         string memory symbol
-    ) public {
+    ) public view {
         // Check the owner
         if (token.owner() != owner) {
             revert OwnerNotAsExpected(owner, token.owner());
