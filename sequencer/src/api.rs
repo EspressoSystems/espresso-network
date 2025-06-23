@@ -4666,6 +4666,14 @@ mod test {
             .blocks_per_epoch(blocks_per_epoch)
             .epoch_start_block(1)
             .multisig_pauser(network_config.signer().address())
+            .timelock_delay(U256::from(0))
+            .timelock_admin(network_config.signer().address())
+            .timelock_proposers(vec![network_config.signer().address()])
+            .timelock_executors(vec![network_config.signer().address()])
+            .token_timelock_delay(U256::from(0))
+            .token_timelock_admin(network_config.signer().address())
+            .token_timelock_proposers(vec![network_config.signer().address()])
+            .token_timelock_executors(vec![network_config.signer().address()])
             .build()
             .unwrap();
 
