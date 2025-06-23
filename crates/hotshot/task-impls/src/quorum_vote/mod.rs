@@ -6,7 +6,7 @@
 
 use std::{collections::BTreeMap, sync::Arc, time::Instant};
 
-use async_broadcast::{InactiveReceiver, Receiver, Sender};
+use async_broadcast::{broadcast, InactiveReceiver, Receiver, Sender};
 use async_trait::async_trait;
 use committable::Committable;
 use hotshot_task::{
@@ -32,7 +32,6 @@ use hotshot_types::{
     vote::{Certificate, HasViewNumber},
 };
 use hotshot_utils::anytrace::*;
-use tokio::task::JoinHandle;
 use tracing::instrument;
 
 use crate::{
@@ -104,6 +103,8 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V
 
     /// Stake table capacity for light client use
     pub stake_table_capacity: usize,
+
+    pub cancel_receiver: Receiver<()>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> HandleDepOutput
@@ -278,6 +279,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
                     &da_cert,
                     &self.consensus,
                     &self.receiver.activate_cloned(),
+                    self.cancel_receiver.clone(),
+                    self.id,
                 )
                 .await
                 {
@@ -400,7 +403,7 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
     pub latest_voted_view: TYPES::View,
 
     /// Table for the in-progress dependency tasks.
-    pub vote_dependencies: BTreeMap<TYPES::View, JoinHandle<()>>,
+    pub vote_dependencies: BTreeMap<TYPES::View, Sender<()>>,
 
     /// The underlying network
     pub network: Arc<I::Network>,
@@ -444,10 +447,16 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
         dependency_type: VoteDependency,
         view_number: TYPES::View,
         event_receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
+        cancel_receiver: Receiver<()>,
     ) -> EventDependency<Arc<HotShotEvent<TYPES>>> {
         let id = self.id;
         EventDependency::new(
-            event_receiver.clone(),
+            event_receiver,
+            cancel_receiver,
+            format!(
+                "VoteDependency::{:?} for view {:?}, my id {:?}",
+                dependency_type, view_number, self.id
+            ),
             Box::new(move |event| {
                 let event = event.as_ref();
                 let event_view = match dependency_type {
@@ -505,15 +514,26 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             return;
         }
 
+        let (cancel_sender, cancel_receiver) = broadcast(1);
+
         let mut quorum_proposal_dependency = self.create_event_dependency(
             VoteDependency::QuorumProposal,
             view_number,
             event_receiver.clone(),
+            cancel_receiver.clone(),
         );
-        let dac_dependency =
-            self.create_event_dependency(VoteDependency::Dac, view_number, event_receiver.clone());
-        let vid_dependency =
-            self.create_event_dependency(VoteDependency::Vid, view_number, event_receiver.clone());
+        let dac_dependency = self.create_event_dependency(
+            VoteDependency::Dac,
+            view_number,
+            event_receiver.clone(),
+            cancel_receiver.clone(),
+        );
+        let vid_dependency = self.create_event_dependency(
+            VoteDependency::Vid,
+            view_number,
+            event_receiver.clone(),
+            cancel_receiver.clone(),
+        );
         // If we have an event provided to us
         if let HotShotEvent::QuorumProposalValidated(..) = event.as_ref() {
             quorum_proposal_dependency.mark_as_completed(event);
@@ -542,10 +562,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 state_private_key: self.state_private_key.clone(),
                 first_epoch: self.first_epoch,
                 stake_table_capacity: self.stake_table_capacity,
+                cancel_receiver,
             },
         );
-        self.vote_dependencies
-            .insert(view_number, dependency_task.run());
+        self.vote_dependencies.insert(view_number, cancel_sender);
+
+        dependency_task.run();
     }
 
     /// Update the latest voted view number.
@@ -560,9 +582,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
 
             // Cancel the old dependency tasks.
             for view in *self.latest_voted_view..(*new_view) {
-                if let Some(dependency) = self.vote_dependencies.remove(&TYPES::View::new(view)) {
-                    dependency.abort();
-                    tracing::debug!("Vote dependency removed for view {view:?}");
+                let maybe_cancel_sender = self.vote_dependencies.remove(&TYPES::View::new(view));
+                if maybe_cancel_sender.as_ref().is_some_and(|s| !s.is_closed()) {
+                    tracing::error!("Aborting vote dependency task for view {view}");
+                    let _ = maybe_cancel_sender.unwrap().try_broadcast(());
                 }
             }
 
@@ -735,8 +758,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 let view = TYPES::View::new(view.saturating_sub(1));
                 // cancel old tasks
                 let current_tasks = self.vote_dependencies.split_off(&view);
-                while let Some((_, task)) = self.vote_dependencies.pop_last() {
-                    task.abort();
+                while let Some((view, cancel_sender)) = self.vote_dependencies.pop_last() {
+                    if !cancel_sender.is_closed() {
+                        tracing::error!("Aborting vote dependency task for view {view}");
+                        let _ = cancel_sender.try_broadcast(());
+                    }
                 }
                 self.vote_dependencies = current_tasks;
             },
@@ -747,8 +773,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 }
                 // cancel old tasks
                 let current_tasks = self.vote_dependencies.split_off(&view);
-                while let Some((_, task)) = self.vote_dependencies.pop_last() {
-                    task.abort();
+                while let Some((view, cancel_sender)) = self.vote_dependencies.pop_last() {
+                    if !cancel_sender.is_closed() {
+                        tracing::error!("Aborting vote dependency task for view {view}");
+                        let _ = cancel_sender.try_broadcast(());
+                    }
                 }
                 self.vote_dependencies = current_tasks;
             },
@@ -777,8 +806,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TaskState
     }
 
     fn cancel_subtasks(&mut self) {
-        while let Some((_, handle)) = self.vote_dependencies.pop_last() {
-            handle.abort();
+        while let Some((view, cancel_sender)) = self.vote_dependencies.pop_last() {
+            if !cancel_sender.is_closed() {
+                tracing::error!("Aborting vote dependency task for view {view}");
+                let _ = cancel_sender.try_broadcast(());
+            }
         }
     }
 }
