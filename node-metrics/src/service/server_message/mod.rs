@@ -11,7 +11,7 @@ use super::{client_id::ClientId, data_state::NodeIdentity};
 
 /// [ServerMessage] represents the messages that the server can send to the
 /// client for a response.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ServerMessage {
     /// This allows the client to know what client_id they have been assigned
     YouAre(ClientId),

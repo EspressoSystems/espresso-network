@@ -23,6 +23,7 @@ use crate::{
         client_state::{
             ClientThreadState, InternalClientMessageProcessingTask,
             ProcessDistributeBlockDetailHandlingTask, ProcessDistributeNodeIdentityHandlingTask,
+            ProcessDistributeStakeTableHandlingTask, ProcessDistributeValidatorHandlingTask,
             ProcessDistributeVotersHandlingTask,
         },
         data_state::{DataState, ProcessLeafAndBlockPairStreamTask, ProcessNodeIdentityStreamTask},
@@ -35,6 +36,8 @@ pub struct NodeValidatorAPI<K> {
     pub process_distribute_block_detail_handle: Option<ProcessDistributeBlockDetailHandlingTask>,
     pub process_distribute_node_identity_handle: Option<ProcessDistributeNodeIdentityHandlingTask>,
     pub process_distribute_voters_handle: Option<ProcessDistributeVotersHandlingTask>,
+    pub process_distribute_stake_table_handle: Option<ProcessDistributeStakeTableHandlingTask>,
+    pub process_distribute_validators_handle: Option<ProcessDistributeValidatorHandlingTask>,
     pub process_leaf_stream_handle: Option<ProcessLeafAndBlockPairStreamTask>,
     pub process_node_identity_stream_handle: Option<ProcessNodeIdentityStreamTask>,
     pub process_url_stream_handle: Option<ProcessNodeIdentityUrlStreamTask>,
@@ -169,6 +172,8 @@ pub async fn create_node_validator_processing(
     let (node_identity_sender_2, node_identity_receiver_2) = mpsc::channel(32);
     let (voters_sender, voters_receiver) = mpsc::channel(32);
     let (url_sender, url_receiver) = mpsc::channel(32);
+    let (stake_table_sender, stake_table_receiver) = mpsc::channel(32);
+    let (validator_sender, validator_receiver) = mpsc::channel(32);
 
     let process_internal_client_message_handle = InternalClientMessageProcessingTask::new(
         internal_client_message_receiver,
@@ -189,13 +194,27 @@ pub async fn create_node_validator_processing(
     let process_distribute_voters_handle =
         ProcessDistributeVotersHandlingTask::new(client_thread_state.clone(), voters_receiver);
 
+    let process_distribute_stake_table_handle = ProcessDistributeStakeTableHandlingTask::new(
+        client_thread_state.clone(),
+        stake_table_receiver,
+    );
+
+    let process_distribute_validator_handle = ProcessDistributeValidatorHandlingTask::new(
+        client_thread_state.clone(),
+        validator_receiver,
+    );
+
     let process_leaf_stream_handle = ProcessLeafAndBlockPairStreamTask::new(
         leaf_and_block_pair_receiver,
         data_state.clone(),
         hotshot_client,
         hotshot_config,
-        block_detail_sender,
-        voters_sender,
+        (
+            block_detail_sender,
+            voters_sender,
+            stake_table_sender,
+            validator_sender,
+        ),
     );
 
     let process_node_identity_stream_handle = ProcessNodeIdentityStreamTask::new(
@@ -218,6 +237,8 @@ pub async fn create_node_validator_processing(
         process_internal_client_message_handle: Some(process_internal_client_message_handle),
         process_distribute_block_detail_handle: Some(process_distribute_block_detail_handle),
         process_distribute_node_identity_handle: Some(process_distribute_node_identity_handle),
+        process_distribute_stake_table_handle: Some(process_distribute_stake_table_handle),
+        process_distribute_validators_handle: Some(process_distribute_validator_handle),
         process_distribute_voters_handle: Some(process_distribute_voters_handle),
         process_leaf_stream_handle: Some(process_leaf_stream_handle),
         process_node_identity_stream_handle: Some(process_node_identity_stream_handle),

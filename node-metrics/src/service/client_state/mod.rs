@@ -3,11 +3,13 @@ use std::{
     sync::Arc,
 };
 
-use async_lock::{RwLock, RwLockWriteGuard};
+use async_lock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use bitvec::vec::BitVec;
-use espresso_types::SeqTypes;
+use espresso_types::{v0_3::Validator, SeqTypes};
 use futures::{channel::mpsc::SendError, Sink, SinkExt, Stream, StreamExt};
+use hotshot::types::BLSPubKey;
 use hotshot_query_service::explorer::{BlockDetail, ExplorerHistograms};
+use hotshot_types::PeerConfig;
 use tokio::{spawn, task::JoinHandle};
 
 use super::{
@@ -909,6 +911,54 @@ async fn drop_failed_client_sends<K>(
     }
 }
 
+/// [handle_send_server_message_to_subscribed_clients] is a utility function
+/// that handles the sending of a server message to all of the subscribed
+/// clients.
+///
+/// It will automatically perform the send to all of the clients, and collect
+/// and return all failed recipients so they can be dropped.
+async fn handle_send_server_message_to_subscribed_clients<K>(
+    client_thread_state_read_lock_guard: &RwLockReadGuard<'_, ClientThreadState<K>>,
+    subscribers: &HashSet<ClientId>,
+    message: ServerMessage,
+) -> Vec<ClientId>
+where
+    K: Sink<ServerMessage, Error = SendError> + Clone + Unpin,
+{
+    let latest_subscribers = subscribers
+        .iter()
+        .map(|client_id| {
+            (
+                client_id,
+                client_thread_state_read_lock_guard.clients.get(client_id),
+            )
+        })
+        .filter(|(_, client)| client.is_some());
+
+    // We collect the results of sending the latest block to the clients.
+    let client_send_result_future = latest_subscribers.map(|(client_id, client)| {
+        let message = message.clone();
+        async move {
+            // This is guaranteed to be a some now
+            let client = client.unwrap();
+            let mut sender = client.sender.clone();
+            let send_result = sender.send(message).await;
+
+            (client_id, send_result)
+        }
+    });
+
+    let client_send_results = futures::future::join_all(client_send_result_future).await;
+
+    // These are the clients we failed to send the message to.  We copy these
+    // here so we can drop our read lock.
+    client_send_results
+        .into_iter()
+        .filter(|(_, send_result)| send_result.is_err())
+        .map(|(client_id, _)| *client_id)
+        .collect()
+}
+
 /// [handle_received_block_detail] is a function that processes received Block
 /// details and will attempt to distribute the message to all of the clients
 /// that are subscribed to the latest block stream.
@@ -919,45 +969,14 @@ async fn handle_received_block_detail<K>(
     K: Sink<ServerMessage, Error = SendError> + Clone + Unpin,
 {
     let client_thread_state_read_lock_guard = client_thread_state.read().await;
-
-    // These are the clients who are subscribed to the latest blocks, that
-    // have an active ClientState within the system.
-    let latest_block_subscribers = client_thread_state_read_lock_guard
-        .subscribed_latest_block
-        .iter()
-        .map(|client_id| {
-            (
-                client_id,
-                client_thread_state_read_lock_guard.clients.get(client_id),
-            )
-        })
-        .filter(|(_, client)| client.is_some());
-
-    let arc_block_detail = Arc::new(block_detail);
-    // We collect the results of sending the latest block to the clients.
-    let client_send_result_future = latest_block_subscribers.map(|(client_id, client)| {
-        let arc_block_detail = arc_block_detail.clone();
-        async move {
-            // This is guaranteed to be a some now
-            let client = client.unwrap();
-            let mut sender = client.sender.clone();
-            let send_result = sender
-                .send(ServerMessage::LatestBlock(arc_block_detail))
-                .await;
-
-            (client_id, send_result)
-        }
-    });
-
-    let client_send_results = futures::future::join_all(client_send_result_future).await;
-
-    // These are the clients we failed to send the message to.  We copy these
-    // here so we can drop our read lock.
-    let failed_client_sends = client_send_results
-        .into_iter()
-        .filter(|(_, send_result)| send_result.is_err())
-        .map(|(client_id, _)| *client_id)
-        .collect::<Vec<_>>();
+    let failed_client_sends = handle_send_server_message_to_subscribed_clients(
+        &client_thread_state_read_lock_guard,
+        // These are the clients who are subscribed to the latest blocks, that
+        // have an active ClientState within the system.
+        &client_thread_state_read_lock_guard.subscribed_latest_block,
+        ServerMessage::LatestBlock(Arc::new(block_detail)),
+    )
+    .await;
 
     // Explicitly Drop the read lock.
     drop(client_thread_state_read_lock_guard);
@@ -979,45 +998,14 @@ async fn handle_received_node_identity<K>(
     K: Sink<ServerMessage, Error = SendError> + Clone + Unpin,
 {
     let client_thread_state_read_lock_guard = client_thread_state.read().await;
-
-    // These are the clients who are subscribed to the node identities, that
-    // have an active ClientState within the system.
-    let node_identity_subscribers = client_thread_state_read_lock_guard
-        .subscribed_node_identity
-        .iter()
-        .map(|client_id| {
-            (
-                client_id,
-                client_thread_state_read_lock_guard.clients.get(client_id),
-            )
-        })
-        .filter(|(_, client)| client.is_some());
-
-    let arc_node_identity = Arc::new(node_identity);
-    // We collect the results of sending the latest block to the clients.
-    let client_send_result_future = node_identity_subscribers.map(|(client_id, client)| {
-        let arc_node_identity = arc_node_identity.clone();
-        async move {
-            // This is guaranteed to be a some now
-            let client = client.unwrap();
-            let mut sender = client.sender.clone();
-            let send_result = sender
-                .send(ServerMessage::LatestNodeIdentity(arc_node_identity.clone()))
-                .await;
-
-            (client_id, send_result)
-        }
-    });
-
-    let client_send_results = futures::future::join_all(client_send_result_future).await;
-
-    // These are the clients we failed to send the message to.  We copy these
-    // here so we can drop our read lock.
-    let failed_client_sends = client_send_results
-        .into_iter()
-        .filter(|(_, send_result)| send_result.is_err())
-        .map(|(client_id, _)| *client_id)
-        .collect::<Vec<_>>();
+    let failed_client_sends = handle_send_server_message_to_subscribed_clients(
+        &client_thread_state_read_lock_guard,
+        // These are the clients who are subscribed to the node identities, that
+        // have an active ClientState within the system.
+        &client_thread_state_read_lock_guard.subscribed_node_identity,
+        ServerMessage::LatestNodeIdentity(Arc::new(node_identity)),
+    )
+    .await;
 
     // Explicitly Drop the read lock.
     drop(client_thread_state_read_lock_guard);
@@ -1039,42 +1027,66 @@ async fn handle_received_voters<K>(
     K: Sink<ServerMessage, Error = SendError> + Clone + Unpin,
 {
     let client_thread_state_read_lock_guard = client_thread_state.read().await;
+    let failed_client_sends = handle_send_server_message_to_subscribed_clients(
+        &client_thread_state_read_lock_guard,
+        // These are the clients who are subscribed to the voters, that
+        // have an active ClientState within the system.
+        &client_thread_state_read_lock_guard.subscribed_voters,
+        ServerMessage::LatestVoters(voters.clone()),
+    )
+    .await;
 
-    // These are the clients who are subscribed to the node identities, that
-    // have an active ClientState within the system.
-    let node_identity_subscribers = client_thread_state_read_lock_guard
-        .subscribed_voters
-        .iter()
-        .map(|client_id| {
-            (
-                client_id,
-                client_thread_state_read_lock_guard.clients.get(client_id),
-            )
-        })
-        .filter(|(_, client)| client.is_some());
+    // Explicitly Drop the read lock.
+    drop(client_thread_state_read_lock_guard);
 
-    // We collect the results of sending the latest block to the clients.
-    let client_send_result_future = node_identity_subscribers.map(|(client_id, client)| {
-        let voters = voters.clone();
-        async move {
-            // This is guaranteed to be a some now
-            let client = client.unwrap();
-            let mut sender = client.sender.clone();
-            let send_result = sender.send(ServerMessage::LatestVoters(voters)).await;
+    if failed_client_sends.is_empty() {
+        return;
+    }
 
-            (client_id, send_result)
-        }
-    });
+    drop_failed_client_sends(client_thread_state, failed_client_sends).await;
+}
 
-    let client_send_results = futures::future::join_all(client_send_result_future).await;
+async fn handle_received_stake_table<K>(
+    client_thread_state: Arc<RwLock<ClientThreadState<K>>>,
+    stake_table: Vec<PeerConfig<SeqTypes>>,
+) where
+    K: Sink<ServerMessage, Error = SendError> + Clone + Unpin,
+{
+    let client_thread_state_read_lock_guard = client_thread_state.read().await;
+    let failed_client_sends = handle_send_server_message_to_subscribed_clients(
+        &client_thread_state_read_lock_guard,
+        // These are the clients who are subscribed to the stake tables, that
+        // have an active ClientState within the system.
+        &client_thread_state_read_lock_guard.subscribed_stake_tables,
+        ServerMessage::LatestStakeTable(Arc::new(stake_table)),
+    )
+    .await;
 
-    // These are the clients we failed to send the message to.  We copy these
-    // here so we can drop our read lock.
-    let failed_client_sends = client_send_results
-        .into_iter()
-        .filter(|(_, send_result)| send_result.is_err())
-        .map(|(client_id, _)| *client_id)
-        .collect::<Vec<_>>();
+    // Explicitly Drop the read lock.
+    drop(client_thread_state_read_lock_guard);
+
+    if failed_client_sends.is_empty() {
+        return;
+    }
+
+    drop_failed_client_sends(client_thread_state, failed_client_sends).await;
+}
+
+async fn handle_received_validator<K>(
+    client_thread_state: Arc<RwLock<ClientThreadState<K>>>,
+    validator: Validator<BLSPubKey>,
+) where
+    K: Sink<ServerMessage, Error = SendError> + Clone + Unpin,
+{
+    let client_thread_state_read_lock_guard = client_thread_state.read().await;
+    let failed_client_sends = handle_send_server_message_to_subscribed_clients(
+        &client_thread_state_read_lock_guard,
+        // These are the clients who are subscribed to the validators, that
+        // have an active ClientState within the system.
+        &client_thread_state_read_lock_guard.subscribed_validators,
+        ServerMessage::LatestValidator(Arc::new(validator)),
+    )
+    .await;
 
     // Explicitly Drop the read lock.
     drop(client_thread_state_read_lock_guard);
@@ -1372,6 +1384,142 @@ impl Drop for ProcessDistributeVotersHandlingTask {
     }
 }
 
+/// [ProcessDistributeStakeTableHandlingTask] represents an async task for
+/// processing the incoming epoch list of [PeerConfig] (Stake Table) and
+/// distributing them to all subscribed clients.
+pub struct ProcessDistributeStakeTableHandlingTask {
+    pub task_handle: Option<JoinHandle<()>>,
+}
+
+impl ProcessDistributeStakeTableHandlingTask {
+    /// [new] creates a new [ProcessDistributeStakeTableHandlingTask] with the
+    /// given client_thread_state and voters_receiver.
+    ///
+    /// Calling this function will start an async task that will start
+    /// processing.  The handle for the async task is stored within the
+    /// returned state.
+    pub fn new<S, K>(
+        client_thread_state: Arc<RwLock<ClientThreadState<K>>>,
+        stake_table_receiver: S,
+    ) -> Self
+    where
+        S: Stream<Item = Vec<PeerConfig<SeqTypes>>> + Send + Sync + Unpin + 'static,
+        K: Sink<ServerMessage, Error = SendError> + Clone + Send + Sync + Unpin + 'static,
+    {
+        let task_handle = spawn(Self::process_distribute_stake_table_handling_stream(
+            client_thread_state.clone(),
+            stake_table_receiver,
+        ));
+
+        Self {
+            task_handle: Some(task_handle),
+        }
+    }
+
+    /// [process_distribute_stake_table_handling_stream] is a function that
+    /// processes the [Stream] of incoming [PeerConfigs] and distributes them to
+    /// all subscribed clients.
+    async fn process_distribute_stake_table_handling_stream<S, K>(
+        client_thread_state: Arc<RwLock<ClientThreadState<K>>>,
+        mut stream: S,
+    ) where
+        S: Stream<Item = Vec<PeerConfig<SeqTypes>>> + Unpin,
+        K: Sink<ServerMessage, Error = SendError> + Clone + Unpin,
+    {
+        loop {
+            let stake_table_result = stream.next().await;
+
+            let stake_table = if let Some(stake_table) = stake_table_result {
+                stake_table
+            } else {
+                tracing::error!("stake table stream closed. shutting down client handling stream.");
+                return;
+            };
+
+            handle_received_stake_table(client_thread_state.clone(), stake_table).await;
+        }
+    }
+}
+
+/// [drop] implementation for [ProcessDistributeStakeTableHandlingTask] that will
+/// cancel the task if it is still running.
+impl Drop for ProcessDistributeStakeTableHandlingTask {
+    fn drop(&mut self) {
+        let task_handle = self.task_handle.take();
+        if let Some(task_handle) = task_handle {
+            task_handle.abort();
+        }
+    }
+}
+
+/// [ProcessDistributeValidatorHandlingTask] represents an async task for
+/// processing the incoming [Validator] and distributing them to all
+/// subscribed clients.
+pub struct ProcessDistributeValidatorHandlingTask {
+    pub task_handle: Option<JoinHandle<()>>,
+}
+
+impl ProcessDistributeValidatorHandlingTask {
+    /// [new] creates a new [ProcessDistributeValidatorHandlingTask] with the
+    /// given client_thread_state and voters_receiver.
+    ///
+    /// Calling this function will start an async task that will start
+    /// processing.  The handle for the async task is stored within the
+    /// returned state.
+    pub fn new<S, K>(
+        client_thread_state: Arc<RwLock<ClientThreadState<K>>>,
+        validator_receiver: S,
+    ) -> Self
+    where
+        S: Stream<Item = Validator<BLSPubKey>> + Send + Sync + Unpin + 'static,
+        K: Sink<ServerMessage, Error = SendError> + Clone + Send + Sync + Unpin + 'static,
+    {
+        let task_handle = spawn(Self::process_distribute_validator_handling_stream(
+            client_thread_state.clone(),
+            validator_receiver,
+        ));
+
+        Self {
+            task_handle: Some(task_handle),
+        }
+    }
+
+    /// [process_distribute_validator_handling_stream] is a function that
+    /// processes the [Stream] of incoming [Validator]s and distributes them to
+    /// all subscribed clients.
+    async fn process_distribute_validator_handling_stream<S, K>(
+        client_thread_state: Arc<RwLock<ClientThreadState<K>>>,
+        mut stream: S,
+    ) where
+        S: Stream<Item = Validator<BLSPubKey>> + Unpin,
+        K: Sink<ServerMessage, Error = SendError> + Clone + Unpin,
+    {
+        loop {
+            let validator_result = stream.next().await;
+
+            let validator = if let Some(validator) = validator_result {
+                validator
+            } else {
+                tracing::error!("validator stream closed. shutting down client handling stream.");
+                return;
+            };
+
+            handle_received_validator(client_thread_state.clone(), validator).await;
+        }
+    }
+}
+
+/// [drop] implementation for [ProcessDistributeValidatorHandlingTask] that will
+/// cancel the task if it is still running.
+impl Drop for ProcessDistributeValidatorHandlingTask {
+    fn drop(&mut self) {
+        let task_handle = self.task_handle.take();
+        if let Some(task_handle) = task_handle {
+            task_handle.abort();
+        }
+    }
+}
+
 #[cfg(test)]
 pub mod tests {
     use std::{sync::Arc, time::Duration};
@@ -1404,7 +1552,8 @@ pub mod tests {
             client_message::{ClientMessage, InternalClientMessage},
             client_state::{
                 ProcessDistributeBlockDetailHandlingTask,
-                ProcessDistributeNodeIdentityHandlingTask, ProcessDistributeVotersHandlingTask,
+                ProcessDistributeNodeIdentityHandlingTask, ProcessDistributeStakeTableHandlingTask,
+                ProcessDistributeValidatorHandlingTask, ProcessDistributeVotersHandlingTask,
             },
             data_state::{
                 create_block_detail_from_block, DataState, LocationDetails, NodeIdentity,
@@ -1727,6 +1876,8 @@ pub mod tests {
         let (server_message_sender_1, mut server_message_receiver_1) = mpsc::channel(1);
         let (server_message_sender_2, mut server_message_receiver_2) = mpsc::channel(1);
         let (server_message_sender_3, mut server_message_receiver_3) = mpsc::channel(1);
+        let (stake_table_sender, stake_table_receiver) = mpsc::channel(1);
+        let (validator_sender, validator_receiver) = mpsc::channel(1);
         let mut process_internal_client_message_handle = InternalClientMessageProcessingTask::new(
             internal_client_message_receiver,
             data_state.clone(),
@@ -1740,7 +1891,15 @@ pub mod tests {
             );
 
         let mut process_distribute_voters_handle =
-            ProcessDistributeVotersHandlingTask::new(client_thread_state, voters_receiver);
+            ProcessDistributeVotersHandlingTask::new(client_thread_state.clone(), voters_receiver);
+
+        let mut process_distribute_stake_table_handle =
+            ProcessDistributeStakeTableHandlingTask::new(
+                client_thread_state.clone(),
+                stake_table_receiver,
+            );
+        let mut process_distribute_validator_handle =
+            ProcessDistributeValidatorHandlingTask::new(client_thread_state, validator_receiver);
 
         let mut process_leaf_stream_handle = ProcessLeafAndBlockPairStreamTask::new(
             leaf_receiver,
@@ -1751,8 +1910,12 @@ pub mod tests {
                 epoch_start_block: None,
                 known_nodes_with_stake: vec![],
             },
-            block_detail_sender,
-            voters_sender,
+            (
+                block_detail_sender,
+                voters_sender,
+                stake_table_sender,
+                validator_sender,
+            ),
         );
 
         // Send a Connected Message to the server
@@ -1874,6 +2037,16 @@ pub mod tests {
             process_distribute_voters_handle.task_handle.take()
         {
             process_distribute_voters_handle.abort();
+        }
+        if let Some(process_distribute_stake_table_handle) =
+            process_distribute_stake_table_handle.task_handle.take()
+        {
+            process_distribute_stake_table_handle.abort();
+        }
+        if let Some(process_distribute_validator_handle) =
+            process_distribute_validator_handle.task_handle.take()
+        {
+            process_distribute_validator_handle.abort();
         }
         if let Some(process_leaf_stream_handle) = process_leaf_stream_handle.task_handle.take() {
             process_leaf_stream_handle.abort();

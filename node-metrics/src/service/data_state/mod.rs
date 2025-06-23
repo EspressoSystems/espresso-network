@@ -181,7 +181,7 @@ impl DataState {
         for (address, validator) in validators.into_iter() {
             // We want to ensure that we have the latest information for this
             // validator.
-            self.validators.insert(address.clone(), validator.clone());
+            self.validators.insert(address, validator.clone());
         }
     }
 
@@ -227,6 +227,8 @@ impl DataState {
 pub enum ProcessLeafError {
     BlockSendError(SendError),
     VotersSendError(SendError),
+    StakeTableSendError(SendError),
+    ValidatorSendError(SendError),
     FailedToGetNewStakeTable,
 }
 
@@ -238,6 +240,12 @@ impl std::fmt::Display for ProcessLeafError {
             },
             ProcessLeafError::VotersSendError(err) => {
                 write!(f, "error sending voters to sender: {err}")
+            },
+            ProcessLeafError::StakeTableSendError(err) => {
+                write!(f, "error sending stake table to sender: {err}")
+            },
+            ProcessLeafError::ValidatorSendError(err) => {
+                write!(f, "error sending validator to sender: {err}")
             },
             ProcessLeafError::FailedToGetNewStakeTable => {
                 write!(f, "error getting new stake table from sequencer")
@@ -251,6 +259,8 @@ impl std::error::Error for ProcessLeafError {
         match self {
             ProcessLeafError::BlockSendError(err) => Some(err),
             ProcessLeafError::VotersSendError(err) => Some(err),
+            ProcessLeafError::StakeTableSendError(err) => Some(err),
+            ProcessLeafError::ValidatorSendError(err) => Some(err),
             ProcessLeafError::FailedToGetNewStakeTable => None,
         }
     }
@@ -299,12 +309,18 @@ fn epoch_number_helper(
     epoch_from_block_number(block_height, num_blocks_per_epoch)
 }
 
-async fn perform_stake_table_epoch_check_and_update(
+async fn perform_stake_table_epoch_check_and_update<STSink, EVSink>(
     data_state: Arc<RwLock<DataState>>,
     client: surf_disco::Client<hotshot_query_service::Error, Version01>,
     hotshot_config: &PublicHotShotConfig,
     block_height: u64,
-) -> Result<(), ProcessLeafError> {
+    mut stake_table_sender: STSink,
+    mut epoch_validators_sender: EVSink,
+) -> Result<(), ProcessLeafError>
+where
+    STSink: Sink<Vec<PeerConfig<SeqTypes>>, Error = SendError> + Unpin,
+    EVSink: Sink<Validator<BLSPubKey>, Error = SendError> + Unpin,
+{
     // Are we in a new epoch?
     // Do we need to replace our stake table?
     tracing::debug!("processing block height: {block_height}");
@@ -351,6 +367,10 @@ async fn perform_stake_table_epoch_check_and_update(
                 // Update the stake table
                 let mut data_state_write_lock_guard = data_state.write().await;
                 data_state_write_lock_guard.replace_stake_table(next_stake_table);
+                stake_table_sender
+                    .send(data_state_write_lock_guard.stake_table.clone())
+                    .await
+                    .map_err(ProcessLeafError::StakeTableSendError)?;
             }
 
             let validators = match get_node_validators_from_sequencer(client, upcoming_epoch).await
@@ -365,7 +385,14 @@ async fn perform_stake_table_epoch_check_and_update(
             {
                 // Report the validators
                 let mut data_state_write_lock_guard = data_state.write().await;
-                data_state_write_lock_guard.report_validator_map(validators);
+                data_state_write_lock_guard.report_validator_map(validators.clone());
+
+                for validator in validators.values() {
+                    epoch_validators_sender
+                        .send(validator.clone())
+                        .await
+                        .map_err(ProcessLeafError::StakeTableSendError)?;
+                }
             }
         }
     }
@@ -378,21 +405,24 @@ async fn perform_stake_table_epoch_check_and_update(
 /// Additionally, the block that is contained within the [Leaf] will be
 /// computed into a [BlockDetail] and sent to the [Sink] so that it can be
 /// processed for real-time considerations.
-async fn process_incoming_leaf_and_block<BDSink, BVSink>(
+async fn process_incoming_leaf_and_block<BDSink, BVSink, STSink, EVSink>(
     leaf: Leaf1QueryData<SeqTypes>,
     block: BlockQueryData<SeqTypes>,
     data_state: Arc<RwLock<DataState>>,
     client: surf_disco::Client<hotshot_query_service::Error, Version01>,
     hotshot_config: &PublicHotShotConfig,
-    mut block_sender: BDSink,
-    mut voters_sender: BVSink,
+    senders: (BDSink, BVSink, STSink, EVSink),
 ) -> Result<(), ProcessLeafError>
 where
     Header: BlockHeader<SeqTypes> + BlockHeader<SeqTypes> + ExplorerHeader<SeqTypes>,
     Payload: BlockPayload<SeqTypes>,
     BDSink: Sink<BlockDetail<SeqTypes>, Error = SendError> + Unpin,
     BVSink: Sink<BitVec<u16>, Error = SendError> + Unpin,
+    STSink: Sink<Vec<PeerConfig<SeqTypes>>, Error = SendError> + Unpin,
+    EVSink: Sink<Validator<BLSPubKey>, Error = SendError> + Unpin,
 {
+    let (mut block_sender, mut voters_sender, stake_table_sender, epoch_validators_sender) =
+        senders;
     let block_detail = create_block_detail_from_block(&block);
     let block_detail_copy = create_block_detail_from_block(&block);
 
@@ -434,6 +464,8 @@ where
         client.clone(),
         hotshot_config,
         block_height,
+        stake_table_sender,
+        epoch_validators_sender,
     )
     .await?;
 
@@ -500,26 +532,31 @@ impl ProcessLeafAndBlockPairStreamTask {
     /// Calling this function will create an asynchronous task that will start
     /// processing immediately. The handle for the task will be stored within
     /// the returned structure.
-    pub fn new<S, K1, K2>(
+    pub fn new<S, K1, K2, K3, K4>(
         leaf_receiver: S,
         data_state: Arc<RwLock<DataState>>,
         client: surf_disco::Client<hotshot_query_service::Error, Version01>,
         hotshot_config: PublicHotShotConfig,
-        block_detail_sender: K1,
-        voters_sender: K2,
+        senders: (K1, K2, K3, K4),
     ) -> Self
     where
         S: Stream<Item = LeafAndBlock<SeqTypes>> + Send + Sync + Unpin + 'static,
         K1: Sink<BlockDetail<SeqTypes>, Error = SendError> + Clone + Send + Sync + Unpin + 'static,
         K2: Sink<BitVec<u16>, Error = SendError> + Clone + Send + Sync + Unpin + 'static,
+        K3: Sink<Vec<PeerConfig<SeqTypes>>, Error = SendError>
+            + Clone
+            + Send
+            + Sync
+            + Unpin
+            + 'static,
+        K4: Sink<Validator<BLSPubKey>, Error = SendError> + Clone + Send + Sync + Unpin + 'static,
     {
         let task_handle = spawn(Self::process_leaf_stream(
             leaf_receiver,
             data_state.clone(),
             client,
             hotshot_config,
-            block_detail_sender,
-            voters_sender,
+            senders,
         ));
 
         Self {
@@ -529,20 +566,22 @@ impl ProcessLeafAndBlockPairStreamTask {
 
     /// [process_leaf_stream] allows for the consumption of a [Stream] when
     /// attempting to process new incoming [Leaf]s.
-    async fn process_leaf_stream<S, BDSink, BVSink>(
+    async fn process_leaf_stream<S, BDSink, BVSink, STSink, EVSink>(
         mut stream: S,
         data_state: Arc<RwLock<DataState>>,
         client: surf_disco::Client<hotshot_query_service::Error, Version01>,
         hotshot_config: PublicHotShotConfig,
-        block_sender: BDSink,
-        voters_senders: BVSink,
+        senders: (BDSink, BVSink, STSink, EVSink),
     ) where
         S: Stream<Item = LeafAndBlock<SeqTypes>> + Unpin,
         Header: BlockHeader<SeqTypes> + BlockHeader<SeqTypes> + ExplorerHeader<SeqTypes>,
         Payload: BlockPayload<SeqTypes>,
         BDSink: Sink<BlockDetail<SeqTypes>, Error = SendError> + Clone + Unpin,
         BVSink: Sink<BitVec<u16>, Error = SendError> + Clone + Unpin,
+        STSink: Sink<Vec<PeerConfig<SeqTypes>>, Error = SendError> + Clone + Unpin,
+        EVSink: Sink<Validator<BLSPubKey>, Error = SendError> + Clone + Unpin,
     {
+        let (block_sender, voters_senders, stake_table_sender, epoch_validators_sender) = senders;
         loop {
             let leaf_result = stream.next().await;
             let (leaf, block) = if let Some(pair) = leaf_result {
@@ -559,8 +598,12 @@ impl ProcessLeafAndBlockPairStreamTask {
                 data_state.clone(),
                 client.clone(),
                 &hotshot_config,
-                block_sender.clone(),
-                voters_senders.clone(),
+                (
+                    block_sender.clone(),
+                    voters_senders.clone(),
+                    stake_table_sender.clone(),
+                    epoch_validators_sender.clone(),
+                ),
             )
             .await
             {
@@ -571,14 +614,20 @@ impl ProcessLeafAndBlockPairStreamTask {
                 // which will ultimately mean that further processing attempts
                 // will fail, and be fruitless.
                 match err {
-                    ProcessLeafError::BlockSendError(_) => {
+                    ProcessLeafError::BlockSendError(err) => {
                         panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying sink is closed, blocks will stagnate: {err}")
                     },
-                    ProcessLeafError::VotersSendError(_) => {
+                    ProcessLeafError::VotersSendError(err) => {
                         panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying sink is closed, voters will stagnate: {err}")
                     },
+                    ProcessLeafError::StakeTableSendError(err) => {
+                        panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying stake table is closed, stake table will stagnate: {err}")
+                    },
+                    ProcessLeafError::ValidatorSendError(err) => {
+                        panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying validator sink is closed, validators will stagnate: {err}")
+                    },
                     ProcessLeafError::FailedToGetNewStakeTable => {
-                        panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying stake table is closed, blocks will stagnate: {err}")
+                        panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying stake table is closed, blocks will stagnate")
                     },
                 }
             }
@@ -794,6 +843,9 @@ mod tests {
         let (block_sender, block_receiver) = futures::channel::mpsc::channel(1);
         let (voters_sender, voters_receiver) = futures::channel::mpsc::channel(1);
         let (leaf_sender, leaf_receiver) = futures::channel::mpsc::channel(1);
+        let (stake_table_sender, _stake_table_receiver) = futures::channel::mpsc::channel(1);
+        let (epoch_validators_sender, _epoch_validators_receiver) =
+            futures::channel::mpsc::channel(1);
 
         let mut process_leaf_stream_task_handle = ProcessLeafAndBlockPairStreamTask::new(
             leaf_receiver,
@@ -804,8 +856,12 @@ mod tests {
                 epoch_height: None,
                 known_nodes_with_stake: vec![],
             },
-            block_sender,
-            voters_sender,
+            (
+                block_sender,
+                voters_sender,
+                stake_table_sender,
+                epoch_validators_sender,
+            ),
         );
 
         {
