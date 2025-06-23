@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import { Script } from "forge-std/Script.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import { EspToken } from "../src/EspTokenV2.sol";
+import { EspToken } from "../src/EspToken.sol";
 
 /// @notice Deploys an upgradeable Fee Contract using the OpenZeppelin Upgrades plugin.
 ///
@@ -15,8 +15,6 @@ import { EspToken } from "../src/EspTokenV2.sol";
 /// echo test test test test test test test test test test test junk | tr -d '\n' > .mnemonic
 /// forge script --mnemonics .mnemonic DeployEspTokenScript --broadcast
 contract DeployEspTokenScript is Script {
-    string internal contractName = "EspTokenV2.sol";
-
     error OwnerNotAsExpected(address expectedOwner, address currentOwner);
 
     /// @dev Deploys both the proxy and the implementation contract.
@@ -34,8 +32,8 @@ contract DeployEspTokenScript is Script {
     {
         vm.startBroadcast();
 
-        owner = vm.envAddress("ESP_TOKEN_INITIAL_OWNER");
-        initialRecipient = vm.envAddress("ESP_TOKEN_INITIAL_RECIPIENT");
+        owner = vm.envAddress("ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS");
+        initialRecipient = vm.envAddress("ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS");
         initialSupply = vm.envUint("ESP_TOKEN_INITIAL_SUPPLY");
         name = vm.envString("ESP_TOKEN_NAME");
         symbol = vm.envString("ESP_TOKEN_SYMBOL");
