@@ -909,6 +909,9 @@ pub mod testing {
                         .blocks_per_epoch(blocks_per_epoch)
                         .epoch_start_block(epoch_start_block)
                         .multisig_pauser(self.signer.address())
+                        .token_name("Espresso".to_string())
+                        .token_symbol("ESP".to_string())
+                        .initial_token_supply(U256::from(3590000000u64))
                         .build()
                         .unwrap();
                     args.deploy_all(&mut contracts)

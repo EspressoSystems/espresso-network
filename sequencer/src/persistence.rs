@@ -1482,6 +1482,9 @@ mod tests {
             .blocks_per_epoch(blocks_per_epoch)
             .epoch_start_block(1)
             .multisig_pauser(network_config.signer().address())
+            .token_name("Espresso".to_string())
+            .token_symbol("ESP".to_string())
+            .initial_token_supply(U256::from(3590000000u64))
             .build()
             .unwrap();
 
