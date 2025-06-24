@@ -115,8 +115,6 @@ pub enum StakeTableError {
     DelegatorNotFound(Address),
     #[error("BLS key already used: {0}")]
     BlsKeyAlreadyUsed(String),
-    #[error("Schnorr key already used: {0}")]
-    SchnorrKeyAlreadyUsed(String),
     #[error("Insufficient stake to undelegate")]
     InsufficientStake,
     #[error("Event authentication failed: {0}")]
@@ -127,6 +125,14 @@ pub enum StakeTableError {
     MissingMaximumStake,
     #[error("Overflow when calculating minimum stake threshold")]
     MinimumStakeOverflow,
+    #[error("Delegator {0:#x} has 0 stake")]
+    ZeroDelegatorStake(Address),
+}
+
+#[derive(Debug, Error)]
+pub enum ExpectedStakeTableError {
+ #[error("Schnorr key already used: {0}")]
+    SchnorrKeyAlreadyUsed(String),
 }
 
 #[derive(Debug, Error)]
