@@ -2439,9 +2439,9 @@ mod tests {
 
         assert_matches!(
             result,
-            Err(StakeTableError::BlsKeyAlreadyUsed( key))
+            Err(StakeTableError::BlsKeyAlreadyUsed(key))
                 if key == expected_bls_key,
-            "Expected BlsKeyAlreadyUsed({}), but got: {:?}", expected_bls_key, result
+            "Expected BlsKeyAlreadyUsed({expected_bls_key}), but got: {result:?}",
         );
     }
 
@@ -2464,7 +2464,7 @@ mod tests {
             result,
             Ok(Err(ExpectedStakeTableError::SchnorrKeyAlreadyUsed(key)))
                 if key == schnorr.to_string(),
-            "Expected SchnorrKeyAlreadyUsed({}), but got: {:?}", schnorr, result
+            "Expected SchnorrKeyAlreadyUsed({schnorr}), but got: {result:?}",
 
         );
     }
@@ -2481,7 +2481,7 @@ mod tests {
     }
 
     #[test]
-    fn test_delegate_zero_amount_is_ignored() {
+    fn test_delegate_zero_amount_is_rejected() {
         let mut state = StakeTableState::new();
         let validator = TestValidator::random();
         let account = validator.account;
@@ -2497,9 +2497,15 @@ mod tests {
             validator: account,
             amount,
         });
-        assert!(state.apply_event(event).unwrap().is_ok());
-        let val = state.validators.get(&account).unwrap();
-        assert!(!val.delegators.contains_key(&delegator));
+        let result = state.apply_event(event);
+
+        assert_matches!(
+            result,
+            Err(StakeTableError::ZeroDelegatorStake(addr))
+                if addr == delegator,
+            "delegator stake is zero"
+
+        );
     }
 
     #[test]
@@ -2528,8 +2534,7 @@ mod tests {
         assert_matches!(
             result,
             Err(StakeTableError::InsufficientStake),
-            "Expected InsufficientStake error, got: {:?}",
-            result
+            "Expected InsufficientStake error, got: {result:?}",
         );
     }
 
