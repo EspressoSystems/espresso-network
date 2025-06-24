@@ -15,5 +15,5 @@ RUN chmod +x /bin/multisig-upgrade-entrypoint
 
 COPY contracts/script/multisigTransactionProposals/safeSDK ./contracts/script/multisigTransactionProposals/safeSDK/
 
-RUN /bin/deploy --verify-node-js-files
+RUN /bin/deploy verify-node-js-files
 CMD ["/bin/deploy"]

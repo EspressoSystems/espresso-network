@@ -1,11 +1,16 @@
 use std::{fs::File, io::stdout, path::PathBuf, thread::sleep, time::Duration};
 
-use alloy::primitives::{Address, U256};
-use clap::Parser;
+use alloy::{
+    primitives::{utils::format_ether, Address, U256},
+    providers::{Provider, WalletProvider},
+};
+use anyhow::Context as _;
+use clap::{Parser, Subcommand};
 use espresso_contract_deployer::{
-    build_provider,
+    build_provider, build_provider_ledger,
     builder::DeployerArgsBuilder,
     network_config::{light_client_genesis, light_client_genesis_from_stake_table},
+    provider::connect_ledger,
     verify_node_js_files, Contract, Contracts, DeployedContracts,
 };
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
@@ -69,9 +74,10 @@ struct Options {
         long,
         name = "MNEMONIC",
         env = "ESPRESSO_SEQUENCER_ETH_MNEMONIC",
-        default_value = "test test test test test test test test test test test junk"
+        default_value = "test test test test test test test test test test test junk",
+        conflicts_with = "LEDGER"
     )]
-    mnemonic: String,
+    mnemonic: Option<String>,
 
     /// Address for the multisig wallet that will be the admin
     ///
@@ -103,6 +109,18 @@ struct Options {
         default_value = "0"
     )]
     account_index: u32,
+
+    /// Use a ledger device to sign transactions.
+    ///
+    /// NOTE: ledger must be unlocked, Ethereum app open and blind signing must be enabled in the
+    /// Ethereum app settings.
+    #[clap(
+        long,
+        name = "LEDGER",
+        env = "ESPRESSO_DEPLOYER_USE_LEDGER",
+        conflicts_with = "MNEMONIC"
+    )]
+    ledger: bool,
 
     /// Option to deploy fee contracts
     #[clap(long, default_value = "false")]
@@ -220,24 +238,86 @@ struct Options {
 
     #[clap(flatten)]
     logging: logging::Config,
+
+    /// Command to run
+    ///
+    /// For backwards compatibility, the default is to deploy contracts, if no
+    /// subcommand is specified.
+    #[clap(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+enum Command {
+    Account,
+    Balance,
+    VerifyNodeJsFiles,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let opt = Options::parse();
+
     opt.logging.init();
 
-    if opt.verify_node_js_files {
+    if matches!(opt.command, Some(Command::VerifyNodeJsFiles)) {
         verify_node_js_files().await?;
-    }
+        return Ok(());
+    };
 
     let mut contracts = Contracts::from(opt.contracts);
-    let provider = build_provider(
-        opt.mnemonic,
-        opt.account_index,
-        opt.rpc_url.clone(),
-        Some(opt.l1_polling_interval),
+    let provider = if opt.ledger {
+        let signer = connect_ledger(opt.account_index as usize).await?;
+        tracing::info!("Using ledger for signing, watch ledger device for prompts.");
+        build_provider_ledger(signer, opt.rpc_url.clone(), Some(opt.l1_polling_interval))
+    } else {
+        build_provider(
+            opt.mnemonic
+                .expect("Mnemonic provided when not using ledger"),
+            opt.account_index,
+            opt.rpc_url.clone(),
+            Some(opt.l1_polling_interval),
+        )
+    };
+
+    // Fail early if we can't connect to the Ethereum RPC.
+    let chain_id = provider.get_chain_id().await.with_context(|| {
+        // The URL may contain a key in the query string.
+        let mut url = opt.rpc_url.clone();
+        url.set_query(None);
+        format!("Unable query Ethereum provider {url}..")
+    })?;
+    tracing::info!("Connected to chain with chain ID: {chain_id}");
+
+    let account = provider.default_signer_address();
+    if let Some(command) = &opt.command {
+        match command {
+            Command::Account => {
+                println!("{account}");
+                return Ok(());
+            },
+            Command::Balance => {
+                let balance = provider.get_balance(account).await?;
+                println!("{account}: {} Eth", format_ether(balance));
+                return Ok(());
+            },
+            _ => unreachable!(),
+        };
+    };
+
+    // No subcommand specified. Deploy contracts.
+
+    let balance = provider.get_balance(account).await?;
+    tracing::info!(
+        "Using deployer account {account} with balance: {}",
+        format_ether(balance),
     );
+    if balance.is_zero() {
+        anyhow::bail!(
+            "account_index {}, address={account} has no balance. A funded account is required.",
+            opt.account_index
+        );
+    }
 
     // First use builder to build constructor input arguments
     let mut args_builder = DeployerArgsBuilder::default();
