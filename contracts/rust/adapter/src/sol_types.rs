@@ -38,6 +38,7 @@ pub use crate::bindings::{
     lightclientmock::{self, LightClientMock},
     lightclientv2::{self, LightClientV2},
     lightclientv2mock::{self, LightClientV2Mock},
+    opstimelock::OpsTimelock,
     plonkverifier::PlonkVerifier,
     plonkverifierv2::PlonkVerifierV2,
     safeexittimelock::SafeExitTimelock,
@@ -46,7 +47,6 @@ pub use crate::bindings::{
         self, EdOnBN254::EdOnBN254Point as EdOnBN254PointSol, StakeTableV2,
         BN254::G2Point as G2PointSol,
     },
-    timelock::Timelock,
 };
 
 // For types that we need to interact with some functions but their bindings are not generated

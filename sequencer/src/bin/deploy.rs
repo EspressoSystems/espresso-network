@@ -140,10 +140,10 @@ struct Options {
     /// Option to upgrade to StakeTable V2
     #[clap(long, default_value = "false")]
     upgrade_stake_table_v2: bool,
-    /// Option to deploy timelock
+    /// Option to deploy ops timelock
     #[clap(long, default_value = "false")]
-    deploy_timelock: bool,
-    /// Option to deploy token timelock
+    deploy_ops_timelock: bool,
+    /// Option to deploy safe exit timelock
     #[clap(long, default_value = "false")]
     deploy_safe_exit_timelock: bool,
 
@@ -223,35 +223,35 @@ struct Options {
     #[clap(long, env = "ESP_TOKEN_SYMBOL", default_value = "ESP")]
     token_symbol: String,
 
-    /// The admin of the timelock
-    #[clap(long, env = "ESPRESSO_TIMELOCK_ADMIN")]
-    timelock_admin: Option<Address>,
+    /// The admin of the ops timelock
+    #[clap(long, env = "ESPRESSO_OPS_TIMELOCK_ADMIN")]
+    ops_timelock_admin: Option<Address>,
 
-    /// The delay of the timelock
-    #[clap(long, env = "ESPRESSO_TIMELOCK_DELAY")]
-    timelock_delay: Option<u64>,
+    /// The delay of the ops timelock
+    #[clap(long, env = "ESPRESSO_OPS_TIMELOCK_DELAY")]
+    ops_timelock_delay: Option<u64>,
 
-    /// The executor(s) of the timelock
-    #[clap(long, env = "ESPRESSO_TIMELOCK_EXECUTORS")]
-    timelock_executors: Option<Vec<Address>>,
+    /// The executor(s) of the ops timelock
+    #[clap(long, env = "ESPRESSO_OPS_TIMELOCK_EXECUTORS")]
+    ops_timelock_executors: Option<Vec<Address>>,
 
-    /// The proposer(s) of the timelock
-    #[clap(long, env = "ESPRESSO_TIMELOCK_PROPOSERS")]
-    timelock_proposers: Option<Vec<Address>>,
+    /// The proposer(s) of the ops timelock
+    #[clap(long, env = "ESPRESSO_OPS_TIMELOCK_PROPOSERS")]
+    ops_timelock_proposers: Option<Vec<Address>>,
 
-    /// The admin of the token timelock
+    /// The admin of the safe exit timelock
     #[clap(long, env = "ESPRESSO_SAFE_EXIT_TIMELOCK_ADMIN")]
     safe_exit_timelock_admin: Option<Address>,
 
-    /// The delay of the token timelock
+    /// The delay of the safe exit timelock
     #[clap(long, env = "ESPRESSO_SAFE_EXIT_TIMELOCK_DELAY")]
     safe_exit_timelock_delay: Option<u64>,
 
-    /// The executor(s) of the token  timelock
+    /// The executor(s) of the safe exit timelock
     #[clap(long, env = "ESPRESSO_SAFE_EXIT_TIMELOCK_EXECUTORS")]
     safe_exit_timelock_executors: Option<Vec<Address>>,
 
-    /// The proposer(s) of the token timelock
+    /// The proposer(s) of the safe exit timelock
     #[clap(long, env = "ESPRESSO_SAFE_EXIT_TIMELOCK_PROPOSERS")]
     safe_exit_timelock_proposers: Option<Vec<Address>>,
 
@@ -412,23 +412,23 @@ async fn main() -> anyhow::Result<()> {
             args_builder.exit_escrow_period(U256::from(escrow_period.as_secs()));
         }
     }
-    if opt.deploy_timelock {
-        let timelock_admin = opt
-            .timelock_admin
-            .expect("Must provide --timelock-admin when deploying timelock");
-        args_builder.timelock_admin(timelock_admin);
-        let timelock_delay = opt
-            .timelock_delay
-            .expect("Must provide --timelock-delay when deploying timelock");
-        args_builder.timelock_delay(U256::from(timelock_delay));
-        let timelock_executors = opt
-            .timelock_executors
-            .expect("Must provide --timelock-executors when deploying timelock");
-        args_builder.timelock_executors(timelock_executors.into_iter().collect());
-        let timelock_proposers = opt
-            .timelock_proposers
-            .expect("Must provide --timelock-proposers when deploying timelock");
-        args_builder.timelock_proposers(timelock_proposers.into_iter().collect());
+    if opt.deploy_ops_timelock {
+        let ops_timelock_admin = opt
+            .ops_timelock_admin
+            .expect("Must provide --ops-timelock-admin when deploying ops timelock");
+        args_builder.ops_timelock_admin(ops_timelock_admin);
+        let ops_timelock_delay = opt
+            .ops_timelock_delay
+            .expect("Must provide --ops-timelock-delay when deploying ops timelock");
+        args_builder.ops_timelock_delay(U256::from(ops_timelock_delay));
+        let ops_timelock_executors = opt
+            .ops_timelock_executors
+            .expect("Must provide --ops-timelock-executors when deploying ops timelock");
+        args_builder.ops_timelock_executors(ops_timelock_executors.into_iter().collect());
+        let ops_timelock_proposers = opt
+            .ops_timelock_proposers
+            .expect("Must provide --ops-timelock-proposers when deploying ops timelock");
+        args_builder.ops_timelock_proposers(ops_timelock_proposers.into_iter().collect());
     }
 
     if opt.deploy_safe_exit_timelock {
@@ -475,8 +475,8 @@ async fn main() -> anyhow::Result<()> {
     if opt.upgrade_stake_table_v2 {
         args.deploy(&mut contracts, Contract::StakeTableV2).await?;
     }
-    if opt.deploy_timelock {
-        args.deploy(&mut contracts, Contract::Timelock).await?;
+    if opt.deploy_ops_timelock {
+        args.deploy(&mut contracts, Contract::OpsTimelock).await?;
     }
     if opt.deploy_safe_exit_timelock {
         args.deploy(&mut contracts, Contract::SafeExitTimelock)
