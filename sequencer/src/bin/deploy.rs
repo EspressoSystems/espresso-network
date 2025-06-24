@@ -434,20 +434,20 @@ async fn main() -> anyhow::Result<()> {
     if opt.deploy_safe_exit_timelock {
         let safe_exit_timelock_admin = opt
             .safe_exit_timelock_admin
-            .expect("Must provide --safe-token-timelock-admin when deploying token timelock");
+            .expect("Must provide --safe-exit-timelock-admin when deploying token timelock");
         args_builder.safe_exit_timelock_admin(safe_exit_timelock_admin);
         let safe_exit_timelock_delay = opt
             .safe_exit_timelock_delay
-            .expect("Must provide --safe-token-timelock-delay when deploying token timelock");
+            .expect("Must provide --safe-exit-timelock-delay when deploying token timelock");
         args_builder.safe_exit_timelock_delay(U256::from(safe_exit_timelock_delay));
         let safe_exit_timelock_executors = opt
             .safe_exit_timelock_executors
-            .expect("Must provide --safe-token-timelock-executors when deploying token timelock");
+            .expect("Must provide --safe-exit-timelock-executors when deploying token timelock");
         args_builder
             .safe_exit_timelock_executors(safe_exit_timelock_executors.into_iter().collect());
         let safe_exit_timelock_proposers = opt
             .safe_exit_timelock_proposers
-            .expect("Must provide --safe-token-timelock-proposers when deploying token timelock");
+            .expect("Must provide --safe-exit-timelock-proposers when deploying token timelock");
         args_builder
             .safe_exit_timelock_proposers(safe_exit_timelock_proposers.into_iter().collect());
     }
