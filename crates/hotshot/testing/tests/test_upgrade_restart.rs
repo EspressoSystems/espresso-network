@@ -12,8 +12,8 @@ use hotshot_example_types::node_types::{
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,
-    overall_safety_task::OverallSafetyPropertiesDescription,
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
+    overall_safety_task::OverallSafetyPropertiesDescription,
     spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
     test_builder::TestDescription,
 };
@@ -51,62 +51,68 @@ cross_tests!(
             ..TestDescription::default()
         };
 
-      metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
-          // Make sure we keep committing rounds after the catchup, up to the 2nd epoch transition.
-          num_successful_views: 110,
-          expected_view_failures: vec![40],
-          possible_view_failures: vec![38, 39, 41, 42],
-          decide_timeout: Duration::from_secs(60),
-          ..Default::default()
-      };
+        metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
+            // Make sure we keep committing rounds after the catchup, up to the 2nd epoch transition.
+            num_successful_views: 110,
+            expected_view_failures: vec![40],
+            possible_view_failures: vec![38, 39, 41, 42],
+            decide_timeout: Duration::from_secs(60),
+            ..Default::default()
+        };
 
-        // Keep going until the 2nd epoch transition
-        metadata.overall_safety_properties.num_successful_views = 110;
         metadata.test_config.epoch_height = 50;
 
         metadata
     },
 );
 
-// cross_tests!(
-//     TestName: test_epoch_upgrade_restart_2,
-//     Impls: [MemoryImpl],
-//     Types: [TestTypes, TestTypesRandomizedLeader],
-//     // TODO: we need some test infrastructure + Membership trait fixes to get this to work with:
-//     // Types: [TestTypes, TestTypesRandomizedLeader, TestTwoStakeTablesTypes],
-//     Versions: [EpochUpgradeTestVersions],
-//     Ignore: false,
-//     Metadata: {
-// 
-//         let mut catchup_nodes = vec![];
-//         for i in 0..7 {
-//             catchup_nodes.push(ChangeNode {
-//                 idx: i,
-//                 updown: NodeAction::RestartDown(0),
-//             })
-//         }
-// 
-//         let spinning_properties = SpinningTaskDescription {
-//             // Restart all the nodes in view 70, i.e. between the first and second epochs
-//             node_changes: vec![(70, catchup_nodes)],
-//         };
-// 
-//         let mut metadata = TestDescription {
-//             // allow more time to pass in CI
-//             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-//                                              TimeBasedCompletionTaskDescription {
-//                                                  duration: Duration::from_secs(120),
-//                                              },
-//                                          ),
-//             upgrade_view: Some(5),
-//             spinning_properties,
-//             ..TestDescription::default()
-//         };
-// 
-//         // Keep going until the 2nd epoch transition
-//         metadata.overall_safety_properties.num_successful_views = 110;
-//         metadata.test_config.epoch_height = 50;
-// 
-//         metadata
-//     },
-// );
+cross_tests!(
+    TestName: test_epoch_upgrade_restart_2,
+    Impls: [MemoryImpl],
+    Types: [TestTypes, TestTypesRandomizedLeader],
+    // TODO: we need some test infrastructure + Membership trait fixes to get this to work with:
+    // Types: [TestTypes, TestTypesRandomizedLeader, TestTwoStakeTablesTypes],
+    Versions: [EpochUpgradeTestVersions],
+    Ignore: false,
+    Metadata: {
+
+        let mut catchup_nodes = vec![];
+        for i in 0..7 {
+            catchup_nodes.push(ChangeNode {
+                idx: i,
+                updown: NodeAction::RestartDown(0),
+            })
+        }
+
+        let spinning_properties = SpinningTaskDescription {
+            // Restart all the nodes in view 70, i.e. between the first and second epochs
+            node_changes: vec![(70, catchup_nodes)],
+        };
+
+        let mut metadata = TestDescription {
+            // allow more time to pass in CI
+            completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
+                                             TimeBasedCompletionTaskDescription {
+                                                 duration: Duration::from_secs(120),
+                                             },
+                                         ),
+            upgrade_view: Some(5),
+            spinning_properties,
+            ..TestDescription::default()
+        };
+
+        // Keep going until the 2nd epoch transition
+        metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
+            // Make sure we keep committing rounds after the catchup, up to the 2nd epoch transition.
+            num_successful_views: 110,
+            expected_view_failures: vec![70],
+            possible_view_failures: vec![68, 69, 71, 72],
+            decide_timeout: Duration::from_secs(60),
+            ..Default::default()
+        };
+
+        metadata.test_config.epoch_height = 50;
+
+        metadata
+    },
+);
