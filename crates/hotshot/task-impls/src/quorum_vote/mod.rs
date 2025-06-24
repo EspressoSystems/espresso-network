@@ -155,7 +155,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
                     ensure!(proposed_leaf.parent_commitment() == parent_commitment,
                         warn!("Proposed leaf parent commitment does not match parent leaf payload commitment. Aborting vote."));
 
-                    let now = Instant::now();
                     // Update our persistent storage of the proposal. If we cannot store the proposal return
                     // and error so we don't vote
                     self.storage
