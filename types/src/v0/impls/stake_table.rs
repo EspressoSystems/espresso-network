@@ -223,7 +223,7 @@ impl StakeTableState {
 
                 // The stake table contract enforces that each bls key is only used once.
                 if !self.used_bls_keys.insert(stake_table_key) {
-                    tracing::warn!(
+                    tracing::error!(
                         stake_table_key = %stake_table_key,
                         "Duplicate BLS key found during stake table events processing"
                     );
@@ -274,7 +274,7 @@ impl StakeTableState {
 
                 // The stake table contract enforces that each bls key is only used once.
                 if !self.used_bls_keys.insert(stake_table_key) {
-                    tracing::warn!(
+                    tracing::error!(
                         stake_table_key = %stake_table_key,
                         "Duplicate BLS key found during stake table events processing"
                     );
@@ -341,7 +341,7 @@ impl StakeTableState {
                 // or increase the stake if already present
                 val.delegators
                     .entry(delegator)
-                    .and_modify(|s| *s += amount)
+                    .and_modify(|stake| *stake += amount)
                     .or_insert(amount);
 
                 Ok(())
@@ -396,7 +396,7 @@ impl StakeTableState {
                 let state_ver_key: SchnorrPubKey = schnorrVK.into();
 
                 if !self.used_bls_keys.insert(stake_table_key) {
-                    tracing::warn!(
+                    tracing::error!(
                         stake_table_key = %stake_table_key,
                         "Duplicate BLS key found during stake table events processing"
                     );
@@ -447,7 +447,7 @@ impl StakeTableState {
 
                 // The stake table contract enforces that each bls key is only used once.
                 if !self.used_bls_keys.insert(stake_table_key) {
-                    tracing::warn!(
+                    tracing::error!(
                         stake_table_key = %stake_table_key,
                         "Duplicate BLS key found during stake table events processing"
                     );
@@ -2081,6 +2081,7 @@ pub mod testing {
 mod tests {
     use alloy::{primitives::Address, rpc::types::Log};
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
+    use rstest::rstest;
     use sequencer_utils::test_utils::setup_test;
 
     use super::*;
@@ -2305,44 +2306,63 @@ mod tests {
         )
     }
 
-    #[test]
-    fn test_register_validator() {
-        let mut state = StakeTableState::new();
-        let val = TestValidator::random();
-        let event = StakeTableEvent::Register((&val).into());
-
-        assert!(state.apply_event(event).is_ok());
-
-        let stored = state.validators.get(&val.account).unwrap();
-        assert_eq!(stored.account, val.account);
-    }
-
-    #[test]
-    fn test_validator_already_registered() {
+    #[rstest]
+    #[case::v1(StakeTableContractVersion::V1)]
+    #[case::v2(StakeTableContractVersion::V2)]
+    fn test_register_validator(#[case] version: StakeTableContractVersion) {
         let mut state = StakeTableState::new();
         let validator = TestValidator::random();
 
-        assert!(state
-            .apply_event(StakeTableEvent::Register((&validator).into()))
-            .is_ok());
-
-        // Second registration with the same validator should fail
-        let result = state.apply_event(StakeTableEvent::Register((&validator).into()));
-        assert!(
-            matches!(result, Err(StakeTableError::AlreadyRegistered(addr)) if addr == validator.account)
-        );
-    }
-
-    #[test]
-    fn test_register_v2_validator() {
-        let mut state = StakeTableState::new();
-        let val = TestValidator::random();
-        let event = StakeTableEvent::RegisterV2((&val).into());
+        let event = match version {
+            StakeTableContractVersion::V1 => StakeTableEvent::Register((&validator).into()),
+            StakeTableContractVersion::V2 => StakeTableEvent::RegisterV2((&validator).into()),
+        };
 
         assert!(state.apply_event(event).is_ok());
 
-        let stored = state.validators.get(&val.account).unwrap();
-        assert_eq!(stored.account, val.account);
+        let stored = state.validators.get(&validator.account).unwrap();
+        assert_eq!(stored.account, validator.account);
+    }
+
+    #[rstest]
+    #[case::v1(StakeTableContractVersion::V1)]
+    #[case::v2(StakeTableContractVersion::V2)]
+    fn test_validator_already_registered(#[case] version: StakeTableContractVersion) {
+        let mut stake_table_state = StakeTableState::new();
+
+        let test_validator = TestValidator::random();
+
+        // First registration attempt using the specified contract version
+        let first_registration_result =
+            match version {
+                StakeTableContractVersion::V1 => stake_table_state
+                    .apply_event(StakeTableEvent::Register((&test_validator).into())),
+                StakeTableContractVersion::V2 => stake_table_state
+                    .apply_event(StakeTableEvent::RegisterV2((&test_validator).into())),
+            };
+
+        // Expect the first registration to succeed
+        assert!(first_registration_result.is_ok());
+
+        // attempt using V1 registration (should fail with AlreadyRegistered)
+        let v1_already_registered_result =
+            stake_table_state.apply_event(StakeTableEvent::Register((&test_validator).into()));
+
+        pretty_assertions::assert_matches!(
+           v1_already_registered_result,  Err(StakeTableError::AlreadyRegistered(account)) if account == test_validator.account,
+           "Expected AlreadyRegistered error. version ={version:?} result={v1_already_registered_result:?}",
+        );
+
+        // attempt using V2 registration (should also fail with AlreadyRegistered)
+        let v2_already_registered_result =
+            stake_table_state.apply_event(StakeTableEvent::RegisterV2((&test_validator).into()));
+
+        pretty_assertions::assert_matches!(
+            v2_already_registered_result,
+            Err(StakeTableError::AlreadyRegistered(account)) if account == test_validator.account,
+            "Expected AlreadyRegistered error. version ={version:?} result={v2_already_registered_result:?}",
+
+        );
     }
 
     #[test]
@@ -2402,16 +2422,24 @@ mod tests {
         assert!(!validator.delegators.contains_key(&delegator));
     }
 
-    #[test]
-    fn test_key_update_v2() {
+    #[rstest]
+    #[case::v1(StakeTableContractVersion::V1)]
+    #[case::v2(StakeTableContractVersion::V2)]
+    fn test_key_update_event(#[case] version: StakeTableContractVersion) {
         let mut state = StakeTableState::new();
         let val = TestValidator::random();
+
+        // Always register first using V1 to simulate upgrade scenarios
         state
             .apply_event(StakeTableEvent::Register((&val).into()))
             .unwrap();
 
         let new_keys = val.randomize_keys();
-        let event = StakeTableEvent::KeyUpdateV2((&new_keys).into());
+
+        let event = match version {
+            StakeTableContractVersion::V1 => StakeTableEvent::KeyUpdate((&new_keys).into()),
+            StakeTableContractVersion::V2 => StakeTableEvent::KeyUpdateV2((&new_keys).into()),
+        };
 
         assert!(state.apply_event(event).is_ok());
 
@@ -2514,6 +2542,43 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_decaf_stake_table() {
         setup_test();
+
+        // The following commented-out block demonstrates how the `decaf_stake_table_events.json`
+        // and `decaf_stake_table.json` files were originally generated.
+
+        // It generates decaf stake table data by fetching events from the contract,
+        // writes events and the constructed stake table to JSON files.
+
+        /*
+        let l1 = L1Client::new(vec!["https://ethereum-sepolia.publicnode.com"
+            .parse()
+            .unwrap()])
+        .unwrap();
+        let contract_address = "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037";
+
+        let events = Fetcher::fetch_events_from_contract(
+            l1,
+            contract_address.parse().unwrap(),
+            None,
+            8582328,
+        )
+        .await;
+
+        let sorted_events = events.sort_events().expect("failed to sort");
+
+        // Serialize and write sorted events
+        let json_events = serde_json::to_string_pretty(&sorted_events)?;
+        let mut events_file = File::create("decaf_stake_table_events.json").await?;
+        events_file.write_all(json_events.as_bytes()).await?;
+
+        // Process into stake table
+        let stake_table = validators_from_l1_events(sorted_events.into_iter().map(|(_, e)| e))?;
+
+        // Serialize and write stake table
+        let json_stake_table = serde_json::to_string_pretty(&stake_table)?;
+        let mut stake_file = File::create("decaf_stake_table.json").await?;
+        stake_file.write_all(json_stake_table.as_bytes()).await?;
+        */
 
         let events_json =
             std::fs::read_to_string("../data/v3/decaf_stake_table_events.json").unwrap();
