@@ -7,6 +7,6 @@ UPDATE network_config SET
     config = jsonb_set(config, '{config}', '{
         "stake_table_capacity": 200,
         "drb_difficulty": 0,
-        "drb_upgrade_difficulty": 0,
+        "drb_upgrade_difficulty": 0
 
     }' || (config->'config'));
