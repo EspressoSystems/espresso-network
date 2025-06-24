@@ -21,6 +21,7 @@ use crate::{Contract, Contracts};
 /// - `epoch_start_block`: block height for the first *activated* epoch
 /// - `exit_escrow_period`: exit escrow period for stake table (in seconds)
 /// - `multisig`: new owner/multisig that owns all the proxy contracts
+/// - `multisig_pauser`: new multisig that owns the pauser role
 /// - `initial_token_supply`: initial token supply for the token contract
 /// - `token_name`: name of the token
 /// - `token_symbol`: symbol of the token
@@ -52,6 +53,8 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     exit_escrow_period: Option<U256>,
     #[builder(default)]
     multisig: Option<Address>,
+    #[builder(default)]
+    multisig_pauser: Option<Address>,
     #[builder(default)]
     initial_token_supply: Option<U256>,
     #[builder(default)]
@@ -182,12 +185,12 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         provider,
                         contracts,
                         crate::LightClientV2UpgradeParams {
-                            is_mock: use_mock,
                             blocks_per_epoch,
                             epoch_start_block,
-                            rpc_url,
-                            dry_run: Some(dry_run),
                         },
+                        use_mock,
+                        rpc_url,
+                        Some(dry_run),
                     )
                     .await?;
                 } else {
@@ -235,29 +238,64 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 // NOTE: we don't transfer ownership to multisig, we only do so after V2 upgrade
             },
             Contract::StakeTableV2 => {
-                crate::upgrade_stake_table_v2(provider, contracts).await?;
-
-                if let Some(multisig) = self.multisig {
-                    let stake_table_proxy = contracts
-                        .address(Contract::StakeTableProxy)
-                        .expect("fail to get StakeTableProxy address");
-                    crate::transfer_ownership(
+                let use_multisig = self.use_multisig;
+                let dry_run = self.dry_run;
+                let multisig_pauser = self.multisig_pauser.context(
+                    "Multisig pauser address must be set for the upgrade to StakeTableV2",
+                )?;
+                tracing::info!(?dry_run, ?use_multisig, "Upgrading to StakeTableV2 with ");
+                if use_multisig {
+                    crate::upgrade_stake_table_v2_multisig_owner(
                         provider,
-                        Contract::StakeTableProxy,
-                        stake_table_proxy,
-                        multisig,
+                        contracts,
+                        self.rpc_url.clone(),
+                        self.multisig.context(
+                            "Multisig address must be set when upgrading to --use-multisig flag is present",
+                        )?,
+                        multisig_pauser,
+                        Some(dry_run),
                     )
                     .await?;
+                } else {
+                    crate::upgrade_stake_table_v2(provider, contracts, multisig_pauser, admin)
+                        .await?;
+
+                    if let Some(multisig) = self.multisig {
+                        let stake_table_proxy = contracts
+                            .address(Contract::StakeTableProxy)
+                            .expect("fail to get StakeTableProxy address");
+                        crate::transfer_ownership(
+                            provider,
+                            Contract::StakeTableProxy,
+                            stake_table_proxy,
+                            multisig,
+                        )
+                        .await?;
+                    }
                 }
             },
             Contract::Timelock => {
+                let timelock_delay = self
+                    .timelock_delay
+                    .context("Timelock delay must be set when deploying Timelock")?;
+                let timelock_proposers = self
+                    .timelock_proposers
+                    .clone()
+                    .context("Timelock proposers must be set when deploying Timelock")?;
+                let timelock_executors = self
+                    .timelock_executors
+                    .clone()
+                    .context("Timelock executors must be set when deploying Timelock")?;
+                let timelock_admin = self
+                    .timelock_admin
+                    .context("Timelock admin must be set when deploying Timelock")?;
                 crate::deploy_timelock(
                     provider,
                     contracts,
-                    self.timelock_delay.unwrap(),
-                    self.timelock_proposers.clone().unwrap(),
-                    self.timelock_executors.clone().unwrap(),
-                    self.timelock_admin.unwrap(),
+                    timelock_delay,
+                    timelock_proposers,
+                    timelock_executors,
+                    timelock_admin,
                 )
                 .await?;
             },
