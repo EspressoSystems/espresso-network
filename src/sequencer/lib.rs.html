@@ -317,12 +317,12 @@
 <a href=#317 id=317 data-nosnippet>317</a>        network_params.config_peers,
 <a href=#318 id=318 data-nosnippet>318</a>    ) {
 <a href=#319 id=319 data-nosnippet>319</a>        (<span class="prelude-val">Some</span>(config), <span class="kw">_</span>) =&gt; {
-<a href=#320 id=320 data-nosnippet>320</a>            <span class="macro">tracing::info!</span>(<span class="string">"loaded network config from storage, rejoining existing network"</span>);
+<a href=#320 id=320 data-nosnippet>320</a>            <span class="macro">tracing::warn!</span>(<span class="string">"loaded network config from storage, rejoining existing network"</span>);
 <a href=#321 id=321 data-nosnippet>321</a>            (config, <span class="bool-val">false</span>)
 <a href=#322 id=322 data-nosnippet>322</a>        },
 <a href=#323 id=323 data-nosnippet>323</a>        <span class="comment">// If we were told to fetch the config from an already-started peer, do so.
 <a href=#324 id=324 data-nosnippet>324</a>        </span>(<span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(peers)) =&gt; {
-<a href=#325 id=325 data-nosnippet>325</a>            <span class="macro">tracing::info!</span>(<span class="question-mark">?</span>peers, <span class="string">"loading network config from peers"</span>);
+<a href=#325 id=325 data-nosnippet>325</a>            <span class="macro">tracing::warn!</span>(<span class="question-mark">?</span>peers, <span class="string">"loading network config from peers"</span>);
 <a href=#326 id=326 data-nosnippet>326</a>            <span class="kw">let </span>peers = StatePeers::&lt;SequencerApiVersion&gt;::from_urls(
 <a href=#327 id=327 data-nosnippet>327</a>                peers,
 <a href=#328 id=328 data-nosnippet>328</a>                network_params.catchup_backoff,
@@ -330,7 +330,7 @@
 <a href=#330 id=330 data-nosnippet>330</a>            );
 <a href=#331 id=331 data-nosnippet>331</a>            <span class="kw">let </span>config = peers.fetch_config(validator_config.clone()).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#332 id=332 data-nosnippet>332</a>
-<a href=#333 id=333 data-nosnippet>333</a>            <span class="macro">tracing::info!</span>(
+<a href=#333 id=333 data-nosnippet>333</a>            <span class="macro">tracing::warn!</span>(
 <a href=#334 id=334 data-nosnippet>334</a>                node_id = config.node_index,
 <a href=#335 id=335 data-nosnippet>335</a>                stake_table = <span class="question-mark">?</span>config.config.known_nodes_with_stake,
 <a href=#336 id=336 data-nosnippet>336</a>                <span class="string">"loaded config"</span>,
@@ -340,8 +340,8 @@
 <a href=#340 id=340 data-nosnippet>340</a>        },
 <a href=#341 id=341 data-nosnippet>341</a>        <span class="comment">// Otherwise, this is a fresh network; load from the orchestrator.
 <a href=#342 id=342 data-nosnippet>342</a>        </span>(<span class="prelude-val">None</span>, <span class="prelude-val">None</span>) =&gt; {
-<a href=#343 id=343 data-nosnippet>343</a>            <span class="macro">tracing::info!</span>(<span class="string">"loading network config from orchestrator"</span>);
-<a href=#344 id=344 data-nosnippet>344</a>            <span class="macro">tracing::error!</span>(
+<a href=#343 id=343 data-nosnippet>343</a>            <span class="macro">tracing::warn!</span>(<span class="string">"loading network config from orchestrator"</span>);
+<a href=#344 id=344 data-nosnippet>344</a>            <span class="macro">tracing::warn!</span>(
 <a href=#345 id=345 data-nosnippet>345</a>                <span class="string">"waiting for other nodes to connect, DO NOT RESTART until fully connected"
 <a href=#346 id=346 data-nosnippet>346</a>            </span>);
 <a href=#347 id=347 data-nosnippet>347</a>            <span class="kw">let </span>config = get_complete_config(
@@ -355,13 +355,13 @@
 <a href=#355 id=355 data-nosnippet>355</a>            .<span class="kw">await</span><span class="question-mark">?
 <a href=#356 id=356 data-nosnippet>356</a>            </span>.<span class="number">0</span>;
 <a href=#357 id=357 data-nosnippet>357</a>
-<a href=#358 id=358 data-nosnippet>358</a>            <span class="macro">tracing::info!</span>(
+<a href=#358 id=358 data-nosnippet>358</a>            <span class="macro">tracing::warn!</span>(
 <a href=#359 id=359 data-nosnippet>359</a>                node_id = config.node_index,
 <a href=#360 id=360 data-nosnippet>360</a>                stake_table = <span class="question-mark">?</span>config.config.known_nodes_with_stake,
 <a href=#361 id=361 data-nosnippet>361</a>                <span class="string">"loaded config"</span>,
 <a href=#362 id=362 data-nosnippet>362</a>            );
 <a href=#363 id=363 data-nosnippet>363</a>            persistence.save_config(<span class="kw-2">&amp;</span>config).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#364 id=364 data-nosnippet>364</a>            <span class="macro">tracing::error!</span>(<span class="string">"all nodes connected"</span>);
+<a href=#364 id=364 data-nosnippet>364</a>            <span class="macro">tracing::warn!</span>(<span class="string">"all nodes connected"</span>);
 <a href=#365 id=365 data-nosnippet>365</a>            (config, <span class="bool-val">true</span>)
 <a href=#366 id=366 data-nosnippet>366</a>        },
 <a href=#367 id=367 data-nosnippet>367</a>    };
@@ -377,10 +377,10 @@
 <a href=#377 id=377 data-nosnippet>377</a>        .stake_table_capacity
 <a href=#378 id=378 data-nosnippet>378</a>        .unwrap_or(hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY);
 <a href=#379 id=379 data-nosnippet>379</a>
-<a href=#380 id=380 data-nosnippet>380</a>    <span class="macro">tracing::info!</span>(<span class="string">"setting epoch_height={epoch_height:?}"</span>);
-<a href=#381 id=381 data-nosnippet>381</a>    <span class="macro">tracing::info!</span>(<span class="string">"setting drb_difficulty={drb_difficulty:?}"</span>);
-<a href=#382 id=382 data-nosnippet>382</a>    <span class="macro">tracing::info!</span>(<span class="string">"setting epoch_start_block={epoch_start_block:?}"</span>);
-<a href=#383 id=383 data-nosnippet>383</a>    <span class="macro">tracing::info!</span>(<span class="string">"setting stake_table_capacity={stake_table_capacity:?}"</span>);
+<a href=#380 id=380 data-nosnippet>380</a>    <span class="macro">tracing::warn!</span>(<span class="string">"setting epoch_height={epoch_height:?}"</span>);
+<a href=#381 id=381 data-nosnippet>381</a>    <span class="macro">tracing::warn!</span>(<span class="string">"setting drb_difficulty={drb_difficulty:?}"</span>);
+<a href=#382 id=382 data-nosnippet>382</a>    <span class="macro">tracing::warn!</span>(<span class="string">"setting epoch_start_block={epoch_start_block:?}"</span>);
+<a href=#383 id=383 data-nosnippet>383</a>    <span class="macro">tracing::warn!</span>(<span class="string">"setting stake_table_capacity={stake_table_capacity:?}"</span>);
 <a href=#384 id=384 data-nosnippet>384</a>    network_config.config.epoch_height = epoch_height;
 <a href=#385 id=385 data-nosnippet>385</a>    network_config.config.drb_difficulty = drb_difficulty;
 <a href=#386 id=386 data-nosnippet>386</a>    network_config.config.epoch_start_block = epoch_start_block;
@@ -481,7 +481,7 @@
 <a href=#481 id=481 data-nosnippet>481</a>        ..Default::default()
 <a href=#482 id=482 data-nosnippet>482</a>    };
 <a href=#483 id=483 data-nosnippet>483</a>    <span class="kw">for </span>(address, amount) <span class="kw">in </span>genesis.accounts {
-<a href=#484 id=484 data-nosnippet>484</a>        <span class="macro">tracing::info!</span>(%address, %amount, <span class="string">"Prefunding account for demo"</span>);
+<a href=#484 id=484 data-nosnippet>484</a>        <span class="macro">tracing::warn!</span>(%address, %amount, <span class="string">"Prefunding account for demo"</span>);
 <a href=#485 id=485 data-nosnippet>485</a>        genesis_state.prefund_account(address, amount);
 <a href=#486 id=486 data-nosnippet>486</a>    }
 <a href=#487 id=487 data-nosnippet>487</a>
