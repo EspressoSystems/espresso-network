@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["NUM_REPLICATED_TO_TRUST"],"enum":["DHTEvent","DHTProgress","State"],"mod":["bootstrap","record","store"],"struct":["Bootstrap","DHTBehaviour","KadGetQuery","KadPutQuery","MAX_DHT_QUERY_SIZE"]};
+window.SIDEBAR_ITEMS = {"enum":["DHTEvent","DHTProgress","State"],"mod":["bootstrap","record","store"],"struct":["Bootstrap","DHTBehaviour","KadGetQuery","KadPutQuery","MAX_DHT_QUERY_SIZE"]};
