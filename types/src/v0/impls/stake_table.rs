@@ -272,6 +272,11 @@ impl StakeTableState {
                 let stake_table_key: BLSPubKey = blsVK.into();
                 let state_ver_key: SchnorrPubKey = schnorrVK.into();
 
+                let entry = self.validators.entry(account);
+                if let indexmap::map::Entry::Occupied(_) = entry {
+                    return Err(StakeTableError::AlreadyRegistered(account));
+                }
+
                 // The stake table contract enforces that each bls key is only used once.
                 if !self.used_bls_keys.insert(stake_table_key) {
                     tracing::error!(
@@ -292,11 +297,6 @@ impl StakeTableState {
                     return Err(StakeTableError::SchnorrKeyAlreadyUsed(
                         state_ver_key.to_string(),
                     ));
-                }
-
-                let entry = self.validators.entry(account);
-                if let indexmap::map::Entry::Occupied(_) = entry {
-                    return Err(StakeTableError::AlreadyRegistered(account));
                 }
 
                 entry.or_insert(Validator {
