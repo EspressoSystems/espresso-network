@@ -145,7 +145,7 @@ struct Options {
     deploy_timelock: bool,
     /// Option to deploy token timelock
     #[clap(long, default_value = "false")]
-    deploy_token_timelock: bool,
+    deploy_safe_exit_timelock: bool,
 
     /// Write deployment results to OUT as a .env file.
     ///
@@ -240,20 +240,20 @@ struct Options {
     timelock_proposers: Option<Vec<Address>>,
 
     /// The admin of the token timelock
-    #[clap(long, env = "ESPRESSO_TOKEN_TIMELOCK_ADMIN")]
-    token_timelock_admin: Option<Address>,
+    #[clap(long, env = "ESPRESSO_SAFE_EXIT_TIMELOCK_ADMIN")]
+    safe_exit_timelock_admin: Option<Address>,
 
     /// The delay of the token timelock
-    #[clap(long, env = "ESPRESSO_TOKEN_TIMELOCK_DELAY")]
-    token_timelock_delay: Option<u64>,
+    #[clap(long, env = "ESPRESSO_SAFE_EXIT_TIMELOCK_DELAY")]
+    safe_exit_timelock_delay: Option<u64>,
 
     /// The executor(s) of the token  timelock
-    #[clap(long, env = "ESPRESSO_TOKEN_TIMELOCK_EXECUTORS")]
-    token_timelock_executors: Option<Vec<Address>>,
+    #[clap(long, env = "ESPRESSO_SAFE_EXIT_TIMELOCK_EXECUTORS")]
+    safe_exit_timelock_executors: Option<Vec<Address>>,
 
     /// The proposer(s) of the token timelock
-    #[clap(long, env = "ESPRESSO_TOKEN_TIMELOCK_PROPOSERS")]
-    token_timelock_proposers: Option<Vec<Address>>,
+    #[clap(long, env = "ESPRESSO_SAFE_EXIT_TIMELOCK_PROPOSERS")]
+    safe_exit_timelock_proposers: Option<Vec<Address>>,
 
     #[clap(flatten)]
     logging: logging::Config,
@@ -431,23 +431,25 @@ async fn main() -> anyhow::Result<()> {
         args_builder.timelock_proposers(timelock_proposers.into_iter().collect());
     }
 
-    if opt.deploy_token_timelock {
-        let token_timelock_admin = opt
-            .token_timelock_admin
-            .expect("Must provide --token-timelock-admin when deploying token timelock");
-        args_builder.token_timelock_admin(token_timelock_admin);
-        let token_timelock_delay = opt
-            .token_timelock_delay
-            .expect("Must provide --token-timelock-delay when deploying token timelock");
-        args_builder.token_timelock_delay(U256::from(token_timelock_delay));
-        let token_timelock_executors = opt
-            .token_timelock_executors
-            .expect("Must provide --token-timelock-executors when deploying token timelock");
-        args_builder.token_timelock_executors(token_timelock_executors.into_iter().collect());
-        let token_timelock_proposers = opt
-            .token_timelock_proposers
-            .expect("Must provide --token-timelock-proposers when deploying token timelock");
-        args_builder.token_timelock_proposers(token_timelock_proposers.into_iter().collect());
+    if opt.deploy_safe_exit_timelock {
+        let safe_exit_timelock_admin = opt
+            .safe_exit_timelock_admin
+            .expect("Must provide --safe-token-timelock-admin when deploying token timelock");
+        args_builder.safe_exit_timelock_admin(safe_exit_timelock_admin);
+        let safe_exit_timelock_delay = opt
+            .safe_exit_timelock_delay
+            .expect("Must provide --safe-token-timelock-delay when deploying token timelock");
+        args_builder.safe_exit_timelock_delay(U256::from(safe_exit_timelock_delay));
+        let safe_exit_timelock_executors = opt
+            .safe_exit_timelock_executors
+            .expect("Must provide --safe-token-timelock-executors when deploying token timelock");
+        args_builder
+            .safe_exit_timelock_executors(safe_exit_timelock_executors.into_iter().collect());
+        let safe_exit_timelock_proposers = opt
+            .safe_exit_timelock_proposers
+            .expect("Must provide --safe-token-timelock-proposers when deploying token timelock");
+        args_builder
+            .safe_exit_timelock_proposers(safe_exit_timelock_proposers.into_iter().collect());
     }
 
     // then deploy specified contracts
@@ -476,8 +478,9 @@ async fn main() -> anyhow::Result<()> {
     if opt.deploy_timelock {
         args.deploy(&mut contracts, Contract::Timelock).await?;
     }
-    if opt.deploy_token_timelock {
-        args.deploy(&mut contracts, Contract::TokenTimelock).await?;
+    if opt.deploy_safe_exit_timelock {
+        args.deploy(&mut contracts, Contract::SafeExitTimelock)
+            .await?;
     }
 
     // finally print out or persist deployed addresses

@@ -5,7 +5,7 @@ import "@openzeppelin/contracts/governance/TimelockController.sol";
 
 /// @title TimelockController
 /// @notice A timelock controller for the StakeTable contract
-contract TokenTimelock is TimelockController {
+contract SafeExitTimelock is TimelockController {
     constructor(
         uint256 minDelay,
         address[] memory proposers,

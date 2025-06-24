@@ -121,9 +121,9 @@ pub struct DeployedContracts {
     /// Timelock.sol
     #[clap(long, env = Contract::Timelock)]
     timelock: Option<Address>,
-    /// TokenTimelock.sol
-    #[clap(long, env = Contract::TokenTimelock)]
-    token_timelock: Option<Address>,
+    /// SafeExitTimelock.sol
+    #[clap(long, env = Contract::SafeExitTimelock)]
+    safe_exit_timelock: Option<Address>,
     /// PlonkVerifierV2.sol
     #[clap(long, env = Contract::PlonkVerifierV2)]
     plonk_verifier_v2: Option<Address>,
@@ -179,8 +179,8 @@ pub enum Contract {
     PlonkVerifier,
     #[display("ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS")]
     Timelock,
-    #[display("ESPRESSO_SEQUENCER_TOKEN_TIMELOCK_ADDRESS")]
-    TokenTimelock,
+    #[display("ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS")]
+    SafeExitTimelock,
     #[display("ESPRESSO_SEQUENCER_PLONK_VERIFIER_V2_ADDRESS")]
     PlonkVerifierV2,
     #[display("ESPRESSO_SEQUENCER_LIGHT_CLIENT_ADDRESS")]
@@ -226,8 +226,8 @@ impl From<DeployedContracts> for Contracts {
         if let Some(addr) = deployed.plonk_verifier_v2 {
             m.insert(Contract::PlonkVerifierV2, addr);
         }
-        if let Some(addr) = deployed.token_timelock {
-            m.insert(Contract::TokenTimelock, addr);
+        if let Some(addr) = deployed.safe_exit_timelock {
+            m.insert(Contract::SafeExitTimelock, addr);
         }
         if let Some(addr) = deployed.timelock {
             m.insert(Contract::Timelock, addr);
@@ -1408,7 +1408,7 @@ pub async fn deploy_timelock(
 /// - `proposers`: The list of addresses that can propose
 /// - `executors`: The list of addresses that can execute
 /// - `admin`: The address that can perform admin actions
-pub async fn deploy_token_timelock(
+pub async fn deploy_safe_exit_timelock(
     provider: impl Provider,
     contracts: &mut Contracts,
     min_delay: U256,
@@ -1418,8 +1418,8 @@ pub async fn deploy_token_timelock(
 ) -> Result<Address> {
     let timelock_addr = contracts
         .deploy(
-            Contract::TokenTimelock,
-            TokenTimelock::deploy_builder(
+            Contract::SafeExitTimelock,
+            SafeExitTimelock::deploy_builder(
                 &provider,
                 min_delay,
                 proposers.clone(),
@@ -1430,7 +1430,7 @@ pub async fn deploy_token_timelock(
         .await?;
 
     // Verify deployment
-    let timelock = TokenTimelock::new(timelock_addr, &provider);
+    let timelock = SafeExitTimelock::new(timelock_addr, &provider);
 
     // Verify initialization parameters
     assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
@@ -2252,7 +2252,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_deploy_token_timelock() -> Result<()> {
+    async fn test_deploy_safe_exit_timelock() -> Result<()> {
         setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
@@ -2263,7 +2263,7 @@ mod tests {
         let proposers = vec![Address::random()];
         let executors = vec![Address::random()];
 
-        let timelock_addr = deploy_token_timelock(
+        let timelock_addr = deploy_safe_exit_timelock(
             &provider,
             &mut contracts,
             min_delay,
@@ -2274,7 +2274,7 @@ mod tests {
         .await?;
 
         // Verify deployment
-        let timelock = TokenTimelock::new(timelock_addr, &provider);
+        let timelock = SafeExitTimelock::new(timelock_addr, &provider);
         assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
 
         // Verify initialization parameters

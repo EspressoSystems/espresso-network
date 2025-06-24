@@ -1486,10 +1486,10 @@ mod tests {
             .timelock_admin(network_config.signer().address())
             .timelock_proposers(vec![network_config.signer().address()])
             .timelock_executors(vec![network_config.signer().address()])
-            .token_timelock_delay(U256::from(10))
-            .token_timelock_admin(network_config.signer().address())
-            .token_timelock_proposers(vec![network_config.signer().address()])
-            .token_timelock_executors(vec![network_config.signer().address()])
+            .safe_exit_timelock_delay(U256::from(10))
+            .safe_exit_timelock_admin(network_config.signer().address())
+            .safe_exit_timelock_proposers(vec![network_config.signer().address()])
+            .safe_exit_timelock_executors(vec![network_config.signer().address()])
             .build()
             .unwrap();
 

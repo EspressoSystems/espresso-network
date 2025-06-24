@@ -11,7 +11,7 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 // Target contracts
 import { EspToken } from "../src/EspToken.sol";
 import { EspTokenV2 } from "../src/EspTokenV2.sol";
-import { TokenTimelock } from "../src/TokenTimelock.sol";
+import { SafeExitTimelock } from "../src/SafeExitTimelock.sol";
 import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 contract EspTokenUpgradabilityTest is Test {
@@ -62,11 +62,12 @@ contract EspTokenUpgradabilityTest is Test {
         assertEq(patchVersion, 0);
     }
 
-    function test_TokenTimelock() public {
+    function test_SafeExitTimelock() public {
         uint256 minDelaySeconds = 10;
         address[] memory proposers = new address[](1);
         address[] memory executors = new address[](1);
-        TokenTimelock timelock = new TokenTimelock(minDelaySeconds, proposers, executors, admin);
+        SafeExitTimelock timelock =
+            new SafeExitTimelock(minDelaySeconds, proposers, executors, admin);
         assertEq(timelock.getMinDelay(), minDelaySeconds);
         assertEq(timelock.hasRole(timelock.PROPOSER_ROLE(), proposers[0]), true);
         assertEq(timelock.hasRole(timelock.EXECUTOR_ROLE(), executors[0]), true);
@@ -77,7 +78,8 @@ contract EspTokenUpgradabilityTest is Test {
         uint256 minDelaySeconds = 10;
         address[] memory proposers = new address[](1);
         address[] memory executors = new address[](1);
-        TokenTimelock timelock = new TokenTimelock(minDelaySeconds, proposers, executors, admin);
+        SafeExitTimelock timelock =
+            new SafeExitTimelock(minDelaySeconds, proposers, executors, admin);
         vm.prank(admin);
         token.transferOwnership(address(timelock));
         assertEq(token.owner(), address(timelock));
@@ -116,7 +118,8 @@ contract EspTokenUpgradabilityTest is Test {
         address[] memory executors = new address[](1);
         proposers[0] = makeAddr("proposer");
         executors[0] = makeAddr("executor");
-        TokenTimelock timelock = new TokenTimelock(minDelaySeconds, proposers, executors, admin);
+        SafeExitTimelock timelock =
+            new SafeExitTimelock(minDelaySeconds, proposers, executors, admin);
 
         vm.prank(admin);
         token.transferOwnership(address(timelock));
@@ -144,7 +147,8 @@ contract EspTokenUpgradabilityTest is Test {
         address[] memory executors = new address[](1);
         proposers[0] = makeAddr("proposer");
         executors[0] = makeAddr("executor");
-        TokenTimelock timelock = new TokenTimelock(minDelaySeconds, proposers, executors, admin);
+        SafeExitTimelock timelock =
+            new SafeExitTimelock(minDelaySeconds, proposers, executors, admin);
 
         vm.prank(admin);
         token.transferOwnership(address(timelock));
@@ -166,7 +170,8 @@ contract EspTokenUpgradabilityTest is Test {
         address[] memory executors = new address[](1);
         proposers[0] = makeAddr("proposer");
         executors[0] = makeAddr("executor");
-        TokenTimelock timelock = new TokenTimelock(minDelaySeconds, proposers, executors, admin);
+        SafeExitTimelock timelock =
+            new SafeExitTimelock(minDelaySeconds, proposers, executors, admin);
 
         uint256 newDelay = 20;
 
@@ -195,7 +200,8 @@ contract EspTokenUpgradabilityTest is Test {
         address[] memory executors = new address[](1);
         proposers[0] = makeAddr("proposer");
         executors[0] = makeAddr("executor");
-        TokenTimelock timelock = new TokenTimelock(minDelaySeconds, proposers, executors, admin);
+        SafeExitTimelock timelock =
+            new SafeExitTimelock(minDelaySeconds, proposers, executors, admin);
 
         uint256 newDelay = 20;
 
@@ -223,7 +229,8 @@ contract EspTokenUpgradabilityTest is Test {
         address[] memory executors = new address[](1);
         proposers[0] = makeAddr("proposer");
         executors[0] = makeAddr("executor");
-        TokenTimelock timelock = new TokenTimelock(minDelaySeconds, proposers, executors, admin);
+        SafeExitTimelock timelock =
+            new SafeExitTimelock(minDelaySeconds, proposers, executors, admin);
 
         // Even admin cannot update delay directly
         vm.startPrank(admin);
@@ -238,7 +245,8 @@ contract EspTokenUpgradabilityTest is Test {
         address[] memory executors = new address[](1);
         proposers[0] = makeAddr("proposer");
         executors[0] = makeAddr("executor");
-        TokenTimelock timelock = new TokenTimelock(minDelaySeconds, proposers, executors, admin);
+        SafeExitTimelock timelock =
+            new SafeExitTimelock(minDelaySeconds, proposers, executors, admin);
         vm.prank(admin);
         token.transferOwnership(address(timelock));
         assertEq(token.owner(), address(timelock));

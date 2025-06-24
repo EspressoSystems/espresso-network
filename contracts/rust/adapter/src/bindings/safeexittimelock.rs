@@ -265,7 +265,7 @@ library TimelockController {
     type OperationState is uint8;
 }
 
-interface TokenTimelock {
+interface SafeExitTimelock {
     error AccessControlBadConfirmation();
     error AccessControlUnauthorizedAccount(address account, bytes32 neededRole);
     error FailedInnerCall();
@@ -1327,7 +1327,7 @@ interface TokenTimelock {
     clippy::style,
     clippy::empty_structs_with_brackets
 )]
-pub mod TokenTimelock {
+pub mod SafeExitTimelock {
     use alloy::sol_types as alloy_sol_types;
 
     use super::*;
@@ -6849,9 +6849,9 @@ pub mod TokenTimelock {
             }
         }
     };
-    ///Container for all the [`TokenTimelock`](self) function calls.
+    ///Container for all the [`SafeExitTimelock`](self) function calls.
     #[derive()]
-    pub enum TokenTimelockCalls {
+    pub enum SafeExitTimelockCalls {
         #[allow(missing_docs)]
         CANCELLER_ROLE(CANCELLER_ROLECall),
         #[allow(missing_docs)]
@@ -6910,7 +6910,7 @@ pub mod TokenTimelock {
         updateDelay(updateDelayCall),
     }
     #[automatically_derived]
-    impl TokenTimelockCalls {
+    impl SafeExitTimelockCalls {
         /// All the selectors of this enum.
         ///
         /// Note that the selectors might not be in the same order as the variants.
@@ -6949,8 +6949,8 @@ pub mod TokenTimelock {
         ];
     }
     #[automatically_derived]
-    impl alloy_sol_types::SolInterface for TokenTimelockCalls {
-        const NAME: &'static str = "TokenTimelockCalls";
+    impl alloy_sol_types::SolInterface for SafeExitTimelockCalls {
+        const NAME: &'static str = "SafeExitTimelockCalls";
         const MIN_DATA_LENGTH: usize = 0usize;
         const COUNT: usize = 28usize;
         #[inline]
@@ -7027,14 +7027,14 @@ pub mod TokenTimelock {
                 &[u8],
                 bool,
             )
-                -> alloy_sol_types::Result<TokenTimelockCalls>] = &[
+                -> alloy_sol_types::Result<SafeExitTimelockCalls>] = &[
                 {
                     fn schedule(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <scheduleCall as alloy_sol_types::SolCall>::abi_decode_raw(data, validate)
-                            .map(TokenTimelockCalls::schedule)
+                            .map(SafeExitTimelockCalls::schedule)
                     }
                     schedule
                 },
@@ -7042,11 +7042,11 @@ pub mod TokenTimelock {
                     fn supportsInterface(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <supportsInterfaceCall as alloy_sol_types::SolCall>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockCalls::supportsInterface)
+                        .map(SafeExitTimelockCalls::supportsInterface)
                     }
                     supportsInterface
                 },
@@ -7054,11 +7054,11 @@ pub mod TokenTimelock {
                     fn EXECUTOR_ROLE(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <EXECUTOR_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockCalls::EXECUTOR_ROLE)
+                        .map(SafeExitTimelockCalls::EXECUTOR_ROLE)
                     }
                     EXECUTOR_ROLE
                 },
@@ -7066,9 +7066,9 @@ pub mod TokenTimelock {
                     fn execute(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <executeCall as alloy_sol_types::SolCall>::abi_decode_raw(data, validate)
-                            .map(TokenTimelockCalls::execute)
+                            .map(SafeExitTimelockCalls::execute)
                     }
                     execute
                 },
@@ -7076,11 +7076,11 @@ pub mod TokenTimelock {
                     fn isOperationReady(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <isOperationReadyCall as alloy_sol_types::SolCall>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockCalls::isOperationReady)
+                        .map(SafeExitTimelockCalls::isOperationReady)
                     }
                     isOperationReady
                 },
@@ -7088,11 +7088,11 @@ pub mod TokenTimelock {
                     fn onERC721Received(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <onERC721ReceivedCall as alloy_sol_types::SolCall>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockCalls::onERC721Received)
+                        .map(SafeExitTimelockCalls::onERC721Received)
                     }
                     onERC721Received
                 },
@@ -7100,11 +7100,11 @@ pub mod TokenTimelock {
                     fn getRoleAdmin(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <getRoleAdminCall as alloy_sol_types::SolCall>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockCalls::getRoleAdmin)
+                        .map(SafeExitTimelockCalls::getRoleAdmin)
                     }
                     getRoleAdmin
                 },
@@ -7112,11 +7112,11 @@ pub mod TokenTimelock {
                     fn isOperationDone(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <isOperationDoneCall as alloy_sol_types::SolCall>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockCalls::isOperationDone)
+                        .map(SafeExitTimelockCalls::isOperationDone)
                     }
                     isOperationDone
                 },
@@ -7124,9 +7124,9 @@ pub mod TokenTimelock {
                     fn grantRole(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <grantRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(data, validate)
-                            .map(TokenTimelockCalls::grantRole)
+                            .map(SafeExitTimelockCalls::grantRole)
                     }
                     grantRole
                 },
@@ -7134,11 +7134,11 @@ pub mod TokenTimelock {
                     fn isOperation(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <isOperationCall as alloy_sol_types::SolCall>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockCalls::isOperation)
+                        .map(SafeExitTimelockCalls::isOperation)
                     }
                     isOperation
                 },
@@ -7146,11 +7146,11 @@ pub mod TokenTimelock {
                     fn renounceRole(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <renounceRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockCalls::renounceRole)
+                        .map(SafeExitTimelockCalls::renounceRole)
                     }
                     renounceRole
                 },
@@ -7158,11 +7158,11 @@ pub mod TokenTimelock {
                     fn isOperationPending(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <isOperationPendingCall as alloy_sol_types::SolCall>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockCalls::isOperationPending)
+                        .map(SafeExitTimelockCalls::isOperationPending)
                     }
                     isOperationPending
                 },
@@ -7170,11 +7170,11 @@ pub mod TokenTimelock {
                     fn updateDelay(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <updateDelayCall as alloy_sol_types::SolCall>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockCalls::updateDelay)
+                        .map(SafeExitTimelockCalls::updateDelay)
                     }
                     updateDelay
                 },
@@ -7182,11 +7182,11 @@ pub mod TokenTimelock {
                     fn getOperationState(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <getOperationStateCall as alloy_sol_types::SolCall>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockCalls::getOperationState)
+                        .map(SafeExitTimelockCalls::getOperationState)
                     }
                     getOperationState
                 },
@@ -7194,11 +7194,11 @@ pub mod TokenTimelock {
                     fn hashOperation(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <hashOperationCall as alloy_sol_types::SolCall>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockCalls::hashOperation)
+                        .map(SafeExitTimelockCalls::hashOperation)
                     }
                     hashOperation
                 },
@@ -7206,11 +7206,11 @@ pub mod TokenTimelock {
                     fn scheduleBatch(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <scheduleBatchCall as alloy_sol_types::SolCall>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockCalls::scheduleBatch)
+                        .map(SafeExitTimelockCalls::scheduleBatch)
                     }
                     scheduleBatch
                 },
@@ -7218,11 +7218,11 @@ pub mod TokenTimelock {
                     fn PROPOSER_ROLE(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <PROPOSER_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockCalls::PROPOSER_ROLE)
+                        .map(SafeExitTimelockCalls::PROPOSER_ROLE)
                     }
                     PROPOSER_ROLE
                 },
@@ -7230,9 +7230,9 @@ pub mod TokenTimelock {
                     fn hasRole(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <hasRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(data, validate)
-                            .map(TokenTimelockCalls::hasRole)
+                            .map(SafeExitTimelockCalls::hasRole)
                     }
                     hasRole
                 },
@@ -7240,11 +7240,11 @@ pub mod TokenTimelock {
                     fn DEFAULT_ADMIN_ROLE(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <DEFAULT_ADMIN_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockCalls::DEFAULT_ADMIN_ROLE)
+                        .map(SafeExitTimelockCalls::DEFAULT_ADMIN_ROLE)
                     }
                     DEFAULT_ADMIN_ROLE
                 },
@@ -7252,11 +7252,11 @@ pub mod TokenTimelock {
                     fn CANCELLER_ROLE(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <CANCELLER_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockCalls::CANCELLER_ROLE)
+                        .map(SafeExitTimelockCalls::CANCELLER_ROLE)
                     }
                     CANCELLER_ROLE
                 },
@@ -7264,11 +7264,11 @@ pub mod TokenTimelock {
                     fn hashOperationBatch(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <hashOperationBatchCall as alloy_sol_types::SolCall>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockCalls::hashOperationBatch)
+                        .map(SafeExitTimelockCalls::hashOperationBatch)
                     }
                     hashOperationBatch
                 },
@@ -7276,11 +7276,11 @@ pub mod TokenTimelock {
                     fn onERC1155BatchReceived(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <onERC1155BatchReceivedCall as alloy_sol_types::SolCall>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockCalls::onERC1155BatchReceived)
+                        .map(SafeExitTimelockCalls::onERC1155BatchReceived)
                     }
                     onERC1155BatchReceived
                 },
@@ -7288,9 +7288,9 @@ pub mod TokenTimelock {
                     fn cancel(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <cancelCall as alloy_sol_types::SolCall>::abi_decode_raw(data, validate)
-                            .map(TokenTimelockCalls::cancel)
+                            .map(SafeExitTimelockCalls::cancel)
                     }
                     cancel
                 },
@@ -7298,11 +7298,11 @@ pub mod TokenTimelock {
                     fn getTimestamp(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <getTimestampCall as alloy_sol_types::SolCall>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockCalls::getTimestamp)
+                        .map(SafeExitTimelockCalls::getTimestamp)
                     }
                     getTimestamp
                 },
@@ -7310,9 +7310,9 @@ pub mod TokenTimelock {
                     fn revokeRole(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <revokeRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(data, validate)
-                            .map(TokenTimelockCalls::revokeRole)
+                            .map(SafeExitTimelockCalls::revokeRole)
                     }
                     revokeRole
                 },
@@ -7320,11 +7320,11 @@ pub mod TokenTimelock {
                     fn executeBatch(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <executeBatchCall as alloy_sol_types::SolCall>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockCalls::executeBatch)
+                        .map(SafeExitTimelockCalls::executeBatch)
                     }
                     executeBatch
                 },
@@ -7332,11 +7332,11 @@ pub mod TokenTimelock {
                     fn onERC1155Received(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <onERC1155ReceivedCall as alloy_sol_types::SolCall>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockCalls::onERC1155Received)
+                        .map(SafeExitTimelockCalls::onERC1155Received)
                     }
                     onERC1155Received
                 },
@@ -7344,11 +7344,11 @@ pub mod TokenTimelock {
                     fn getMinDelay(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockCalls> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockCalls> {
                         <getMinDelayCall as alloy_sol_types::SolCall>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockCalls::getMinDelay)
+                        .map(SafeExitTimelockCalls::getMinDelay)
                     }
                     getMinDelay
                 },
@@ -7544,9 +7544,9 @@ pub mod TokenTimelock {
             }
         }
     }
-    ///Container for all the [`TokenTimelock`](self) custom errors.
+    ///Container for all the [`SafeExitTimelock`](self) custom errors.
     #[derive(Debug, PartialEq, Eq, Hash)]
-    pub enum TokenTimelockErrors {
+    pub enum SafeExitTimelockErrors {
         #[allow(missing_docs)]
         AccessControlBadConfirmation(AccessControlBadConfirmation),
         #[allow(missing_docs)]
@@ -7565,7 +7565,7 @@ pub mod TokenTimelock {
         TimelockUnexpectedOperationState(TimelockUnexpectedOperationState),
     }
     #[automatically_derived]
-    impl TokenTimelockErrors {
+    impl SafeExitTimelockErrors {
         /// All the selectors of this enum.
         ///
         /// Note that the selectors might not be in the same order as the variants.
@@ -7584,8 +7584,8 @@ pub mod TokenTimelock {
         ];
     }
     #[automatically_derived]
-    impl alloy_sol_types::SolInterface for TokenTimelockErrors {
-        const NAME: &'static str = "TokenTimelockErrors";
+    impl alloy_sol_types::SolInterface for SafeExitTimelockErrors {
+        const NAME: &'static str = "SafeExitTimelockErrors";
         const MIN_DATA_LENGTH: usize = 0usize;
         const COUNT: usize = 8usize;
         #[inline]
@@ -7636,16 +7636,16 @@ pub mod TokenTimelock {
                 &[u8],
                 bool,
             )
-                -> alloy_sol_types::Result<TokenTimelockErrors>] = &[
+                -> alloy_sol_types::Result<SafeExitTimelockErrors>] = &[
                 {
                     fn FailedInnerCall(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockErrors> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockErrors> {
                         <FailedInnerCall as alloy_sol_types::SolError>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockErrors::FailedInnerCall)
+                        .map(SafeExitTimelockErrors::FailedInnerCall)
                     }
                     FailedInnerCall
                 },
@@ -7653,11 +7653,11 @@ pub mod TokenTimelock {
                     fn TimelockInsufficientDelay(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockErrors> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockErrors> {
                         <TimelockInsufficientDelay as alloy_sol_types::SolError>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockErrors::TimelockInsufficientDelay)
+                        .map(SafeExitTimelockErrors::TimelockInsufficientDelay)
                     }
                     TimelockInsufficientDelay
                 },
@@ -7665,12 +7665,14 @@ pub mod TokenTimelock {
                     fn TimelockUnexpectedOperationState(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockErrors> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockErrors> {
                         <TimelockUnexpectedOperationState as alloy_sol_types::SolError>::abi_decode_raw(
                                 data,
                                 validate,
                             )
-                            .map(TokenTimelockErrors::TimelockUnexpectedOperationState)
+                            .map(
+                                SafeExitTimelockErrors::TimelockUnexpectedOperationState,
+                            )
                     }
                     TimelockUnexpectedOperationState
                 },
@@ -7678,11 +7680,11 @@ pub mod TokenTimelock {
                     fn AccessControlBadConfirmation(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockErrors> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockErrors> {
                         <AccessControlBadConfirmation as alloy_sol_types::SolError>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockErrors::AccessControlBadConfirmation)
+                        .map(SafeExitTimelockErrors::AccessControlBadConfirmation)
                     }
                     AccessControlBadConfirmation
                 },
@@ -7690,12 +7692,12 @@ pub mod TokenTimelock {
                     fn TimelockUnexecutedPredecessor(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockErrors> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockErrors> {
                         <TimelockUnexecutedPredecessor as alloy_sol_types::SolError>::abi_decode_raw(
                                 data,
                                 validate,
                             )
-                            .map(TokenTimelockErrors::TimelockUnexecutedPredecessor)
+                            .map(SafeExitTimelockErrors::TimelockUnexecutedPredecessor)
                     }
                     TimelockUnexecutedPredecessor
                 },
@@ -7703,12 +7705,14 @@ pub mod TokenTimelock {
                     fn AccessControlUnauthorizedAccount(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockErrors> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockErrors> {
                         <AccessControlUnauthorizedAccount as alloy_sol_types::SolError>::abi_decode_raw(
                                 data,
                                 validate,
                             )
-                            .map(TokenTimelockErrors::AccessControlUnauthorizedAccount)
+                            .map(
+                                SafeExitTimelockErrors::AccessControlUnauthorizedAccount,
+                            )
                     }
                     AccessControlUnauthorizedAccount
                 },
@@ -7716,11 +7720,11 @@ pub mod TokenTimelock {
                     fn TimelockUnauthorizedCaller(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockErrors> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockErrors> {
                         <TimelockUnauthorizedCaller as alloy_sol_types::SolError>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TokenTimelockErrors::TimelockUnauthorizedCaller)
+                        .map(SafeExitTimelockErrors::TimelockUnauthorizedCaller)
                     }
                     TimelockUnauthorizedCaller
                 },
@@ -7728,12 +7732,12 @@ pub mod TokenTimelock {
                     fn TimelockInvalidOperationLength(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TokenTimelockErrors> {
+                    ) -> alloy_sol_types::Result<SafeExitTimelockErrors> {
                         <TimelockInvalidOperationLength as alloy_sol_types::SolError>::abi_decode_raw(
                                 data,
                                 validate,
                             )
-                            .map(TokenTimelockErrors::TimelockInvalidOperationLength)
+                            .map(SafeExitTimelockErrors::TimelockInvalidOperationLength)
                     }
                     TimelockInvalidOperationLength
                 },
@@ -7835,9 +7839,9 @@ pub mod TokenTimelock {
             }
         }
     }
-    ///Container for all the [`TokenTimelock`](self) events.
+    ///Container for all the [`SafeExitTimelock`](self) events.
     #[derive(Debug, PartialEq, Eq, Hash)]
-    pub enum TokenTimelockEvents {
+    pub enum SafeExitTimelockEvents {
         #[allow(missing_docs)]
         CallExecuted(CallExecuted),
         #[allow(missing_docs)]
@@ -7856,7 +7860,7 @@ pub mod TokenTimelock {
         RoleRevoked(RoleRevoked),
     }
     #[automatically_derived]
-    impl TokenTimelockEvents {
+    impl SafeExitTimelockEvents {
         /// All the selectors of this enum.
         ///
         /// Note that the selectors might not be in the same order as the variants.
@@ -7907,8 +7911,8 @@ pub mod TokenTimelock {
         ];
     }
     #[automatically_derived]
-    impl alloy_sol_types::SolEventInterface for TokenTimelockEvents {
-        const NAME: &'static str = "TokenTimelockEvents";
+    impl alloy_sol_types::SolEventInterface for SafeExitTimelockEvents {
+        const NAME: &'static str = "SafeExitTimelockEvents";
         const COUNT: usize = 8usize;
         fn decode_raw_log(
             topics: &[alloy_sol_types::Word],
@@ -7973,7 +7977,7 @@ pub mod TokenTimelock {
         }
     }
     #[automatically_derived]
-    impl alloy_sol_types::private::IntoLogData for TokenTimelockEvents {
+    impl alloy_sol_types::private::IntoLogData for SafeExitTimelockEvents {
         fn to_log_data(&self) -> alloy_sol_types::private::LogData {
             match self {
                 Self::CallExecuted(inner) => {
@@ -8028,9 +8032,9 @@ pub mod TokenTimelock {
         }
     }
     use alloy::contract as alloy_contract;
-    /**Creates a new wrapper around an on-chain [`TokenTimelock`](self) contract instance.
+    /**Creates a new wrapper around an on-chain [`SafeExitTimelock`](self) contract instance.
 
-    See the [wrapper's documentation](`TokenTimelockInstance`) for more details.*/
+    See the [wrapper's documentation](`SafeExitTimelockInstance`) for more details.*/
     #[inline]
     pub const fn new<
         T: alloy_contract::private::Transport + ::core::clone::Clone,
@@ -8039,8 +8043,8 @@ pub mod TokenTimelock {
     >(
         address: alloy_sol_types::private::Address,
         provider: P,
-    ) -> TokenTimelockInstance<T, P, N> {
-        TokenTimelockInstance::<T, P, N>::new(address, provider)
+    ) -> SafeExitTimelockInstance<T, P, N> {
+        SafeExitTimelockInstance::<T, P, N>::new(address, provider)
     }
     /**Deploys this contract using the given `provider` and constructor arguments, if any.
 
@@ -8058,9 +8062,9 @@ pub mod TokenTimelock {
         proposers: alloy::sol_types::private::Vec<alloy::sol_types::private::Address>,
         executors: alloy::sol_types::private::Vec<alloy::sol_types::private::Address>,
         admin: alloy::sol_types::private::Address,
-    ) -> impl ::core::future::Future<Output = alloy_contract::Result<TokenTimelockInstance<T, P, N>>>
+    ) -> impl ::core::future::Future<Output = alloy_contract::Result<SafeExitTimelockInstance<T, P, N>>>
     {
-        TokenTimelockInstance::<T, P, N>::deploy(provider, minDelay, proposers, executors, admin)
+        SafeExitTimelockInstance::<T, P, N>::deploy(provider, minDelay, proposers, executors, admin)
     }
     /**Creates a `RawCallBuilder` for deploying this contract using the given `provider`
     and constructor arguments, if any.
@@ -8079,14 +8083,14 @@ pub mod TokenTimelock {
         executors: alloy::sol_types::private::Vec<alloy::sol_types::private::Address>,
         admin: alloy::sol_types::private::Address,
     ) -> alloy_contract::RawCallBuilder<T, P, N> {
-        TokenTimelockInstance::<T, P, N>::deploy_builder(
+        SafeExitTimelockInstance::<T, P, N>::deploy_builder(
             provider, minDelay, proposers, executors, admin,
         )
     }
-    /**A [`TokenTimelock`](self) instance.
+    /**A [`SafeExitTimelock`](self) instance.
 
     Contains type-safe methods for interacting with an on-chain instance of the
-    [`TokenTimelock`](self) contract located at a given `address`, using a given
+    [`SafeExitTimelock`](self) contract located at a given `address`, using a given
     provider `P`.
 
     If the contract bytecode is available (see the [`sol!`](alloy_sol_types::sol!)
@@ -8095,16 +8099,16 @@ pub mod TokenTimelock {
 
     See the [module-level documentation](self) for all the available methods.*/
     #[derive(Clone)]
-    pub struct TokenTimelockInstance<T, P, N = alloy_contract::private::Ethereum> {
+    pub struct SafeExitTimelockInstance<T, P, N = alloy_contract::private::Ethereum> {
         address: alloy_sol_types::private::Address,
         provider: P,
         _network_transport: ::core::marker::PhantomData<(N, T)>,
     }
     #[automatically_derived]
-    impl<T, P, N> ::core::fmt::Debug for TokenTimelockInstance<T, P, N> {
+    impl<T, P, N> ::core::fmt::Debug for SafeExitTimelockInstance<T, P, N> {
         #[inline]
         fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-            f.debug_tuple("TokenTimelockInstance")
+            f.debug_tuple("SafeExitTimelockInstance")
                 .field(&self.address)
                 .finish()
         }
@@ -8115,11 +8119,11 @@ pub mod TokenTimelock {
             T: alloy_contract::private::Transport + ::core::clone::Clone,
             P: alloy_contract::private::Provider<T, N>,
             N: alloy_contract::private::Network,
-        > TokenTimelockInstance<T, P, N>
+        > SafeExitTimelockInstance<T, P, N>
     {
-        /**Creates a new wrapper around an on-chain [`TokenTimelock`](self) contract instance.
+        /**Creates a new wrapper around an on-chain [`SafeExitTimelock`](self) contract instance.
 
-        See the [wrapper's documentation](`TokenTimelockInstance`) for more details.*/
+        See the [wrapper's documentation](`SafeExitTimelockInstance`) for more details.*/
         #[inline]
         pub const fn new(address: alloy_sol_types::private::Address, provider: P) -> Self {
             Self {
@@ -8140,7 +8144,7 @@ pub mod TokenTimelock {
             proposers: alloy::sol_types::private::Vec<alloy::sol_types::private::Address>,
             executors: alloy::sol_types::private::Vec<alloy::sol_types::private::Address>,
             admin: alloy::sol_types::private::Address,
-        ) -> alloy_contract::Result<TokenTimelockInstance<T, P, N>> {
+        ) -> alloy_contract::Result<SafeExitTimelockInstance<T, P, N>> {
             let call_builder =
                 Self::deploy_builder(provider, minDelay, proposers, executors, admin);
             let contract_address = call_builder.deploy().await?;
@@ -8195,11 +8199,11 @@ pub mod TokenTimelock {
             &self.provider
         }
     }
-    impl<T, P: ::core::clone::Clone, N> TokenTimelockInstance<T, &P, N> {
+    impl<T, P: ::core::clone::Clone, N> SafeExitTimelockInstance<T, &P, N> {
         /// Clones the provider and returns a new instance with the cloned provider.
         #[inline]
-        pub fn with_cloned_provider(self) -> TokenTimelockInstance<T, P, N> {
-            TokenTimelockInstance {
+        pub fn with_cloned_provider(self) -> SafeExitTimelockInstance<T, P, N> {
+            SafeExitTimelockInstance {
                 address: self.address,
                 provider: ::core::clone::Clone::clone(&self.provider),
                 _network_transport: ::core::marker::PhantomData,
@@ -8212,7 +8216,7 @@ pub mod TokenTimelock {
             T: alloy_contract::private::Transport + ::core::clone::Clone,
             P: alloy_contract::private::Provider<T, N>,
             N: alloy_contract::private::Network,
-        > TokenTimelockInstance<T, P, N>
+        > SafeExitTimelockInstance<T, P, N>
     {
         /// Creates a new call builder using this contract instance's provider and address.
         ///
@@ -8508,7 +8512,7 @@ pub mod TokenTimelock {
             T: alloy_contract::private::Transport + ::core::clone::Clone,
             P: alloy_contract::private::Provider<T, N>,
             N: alloy_contract::private::Network,
-        > TokenTimelockInstance<T, P, N>
+        > SafeExitTimelockInstance<T, P, N>
     {
         /// Creates a new event filter using this contract instance's provider and address.
         ///

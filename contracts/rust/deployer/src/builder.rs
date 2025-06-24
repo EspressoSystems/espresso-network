@@ -70,13 +70,13 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     #[builder(default)]
     timelock_proposers: Option<Vec<Address>>,
     #[builder(default)]
-    token_timelock_admin: Option<Address>,
+    safe_exit_timelock_admin: Option<Address>,
     #[builder(default)]
-    token_timelock_delay: Option<U256>,
+    safe_exit_timelock_delay: Option<U256>,
     #[builder(default)]
-    token_timelock_executors: Option<Vec<Address>>,
+    safe_exit_timelock_executors: Option<Vec<Address>>,
     #[builder(default)]
-    token_timelock_proposers: Option<Vec<Address>>,
+    safe_exit_timelock_proposers: Option<Vec<Address>>,
 }
 
 impl<P: Provider + WalletProvider> DeployerArgs<P> {
@@ -307,22 +307,20 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 )
                 .await?;
             },
-            Contract::TokenTimelock => {
-                let timelock_delay = self
-                    .token_timelock_delay
-                    .context("TokenTimelock delay must be set when deploying TokenTimelock")?;
-                let timelock_proposers = self
-                    .token_timelock_proposers
-                    .clone()
-                    .context("TokenTimelock proposers must be set when deploying TokenTimelock")?;
-                let timelock_executors = self
-                    .token_timelock_executors
-                    .clone()
-                    .context("TokenTimelock executors must be set when deploying TokenTimelock")?;
-                let timelock_admin = self
-                    .token_timelock_admin
-                    .context("TokenTimelock admin must be set when deploying TokenTimelock")?;
-                crate::deploy_token_timelock(
+            Contract::SafeExitTimelock => {
+                let timelock_delay = self.safe_exit_timelock_delay.context(
+                    "SafeExitTimelock delay must be set when deploying SafeExitTimelock",
+                )?;
+                let timelock_proposers = self.safe_exit_timelock_proposers.clone().context(
+                    "SafeExitTimelock proposers must be set when deploying SafeExitTimelock",
+                )?;
+                let timelock_executors = self.safe_exit_timelock_executors.clone().context(
+                    "SafeExitTimelock executors must be set when deploying SafeExitTimelock",
+                )?;
+                let timelock_admin = self.safe_exit_timelock_admin.context(
+                    "SafeExitTimelock admin must be set when deploying SafeExitTimelock",
+                )?;
+                crate::deploy_safe_exit_timelock(
                     provider,
                     contracts,
                     timelock_delay,
@@ -347,7 +345,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         self.deploy(contracts, Contract::LightClientV2).await?;
         self.deploy(contracts, Contract::StakeTableProxy).await?;
         self.deploy(contracts, Contract::Timelock).await?;
-        self.deploy(contracts, Contract::TokenTimelock).await?;
+        self.deploy(contracts, Contract::SafeExitTimelock).await?;
         Ok(())
     }
 

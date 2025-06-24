@@ -16,7 +16,7 @@ pub mod r#lightclientv2;
 pub mod r#lightclientv2mock;
 pub mod r#plonkverifier;
 pub mod r#plonkverifierv2;
+pub mod r#safeexittimelock;
 pub mod r#staketable;
 pub mod r#staketablev2;
 pub mod r#timelock;
-pub mod r#tokentimelock;

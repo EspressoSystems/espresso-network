@@ -1013,10 +1013,10 @@ pub mod test_helpers {
                 .timelock_admin(signer.address())
                 .timelock_proposers(vec![signer.address()])
                 .timelock_executors(vec![signer.address()])
-                .token_timelock_delay(U256::from(10))
-                .token_timelock_admin(signer.address())
-                .token_timelock_proposers(vec![signer.address()])
-                .token_timelock_executors(vec![signer.address()])
+                .safe_exit_timelock_delay(U256::from(10))
+                .safe_exit_timelock_admin(signer.address())
+                .safe_exit_timelock_proposers(vec![signer.address()])
+                .safe_exit_timelock_executors(vec![signer.address()])
                 .build()
                 .unwrap();
 
@@ -4670,10 +4670,10 @@ mod test {
             .timelock_admin(network_config.signer().address())
             .timelock_proposers(vec![network_config.signer().address()])
             .timelock_executors(vec![network_config.signer().address()])
-            .token_timelock_delay(U256::from(0))
-            .token_timelock_admin(network_config.signer().address())
-            .token_timelock_proposers(vec![network_config.signer().address()])
-            .token_timelock_executors(vec![network_config.signer().address()])
+            .safe_exit_timelock_delay(U256::from(0))
+            .safe_exit_timelock_admin(network_config.signer().address())
+            .safe_exit_timelock_proposers(vec![network_config.signer().address()])
+            .safe_exit_timelock_executors(vec![network_config.signer().address()])
             .build()
             .unwrap();
 
