@@ -5080,8 +5080,7 @@ mod test {
         for (namespace, expected_ns_txns) in &namespace_tx {
             let mut api_namespace_txns = client
                 .socket(&format!(
-                    "availability/stream/transactions/0/namespace/{}",
-                    namespace
+                    "availability/stream/transactions/0/namespace/{namespace}",
                 ))
                 .subscribe::<TransactionQueryData<SeqTypes>>()
                 .await
