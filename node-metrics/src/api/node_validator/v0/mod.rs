@@ -3,7 +3,7 @@ pub mod create_node_validator_api;
 use std::{fmt, future::Future, io::BufRead, pin::Pin, str::FromStr, time::Duration};
 
 use alloy::primitives::Address;
-use espresso_types::{v0_3::Validator, BackoffParams, SeqTypes};
+use espresso_types::{config::PublicHotShotConfig, v0_3::Validator, BackoffParams, SeqTypes};
 use futures::{
     channel::mpsc::{self, SendError, Sender},
     future::{BoxFuture, Either},
@@ -289,13 +289,6 @@ where
         },
     )?;
     Ok(api)
-}
-
-#[derive(Debug, Deserialize)]
-pub struct PublicHotShotConfig {
-    pub known_nodes_with_stake: Vec<PeerConfig<SeqTypes>>,
-    pub epoch_height: Option<u64>,
-    pub epoch_start_block: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
