@@ -231,8 +231,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
             .await;
         *decided_certificate_lock = Some(cert.clone());
         drop(decided_certificate_lock);
-
-        if cert.data.new_version == V::Epochs::VERSION {
+        if cert.data.new_version >= V::Epochs::VERSION && V::Base::VERSION < V::Epochs::VERSION {
             let epoch_height = task_state.consensus.read().await.epoch_height;
             let first_epoch_number = TYPES::Epoch::new(epoch_from_block_number(
                 proposal.block_header().block_number(),
