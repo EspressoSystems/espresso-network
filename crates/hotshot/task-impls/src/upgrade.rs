@@ -160,7 +160,9 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                     proposal.data.view_number()
                 );
 
-                let epoch_upgrade_checks = if V::Upgrade::VERSION == V::Epochs::VERSION {
+                let epoch_upgrade_checks = if V::Upgrade::VERSION >= V::Epochs::VERSION
+                    && V::Base::VERSION < V::Epochs::VERSION
+                {
                     let consensus_reader = self.consensus.read().await;
 
                     let Some((_, last_proposal)) =
@@ -327,7 +329,9 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                 let new_version_first_view = view + TYPES::UPGRADE_CONSTANTS.finish_offset;
                 let decide_by = view + TYPES::UPGRADE_CONSTANTS.decide_by_offset;
 
-                let epoch_upgrade_checks = if V::Upgrade::VERSION == V::Epochs::VERSION {
+                let epoch_upgrade_checks = if V::Upgrade::VERSION >= V::Epochs::VERSION
+                    && V::Base::VERSION < V::Epochs::VERSION
+                {
                     let consensus_reader = self.consensus.read().await;
 
                     let Some((_, last_proposal)) =

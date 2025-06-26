@@ -648,14 +648,6 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                     continue;
                 }
 
-                // verify the message signature and the fee_signature
-                if !header_input.validate_signature(block_info.offered_fee, &block_data.metadata) {
-                    tracing::warn!(
-                        "Failed to verify available block header input data response message signature"
-                    );
-                    continue;
-                }
-
                 let fee = BuilderFee {
                     fee_amount: block_info.offered_fee,
                     fee_account: header_input.sender,
