@@ -236,10 +236,14 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
             .retry(self, move |provider, retry| {
                 let my_own_validator_config = my_own_validator_config.clone();
                 async move {
-                    let cfg = provider
+                    let cfg: PublicNetworkConfig = provider
                         .fetch(retry, |client| {
-                            client.get::<PublicNetworkConfig>("config/hotshot").send()
+                            let url = client.url.join("config/hotshot").unwrap();
+
+                            reqwest::get(url.clone())
                         })
+                        .await?
+                        .json()
                         .await?;
                     cfg.into_network_config(my_own_validator_config)
                         .context("fetched config, but failed to convert to private config")
