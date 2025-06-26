@@ -7,6 +7,7 @@ use futures::{
     Sink, SinkExt,
 };
 use hotshot_types::utils::epoch_from_block_number;
+use indexmap::IndexMap;
 use tokio::{spawn, task::JoinHandle};
 use url::Url;
 
@@ -14,13 +15,15 @@ use super::{
     get_config_stake_table_from_sequencer, LeafAndBlock, ProcessNodeIdentityUrlStreamTask,
 };
 use crate::{
-    api::node_validator::v0::get_node_stake_table_from_sequencer,
+    api::node_validator::v0::{
+        get_node_stake_table_from_sequencer, get_node_validators_from_sequencer,
+    },
     service::{
-        client_id::ClientId,
         client_message::InternalClientMessage,
         client_state::{
             ClientThreadState, InternalClientMessageProcessingTask,
             ProcessDistributeBlockDetailHandlingTask, ProcessDistributeNodeIdentityHandlingTask,
+            ProcessDistributeStakeTableHandlingTask, ProcessDistributeValidatorHandlingTask,
             ProcessDistributeVotersHandlingTask,
         },
         data_state::{DataState, ProcessLeafAndBlockPairStreamTask, ProcessNodeIdentityStreamTask},
@@ -33,6 +36,8 @@ pub struct NodeValidatorAPI<K> {
     pub process_distribute_block_detail_handle: Option<ProcessDistributeBlockDetailHandlingTask>,
     pub process_distribute_node_identity_handle: Option<ProcessDistributeNodeIdentityHandlingTask>,
     pub process_distribute_voters_handle: Option<ProcessDistributeVotersHandlingTask>,
+    pub process_distribute_stake_table_handle: Option<ProcessDistributeStakeTableHandlingTask>,
+    pub process_distribute_validators_handle: Option<ProcessDistributeValidatorHandlingTask>,
     pub process_leaf_stream_handle: Option<ProcessLeafAndBlockPairStreamTask>,
     pub process_node_identity_stream_handle: Option<ProcessNodeIdentityStreamTask>,
     pub process_url_stream_handle: Option<ProcessNodeIdentityUrlStreamTask>,
@@ -49,6 +54,7 @@ pub struct NodeValidatorConfig {
 #[derive(Debug)]
 pub enum CreateNodeValidatorProcessingError {
     FailedToGetStakeTable(hotshot_query_service::Error),
+    FailedToGetValidators(hotshot_query_service::Error),
 }
 
 /// [SubmitPublicUrlsToScrapeTask] is a task that is capable of submitting
@@ -110,32 +116,26 @@ pub async fn create_node_validator_processing(
     internal_client_message_receiver: Receiver<InternalClientMessage<Sender<ServerMessage>>>,
     leaf_and_block_pair_receiver: Receiver<LeafAndBlock<SeqTypes>>,
 ) -> Result<NodeValidatorAPI<Sender<Url>>, CreateNodeValidatorProcessingError> {
-    let client_thread_state = ClientThreadState::<Sender<ServerMessage>>::new(
-        Default::default(),
-        Default::default(),
-        Default::default(),
-        Default::default(),
-        ClientId::from_count(1),
-    );
+    let client_thread_state: ClientThreadState<Sender<ServerMessage>> = Default::default();
 
     let hotshot_client = surf_disco::Client::new(config.stake_table_url_base.clone());
 
     let hotshot_config = get_config_stake_table_from_sequencer(hotshot_client.clone())
         .await
         .map_err(CreateNodeValidatorProcessingError::FailedToGetStakeTable)?;
-    let mut stake_table = hotshot_config.known_nodes_with_stake.clone();
+    let mut stake_table = hotshot_config.known_nodes_with_stake();
+    let mut validator_map = IndexMap::new();
 
-    if let (Some(epoch_starting_block), Some(num_blocks_per_epoch)) = (
-        hotshot_config.epoch_start_block,
-        hotshot_config.epoch_height,
-    ) {
+    if hotshot_config.blocks_per_epoch() > 0 {
+        let epoch_starting_block = hotshot_config.epoch_start_block();
+        let num_blocks_per_epoch = hotshot_config.blocks_per_epoch();
         tracing::info!(
             "epoch starting block: {}, num blocks per epoch: {}",
             epoch_starting_block,
             num_blocks_per_epoch
         );
         let epoch = epoch_from_block_number(config.starting_block_height, num_blocks_per_epoch);
-        if epoch > 1 {
+        if config.starting_block_height >= epoch_starting_block {
             // Let's fetch our initial stake table that is not derived from the
             // initial configuration.
 
@@ -145,6 +145,11 @@ pub async fn create_node_validator_processing(
                     .map_err(CreateNodeValidatorProcessingError::FailedToGetStakeTable)?;
 
             stake_table = node_stake_table;
+
+            let validator_info = get_node_validators_from_sequencer(hotshot_client.clone(), epoch)
+                .await
+                .map_err(CreateNodeValidatorProcessingError::FailedToGetValidators)?;
+            validator_map = validator_info.clone();
         }
     } else {
         tracing::warn!(
@@ -152,7 +157,12 @@ pub async fn create_node_validator_processing(
         );
     }
 
-    let data_state = DataState::new(Default::default(), Default::default(), stake_table);
+    let data_state = DataState::new(
+        Default::default(),
+        Default::default(),
+        stake_table,
+        validator_map,
+    );
 
     let data_state = Arc::new(RwLock::new(data_state));
     let client_thread_state = Arc::new(RwLock::new(client_thread_state));
@@ -161,6 +171,8 @@ pub async fn create_node_validator_processing(
     let (node_identity_sender_2, node_identity_receiver_2) = mpsc::channel(32);
     let (voters_sender, voters_receiver) = mpsc::channel(32);
     let (url_sender, url_receiver) = mpsc::channel(32);
+    let (stake_table_sender, stake_table_receiver) = mpsc::channel(32);
+    let (validator_sender, validator_receiver) = mpsc::channel(32);
 
     let process_internal_client_message_handle = InternalClientMessageProcessingTask::new(
         internal_client_message_receiver,
@@ -181,13 +193,27 @@ pub async fn create_node_validator_processing(
     let process_distribute_voters_handle =
         ProcessDistributeVotersHandlingTask::new(client_thread_state.clone(), voters_receiver);
 
+    let process_distribute_stake_table_handle = ProcessDistributeStakeTableHandlingTask::new(
+        client_thread_state.clone(),
+        stake_table_receiver,
+    );
+
+    let process_distribute_validator_handle = ProcessDistributeValidatorHandlingTask::new(
+        client_thread_state.clone(),
+        validator_receiver,
+    );
+
     let process_leaf_stream_handle = ProcessLeafAndBlockPairStreamTask::new(
         leaf_and_block_pair_receiver,
         data_state.clone(),
         hotshot_client,
         hotshot_config,
-        block_detail_sender,
-        voters_sender,
+        (
+            block_detail_sender,
+            voters_sender,
+            stake_table_sender,
+            validator_sender,
+        ),
     );
 
     let process_node_identity_stream_handle = ProcessNodeIdentityStreamTask::new(
@@ -210,6 +236,8 @@ pub async fn create_node_validator_processing(
         process_internal_client_message_handle: Some(process_internal_client_message_handle),
         process_distribute_block_detail_handle: Some(process_distribute_block_detail_handle),
         process_distribute_node_identity_handle: Some(process_distribute_node_identity_handle),
+        process_distribute_stake_table_handle: Some(process_distribute_stake_table_handle),
+        process_distribute_validators_handle: Some(process_distribute_validator_handle),
         process_distribute_voters_handle: Some(process_distribute_voters_handle),
         process_leaf_stream_handle: Some(process_leaf_stream_handle),
         process_node_identity_stream_handle: Some(process_node_identity_stream_handle),
