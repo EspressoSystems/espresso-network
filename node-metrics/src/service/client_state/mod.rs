@@ -669,6 +669,70 @@ where
     Ok(())
 }
 
+#[derive(Debug)]
+pub enum HandleRequestUnrecognizedRequestError {
+    ClientSendError(SendError),
+}
+
+impl std::fmt::Display for HandleRequestUnrecognizedRequestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HandleRequestUnrecognizedRequestError::ClientSendError(err) => {
+                write!(
+                    f,
+                    "handle request unrecognized request error: client send error: {}",
+                    err
+                )
+            },
+        }
+    }
+}
+
+impl std::error::Error for HandleRequestUnrecognizedRequestError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            HandleRequestUnrecognizedRequestError::ClientSendError(err) => Some(err),
+        }
+    }
+}
+
+/// [handle_client_message_request_unknown] is a function that processes the
+/// client message received by the user, in the specific case that the request
+/// received by the client is not recognized by the server.
+///
+/// In this case, for better ergonomics, we really just want to ignore the
+/// request, as we don't know what the user really wanted to do.  However,
+/// we do not want to drop the client connection as a result, as a dropped
+/// connection without a response from the service isn't detectable differently
+/// from a dropped connection due to a network error. This sort of behavior
+/// will lead an unsuspecting user to believe that they may not have submitted
+/// anything incorrectly.
+pub async fn handle_client_message_request_unknown<K>(
+    client_id: ClientId,
+    client_thread_state: Arc<RwLock<ClientThreadState<K>>>,
+    request: serde_json::Value,
+) -> Result<(), HandleRequestUnrecognizedRequestError>
+where
+    K: Sink<ServerMessage, Error = SendError> + Clone + Unpin,
+{
+    let mut sender = {
+        let client_thread_state_read_lock_guard = client_thread_state.read().await;
+        match client_thread_state_read_lock_guard.clients.get(&client_id) {
+            Some(client) => client.sender.clone(),
+            None => return Ok(()), // Client not found, nothing to do
+        }
+    };
+
+    if let Err(err) = sender
+        .send(ServerMessage::UnrecognizedRequest(request))
+        .await
+    {
+        drop_client_no_lock_guard(&client_id, client_thread_state.clone()).await;
+        return Err(HandleRequestUnrecognizedRequestError::ClientSendError(err));
+    }
+    Ok(())
+}
+
 /// [ProcessClientMessageError] represents the scope of errors that can be
 /// returned from the [process_client_message] function.
 #[derive(Debug)]
@@ -680,6 +744,11 @@ pub enum ProcessClientMessageError {
     VotersSnapshot(HandleRequestVotersSnapshotError),
     ValidatorsSnapshot(HandleRequestValidatorsSnapshotError),
     StakeTableSnapshot(HandleRequestStakeTableSnapshotError),
+
+    /// This is the special case where the request received by the client is
+    ///  not recognized by the server, and we want to handle it gracefully
+    /// without dropping the client connection.
+    UnrecognizedRequest(HandleRequestUnrecognizedRequestError),
 }
 
 impl From<HandleConnectedError> for ProcessClientMessageError {
@@ -724,6 +793,12 @@ impl From<HandleRequestStakeTableSnapshotError> for ProcessClientMessageError {
     }
 }
 
+impl From<HandleRequestUnrecognizedRequestError> for ProcessClientMessageError {
+    fn from(err: HandleRequestUnrecognizedRequestError) -> Self {
+        ProcessClientMessageError::UnrecognizedRequest(err)
+    }
+}
+
 impl std::fmt::Display for ProcessClientMessageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -759,6 +834,9 @@ impl std::fmt::Display for ProcessClientMessageError {
                     err
                 )
             },
+            ProcessClientMessageError::UnrecognizedRequest(err) => {
+                write!(f, "process client message error: unknown: {}", err)
+            },
         }
     }
 }
@@ -773,6 +851,7 @@ impl std::error::Error for ProcessClientMessageError {
             ProcessClientMessageError::VotersSnapshot(err) => Some(err),
             ProcessClientMessageError::ValidatorsSnapshot(err) => Some(err),
             ProcessClientMessageError::StakeTableSnapshot(err) => Some(err),
+            ProcessClientMessageError::UnrecognizedRequest(err) => Some(err),
         }
     }
 }
@@ -887,6 +966,14 @@ where
                 client_thread_state,
             )
             .await?;
+            Ok(())
+        },
+
+        InternalClientMessage::Request(client_id, ClientMessage::UnrecognizedCommand(raw_str)) => {
+            // This is a message that we don't know how to handle, and that we
+            // do not recognize. We just want to inform the client that this
+            // message is unrecognized.
+            handle_client_message_request_unknown(client_id, client_thread_state, raw_str).await?;
             Ok(())
         },
     }

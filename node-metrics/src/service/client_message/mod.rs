@@ -5,7 +5,7 @@ use super::client_id::ClientId;
 /// [ClientMessage] represents the messages that the client can send to the
 /// server for a request.
 ///
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ClientMessage {
     SubscribeLatestBlock,
     SubscribeNodeIdentity,
@@ -23,6 +23,15 @@ pub enum ClientMessage {
     SubscribeValidators,
     RequestValidatorsSnapshot,
     RequestStakeTableSnapshot,
+
+    /// This allows the use-case of a user sending a message that is not a
+    /// valid recognized request to be handled explicitly by the server rather
+    /// than the underlying mechanism of tide-disco.
+    /// If not for this case [tide_disco] would silently ignore the error and
+    /// drop the client connection, resulting in the client receiving no
+    /// response / feedback about the mistake in the request.
+    #[serde(untagged)]
+    UnrecognizedCommand(serde_json::Value),
 }
 
 /// InternalClientMessage represents the message requests that the client can
@@ -41,7 +50,7 @@ impl ClientMessage {
     /// [to_internal_with_client_id] converts the [ClientMessage] into an
     /// [InternalClientMessage] with the given [ClientId].
     pub fn to_internal_with_client_id<K>(&self, client_id: ClientId) -> InternalClientMessage<K> {
-        InternalClientMessage::Request(client_id, *self)
+        InternalClientMessage::Request(client_id, self.clone())
     }
 }
 
@@ -66,6 +75,25 @@ mod tests {
                     Self::Request(rhs_client_id, rhs_message),
                 ) => lhs_client_id == rhs_client_id && lhs_message == rhs_message,
                 _ => false,
+            }
+        }
+    }
+
+    /// [test_client_message_unrecognized_message] is a test that ensures that
+    /// the catch-all variants for the [ClientMessage] succeeds in receiving
+    /// unrecognized messages.
+    #[test]
+    fn test_client_message_unrecognized_message() {
+        let test_cases = ["\"FooBar\"", "{}", "null", "{\"command\":\"whoami\"}"];
+
+        for unrecognized_message in test_cases.iter() {
+            let message: ClientMessage = serde_json::from_str(unrecognized_message).unwrap();
+            match message {
+                ClientMessage::UnrecognizedCommand(_) => {
+                    // If we reach here, the test passes as we expect the result
+                    // to be an unrecognized command.
+                },
+                _ => panic!("Expected UnrecognizedCommand variant"),
             }
         }
     }

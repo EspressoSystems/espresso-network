@@ -63,6 +63,11 @@ pub enum ServerMessage {
     /// StakeTableSnapshot is a message that is sent in response to a request
     /// for the snapshot of the current stake table information.
     StakeTableSnapshot(Arc<Vec<PeerConfig<SeqTypes>>>),
+
+    // UnrecognizedRequest is a message that is sent when the server receives
+    // a request that it does not recognize. This is useful for debugging and
+    // for ensuring that the client is sending valid requests.
+    UnrecognizedRequest(serde_json::Value),
 }
 
 impl PartialEq for ServerMessage {
@@ -80,6 +85,7 @@ impl PartialEq for ServerMessage {
             (Self::VotersSnapshot(lhs), Self::VotersSnapshot(rhs)) => lhs == rhs,
             (Self::ValidatorsSnapshot(lhs), Self::ValidatorsSnapshot(rhs)) => lhs == rhs,
             (Self::StakeTableSnapshot(lhs), Self::StakeTableSnapshot(rhs)) => lhs == rhs,
+            (Self::UnrecognizedRequest(lhs), Self::UnrecognizedRequest(rhs)) => lhs == rhs,
             _ => false,
         }
     }

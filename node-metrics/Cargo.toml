@@ -6,7 +6,7 @@ authors = { workspace = true }
 edition = { workspace = true }
 
 [features]
-testing = ["serde_json", "espresso-types/testing", "hotshot-query-service/testing"]
+testing = ["espresso-types/testing", "hotshot-query-service/testing"]
 
 [dev-dependencies]
 node-metrics = { path = ".", features = [ "testing" ] }
@@ -25,14 +25,14 @@ hotshot = { workspace = true }
 hotshot-example-types = { workspace = true }
 hotshot-query-service = { workspace = true }
 indexmap = { workspace = true }
+serde = { workspace = true }
+serde_json = { version = "^1.0.113" }
 tokio = { workspace = true }
 
 # Dependencies for feature `testing`
 hotshot-types = { workspace = true }
 prometheus-parse = { version = "^0.2.5" }
 reqwest = { workspace = true }
-serde = { workspace = true }
-serde_json = { version = "^1.0.113", optional = true }
 surf-disco = { workspace = true }
 tide-disco = { workspace = true }
 time = { workspace = true }
