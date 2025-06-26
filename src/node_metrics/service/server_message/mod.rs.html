@@ -63,27 +63,33 @@
 <a href=#63 id=63 data-nosnippet>63</a>    <span class="doccomment">/// StakeTableSnapshot is a message that is sent in response to a request
 <a href=#64 id=64 data-nosnippet>64</a>    /// for the snapshot of the current stake table information.
 <a href=#65 id=65 data-nosnippet>65</a>    </span>StakeTableSnapshot(Arc&lt;Vec&lt;PeerConfig&lt;SeqTypes&gt;&gt;&gt;),
-<a href=#66 id=66 data-nosnippet>66</a>}
-<a href=#67 id=67 data-nosnippet>67</a>
-<a href=#68 id=68 data-nosnippet>68</a><span class="kw">impl </span>PartialEq <span class="kw">for </span>ServerMessage {
-<a href=#69 id=69 data-nosnippet>69</a>    <span class="kw">fn </span>eq(<span class="kw-2">&amp;</span><span class="self">self</span>, other: <span class="kw-2">&amp;</span><span class="self">Self</span>) -&gt; bool {
-<a href=#70 id=70 data-nosnippet>70</a>        <span class="kw">match </span>(<span class="self">self</span>, other) {
-<a href=#71 id=71 data-nosnippet>71</a>            (<span class="self">Self</span>::YouAre(lhs), <span class="self">Self</span>::YouAre(rhg)) =&gt; lhs == rhg,
-<a href=#72 id=72 data-nosnippet>72</a>            (<span class="self">Self</span>::LatestBlock(lhs), <span class="self">Self</span>::LatestBlock(rhs)) =&gt; lhs == rhs,
-<a href=#73 id=73 data-nosnippet>73</a>            (<span class="self">Self</span>::LatestNodeIdentity(lhs), <span class="self">Self</span>::LatestNodeIdentity(rhs)) =&gt; lhs == rhs,
-<a href=#74 id=74 data-nosnippet>74</a>            (<span class="self">Self</span>::LatestVoters(lhs), <span class="self">Self</span>::LatestVoters(rhs)) =&gt; lhs == rhs,
-<a href=#75 id=75 data-nosnippet>75</a>            (<span class="self">Self</span>::LatestValidator(lhs), <span class="self">Self</span>::LatestValidator(rhs)) =&gt; lhs == rhs,
-<a href=#76 id=76 data-nosnippet>76</a>            (<span class="self">Self</span>::LatestStakeTable(lhs), <span class="self">Self</span>::LatestStakeTable(rhs)) =&gt; lhs == rhs,
-<a href=#77 id=77 data-nosnippet>77</a>            (<span class="self">Self</span>::BlocksSnapshot(lhs), <span class="self">Self</span>::BlocksSnapshot(rhs)) =&gt; lhs == rhs,
-<a href=#78 id=78 data-nosnippet>78</a>            (<span class="self">Self</span>::NodeIdentitySnapshot(lhs), <span class="self">Self</span>::NodeIdentitySnapshot(rhs)) =&gt; lhs == rhs,
-<a href=#79 id=79 data-nosnippet>79</a>            (<span class="self">Self</span>::HistogramSnapshot(<span class="kw">_</span>), <span class="self">Self</span>::HistogramSnapshot(<span class="kw">_</span>)) =&gt; <span class="bool-val">false</span>,
-<a href=#80 id=80 data-nosnippet>80</a>            (<span class="self">Self</span>::VotersSnapshot(lhs), <span class="self">Self</span>::VotersSnapshot(rhs)) =&gt; lhs == rhs,
-<a href=#81 id=81 data-nosnippet>81</a>            (<span class="self">Self</span>::ValidatorsSnapshot(lhs), <span class="self">Self</span>::ValidatorsSnapshot(rhs)) =&gt; lhs == rhs,
-<a href=#82 id=82 data-nosnippet>82</a>            (<span class="self">Self</span>::StakeTableSnapshot(lhs), <span class="self">Self</span>::StakeTableSnapshot(rhs)) =&gt; lhs == rhs,
-<a href=#83 id=83 data-nosnippet>83</a>            <span class="kw">_ </span>=&gt; <span class="bool-val">false</span>,
-<a href=#84 id=84 data-nosnippet>84</a>        }
-<a href=#85 id=85 data-nosnippet>85</a>    }
-<a href=#86 id=86 data-nosnippet>86</a>}
-<a href=#87 id=87 data-nosnippet>87</a>
-<a href=#88 id=88 data-nosnippet>88</a><span class="attr">#[cfg(test)]
-<a href=#89 id=89 data-nosnippet>89</a></span><span class="kw">mod </span>tests {}</code></pre></div></section></main></body></html>
+<a href=#66 id=66 data-nosnippet>66</a>
+<a href=#67 id=67 data-nosnippet>67</a>    <span class="comment">// UnrecognizedRequest is a message that is sent when the server receives
+<a href=#68 id=68 data-nosnippet>68</a>    // a request that it does not recognize. This is useful for debugging and
+<a href=#69 id=69 data-nosnippet>69</a>    // for ensuring that the client is sending valid requests.
+<a href=#70 id=70 data-nosnippet>70</a>    </span>UnrecognizedRequest(serde_json::Value),
+<a href=#71 id=71 data-nosnippet>71</a>}
+<a href=#72 id=72 data-nosnippet>72</a>
+<a href=#73 id=73 data-nosnippet>73</a><span class="kw">impl </span>PartialEq <span class="kw">for </span>ServerMessage {
+<a href=#74 id=74 data-nosnippet>74</a>    <span class="kw">fn </span>eq(<span class="kw-2">&amp;</span><span class="self">self</span>, other: <span class="kw-2">&amp;</span><span class="self">Self</span>) -&gt; bool {
+<a href=#75 id=75 data-nosnippet>75</a>        <span class="kw">match </span>(<span class="self">self</span>, other) {
+<a href=#76 id=76 data-nosnippet>76</a>            (<span class="self">Self</span>::YouAre(lhs), <span class="self">Self</span>::YouAre(rhg)) =&gt; lhs == rhg,
+<a href=#77 id=77 data-nosnippet>77</a>            (<span class="self">Self</span>::LatestBlock(lhs), <span class="self">Self</span>::LatestBlock(rhs)) =&gt; lhs == rhs,
+<a href=#78 id=78 data-nosnippet>78</a>            (<span class="self">Self</span>::LatestNodeIdentity(lhs), <span class="self">Self</span>::LatestNodeIdentity(rhs)) =&gt; lhs == rhs,
+<a href=#79 id=79 data-nosnippet>79</a>            (<span class="self">Self</span>::LatestVoters(lhs), <span class="self">Self</span>::LatestVoters(rhs)) =&gt; lhs == rhs,
+<a href=#80 id=80 data-nosnippet>80</a>            (<span class="self">Self</span>::LatestValidator(lhs), <span class="self">Self</span>::LatestValidator(rhs)) =&gt; lhs == rhs,
+<a href=#81 id=81 data-nosnippet>81</a>            (<span class="self">Self</span>::LatestStakeTable(lhs), <span class="self">Self</span>::LatestStakeTable(rhs)) =&gt; lhs == rhs,
+<a href=#82 id=82 data-nosnippet>82</a>            (<span class="self">Self</span>::BlocksSnapshot(lhs), <span class="self">Self</span>::BlocksSnapshot(rhs)) =&gt; lhs == rhs,
+<a href=#83 id=83 data-nosnippet>83</a>            (<span class="self">Self</span>::NodeIdentitySnapshot(lhs), <span class="self">Self</span>::NodeIdentitySnapshot(rhs)) =&gt; lhs == rhs,
+<a href=#84 id=84 data-nosnippet>84</a>            (<span class="self">Self</span>::HistogramSnapshot(<span class="kw">_</span>), <span class="self">Self</span>::HistogramSnapshot(<span class="kw">_</span>)) =&gt; <span class="bool-val">false</span>,
+<a href=#85 id=85 data-nosnippet>85</a>            (<span class="self">Self</span>::VotersSnapshot(lhs), <span class="self">Self</span>::VotersSnapshot(rhs)) =&gt; lhs == rhs,
+<a href=#86 id=86 data-nosnippet>86</a>            (<span class="self">Self</span>::ValidatorsSnapshot(lhs), <span class="self">Self</span>::ValidatorsSnapshot(rhs)) =&gt; lhs == rhs,
+<a href=#87 id=87 data-nosnippet>87</a>            (<span class="self">Self</span>::StakeTableSnapshot(lhs), <span class="self">Self</span>::StakeTableSnapshot(rhs)) =&gt; lhs == rhs,
+<a href=#88 id=88 data-nosnippet>88</a>            (<span class="self">Self</span>::UnrecognizedRequest(lhs), <span class="self">Self</span>::UnrecognizedRequest(rhs)) =&gt; lhs == rhs,
+<a href=#89 id=89 data-nosnippet>89</a>            <span class="kw">_ </span>=&gt; <span class="bool-val">false</span>,
+<a href=#90 id=90 data-nosnippet>90</a>        }
+<a href=#91 id=91 data-nosnippet>91</a>    }
+<a href=#92 id=92 data-nosnippet>92</a>}
+<a href=#93 id=93 data-nosnippet>93</a>
+<a href=#94 id=94 data-nosnippet>94</a><span class="attr">#[cfg(test)]
+<a href=#95 id=95 data-nosnippet>95</a></span><span class="kw">mod </span>tests {}</code></pre></div></section></main></body></html>
