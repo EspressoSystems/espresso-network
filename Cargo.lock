@@ -8206,6 +8206,7 @@ dependencies = [
 name = "node-metrics"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "async-lock 3.4.0",
  "async-trait",
  "bincode",
@@ -8218,6 +8219,7 @@ dependencies = [
  "hotshot-example-types",
  "hotshot-query-service",
  "hotshot-types",
+ "indexmap 2.9.0",
  "node-metrics",
  "prometheus-parse",
  "reqwest 0.12.18",

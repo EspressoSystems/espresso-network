@@ -259,7 +259,7 @@ vergen = { version = "8.3", features = ["git", "gitcl"] }
 zeroize = "1.7"
 committable = "0.2"
 portpicker = "0.1.1"
-pretty_assertions = "1.4"
+pretty_assertions = { version = "1.4", features = ["unstable"] }
 static_assertions = "1.1"
 num-traits = "0.2"
 derivative = "2.2"

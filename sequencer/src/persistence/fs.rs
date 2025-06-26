@@ -15,10 +15,10 @@ use clap::Parser;
 use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
-    Leaf, Leaf2, NetworkConfig, Payload, SeqTypes,
+    v0_3::{EventKey, IndexedStake, StakeTableEvent},
+    Leaf, Leaf2, NetworkConfig, Payload, SeqTypes, ValidatorMap,
 };
-use hotshot::{types::BLSPubKey, InitializerEpochInfo};
+use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
     DhtPersistentStorage, SerializableRecord,
 };
@@ -42,7 +42,6 @@ use hotshot_types::{
     },
     vote::HasViewNumber,
 };
-use indexmap::IndexMap;
 use itertools::Itertools;
 
 use crate::{
@@ -1511,10 +1510,7 @@ impl SequencerPersistence for Persistence {
 
 #[async_trait]
 impl MembershipPersistence for Persistence {
-    async fn load_stake(
-        &self,
-        epoch: EpochNumber,
-    ) -> anyhow::Result<Option<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>>> {
+    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<ValidatorMap>> {
         let inner = self.inner.read().await;
         let path = &inner.stake_table_dir_path();
         let file_path = path.join(epoch.to_string()).with_extension("txt");
@@ -1542,11 +1538,7 @@ impl MembershipPersistence for Persistence {
             .collect()
     }
 
-    async fn store_stake(
-        &self,
-        epoch: EpochNumber,
-        stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
-    ) -> anyhow::Result<()> {
+    async fn store_stake(&self, epoch: EpochNumber, stake: ValidatorMap) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
         let dir_path = &inner.stake_table_dir_path();
 
@@ -1863,6 +1855,15 @@ fn migrate_network_config(
         config.insert("epoch_height".into(), 0.into());
     }
 
+    // HotShotConfig was upgraded to include `drb_difficulty` and `drb_upgrade_difficulty` parameters. Initialize with a default
+    // if missing.
+    if !config.contains_key("drb_difficulty") {
+        config.insert("drb_difficulty".into(), 0.into());
+    }
+    if !config.contains_key("drb_upgrade_difficulty") {
+        config.insert("drb_upgrade_difficulty".into(), 0.into());
+    }
+
     Ok(network_config)
 }
 
@@ -1985,7 +1986,9 @@ mod test {
                 "stop_proposing_time": 2,
                 "start_voting_time": 1,
                 "stop_voting_time": 2,
-                "epoch_height": 0
+                "epoch_height": 0,
+                "drb_difficulty": 0,
+                "drb_upgrade_difficulty": 0,
             }
         });
 
@@ -2005,7 +2008,9 @@ mod test {
                 "stop_proposing_time": 2,
                 "start_voting_time": 1,
                 "stop_voting_time": 2,
-                "epoch_height": 0
+                "epoch_height": 0,
+                "drb_difficulty": 0,
+                "drb_upgrade_difficulty": 0,
             }
         });
 
@@ -2030,7 +2035,9 @@ mod test {
                 "stop_proposing_time": 0,
                 "start_voting_time": 9007199254740991u64,
                 "stop_voting_time": 0,
-                "epoch_height": 0
+                "epoch_height": 0,
+                "drb_difficulty": 0,
+                "drb_upgrade_difficulty": 0,
             }
         });
 
@@ -2050,7 +2057,9 @@ mod test {
                 "stop_proposing_time": 2,
                 "start_voting_time": 1,
                 "stop_voting_time": 2,
-                "epoch_height": 0
+                "epoch_height": 0,
+                "drb_difficulty": 0,
+                "drb_upgrade_difficulty": 0,
             }
         });
 
