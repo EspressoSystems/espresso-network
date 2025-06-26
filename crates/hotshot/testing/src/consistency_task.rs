@@ -237,7 +237,7 @@ pub struct ConsistencyTask<TYPES: NodeType, V: Versions> {
     /// A map from node ids to (leaves keyed on view number)
     pub consensus_leaves: NetworkMap<TYPES>,
     /// safety task requirements
-    pub safety_properties: OverallSafetyPropertiesDescription,
+    pub safety_properties: OverallSafetyPropertiesDescription<TYPES>,
     /// whether we should have seen an upgrade certificate or not
     pub ensure_upgrade: bool,
     /// a list of errors accumulated by the task

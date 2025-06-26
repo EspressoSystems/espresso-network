@@ -136,7 +136,7 @@ pub struct TestDescription<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
     /// `HotShotInitializer::from_reload` in the spinning task.
     pub skip_late: bool,
     /// overall safety property description
-    pub overall_safety_properties: OverallSafetyPropertiesDescription,
+    pub overall_safety_properties: OverallSafetyPropertiesDescription<TYPES>,
     /// spinning properties
     pub spinning_properties: SpinningTaskDescription,
     /// txns timing
