@@ -1393,6 +1393,113 @@ pub async fn deploy_timelock(
     Ok(timelock_addr)
 }
 
+#[derive(Debug, Clone)]
+pub struct TimelockOperation {
+    /// The address of the contract to call
+    target: Address,
+    /// The value to send with the call
+    value: U256,
+    /// The data to send with the call e.g. the calldata of a function call
+    data: Bytes,
+    /// The predecessor operation id if you need to chain operations
+    predecessor: B256,
+    /// The salt for the operation
+    salt: B256,
+    /// The delay for the operation, must be >= the timelock's min delay
+    delay: U256,
+}
+
+pub async fn schedule_timelock_operation(
+    provider: impl Provider,
+    timelock_addr: Address,
+    operation: TimelockOperation,
+) -> Result<B256> {
+    let timelock = Timelock::new(timelock_addr, &provider);
+    let tx_id = timelock
+        .hashOperation(
+            operation.target,
+            operation.value,
+            operation.data.clone(),
+            operation.predecessor,
+            operation.salt,
+        )
+        .call()
+        .await?
+        ._0;
+    let pending_tx = timelock
+        .schedule(
+            operation.target,
+            operation.value,
+            operation.data,
+            operation.predecessor,
+            operation.salt,
+            operation.delay,
+        )
+        .send()
+        .await?;
+    let tx_hash = *pending_tx.tx_hash();
+    tracing::info!(%tx_hash, "waiting for tx to be mined");
+    let receipt = pending_tx.get_receipt().await?;
+    tracing::info!(%receipt.gas_used, %tx_hash, "tx mined");
+    if !receipt.inner.is_success() {
+        anyhow::bail!("tx failed: {:?}", receipt);
+    }
+
+    // check that the tx is scheduled
+    if !(timelock.isOperationPending(tx_id).call().await?._0
+        || timelock.isOperationReady(tx_id).call().await?._0)
+    {
+        anyhow::bail!("tx not correctly scheduled: {}", tx_id);
+    }
+    tracing::info!("tx scheduled with id: {}", tx_id);
+    Ok(tx_id)
+}
+
+pub async fn execute_timelock_operation(
+    provider: impl Provider,
+    timelock_addr: Address,
+    operation: TimelockOperation,
+) -> Result<B256> {
+    let timelock = Timelock::new(timelock_addr, &provider);
+    let tx_id = timelock
+        .hashOperation(
+            operation.target,
+            operation.value,
+            operation.data.clone(),
+            operation.predecessor,
+            operation.salt,
+        )
+        .call()
+        .await?
+        ._0;
+
+    // execute the tx
+    let pending_tx = timelock
+        .execute(
+            operation.target,
+            operation.value,
+            operation.data,
+            operation.predecessor,
+            operation.salt,
+        )
+        .send()
+        .await?;
+    let tx_hash = *pending_tx.tx_hash();
+    tracing::info!(%tx_hash, "waiting for tx to be mined");
+    let receipt = pending_tx.get_receipt().await?;
+    tracing::info!(%receipt.gas_used, %tx_hash, "tx mined");
+    if !receipt.inner.is_success() {
+        anyhow::bail!("tx failed: {:?}", receipt);
+    }
+
+    // check that the tx is executed
+    if !timelock.isOperationDone(tx_id).call().await?._0 {
+        anyhow::bail!("tx not correctly executed: {}", tx_id);
+    }
+    tracing::info!("tx executed with id: {}", tx_id);
+    Ok(tx_id)
+}
+
 #[cfg(test)]
 mod tests {
     use alloy::{
@@ -2361,6 +2468,69 @@ mod tests {
         // v1 state persistence cannot be tested here because the upgrade proposal is not yet executed
         // One has to test that the upgrade proposal is available via the Safe UI
         // and then test that the v1 state is persisted
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_schedule_and_execute_timelock_operation() -> Result<()> {
+        setup_test();
+        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+        let delay = U256::from(0);
+
+        // Get the provider's wallet address (the one actually sending transactions)
+        let provider_wallet = provider.get_accounts().await?[0];
+
+        let proposers = vec![provider_wallet];
+        let executors = vec![provider_wallet];
+
+        let timelock_addr = deploy_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            proposers,
+            executors,
+            provider_wallet, // Use provider wallet as admin too
+        )
+        .await?;
+
+        // deploy fee contract and set the timelock as the admin
+        let fee_contract_proxy_addr =
+            deploy_fee_contract_proxy(&provider, &mut contracts, timelock_addr).await?;
+
+        let proxy = FeeContract::new(fee_contract_proxy_addr, &provider);
+        let upgrade_data = proxy
+            .transferOwnership(provider_wallet)
+            .calldata()
+            .to_owned();
+
+        // propose a timelock operation
+        let operation = TimelockOperation {
+            target: fee_contract_proxy_addr,
+            value: U256::ZERO,
+            data: upgrade_data.into(),
+            predecessor: B256::ZERO,
+            salt: B256::ZERO,
+            delay,
+        };
+        let tx_id =
+            schedule_timelock_operation(&provider, timelock_addr, operation.clone()).await?;
+
+        // check that the tx is scheduled
+        let timelock = Timelock::new(timelock_addr, &provider);
+        assert!(timelock.isOperationPending(tx_id).call().await?._0);
+        assert!(timelock.isOperationReady(tx_id).call().await?._0);
+        assert!(!timelock.isOperationDone(tx_id).call().await?._0);
+        assert!(timelock.getTimestamp(tx_id).call().await?._0 > U256::ZERO);
+
+        // execute the tx since the delay is 0
+        execute_timelock_operation(&provider, timelock_addr, operation).await?;
+
+        // check that the tx is executed
+        assert!(timelock.isOperationDone(tx_id).call().await?._0);
+        assert!(!timelock.isOperationPending(tx_id).call().await?._0);
+        assert!(!timelock.isOperationReady(tx_id).call().await?._0);
+
         Ok(())
     }
 }
