@@ -1627,19 +1627,22 @@ pub mod tests {
     };
 
     use super::{ClientThreadState, InternalClientMessageProcessingTask};
-    use crate::service::{
-        client_id::ClientId,
-        client_message::{ClientMessage, InternalClientMessage},
-        client_state::{
-            ProcessDistributeBlockDetailHandlingTask, ProcessDistributeNodeIdentityHandlingTask,
-            ProcessDistributeStakeTableHandlingTask, ProcessDistributeValidatorHandlingTask,
-            ProcessDistributeVotersHandlingTask,
+    use crate::{
+        api::node_validator::v0::PublicHotShotConfig,
+        service::{
+            client_id::ClientId,
+            client_message::{ClientMessage, InternalClientMessage},
+            client_state::{
+                ProcessDistributeBlockDetailHandlingTask,
+                ProcessDistributeNodeIdentityHandlingTask, ProcessDistributeStakeTableHandlingTask,
+                ProcessDistributeValidatorHandlingTask, ProcessDistributeVotersHandlingTask,
+            },
+            data_state::{
+                create_block_detail_from_block, DataState, LocationDetails, NodeIdentity,
+                ProcessLeafAndBlockPairStreamTask,
+            },
+            server_message::ServerMessage,
         },
-        data_state::{
-            create_block_detail_from_block, default_hotshot_for_testing, DataState,
-            LocationDetails, NodeIdentity, ProcessLeafAndBlockPairStreamTask,
-        },
-        server_message::ServerMessage,
     };
 
     pub fn create_test_client_thread_state() -> ClientThreadState<Sender<ServerMessage>> {
@@ -1984,7 +1987,11 @@ pub mod tests {
             leaf_receiver,
             data_state,
             surf_disco::client::Client::new("http://localhost/".parse().unwrap()),
-            default_hotshot_for_testing().into(),
+            PublicHotShotConfig {
+                epoch_height: None,
+                epoch_start_block: None,
+                known_nodes_with_stake: vec![],
+            },
             (
                 block_detail_sender,
                 voters_sender,
