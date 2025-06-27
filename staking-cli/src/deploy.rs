@@ -99,6 +99,9 @@ impl TestSystem {
             .epoch_start_block(epoch_start_block)
             .multisig_pauser(deployer_address)
             .exit_escrow_period(U256::from(exit_escrow_period.as_secs()))
+            .token_name("Espresso".to_string())
+            .token_symbol("ESP".to_string())
+            .initial_token_supply(U256::from(3590000000u64))
             .build()
             .unwrap();
 
