@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `types/src/v0/impls/stake_table.rs`."><title>stake_table.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-916cea96.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="espresso_types" data-themes="" data-resource-suffix="" data-rustdoc-version="1.87.0 (17067e9ac 2025-05-09)" data-channel="1.87.0" data-search-js="search-e7298875.js" data-settings-js="settings-d72f25bb.js" ><script src="../../../../static.files/storage-82c7156e.js"></script><script defer src="../../../../static.files/src-script-63605ae7.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-fb8c74a8.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">espresso_types/v0/impls/</div>stake_table.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span>std::{
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `types/src/v0/impls/stake_table.rs`."><title>stake_table.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-1a91846b.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="espresso_types" data-themes="" data-resource-suffix="" data-rustdoc-version="1.88.0 (6b00bc388 2025-06-23)" data-channel="1.88.0" data-search-js="search-f7877310.js" data-settings-js="settings-5514c975.js" ><script src="../../../../static.files/storage-4e99c027.js"></script><script defer src="../../../../static.files/src-script-63605ae7.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-7ef8a74a.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">espresso_types/v0/impls/</div>stake_table.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span>std::{
 <a href=#2 id=2 data-nosnippet>2</a>    cmp::{max, min},
 <a href=#3 id=3 data-nosnippet>3</a>    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
 <a href=#4 id=4 data-nosnippet>4</a>    future::Future,
@@ -2187,414 +2187,413 @@
 <a href=#2187 id=2187 data-nosnippet>2187</a>            </span><span class="kw">let </span>res = validators_from_l1_events(events.iter().cloned());
 <a href=#2188 id=2188 data-nosnippet>2188</a>            <span class="macro">assert!</span>(
 <a href=#2189 id=2189 data-nosnippet>2189</a>                res.is_err(),
-<a href=#2190 id=2190 data-nosnippet>2190</a>                <span class="string">"events {:?}, not a valid sequence of events"</span>,
-<a href=#2191 id=2191 data-nosnippet>2191</a>                res
-<a href=#2192 id=2192 data-nosnippet>2192</a>            );
-<a href=#2193 id=2193 data-nosnippet>2193</a>        }
-<a href=#2194 id=2194 data-nosnippet>2194</a>        <span class="prelude-val">Ok</span>(())
-<a href=#2195 id=2195 data-nosnippet>2195</a>    }
-<a href=#2196 id=2196 data-nosnippet>2196</a>
-<a href=#2197 id=2197 data-nosnippet>2197</a>    <span class="attr">#[test]
-<a href=#2198 id=2198 data-nosnippet>2198</a>    </span><span class="kw">fn </span>test_validators_selection() {
-<a href=#2199 id=2199 data-nosnippet>2199</a>        <span class="kw">let </span><span class="kw-2">mut </span>validators = IndexMap::new();
-<a href=#2200 id=2200 data-nosnippet>2200</a>        <span class="kw">let </span><span class="kw-2">mut </span>highest_stake = alloy::primitives::U256::ZERO;
-<a href=#2201 id=2201 data-nosnippet>2201</a>
-<a href=#2202 id=2202 data-nosnippet>2202</a>        <span class="kw">for </span>_i <span class="kw">in </span><span class="number">0</span>..<span class="number">3000 </span>{
-<a href=#2203 id=2203 data-nosnippet>2203</a>            <span class="kw">let </span>validator = Validator::mock();
-<a href=#2204 id=2204 data-nosnippet>2204</a>            validators.insert(validator.account, validator.clone());
-<a href=#2205 id=2205 data-nosnippet>2205</a>
-<a href=#2206 id=2206 data-nosnippet>2206</a>            <span class="kw">if </span>validator.stake &gt; highest_stake {
-<a href=#2207 id=2207 data-nosnippet>2207</a>                highest_stake = validator.stake;
-<a href=#2208 id=2208 data-nosnippet>2208</a>            }
-<a href=#2209 id=2209 data-nosnippet>2209</a>        }
-<a href=#2210 id=2210 data-nosnippet>2210</a>
-<a href=#2211 id=2211 data-nosnippet>2211</a>        <span class="kw">let </span>minimum_stake = highest_stake / U256::from(VID_TARGET_TOTAL_STAKE);
-<a href=#2212 id=2212 data-nosnippet>2212</a>
-<a href=#2213 id=2213 data-nosnippet>2213</a>        select_active_validator_set(<span class="kw-2">&amp;mut </span>validators).expect(<span class="string">"Failed to select validators"</span>);
-<a href=#2214 id=2214 data-nosnippet>2214</a>        <span class="macro">assert!</span>(
-<a href=#2215 id=2215 data-nosnippet>2215</a>            validators.len() &lt;= <span class="number">100</span>,
-<a href=#2216 id=2216 data-nosnippet>2216</a>            <span class="string">"validators len is {}, expected at most 100"</span>,
-<a href=#2217 id=2217 data-nosnippet>2217</a>            validators.len()
-<a href=#2218 id=2218 data-nosnippet>2218</a>        );
-<a href=#2219 id=2219 data-nosnippet>2219</a>
-<a href=#2220 id=2220 data-nosnippet>2220</a>        <span class="kw">let </span><span class="kw-2">mut </span>selected_validators_highest_stake = alloy::primitives::U256::ZERO;
-<a href=#2221 id=2221 data-nosnippet>2221</a>        <span class="comment">// Ensure every validator in the final selection is above or equal to minimum stake
-<a href=#2222 id=2222 data-nosnippet>2222</a>        </span><span class="kw">for </span>(address, validator) <span class="kw">in </span><span class="kw-2">&amp;</span>validators {
-<a href=#2223 id=2223 data-nosnippet>2223</a>            <span class="macro">assert!</span>(
-<a href=#2224 id=2224 data-nosnippet>2224</a>                validator.stake &gt;= minimum_stake,
-<a href=#2225 id=2225 data-nosnippet>2225</a>                <span class="string">"Validator {:?} has stake below minimum: {}"</span>,
-<a href=#2226 id=2226 data-nosnippet>2226</a>                address,
-<a href=#2227 id=2227 data-nosnippet>2227</a>                validator.stake
-<a href=#2228 id=2228 data-nosnippet>2228</a>            );
-<a href=#2229 id=2229 data-nosnippet>2229</a>
-<a href=#2230 id=2230 data-nosnippet>2230</a>            <span class="kw">if </span>validator.stake &gt; selected_validators_highest_stake {
-<a href=#2231 id=2231 data-nosnippet>2231</a>                selected_validators_highest_stake = validator.stake;
-<a href=#2232 id=2232 data-nosnippet>2232</a>            }
-<a href=#2233 id=2233 data-nosnippet>2233</a>        }
-<a href=#2234 id=2234 data-nosnippet>2234</a>    }
-<a href=#2235 id=2235 data-nosnippet>2235</a>
-<a href=#2236 id=2236 data-nosnippet>2236</a>    <span class="comment">// For a bug where the GCL did not match the stake table contract implementation and allowed
-<a href=#2237 id=2237 data-nosnippet>2237</a>    // duplicated BLS keys via the update keys events.
-<a href=#2238 id=2238 data-nosnippet>2238</a>    </span><span class="attr">#[rstest::rstest]
-<a href=#2239 id=2239 data-nosnippet>2239</a>    </span><span class="kw">fn </span>test_regression_non_unique_bls_keys_not_discarded(
-<a href=#2240 id=2240 data-nosnippet>2240</a>        <span class="attr">#[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
-<a href=#2241 id=2241 data-nosnippet>2241</a>        </span>version: StakeTableContractVersion,
-<a href=#2242 id=2242 data-nosnippet>2242</a>    ) {
-<a href=#2243 id=2243 data-nosnippet>2243</a>        <span class="kw">let </span>val = TestValidator::random();
-<a href=#2244 id=2244 data-nosnippet>2244</a>        <span class="kw">let </span>register: StakeTableEvent = <span class="kw">match </span>version {
-<a href=#2245 id=2245 data-nosnippet>2245</a>            StakeTableContractVersion::V1 =&gt; ValidatorRegistered::from(<span class="kw-2">&amp;</span>val).into(),
-<a href=#2246 id=2246 data-nosnippet>2246</a>            StakeTableContractVersion::V2 =&gt; ValidatorRegisteredV2::from(<span class="kw-2">&amp;</span>val).into(),
-<a href=#2247 id=2247 data-nosnippet>2247</a>        };
-<a href=#2248 id=2248 data-nosnippet>2248</a>        <span class="kw">let </span>delegate: StakeTableEvent = Delegated {
-<a href=#2249 id=2249 data-nosnippet>2249</a>            delegator: Address::random(),
-<a href=#2250 id=2250 data-nosnippet>2250</a>            validator: val.account,
-<a href=#2251 id=2251 data-nosnippet>2251</a>            amount: U256::from(<span class="number">10</span>),
-<a href=#2252 id=2252 data-nosnippet>2252</a>        }
-<a href=#2253 id=2253 data-nosnippet>2253</a>        .into();
-<a href=#2254 id=2254 data-nosnippet>2254</a>
-<a href=#2255 id=2255 data-nosnippet>2255</a>        <span class="comment">// first ensure that wan build a valid stake table
-<a href=#2256 id=2256 data-nosnippet>2256</a>        </span><span class="macro">assert!</span>(active_validator_set_from_l1_events(
-<a href=#2257 id=2257 data-nosnippet>2257</a>            <span class="macro">vec!</span>[register.clone(), delegate.clone()].into_iter()
-<a href=#2258 id=2258 data-nosnippet>2258</a>        )
-<a href=#2259 id=2259 data-nosnippet>2259</a>        .is_ok());
-<a href=#2260 id=2260 data-nosnippet>2260</a>
-<a href=#2261 id=2261 data-nosnippet>2261</a>        <span class="comment">// add the invalid key update (re-using the same consensus keys)
-<a href=#2262 id=2262 data-nosnippet>2262</a>        </span><span class="kw">let </span>key_update = ConsensusKeysUpdated::from(<span class="kw-2">&amp;</span>val).into();
-<a href=#2263 id=2263 data-nosnippet>2263</a>        <span class="kw">let </span>err =
-<a href=#2264 id=2264 data-nosnippet>2264</a>            active_validator_set_from_l1_events(<span class="macro">vec!</span>[register, delegate, key_update].into_iter())
-<a href=#2265 id=2265 data-nosnippet>2265</a>                .unwrap_err();
-<a href=#2266 id=2266 data-nosnippet>2266</a>
-<a href=#2267 id=2267 data-nosnippet>2267</a>        <span class="kw">let </span>bls: BLSPubKey = val.bls_vk.into();
-<a href=#2268 id=2268 data-nosnippet>2268</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(err, StakeTableError::BlsKeyAlreadyUsed(addr) <span class="kw">if </span>addr == bls.to_string()));
-<a href=#2269 id=2269 data-nosnippet>2269</a>    }
-<a href=#2270 id=2270 data-nosnippet>2270</a>
-<a href=#2271 id=2271 data-nosnippet>2271</a>    <span class="attr">#[test]
-<a href=#2272 id=2272 data-nosnippet>2272</a>    </span><span class="kw">fn </span>test_display_log() {
-<a href=#2273 id=2273 data-nosnippet>2273</a>        <span class="kw">let </span>serialized = <span class="string">r#"{"address":"0x0000000000000000000000000000000000000069","topics":["0x0000000000000000000000000000000000000000000000000000000000000069"],"data":"0x69","blockHash":"0x0000000000000000000000000000000000000000000000000000000000000069","blockNumber":"0x69","blockTimestamp":"0x69","transactionHash":"0x0000000000000000000000000000000000000000000000000000000000000069","transactionIndex":"0x69","logIndex":"0x70","removed":false}"#</span>;
-<a href=#2274 id=2274 data-nosnippet>2274</a>        <span class="kw">let </span>log: Log = serde_json::from_str(serialized).unwrap();
-<a href=#2275 id=2275 data-nosnippet>2275</a>        <span class="macro">assert_eq!</span>(
-<a href=#2276 id=2276 data-nosnippet>2276</a>            log.display(),
-<a href=#2277 id=2277 data-nosnippet>2277</a>            <span class="string">"Log(block=105,index=112,transaction_hash=0x0000000000000000000000000000000000000000000000000000000000000069)"
-<a href=#2278 id=2278 data-nosnippet>2278</a>        </span>)
-<a href=#2279 id=2279 data-nosnippet>2279</a>    }
-<a href=#2280 id=2280 data-nosnippet>2280</a>
-<a href=#2281 id=2281 data-nosnippet>2281</a>    <span class="attr">#[rstest]
-<a href=#2282 id=2282 data-nosnippet>2282</a>    #[case::v1(StakeTableContractVersion::V1)]
-<a href=#2283 id=2283 data-nosnippet>2283</a>    #[case::v2(StakeTableContractVersion::V2)]
-<a href=#2284 id=2284 data-nosnippet>2284</a>    </span><span class="kw">fn </span>test_register_validator(<span class="attr">#[case] </span>version: StakeTableContractVersion) {
-<a href=#2285 id=2285 data-nosnippet>2285</a>        <span class="kw">let </span><span class="kw-2">mut </span>state = StakeTableState::new();
-<a href=#2286 id=2286 data-nosnippet>2286</a>        <span class="kw">let </span>validator = TestValidator::random();
-<a href=#2287 id=2287 data-nosnippet>2287</a>
-<a href=#2288 id=2288 data-nosnippet>2288</a>        <span class="kw">let </span>event = <span class="kw">match </span>version {
-<a href=#2289 id=2289 data-nosnippet>2289</a>            StakeTableContractVersion::V1 =&gt; StakeTableEvent::Register((<span class="kw-2">&amp;</span>validator).into()),
-<a href=#2290 id=2290 data-nosnippet>2290</a>            StakeTableContractVersion::V2 =&gt; StakeTableEvent::RegisterV2((<span class="kw-2">&amp;</span>validator).into()),
-<a href=#2291 id=2291 data-nosnippet>2291</a>        };
-<a href=#2292 id=2292 data-nosnippet>2292</a>
-<a href=#2293 id=2293 data-nosnippet>2293</a>        <span class="macro">assert!</span>(state.apply_event(event).unwrap().is_ok());
-<a href=#2294 id=2294 data-nosnippet>2294</a>
-<a href=#2295 id=2295 data-nosnippet>2295</a>        <span class="kw">let </span>stored = state.validators.get(<span class="kw-2">&amp;</span>validator.account).unwrap();
-<a href=#2296 id=2296 data-nosnippet>2296</a>        <span class="macro">assert_eq!</span>(stored.account, validator.account);
-<a href=#2297 id=2297 data-nosnippet>2297</a>    }
-<a href=#2298 id=2298 data-nosnippet>2298</a>
-<a href=#2299 id=2299 data-nosnippet>2299</a>    <span class="attr">#[rstest]
-<a href=#2300 id=2300 data-nosnippet>2300</a>    #[case::v1(StakeTableContractVersion::V1)]
-<a href=#2301 id=2301 data-nosnippet>2301</a>    #[case::v2(StakeTableContractVersion::V2)]
-<a href=#2302 id=2302 data-nosnippet>2302</a>    </span><span class="kw">fn </span>test_validator_already_registered(<span class="attr">#[case] </span>version: StakeTableContractVersion) {
-<a href=#2303 id=2303 data-nosnippet>2303</a>        <span class="kw">let </span><span class="kw-2">mut </span>stake_table_state = StakeTableState::new();
-<a href=#2304 id=2304 data-nosnippet>2304</a>
-<a href=#2305 id=2305 data-nosnippet>2305</a>        <span class="kw">let </span>test_validator = TestValidator::random();
-<a href=#2306 id=2306 data-nosnippet>2306</a>
-<a href=#2307 id=2307 data-nosnippet>2307</a>        <span class="comment">// First registration attempt using the specified contract version
-<a href=#2308 id=2308 data-nosnippet>2308</a>        </span><span class="kw">let </span>first_registration_result =
-<a href=#2309 id=2309 data-nosnippet>2309</a>            <span class="kw">match </span>version {
-<a href=#2310 id=2310 data-nosnippet>2310</a>                StakeTableContractVersion::V1 =&gt; stake_table_state
-<a href=#2311 id=2311 data-nosnippet>2311</a>                    .apply_event(StakeTableEvent::Register((<span class="kw-2">&amp;</span>test_validator).into())),
-<a href=#2312 id=2312 data-nosnippet>2312</a>                StakeTableContractVersion::V2 =&gt; stake_table_state
-<a href=#2313 id=2313 data-nosnippet>2313</a>                    .apply_event(StakeTableEvent::RegisterV2((<span class="kw-2">&amp;</span>test_validator).into())),
-<a href=#2314 id=2314 data-nosnippet>2314</a>            };
-<a href=#2315 id=2315 data-nosnippet>2315</a>
-<a href=#2316 id=2316 data-nosnippet>2316</a>        <span class="comment">// Expect the first registration to succeed
-<a href=#2317 id=2317 data-nosnippet>2317</a>        </span><span class="macro">assert!</span>(first_registration_result.unwrap().is_ok());
-<a href=#2318 id=2318 data-nosnippet>2318</a>
-<a href=#2319 id=2319 data-nosnippet>2319</a>        <span class="comment">// attempt using V1 registration (should fail with AlreadyRegistered)
-<a href=#2320 id=2320 data-nosnippet>2320</a>        </span><span class="kw">let </span>v1_already_registered_result =
-<a href=#2321 id=2321 data-nosnippet>2321</a>            stake_table_state.apply_event(StakeTableEvent::Register((<span class="kw-2">&amp;</span>test_validator).into()));
-<a href=#2322 id=2322 data-nosnippet>2322</a>
-<a href=#2323 id=2323 data-nosnippet>2323</a>        <span class="macro">pretty_assertions::assert_matches!</span>(
-<a href=#2324 id=2324 data-nosnippet>2324</a>           v1_already_registered_result,  <span class="prelude-val">Err</span>(StakeTableError::AlreadyRegistered(account)) <span class="kw">if </span>account == test_validator.account,
-<a href=#2325 id=2325 data-nosnippet>2325</a>           <span class="string">"Expected AlreadyRegistered error. version ={version:?} result={v1_already_registered_result:?}"</span>,
-<a href=#2326 id=2326 data-nosnippet>2326</a>        );
-<a href=#2327 id=2327 data-nosnippet>2327</a>
-<a href=#2328 id=2328 data-nosnippet>2328</a>        <span class="comment">// attempt using V2 registration (should also fail with AlreadyRegistered)
-<a href=#2329 id=2329 data-nosnippet>2329</a>        </span><span class="kw">let </span>v2_already_registered_result =
-<a href=#2330 id=2330 data-nosnippet>2330</a>            stake_table_state.apply_event(StakeTableEvent::RegisterV2((<span class="kw-2">&amp;</span>test_validator).into()));
-<a href=#2331 id=2331 data-nosnippet>2331</a>
-<a href=#2332 id=2332 data-nosnippet>2332</a>        <span class="macro">pretty_assertions::assert_matches!</span>(
-<a href=#2333 id=2333 data-nosnippet>2333</a>            v2_already_registered_result,
-<a href=#2334 id=2334 data-nosnippet>2334</a>            <span class="prelude-val">Err</span>(StakeTableError::AlreadyRegistered(account)) <span class="kw">if </span>account == test_validator.account,
-<a href=#2335 id=2335 data-nosnippet>2335</a>            <span class="string">"Expected AlreadyRegistered error. version ={version:?} result={v2_already_registered_result:?}"</span>,
-<a href=#2336 id=2336 data-nosnippet>2336</a>
-<a href=#2337 id=2337 data-nosnippet>2337</a>        );
-<a href=#2338 id=2338 data-nosnippet>2338</a>    }
-<a href=#2339 id=2339 data-nosnippet>2339</a>
-<a href=#2340 id=2340 data-nosnippet>2340</a>    <span class="attr">#[test]
-<a href=#2341 id=2341 data-nosnippet>2341</a>    </span><span class="kw">fn </span>test_register_validator_v2_auth_fails() {
-<a href=#2342 id=2342 data-nosnippet>2342</a>        <span class="kw">let </span><span class="kw-2">mut </span>state = StakeTableState::new();
-<a href=#2343 id=2343 data-nosnippet>2343</a>        <span class="kw">let </span><span class="kw-2">mut </span>val = TestValidator::random();
-<a href=#2344 id=2344 data-nosnippet>2344</a>        val.bls_sig = Default::default();
-<a href=#2345 id=2345 data-nosnippet>2345</a>        <span class="kw">let </span>event = StakeTableEvent::RegisterV2((<span class="kw-2">&amp;</span>val).into());
-<a href=#2346 id=2346 data-nosnippet>2346</a>
-<a href=#2347 id=2347 data-nosnippet>2347</a>        <span class="kw">let </span>result = state.apply_event(event);
-<a href=#2348 id=2348 data-nosnippet>2348</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
-<a href=#2349 id=2349 data-nosnippet>2349</a>            result,
-<a href=#2350 id=2350 data-nosnippet>2350</a>            <span class="prelude-val">Err</span>(StakeTableError::AuthenticationFailed(<span class="kw">_</span>))
-<a href=#2351 id=2351 data-nosnippet>2351</a>        ));
-<a href=#2352 id=2352 data-nosnippet>2352</a>    }
-<a href=#2353 id=2353 data-nosnippet>2353</a>
-<a href=#2354 id=2354 data-nosnippet>2354</a>    <span class="attr">#[test]
-<a href=#2355 id=2355 data-nosnippet>2355</a>    </span><span class="kw">fn </span>test_deregister_validator() {
-<a href=#2356 id=2356 data-nosnippet>2356</a>        <span class="kw">let </span><span class="kw-2">mut </span>state = StakeTableState::new();
-<a href=#2357 id=2357 data-nosnippet>2357</a>        <span class="kw">let </span>val = TestValidator::random();
-<a href=#2358 id=2358 data-nosnippet>2358</a>
-<a href=#2359 id=2359 data-nosnippet>2359</a>        <span class="kw">let </span>reg = StakeTableEvent::Register((<span class="kw-2">&amp;</span>val).into());
-<a href=#2360 id=2360 data-nosnippet>2360</a>        state.apply_event(reg).unwrap().unwrap();
-<a href=#2361 id=2361 data-nosnippet>2361</a>
-<a href=#2362 id=2362 data-nosnippet>2362</a>        <span class="kw">let </span>dereg = StakeTableEvent::Deregister((<span class="kw-2">&amp;</span>val).into());
-<a href=#2363 id=2363 data-nosnippet>2363</a>        <span class="macro">assert!</span>(state.apply_event(dereg).unwrap().is_ok());
-<a href=#2364 id=2364 data-nosnippet>2364</a>        <span class="macro">assert!</span>(!state.validators.contains_key(<span class="kw-2">&amp;</span>val.account));
-<a href=#2365 id=2365 data-nosnippet>2365</a>    }
-<a href=#2366 id=2366 data-nosnippet>2366</a>
-<a href=#2367 id=2367 data-nosnippet>2367</a>    <span class="attr">#[test]
-<a href=#2368 id=2368 data-nosnippet>2368</a>    </span><span class="kw">fn </span>test_delegate_and_undelegate() {
-<a href=#2369 id=2369 data-nosnippet>2369</a>        <span class="kw">let </span><span class="kw-2">mut </span>state = StakeTableState::new();
-<a href=#2370 id=2370 data-nosnippet>2370</a>        <span class="kw">let </span>val = TestValidator::random();
-<a href=#2371 id=2371 data-nosnippet>2371</a>        state
-<a href=#2372 id=2372 data-nosnippet>2372</a>            .apply_event(StakeTableEvent::Register((<span class="kw-2">&amp;</span>val).into()))
-<a href=#2373 id=2373 data-nosnippet>2373</a>            .unwrap()
-<a href=#2374 id=2374 data-nosnippet>2374</a>            .unwrap();
-<a href=#2375 id=2375 data-nosnippet>2375</a>
-<a href=#2376 id=2376 data-nosnippet>2376</a>        <span class="kw">let </span>delegator = Address::random();
-<a href=#2377 id=2377 data-nosnippet>2377</a>        <span class="kw">let </span>amount = U256::from(<span class="number">1000</span>);
-<a href=#2378 id=2378 data-nosnippet>2378</a>        <span class="kw">let </span>delegate_event = StakeTableEvent::Delegate(Delegated {
-<a href=#2379 id=2379 data-nosnippet>2379</a>            delegator,
-<a href=#2380 id=2380 data-nosnippet>2380</a>            validator: val.account,
-<a href=#2381 id=2381 data-nosnippet>2381</a>            amount,
-<a href=#2382 id=2382 data-nosnippet>2382</a>        });
-<a href=#2383 id=2383 data-nosnippet>2383</a>        <span class="macro">assert!</span>(state.apply_event(delegate_event).unwrap().is_ok());
-<a href=#2384 id=2384 data-nosnippet>2384</a>
-<a href=#2385 id=2385 data-nosnippet>2385</a>        <span class="kw">let </span>validator = state.validators.get(<span class="kw-2">&amp;</span>val.account).unwrap();
-<a href=#2386 id=2386 data-nosnippet>2386</a>        <span class="macro">assert_eq!</span>(validator.delegators.get(<span class="kw-2">&amp;</span>delegator).cloned(), <span class="prelude-val">Some</span>(amount));
-<a href=#2387 id=2387 data-nosnippet>2387</a>
-<a href=#2388 id=2388 data-nosnippet>2388</a>        <span class="kw">let </span>undelegate_event = StakeTableEvent::Undelegate(Undelegated {
-<a href=#2389 id=2389 data-nosnippet>2389</a>            delegator,
-<a href=#2390 id=2390 data-nosnippet>2390</a>            validator: val.account,
-<a href=#2391 id=2391 data-nosnippet>2391</a>            amount,
-<a href=#2392 id=2392 data-nosnippet>2392</a>        });
-<a href=#2393 id=2393 data-nosnippet>2393</a>        <span class="macro">assert!</span>(state.apply_event(undelegate_event).unwrap().is_ok());
-<a href=#2394 id=2394 data-nosnippet>2394</a>        <span class="kw">let </span>validator = state.validators.get(<span class="kw-2">&amp;</span>val.account).unwrap();
-<a href=#2395 id=2395 data-nosnippet>2395</a>        <span class="macro">assert!</span>(!validator.delegators.contains_key(<span class="kw-2">&amp;</span>delegator));
-<a href=#2396 id=2396 data-nosnippet>2396</a>    }
-<a href=#2397 id=2397 data-nosnippet>2397</a>
-<a href=#2398 id=2398 data-nosnippet>2398</a>    <span class="attr">#[rstest]
-<a href=#2399 id=2399 data-nosnippet>2399</a>    #[case::v1(StakeTableContractVersion::V1)]
-<a href=#2400 id=2400 data-nosnippet>2400</a>    #[case::v2(StakeTableContractVersion::V2)]
-<a href=#2401 id=2401 data-nosnippet>2401</a>    </span><span class="kw">fn </span>test_key_update_event(<span class="attr">#[case] </span>version: StakeTableContractVersion) {
-<a href=#2402 id=2402 data-nosnippet>2402</a>        <span class="kw">let </span><span class="kw-2">mut </span>state = StakeTableState::new();
-<a href=#2403 id=2403 data-nosnippet>2403</a>        <span class="kw">let </span>val = TestValidator::random();
-<a href=#2404 id=2404 data-nosnippet>2404</a>
-<a href=#2405 id=2405 data-nosnippet>2405</a>        <span class="comment">// Always register first using V1 to simulate upgrade scenarios
-<a href=#2406 id=2406 data-nosnippet>2406</a>        </span>state
-<a href=#2407 id=2407 data-nosnippet>2407</a>            .apply_event(StakeTableEvent::Register((<span class="kw-2">&amp;</span>val).into()))
-<a href=#2408 id=2408 data-nosnippet>2408</a>            .unwrap()
-<a href=#2409 id=2409 data-nosnippet>2409</a>            .unwrap();
-<a href=#2410 id=2410 data-nosnippet>2410</a>
-<a href=#2411 id=2411 data-nosnippet>2411</a>        <span class="kw">let </span>new_keys = val.randomize_keys();
-<a href=#2412 id=2412 data-nosnippet>2412</a>
-<a href=#2413 id=2413 data-nosnippet>2413</a>        <span class="kw">let </span>event = <span class="kw">match </span>version {
-<a href=#2414 id=2414 data-nosnippet>2414</a>            StakeTableContractVersion::V1 =&gt; StakeTableEvent::KeyUpdate((<span class="kw-2">&amp;</span>new_keys).into()),
-<a href=#2415 id=2415 data-nosnippet>2415</a>            StakeTableContractVersion::V2 =&gt; StakeTableEvent::KeyUpdateV2((<span class="kw-2">&amp;</span>new_keys).into()),
-<a href=#2416 id=2416 data-nosnippet>2416</a>        };
-<a href=#2417 id=2417 data-nosnippet>2417</a>
-<a href=#2418 id=2418 data-nosnippet>2418</a>        <span class="macro">assert!</span>(state.apply_event(event).unwrap().is_ok());
-<a href=#2419 id=2419 data-nosnippet>2419</a>
-<a href=#2420 id=2420 data-nosnippet>2420</a>        <span class="kw">let </span>updated = state.validators.get(<span class="kw-2">&amp;</span>val.account).unwrap();
-<a href=#2421 id=2421 data-nosnippet>2421</a>        <span class="macro">assert_eq!</span>(updated.stake_table_key, new_keys.bls_vk.into());
-<a href=#2422 id=2422 data-nosnippet>2422</a>        <span class="macro">assert_eq!</span>(updated.state_ver_key, new_keys.schnorr_vk.into());
-<a href=#2423 id=2423 data-nosnippet>2423</a>    }
-<a href=#2424 id=2424 data-nosnippet>2424</a>
-<a href=#2425 id=2425 data-nosnippet>2425</a>    <span class="attr">#[test]
-<a href=#2426 id=2426 data-nosnippet>2426</a>    </span><span class="kw">fn </span>test_duplicate_bls_key() {
-<a href=#2427 id=2427 data-nosnippet>2427</a>        <span class="kw">let </span><span class="kw-2">mut </span>state = StakeTableState::new();
-<a href=#2428 id=2428 data-nosnippet>2428</a>        <span class="kw">let </span>val = TestValidator::random();
-<a href=#2429 id=2429 data-nosnippet>2429</a>        <span class="kw">let </span>event1 = StakeTableEvent::Register((<span class="kw-2">&amp;</span>val).into());
-<a href=#2430 id=2430 data-nosnippet>2430</a>        <span class="kw">let </span><span class="kw-2">mut </span>val2 = TestValidator::random();
-<a href=#2431 id=2431 data-nosnippet>2431</a>        val2.bls_vk = val.bls_vk;
-<a href=#2432 id=2432 data-nosnippet>2432</a>        val2.account = Address::random();
-<a href=#2433 id=2433 data-nosnippet>2433</a>
-<a href=#2434 id=2434 data-nosnippet>2434</a>        <span class="kw">let </span>event2 = StakeTableEvent::Register((<span class="kw-2">&amp;</span>val2).into());
-<a href=#2435 id=2435 data-nosnippet>2435</a>        <span class="macro">assert!</span>(state.apply_event(event1).unwrap().is_ok());
-<a href=#2436 id=2436 data-nosnippet>2436</a>        <span class="kw">let </span>result = state.apply_event(event2);
-<a href=#2437 id=2437 data-nosnippet>2437</a>
-<a href=#2438 id=2438 data-nosnippet>2438</a>        <span class="kw">let </span>expected_bls_key = BLSPubKey::from(val.bls_vk).to_string();
-<a href=#2439 id=2439 data-nosnippet>2439</a>
-<a href=#2440 id=2440 data-nosnippet>2440</a>        <span class="macro">assert_matches!</span>(
-<a href=#2441 id=2441 data-nosnippet>2441</a>            result,
-<a href=#2442 id=2442 data-nosnippet>2442</a>            <span class="prelude-val">Err</span>(StakeTableError::BlsKeyAlreadyUsed(key))
-<a href=#2443 id=2443 data-nosnippet>2443</a>                <span class="kw">if </span>key == expected_bls_key,
-<a href=#2444 id=2444 data-nosnippet>2444</a>            <span class="string">"Expected BlsKeyAlreadyUsed({expected_bls_key}), but got: {result:?}"</span>,
-<a href=#2445 id=2445 data-nosnippet>2445</a>        );
-<a href=#2446 id=2446 data-nosnippet>2446</a>    }
-<a href=#2447 id=2447 data-nosnippet>2447</a>
-<a href=#2448 id=2448 data-nosnippet>2448</a>    <span class="attr">#[test]
-<a href=#2449 id=2449 data-nosnippet>2449</a>    </span><span class="kw">fn </span>test_duplicate_schnorr_key() {
-<a href=#2450 id=2450 data-nosnippet>2450</a>        <span class="kw">let </span><span class="kw-2">mut </span>state = StakeTableState::new();
-<a href=#2451 id=2451 data-nosnippet>2451</a>        <span class="kw">let </span>val = TestValidator::random();
-<a href=#2452 id=2452 data-nosnippet>2452</a>        <span class="kw">let </span>event1 = StakeTableEvent::Register((<span class="kw-2">&amp;</span>val).into());
-<a href=#2453 id=2453 data-nosnippet>2453</a>        <span class="kw">let </span><span class="kw-2">mut </span>val2 = TestValidator::random();
-<a href=#2454 id=2454 data-nosnippet>2454</a>        val2.schnorr_vk = val.schnorr_vk;
-<a href=#2455 id=2455 data-nosnippet>2455</a>        val2.account = Address::random();
-<a href=#2456 id=2456 data-nosnippet>2456</a>        val2.bls_vk = val2.randomize_keys().bls_vk;
-<a href=#2457 id=2457 data-nosnippet>2457</a>
-<a href=#2458 id=2458 data-nosnippet>2458</a>        <span class="kw">let </span>event2 = StakeTableEvent::Register((<span class="kw-2">&amp;</span>val2).into());
-<a href=#2459 id=2459 data-nosnippet>2459</a>        <span class="macro">assert!</span>(state.apply_event(event1).unwrap().is_ok());
-<a href=#2460 id=2460 data-nosnippet>2460</a>        <span class="kw">let </span>result = state.apply_event(event2);
-<a href=#2461 id=2461 data-nosnippet>2461</a>
-<a href=#2462 id=2462 data-nosnippet>2462</a>        <span class="kw">let </span>schnorr: SchnorrPubKey = val.schnorr_vk.into();
-<a href=#2463 id=2463 data-nosnippet>2463</a>        <span class="macro">assert_matches!</span>(
-<a href=#2464 id=2464 data-nosnippet>2464</a>            result,
-<a href=#2465 id=2465 data-nosnippet>2465</a>            <span class="prelude-val">Ok</span>(<span class="prelude-val">Err</span>(ExpectedStakeTableError::SchnorrKeyAlreadyUsed(key)))
-<a href=#2466 id=2466 data-nosnippet>2466</a>                <span class="kw">if </span>key == schnorr.to_string(),
-<a href=#2467 id=2467 data-nosnippet>2467</a>            <span class="string">"Expected SchnorrKeyAlreadyUsed({schnorr}), but got: {result:?}"</span>,
-<a href=#2468 id=2468 data-nosnippet>2468</a>
-<a href=#2469 id=2469 data-nosnippet>2469</a>        );
-<a href=#2470 id=2470 data-nosnippet>2470</a>    }
-<a href=#2471 id=2471 data-nosnippet>2471</a>
-<a href=#2472 id=2472 data-nosnippet>2472</a>    <span class="attr">#[test]
-<a href=#2473 id=2473 data-nosnippet>2473</a>    </span><span class="kw">fn </span>test_register_and_deregister_validator() {
-<a href=#2474 id=2474 data-nosnippet>2474</a>        <span class="kw">let </span><span class="kw-2">mut </span>state = StakeTableState::new();
-<a href=#2475 id=2475 data-nosnippet>2475</a>        <span class="kw">let </span>validator = TestValidator::random();
-<a href=#2476 id=2476 data-nosnippet>2476</a>        <span class="kw">let </span>event = StakeTableEvent::Register((<span class="kw-2">&amp;</span>validator).into());
-<a href=#2477 id=2477 data-nosnippet>2477</a>        <span class="macro">assert!</span>(state.apply_event(event).unwrap().is_ok());
-<a href=#2478 id=2478 data-nosnippet>2478</a>
-<a href=#2479 id=2479 data-nosnippet>2479</a>        <span class="kw">let </span>deregister_event = StakeTableEvent::Deregister((<span class="kw-2">&amp;</span>validator).into());
-<a href=#2480 id=2480 data-nosnippet>2480</a>        <span class="macro">assert!</span>(state.apply_event(deregister_event).unwrap().is_ok());
-<a href=#2481 id=2481 data-nosnippet>2481</a>    }
-<a href=#2482 id=2482 data-nosnippet>2482</a>
-<a href=#2483 id=2483 data-nosnippet>2483</a>    <span class="attr">#[test]
-<a href=#2484 id=2484 data-nosnippet>2484</a>    </span><span class="kw">fn </span>test_delegate_zero_amount_is_rejected() {
-<a href=#2485 id=2485 data-nosnippet>2485</a>        <span class="kw">let </span><span class="kw-2">mut </span>state = StakeTableState::new();
-<a href=#2486 id=2486 data-nosnippet>2486</a>        <span class="kw">let </span>validator = TestValidator::random();
-<a href=#2487 id=2487 data-nosnippet>2487</a>        <span class="kw">let </span>account = validator.account;
-<a href=#2488 id=2488 data-nosnippet>2488</a>        state
-<a href=#2489 id=2489 data-nosnippet>2489</a>            .apply_event(StakeTableEvent::Register((<span class="kw-2">&amp;</span>validator).into()))
-<a href=#2490 id=2490 data-nosnippet>2490</a>            .unwrap()
-<a href=#2491 id=2491 data-nosnippet>2491</a>            .unwrap();
-<a href=#2492 id=2492 data-nosnippet>2492</a>
-<a href=#2493 id=2493 data-nosnippet>2493</a>        <span class="kw">let </span>delegator = Address::random();
-<a href=#2494 id=2494 data-nosnippet>2494</a>        <span class="kw">let </span>amount = U256::ZERO;
-<a href=#2495 id=2495 data-nosnippet>2495</a>        <span class="kw">let </span>event = StakeTableEvent::Delegate(Delegated {
-<a href=#2496 id=2496 data-nosnippet>2496</a>            delegator,
-<a href=#2497 id=2497 data-nosnippet>2497</a>            validator: account,
-<a href=#2498 id=2498 data-nosnippet>2498</a>            amount,
-<a href=#2499 id=2499 data-nosnippet>2499</a>        });
-<a href=#2500 id=2500 data-nosnippet>2500</a>        <span class="kw">let </span>result = state.apply_event(event);
-<a href=#2501 id=2501 data-nosnippet>2501</a>
-<a href=#2502 id=2502 data-nosnippet>2502</a>        <span class="macro">assert_matches!</span>(
-<a href=#2503 id=2503 data-nosnippet>2503</a>            result,
-<a href=#2504 id=2504 data-nosnippet>2504</a>            <span class="prelude-val">Err</span>(StakeTableError::ZeroDelegatorStake(addr))
-<a href=#2505 id=2505 data-nosnippet>2505</a>                <span class="kw">if </span>addr == delegator,
-<a href=#2506 id=2506 data-nosnippet>2506</a>            <span class="string">"delegator stake is zero"
-<a href=#2507 id=2507 data-nosnippet>2507</a>
-<a href=#2508 id=2508 data-nosnippet>2508</a>        </span>);
-<a href=#2509 id=2509 data-nosnippet>2509</a>    }
-<a href=#2510 id=2510 data-nosnippet>2510</a>
-<a href=#2511 id=2511 data-nosnippet>2511</a>    <span class="attr">#[test]
-<a href=#2512 id=2512 data-nosnippet>2512</a>    </span><span class="kw">fn </span>test_undelegate_more_than_stake_fails() {
-<a href=#2513 id=2513 data-nosnippet>2513</a>        <span class="kw">let </span><span class="kw-2">mut </span>state = StakeTableState::new();
-<a href=#2514 id=2514 data-nosnippet>2514</a>        <span class="kw">let </span>validator = TestValidator::random();
-<a href=#2515 id=2515 data-nosnippet>2515</a>        <span class="kw">let </span>account = validator.account;
-<a href=#2516 id=2516 data-nosnippet>2516</a>        state
-<a href=#2517 id=2517 data-nosnippet>2517</a>            .apply_event(StakeTableEvent::Register((<span class="kw-2">&amp;</span>validator).into()))
-<a href=#2518 id=2518 data-nosnippet>2518</a>            .unwrap()
-<a href=#2519 id=2519 data-nosnippet>2519</a>            .unwrap();
-<a href=#2520 id=2520 data-nosnippet>2520</a>
-<a href=#2521 id=2521 data-nosnippet>2521</a>        <span class="kw">let </span>delegator = Address::random();
-<a href=#2522 id=2522 data-nosnippet>2522</a>        <span class="kw">let </span>event = StakeTableEvent::Delegate(Delegated {
-<a href=#2523 id=2523 data-nosnippet>2523</a>            delegator,
-<a href=#2524 id=2524 data-nosnippet>2524</a>            validator: account,
-<a href=#2525 id=2525 data-nosnippet>2525</a>            amount: U256::from(<span class="number">10u64</span>),
-<a href=#2526 id=2526 data-nosnippet>2526</a>        });
-<a href=#2527 id=2527 data-nosnippet>2527</a>        state.apply_event(event).unwrap().unwrap();
-<a href=#2528 id=2528 data-nosnippet>2528</a>
-<a href=#2529 id=2529 data-nosnippet>2529</a>        <span class="kw">let </span>result = state.apply_event(StakeTableEvent::Undelegate(Undelegated {
-<a href=#2530 id=2530 data-nosnippet>2530</a>            delegator,
-<a href=#2531 id=2531 data-nosnippet>2531</a>            validator: account,
-<a href=#2532 id=2532 data-nosnippet>2532</a>            amount: U256::from(<span class="number">20u64</span>),
-<a href=#2533 id=2533 data-nosnippet>2533</a>        }));
-<a href=#2534 id=2534 data-nosnippet>2534</a>        <span class="macro">assert_matches!</span>(
-<a href=#2535 id=2535 data-nosnippet>2535</a>            result,
-<a href=#2536 id=2536 data-nosnippet>2536</a>            <span class="prelude-val">Err</span>(StakeTableError::InsufficientStake),
-<a href=#2537 id=2537 data-nosnippet>2537</a>            <span class="string">"Expected InsufficientStake error, got: {result:?}"</span>,
-<a href=#2538 id=2538 data-nosnippet>2538</a>        );
-<a href=#2539 id=2539 data-nosnippet>2539</a>    }
-<a href=#2540 id=2540 data-nosnippet>2540</a>
-<a href=#2541 id=2541 data-nosnippet>2541</a>    <span class="attr">#[tokio::test(flavor = <span class="string">"multi_thread"</span>)]
-<a href=#2542 id=2542 data-nosnippet>2542</a>    </span><span class="kw">async fn </span>test_decaf_stake_table() {
-<a href=#2543 id=2543 data-nosnippet>2543</a>        setup_test();
-<a href=#2544 id=2544 data-nosnippet>2544</a>
-<a href=#2545 id=2545 data-nosnippet>2545</a>        <span class="comment">// The following commented-out block demonstrates how the `decaf_stake_table_events.json`
-<a href=#2546 id=2546 data-nosnippet>2546</a>        // and `decaf_stake_table.json` files were originally generated.
-<a href=#2547 id=2547 data-nosnippet>2547</a>
-<a href=#2548 id=2548 data-nosnippet>2548</a>        // It generates decaf stake table data by fetching events from the contract,
-<a href=#2549 id=2549 data-nosnippet>2549</a>        // writes events and the constructed stake table to JSON files.
-<a href=#2550 id=2550 data-nosnippet>2550</a>
-<a href=#2551 id=2551 data-nosnippet>2551</a>        /*
-<a href=#2552 id=2552 data-nosnippet>2552</a>        let l1 = L1Client::new(vec!["https://ethereum-sepolia.publicnode.com"
-<a href=#2553 id=2553 data-nosnippet>2553</a>            .parse()
-<a href=#2554 id=2554 data-nosnippet>2554</a>            .unwrap()])
-<a href=#2555 id=2555 data-nosnippet>2555</a>        .unwrap();
-<a href=#2556 id=2556 data-nosnippet>2556</a>        let contract_address = "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037";
-<a href=#2557 id=2557 data-nosnippet>2557</a>
-<a href=#2558 id=2558 data-nosnippet>2558</a>        let events = Fetcher::fetch_events_from_contract(
-<a href=#2559 id=2559 data-nosnippet>2559</a>            l1,
-<a href=#2560 id=2560 data-nosnippet>2560</a>            contract_address.parse().unwrap(),
-<a href=#2561 id=2561 data-nosnippet>2561</a>            None,
-<a href=#2562 id=2562 data-nosnippet>2562</a>            8582328,
-<a href=#2563 id=2563 data-nosnippet>2563</a>        )
-<a href=#2564 id=2564 data-nosnippet>2564</a>        .await;
-<a href=#2565 id=2565 data-nosnippet>2565</a>
-<a href=#2566 id=2566 data-nosnippet>2566</a>        let sorted_events = events.sort_events().expect("failed to sort");
-<a href=#2567 id=2567 data-nosnippet>2567</a>
-<a href=#2568 id=2568 data-nosnippet>2568</a>        // Serialize and write sorted events
-<a href=#2569 id=2569 data-nosnippet>2569</a>        let json_events = serde_json::to_string_pretty(&amp;sorted_events)?;
-<a href=#2570 id=2570 data-nosnippet>2570</a>        let mut events_file = File::create("decaf_stake_table_events.json").await?;
-<a href=#2571 id=2571 data-nosnippet>2571</a>        events_file.write_all(json_events.as_bytes()).await?;
-<a href=#2572 id=2572 data-nosnippet>2572</a>
-<a href=#2573 id=2573 data-nosnippet>2573</a>        // Process into stake table
-<a href=#2574 id=2574 data-nosnippet>2574</a>        let stake_table = validators_from_l1_events(sorted_events.into_iter().map(|(_, e)| e))?;
-<a href=#2575 id=2575 data-nosnippet>2575</a>
-<a href=#2576 id=2576 data-nosnippet>2576</a>        // Serialize and write stake table
-<a href=#2577 id=2577 data-nosnippet>2577</a>        let json_stake_table = serde_json::to_string_pretty(&amp;stake_table)?;
-<a href=#2578 id=2578 data-nosnippet>2578</a>        let mut stake_file = File::create("decaf_stake_table.json").await?;
-<a href=#2579 id=2579 data-nosnippet>2579</a>        stake_file.write_all(json_stake_table.as_bytes()).await?;
-<a href=#2580 id=2580 data-nosnippet>2580</a>        */
-<a href=#2581 id=2581 data-nosnippet>2581</a>
-<a href=#2582 id=2582 data-nosnippet>2582</a>        </span><span class="kw">let </span>events_json =
-<a href=#2583 id=2583 data-nosnippet>2583</a>            std::fs::read_to_string(<span class="string">"../data/v3/decaf_stake_table_events.json"</span>).unwrap();
-<a href=#2584 id=2584 data-nosnippet>2584</a>        <span class="kw">let </span>events: Vec&lt;(EventKey, StakeTableEvent)&gt; = serde_json::from_str(<span class="kw-2">&amp;</span>events_json).unwrap();
-<a href=#2585 id=2585 data-nosnippet>2585</a>
-<a href=#2586 id=2586 data-nosnippet>2586</a>        <span class="comment">// Reconstruct stake table from events
-<a href=#2587 id=2587 data-nosnippet>2587</a>        </span><span class="kw">let </span>reconstructed_stake_table =
-<a href=#2588 id=2588 data-nosnippet>2588</a>            active_validator_set_from_l1_events(events.into_iter().map(|(<span class="kw">_</span>, e)| e)).unwrap();
-<a href=#2589 id=2589 data-nosnippet>2589</a>
-<a href=#2590 id=2590 data-nosnippet>2590</a>        <span class="kw">let </span>stake_table_json =
-<a href=#2591 id=2591 data-nosnippet>2591</a>            std::fs::read_to_string(<span class="string">"../data/v3/decaf_stake_table.json"</span>).unwrap();
-<a href=#2592 id=2592 data-nosnippet>2592</a>        <span class="kw">let </span>expected: IndexMap&lt;Address, Validator&lt;BLSPubKey&gt;&gt; =
-<a href=#2593 id=2593 data-nosnippet>2593</a>            serde_json::from_str(<span class="kw-2">&amp;</span>stake_table_json).unwrap();
-<a href=#2594 id=2594 data-nosnippet>2594</a>
-<a href=#2595 id=2595 data-nosnippet>2595</a>        <span class="macro">assert_eq!</span>(
-<a href=#2596 id=2596 data-nosnippet>2596</a>            reconstructed_stake_table, expected,
-<a href=#2597 id=2597 data-nosnippet>2597</a>            <span class="string">"Stake table reconstructed from events does not match the expected stake table "
-<a href=#2598 id=2598 data-nosnippet>2598</a>        </span>);
-<a href=#2599 id=2599 data-nosnippet>2599</a>    }
-<a href=#2600 id=2600 data-nosnippet>2600</a>}</code></pre></div></section></main></body></html>
+<a href=#2190 id=2190 data-nosnippet>2190</a>                <span class="string">"events {res:?}, not a valid sequence of events"
+<a href=#2191 id=2191 data-nosnippet>2191</a>            </span>);
+<a href=#2192 id=2192 data-nosnippet>2192</a>        }
+<a href=#2193 id=2193 data-nosnippet>2193</a>        <span class="prelude-val">Ok</span>(())
+<a href=#2194 id=2194 data-nosnippet>2194</a>    }
+<a href=#2195 id=2195 data-nosnippet>2195</a>
+<a href=#2196 id=2196 data-nosnippet>2196</a>    <span class="attr">#[test]
+<a href=#2197 id=2197 data-nosnippet>2197</a>    </span><span class="kw">fn </span>test_validators_selection() {
+<a href=#2198 id=2198 data-nosnippet>2198</a>        <span class="kw">let </span><span class="kw-2">mut </span>validators = IndexMap::new();
+<a href=#2199 id=2199 data-nosnippet>2199</a>        <span class="kw">let </span><span class="kw-2">mut </span>highest_stake = alloy::primitives::U256::ZERO;
+<a href=#2200 id=2200 data-nosnippet>2200</a>
+<a href=#2201 id=2201 data-nosnippet>2201</a>        <span class="kw">for </span>_i <span class="kw">in </span><span class="number">0</span>..<span class="number">3000 </span>{
+<a href=#2202 id=2202 data-nosnippet>2202</a>            <span class="kw">let </span>validator = Validator::mock();
+<a href=#2203 id=2203 data-nosnippet>2203</a>            validators.insert(validator.account, validator.clone());
+<a href=#2204 id=2204 data-nosnippet>2204</a>
+<a href=#2205 id=2205 data-nosnippet>2205</a>            <span class="kw">if </span>validator.stake &gt; highest_stake {
+<a href=#2206 id=2206 data-nosnippet>2206</a>                highest_stake = validator.stake;
+<a href=#2207 id=2207 data-nosnippet>2207</a>            }
+<a href=#2208 id=2208 data-nosnippet>2208</a>        }
+<a href=#2209 id=2209 data-nosnippet>2209</a>
+<a href=#2210 id=2210 data-nosnippet>2210</a>        <span class="kw">let </span>minimum_stake = highest_stake / U256::from(VID_TARGET_TOTAL_STAKE);
+<a href=#2211 id=2211 data-nosnippet>2211</a>
+<a href=#2212 id=2212 data-nosnippet>2212</a>        select_active_validator_set(<span class="kw-2">&amp;mut </span>validators).expect(<span class="string">"Failed to select validators"</span>);
+<a href=#2213 id=2213 data-nosnippet>2213</a>        <span class="macro">assert!</span>(
+<a href=#2214 id=2214 data-nosnippet>2214</a>            validators.len() &lt;= <span class="number">100</span>,
+<a href=#2215 id=2215 data-nosnippet>2215</a>            <span class="string">"validators len is {}, expected at most 100"</span>,
+<a href=#2216 id=2216 data-nosnippet>2216</a>            validators.len()
+<a href=#2217 id=2217 data-nosnippet>2217</a>        );
+<a href=#2218 id=2218 data-nosnippet>2218</a>
+<a href=#2219 id=2219 data-nosnippet>2219</a>        <span class="kw">let </span><span class="kw-2">mut </span>selected_validators_highest_stake = alloy::primitives::U256::ZERO;
+<a href=#2220 id=2220 data-nosnippet>2220</a>        <span class="comment">// Ensure every validator in the final selection is above or equal to minimum stake
+<a href=#2221 id=2221 data-nosnippet>2221</a>        </span><span class="kw">for </span>(address, validator) <span class="kw">in </span><span class="kw-2">&amp;</span>validators {
+<a href=#2222 id=2222 data-nosnippet>2222</a>            <span class="macro">assert!</span>(
+<a href=#2223 id=2223 data-nosnippet>2223</a>                validator.stake &gt;= minimum_stake,
+<a href=#2224 id=2224 data-nosnippet>2224</a>                <span class="string">"Validator {:?} has stake below minimum: {}"</span>,
+<a href=#2225 id=2225 data-nosnippet>2225</a>                address,
+<a href=#2226 id=2226 data-nosnippet>2226</a>                validator.stake
+<a href=#2227 id=2227 data-nosnippet>2227</a>            );
+<a href=#2228 id=2228 data-nosnippet>2228</a>
+<a href=#2229 id=2229 data-nosnippet>2229</a>            <span class="kw">if </span>validator.stake &gt; selected_validators_highest_stake {
+<a href=#2230 id=2230 data-nosnippet>2230</a>                selected_validators_highest_stake = validator.stake;
+<a href=#2231 id=2231 data-nosnippet>2231</a>            }
+<a href=#2232 id=2232 data-nosnippet>2232</a>        }
+<a href=#2233 id=2233 data-nosnippet>2233</a>    }
+<a href=#2234 id=2234 data-nosnippet>2234</a>
+<a href=#2235 id=2235 data-nosnippet>2235</a>    <span class="comment">// For a bug where the GCL did not match the stake table contract implementation and allowed
+<a href=#2236 id=2236 data-nosnippet>2236</a>    // duplicated BLS keys via the update keys events.
+<a href=#2237 id=2237 data-nosnippet>2237</a>    </span><span class="attr">#[rstest::rstest]
+<a href=#2238 id=2238 data-nosnippet>2238</a>    </span><span class="kw">fn </span>test_regression_non_unique_bls_keys_not_discarded(
+<a href=#2239 id=2239 data-nosnippet>2239</a>        <span class="attr">#[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
+<a href=#2240 id=2240 data-nosnippet>2240</a>        </span>version: StakeTableContractVersion,
+<a href=#2241 id=2241 data-nosnippet>2241</a>    ) {
+<a href=#2242 id=2242 data-nosnippet>2242</a>        <span class="kw">let </span>val = TestValidator::random();
+<a href=#2243 id=2243 data-nosnippet>2243</a>        <span class="kw">let </span>register: StakeTableEvent = <span class="kw">match </span>version {
+<a href=#2244 id=2244 data-nosnippet>2244</a>            StakeTableContractVersion::V1 =&gt; ValidatorRegistered::from(<span class="kw-2">&amp;</span>val).into(),
+<a href=#2245 id=2245 data-nosnippet>2245</a>            StakeTableContractVersion::V2 =&gt; ValidatorRegisteredV2::from(<span class="kw-2">&amp;</span>val).into(),
+<a href=#2246 id=2246 data-nosnippet>2246</a>        };
+<a href=#2247 id=2247 data-nosnippet>2247</a>        <span class="kw">let </span>delegate: StakeTableEvent = Delegated {
+<a href=#2248 id=2248 data-nosnippet>2248</a>            delegator: Address::random(),
+<a href=#2249 id=2249 data-nosnippet>2249</a>            validator: val.account,
+<a href=#2250 id=2250 data-nosnippet>2250</a>            amount: U256::from(<span class="number">10</span>),
+<a href=#2251 id=2251 data-nosnippet>2251</a>        }
+<a href=#2252 id=2252 data-nosnippet>2252</a>        .into();
+<a href=#2253 id=2253 data-nosnippet>2253</a>
+<a href=#2254 id=2254 data-nosnippet>2254</a>        <span class="comment">// first ensure that wan build a valid stake table
+<a href=#2255 id=2255 data-nosnippet>2255</a>        </span><span class="macro">assert!</span>(active_validator_set_from_l1_events(
+<a href=#2256 id=2256 data-nosnippet>2256</a>            <span class="macro">vec!</span>[register.clone(), delegate.clone()].into_iter()
+<a href=#2257 id=2257 data-nosnippet>2257</a>        )
+<a href=#2258 id=2258 data-nosnippet>2258</a>        .is_ok());
+<a href=#2259 id=2259 data-nosnippet>2259</a>
+<a href=#2260 id=2260 data-nosnippet>2260</a>        <span class="comment">// add the invalid key update (re-using the same consensus keys)
+<a href=#2261 id=2261 data-nosnippet>2261</a>        </span><span class="kw">let </span>key_update = ConsensusKeysUpdated::from(<span class="kw-2">&amp;</span>val).into();
+<a href=#2262 id=2262 data-nosnippet>2262</a>        <span class="kw">let </span>err =
+<a href=#2263 id=2263 data-nosnippet>2263</a>            active_validator_set_from_l1_events(<span class="macro">vec!</span>[register, delegate, key_update].into_iter())
+<a href=#2264 id=2264 data-nosnippet>2264</a>                .unwrap_err();
+<a href=#2265 id=2265 data-nosnippet>2265</a>
+<a href=#2266 id=2266 data-nosnippet>2266</a>        <span class="kw">let </span>bls: BLSPubKey = val.bls_vk.into();
+<a href=#2267 id=2267 data-nosnippet>2267</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(err, StakeTableError::BlsKeyAlreadyUsed(addr) <span class="kw">if </span>addr == bls.to_string()));
+<a href=#2268 id=2268 data-nosnippet>2268</a>    }
+<a href=#2269 id=2269 data-nosnippet>2269</a>
+<a href=#2270 id=2270 data-nosnippet>2270</a>    <span class="attr">#[test]
+<a href=#2271 id=2271 data-nosnippet>2271</a>    </span><span class="kw">fn </span>test_display_log() {
+<a href=#2272 id=2272 data-nosnippet>2272</a>        <span class="kw">let </span>serialized = <span class="string">r#"{"address":"0x0000000000000000000000000000000000000069","topics":["0x0000000000000000000000000000000000000000000000000000000000000069"],"data":"0x69","blockHash":"0x0000000000000000000000000000000000000000000000000000000000000069","blockNumber":"0x69","blockTimestamp":"0x69","transactionHash":"0x0000000000000000000000000000000000000000000000000000000000000069","transactionIndex":"0x69","logIndex":"0x70","removed":false}"#</span>;
+<a href=#2273 id=2273 data-nosnippet>2273</a>        <span class="kw">let </span>log: Log = serde_json::from_str(serialized).unwrap();
+<a href=#2274 id=2274 data-nosnippet>2274</a>        <span class="macro">assert_eq!</span>(
+<a href=#2275 id=2275 data-nosnippet>2275</a>            log.display(),
+<a href=#2276 id=2276 data-nosnippet>2276</a>            <span class="string">"Log(block=105,index=112,transaction_hash=0x0000000000000000000000000000000000000000000000000000000000000069)"
+<a href=#2277 id=2277 data-nosnippet>2277</a>        </span>)
+<a href=#2278 id=2278 data-nosnippet>2278</a>    }
+<a href=#2279 id=2279 data-nosnippet>2279</a>
+<a href=#2280 id=2280 data-nosnippet>2280</a>    <span class="attr">#[rstest]
+<a href=#2281 id=2281 data-nosnippet>2281</a>    #[case::v1(StakeTableContractVersion::V1)]
+<a href=#2282 id=2282 data-nosnippet>2282</a>    #[case::v2(StakeTableContractVersion::V2)]
+<a href=#2283 id=2283 data-nosnippet>2283</a>    </span><span class="kw">fn </span>test_register_validator(<span class="attr">#[case] </span>version: StakeTableContractVersion) {
+<a href=#2284 id=2284 data-nosnippet>2284</a>        <span class="kw">let </span><span class="kw-2">mut </span>state = StakeTableState::new();
+<a href=#2285 id=2285 data-nosnippet>2285</a>        <span class="kw">let </span>validator = TestValidator::random();
+<a href=#2286 id=2286 data-nosnippet>2286</a>
+<a href=#2287 id=2287 data-nosnippet>2287</a>        <span class="kw">let </span>event = <span class="kw">match </span>version {
+<a href=#2288 id=2288 data-nosnippet>2288</a>            StakeTableContractVersion::V1 =&gt; StakeTableEvent::Register((<span class="kw-2">&amp;</span>validator).into()),
+<a href=#2289 id=2289 data-nosnippet>2289</a>            StakeTableContractVersion::V2 =&gt; StakeTableEvent::RegisterV2((<span class="kw-2">&amp;</span>validator).into()),
+<a href=#2290 id=2290 data-nosnippet>2290</a>        };
+<a href=#2291 id=2291 data-nosnippet>2291</a>
+<a href=#2292 id=2292 data-nosnippet>2292</a>        <span class="macro">assert!</span>(state.apply_event(event).unwrap().is_ok());
+<a href=#2293 id=2293 data-nosnippet>2293</a>
+<a href=#2294 id=2294 data-nosnippet>2294</a>        <span class="kw">let </span>stored = state.validators.get(<span class="kw-2">&amp;</span>validator.account).unwrap();
+<a href=#2295 id=2295 data-nosnippet>2295</a>        <span class="macro">assert_eq!</span>(stored.account, validator.account);
+<a href=#2296 id=2296 data-nosnippet>2296</a>    }
+<a href=#2297 id=2297 data-nosnippet>2297</a>
+<a href=#2298 id=2298 data-nosnippet>2298</a>    <span class="attr">#[rstest]
+<a href=#2299 id=2299 data-nosnippet>2299</a>    #[case::v1(StakeTableContractVersion::V1)]
+<a href=#2300 id=2300 data-nosnippet>2300</a>    #[case::v2(StakeTableContractVersion::V2)]
+<a href=#2301 id=2301 data-nosnippet>2301</a>    </span><span class="kw">fn </span>test_validator_already_registered(<span class="attr">#[case] </span>version: StakeTableContractVersion) {
+<a href=#2302 id=2302 data-nosnippet>2302</a>        <span class="kw">let </span><span class="kw-2">mut </span>stake_table_state = StakeTableState::new();
+<a href=#2303 id=2303 data-nosnippet>2303</a>
+<a href=#2304 id=2304 data-nosnippet>2304</a>        <span class="kw">let </span>test_validator = TestValidator::random();
+<a href=#2305 id=2305 data-nosnippet>2305</a>
+<a href=#2306 id=2306 data-nosnippet>2306</a>        <span class="comment">// First registration attempt using the specified contract version
+<a href=#2307 id=2307 data-nosnippet>2307</a>        </span><span class="kw">let </span>first_registration_result =
+<a href=#2308 id=2308 data-nosnippet>2308</a>            <span class="kw">match </span>version {
+<a href=#2309 id=2309 data-nosnippet>2309</a>                StakeTableContractVersion::V1 =&gt; stake_table_state
+<a href=#2310 id=2310 data-nosnippet>2310</a>                    .apply_event(StakeTableEvent::Register((<span class="kw-2">&amp;</span>test_validator).into())),
+<a href=#2311 id=2311 data-nosnippet>2311</a>                StakeTableContractVersion::V2 =&gt; stake_table_state
+<a href=#2312 id=2312 data-nosnippet>2312</a>                    .apply_event(StakeTableEvent::RegisterV2((<span class="kw-2">&amp;</span>test_validator).into())),
+<a href=#2313 id=2313 data-nosnippet>2313</a>            };
+<a href=#2314 id=2314 data-nosnippet>2314</a>
+<a href=#2315 id=2315 data-nosnippet>2315</a>        <span class="comment">// Expect the first registration to succeed
+<a href=#2316 id=2316 data-nosnippet>2316</a>        </span><span class="macro">assert!</span>(first_registration_result.unwrap().is_ok());
+<a href=#2317 id=2317 data-nosnippet>2317</a>
+<a href=#2318 id=2318 data-nosnippet>2318</a>        <span class="comment">// attempt using V1 registration (should fail with AlreadyRegistered)
+<a href=#2319 id=2319 data-nosnippet>2319</a>        </span><span class="kw">let </span>v1_already_registered_result =
+<a href=#2320 id=2320 data-nosnippet>2320</a>            stake_table_state.apply_event(StakeTableEvent::Register((<span class="kw-2">&amp;</span>test_validator).into()));
+<a href=#2321 id=2321 data-nosnippet>2321</a>
+<a href=#2322 id=2322 data-nosnippet>2322</a>        <span class="macro">pretty_assertions::assert_matches!</span>(
+<a href=#2323 id=2323 data-nosnippet>2323</a>           v1_already_registered_result,  <span class="prelude-val">Err</span>(StakeTableError::AlreadyRegistered(account)) <span class="kw">if </span>account == test_validator.account,
+<a href=#2324 id=2324 data-nosnippet>2324</a>           <span class="string">"Expected AlreadyRegistered error. version ={version:?} result={v1_already_registered_result:?}"</span>,
+<a href=#2325 id=2325 data-nosnippet>2325</a>        );
+<a href=#2326 id=2326 data-nosnippet>2326</a>
+<a href=#2327 id=2327 data-nosnippet>2327</a>        <span class="comment">// attempt using V2 registration (should also fail with AlreadyRegistered)
+<a href=#2328 id=2328 data-nosnippet>2328</a>        </span><span class="kw">let </span>v2_already_registered_result =
+<a href=#2329 id=2329 data-nosnippet>2329</a>            stake_table_state.apply_event(StakeTableEvent::RegisterV2((<span class="kw-2">&amp;</span>test_validator).into()));
+<a href=#2330 id=2330 data-nosnippet>2330</a>
+<a href=#2331 id=2331 data-nosnippet>2331</a>        <span class="macro">pretty_assertions::assert_matches!</span>(
+<a href=#2332 id=2332 data-nosnippet>2332</a>            v2_already_registered_result,
+<a href=#2333 id=2333 data-nosnippet>2333</a>            <span class="prelude-val">Err</span>(StakeTableError::AlreadyRegistered(account)) <span class="kw">if </span>account == test_validator.account,
+<a href=#2334 id=2334 data-nosnippet>2334</a>            <span class="string">"Expected AlreadyRegistered error. version ={version:?} result={v2_already_registered_result:?}"</span>,
+<a href=#2335 id=2335 data-nosnippet>2335</a>
+<a href=#2336 id=2336 data-nosnippet>2336</a>        );
+<a href=#2337 id=2337 data-nosnippet>2337</a>    }
+<a href=#2338 id=2338 data-nosnippet>2338</a>
+<a href=#2339 id=2339 data-nosnippet>2339</a>    <span class="attr">#[test]
+<a href=#2340 id=2340 data-nosnippet>2340</a>    </span><span class="kw">fn </span>test_register_validator_v2_auth_fails() {
+<a href=#2341 id=2341 data-nosnippet>2341</a>        <span class="kw">let </span><span class="kw-2">mut </span>state = StakeTableState::new();
+<a href=#2342 id=2342 data-nosnippet>2342</a>        <span class="kw">let </span><span class="kw-2">mut </span>val = TestValidator::random();
+<a href=#2343 id=2343 data-nosnippet>2343</a>        val.bls_sig = Default::default();
+<a href=#2344 id=2344 data-nosnippet>2344</a>        <span class="kw">let </span>event = StakeTableEvent::RegisterV2((<span class="kw-2">&amp;</span>val).into());
+<a href=#2345 id=2345 data-nosnippet>2345</a>
+<a href=#2346 id=2346 data-nosnippet>2346</a>        <span class="kw">let </span>result = state.apply_event(event);
+<a href=#2347 id=2347 data-nosnippet>2347</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
+<a href=#2348 id=2348 data-nosnippet>2348</a>            result,
+<a href=#2349 id=2349 data-nosnippet>2349</a>            <span class="prelude-val">Err</span>(StakeTableError::AuthenticationFailed(<span class="kw">_</span>))
+<a href=#2350 id=2350 data-nosnippet>2350</a>        ));
+<a href=#2351 id=2351 data-nosnippet>2351</a>    }
+<a href=#2352 id=2352 data-nosnippet>2352</a>
+<a href=#2353 id=2353 data-nosnippet>2353</a>    <span class="attr">#[test]
+<a href=#2354 id=2354 data-nosnippet>2354</a>    </span><span class="kw">fn </span>test_deregister_validator() {
+<a href=#2355 id=2355 data-nosnippet>2355</a>        <span class="kw">let </span><span class="kw-2">mut </span>state = StakeTableState::new();
+<a href=#2356 id=2356 data-nosnippet>2356</a>        <span class="kw">let </span>val = TestValidator::random();
+<a href=#2357 id=2357 data-nosnippet>2357</a>
+<a href=#2358 id=2358 data-nosnippet>2358</a>        <span class="kw">let </span>reg = StakeTableEvent::Register((<span class="kw-2">&amp;</span>val).into());
+<a href=#2359 id=2359 data-nosnippet>2359</a>        state.apply_event(reg).unwrap().unwrap();
+<a href=#2360 id=2360 data-nosnippet>2360</a>
+<a href=#2361 id=2361 data-nosnippet>2361</a>        <span class="kw">let </span>dereg = StakeTableEvent::Deregister((<span class="kw-2">&amp;</span>val).into());
+<a href=#2362 id=2362 data-nosnippet>2362</a>        <span class="macro">assert!</span>(state.apply_event(dereg).unwrap().is_ok());
+<a href=#2363 id=2363 data-nosnippet>2363</a>        <span class="macro">assert!</span>(!state.validators.contains_key(<span class="kw-2">&amp;</span>val.account));
+<a href=#2364 id=2364 data-nosnippet>2364</a>    }
+<a href=#2365 id=2365 data-nosnippet>2365</a>
+<a href=#2366 id=2366 data-nosnippet>2366</a>    <span class="attr">#[test]
+<a href=#2367 id=2367 data-nosnippet>2367</a>    </span><span class="kw">fn </span>test_delegate_and_undelegate() {
+<a href=#2368 id=2368 data-nosnippet>2368</a>        <span class="kw">let </span><span class="kw-2">mut </span>state = StakeTableState::new();
+<a href=#2369 id=2369 data-nosnippet>2369</a>        <span class="kw">let </span>val = TestValidator::random();
+<a href=#2370 id=2370 data-nosnippet>2370</a>        state
+<a href=#2371 id=2371 data-nosnippet>2371</a>            .apply_event(StakeTableEvent::Register((<span class="kw-2">&amp;</span>val).into()))
+<a href=#2372 id=2372 data-nosnippet>2372</a>            .unwrap()
+<a href=#2373 id=2373 data-nosnippet>2373</a>            .unwrap();
+<a href=#2374 id=2374 data-nosnippet>2374</a>
+<a href=#2375 id=2375 data-nosnippet>2375</a>        <span class="kw">let </span>delegator = Address::random();
+<a href=#2376 id=2376 data-nosnippet>2376</a>        <span class="kw">let </span>amount = U256::from(<span class="number">1000</span>);
+<a href=#2377 id=2377 data-nosnippet>2377</a>        <span class="kw">let </span>delegate_event = StakeTableEvent::Delegate(Delegated {
+<a href=#2378 id=2378 data-nosnippet>2378</a>            delegator,
+<a href=#2379 id=2379 data-nosnippet>2379</a>            validator: val.account,
+<a href=#2380 id=2380 data-nosnippet>2380</a>            amount,
+<a href=#2381 id=2381 data-nosnippet>2381</a>        });
+<a href=#2382 id=2382 data-nosnippet>2382</a>        <span class="macro">assert!</span>(state.apply_event(delegate_event).unwrap().is_ok());
+<a href=#2383 id=2383 data-nosnippet>2383</a>
+<a href=#2384 id=2384 data-nosnippet>2384</a>        <span class="kw">let </span>validator = state.validators.get(<span class="kw-2">&amp;</span>val.account).unwrap();
+<a href=#2385 id=2385 data-nosnippet>2385</a>        <span class="macro">assert_eq!</span>(validator.delegators.get(<span class="kw-2">&amp;</span>delegator).cloned(), <span class="prelude-val">Some</span>(amount));
+<a href=#2386 id=2386 data-nosnippet>2386</a>
+<a href=#2387 id=2387 data-nosnippet>2387</a>        <span class="kw">let </span>undelegate_event = StakeTableEvent::Undelegate(Undelegated {
+<a href=#2388 id=2388 data-nosnippet>2388</a>            delegator,
+<a href=#2389 id=2389 data-nosnippet>2389</a>            validator: val.account,
+<a href=#2390 id=2390 data-nosnippet>2390</a>            amount,
+<a href=#2391 id=2391 data-nosnippet>2391</a>        });
+<a href=#2392 id=2392 data-nosnippet>2392</a>        <span class="macro">assert!</span>(state.apply_event(undelegate_event).unwrap().is_ok());
+<a href=#2393 id=2393 data-nosnippet>2393</a>        <span class="kw">let </span>validator = state.validators.get(<span class="kw-2">&amp;</span>val.account).unwrap();
+<a href=#2394 id=2394 data-nosnippet>2394</a>        <span class="macro">assert!</span>(!validator.delegators.contains_key(<span class="kw-2">&amp;</span>delegator));
+<a href=#2395 id=2395 data-nosnippet>2395</a>    }
+<a href=#2396 id=2396 data-nosnippet>2396</a>
+<a href=#2397 id=2397 data-nosnippet>2397</a>    <span class="attr">#[rstest]
+<a href=#2398 id=2398 data-nosnippet>2398</a>    #[case::v1(StakeTableContractVersion::V1)]
+<a href=#2399 id=2399 data-nosnippet>2399</a>    #[case::v2(StakeTableContractVersion::V2)]
+<a href=#2400 id=2400 data-nosnippet>2400</a>    </span><span class="kw">fn </span>test_key_update_event(<span class="attr">#[case] </span>version: StakeTableContractVersion) {
+<a href=#2401 id=2401 data-nosnippet>2401</a>        <span class="kw">let </span><span class="kw-2">mut </span>state = StakeTableState::new();
+<a href=#2402 id=2402 data-nosnippet>2402</a>        <span class="kw">let </span>val = TestValidator::random();
+<a href=#2403 id=2403 data-nosnippet>2403</a>
+<a href=#2404 id=2404 data-nosnippet>2404</a>        <span class="comment">// Always register first using V1 to simulate upgrade scenarios
+<a href=#2405 id=2405 data-nosnippet>2405</a>        </span>state
+<a href=#2406 id=2406 data-nosnippet>2406</a>            .apply_event(StakeTableEvent::Register((<span class="kw-2">&amp;</span>val).into()))
+<a href=#2407 id=2407 data-nosnippet>2407</a>            .unwrap()
+<a href=#2408 id=2408 data-nosnippet>2408</a>            .unwrap();
+<a href=#2409 id=2409 data-nosnippet>2409</a>
+<a href=#2410 id=2410 data-nosnippet>2410</a>        <span class="kw">let </span>new_keys = val.randomize_keys();
+<a href=#2411 id=2411 data-nosnippet>2411</a>
+<a href=#2412 id=2412 data-nosnippet>2412</a>        <span class="kw">let </span>event = <span class="kw">match </span>version {
+<a href=#2413 id=2413 data-nosnippet>2413</a>            StakeTableContractVersion::V1 =&gt; StakeTableEvent::KeyUpdate((<span class="kw-2">&amp;</span>new_keys).into()),
+<a href=#2414 id=2414 data-nosnippet>2414</a>            StakeTableContractVersion::V2 =&gt; StakeTableEvent::KeyUpdateV2((<span class="kw-2">&amp;</span>new_keys).into()),
+<a href=#2415 id=2415 data-nosnippet>2415</a>        };
+<a href=#2416 id=2416 data-nosnippet>2416</a>
+<a href=#2417 id=2417 data-nosnippet>2417</a>        <span class="macro">assert!</span>(state.apply_event(event).unwrap().is_ok());
+<a href=#2418 id=2418 data-nosnippet>2418</a>
+<a href=#2419 id=2419 data-nosnippet>2419</a>        <span class="kw">let </span>updated = state.validators.get(<span class="kw-2">&amp;</span>val.account).unwrap();
+<a href=#2420 id=2420 data-nosnippet>2420</a>        <span class="macro">assert_eq!</span>(updated.stake_table_key, new_keys.bls_vk.into());
+<a href=#2421 id=2421 data-nosnippet>2421</a>        <span class="macro">assert_eq!</span>(updated.state_ver_key, new_keys.schnorr_vk.into());
+<a href=#2422 id=2422 data-nosnippet>2422</a>    }
+<a href=#2423 id=2423 data-nosnippet>2423</a>
+<a href=#2424 id=2424 data-nosnippet>2424</a>    <span class="attr">#[test]
+<a href=#2425 id=2425 data-nosnippet>2425</a>    </span><span class="kw">fn </span>test_duplicate_bls_key() {
+<a href=#2426 id=2426 data-nosnippet>2426</a>        <span class="kw">let </span><span class="kw-2">mut </span>state = StakeTableState::new();
+<a href=#2427 id=2427 data-nosnippet>2427</a>        <span class="kw">let </span>val = TestValidator::random();
+<a href=#2428 id=2428 data-nosnippet>2428</a>        <span class="kw">let </span>event1 = StakeTableEvent::Register((<span class="kw-2">&amp;</span>val).into());
+<a href=#2429 id=2429 data-nosnippet>2429</a>        <span class="kw">let </span><span class="kw-2">mut </span>val2 = TestValidator::random();
+<a href=#2430 id=2430 data-nosnippet>2430</a>        val2.bls_vk = val.bls_vk;
+<a href=#2431 id=2431 data-nosnippet>2431</a>        val2.account = Address::random();
+<a href=#2432 id=2432 data-nosnippet>2432</a>
+<a href=#2433 id=2433 data-nosnippet>2433</a>        <span class="kw">let </span>event2 = StakeTableEvent::Register((<span class="kw-2">&amp;</span>val2).into());
+<a href=#2434 id=2434 data-nosnippet>2434</a>        <span class="macro">assert!</span>(state.apply_event(event1).unwrap().is_ok());
+<a href=#2435 id=2435 data-nosnippet>2435</a>        <span class="kw">let </span>result = state.apply_event(event2);
+<a href=#2436 id=2436 data-nosnippet>2436</a>
+<a href=#2437 id=2437 data-nosnippet>2437</a>        <span class="kw">let </span>expected_bls_key = BLSPubKey::from(val.bls_vk).to_string();
+<a href=#2438 id=2438 data-nosnippet>2438</a>
+<a href=#2439 id=2439 data-nosnippet>2439</a>        <span class="macro">assert_matches!</span>(
+<a href=#2440 id=2440 data-nosnippet>2440</a>            result,
+<a href=#2441 id=2441 data-nosnippet>2441</a>            <span class="prelude-val">Err</span>(StakeTableError::BlsKeyAlreadyUsed(key))
+<a href=#2442 id=2442 data-nosnippet>2442</a>                <span class="kw">if </span>key == expected_bls_key,
+<a href=#2443 id=2443 data-nosnippet>2443</a>            <span class="string">"Expected BlsKeyAlreadyUsed({expected_bls_key}), but got: {result:?}"</span>,
+<a href=#2444 id=2444 data-nosnippet>2444</a>        );
+<a href=#2445 id=2445 data-nosnippet>2445</a>    }
+<a href=#2446 id=2446 data-nosnippet>2446</a>
+<a href=#2447 id=2447 data-nosnippet>2447</a>    <span class="attr">#[test]
+<a href=#2448 id=2448 data-nosnippet>2448</a>    </span><span class="kw">fn </span>test_duplicate_schnorr_key() {
+<a href=#2449 id=2449 data-nosnippet>2449</a>        <span class="kw">let </span><span class="kw-2">mut </span>state = StakeTableState::new();
+<a href=#2450 id=2450 data-nosnippet>2450</a>        <span class="kw">let </span>val = TestValidator::random();
+<a href=#2451 id=2451 data-nosnippet>2451</a>        <span class="kw">let </span>event1 = StakeTableEvent::Register((<span class="kw-2">&amp;</span>val).into());
+<a href=#2452 id=2452 data-nosnippet>2452</a>        <span class="kw">let </span><span class="kw-2">mut </span>val2 = TestValidator::random();
+<a href=#2453 id=2453 data-nosnippet>2453</a>        val2.schnorr_vk = val.schnorr_vk;
+<a href=#2454 id=2454 data-nosnippet>2454</a>        val2.account = Address::random();
+<a href=#2455 id=2455 data-nosnippet>2455</a>        val2.bls_vk = val2.randomize_keys().bls_vk;
+<a href=#2456 id=2456 data-nosnippet>2456</a>
+<a href=#2457 id=2457 data-nosnippet>2457</a>        <span class="kw">let </span>event2 = StakeTableEvent::Register((<span class="kw-2">&amp;</span>val2).into());
+<a href=#2458 id=2458 data-nosnippet>2458</a>        <span class="macro">assert!</span>(state.apply_event(event1).unwrap().is_ok());
+<a href=#2459 id=2459 data-nosnippet>2459</a>        <span class="kw">let </span>result = state.apply_event(event2);
+<a href=#2460 id=2460 data-nosnippet>2460</a>
+<a href=#2461 id=2461 data-nosnippet>2461</a>        <span class="kw">let </span>schnorr: SchnorrPubKey = val.schnorr_vk.into();
+<a href=#2462 id=2462 data-nosnippet>2462</a>        <span class="macro">assert_matches!</span>(
+<a href=#2463 id=2463 data-nosnippet>2463</a>            result,
+<a href=#2464 id=2464 data-nosnippet>2464</a>            <span class="prelude-val">Ok</span>(<span class="prelude-val">Err</span>(ExpectedStakeTableError::SchnorrKeyAlreadyUsed(key)))
+<a href=#2465 id=2465 data-nosnippet>2465</a>                <span class="kw">if </span>key == schnorr.to_string(),
+<a href=#2466 id=2466 data-nosnippet>2466</a>            <span class="string">"Expected SchnorrKeyAlreadyUsed({schnorr}), but got: {result:?}"</span>,
+<a href=#2467 id=2467 data-nosnippet>2467</a>
+<a href=#2468 id=2468 data-nosnippet>2468</a>        );
+<a href=#2469 id=2469 data-nosnippet>2469</a>    }
+<a href=#2470 id=2470 data-nosnippet>2470</a>
+<a href=#2471 id=2471 data-nosnippet>2471</a>    <span class="attr">#[test]
+<a href=#2472 id=2472 data-nosnippet>2472</a>    </span><span class="kw">fn </span>test_register_and_deregister_validator() {
+<a href=#2473 id=2473 data-nosnippet>2473</a>        <span class="kw">let </span><span class="kw-2">mut </span>state = StakeTableState::new();
+<a href=#2474 id=2474 data-nosnippet>2474</a>        <span class="kw">let </span>validator = TestValidator::random();
+<a href=#2475 id=2475 data-nosnippet>2475</a>        <span class="kw">let </span>event = StakeTableEvent::Register((<span class="kw-2">&amp;</span>validator).into());
+<a href=#2476 id=2476 data-nosnippet>2476</a>        <span class="macro">assert!</span>(state.apply_event(event).unwrap().is_ok());
+<a href=#2477 id=2477 data-nosnippet>2477</a>
+<a href=#2478 id=2478 data-nosnippet>2478</a>        <span class="kw">let </span>deregister_event = StakeTableEvent::Deregister((<span class="kw-2">&amp;</span>validator).into());
+<a href=#2479 id=2479 data-nosnippet>2479</a>        <span class="macro">assert!</span>(state.apply_event(deregister_event).unwrap().is_ok());
+<a href=#2480 id=2480 data-nosnippet>2480</a>    }
+<a href=#2481 id=2481 data-nosnippet>2481</a>
+<a href=#2482 id=2482 data-nosnippet>2482</a>    <span class="attr">#[test]
+<a href=#2483 id=2483 data-nosnippet>2483</a>    </span><span class="kw">fn </span>test_delegate_zero_amount_is_rejected() {
+<a href=#2484 id=2484 data-nosnippet>2484</a>        <span class="kw">let </span><span class="kw-2">mut </span>state = StakeTableState::new();
+<a href=#2485 id=2485 data-nosnippet>2485</a>        <span class="kw">let </span>validator = TestValidator::random();
+<a href=#2486 id=2486 data-nosnippet>2486</a>        <span class="kw">let </span>account = validator.account;
+<a href=#2487 id=2487 data-nosnippet>2487</a>        state
+<a href=#2488 id=2488 data-nosnippet>2488</a>            .apply_event(StakeTableEvent::Register((<span class="kw-2">&amp;</span>validator).into()))
+<a href=#2489 id=2489 data-nosnippet>2489</a>            .unwrap()
+<a href=#2490 id=2490 data-nosnippet>2490</a>            .unwrap();
+<a href=#2491 id=2491 data-nosnippet>2491</a>
+<a href=#2492 id=2492 data-nosnippet>2492</a>        <span class="kw">let </span>delegator = Address::random();
+<a href=#2493 id=2493 data-nosnippet>2493</a>        <span class="kw">let </span>amount = U256::ZERO;
+<a href=#2494 id=2494 data-nosnippet>2494</a>        <span class="kw">let </span>event = StakeTableEvent::Delegate(Delegated {
+<a href=#2495 id=2495 data-nosnippet>2495</a>            delegator,
+<a href=#2496 id=2496 data-nosnippet>2496</a>            validator: account,
+<a href=#2497 id=2497 data-nosnippet>2497</a>            amount,
+<a href=#2498 id=2498 data-nosnippet>2498</a>        });
+<a href=#2499 id=2499 data-nosnippet>2499</a>        <span class="kw">let </span>result = state.apply_event(event);
+<a href=#2500 id=2500 data-nosnippet>2500</a>
+<a href=#2501 id=2501 data-nosnippet>2501</a>        <span class="macro">assert_matches!</span>(
+<a href=#2502 id=2502 data-nosnippet>2502</a>            result,
+<a href=#2503 id=2503 data-nosnippet>2503</a>            <span class="prelude-val">Err</span>(StakeTableError::ZeroDelegatorStake(addr))
+<a href=#2504 id=2504 data-nosnippet>2504</a>                <span class="kw">if </span>addr == delegator,
+<a href=#2505 id=2505 data-nosnippet>2505</a>            <span class="string">"delegator stake is zero"
+<a href=#2506 id=2506 data-nosnippet>2506</a>
+<a href=#2507 id=2507 data-nosnippet>2507</a>        </span>);
+<a href=#2508 id=2508 data-nosnippet>2508</a>    }
+<a href=#2509 id=2509 data-nosnippet>2509</a>
+<a href=#2510 id=2510 data-nosnippet>2510</a>    <span class="attr">#[test]
+<a href=#2511 id=2511 data-nosnippet>2511</a>    </span><span class="kw">fn </span>test_undelegate_more_than_stake_fails() {
+<a href=#2512 id=2512 data-nosnippet>2512</a>        <span class="kw">let </span><span class="kw-2">mut </span>state = StakeTableState::new();
+<a href=#2513 id=2513 data-nosnippet>2513</a>        <span class="kw">let </span>validator = TestValidator::random();
+<a href=#2514 id=2514 data-nosnippet>2514</a>        <span class="kw">let </span>account = validator.account;
+<a href=#2515 id=2515 data-nosnippet>2515</a>        state
+<a href=#2516 id=2516 data-nosnippet>2516</a>            .apply_event(StakeTableEvent::Register((<span class="kw-2">&amp;</span>validator).into()))
+<a href=#2517 id=2517 data-nosnippet>2517</a>            .unwrap()
+<a href=#2518 id=2518 data-nosnippet>2518</a>            .unwrap();
+<a href=#2519 id=2519 data-nosnippet>2519</a>
+<a href=#2520 id=2520 data-nosnippet>2520</a>        <span class="kw">let </span>delegator = Address::random();
+<a href=#2521 id=2521 data-nosnippet>2521</a>        <span class="kw">let </span>event = StakeTableEvent::Delegate(Delegated {
+<a href=#2522 id=2522 data-nosnippet>2522</a>            delegator,
+<a href=#2523 id=2523 data-nosnippet>2523</a>            validator: account,
+<a href=#2524 id=2524 data-nosnippet>2524</a>            amount: U256::from(<span class="number">10u64</span>),
+<a href=#2525 id=2525 data-nosnippet>2525</a>        });
+<a href=#2526 id=2526 data-nosnippet>2526</a>        state.apply_event(event).unwrap().unwrap();
+<a href=#2527 id=2527 data-nosnippet>2527</a>
+<a href=#2528 id=2528 data-nosnippet>2528</a>        <span class="kw">let </span>result = state.apply_event(StakeTableEvent::Undelegate(Undelegated {
+<a href=#2529 id=2529 data-nosnippet>2529</a>            delegator,
+<a href=#2530 id=2530 data-nosnippet>2530</a>            validator: account,
+<a href=#2531 id=2531 data-nosnippet>2531</a>            amount: U256::from(<span class="number">20u64</span>),
+<a href=#2532 id=2532 data-nosnippet>2532</a>        }));
+<a href=#2533 id=2533 data-nosnippet>2533</a>        <span class="macro">assert_matches!</span>(
+<a href=#2534 id=2534 data-nosnippet>2534</a>            result,
+<a href=#2535 id=2535 data-nosnippet>2535</a>            <span class="prelude-val">Err</span>(StakeTableError::InsufficientStake),
+<a href=#2536 id=2536 data-nosnippet>2536</a>            <span class="string">"Expected InsufficientStake error, got: {result:?}"</span>,
+<a href=#2537 id=2537 data-nosnippet>2537</a>        );
+<a href=#2538 id=2538 data-nosnippet>2538</a>    }
+<a href=#2539 id=2539 data-nosnippet>2539</a>
+<a href=#2540 id=2540 data-nosnippet>2540</a>    <span class="attr">#[tokio::test(flavor = <span class="string">"multi_thread"</span>)]
+<a href=#2541 id=2541 data-nosnippet>2541</a>    </span><span class="kw">async fn </span>test_decaf_stake_table() {
+<a href=#2542 id=2542 data-nosnippet>2542</a>        setup_test();
+<a href=#2543 id=2543 data-nosnippet>2543</a>
+<a href=#2544 id=2544 data-nosnippet>2544</a>        <span class="comment">// The following commented-out block demonstrates how the `decaf_stake_table_events.json`
+<a href=#2545 id=2545 data-nosnippet>2545</a>        // and `decaf_stake_table.json` files were originally generated.
+<a href=#2546 id=2546 data-nosnippet>2546</a>
+<a href=#2547 id=2547 data-nosnippet>2547</a>        // It generates decaf stake table data by fetching events from the contract,
+<a href=#2548 id=2548 data-nosnippet>2548</a>        // writes events and the constructed stake table to JSON files.
+<a href=#2549 id=2549 data-nosnippet>2549</a>
+<a href=#2550 id=2550 data-nosnippet>2550</a>        /*
+<a href=#2551 id=2551 data-nosnippet>2551</a>        let l1 = L1Client::new(vec!["https://ethereum-sepolia.publicnode.com"
+<a href=#2552 id=2552 data-nosnippet>2552</a>            .parse()
+<a href=#2553 id=2553 data-nosnippet>2553</a>            .unwrap()])
+<a href=#2554 id=2554 data-nosnippet>2554</a>        .unwrap();
+<a href=#2555 id=2555 data-nosnippet>2555</a>        let contract_address = "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037";
+<a href=#2556 id=2556 data-nosnippet>2556</a>
+<a href=#2557 id=2557 data-nosnippet>2557</a>        let events = Fetcher::fetch_events_from_contract(
+<a href=#2558 id=2558 data-nosnippet>2558</a>            l1,
+<a href=#2559 id=2559 data-nosnippet>2559</a>            contract_address.parse().unwrap(),
+<a href=#2560 id=2560 data-nosnippet>2560</a>            None,
+<a href=#2561 id=2561 data-nosnippet>2561</a>            8582328,
+<a href=#2562 id=2562 data-nosnippet>2562</a>        )
+<a href=#2563 id=2563 data-nosnippet>2563</a>        .await;
+<a href=#2564 id=2564 data-nosnippet>2564</a>
+<a href=#2565 id=2565 data-nosnippet>2565</a>        let sorted_events = events.sort_events().expect("failed to sort");
+<a href=#2566 id=2566 data-nosnippet>2566</a>
+<a href=#2567 id=2567 data-nosnippet>2567</a>        // Serialize and write sorted events
+<a href=#2568 id=2568 data-nosnippet>2568</a>        let json_events = serde_json::to_string_pretty(&amp;sorted_events)?;
+<a href=#2569 id=2569 data-nosnippet>2569</a>        let mut events_file = File::create("decaf_stake_table_events.json").await?;
+<a href=#2570 id=2570 data-nosnippet>2570</a>        events_file.write_all(json_events.as_bytes()).await?;
+<a href=#2571 id=2571 data-nosnippet>2571</a>
+<a href=#2572 id=2572 data-nosnippet>2572</a>        // Process into stake table
+<a href=#2573 id=2573 data-nosnippet>2573</a>        let stake_table = validators_from_l1_events(sorted_events.into_iter().map(|(_, e)| e))?;
+<a href=#2574 id=2574 data-nosnippet>2574</a>
+<a href=#2575 id=2575 data-nosnippet>2575</a>        // Serialize and write stake table
+<a href=#2576 id=2576 data-nosnippet>2576</a>        let json_stake_table = serde_json::to_string_pretty(&amp;stake_table)?;
+<a href=#2577 id=2577 data-nosnippet>2577</a>        let mut stake_file = File::create("decaf_stake_table.json").await?;
+<a href=#2578 id=2578 data-nosnippet>2578</a>        stake_file.write_all(json_stake_table.as_bytes()).await?;
+<a href=#2579 id=2579 data-nosnippet>2579</a>        */
+<a href=#2580 id=2580 data-nosnippet>2580</a>
+<a href=#2581 id=2581 data-nosnippet>2581</a>        </span><span class="kw">let </span>events_json =
+<a href=#2582 id=2582 data-nosnippet>2582</a>            std::fs::read_to_string(<span class="string">"../data/v3/decaf_stake_table_events.json"</span>).unwrap();
+<a href=#2583 id=2583 data-nosnippet>2583</a>        <span class="kw">let </span>events: Vec&lt;(EventKey, StakeTableEvent)&gt; = serde_json::from_str(<span class="kw-2">&amp;</span>events_json).unwrap();
+<a href=#2584 id=2584 data-nosnippet>2584</a>
+<a href=#2585 id=2585 data-nosnippet>2585</a>        <span class="comment">// Reconstruct stake table from events
+<a href=#2586 id=2586 data-nosnippet>2586</a>        </span><span class="kw">let </span>reconstructed_stake_table =
+<a href=#2587 id=2587 data-nosnippet>2587</a>            active_validator_set_from_l1_events(events.into_iter().map(|(<span class="kw">_</span>, e)| e)).unwrap();
+<a href=#2588 id=2588 data-nosnippet>2588</a>
+<a href=#2589 id=2589 data-nosnippet>2589</a>        <span class="kw">let </span>stake_table_json =
+<a href=#2590 id=2590 data-nosnippet>2590</a>            std::fs::read_to_string(<span class="string">"../data/v3/decaf_stake_table.json"</span>).unwrap();
+<a href=#2591 id=2591 data-nosnippet>2591</a>        <span class="kw">let </span>expected: IndexMap&lt;Address, Validator&lt;BLSPubKey&gt;&gt; =
+<a href=#2592 id=2592 data-nosnippet>2592</a>            serde_json::from_str(<span class="kw-2">&amp;</span>stake_table_json).unwrap();
+<a href=#2593 id=2593 data-nosnippet>2593</a>
+<a href=#2594 id=2594 data-nosnippet>2594</a>        <span class="macro">assert_eq!</span>(
+<a href=#2595 id=2595 data-nosnippet>2595</a>            reconstructed_stake_table, expected,
+<a href=#2596 id=2596 data-nosnippet>2596</a>            <span class="string">"Stake table reconstructed from events does not match the expected stake table "
+<a href=#2597 id=2597 data-nosnippet>2597</a>        </span>);
+<a href=#2598 id=2598 data-nosnippet>2598</a>    }
+<a href=#2599 id=2599 data-nosnippet>2599</a>}</code></pre></div></section></main></body></html>

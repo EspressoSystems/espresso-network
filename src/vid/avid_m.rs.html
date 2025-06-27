@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `vid/src/avid_m.rs`."><title>avid_m.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-916cea96.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="vid" data-themes="" data-resource-suffix="" data-rustdoc-version="1.87.0 (17067e9ac 2025-05-09)" data-channel="1.87.0" data-search-js="search-e7298875.js" data-settings-js="settings-d72f25bb.js" ><script src="../../static.files/storage-82c7156e.js"></script><script defer src="../../static.files/src-script-63605ae7.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-fb8c74a8.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">vid/</div>avid_m.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="doccomment">//! This module implements the AVID-M scheme, whose name came after the DispersedLedger paper &lt;https://www.usenix.org/conference/nsdi22/presentation/yang&gt;.
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `vid/src/avid_m.rs`."><title>avid_m.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-1a91846b.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="vid" data-themes="" data-resource-suffix="" data-rustdoc-version="1.88.0 (6b00bc388 2025-06-23)" data-channel="1.88.0" data-search-js="search-f7877310.js" data-settings-js="settings-5514c975.js" ><script src="../../static.files/storage-4e99c027.js"></script><script defer src="../../static.files/src-script-63605ae7.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-7ef8a74a.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">vid/</div>avid_m.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="doccomment">//! This module implements the AVID-M scheme, whose name came after the DispersedLedger paper &lt;https://www.usenix.org/conference/nsdi22/presentation/yang&gt;.
 <a href=#2 id=2 data-nosnippet>2</a>//!
 <a href=#3 id=3 data-nosnippet>3</a>//! To disperse a payload to a number of storage nodes according to a weight
 <a href=#4 id=4 data-nosnippet>4</a>//! distribution, the payload is first converted into field elements and then
@@ -490,67 +490,66 @@
 <a href=#490 id=490 data-nosnippet>490</a>
 <a href=#491 id=491 data-nosnippet>491</a>            <span class="kw">for </span>payload_byte_len <span class="kw">in </span>payload_byte_lens {
 <a href=#492 id=492 data-nosnippet>492</a>                <span class="macro">println!</span>(
-<a href=#493 id=493 data-nosnippet>493</a>                    <span class="string">"recovery_threshold:: {} num_storage_nodes: {} payload_byte_len: {}"</span>,
-<a href=#494 id=494 data-nosnippet>494</a>                    recovery_threshold, num_storage_nodes, payload_byte_len
-<a href=#495 id=495 data-nosnippet>495</a>                );
-<a href=#496 id=496 data-nosnippet>496</a>                <span class="macro">println!</span>(<span class="string">"weights: {:?}"</span>, weights);
-<a href=#497 id=497 data-nosnippet>497</a>
-<a href=#498 id=498 data-nosnippet>498</a>                <span class="kw">let </span>payload = {
-<a href=#499 id=499 data-nosnippet>499</a>                    <span class="kw">let </span><span class="kw-2">mut </span>bytes_random = <span class="macro">vec!</span>[<span class="number">0u8</span>; payload_byte_len];
-<a href=#500 id=500 data-nosnippet>500</a>                    rng.fill_bytes(<span class="kw-2">&amp;mut </span>bytes_random);
-<a href=#501 id=501 data-nosnippet>501</a>                    bytes_random
-<a href=#502 id=502 data-nosnippet>502</a>                };
-<a href=#503 id=503 data-nosnippet>503</a>
-<a href=#504 id=504 data-nosnippet>504</a>                <span class="kw">let </span>(commit, <span class="kw-2">mut </span>shares) =
-<a href=#505 id=505 data-nosnippet>505</a>                    AvidMScheme::disperse(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>weights, <span class="kw-2">&amp;</span>payload).unwrap();
-<a href=#506 id=506 data-nosnippet>506</a>
-<a href=#507 id=507 data-nosnippet>507</a>                <span class="macro">assert_eq!</span>(shares.len(), num_storage_nodes);
-<a href=#508 id=508 data-nosnippet>508</a>
-<a href=#509 id=509 data-nosnippet>509</a>                <span class="comment">// verify shares
-<a href=#510 id=510 data-nosnippet>510</a>                </span>shares.iter().for_each(|share| {
-<a href=#511 id=511 data-nosnippet>511</a>                    <span class="macro">assert!</span>(
-<a href=#512 id=512 data-nosnippet>512</a>                        AvidMScheme::verify_share(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>commit, share).is_ok_and(|r| r.is_ok())
-<a href=#513 id=513 data-nosnippet>513</a>                    )
-<a href=#514 id=514 data-nosnippet>514</a>                });
-<a href=#515 id=515 data-nosnippet>515</a>
-<a href=#516 id=516 data-nosnippet>516</a>                <span class="comment">// test payload recovery on a random subset of shares
-<a href=#517 id=517 data-nosnippet>517</a>                </span>shares.shuffle(<span class="kw-2">&amp;mut </span>rng);
-<a href=#518 id=518 data-nosnippet>518</a>                <span class="kw">let </span><span class="kw-2">mut </span>cumulated_weights = <span class="number">0</span>;
-<a href=#519 id=519 data-nosnippet>519</a>                <span class="kw">let </span><span class="kw-2">mut </span>cut_index = <span class="number">0</span>;
-<a href=#520 id=520 data-nosnippet>520</a>                <span class="kw">while </span>cumulated_weights &lt;= recovery_threshold {
-<a href=#521 id=521 data-nosnippet>521</a>                    cumulated_weights += shares[cut_index].content.range.len();
-<a href=#522 id=522 data-nosnippet>522</a>                    cut_index += <span class="number">1</span>;
-<a href=#523 id=523 data-nosnippet>523</a>                }
-<a href=#524 id=524 data-nosnippet>524</a>                <span class="kw">let </span>payload_recovered =
-<a href=#525 id=525 data-nosnippet>525</a>                    AvidMScheme::recover(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>commit, <span class="kw-2">&amp;</span>shares[..cut_index]).unwrap();
-<a href=#526 id=526 data-nosnippet>526</a>                <span class="macro">assert_eq!</span>(payload_recovered, payload);
-<a href=#527 id=527 data-nosnippet>527</a>            }
-<a href=#528 id=528 data-nosnippet>528</a>        }
-<a href=#529 id=529 data-nosnippet>529</a>    }
-<a href=#530 id=530 data-nosnippet>530</a>
-<a href=#531 id=531 data-nosnippet>531</a>    <span class="attr">#[test]
-<a href=#532 id=532 data-nosnippet>532</a>    #[cfg(feature = <span class="string">"print-trace"</span>)]
-<a href=#533 id=533 data-nosnippet>533</a>    </span><span class="kw">fn </span>round_trip_breakdown() {
-<a href=#534 id=534 data-nosnippet>534</a>        <span class="kw">use </span>ark_std::{end_timer, start_timer};
-<a href=#535 id=535 data-nosnippet>535</a>
-<a href=#536 id=536 data-nosnippet>536</a>        <span class="kw">let </span><span class="kw-2">mut </span>rng = jf_utils::test_rng();
-<a href=#537 id=537 data-nosnippet>537</a>
-<a href=#538 id=538 data-nosnippet>538</a>        <span class="kw">let </span>params = AvidMScheme::setup(<span class="number">50usize</span>, <span class="number">200usize</span>).unwrap();
-<a href=#539 id=539 data-nosnippet>539</a>        <span class="kw">let </span>weights = <span class="macro">vec!</span>[<span class="number">2u32</span>; <span class="number">100usize</span>];
-<a href=#540 id=540 data-nosnippet>540</a>        <span class="kw">let </span>payload_byte_len = <span class="number">1024 </span>* <span class="number">1024 </span>* <span class="number">32</span>; <span class="comment">// 32MB
-<a href=#541 id=541 data-nosnippet>541</a>
-<a href=#542 id=542 data-nosnippet>542</a>        </span><span class="kw">let </span>payload = {
-<a href=#543 id=543 data-nosnippet>543</a>            <span class="kw">let </span><span class="kw-2">mut </span>bytes_random = <span class="macro">vec!</span>[<span class="number">0u8</span>; payload_byte_len];
-<a href=#544 id=544 data-nosnippet>544</a>            rng.fill_bytes(<span class="kw-2">&amp;mut </span>bytes_random);
-<a href=#545 id=545 data-nosnippet>545</a>            bytes_random
-<a href=#546 id=546 data-nosnippet>546</a>        };
-<a href=#547 id=547 data-nosnippet>547</a>
-<a href=#548 id=548 data-nosnippet>548</a>        <span class="kw">let </span>disperse_timer = <span class="macro">start_timer!</span>(|| <span class="macro">format!</span>(<span class="string">"Disperse {} bytes"</span>, payload_byte_len));
-<a href=#549 id=549 data-nosnippet>549</a>        <span class="kw">let </span>(commit, shares) = AvidMScheme::disperse(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>weights, <span class="kw-2">&amp;</span>payload).unwrap();
-<a href=#550 id=550 data-nosnippet>550</a>        <span class="macro">end_timer!</span>(disperse_timer);
-<a href=#551 id=551 data-nosnippet>551</a>
-<a href=#552 id=552 data-nosnippet>552</a>        <span class="kw">let </span>recover_timer = <span class="macro">start_timer!</span>(|| <span class="string">"Recovery"</span>);
-<a href=#553 id=553 data-nosnippet>553</a>        AvidMScheme::recover(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>commit, <span class="kw-2">&amp;</span>shares).unwrap();
-<a href=#554 id=554 data-nosnippet>554</a>        <span class="macro">end_timer!</span>(recover_timer);
-<a href=#555 id=555 data-nosnippet>555</a>    }
-<a href=#556 id=556 data-nosnippet>556</a>}</code></pre></div></section></main></body></html>
+<a href=#493 id=493 data-nosnippet>493</a>                    <span class="string">"recovery_threshold:: {recovery_threshold} num_storage_nodes: {num_storage_nodes} payload_byte_len: {payload_byte_len}"
+<a href=#494 id=494 data-nosnippet>494</a>                </span>);
+<a href=#495 id=495 data-nosnippet>495</a>                <span class="macro">println!</span>(<span class="string">"weights: {weights:?}"</span>);
+<a href=#496 id=496 data-nosnippet>496</a>
+<a href=#497 id=497 data-nosnippet>497</a>                <span class="kw">let </span>payload = {
+<a href=#498 id=498 data-nosnippet>498</a>                    <span class="kw">let </span><span class="kw-2">mut </span>bytes_random = <span class="macro">vec!</span>[<span class="number">0u8</span>; payload_byte_len];
+<a href=#499 id=499 data-nosnippet>499</a>                    rng.fill_bytes(<span class="kw-2">&amp;mut </span>bytes_random);
+<a href=#500 id=500 data-nosnippet>500</a>                    bytes_random
+<a href=#501 id=501 data-nosnippet>501</a>                };
+<a href=#502 id=502 data-nosnippet>502</a>
+<a href=#503 id=503 data-nosnippet>503</a>                <span class="kw">let </span>(commit, <span class="kw-2">mut </span>shares) =
+<a href=#504 id=504 data-nosnippet>504</a>                    AvidMScheme::disperse(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>weights, <span class="kw-2">&amp;</span>payload).unwrap();
+<a href=#505 id=505 data-nosnippet>505</a>
+<a href=#506 id=506 data-nosnippet>506</a>                <span class="macro">assert_eq!</span>(shares.len(), num_storage_nodes);
+<a href=#507 id=507 data-nosnippet>507</a>
+<a href=#508 id=508 data-nosnippet>508</a>                <span class="comment">// verify shares
+<a href=#509 id=509 data-nosnippet>509</a>                </span>shares.iter().for_each(|share| {
+<a href=#510 id=510 data-nosnippet>510</a>                    <span class="macro">assert!</span>(
+<a href=#511 id=511 data-nosnippet>511</a>                        AvidMScheme::verify_share(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>commit, share).is_ok_and(|r| r.is_ok())
+<a href=#512 id=512 data-nosnippet>512</a>                    )
+<a href=#513 id=513 data-nosnippet>513</a>                });
+<a href=#514 id=514 data-nosnippet>514</a>
+<a href=#515 id=515 data-nosnippet>515</a>                <span class="comment">// test payload recovery on a random subset of shares
+<a href=#516 id=516 data-nosnippet>516</a>                </span>shares.shuffle(<span class="kw-2">&amp;mut </span>rng);
+<a href=#517 id=517 data-nosnippet>517</a>                <span class="kw">let </span><span class="kw-2">mut </span>cumulated_weights = <span class="number">0</span>;
+<a href=#518 id=518 data-nosnippet>518</a>                <span class="kw">let </span><span class="kw-2">mut </span>cut_index = <span class="number">0</span>;
+<a href=#519 id=519 data-nosnippet>519</a>                <span class="kw">while </span>cumulated_weights &lt;= recovery_threshold {
+<a href=#520 id=520 data-nosnippet>520</a>                    cumulated_weights += shares[cut_index].content.range.len();
+<a href=#521 id=521 data-nosnippet>521</a>                    cut_index += <span class="number">1</span>;
+<a href=#522 id=522 data-nosnippet>522</a>                }
+<a href=#523 id=523 data-nosnippet>523</a>                <span class="kw">let </span>payload_recovered =
+<a href=#524 id=524 data-nosnippet>524</a>                    AvidMScheme::recover(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>commit, <span class="kw-2">&amp;</span>shares[..cut_index]).unwrap();
+<a href=#525 id=525 data-nosnippet>525</a>                <span class="macro">assert_eq!</span>(payload_recovered, payload);
+<a href=#526 id=526 data-nosnippet>526</a>            }
+<a href=#527 id=527 data-nosnippet>527</a>        }
+<a href=#528 id=528 data-nosnippet>528</a>    }
+<a href=#529 id=529 data-nosnippet>529</a>
+<a href=#530 id=530 data-nosnippet>530</a>    <span class="attr">#[test]
+<a href=#531 id=531 data-nosnippet>531</a>    #[cfg(feature = <span class="string">"print-trace"</span>)]
+<a href=#532 id=532 data-nosnippet>532</a>    </span><span class="kw">fn </span>round_trip_breakdown() {
+<a href=#533 id=533 data-nosnippet>533</a>        <span class="kw">use </span>ark_std::{end_timer, start_timer};
+<a href=#534 id=534 data-nosnippet>534</a>
+<a href=#535 id=535 data-nosnippet>535</a>        <span class="kw">let </span><span class="kw-2">mut </span>rng = jf_utils::test_rng();
+<a href=#536 id=536 data-nosnippet>536</a>
+<a href=#537 id=537 data-nosnippet>537</a>        <span class="kw">let </span>params = AvidMScheme::setup(<span class="number">50usize</span>, <span class="number">200usize</span>).unwrap();
+<a href=#538 id=538 data-nosnippet>538</a>        <span class="kw">let </span>weights = <span class="macro">vec!</span>[<span class="number">2u32</span>; <span class="number">100usize</span>];
+<a href=#539 id=539 data-nosnippet>539</a>        <span class="kw">let </span>payload_byte_len = <span class="number">1024 </span>* <span class="number">1024 </span>* <span class="number">32</span>; <span class="comment">// 32MB
+<a href=#540 id=540 data-nosnippet>540</a>
+<a href=#541 id=541 data-nosnippet>541</a>        </span><span class="kw">let </span>payload = {
+<a href=#542 id=542 data-nosnippet>542</a>            <span class="kw">let </span><span class="kw-2">mut </span>bytes_random = <span class="macro">vec!</span>[<span class="number">0u8</span>; payload_byte_len];
+<a href=#543 id=543 data-nosnippet>543</a>            rng.fill_bytes(<span class="kw-2">&amp;mut </span>bytes_random);
+<a href=#544 id=544 data-nosnippet>544</a>            bytes_random
+<a href=#545 id=545 data-nosnippet>545</a>        };
+<a href=#546 id=546 data-nosnippet>546</a>
+<a href=#547 id=547 data-nosnippet>547</a>        <span class="kw">let </span>disperse_timer = <span class="macro">start_timer!</span>(|| <span class="macro">format!</span>(<span class="string">"Disperse {} bytes"</span>, payload_byte_len));
+<a href=#548 id=548 data-nosnippet>548</a>        <span class="kw">let </span>(commit, shares) = AvidMScheme::disperse(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>weights, <span class="kw-2">&amp;</span>payload).unwrap();
+<a href=#549 id=549 data-nosnippet>549</a>        <span class="macro">end_timer!</span>(disperse_timer);
+<a href=#550 id=550 data-nosnippet>550</a>
+<a href=#551 id=551 data-nosnippet>551</a>        <span class="kw">let </span>recover_timer = <span class="macro">start_timer!</span>(|| <span class="string">"Recovery"</span>);
+<a href=#552 id=552 data-nosnippet>552</a>        AvidMScheme::recover(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>commit, <span class="kw-2">&amp;</span>shares).unwrap();
+<a href=#553 id=553 data-nosnippet>553</a>        <span class="macro">end_timer!</span>(recover_timer);
+<a href=#554 id=554 data-nosnippet>554</a>    }
+<a href=#555 id=555 data-nosnippet>555</a>}</code></pre></div></section></main></body></html>
