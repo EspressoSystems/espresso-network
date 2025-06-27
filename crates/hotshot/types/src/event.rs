@@ -8,19 +8,13 @@
 
 use std::sync::Arc;
 
-use hotshot_utils::anytrace::*;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    data::{
-        vid_disperse::ADVZDisperseShare, DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal,
-        QuorumProposalWrapper, UpgradeProposal, VidDisperseShare,
-    },
+    data::{DaProposal2, Leaf2, QuorumProposalWrapper, UpgradeProposal, VidDisperseShare},
     error::HotShotError,
-    message::{convert_proposal, Proposal},
-    simple_certificate::{
-        LightClientStateUpdateCertificate, QuorumCertificate, QuorumCertificate2,
-    },
+    message::Proposal,
+    simple_certificate::{LightClientStateUpdateCertificate, QuorumCertificate2},
     traits::{node_implementation::NodeType, ValidatedState},
 };
 
@@ -38,11 +32,11 @@ pub struct Event<TYPES: NodeType> {
 }
 
 impl<TYPES: NodeType> Event<TYPES> {
-    pub fn to_legacy(self) -> anyhow::Result<LegacyEvent<TYPES>> {
-        Ok(LegacyEvent {
+    pub fn to_legacy(self) -> LegacyEvent<TYPES> {
+        LegacyEvent {
             view_number: self.view_number,
-            event: self.event.to_legacy()?,
-        })
+            event: self.event.to_legacy(),
+        }
     }
 }
 
@@ -90,19 +84,13 @@ impl<TYPES: NodeType> LeafInfo<TYPES> {
         }
     }
 
-    pub fn to_legacy_unsafe(self) -> anyhow::Result<LegacyLeafInfo<TYPES>> {
-        Ok(LegacyLeafInfo {
-            leaf: self.leaf.to_leaf_unsafe(),
+    pub fn to_legacy(self) -> LegacyLeafInfo<TYPES> {
+        LegacyLeafInfo {
+            leaf: self.leaf,
             state: self.state,
             delta: self.delta,
-            vid_share: self
-                .vid_share
-                .map(|share| match share {
-                    VidDisperseShare::V0(share) => Ok(share),
-                    VidDisperseShare::V1(_) => Err(error!("VID share is post-epoch")),
-                })
-                .transpose()?,
-        })
+            vid_share: self.vid_share,
+        }
     }
 }
 
@@ -111,22 +99,22 @@ impl<TYPES: NodeType> LeafInfo<TYPES> {
 #[serde(bound(deserialize = "TYPES: NodeType"))]
 pub struct LegacyLeafInfo<TYPES: NodeType> {
     /// Decided leaf.
-    pub leaf: Leaf<TYPES>,
+    pub leaf: Leaf2<TYPES>,
     /// Validated state.
     pub state: Arc<<TYPES as NodeType>::ValidatedState>,
     /// Optional application-specific state delta.
     pub delta: Option<Arc<<<TYPES as NodeType>::ValidatedState as ValidatedState<TYPES>>::Delta>>,
     /// Optional VID share data.
-    pub vid_share: Option<ADVZDisperseShare<TYPES>>,
+    pub vid_share: Option<VidDisperseShare<TYPES>>,
 }
 
 impl<TYPES: NodeType> LegacyLeafInfo<TYPES> {
     /// Constructor.
     pub fn new(
-        leaf: Leaf<TYPES>,
+        leaf: Leaf2<TYPES>,
         state: Arc<<TYPES as NodeType>::ValidatedState>,
         delta: Option<Arc<<<TYPES as NodeType>::ValidatedState as ValidatedState<TYPES>>::Delta>>,
-        vid_share: Option<ADVZDisperseShare<TYPES>>,
+        vid_share: Option<VidDisperseShare<TYPES>>,
     ) -> Self {
         Self {
             leaf,
@@ -261,8 +249,8 @@ pub enum EventType<TYPES: NodeType> {
 }
 
 impl<TYPES: NodeType> EventType<TYPES> {
-    pub fn to_legacy(self) -> anyhow::Result<LegacyEventType<TYPES>> {
-        Ok(match self {
+    pub fn to_legacy(self) -> LegacyEventType<TYPES> {
+        match self {
             EventType::Error { error } => LegacyEventType::Error { error },
             EventType::Decide {
                 leaf_chain,
@@ -273,10 +261,10 @@ impl<TYPES: NodeType> EventType<TYPES> {
                     leaf_chain
                         .iter()
                         .cloned()
-                        .map(LeafInfo::to_legacy_unsafe)
-                        .collect::<anyhow::Result<_, _>>()?,
+                        .map(LeafInfo::to_legacy)
+                        .collect(),
                 ),
-                qc: Arc::new(qc.as_ref().clone().to_qc()),
+                qc,
                 block_size,
             },
             EventType::ReplicaViewTimeout { view_number } => {
@@ -289,13 +277,11 @@ impl<TYPES: NodeType> EventType<TYPES> {
             EventType::Transactions { transactions } => {
                 LegacyEventType::Transactions { transactions }
             },
-            EventType::DaProposal { proposal, sender } => LegacyEventType::DaProposal {
-                proposal: convert_proposal(proposal),
-                sender,
+            EventType::DaProposal { proposal, sender } => {
+                LegacyEventType::DaProposal { proposal, sender }
             },
-            EventType::QuorumProposal { proposal, sender } => LegacyEventType::QuorumProposal {
-                proposal: convert_proposal(proposal),
-                sender,
+            EventType::QuorumProposal { proposal, sender } => {
+                LegacyEventType::QuorumProposal { proposal, sender }
             },
             EventType::UpgradeProposal { proposal, sender } => {
                 LegacyEventType::UpgradeProposal { proposal, sender }
@@ -303,7 +289,7 @@ impl<TYPES: NodeType> EventType<TYPES> {
             EventType::ExternalMessageReceived { sender, data } => {
                 LegacyEventType::ExternalMessageReceived { sender, data }
             },
-        })
+        }
     }
 }
 
@@ -333,7 +319,7 @@ pub enum LegacyEventType<TYPES: NodeType> {
         ///
         /// Note that the QC for each additional leaf in the chain can be obtained from the leaf
         /// before it using
-        qc: Arc<QuorumCertificate<TYPES>>,
+        qc: Arc<QuorumCertificate2<TYPES>>,
         /// Optional information of the number of transactions in the block, for logging purposes.
         block_size: Option<u64>,
     },
@@ -362,7 +348,7 @@ pub enum LegacyEventType<TYPES: NodeType> {
     /// or submitted to the network by us
     DaProposal {
         /// Contents of the proposal
-        proposal: Proposal<TYPES, DaProposal<TYPES>>,
+        proposal: Proposal<TYPES, DaProposal2<TYPES>>,
         /// Public key of the leader submitting the proposal
         sender: TYPES::SignatureKey,
     },
@@ -370,7 +356,7 @@ pub enum LegacyEventType<TYPES: NodeType> {
     /// or submitted to the network by us
     QuorumProposal {
         /// Contents of the proposal
-        proposal: Proposal<TYPES, QuorumProposal<TYPES>>,
+        proposal: Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
         /// Public key of the leader submitting the proposal
         sender: TYPES::SignatureKey,
     },

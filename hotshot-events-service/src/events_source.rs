@@ -176,22 +176,20 @@ impl<Types: NodeType> EventsSource<Types> for EventsStreamer<Types> {
                 .filter(move |event| {
                     futures::future::ready(filter.should_broadcast(&event.as_ref().event))
                 })
-                .filter_map(|a| {
-                    futures::future::ready(Event::to_legacy(a.as_ref().clone()).ok().map(Arc::new))
-                })
+                .map(|a| Arc::new(Event::to_legacy(a.as_ref().clone())))
                 .boxed()
         } else {
             receiver
-                .filter_map(|a| {
+                .map(|a| {
                     // TODO: MA: debugging
-                    let event = Event::to_legacy(a.as_ref().clone()).unwrap();
+                    let event = Event::to_legacy(a.as_ref().clone());
                     let s = bincode::serialize(&event)
                         .map_err(|e| tracing::error!("Failed to serialize event: {:?}", e))
                         .ok();
                     // Log the event being sent
                     tracing::debug!("MAA: sending event: {:?} {:?}", event, s);
 
-                    futures::future::ready(Event::to_legacy(a.as_ref().clone()).ok().map(Arc::new))
+                    Arc::new(Event::to_legacy(a.as_ref().clone()))
                 })
                 .boxed()
         }
