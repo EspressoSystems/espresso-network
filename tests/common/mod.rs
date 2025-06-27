@@ -14,7 +14,7 @@ use alloy::{
     providers::{Provider, ProviderBuilder},
     rpc::types::Filter,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use client::SequencerClient;
 use espresso_types::FeeAmount;
 use futures::future::join_all;

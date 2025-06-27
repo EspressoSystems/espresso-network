@@ -4,14 +4,14 @@ use std::{
 };
 
 use alloy::primitives::{
-    utils::{format_ether, parse_ether},
     Address, U256,
+    utils::{format_ether, parse_ether},
 };
 use anyhow::Result;
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
-use rand::{rngs::StdRng, SeedableRng as _};
+use rand::{SeedableRng as _, rngs::StdRng};
 use sequencer_utils::test_utils::setup_test;
-use staking_cli::{demo::DelegationConfig, deploy, deploy::Signer, Config};
+use staking_cli::{Config, demo::DelegationConfig, deploy, deploy::Signer};
 
 use crate::deploy::TestSystem;
 

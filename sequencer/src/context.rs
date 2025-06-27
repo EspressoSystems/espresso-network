@@ -9,27 +9,27 @@ use anyhow::Context;
 use async_lock::RwLock;
 use derivative::Derivative;
 use espresso_types::{
-    v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
     NodeState, PubKey, Transaction, ValidatedState,
+    v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
 };
 use futures::{
-    future::{join_all, Future},
+    future::{Future, join_all},
     stream::{Stream, StreamExt},
 };
 use hotshot::{
-    types::{Event, EventType, SystemContextHandle},
     SystemContext,
+    types::{Event, EventType, SystemContextHandle},
 };
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{
+    PeerConfig, ValidatorConfig,
     consensus::ConsensusMetricsValue,
     data::{Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     network::NetworkConfig,
     storage_metrics::StorageMetricsValue,
     traits::{metrics::Metrics, network::ConnectedNetwork, node_implementation::Versions},
-    PeerConfig, ValidatorConfig,
 };
 use parking_lot::Mutex;
 use request_response::RequestResponseConfig;
@@ -38,17 +38,17 @@ use tracing::{Instrument, Level};
 use url::Url;
 
 use crate::{
+    Node, SeqTypes, SequencerApiVersion,
     catchup::ParallelStateCatchup,
     external_event_handler::ExternalEventHandler,
     proposal_fetcher::ProposalFetcherConfig,
     request_response::{
+        RequestResponseProtocol,
         data_source::{DataSource, Storage as RequestResponseStorage},
         network::Sender as RequestResponseSender,
         recipient_source::RecipientSource,
-        RequestResponseProtocol,
     },
     state_signature::StateSigner,
-    Node, SeqTypes, SequencerApiVersion,
 };
 
 /// The consensus handle

@@ -6,14 +6,13 @@ use std::{
 use alloy::{
     primitives::{Address, PrimitiveSignature},
     signers::{
-        self,
+        self, SignerSync,
         k256::ecdsa::{SigningKey, VerifyingKey},
         local::{
-            coins_bip39::{English, Mnemonic},
             PrivateKeySigner,
+            coins_bip39::{English, Mnemonic},
         },
         utils::public_key_to_address,
-        SignerSync,
     },
 };
 use alloy_compat::ethers_serde;

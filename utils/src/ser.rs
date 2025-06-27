@@ -1,7 +1,7 @@
 use serde::{
+    Deserialize, Serialize,
     de::{DeserializeOwned, Deserializer, Error as _},
     ser::{Error as _, Serializer},
-    Deserialize, Serialize,
 };
 
 /// Types which can be deserialized from either integers or strings.

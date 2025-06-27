@@ -2,21 +2,21 @@ use std::{process::Command, time::Duration};
 
 use alloy::{
     network::{Ethereum, EthereumWallet, TransactionBuilder as _},
-    primitives::{utils::parse_ether, Address, U256},
+    primitives::{Address, U256, utils::parse_ether},
     providers::{
+        Provider as _, ProviderBuilder, RootProvider, WalletProvider,
         ext::AnvilApi as _,
         fillers::{FillProvider, JoinFill, WalletFiller},
         layers::AnvilProvider,
         utils::JoinedRecommendedFillers,
-        Provider as _, ProviderBuilder, RootProvider, WalletProvider,
     },
     rpc::types::TransactionRequest,
     signers::local::PrivateKeySigner,
 };
 use anyhow::Result;
 use espresso_contract_deployer::{
-    build_signer, builder::DeployerArgsBuilder,
-    network_config::light_client_genesis_from_stake_table, Contract, Contracts,
+    Contract, Contracts, build_signer, builder::DeployerArgsBuilder,
+    network_config::light_client_genesis_from_stake_table,
 };
 use hotshot_contract_adapter::{
     sol_types::{
@@ -27,10 +27,10 @@ use hotshot_contract_adapter::{
 };
 use hotshot_state_prover::mock_ledger::STAKE_TABLE_CAPACITY_FOR_TEST;
 use hotshot_types::light_client::StateKeyPair;
-use rand::{rngs::StdRng, CryptoRng, Rng as _, RngCore, SeedableRng as _};
+use rand::{CryptoRng, Rng as _, RngCore, SeedableRng as _, rngs::StdRng};
 use url::Url;
 
-use crate::{parse::Commission, registration::register_validator, BLSKeyPair, DEV_MNEMONIC};
+use crate::{BLSKeyPair, DEV_MNEMONIC, parse::Commission, registration::register_validator};
 
 type TestProvider = FillProvider<
     JoinFill<JoinedRecommendedFillers, WalletFiller<EthereumWallet>>,

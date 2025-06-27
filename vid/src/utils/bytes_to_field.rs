@@ -105,11 +105,14 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         let mut elem_bytes = Vec::with_capacity(self.elem_byte_capacity);
         for _ in 0..elem_bytes.capacity() {
-            match self.bytes_iter.next() { Some(byte) => {
-                elem_bytes.push(*byte.borrow());
-            } _ => {
-                break;
-            }}
+            match self.bytes_iter.next() {
+                Some(byte) => {
+                    elem_bytes.push(*byte.borrow());
+                },
+                _ => {
+                    break;
+                },
+            }
         }
         if elem_bytes.is_empty() {
             None
@@ -183,7 +186,7 @@ mod tests {
     use ark_bn254::Fr as Fr254;
     use rand::RngCore;
 
-    use super::{bytes_to_field, field_to_bytes, PrimeField, Vec};
+    use super::{PrimeField, Vec, bytes_to_field, field_to_bytes};
 
     fn bytes_to_field_iter<F: PrimeField>() {
         let byte_lens = [0, 1, 2, 16, 31, 32, 33, 48, 65, 100, 200, 5000];

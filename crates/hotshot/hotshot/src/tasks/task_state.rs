@@ -6,7 +6,7 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::Instant,
 };
 
@@ -28,7 +28,7 @@ use hotshot_types::{
 };
 use tokio::spawn;
 
-use crate::{types::SystemContextHandle, Versions};
+use crate::{Versions, types::SystemContextHandle};
 
 /// Trait for creating task states.
 #[async_trait]

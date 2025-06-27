@@ -11,22 +11,22 @@ use std::{
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
-use futures::{stream::FuturesUnordered, StreamExt};
+use futures::{StreamExt, stream::FuturesUnordered};
 use hotshot_builder_api::v0_1::block_info::AvailableBlockInfo;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
-    data::{null_block, PackedBundle, VidCommitment},
+    data::{PackedBundle, VidCommitment, null_block},
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
     message::UpgradeLock,
     traits::{
+        BlockPayload,
         block_contents::{BuilderFee, EncodeBytes},
         node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::{BuilderSignatureKey, SignatureKey},
-        BlockPayload,
     },
-    utils::{is_epoch_transition, is_last_block, ViewInner},
+    utils::{ViewInner, is_epoch_transition, is_last_block},
 };
 use hotshot_utils::anytrace::*;
 use tokio::time::{sleep, timeout};
@@ -140,7 +140,9 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
         let version = match self.upgrade_lock.version(block_view).await {
             Ok(v) => v,
             Err(err) => {
-                tracing::error!("Upgrade certificate requires unsupported version, refusing to request blocks: {err}");
+                tracing::error!(
+                    "Upgrade certificate requires unsupported version, refusing to request blocks: {err}"
+                );
                 return None;
             },
         };
@@ -193,7 +195,9 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
             {
                 // We are proposing a transition block it should be empty
                 if !is_last_block(high_qc_block_number, self.epoch_height) {
-                    tracing::info!("Sending empty block event. View number: {block_view}. Parent Block number: {high_qc_block_number}");
+                    tracing::info!(
+                        "Sending empty block event. View number: {block_view}. Parent Block number: {high_qc_block_number}"
+                    );
                     self.send_empty_block(event_stream, block_view, block_epoch, version)
                         .await;
                     return None;
@@ -345,9 +349,9 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                 ensure!(
                     *view > *self.cur_view && *epoch >= self.cur_epoch,
                     debug!(
-                      "Received a view change to an older view and epoch: tried to change view to {view}\
+                        "Received a view change to an older view and epoch: tried to change view to {view}\
                       and epoch {epoch:?} though we are at view {} and epoch {:?}",
-                          self.cur_view, self.cur_epoch
+                        self.cur_view, self.cur_epoch
                     )
                 );
                 self.cur_view = view;
@@ -636,7 +640,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                 else {
                     tracing::warn!(
                         "Failed to verify available new or legacy block header input data response message signature"
-                      );
+                    );
                     continue;
                 };
 

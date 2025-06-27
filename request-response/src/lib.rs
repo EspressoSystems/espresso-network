@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use data_source::DataSource;
 use derive_more::derive::Deref;
 use hotshot_types::traits::signature_key::SignatureKey;
@@ -150,13 +150,13 @@ pub struct RequestResponse<
 /// We need to manually implement the `Clone` trait for this type because deriving
 /// `Deref` will cause an issue where it tries to clone the inner field instead
 impl<
-        S: Sender<K>,
-        R: Receiver,
-        Req: Request,
-        RS: RecipientSource<Req, K>,
-        DS: DataSource<Req>,
-        K: SignatureKey + 'static,
-    > Clone for RequestResponse<S, R, Req, RS, DS, K>
+    S: Sender<K>,
+    R: Receiver,
+    Req: Request,
+    RS: RecipientSource<Req, K>,
+    DS: DataSource<Req>,
+    K: SignatureKey + 'static,
+> Clone for RequestResponse<S, R, Req, RS, DS, K>
 {
     fn clone(&self) -> Self {
         Self {
@@ -167,13 +167,13 @@ impl<
 }
 
 impl<
-        S: Sender<K>,
-        R: Receiver,
-        Req: Request,
-        RS: RecipientSource<Req, K>,
-        DS: DataSource<Req>,
-        K: SignatureKey + 'static,
-    > RequestResponse<S, R, Req, RS, DS, K>
+    S: Sender<K>,
+    R: Receiver,
+    Req: Request,
+    RS: RecipientSource<Req, K>,
+    DS: DataSource<Req>,
+    K: SignatureKey + 'static,
+> RequestResponse<S, R, Req, RS, DS, K>
 {
     /// Create a new [`RequestResponseProtocol`]
     pub fn new(
@@ -251,13 +251,13 @@ pub struct RequestResponseInner<
     phantom_data: PhantomData<(K, R, Req, DS)>,
 }
 impl<
-        S: Sender<K>,
-        R: Receiver,
-        Req: Request,
-        RS: RecipientSource<Req, K>,
-        DS: DataSource<Req>,
-        K: SignatureKey + 'static,
-    > RequestResponseInner<S, R, Req, RS, DS, K>
+    S: Sender<K>,
+    R: Receiver,
+    Req: Request,
+    RS: RecipientSource<Req, K>,
+    DS: DataSource<Req>,
+    K: SignatureKey + 'static,
+> RequestResponseInner<S, R, Req, RS, DS, K>
 {
     /// Request something from the protocol indefinitely until we get a response
     /// or there was a critical error (e.g. the request could not be signed)
@@ -724,7 +724,7 @@ impl<R: Request> Drop for OutgoingRequestInner<R> {
 mod tests {
     use std::{
         collections::HashMap,
-        sync::{atomic::AtomicBool, Mutex},
+        sync::{Mutex, atomic::AtomicBool},
     };
 
     use async_trait::async_trait;

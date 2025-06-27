@@ -6,16 +6,16 @@ use ark_bn254::Bn254;
 use ark_ed_on_bn254::EdwardsConfig;
 use ark_ff::PrimeField;
 use ark_std::{
-    rand::{rngs::StdRng, CryptoRng, Rng, RngCore},
     UniformRand,
+    rand::{CryptoRng, Rng, RngCore, rngs::StdRng},
 };
 use espresso_types::SeqTypes;
 use hotshot_contract_adapter::{field_to_u256, jellyfish::open_key};
 use hotshot_types::{
+    PeerConfig,
     light_client::{GenericLightClientState, GenericStakeTableState, LightClientState},
     stake_table::{HSStakeTable, StakeTableEntry},
     utils::{epoch_from_block_number, is_epoch_root, is_ge_epoch_root, is_last_block},
-    PeerConfig,
 };
 use itertools::izip;
 use jf_pcs::prelude::UnivariateUniversalParams;
@@ -25,14 +25,14 @@ use jf_plonk::{
 };
 use jf_relation::{Arithmetization, Circuit, PlonkCircuit};
 use jf_signature::{
+    SignatureScheme,
     bls_over_bn254::{BLSOverBN254CurveSignatureScheme, VerKey as BLSVerKey},
     schnorr::{SchnorrSignatureScheme, Signature},
-    SignatureScheme,
 };
 use jf_utils::test_rng;
 
 use crate::{
-    circuit::GenericPublicInput, generate_state_update_proof, preprocess, Proof, VerifyingKey,
+    Proof, VerifyingKey, circuit::GenericPublicInput, generate_state_update_proof, preprocess,
 };
 
 type F = ark_ed_on_bn254::Fq;

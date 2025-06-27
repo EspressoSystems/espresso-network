@@ -13,26 +13,26 @@
 use async_trait::async_trait;
 use committable::Committable;
 use hotshot_types::{
-    data::{ns_table, VidCommitment},
-    traits::{block_contents::BlockHeader, node_implementation::NodeType, EncodeBytes},
+    data::{VidCommitment, ns_table},
+    traits::{EncodeBytes, block_contents::BlockHeader, node_implementation::NodeType},
     vid::{
-        advz::{advz_scheme, ADVZScheme},
-        avidm::{init_avidm_param, AvidMScheme},
+        advz::{ADVZScheme, advz_scheme},
+        avidm::{AvidMScheme, init_avidm_param},
     },
 };
 use jf_vid::VidScheme;
 use surf_disco::{Client, Url};
-use vbs::{version::StaticVersionType, BinarySerializer};
+use vbs::{BinarySerializer, version::StaticVersionType};
 
 use super::Provider;
 use crate::{
+    Error, Header, Payload, VidCommon,
     availability::{
         ADVZCommonQueryData, ADVZPayloadQueryData, LeafQueryData, LeafQueryDataLegacy,
         PayloadQueryData, VidCommonQueryData,
     },
     fetching::request::{LeafRequest, PayloadRequest, VidCommonRequest},
     types::HeightIndexed,
-    Error, Header, Payload, VidCommon,
 };
 
 /// Data availability provider backed by another instance of this query service.
@@ -424,7 +424,7 @@ mod test {
 
     use committable::Committable;
     use futures::{
-        future::{join, FutureExt},
+        future::{FutureExt, join},
         stream::StreamExt,
     };
     use generic_array::GenericArray;
@@ -432,36 +432,36 @@ mod test {
     use hotshot_types::traits::node_implementation::Versions;
     use portpicker::pick_unused_port;
     use rand::RngCore;
-    use tide_disco::{error::ServerError, App};
+    use tide_disco::{App, error::ServerError};
     use vbs::version::StaticVersion;
 
     use super::*;
     use crate::{
+        ApiState,
         api::load_api,
         availability::{
-            define_api, AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch,
-            TransactionQueryData, UpdateAvailabilityData,
+            AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch,
+            TransactionQueryData, UpdateAvailabilityData, define_api,
         },
         data_source::{
+            AvailabilityProvider, FetchingDataSource, Transaction, VersionedDataSource,
             sql::{self, SqlDataSource},
             storage::{
+                AvailabilityStorage, SqlStorage, UpdateAvailabilityStorage,
                 fail_storage::{FailStorage, FailableAction},
                 pruning::{PrunedHeightStorage, PrunerCfg},
                 sql::testing::TmpDb,
-                AvailabilityStorage, SqlStorage, UpdateAvailabilityStorage,
             },
-            AvailabilityProvider, FetchingDataSource, Transaction, VersionedDataSource,
         },
         fetching::provider::{NoFetching, Provider as ProviderTrait, TestProvider},
-        node::{data_source::NodeDataSource, SyncStatus},
+        node::{SyncStatus, data_source::NodeDataSource},
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork},
-            mocks::{mock_transaction, MockBase, MockTypes, MockVersions},
+            mocks::{MockBase, MockTypes, MockVersions, mock_transaction},
             setup_test, sleep,
         },
         types::HeightIndexed,
-        ApiState,
     };
 
     type Provider = TestProvider<QueryServiceProvider<MockBase>>;

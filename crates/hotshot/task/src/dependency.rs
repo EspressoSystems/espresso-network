@@ -8,9 +8,9 @@ use std::future::Future;
 
 use async_broadcast::{Receiver, RecvError};
 use futures::{
+    FutureExt,
     future::BoxFuture,
     stream::{FuturesUnordered, StreamExt},
-    FutureExt,
 };
 
 /// Type which describes the idea of waiting for a dependency to complete
@@ -89,13 +89,16 @@ impl<T: Clone + Send + Sync> Dependency<T> for OrDependency<T> {
     async fn completed(self) -> Option<T> {
         let mut futures = FuturesUnordered::from_iter(self.deps);
         loop {
-            match futures.next().await { Some(maybe) => {
-                if maybe.is_some() {
-                    return maybe;
-                }
-            } _ => {
-                return None;
-            }}
+            match futures.next().await {
+                Some(maybe) => {
+                    if maybe.is_some() {
+                        return maybe;
+                    }
+                },
+                _ => {
+                    return None;
+                },
+            }
         }
     }
 }
@@ -196,7 +199,7 @@ impl<T: Clone + Send + Sync + 'static> Dependency<T> for EventDependency<T> {
 
 #[cfg(test)]
 mod tests {
-    use async_broadcast::{broadcast, Receiver};
+    use async_broadcast::{Receiver, broadcast};
 
     use super::{AndDependency, Dependency, EventDependency, OrDependency};
 

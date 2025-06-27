@@ -13,7 +13,7 @@
 use std::{fs, path::Path};
 
 use tide_disco::api::{Api, ApiError};
-use toml::{map::Entry, Value};
+use toml::{Value, map::Entry};
 use vbs::version::StaticVersionType;
 
 pub(crate) fn load_api<State: 'static, Error: 'static, Ver: StaticVersionType + 'static>(

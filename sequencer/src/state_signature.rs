@@ -6,7 +6,7 @@ use std::{
 };
 
 use async_lock::RwLock;
-use espresso_types::{traits::SequencerPersistence, PubKey};
+use espresso_types::{PubKey, traits::SequencerPersistence};
 use hotshot::types::{Event, EventType, SchnorrPubKey};
 use hotshot_types::{
     event::LeafInfo,
@@ -27,7 +27,7 @@ use surf_disco::{Client, Url};
 use tide_disco::error::ServerError;
 use vbs::version::StaticVersionType;
 
-use crate::{context::Consensus, SeqTypes};
+use crate::{SeqTypes, context::Consensus};
 
 /// A relay server that's collecting and serving the light client state signatures
 pub mod relay_server;
@@ -191,7 +191,10 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                             .send()
                             .await
                         {
-                            tracing::error!("Error posting signature for legacy light client to the relay server: {:?}", error);
+                            tracing::error!(
+                                "Error posting signature for legacy light client to the relay server: {:?}",
+                                error
+                            );
                         }
                     }
                 }

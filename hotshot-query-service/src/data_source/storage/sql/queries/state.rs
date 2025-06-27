@@ -22,23 +22,23 @@ use async_trait::async_trait;
 use futures::stream::TryStreamExt;
 use hotshot_types::traits::node_implementation::NodeType;
 use jf_merkle_tree::{
-    prelude::{MerkleNode, MerkleProof},
     DigestAlgorithm, MerkleCommitment, ToTraversalPath,
+    prelude::{MerkleNode, MerkleProof},
 };
 use sqlx::types::{BitVec, JsonValue};
 
 use super::{
-    super::transaction::{query_as, Transaction, TransactionMode, Write},
+    super::transaction::{Transaction, TransactionMode, Write, query_as},
     DecodeError, QueryBuilder,
 };
 use crate::{
+    QueryError, QueryResult,
     data_source::storage::{
+        MerklizedStateHeightStorage, MerklizedStateStorage,
         pruning::PrunedHeightStorage,
         sql::{build_where_in, sqlx::Row},
-        MerklizedStateHeightStorage, MerklizedStateStorage,
     },
     merklized_state::{MerklizedState, Snapshot},
-    QueryError, QueryResult,
 };
 
 #[async_trait]
@@ -238,8 +238,10 @@ where
 
         if commitment_from_path != merkle_commitment.digest() {
             return Err(QueryError::Error {
-                message:
-                    format!("Commitment calculated from merkle path ({commitment_from_path:?}) does not match the commitment in the header ({:?})", merkle_commitment.digest()),
+                message: format!(
+                    "Commitment calculated from merkle path ({commitment_from_path:?}) does not match the commitment in the header ({:?})",
+                    merkle_commitment.digest()
+                ),
             });
         }
 
@@ -488,16 +490,16 @@ fn build_get_path_query<'q>(
 mod test {
     use futures::stream::StreamExt;
     use jf_merkle_tree::{
-        universal_merkle_tree::UniversalMerkleTree, LookupResult, MerkleTreeScheme,
-        UniversalMerkleTreeScheme,
+        LookupResult, MerkleTreeScheme, UniversalMerkleTreeScheme,
+        universal_merkle_tree::UniversalMerkleTree,
     };
-    use rand::{seq::IteratorRandom, RngCore};
+    use rand::{RngCore, seq::IteratorRandom};
 
     use super::*;
     use crate::{
         data_source::{
-            storage::sql::{testing::TmpDb, *},
             VersionedDataSource,
+            storage::sql::{testing::TmpDb, *},
         },
         merklized_state::UpdateStateData,
         testing::{

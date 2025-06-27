@@ -133,12 +133,12 @@ pub mod availability_tests {
 
     use super::test_helpers::*;
     use crate::{
-        availability::{payload_size, BlockId},
+        availability::{BlockId, payload_size},
         data_source::storage::NodeStorage,
         node::NodeDataSource,
         testing::{
             consensus::{MockNetwork, TestableDataSource},
-            mocks::{mock_transaction, MockTypes, MockVersions},
+            mocks::{MockTypes, MockVersions, mock_transaction},
             setup_test,
         },
         types::HeightIndexed,
@@ -548,10 +548,11 @@ pub mod persistence_tests {
     use hotshot_types::simple_certificate::QuorumCertificate2;
 
     use crate::{
+        Leaf2,
         availability::{BlockQueryData, LeafQueryData},
         data_source::{
-            storage::{AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage},
             Transaction,
+            storage::{AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage},
         },
         node::NodeDataSource,
         testing::{
@@ -560,7 +561,6 @@ pub mod persistence_tests {
             setup_test,
         },
         types::HeightIndexed,
-        Leaf2,
     };
 
     #[tokio::test(flavor = "multi_thread")]
@@ -774,17 +774,18 @@ pub mod node_tests {
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
-        data::{vid_commitment, VidCommitment, VidShare},
+        data::{VidCommitment, VidShare, vid_commitment},
         traits::{
             block_contents::{BlockHeader, EncodeBytes},
             node_implementation::Versions,
         },
-        vid::advz::{advz_scheme, ADVZScheme},
+        vid::advz::{ADVZScheme, advz_scheme},
     };
     use jf_vid::VidScheme;
     use vbs::version::StaticVersionType;
 
     use crate::{
+        Header, VidCommon,
         availability::{BlockInfo, BlockQueryData, LeafQueryData, VidCommonQueryData},
         data_source::{
             storage::{NodeStorage, UpdateAvailabilityStorage},
@@ -793,11 +794,10 @@ pub mod node_tests {
         node::{BlockId, NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
         testing::{
             consensus::{MockNetwork, TestableDataSource},
-            mocks::{mock_transaction, MockPayload, MockTypes, MockVersions},
+            mocks::{MockPayload, MockTypes, MockVersions, mock_transaction},
             setup_test, sleep,
         },
         types::HeightIndexed,
-        Header, VidCommon,
     };
 
     fn block_header_timestamp(header: &Header<MockTypes>) -> u64 {
@@ -1417,7 +1417,7 @@ pub mod status_tests {
         status::StatusDataSource,
         testing::{
             consensus::{DataSourceLifeCycle, MockNetwork},
-            mocks::{mock_transaction, MockVersions},
+            mocks::{MockVersions, mock_transaction},
             setup_test, sleep,
         },
     };

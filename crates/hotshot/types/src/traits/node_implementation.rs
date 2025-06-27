@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersionType;
 
 use super::{
+    ValidatedState,
     block_contents::{BlockHeader, TestableBlock, Transaction},
     network::{
         AsyncGenerator, ConnectedNetwork, NetworkReliability, TestableNetworkingImplementation,
@@ -30,13 +31,12 @@ use super::{
     signature_key::{BuilderSignatureKey, StateSignatureKey},
     states::TestableState,
     storage::Storage,
-    ValidatedState,
 };
 use crate::{
     constants::DEFAULT_UPGRADE_CONSTANTS,
     data::{Leaf2, TestableLeaf},
     traits::{
-        election::Membership, signature_key::SignatureKey, states::InstanceState, BlockPayload,
+        BlockPayload, election::Membership, signature_key::SignatureKey, states::InstanceState,
     },
     upgrade_config::UpgradeConstants,
 };
@@ -210,11 +210,11 @@ pub trait NodeType:
     ///
     /// This should be the same block that `ValidatedState::BlockPayload` is using.
     type BlockPayload: BlockPayload<
-        Self,
-        Instance = Self::InstanceState,
-        Transaction = Self::Transaction,
-        ValidatedState = Self::ValidatedState,
-    >;
+            Self,
+            Instance = Self::InstanceState,
+            Transaction = Self::Transaction,
+            ValidatedState = Self::ValidatedState,
+        >;
     /// The signature key that this hotshot setup is using.
     type SignatureKey: SignatureKey;
     /// The transaction type that this hotshot setup is using.

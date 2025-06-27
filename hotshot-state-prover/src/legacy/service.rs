@@ -4,11 +4,11 @@ use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use alloy::{
     network::EthereumWallet,
-    primitives::{utils::format_units, Address, U256},
+    primitives::{Address, U256, utils::format_units},
     providers::{Provider, ProviderBuilder},
     rpc::types::TransactionReceipt,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use futures::FutureExt;
 use hotshot_contract_adapter::{
     field_to_u256,
@@ -24,7 +24,7 @@ use hotshot_types::{
 use jf_pcs::prelude::UnivariateUniversalParams;
 use jf_relation::Circuit as _;
 use surf_disco::Client;
-use tide_disco::{error::ServerError, Api};
+use tide_disco::{Api, error::ServerError};
 use time::ext::InstantExt;
 use tokio::{io, spawn, task::spawn_blocking, time::sleep};
 use vbs::version::StaticVersionType;
@@ -414,11 +414,11 @@ mod test {
 
     use alloy::{
         node_bindings::Anvil,
-        providers::{layers::AnvilProvider, ProviderBuilder},
+        providers::{ProviderBuilder, layers::AnvilProvider},
         sol_types::SolValue,
     };
     use anyhow::Result;
-    use espresso_contract_deployer::{deploy_light_client_proxy, Contracts};
+    use espresso_contract_deployer::{Contracts, deploy_light_client_proxy};
     use hotshot_contract_adapter::sol_types::LightClientMock;
     use jf_utils::test_rng;
     use sequencer_utils::test_utils::setup_test;

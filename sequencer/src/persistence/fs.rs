@@ -8,15 +8,15 @@ use std::{
     time::Instant,
 };
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
+    Leaf, Leaf2, NetworkConfig, Payload, SeqTypes, ValidatorMap,
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
-    Leaf, Leaf2, NetworkConfig, Payload, SeqTypes, ValidatorMap,
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
@@ -24,13 +24,13 @@ use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
 };
 use hotshot_types::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
         QuorumProposalWrapper, VidCommitment, VidDisperseShare,
+        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
     },
     drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
-    message::{convert_proposal, Proposal},
+    message::{Proposal, convert_proposal},
     simple_certificate::{
         LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
         QuorumCertificate2, UpgradeCertificate,
@@ -45,8 +45,8 @@ use hotshot_types::{
 use itertools::Itertools;
 
 use crate::{
-    persistence::persistence_metrics::PersistenceMetricsValue, ViewNumber,
-    RECENT_STAKE_TABLES_LIMIT,
+    RECENT_STAKE_TABLES_LIMIT, ViewNumber,
+    persistence::persistence_metrics::PersistenceMetricsValue,
 };
 
 /// Options for file system backed persistence.
@@ -526,7 +526,9 @@ impl Inner {
             return Ok(anchor);
         }
 
-        tracing::warn!("Failed to find an anchor leaf in `Leaf2` storage. Checking legacy `Leaf` storage. This is very likely to fail.");
+        tracing::warn!(
+            "Failed to find an anchor leaf in `Leaf2` storage. Checking legacy `Leaf` storage. This is very likely to fail."
+        );
         if self.legacy_anchor_leaf_path().is_file() {
             // We may have an old version of storage, where there is just a single file for the
             // anchor leaf. Read it and return the contents.
@@ -1933,8 +1935,8 @@ mod test {
         simple_certificate::QuorumCertificate,
         simple_vote::QuorumData,
         traits::{
-            block_contents::GENESIS_VID_NUM_STORAGE_NODES, node_implementation::Versions,
-            EncodeBytes,
+            EncodeBytes, block_contents::GENESIS_VID_NUM_STORAGE_NODES,
+            node_implementation::Versions,
         },
         vid::advz::advz_scheme,
     };
@@ -1945,7 +1947,7 @@ mod test {
     use vbs::version::StaticVersionType;
 
     use super::*;
-    use crate::{persistence::tests::TestablePersistence, BLSPubKey};
+    use crate::{BLSPubKey, persistence::tests::TestablePersistence};
 
     #[async_trait]
     impl TestablePersistence for Persistence {

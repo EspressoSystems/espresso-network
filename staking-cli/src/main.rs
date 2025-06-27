@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use alloy::{
     self,
     eips::BlockId,
-    primitives::{utils::format_ether, Address},
+    primitives::{Address, utils::format_ether},
     providers::{Provider, ProviderBuilder},
 };
 use anyhow::Result;
@@ -16,12 +16,12 @@ use hotshot_contract_adapter::{
 };
 use hotshot_types::light_client::StateKeyPair;
 use staking_cli::{
+    Commands, Config, ValidSignerConfig,
     claim::{claim_validator_exit, claim_withdrawal},
     delegation::{approve, delegate, undelegate},
     demo::stake_for_demo,
     info::{display_stake_table, stake_table_info},
     registration::{deregister_validator, register_validator, update_consensus_keys},
-    Commands, Config, ValidSignerConfig,
 };
 use sysinfo::System;
 

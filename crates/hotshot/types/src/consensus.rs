@@ -36,16 +36,16 @@ use crate::{
     },
     simple_vote::HasEpoch,
     traits::{
+        BlockPayload, ValidatedState,
         block_contents::{BlockHeader, BuilderFee},
         metrics::{Counter, Gauge, Histogram, Metrics, NoMetrics},
         node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::SignatureKey,
-        BlockPayload, ValidatedState,
     },
     utils::{
-        epoch_from_block_number, is_epoch_root, is_epoch_transition, is_ge_epoch_root,
-        is_last_block, is_transition_block, option_epoch_from_block_number, BuilderCommitment,
-        LeafCommitment, StateAndDelta, Terminator,
+        BuilderCommitment, LeafCommitment, StateAndDelta, Terminator, epoch_from_block_number,
+        is_epoch_root, is_epoch_transition, is_ge_epoch_root, is_last_block, is_transition_block,
+        option_epoch_from_block_number,
     },
     vote::{Certificate, HasViewNumber},
 };
@@ -880,11 +880,15 @@ impl<TYPES: NodeType> Consensus<TYPES> {
                 } = new_view.view_inner
                 {
                     ensure!(
-                         new_delta.is_some() || existing_delta.is_none(),
-                         debug!("Skipping the state update to not override a `Leaf` view with `Some` state delta.")
-                     );
+                        new_delta.is_some() || existing_delta.is_none(),
+                        debug!(
+                            "Skipping the state update to not override a `Leaf` view with `Some` state delta."
+                        )
+                    );
                 } else {
-                    bail!("Skipping the state update to not override a `Leaf` view with a non-`Leaf` view.");
+                    bail!(
+                        "Skipping the state update to not override a `Leaf` view with a non-`Leaf` view."
+                    );
                 }
             }
         }
@@ -1065,32 +1069,35 @@ impl<TYPES: NodeType> Consensus<TYPES> {
 
         while let Some(leaf) = self.saved_leaves.get(&next_leaf) {
             let view = leaf.view_number();
-            match self.state_and_delta(view) { (Some(state), delta) => {
-                if let Terminator::Exclusive(stop_before) = terminator {
-                    if stop_before == view {
-                        if ok_when_finished {
-                            return Ok(());
+            match self.state_and_delta(view) {
+                (Some(state), delta) => {
+                    if let Terminator::Exclusive(stop_before) = terminator {
+                        if stop_before == view {
+                            if ok_when_finished {
+                                return Ok(());
+                            }
+                            break;
                         }
-                        break;
                     }
-                }
-                next_leaf = leaf.parent_commitment();
-                if !f(leaf, state, delta) {
-                    return Ok(());
-                }
-                if let Terminator::Inclusive(stop_after) = terminator {
-                    if stop_after == view {
-                        if ok_when_finished {
-                            return Ok(());
+                    next_leaf = leaf.parent_commitment();
+                    if !f(leaf, state, delta) {
+                        return Ok(());
+                    }
+                    if let Terminator::Inclusive(stop_after) = terminator {
+                        if stop_after == view {
+                            if ok_when_finished {
+                                return Ok(());
+                            }
+                            break;
                         }
-                        break;
                     }
-                }
-            } _ => {
-                return Err(HotShotError::InvalidState(format!(
-                    "View {view} state does not exist in state map"
-                )));
-            }}
+                },
+                _ => {
+                    return Err(HotShotError::InvalidState(format!(
+                        "View {view} state does not exist in state map"
+                    )));
+                },
+            }
         }
         Err(HotShotError::MissingLeaf(next_leaf))
     }

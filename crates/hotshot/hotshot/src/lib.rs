@@ -11,9 +11,9 @@
 #[cfg(feature = "docs")]
 pub mod documentation;
 use committable::Committable;
-use futures::future::{select, Either};
+use futures::future::{Either, select};
 use hotshot_types::{
-    drb::{drb_difficulty_selector, DrbResult, INITIAL_DRB_RESULT},
+    drb::{DrbResult, INITIAL_DRB_RESULT, drb_difficulty_selector},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     simple_certificate::LightClientStateUpdateCertificate,
@@ -44,7 +44,7 @@ use std::{
     time::Duration,
 };
 
-use async_broadcast::{broadcast, InactiveReceiver, Receiver, Sender};
+use async_broadcast::{InactiveReceiver, Receiver, Sender, broadcast};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use futures::join;
@@ -54,6 +54,7 @@ use hotshot_task_impls::{events::HotShotEvent, helpers::broadcast_event};
 /// Reexport error type
 pub use hotshot_types::error::HotShotError;
 use hotshot_types::{
+    HotShotConfig,
     consensus::{
         Consensus, ConsensusMetricsValue, OuterConsensus, PayloadWithMetadata, VidShares, View,
         ViewInner,
@@ -72,7 +73,6 @@ use hotshot_types::{
         states::ValidatedState,
     },
     utils::{genesis_epoch_from_version, option_epoch_from_block_number},
-    HotShotConfig,
 };
 /// Reexport rand crate
 pub use rand;

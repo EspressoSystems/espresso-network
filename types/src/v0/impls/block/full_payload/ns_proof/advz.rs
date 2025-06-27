@@ -3,15 +3,15 @@
 use hotshot_types::{
     data::VidCommitment,
     traits::EncodeBytes,
-    vid::advz::{advz_scheme, ADVZCommon, ADVZScheme},
+    vid::advz::{ADVZCommon, ADVZScheme, advz_scheme},
 };
 use jf_vid::{
-    payload_prover::{PayloadProver, Statement},
     VidScheme,
+    payload_prover::{PayloadProver, Statement},
 };
 
 use crate::{
-    v0_1::ADVZNsProof, NamespaceId, NsIndex, NsTable, Payload, PayloadByteLen, Transaction,
+    NamespaceId, NsIndex, NsTable, Payload, PayloadByteLen, Transaction, v0_1::ADVZNsProof,
 };
 
 impl ADVZNsProof {
@@ -170,11 +170,11 @@ mod tests {
     use hotshot_types::{
         data::VidCommitment,
         traits::EncodeBytes,
-        vid::advz::{advz_scheme, ADVZScheme},
+        vid::advz::{ADVZScheme, advz_scheme},
     };
     use jf_vid::{VidDisperse, VidScheme};
 
-    use crate::{v0::impls::block::test::ValidTest, v0_1::ADVZNsProof, Payload};
+    use crate::{Payload, v0::impls::block::test::ValidTest, v0_1::ADVZNsProof};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn ns_proof() {
@@ -276,24 +276,32 @@ mod tests {
         // mix and match ns_table, vid_commit, vid_common
         {
             // wrong ns_table
-            assert!(ns_proof_0_0
-                .verify(ns_table_1, vid_commit_0, vid_common_0)
-                .is_none());
+            assert!(
+                ns_proof_0_0
+                    .verify(ns_table_1, vid_commit_0, vid_common_0)
+                    .is_none()
+            );
 
             // wrong vid commitment
-            assert!(ns_proof_0_0
-                .verify(ns_table_0, vid_commit_1, vid_common_0)
-                .is_none());
+            assert!(
+                ns_proof_0_0
+                    .verify(ns_table_0, vid_commit_1, vid_common_0)
+                    .is_none()
+            );
 
             // wrong vid common
-            assert!(ns_proof_0_0
-                .verify(ns_table_0, vid_commit_0, vid_common_1)
-                .is_none());
+            assert!(
+                ns_proof_0_0
+                    .verify(ns_table_0, vid_commit_0, vid_common_1)
+                    .is_none()
+            );
 
             // wrong ns_proof
-            assert!(ns_proof_0_0
-                .verify(ns_table_1, vid_commit_1, vid_common_1)
-                .is_none());
+            assert!(
+                ns_proof_0_0
+                    .verify(ns_table_1, vid_commit_1, vid_common_1)
+                    .is_none()
+            );
         }
 
         // hack the proof
@@ -306,25 +314,31 @@ mod tests {
                 ns_index: blocks[0].ns_proofs[1].ns_index.clone(),
                 ..ns_proof_0_0.clone()
             };
-            assert!(wrong_ns_index_ns_proof_0_0
-                .verify(ns_table_0, vid_commit_0, vid_common_0)
-                .is_none());
+            assert!(
+                wrong_ns_index_ns_proof_0_0
+                    .verify(ns_table_0, vid_commit_0, vid_common_0)
+                    .is_none()
+            );
 
             let wrong_ns_payload_ns_proof_0_0 = ADVZNsProof {
                 ns_payload: blocks[0].ns_proofs[1].ns_payload.clone(),
                 ..ns_proof_0_0.clone()
             };
-            assert!(wrong_ns_payload_ns_proof_0_0
-                .verify(ns_table_0, vid_commit_0, vid_common_0)
-                .is_none());
+            assert!(
+                wrong_ns_payload_ns_proof_0_0
+                    .verify(ns_table_0, vid_commit_0, vid_common_0)
+                    .is_none()
+            );
 
             let wrong_proof_ns_proof_0_0 = ADVZNsProof {
                 ns_proof: blocks[0].ns_proofs[1].ns_proof.clone(),
                 ..ns_proof_0_0.clone()
             };
-            assert!(wrong_proof_ns_proof_0_0
-                .verify(ns_table_0, vid_commit_0, vid_common_0)
-                .is_none());
+            assert!(
+                wrong_proof_ns_proof_0_0
+                    .verify(ns_table_0, vid_commit_0, vid_common_0)
+                    .is_none()
+            );
         }
     }
 }

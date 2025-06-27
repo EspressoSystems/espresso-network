@@ -26,10 +26,10 @@ use hotshot_types::traits::node_implementation::NodeType;
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
 use tagged_base64::TaggedBase64;
-use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, StatusCode};
+use tide_disco::{Api, RequestError, StatusCode, api::ApiError, method::ReadState};
 use vbs::version::StaticVersionType;
 
-use crate::{api::load_api, QueryError};
+use crate::{QueryError, api::load_api};
 
 pub(crate) mod data_source;
 pub use data_source::*;

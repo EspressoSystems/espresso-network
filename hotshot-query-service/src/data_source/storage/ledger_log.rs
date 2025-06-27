@@ -15,9 +15,9 @@
 use std::{collections::VecDeque, fmt::Debug};
 
 use atomic_store::{
-    append_log, load_store::BincodeLoadStore, AppendLog, AtomicStoreLoader, PersistenceError,
+    AppendLog, AtomicStoreLoader, PersistenceError, append_log, load_store::BincodeLoadStore,
 };
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use tracing::{debug, warn};
 
 /// A caching append log for ledger objects.

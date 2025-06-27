@@ -12,15 +12,15 @@
 
 use std::{error::Error, fmt::Debug, future::Future};
 
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use vbs::version::Version;
 
 use super::block_contents::TestableBlock;
 use crate::{
     data::Leaf2,
     traits::{
-        node_implementation::{ConsensusTime, NodeType},
         BlockPayload,
+        node_implementation::{ConsensusTime, NodeType},
     },
 };
 

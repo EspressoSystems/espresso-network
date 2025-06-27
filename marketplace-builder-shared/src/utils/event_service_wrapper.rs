@@ -2,11 +2,11 @@ use std::{future::Future, pin::Pin, time::Duration};
 
 use anyhow::Context;
 use either::Either::{self, Left, Right};
-use futures::{stream::unfold, Stream, StreamExt};
+use futures::{Stream, StreamExt, stream::unfold};
 use hotshot::types::Event;
 use hotshot_events_service::events::Error as EventStreamError;
 use hotshot_types::traits::node_implementation::NodeType;
-use surf_disco::{client::HealthStatus, Client};
+use surf_disco::{Client, client::HealthStatus};
 use tokio::time::{sleep, timeout};
 use tracing::{error, warn};
 use url::Url;
@@ -133,14 +133,14 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
 mod tests {
     use std::{
         sync::{
-            atomic::{AtomicU64, Ordering},
             Arc,
+            atomic::{AtomicU64, Ordering},
         },
         time::Duration,
     };
 
     use async_trait::async_trait;
-    use futures::{future::BoxFuture, stream, StreamExt};
+    use futures::{StreamExt, future::BoxFuture, stream};
     use hotshot::types::{Event, EventType};
     use hotshot_events_service::{
         events::define_api,
@@ -152,7 +152,7 @@ mod tests {
         event::{LegacyEvent, LegacyEventType},
         traits::node_implementation::ConsensusTime,
     };
-    use tide_disco::{method::ReadState, App};
+    use tide_disco::{App, method::ReadState};
     use tokio::{spawn, task::JoinHandle, time::timeout};
     use tracing::debug;
     use url::Url;
@@ -309,7 +309,7 @@ mod tests {
             EventServiceStream::<TestTypes, MockVersion>::RETRY_PERIOD + Duration::from_millis(500),
         )
         .await; // Wait longer than idle timeout
-                // Check whether stream returns Err(_) after idle timeout
+        // Check whether stream returns Err(_) after idle timeout
         match timeout(
             EventServiceStream::<TestTypes, MockVersion>::RETRY_PERIOD,
             stream.next(),

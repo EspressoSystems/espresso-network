@@ -1,24 +1,24 @@
 use std::fmt;
 
-use anyhow::{ensure, Context};
+use anyhow::{Context, ensure};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
 use hotshot_types::{
-    data::{vid_commitment, VidCommitment, ViewNumber},
+    data::{VidCommitment, ViewNumber, vid_commitment},
     light_client::LightClientState,
     traits::{
+        BlockPayload, EncodeBytes, ValidatedState as _,
         block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
         node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::BuilderSignatureKey,
-        BlockPayload, EncodeBytes, ValidatedState as _,
     },
     utils::BuilderCommitment,
 };
 use jf_merkle_tree::{AppendableMerkleTreeScheme, MerkleTreeScheme};
 use serde::{
-    de::{self, MapAccess, SeqAccess, Visitor},
     Deserialize, Deserializer, Serialize, Serializer,
+    de::{self, MapAccess, SeqAccess, Visitor},
 };
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -28,18 +28,19 @@ use vbs::version::{StaticVersionType, Version};
 use super::{
     instance_state::NodeState,
     state::ValidatedState,
-    v0_1::{IterableFeeInfo, RewardMerkleCommitment, RewardMerkleTree, REWARD_MERKLE_TREE_HEIGHT},
+    v0_1::{IterableFeeInfo, REWARD_MERKLE_TREE_HEIGHT, RewardMerkleCommitment, RewardMerkleTree},
     v0_3::ChainConfig,
 };
 use crate::{
+    BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment,
+    Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable, PayloadByteLen,
+    SeqTypes, TimestampMillis, UpgradeType,
     eth_signature_key::BuilderSignature,
     v0::{
         header::{EitherOrVersion, VersionedHeader},
-        impls::reward::{find_validator_info, first_two_epochs, RewardDistributor},
+        impls::reward::{RewardDistributor, find_validator_info, first_two_epochs},
     },
-    v0_1, v0_2, v0_3, v0_4, BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
-    FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable,
-    PayloadByteLen, SeqTypes, TimestampMillis, UpgradeType,
+    v0_1, v0_2, v0_3, v0_4,
 };
 
 impl v0_1::Header {
@@ -451,14 +452,18 @@ impl Header {
         if let Some(l1_block) = &l1.finalized {
             let l1_timestamp = l1_block.timestamp.to::<u64>();
             if timestamp < l1_timestamp {
-                tracing::warn!("Espresso timestamp {timestamp} behind L1 timestamp {l1_timestamp}, local clock may be out of sync");
+                tracing::warn!(
+                    "Espresso timestamp {timestamp} behind L1 timestamp {l1_timestamp}, local clock may be out of sync"
+                );
                 timestamp = l1_timestamp;
             }
 
             let l1_timestamp_millis = l1_timestamp * 1_000;
 
             if timestamp_millis < l1_timestamp_millis {
-                tracing::warn!("Espresso timestamp_millis {timestamp_millis} behind L1 timestamp {l1_timestamp_millis}, local clock may be out of sync");
+                tracing::warn!(
+                    "Espresso timestamp_millis {timestamp_millis} behind L1 timestamp {l1_timestamp_millis}, local clock may be out of sync"
+                );
                 timestamp_millis = l1_timestamp_millis;
             }
         }
@@ -1149,14 +1154,14 @@ mod test_headers {
     use hotshot_types::traits::signature_key::BuilderSignatureKey;
     use sequencer_utils::test_utils::setup_test;
     use v0_1::{BlockMerkleTree, FeeMerkleTree, L1Client};
-    use vbs::{bincode_serializer::BincodeSerializer, version::StaticVersion, BinarySerializer};
+    use vbs::{BinarySerializer, bincode_serializer::BincodeSerializer, version::StaticVersion};
 
     use super::*;
     use crate::{
+        Leaf,
         eth_signature_key::EthKeyPair,
         mock::MockStateCatchup,
         v0_1::{RewardInfo, RewardMerkleTree},
-        Leaf,
     };
 
     #[derive(Debug, Default)]
@@ -1578,9 +1583,10 @@ mod test_headers {
 
         let key = FeeAccount::generated_from_seed_indexed([0; 32], 0).1;
         let signature = FeeAccount::sign_builder_message(&key, &commitment).unwrap();
-        assert!(key
-            .fee_account()
-            .validate_builder_signature(&signature, &commitment));
+        assert!(
+            key.fee_account()
+                .validate_builder_signature(&signature, &commitment)
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

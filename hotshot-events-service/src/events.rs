@@ -6,7 +6,7 @@ use futures::{FutureExt, StreamExt, TryFutureExt};
 use hotshot_types::traits::node_implementation::NodeType;
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
-use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, StatusCode};
+use tide_disco::{Api, RequestError, StatusCode, api::ApiError, method::ReadState};
 use vbs::version::StaticVersionType;
 
 use crate::{api::load_api, events_source::EventsSource};

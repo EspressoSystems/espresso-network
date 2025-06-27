@@ -8,7 +8,7 @@ use std::{collections::HashSet, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use async_lock::RwLock;
 use hotshot_types::traits::node_implementation::NodeType;
-use libp2p::{identity::Keypair, Multiaddr};
+use libp2p::{Multiaddr, identity::Keypair};
 use libp2p_identity::PeerId;
 
 use super::MAX_GOSSIP_MSG_SIZE;

@@ -28,17 +28,17 @@ use snafu::OptionExt;
 use sqlx::Row;
 
 use super::{
-    super::transaction::{query, query_as, Transaction, TransactionMode, Write},
-    parse_header, DecodeError, QueryBuilder, HEADER_COLUMNS,
+    super::transaction::{Transaction, TransactionMode, Write, query, query_as},
+    DecodeError, HEADER_COLUMNS, QueryBuilder, parse_header,
 };
 use crate::{
+    Header, MissingSnafu, NotFoundSnafu, QueryError, QueryResult,
     availability::{NamespaceId, QueryableHeader},
     data_source::storage::{
         Aggregate, AggregatesStorage, NodeStorage, PayloadMetadata, UpdateAggregatesStorage,
     },
     node::{BlockId, SyncStatus, TimeWindowQueryData, WindowStart},
     types::HeightIndexed,
-    Header, MissingSnafu, NotFoundSnafu, QueryError, QueryResult,
 };
 
 #[async_trait]

@@ -7,7 +7,7 @@ use std::{cell::LazyCell, sync::Arc, time::Duration};
 use async_broadcast::Sender;
 use committable::Commitment;
 use hotshot::{
-    rand::{thread_rng, Rng},
+    rand::{Rng, thread_rng},
     types::{BLSPubKey, Event, EventType, SignatureKey},
 };
 use hotshot_builder_api::v0_1::{

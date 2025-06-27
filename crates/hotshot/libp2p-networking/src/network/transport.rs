@@ -6,18 +6,18 @@ use std::{
     task::Poll,
 };
 
-use anyhow::{ensure, Context, Result as AnyhowResult};
+use anyhow::{Context, Result as AnyhowResult, ensure};
 use bimap::BiMap;
-use futures::{future::poll_fn, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, future::poll_fn};
 use hotshot_types::traits::signature_key::SignatureKey;
 use libp2p::{
+    Transport,
     core::{
+        StreamMuxer,
         muxing::StreamMuxerExt,
         transport::{DialOpts, TransportEvent},
-        StreamMuxer,
     },
     identity::PeerId,
-    Transport,
 };
 use parking_lot::Mutex;
 use pin_project::pin_project;
@@ -152,7 +152,6 @@ impl<T: Transport, S: SignatureKey + 'static, C: StreamMuxer + Unpin>
     where
         T::Error: From<<C as StreamMuxer>::Error> + From<IoError>,
         T::Output: AsOutput<C> + Send,
-
         C::Substream: Unpin + Send,
     {
         // Create a new upgrade that performs the authentication handshake on top
@@ -300,7 +299,6 @@ where
     T::ListenerUpgrade: Send + 'static,
     T::Output: AsOutput<C> + Send,
     T::Error: From<<C as StreamMuxer>::Error> + From<IoError>,
-
     C::Substream: Unpin + Send,
 {
     // `Dial` is for connecting out, `ListenerUpgrade` is for accepting incoming connections

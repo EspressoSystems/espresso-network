@@ -1,6 +1,6 @@
 use std::cmp::min;
 
-use anyhow::{ensure, Context};
+use anyhow::{Context, ensure};
 use clap::Parser;
 use espresso_types::{Header, NamespaceId, NamespaceProofQueryData};
 use futures::{future::try_join_all, stream::StreamExt};

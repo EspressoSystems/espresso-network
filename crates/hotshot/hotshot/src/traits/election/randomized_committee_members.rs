@@ -10,6 +10,7 @@ use std::{
 
 use alloy::primitives::U256;
 use hotshot_types::{
+    PeerConfig,
     drb::DrbResult,
     stake_table::HSStakeTable,
     traits::{
@@ -17,10 +18,9 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeType},
         signature_key::{SignatureKey, StakeTableEntryType},
     },
-    PeerConfig,
 };
 use hotshot_utils::anytrace::Result;
-use rand::{rngs::StdRng, Rng};
+use rand::{Rng, rngs::StdRng};
 use tracing::error;
 
 use crate::traits::election::helpers::QuorumFilterConfig;
@@ -388,7 +388,10 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig, DaConfig: QuorumFilterConfig> 
 
             let res = leader_vec[index].clone();
 
-            tracing::debug!("RandomizedCommitteeMembers lookup_leader, view_number: {view_number}, epoch: {epoch}, leader: {}", res.0);
+            tracing::debug!(
+                "RandomizedCommitteeMembers lookup_leader, view_number: {view_number}, epoch: {epoch}, leader: {}",
+                res.0
+            );
 
             Ok(TYPES::SignatureKey::public_key(&res.1.stake_table_entry))
         } else {

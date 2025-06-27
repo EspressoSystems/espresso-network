@@ -30,16 +30,16 @@ use hotshot_types::{
     simple_vote::HasEpoch,
     stake_table::StakeTableEntries,
     traits::{
+        BlockPayload, ValidatedState,
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
         signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
-        storage::{load_drb_progress_fn, store_drb_progress_fn, Storage},
-        BlockPayload, ValidatedState,
+        storage::{Storage, load_drb_progress_fn, store_drb_progress_fn},
     },
     utils::{
-        epoch_from_block_number, is_epoch_root, is_epoch_transition, is_transition_block,
-        option_epoch_from_block_number, Terminator, View, ViewInner,
+        Terminator, View, ViewInner, epoch_from_block_number, is_epoch_root, is_epoch_transition,
+        is_transition_block, option_epoch_from_block_number,
     },
     vote::{Certificate, HasViewNumber},
 };
@@ -764,7 +764,10 @@ pub(crate) async fn update_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>
                 .update_state_cert(state_cert.clone())
                 .await
             {
-                bail!("Failed to store the light client state update certificate, not voting; error = {:?}", e);
+                bail!(
+                    "Failed to store the light client state update certificate, not voting; error = {:?}",
+                    e
+                );
             }
             validation_info
                 .consensus
@@ -843,9 +846,9 @@ pub(crate) async fn validate_epoch_transition_qc<
     if is_transition_block(qc_block_number, validation_info.epoch_height) {
         // Height is epoch height - 2
         ensure!(
-            transition_qc(validation_info).await.is_none_or(
-                |(qc, _)| qc.view_number() <= proposed_qc.view_number()
-            ),
+            transition_qc(validation_info)
+                .await
+                .is_none_or(|(qc, _)| qc.view_number() <= proposed_qc.view_number()),
             "Proposed transition qc must have view number greater than or equal to previous transition QC"
         );
 
@@ -871,7 +874,9 @@ pub(crate) async fn validate_epoch_transition_qc<
         );
         ensure!(
             proposed_qc.view_number() + 1 == proposal.data.view_number()
-            || transition_qc(validation_info).await.is_some_and(|(qc, _)| &qc == proposed_qc),
+                || transition_qc(validation_info)
+                    .await
+                    .is_some_and(|(qc, _)| &qc == proposed_qc),
             "Transition proposals must extend the previous view directly, or extend the previous transition block"
         );
     }
@@ -984,7 +989,9 @@ pub async fn validate_proposal_safety_and_liveness<
             proposal_epoch == justify_qc_epoch
                 || consensus_reader.check_eqc(&proposed_leaf, &parent_leaf),
             {
-                error!("Failed epoch safety check \n Proposed leaf is {proposed_leaf:?} \n justify QC leaf is {parent_leaf:?}")
+                error!(
+                    "Failed epoch safety check \n Proposed leaf is {proposed_leaf:?} \n justify QC leaf is {parent_leaf:?}"
+                )
             }
         );
 
@@ -995,8 +1002,10 @@ pub async fn validate_proposal_safety_and_liveness<
                 .epochs_enabled(view_number)
                 .await
         {
-            ensure!(proposal.data.next_epoch_justify_qc().is_some(),
-            "Epoch transition proposal does not include the next epoch justify QC. Do not vote!");
+            ensure!(
+                proposal.data.next_epoch_justify_qc().is_some(),
+                "Epoch transition proposal does not include the next epoch justify QC. Do not vote!"
+            );
         }
 
         // Liveness check.
@@ -1029,7 +1038,12 @@ pub async fn validate_proposal_safety_and_liveness<
                 .await;
             }
 
-            error!("Failed safety and liveness check \n High QC is {:?}  Proposal QC is {:?}  Locked view is {:?}", consensus_reader.high_qc(), proposal.data, consensus_reader.locked_view())
+            error!(
+                "Failed safety and liveness check \n High QC is {:?}  Proposal QC is {:?}  Locked view is {:?}",
+                consensus_reader.high_qc(),
+                proposal.data,
+                consensus_reader.locked_view()
+            )
         });
     }
 
@@ -1366,7 +1380,9 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
     };
     let HotShotEvent::VidShareValidated(second_vid_share) = event.as_ref() else {
         // this shouldn't happen
-        return Err(warn!("Received event is not VidShareValidated but we checked it earlier. Shouldn't be possible."));
+        return Err(warn!(
+            "Received event is not VidShareValidated but we checked it earlier. Shouldn't be possible."
+        ));
     };
     Ok(second_vid_share.clone())
 }

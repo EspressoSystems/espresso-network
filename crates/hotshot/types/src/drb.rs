@@ -11,12 +11,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
+    HotShotConfig,
     message::UpgradeLock,
     traits::{
         node_implementation::{ConsensusTime, NodeType, Versions},
         storage::{LoadDrbProgressFn, StoreDrbProgressFn},
     },
-    HotShotConfig,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

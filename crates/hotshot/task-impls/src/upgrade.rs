@@ -23,7 +23,7 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::SignatureKey,
     },
-    utils::{epoch_from_block_number, EpochTransitionIndicator},
+    utils::{EpochTransitionIndicator, epoch_from_block_number},
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
@@ -33,7 +33,7 @@ use vbs::version::StaticVersionType;
 use crate::{
     events::HotShotEvent,
     helpers::broadcast_event,
-    vote_collection::{handle_vote, VoteCollectorsMap},
+    vote_collection::{VoteCollectorsMap, handle_vote},
 };
 
 /// Tracks state of an upgrade task
@@ -166,8 +166,12 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                     let Some((_, last_proposal)) =
                         consensus_reader.last_proposals().last_key_value()
                     else {
-                        tracing::error!("No recent quorum proposals in consensus state -- skipping upgrade proposal vote.");
-                        return Err(error!("No recent quorum proposals in consensus state -- skipping upgrade proposal vote."));
+                        tracing::error!(
+                            "No recent quorum proposals in consensus state -- skipping upgrade proposal vote."
+                        );
+                        return Err(error!(
+                            "No recent quorum proposals in consensus state -- skipping upgrade proposal vote."
+                        ));
                     };
 
                     let last_proposal_view: u64 = *last_proposal.data.view_number();
@@ -216,10 +220,11 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                 // cause an overflow error.
                 // TODO Come back to this - we probably don't need this, but we should also never receive a UpgradeCertificate where this fails, investigate block ready so it doesn't make one for the genesis block
                 ensure!(
-                    self.cur_view != TYPES::View::genesis() && *view >= self.cur_view.saturating_sub(1),
+                    self.cur_view != TYPES::View::genesis()
+                        && *view >= self.cur_view.saturating_sub(1),
                     warn!(
-                      "Discarding old upgrade proposal; the proposal is for view {view}, but the current view is {}.",
-                      self.cur_view
+                        "Discarding old upgrade proposal; the proposal is for view {view}, but the current view is {}.",
+                        self.cur_view
                     )
                 );
 
@@ -233,7 +238,8 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                 ensure!(
                     view_leader_key == *sender,
                     info!(
-                        "Upgrade proposal doesn't have expected leader key for view {} \n Upgrade proposal is: {:?}", *view, proposal.data
+                        "Upgrade proposal doesn't have expected leader key for view {} \n Upgrade proposal is: {:?}",
+                        *view, proposal.data
                     )
                 );
 
@@ -333,8 +339,12 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                     let Some((_, last_proposal)) =
                         consensus_reader.last_proposals().last_key_value()
                     else {
-                        tracing::error!("No recent quorum proposals in consensus state -- skipping upgrade proposal.");
-                        return Err(error!("No recent quorum proposals in consensus state -- skipping upgrade proposal."));
+                        tracing::error!(
+                            "No recent quorum proposals in consensus state -- skipping upgrade proposal."
+                        );
+                        return Err(error!(
+                            "No recent quorum proposals in consensus state -- skipping upgrade proposal."
+                        ));
                     };
 
                     let last_proposal_view: u64 = *last_proposal.data.view_number();

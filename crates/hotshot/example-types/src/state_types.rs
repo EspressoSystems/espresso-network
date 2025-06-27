@@ -10,12 +10,12 @@ use std::fmt::Debug;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use hotshot_types::{
-    data::{fake_commitment, BlockError, Leaf2, ViewNumber},
+    data::{BlockError, Leaf2, ViewNumber, fake_commitment},
     traits::{
+        BlockPayload,
         block_contents::BlockHeader,
         node_implementation::NodeType,
         states::{InstanceState, StateDelta, TestableState, ValidatedState},
-        BlockPayload,
     },
 };
 use rand::Rng;

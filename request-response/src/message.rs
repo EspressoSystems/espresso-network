@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use hotshot_types::traits::signature_key::SignatureKey;
 
-use super::{request::Request, RequestHash, Serializable};
+use super::{RequestHash, Serializable, request::Request};
 
 /// The outer message type for the request-response protocol. Can either be a request or a response
 #[derive(Clone, Debug)]

@@ -863,10 +863,10 @@ pub mod ERC1967Proxy {
     /// Instantiation and getters/setters.
     #[automatically_derived]
     impl<
-            T: alloy_contract::private::Transport + ::core::clone::Clone,
-            P: alloy_contract::private::Provider<T, N>,
-            N: alloy_contract::private::Network,
-        > ERC1967ProxyInstance<T, P, N>
+        T: alloy_contract::private::Transport + ::core::clone::Clone,
+        P: alloy_contract::private::Provider<T, N>,
+        N: alloy_contract::private::Network,
+    > ERC1967ProxyInstance<T, P, N>
     {
         /**Creates a new wrapper around an on-chain [`ERC1967Proxy`](self) contract instance.
 
@@ -953,10 +953,10 @@ pub mod ERC1967Proxy {
     /// Function calls.
     #[automatically_derived]
     impl<
-            T: alloy_contract::private::Transport + ::core::clone::Clone,
-            P: alloy_contract::private::Provider<T, N>,
-            N: alloy_contract::private::Network,
-        > ERC1967ProxyInstance<T, P, N>
+        T: alloy_contract::private::Transport + ::core::clone::Clone,
+        P: alloy_contract::private::Provider<T, N>,
+        N: alloy_contract::private::Network,
+    > ERC1967ProxyInstance<T, P, N>
     {
         /// Creates a new call builder using this contract instance's provider and address.
         ///
@@ -972,10 +972,10 @@ pub mod ERC1967Proxy {
     /// Event filters.
     #[automatically_derived]
     impl<
-            T: alloy_contract::private::Transport + ::core::clone::Clone,
-            P: alloy_contract::private::Provider<T, N>,
-            N: alloy_contract::private::Network,
-        > ERC1967ProxyInstance<T, P, N>
+        T: alloy_contract::private::Transport + ::core::clone::Clone,
+        P: alloy_contract::private::Provider<T, N>,
+        N: alloy_contract::private::Network,
+    > ERC1967ProxyInstance<T, P, N>
     {
         /// Creates a new event filter using this contract instance's provider and address.
         ///

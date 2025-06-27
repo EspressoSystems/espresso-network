@@ -7,8 +7,8 @@ use hotshot_types::{
 use vid::avid_m::namespaced::NsAvidMScheme;
 
 use crate::{
-    v0_3::{AvidMNsProof, AvidMNsProofV1},
     NamespaceId, NsIndex, NsPayload, NsTable, Payload, Transaction,
+    v0_3::{AvidMNsProof, AvidMNsProofV1},
 };
 
 impl AvidMNsProof {
@@ -198,7 +198,7 @@ mod tests {
         vid::avidm::{AvidMParam, AvidMScheme},
     };
 
-    use crate::{v0::impls::block::test::ValidTest, v0_3::AvidMNsProof, NsIndex, Payload};
+    use crate::{NsIndex, Payload, v0::impls::block::test::ValidTest, v0_3::AvidMNsProof};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn ns_proof() {
@@ -293,14 +293,18 @@ mod tests {
         // mix and match ns_table, vid_commit, vid_common
         {
             // wrong vid commitment
-            assert!(ns_proof_0_0
-                .verify(ns_table_0, vid_commit_1, &param)
-                .is_none());
+            assert!(
+                ns_proof_0_0
+                    .verify(ns_table_0, vid_commit_1, &param)
+                    .is_none()
+            );
 
             // wrong ns_proof
-            assert!(ns_proof_0_0
-                .verify(ns_table_1, vid_commit_1, &param)
-                .is_none());
+            assert!(
+                ns_proof_0_0
+                    .verify(ns_table_1, vid_commit_1, &param)
+                    .is_none()
+            );
         }
     }
 }
