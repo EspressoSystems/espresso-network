@@ -842,6 +842,14 @@ impl TestNetwork {
             .blocks_per_epoch(blocks_per_epoch.unwrap())
             .epoch_start_block(epoch_start_block.unwrap())
             .multisig_pauser(signer.address())
+            .ops_timelock_delay(U256::from(0))
+            .ops_timelock_admin(signer.address())
+            .ops_timelock_proposers(vec![signer.address()])
+            .ops_timelock_executors(vec![signer.address()])
+            .safe_exit_timelock_delay(U256::from(10))
+            .safe_exit_timelock_admin(signer.address())
+            .safe_exit_timelock_proposers(vec![signer.address()])
+            .safe_exit_timelock_executors(vec![signer.address()])
             .build()
             .unwrap();
 

@@ -62,13 +62,21 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     #[builder(default)]
     token_symbol: Option<String>,
     #[builder(default)]
-    timelock_admin: Option<Address>,
+    ops_timelock_admin: Option<Address>,
     #[builder(default)]
-    timelock_delay: Option<U256>,
+    ops_timelock_delay: Option<U256>,
     #[builder(default)]
-    timelock_executors: Option<Vec<Address>>,
+    ops_timelock_executors: Option<Vec<Address>>,
     #[builder(default)]
-    timelock_proposers: Option<Vec<Address>>,
+    ops_timelock_proposers: Option<Vec<Address>>,
+    #[builder(default)]
+    safe_exit_timelock_admin: Option<Address>,
+    #[builder(default)]
+    safe_exit_timelock_delay: Option<U256>,
+    #[builder(default)]
+    safe_exit_timelock_executors: Option<Vec<Address>>,
+    #[builder(default)]
+    safe_exit_timelock_proposers: Option<Vec<Address>>,
 }
 
 impl<P: Provider + WalletProvider> DeployerArgs<P> {
@@ -274,28 +282,53 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     }
                 }
             },
-            Contract::Timelock => {
-                let timelock_delay = self
-                    .timelock_delay
-                    .context("Timelock delay must be set when deploying Timelock")?;
-                let timelock_proposers = self
-                    .timelock_proposers
+            Contract::OpsTimelock => {
+                let ops_timelock_delay = self
+                    .ops_timelock_delay
+                    .context("Ops Timelock delay must be set when deploying Ops Timelock")?;
+                let ops_timelock_proposers = self
+                    .ops_timelock_proposers
                     .clone()
-                    .context("Timelock proposers must be set when deploying Timelock")?;
-                let timelock_executors = self
-                    .timelock_executors
+                    .context("Ops Timelock proposers must be set when deploying Ops Timelock")?;
+                let ops_timelock_executors = self
+                    .ops_timelock_executors
                     .clone()
-                    .context("Timelock executors must be set when deploying Timelock")?;
-                let timelock_admin = self
-                    .timelock_admin
-                    .context("Timelock admin must be set when deploying Timelock")?;
-                crate::deploy_timelock(
+                    .context("Ops Timelock executors must be set when deploying Ops Timelock")?;
+                let ops_timelock_admin = self
+                    .ops_timelock_admin
+                    .context("Ops Timelock admin must be set when deploying Ops Timelock")?;
+                crate::deploy_ops_timelock(
                     provider,
                     contracts,
-                    timelock_delay,
-                    timelock_proposers,
-                    timelock_executors,
-                    timelock_admin,
+                    ops_timelock_delay,
+                    ops_timelock_proposers,
+                    ops_timelock_executors,
+                    ops_timelock_admin,
+                )
+                .await?;
+            },
+            Contract::SafeExitTimelock => {
+                let safe_exit_timelock_delay = self.safe_exit_timelock_delay.context(
+                    "SafeExitTimelock delay must be set when deploying SafeExitTimelock",
+                )?;
+                let safe_exit_timelock_proposers =
+                    self.safe_exit_timelock_proposers.clone().context(
+                        "SafeExitTimelock proposers must be set when deploying SafeExitTimelock",
+                    )?;
+                let safe_exit_timelock_executors =
+                    self.safe_exit_timelock_executors.clone().context(
+                        "SafeExitTimelock executors must be set when deploying SafeExitTimelock",
+                    )?;
+                let safe_exit_timelock_admin = self.safe_exit_timelock_admin.context(
+                    "SafeExitTimelock admin must be set when deploying SafeExitTimelock",
+                )?;
+                crate::deploy_safe_exit_timelock(
+                    provider,
+                    contracts,
+                    safe_exit_timelock_delay,
+                    safe_exit_timelock_proposers,
+                    safe_exit_timelock_executors,
+                    safe_exit_timelock_admin,
                 )
                 .await?;
             },
@@ -313,6 +346,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         self.deploy(contracts, Contract::LightClientProxy).await?;
         self.deploy(contracts, Contract::LightClientV2).await?;
         self.deploy(contracts, Contract::StakeTableProxy).await?;
+        self.deploy(contracts, Contract::OpsTimelock).await?;
+        self.deploy(contracts, Contract::SafeExitTimelock).await?;
         Ok(())
     }
 
