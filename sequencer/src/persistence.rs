@@ -381,7 +381,7 @@ mod tests {
             storage
                 .store_drb_result(epoch, drb)
                 .await
-                .unwrap_or_else(|_| panic!("Failed to store DRB result for epoch {}", i));
+                .unwrap_or_else(|_| panic!("Failed to store DRB result for epoch {i}"));
         }
 
         let results = storage.load_start_epoch_info().await.unwrap();

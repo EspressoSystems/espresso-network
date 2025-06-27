@@ -2555,7 +2555,7 @@ mod test {
 
         let db = TmpDb::init().await;
         let provider = Provider::new(QueryServiceProvider::new(
-            format!("http://localhost:{}/v0", port).parse().unwrap(),
+            format!("http://localhost:{port}/v0").parse().unwrap(),
             StaticVersion::<0, 1> {},
         ));
         let ds = data_source(&db, &provider).await;

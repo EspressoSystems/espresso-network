@@ -115,7 +115,7 @@ mod test {
             let dep = eq_dep(
                 rx.clone(),
                 cancel_rx.clone(),
-                format!("many_works {}", i),
+                format!("many_works {i}"),
                 i,
             );
             let handle = DummyHandle {

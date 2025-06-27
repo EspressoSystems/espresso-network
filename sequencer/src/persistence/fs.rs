@@ -1351,8 +1351,7 @@ impl SequencerPersistence for Persistence {
         let file_path = path.join(epoch.to_string()).with_extension("bin");
         let bytes = fs::read(&file_path).context("read")?;
         Ok(bincode::deserialize(&bytes).context(format!(
-            "failed to deserialize DrbInput for epoch {}",
-            epoch
+            "failed to deserialize DrbInput for epoch {epoch}"
         ))?)
     }
 
@@ -1604,7 +1603,7 @@ impl MembershipPersistence for Persistence {
         for (event_key, event) in events {
             let (block_number, event_index) = event_key;
             // file name is like block_index.json
-            let filename = format!("{}_{}", block_number, event_index);
+            let filename = format!("{block_number}_{event_index}");
             let file_path = events_dir.join(filename).with_extension("json");
 
             if file_path.exists() {

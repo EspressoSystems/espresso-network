@@ -438,7 +438,7 @@ pub mod testing {
                 tracing::info!("Received txn submitted response : {:?}", response);
             },
             Err(e) => {
-                panic!("Error submitting private transaction {:?}", e);
+                panic!("Error submitting private transaction {e:?}");
             },
         }
 
@@ -498,7 +498,7 @@ pub mod testing {
                     response
                 }
                 Err(e) => {
-                    panic!("Error while claiming block {:?}", e);
+                    panic!("Error while claiming block {e:?}");
                 }
             };
 
@@ -523,7 +523,7 @@ pub mod testing {
                     response
                 }
                 Err(e) => {
-                    panic!("Error getting claiming block header {:?}", e);
+                    panic!("Error getting claiming block header {e:?}");
                 }
             };
 
@@ -538,7 +538,7 @@ pub mod testing {
                 assert_eq!(response, builder_pub_key);
             },
             Err(e) => {
-                panic!("Error getting builder key {:?}", e);
+                panic!("Error getting builder key {e:?}");
             },
         }
     }
