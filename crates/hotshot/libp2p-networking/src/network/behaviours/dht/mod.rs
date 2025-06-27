@@ -322,43 +322,42 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                 }
 
                 // Find the record with the highest expiry
-                match records.into_iter().max_by_key(|r| r.expires.unwrap()) {
-                    Some(record) => {
-                        // Only return the record if we can store it (validation passed)
-                        if store.put(record.clone()).is_ok() {
-                            // Send the record to all channels that are still open
-                            for n in notify {
-                                if n.send(record.value.clone()).is_err() {
-                                    warn!(
-                                        "Get DHT: channel closed before get record request result could be sent"
-                                    );
-                                }
+                if let Some(record) = records.into_iter().max_by_key(|r| r.expires.unwrap()) {
+                    // Only return the record if we can store it (validation passed)
+                    if store.put(record.clone()).is_ok() {
+                        // Send the record to all channels that are still open
+                        for n in notify {
+                            if n.send(record.value.clone()).is_err() {
+                                warn!(
+                                    "Get DHT: channel closed before get record request result could be sent"
+                                );
                             }
-                        } else {
-                            error!("Failed to store record in local store");
                         }
-                    },
-                    _ => {
-                        // there is some internal disagreement or not enough nodes returned
-                        // Initiate new query that hits more replicas
-                        if retry_count > 0 {
-                            let new_retry_count = retry_count - 1;
-                            warn!(
-                                "Get DHT: Internal disagreement for get dht request {progress:?}! requerying with more nodes. {new_retry_count:?} retries left"
-                            );
-                            self.retry_get(KadGetQuery {
-                                backoff,
-                                progress: DHTProgress::NotStarted,
-                                notify,
-                                key,
-                                retry_count: new_retry_count,
-                                records: Vec::new(),
-                            });
-                        }
+                    } else {
+                        error!("Failed to store record in local store");
+                    }
+                }
+                // disagreement => query more nodes
+                else {
+                    // there is some internal disagreement or not enough nodes returned
+                    // Initiate new query that hits more replicas
+                    if retry_count > 0 {
+                        let new_retry_count = retry_count - 1;
                         warn!(
-                            "Get DHT: Internal disagreement for get dht request {progress:?}! Giving up because out of retries. "
+                            "Get DHT: Internal disagreement for get dht request {progress:?}! requerying with more nodes. {new_retry_count:?} retries left"
                         );
-                    },
+                        self.retry_get(KadGetQuery {
+                            backoff,
+                            progress: DHTProgress::NotStarted,
+                            notify,
+                            key,
+                            retry_count: new_retry_count,
+                            records: Vec::new(),
+                        });
+                    }
+                    warn!(
+                        "Get DHT: Internal disagreement for get dht request {progress:?}! Giving up because out of retries. "
+                    );
                 }
             }
         }
