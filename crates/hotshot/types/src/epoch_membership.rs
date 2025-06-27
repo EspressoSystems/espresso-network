@@ -231,27 +231,24 @@ where
                 }
                 // Lock the catchup map
                 let mut map_lock = self.catchup_map.lock().await;
-                match map_lock
+                if let Some(mut rx) = map_lock
                     .get(&try_epoch)
                     .map(InactiveReceiver::activate_cloned)
                 {
-                    Some(mut rx) => {
-                        // Somebody else is already fetching this epoch, drop the lock and wait for them to finish
-                        drop(map_lock);
-                        if let Ok(Ok(_)) = rx.recv_direct().await {
-                            break;
-                        };
-                        // If we didn't receive the epoch then we need to try again
-                    },
-                    _ => {
-                        // Nobody else is fetching this epoch. We need to do it. Put it in the map and move on to the next epoch
-                        let (mut tx, rx) = broadcast(1);
-                        tx.set_overflow(true);
-                        map_lock.insert(try_epoch, rx.deactivate());
-                        drop(map_lock);
-                        fetch_epochs.push((try_epoch, tx));
-                        try_epoch = TYPES::Epoch::new(try_epoch.saturating_sub(1));
-                    },
+                    // Somebody else is already fetching this epoch, drop the lock and wait for them to finish
+                    drop(map_lock);
+                    if let Ok(Ok(_)) = rx.recv_direct().await {
+                        break;
+                    };
+                    // If we didn't receive the epoch then we need to try again
+                } else {
+                    // Nobody else is fetching this epoch. We need to do it. Put it in the map and move on to the next epoch
+                    let (mut tx, rx) = broadcast(1);
+                    tx.set_overflow(true);
+                    map_lock.insert(try_epoch, rx.deactivate());
+                    drop(map_lock);
+                    fetch_epochs.push((try_epoch, tx));
+                    try_epoch = TYPES::Epoch::new(try_epoch.saturating_sub(1));
                 }
             };
         }

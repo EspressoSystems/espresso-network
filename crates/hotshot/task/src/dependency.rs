@@ -88,18 +88,12 @@ impl<T: Clone + Send + Sync> Dependency<T> for OrDependency<T> {
     /// Returns the value of the first completed dependency
     async fn completed(self) -> Option<T> {
         let mut futures = FuturesUnordered::from_iter(self.deps);
-        loop {
-            match futures.next().await {
-                Some(maybe) => {
-                    if maybe.is_some() {
-                        return maybe;
-                    }
-                },
-                _ => {
-                    return None;
-                },
+        while let Some(maybe) = futures.next().await {
+            if let Some(value) = maybe {
+                return Some(value);
             }
         }
+        None
     }
 }
 

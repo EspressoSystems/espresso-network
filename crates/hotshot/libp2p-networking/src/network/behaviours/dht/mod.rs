@@ -366,37 +366,34 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
 
     /// Update state based on put query
     fn handle_put_query(&mut self, record_results: PutRecordResult, id: QueryId) {
-        match self.in_progress_put_record_queries.remove(&id) {
-            Some(mut query) => {
-                // dropped so we handle further
-                if query.notify.is_canceled() {
-                    return;
-                }
+        if let Some(mut query) = self.in_progress_put_record_queries.remove(&id) {
+            // dropped so we handle further
+            if query.notify.is_canceled() {
+                return;
+            }
 
-                match record_results {
-                    Ok(_) => {
-                        if query.notify.send(()).is_err() {
-                            warn!(
-                                "Put DHT: client channel closed before put record request could be sent"
-                            );
-                        }
-                    },
-                    Err(e) => {
-                        query.progress = DHTProgress::NotStarted;
-                        query.backoff.start_next(false);
-
+            match record_results {
+                Ok(_) => {
+                    if query.notify.send(()).is_err() {
                         warn!(
-                            "Put DHT: error performing put: {:?}. Retrying on pid {:?}.",
-                            e, self.peer_id
+                            "Put DHT: client channel closed before put record request could be sent"
                         );
-                        // push back onto the queue
-                        self.retry_put(query);
-                    },
-                }
-            },
-            _ => {
-                warn!("Put DHT: completed DHT query that is no longer tracked.");
-            },
+                    }
+                },
+                Err(e) => {
+                    query.progress = DHTProgress::NotStarted;
+                    query.backoff.start_next(false);
+
+                    warn!(
+                        "Put DHT: error performing put: {:?}. Retrying on pid {:?}.",
+                        e, self.peer_id
+                    );
+                    // push back onto the queue
+                    self.retry_put(query);
+                },
+            }
+        } else {
+            warn!("Put DHT: completed DHT query that is no longer tracked.");
         }
     }
 

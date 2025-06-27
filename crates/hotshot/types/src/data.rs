@@ -62,7 +62,7 @@ use crate::{
 /// Implements `ConsensusTime`, `Display`, `Add`, `AddAssign`, `Deref` and `Sub`
 /// for the given thing wrapper type around u64.
 macro_rules! impl_u64_wrapper {
-    ($t:ty, $genesis_val:expr_2021) => {
+    ($t:ty, $genesis_val:expr) => {
         impl ConsensusTime for $t {
             /// Create a genesis number
             fn genesis() -> Self {
