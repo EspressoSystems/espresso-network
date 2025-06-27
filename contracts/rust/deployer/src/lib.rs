@@ -1500,6 +1500,48 @@ pub async fn execute_timelock_operation(
     Ok(tx_id)
 }
 
+pub async fn cancel_timelock_operation_by_id(
+    provider: impl Provider,
+    timelock_addr: Address,
+    operation_id: B256,
+) -> Result<()> {
+    let timelock = Timelock::new(timelock_addr, &provider);
+    let pending_tx = timelock.cancel(operation_id).send().await?;
+    let tx_hash = *pending_tx.tx_hash();
+    tracing::info!(%tx_hash, "waiting for tx to be mined");
+    let receipt = pending_tx.get_receipt().await?;
+    tracing::info!(%receipt.gas_used, %tx_hash, "tx mined");
+    if !receipt.inner.is_success() {
+        anyhow::bail!("tx failed: {:?}", receipt);
+    }
+    if timelock.getTimestamp(operation_id).call().await?._0 != U256::ZERO {
+        anyhow::bail!("tx not correctly cancelled: {}", operation_id);
+    }
+    tracing::info!("tx cancelled with id: {}", operation_id);
+    Ok(())
+}
+
+pub async fn cancel_timelock_operation(
+    provider: impl Provider,
+    timelock_addr: Address,
+    operation: TimelockOperation,
+) -> Result<B256> {
+    let timelock = Timelock::new(timelock_addr, &provider);
+    let tx_id = timelock
+        .hashOperation(
+            operation.target,
+            operation.value,
+            operation.data.clone(),
+            operation.predecessor,
+            operation.salt,
+        )
+        .call()
+        .await?
+        ._0;
+    cancel_timelock_operation_by_id(provider, timelock_addr, tx_id).await?;
+    Ok(tx_id)
+}
+
 #[cfg(test)]
 mod tests {
     use alloy::{
@@ -2505,7 +2547,7 @@ mod tests {
             .to_owned();
 
         // propose a timelock operation
-        let operation = TimelockOperation {
+        let mut operation = TimelockOperation {
             target: fee_contract_proxy_addr,
             value: U256::ZERO,
             data: upgrade_data.into(),
@@ -2524,13 +2566,32 @@ mod tests {
         assert!(timelock.getTimestamp(tx_id).call().await?._0 > U256::ZERO);
 
         // execute the tx since the delay is 0
-        execute_timelock_operation(&provider, timelock_addr, operation).await?;
+        execute_timelock_operation(&provider, timelock_addr, operation.clone()).await?;
 
         // check that the tx is executed
         assert!(timelock.isOperationDone(tx_id).call().await?._0);
         assert!(!timelock.isOperationPending(tx_id).call().await?._0);
         assert!(!timelock.isOperationReady(tx_id).call().await?._0);
 
+        operation.value = U256::from(1);
+
+        schedule_timelock_operation(&provider, timelock_addr, operation.clone()).await?;
+
+        cancel_timelock_operation(&provider, timelock_addr, operation).await?;
+
+        // check that the tx is cancelled
+        let next_tx_id = timelock
+            .hashOperation(
+                operation.target,
+                operation.value,
+                operation.data.clone(),
+                operation.predecessor,
+                operation.salt,
+            )
+            .call()
+            .await?
+            ._0;
+        assert!(timelock.getTimestamp(next_tx_id).call().await?._0 == U256::ZERO);
         Ok(())
     }
 }
