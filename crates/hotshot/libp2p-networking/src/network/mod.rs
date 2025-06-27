@@ -177,7 +177,7 @@ pub async fn gen_transport<T: NodeType>(
         ConsensusKeyAuthentication::new(transport, auth_message, consensus_key_to_pid_map);
 
     // Support DNS resolution
-    let transport = { { DnsTransport::system(transport) } }
+    let transport = { DnsTransport::system(transport) }
         .map_err(|e| NetworkError::ConfigError(format!("failed to build DNS transport: {e}")))?;
 
     Ok(transport
