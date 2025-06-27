@@ -6,7 +6,12 @@
 # Usage: scripts/multisig-upgrade-entrypoint [args]
 #
 set -e
-docker_path=/app/contracts/script/multisigTransactionProposals/safeSDK/upgradeProxy.ts
+
+# Default script path
+DEFAULT_SCRIPT="upgradeProxy.ts"
+SCRIPT_NAME=${1:-$DEFAULT_SCRIPT}
+
+docker_path=/app/contracts/script/multisigTransactionProposals/safeSDK/$SCRIPT_NAME
 
 # 1. if the docker path exists use it
 # 2. get repo path if the docker path does not exist and use that
@@ -17,7 +22,7 @@ if [ -f "$docker_path" ]; then
     path=$docker_path
 else
     REPO_ROOT=$(git rev-parse --show-toplevel)
-    repo_path=$REPO_ROOT/contracts/script/multisigTransactionProposals/safeSDK/upgradeProxy.ts
+    repo_path=$REPO_ROOT/contracts/script/multisigTransactionProposals/safeSDK/$SCRIPT_NAME
     if [ -f "$repo_path" ]; then
         path=$repo_path
     else
