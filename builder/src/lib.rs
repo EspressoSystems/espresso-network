@@ -53,8 +53,8 @@ pub mod testing {
     use async_lock::RwLock;
     use committable::Committable;
     use espresso_types::{
-        traits::SequencerPersistence, v0_3::ChainConfig, Event, FeeAccount, NamespaceId, NodeState,
-        PrivKey, PubKey, Transaction, ValidatedState,
+        Event, FeeAccount, NamespaceId, NodeState, PrivKey, PubKey, Transaction, ValidatedState,
+        traits::SequencerPersistence, v0_3::ChainConfig,
     };
     use futures::stream::{Stream, StreamExt};
     use hotshot::{
@@ -73,6 +73,7 @@ pub mod testing {
         events_source::{EventConsumer, EventsStreamer},
     };
     use hotshot_types::{
+        HotShotConfig, PeerConfig, ValidatorConfig,
         data::{Leaf2, ViewNumber},
         event::LeafInfo,
         light_client::StateKeyPair,
@@ -81,9 +82,8 @@ pub mod testing {
             node_implementation::{ConsensusTime, NodeType, Versions},
             signature_key::BuilderSignatureKey as _,
         },
-        HotShotConfig, PeerConfig, ValidatorConfig,
     };
-    use sequencer::{context::Consensus, network, SequencerApiVersion};
+    use sequencer::{SequencerApiVersion, context::Consensus, network};
     use surf_disco::Client;
     use vbs::version::StaticVersion;
 
@@ -244,10 +244,7 @@ pub mod testing {
             let port = portpicker::pick_unused_port()
                 .expect("Could not find an open port for hotshot event streaming api");
 
-            let hotshot_events_streaming_api_url =
-                Url::parse(format!("http://localhost:{port}").as_str()).unwrap();
-
-            hotshot_events_streaming_api_url
+            Url::parse(format!("http://localhost:{port}").as_str()).unwrap()
         }
 
         // start the server for the hotshot event streaming api
@@ -407,10 +404,7 @@ pub mod testing {
         let port =
             portpicker::pick_unused_port().expect("Could not find an open port for builder api");
 
-        let hotshot_builder_api_url =
-            Url::parse(format!("http://localhost:{port}").as_str()).unwrap();
-
-        hotshot_builder_api_url
+        Url::parse(format!("http://localhost:{port}").as_str()).unwrap()
     }
 
     pub async fn test_builder_impl(
