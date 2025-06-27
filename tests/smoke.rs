@@ -15,7 +15,7 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
     let _ = testing.readiness().await?;
 
     let initial = testing.test_state().await;
-    println!("Initial State: {}", initial);
+    println!("Initial State: {initial}");
 
     let mut sub = testing
         .espresso
@@ -33,7 +33,7 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
         };
 
         let new = testing.test_state().await;
-        println!("New State:{}", new);
+        println!("New State:{new}");
 
         let num_new_tx = new.txn_count - old.txn_count;
         if num_new_tx == 0 {

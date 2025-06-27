@@ -127,7 +127,7 @@ pub fn build_sqlite_path(path: &str) -> anyhow::Result<PathBuf> {
     // if `sqlite` sub dir does not exist then create it
     if !sub_dir.exists() {
         std::fs::create_dir_all(&sub_dir)
-            .with_context(|| format!("failed to create directory: {:?}", sub_dir))?;
+            .with_context(|| format!("failed to create directory: {sub_dir:?}"))?;
     }
 
     Ok(sub_dir.join("database"))

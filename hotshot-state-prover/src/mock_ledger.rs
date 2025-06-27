@@ -216,7 +216,7 @@ impl MockLedger {
             let exit_qc_key = self.qc_keys[exit_idx];
 
             st_map.remove(&exit_qc_key).unwrap_or_else(|| {
-                panic!("failed to deregister {}-th key", exit_idx);
+                panic!("failed to deregister {exit_idx}-th key");
             });
             self.qc_keys.remove(exit_idx);
             self.state_keys.remove(exit_idx);

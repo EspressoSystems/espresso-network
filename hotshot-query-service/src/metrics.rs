@@ -173,8 +173,7 @@ impl tide_disco::metrics::Metrics for PrometheusMetrics {
         encoder.encode(&metric_families, &mut buffer)?;
         String::from_utf8(buffer).map_err(|err| MetricsError::Prometheus {
             source: prometheus::Error::Msg(format!(
-                "could not convert Prometheus output to UTF-8: {}",
-                err
+                "could not convert Prometheus output to UTF-8: {err}"
             )),
         })
     }

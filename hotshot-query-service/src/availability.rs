@@ -810,13 +810,13 @@ mod test {
         // Ignore the genesis block (start from height 1).
         for i in 1.. {
             match client
-                .get::<BlockQueryData<MockTypes>>(&format!("block/{}", i))
+                .get::<BlockQueryData<MockTypes>>(&format!("block/{i}"))
                 .send()
                 .await
             {
                 Ok(block) => {
                     if !block.is_empty() {
-                        let leaf = client.get(&format!("leaf/{}", i)).send().await.unwrap();
+                        let leaf = client.get(&format!("leaf/{i}")).send().await.unwrap();
                         blocks.push((leaf, block));
                     }
                 },
@@ -828,7 +828,7 @@ mod test {
                     );
                     return (i, blocks);
                 },
-                Err(err) => panic!("unexpected error {}", err),
+                Err(err) => panic!("unexpected error {err}"),
             }
         }
         unreachable!()
@@ -846,7 +846,7 @@ mod test {
 
             // Check that looking up the leaf various ways returns the correct leaf.
             let leaf: LeafQueryData<MockTypes> =
-                client.get(&format!("leaf/{}", i)).send().await.unwrap();
+                client.get(&format!("leaf/{i}")).send().await.unwrap();
             assert_eq!(leaf.height(), i);
             assert_eq!(
                 leaf,
@@ -859,7 +859,7 @@ mod test {
 
             // Check that looking up the block various ways returns the correct block.
             let block: BlockQueryData<MockTypes> =
-                client.get(&format!("block/{}", i)).send().await.unwrap();
+                client.get(&format!("block/{i}")).send().await.unwrap();
             let expected_payload = PayloadQueryData::from(block.clone());
             assert_eq!(leaf.block_hash(), block.hash());
             assert_eq!(block.height(), i);
@@ -914,7 +914,7 @@ mod test {
             );
 
             let block_summary = client
-                .get(&format!("block/summary/{}", i))
+                .get(&format!("block/summary/{i}"))
                 .send()
                 .await
                 .unwrap();
@@ -1076,12 +1076,12 @@ mod test {
         .unwrap();
         network.spawn(
             "server",
-            app.serve(format!("0.0.0.0:{}", port), MockBase::instance()),
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
         );
 
         // Start a client.
         let client = Client::<Error, MockBase>::new(
-            format!("http://localhost:{}/availability", port)
+            format!("http://localhost:{port}/availability")
                 .parse()
                 .unwrap(),
         );
@@ -1134,11 +1134,11 @@ mod test {
             };
             assert_eq!(
                 leaf,
-                client.get(&format!("leaf/{}", i)).send().await.unwrap()
+                client.get(&format!("leaf/{i}")).send().await.unwrap()
             );
             assert_eq!(
                 block,
-                client.get(&format!("block/{}", i)).send().await.unwrap()
+                client.get(&format!("block/{i}")).send().await.unwrap()
             );
             assert_eq!(
                 common,
@@ -1163,7 +1163,7 @@ mod test {
 
             // Check that looking up the leaf various ways returns the correct leaf.
             let leaf: Leaf1QueryData<MockTypes> =
-                client.get(&format!("leaf/{}", i)).send().await.unwrap();
+                client.get(&format!("leaf/{i}")).send().await.unwrap();
             assert_eq!(leaf.leaf.height(), i);
             assert_eq!(
                 leaf,
@@ -1179,7 +1179,7 @@ mod test {
 
             // Check that looking up the block various ways returns the correct block.
             let block: BlockQueryData<MockTypes> =
-                client.get(&format!("block/{}", i)).send().await.unwrap();
+                client.get(&format!("block/{i}")).send().await.unwrap();
             let expected_payload = PayloadQueryData::from(block.clone());
             assert_eq!(leaf.leaf.block_header().commit(), block.hash());
             assert_eq!(block.height(), i);
@@ -1237,7 +1237,7 @@ mod test {
             );
 
             let block_summary = client
-                .get(&format!("block/summary/{}", i))
+                .get(&format!("block/summary/{i}"))
                 .send()
                 .await
                 .unwrap();
@@ -1399,12 +1399,12 @@ mod test {
         .unwrap();
         network.spawn(
             "server",
-            app.serve(format!("0.0.0.0:{}", port), MockBase::instance()),
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
         );
 
         // Start a client.
         let client = Client::<Error, MockBase>::new(
-            format!("http://localhost:{}/availability", port)
+            format!("http://localhost:{port}/availability")
                 .parse()
                 .unwrap(),
         );
@@ -1430,7 +1430,7 @@ mod test {
 
         for epoch in 1..4 {
             let state_cert: StateCertQueryData<MockTypes> = client
-                .get(&format!("state-cert/{}", epoch))
+                .get(&format!("state-cert/{epoch}"))
                 .send()
                 .await
                 .unwrap();
@@ -1466,12 +1466,12 @@ mod test {
         .unwrap();
         network.spawn(
             "server",
-            app.serve(format!("0.0.0.0:{}", port), MockBase::instance()),
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
         );
 
         // Start a client.
         let client = Client::<Error, MockBase>::new(
-            format!("http://localhost:{}/availability", port)
+            format!("http://localhost:{port}/availability")
                 .parse()
                 .unwrap(),
         );
@@ -1524,11 +1524,11 @@ mod test {
             };
             assert_eq!(
                 leaf,
-                client.get(&format!("leaf/{}", i)).send().await.unwrap()
+                client.get(&format!("leaf/{i}")).send().await.unwrap()
             );
             assert_eq!(
                 block,
-                client.get(&format!("block/{}", i)).send().await.unwrap()
+                client.get(&format!("block/{i}")).send().await.unwrap()
             );
             assert_eq!(
                 common,
@@ -1619,11 +1619,11 @@ mod test {
         let port = pick_unused_port().unwrap();
         let _server = BackgroundTask::spawn(
             "server",
-            app.serve(format!("0.0.0.0:{}", port), MockBase::instance()),
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
         );
 
         let client = Client::<Error, MockBase>::new(
-            format!("http://localhost:{}/availability", port)
+            format!("http://localhost:{port}/availability")
                 .parse()
                 .unwrap(),
         );
@@ -1675,12 +1675,12 @@ mod test {
         .unwrap();
         network.spawn(
             "server",
-            app.serve(format!("0.0.0.0:{}", port), MockBase::instance()),
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
         );
 
         // Start a client.
         let client = Client::<Error, MockBase>::new(
-            format!("http://localhost:{}/availability", port)
+            format!("http://localhost:{port}/availability")
                 .parse()
                 .unwrap(),
         );
@@ -1763,7 +1763,7 @@ mod test {
         .unwrap();
         network.spawn(
             "server",
-            app.serve(format!("0.0.0.0:{}", port), MockBase::instance()),
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
         );
 
         let ds = network.data_source();
@@ -1805,12 +1805,12 @@ mod test {
         .unwrap();
         network.spawn(
             "server",
-            app.serve(format!("0.0.0.0:{}", port), MockBase::instance()),
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
         );
 
         // Start a client.
         let client = Client::<Error, MockBase>::new(
-            format!("http://localhost:{}/availability", port)
+            format!("http://localhost:{port}/availability")
                 .parse()
                 .unwrap(),
         );

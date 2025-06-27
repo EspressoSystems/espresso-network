@@ -102,7 +102,7 @@ impl fmt::Display for TestState {
             self.light_client_update
         );
 
-        write!(f, "{}", output)
+        write!(f, "{output}")
     }
 }
 
@@ -309,7 +309,7 @@ impl Drop for NativeDemo {
             .expect("process-compose runs")
             .wait()
             .unwrap();
-        println!("process-compose down exited with: {}", res);
+        println!("process-compose down exited with: {res}");
     }
 }
 
@@ -351,11 +351,11 @@ impl NativeDemo {
                 .to_string()
         });
 
-        println!("Writing native demo logs to file: {}", log_path);
+        println!("Writing native demo logs to file: {log_path}");
         let outputs = File::create(log_path).context("unable to create log file")?;
         cmd.stdout(outputs);
 
-        println!("Spawning: {:?}", cmd);
+        println!("Spawning: {cmd:?}");
         let mut child = cmd.spawn().context("failed to spawn command")?;
 
         // Wait for three seconds and check if process has already exited so we don't waste time

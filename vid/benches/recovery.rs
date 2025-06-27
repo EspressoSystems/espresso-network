@@ -23,8 +23,7 @@ fn verify_benchmark(c: &mut Criterion) {
             .unwrap();
             avidm_group.bench_function(
                 format!(
-                    "AvidMRecovery_({}, {})_{}",
-                    recovery_threshold, num_storage_nodes, payload_bytes_len
+                    "AvidMRecovery_({recovery_threshold}, {num_storage_nodes})_{payload_bytes_len}"
                 ),
                 |b| b.iter(|| AvidMScheme::recover(&param, &commit, &shares[..recovery_threshold])),
             );

@@ -59,11 +59,11 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::UnhandledSurfDisco(status, msg) => {
-                write!(f, "Unhandled Surf Disco Error: {} - {}", status, msg)
+                write!(f, "Unhandled Surf Disco Error: {status} - {msg}")
             },
 
             Self::UnhandledTideDisco(status, msg) => {
-                write!(f, "Unhandled Tide Disco Error: {} - {}", status, msg)
+                write!(f, "Unhandled Tide Disco Error: {status} - {msg}")
             },
         }
     }
@@ -387,9 +387,9 @@ pub enum GetNodeIdentityFromUrlError {
 impl std::fmt::Display for GetNodeIdentityFromUrlError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            GetNodeIdentityFromUrlError::Url(err) => write!(f, "url: {}", err),
-            GetNodeIdentityFromUrlError::Reqwest(err) => write!(f, "reqwest error: {}", err),
-            GetNodeIdentityFromUrlError::Io(err) => write!(f, "io error: {}", err),
+            GetNodeIdentityFromUrlError::Url(err) => write!(f, "url: {err}"),
+            GetNodeIdentityFromUrlError::Reqwest(err) => write!(f, "reqwest error: {err}"),
+            GetNodeIdentityFromUrlError::Io(err) => write!(f, "io error: {err}"),
             GetNodeIdentityFromUrlError::NoNodeIdentity => write!(f, "no node identity"),
         }
     }
@@ -490,7 +490,7 @@ impl SurfDiscoAvailabilityAPIPathResolver
     for SurfDiscoAvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>>
 {
     fn resolve_path_for_height(&self, height: u64) -> String {
-        format!("availability/stream/leaves/{}", height)
+        format!("availability/stream/leaves/{height}")
     }
 }
 
@@ -498,7 +498,7 @@ impl SurfDiscoAvailabilityAPIPathResolver
     for SurfDiscoAvailabilityAPIStream<'_, BlockQueryData<SeqTypes>>
 {
     fn resolve_path_for_height(&self, height: u64) -> String {
-        format!("availability/stream/blocks/{}", height)
+        format!("availability/stream/blocks/{height}")
     }
 }
 
@@ -711,8 +711,7 @@ where
                     MAX_STREAM_RECONNECT_ATTEMPTS
                 );
                 panic!(
-                    "unable to retrieve connection after {} attempts",
-                    MAX_STREAM_RECONNECT_ATTEMPTS
+                    "unable to retrieve connection after {MAX_STREAM_RECONNECT_ATTEMPTS} attempts"
                 );
             }
             .boxed(),
@@ -1147,8 +1146,7 @@ impl ProcessNodeIdentityUrlStreamTask {
                 // We will be unable to provide any additional node identity
                 // updates. This is considered a critical error.
                 panic!(
-                    "ProcessNodeIdentityUrlStreamTask node_identity_sender closed, future node identity information will stagnate: {}",
-                    err
+                    "ProcessNodeIdentityUrlStreamTask node_identity_sender closed, future node identity information will stagnate: {err}"
                 );
             }
         }
@@ -1255,7 +1253,7 @@ mod tests {
             Some("-74.0060")
         );
 
-        print!("{:?}", scrape);
+        print!("{scrape:?}");
     }
 
     #[test]

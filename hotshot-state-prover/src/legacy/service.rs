@@ -467,7 +467,7 @@ mod test {
         let genesis_state = LightClientStateSol::dummy_genesis();
         let genesis_stake = StakeTableStateSol::dummy_genesis();
 
-        println!("genesis_state: {:?}", genesis_state);
+        println!("genesis_state: {genesis_state:?}");
         let lc_proxy_addr = deploy(
             &provider,
             &mut contracts,
@@ -485,7 +485,7 @@ mod test {
         // then manually set the `finalizedState` (via mocked methods)
         let lc = LightClientMock::new(lc_proxy_addr, &provider);
         let new_state = LightClientStateSol::rand(rng);
-        println!("new_state: {:?}", new_state);
+        println!("new_state: {new_state:?}");
         lc.setFinalizedState(new_state.clone().into())
             .send()
             .await?

@@ -402,7 +402,7 @@ impl RewardDistributor {
                 match balance.unwrap_or_default().0.checked_add(amount.0) {
                     Some(updated) => Some(updated.into()),
                     None => {
-                        err = Some(format!("overflowed reward balance for account {}", account));
+                        err = Some(format!("overflowed reward balance for account {account}"));
                         balance
                     },
                 }

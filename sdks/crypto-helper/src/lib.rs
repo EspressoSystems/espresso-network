@@ -172,16 +172,14 @@ pub extern "C" fn verify_namespace_helper(
 
     if ns != namespace.into() {
         return VerificationResult::err(&format!(
-            "namespace mismatch: proven {} != expected {}",
-            ns, namespace
+            "namespace mismatch: proven {ns} != expected {namespace}"
         ));
     };
 
     let txns_comm = hash_txns(namespace, &txns);
     if txns_comm != txn_comm_str {
         return VerificationResult::err(&format!(
-            "commitment mismatch: proven {} != expected {}",
-            txns_comm, txn_comm_str
+            "commitment mismatch: proven {txns_comm} != expected {txn_comm_str}"
         ));
     }
 
@@ -195,7 +193,7 @@ fn hash_txns(namespace: u32, txns: &[Transaction]) -> String {
         hasher.update(txn.payload());
     }
     let hash_result = hasher.finalize();
-    format!("{:x}", hash_result)
+    format!("{hash_result:x}")
 }
 
 pub fn field_to_u256<F: PrimeField>(f: F) -> U256 {

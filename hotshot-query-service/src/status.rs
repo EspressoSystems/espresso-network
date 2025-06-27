@@ -153,11 +153,11 @@ mod test {
         .unwrap();
         network.spawn(
             "server",
-            app.serve(format!("0.0.0.0:{}", port), MockBase::instance()),
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
         );
 
         // Start a client.
-        let url = Url::from_str(&format!("http://localhost:{}/status", port)).unwrap();
+        let url = Url::from_str(&format!("http://localhost:{port}/status")).unwrap();
         let client = Client::<Error, MockBase>::new(url.clone());
         assert!(client.connect(Some(Duration::from_secs(60))).await);
 
@@ -184,8 +184,7 @@ mod test {
         let lines = prometheus.lines().collect::<Vec<_>>();
         assert!(
             lines.contains(&"consensus_current_view 0"),
-            "Missing consensus_current_view in metrics:\n{}",
-            prometheus
+            "Missing consensus_current_view in metrics:\n{prometheus}"
         );
 
         // Start the validators and wait for the block to be finalized.
@@ -259,11 +258,11 @@ mod test {
         let port = pick_unused_port().unwrap();
         let _server = BackgroundTask::spawn(
             "server",
-            app.serve(format!("0.0.0.0:{}", port), MockBase::instance()),
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
         );
 
         let client = Client::<Error, MockBase>::new(
-            format!("http://localhost:{}/status", port).parse().unwrap(),
+            format!("http://localhost:{port}/status").parse().unwrap(),
         );
         assert!(client.connect(Some(Duration::from_secs(60))).await);
 

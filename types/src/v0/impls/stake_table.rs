@@ -2192,8 +2192,7 @@ mod tests {
             let res = validators_from_l1_events(events.iter().cloned());
             assert!(
                 res.is_err(),
-                "events {:?}, not a valid sequence of events",
-                res
+                "events {res:?}, not a valid sequence of events"
             );
         }
         Ok(())

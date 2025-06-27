@@ -214,8 +214,8 @@ mod tests {
     fn test_fmt() {
         let key = EthKeyPair::for_test();
         let expected = "EthKeyPair(address=0xb0cfa4e5893107e2995974ef032957752bb526e9)";
-        assert_eq!(format!("{}", key), expected);
-        assert_eq!(format!("{:?}", key), expected);
+        assert_eq!(format!("{key}"), expected);
+        assert_eq!(format!("{key:?}"), expected);
     }
 
     #[test]

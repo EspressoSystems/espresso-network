@@ -148,7 +148,7 @@ async fn get_current_stake_table(
     query_node_url: &str,
 ) -> Result<StakeTableWithEpochNumber<SeqTypes>> {
     // Fetch the current stake table
-    let response = reqwest::get(format!("{}/v0/node/stake-table/current", query_node_url))
+    let response = reqwest::get(format!("{query_node_url}/v0/node/stake-table/current"))
         .await
         .with_context(|| "failed to fetch stake table")?;
 
@@ -166,8 +166,7 @@ async fn get_stake_table(
 ) -> Result<Vec<PeerConfig<SeqTypes>>> {
     // Fetch the stake table for the given epoch number
     let response = reqwest::get(format!(
-        "{}/v0/node/stake-table/{}",
-        query_node_url, epoch_number
+        "{query_node_url}/v0/node/stake-table/{epoch_number}"
     ))
     .await
     .with_context(|| "failed to fetch stake table")?;

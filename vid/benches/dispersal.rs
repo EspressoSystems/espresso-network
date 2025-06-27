@@ -16,8 +16,7 @@ fn dispersal_benchmark(c: &mut Criterion) {
         for payload_bytes_len in payload_bytes_len_list {
             avidm_group.bench_function(
                 format!(
-                    "AvidMDisperse_({}, {})_{}",
-                    recovery_threshold, num_storage_nodes, payload_bytes_len
+                    "AvidMDisperse_({recovery_threshold}, {num_storage_nodes})_{payload_bytes_len}"
                 ),
                 |b| {
                     b.iter(|| {

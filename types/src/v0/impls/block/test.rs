@@ -95,7 +95,7 @@ async fn basic_correctness() {
 
             let (ns_proof_txs, ns_proof_ns_id) = ns_proof
                 .verify(block.ns_table(), &vid_commit, &vid_common)
-                .unwrap_or_else(|| panic!("namespace {} proof verification failure", ns_id));
+                .unwrap_or_else(|| panic!("namespace {ns_id} proof verification failure"));
 
             assert_eq!(ns_proof_ns_id, ns_id);
             assert_eq!(ns_proof_txs, txs);

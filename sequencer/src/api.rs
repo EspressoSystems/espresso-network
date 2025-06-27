@@ -4898,7 +4898,7 @@ mod test {
 
         let duration = start.elapsed();
 
-        println!("Time elapsed to submit transactions: {:?}", duration);
+        println!("Time elapsed to submit transactions: {duration:?}");
 
         let last_tx_height = tx_heights.last().unwrap();
         for namespace in 1..=4 {

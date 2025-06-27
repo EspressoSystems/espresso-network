@@ -67,7 +67,7 @@ impl TestSystem {
         let provider = ProviderBuilder::new().on_anvil_with_wallet_and_config(|anvil| {
             anvil.port(port).arg("--accounts").arg("20")
         })?;
-        let rpc_url = format!("http://localhost:{}", port).parse()?;
+        let rpc_url = format!("http://localhost:{port}").parse()?;
         let deployer_address = provider.default_signer_address();
         // I don't know how to get the signer out of the provider, by default anvil uses the dev
         // mnemonic and the default signer is the first account.
