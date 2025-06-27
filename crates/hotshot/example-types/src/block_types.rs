@@ -13,11 +13,14 @@ use std::{
 use async_trait::async_trait;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot_types::{
-    data::{BlockError, Leaf2, VidCommitment},
+    data::{vid_commitment, BlockError, Leaf2, VidCommitment},
     light_client::LightClientState,
     traits::{
-        block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock, Transaction},
-        node_implementation::{ConsensusTime, NodeType},
+        block_contents::{
+            BlockHeader, BuilderFee, EncodeBytes, TestableBlock, Transaction,
+            GENESIS_VID_NUM_STORAGE_NODES,
+        },
+        node_implementation::{ConsensusTime, NodeType, Versions},
         BlockPayload, ValidatedState,
     },
     utils::BuilderCommitment,
@@ -27,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use thiserror::Error;
 use time::OffsetDateTime;
-use vbs::version::Version;
+use vbs::version::{StaticVersionType, Version};
 
 use crate::{
     node_types::TestTypes,
@@ -250,6 +253,10 @@ impl<TYPES: NodeType> BlockPayload<TYPES> for TestBlockPayload {
     ) -> impl 'a + Iterator<Item = Self::Transaction> {
         self.transactions.iter().cloned()
     }
+
+    fn txn_bytes(&self) -> usize {
+        self.transactions.iter().map(|tx| tx.0.len()).sum()
+    }
 }
 
 /// A [`BlockHeader`] that commits to [`TestBlockPayload`].
@@ -265,6 +272,8 @@ pub struct TestBlockHeader {
     pub metadata: TestMetadata,
     /// Timestamp when this header was created.
     pub timestamp: u64,
+    /// Timestamp when this header was created.
+    pub timestamp_millis: u64,
     /// random
     pub random: u64,
 }
@@ -278,10 +287,19 @@ impl TestBlockHeader {
     ) -> Self {
         let parent = parent_leaf.block_header();
 
-        let mut timestamp = OffsetDateTime::now_utc().unix_timestamp() as u64;
+        let time = OffsetDateTime::now_utc();
+
+        let mut timestamp = time.unix_timestamp() as u64;
+        let mut timestamp_millis = (time.unix_timestamp_nanos() / 1_000_000) as u64;
+
         if timestamp < parent.timestamp {
             // Prevent decreasing timestamps.
             timestamp = parent.timestamp;
+        }
+
+        if timestamp_millis < parent.timestamp_millis {
+            // Prevent decreasing timestamps.
+            timestamp_millis = parent.timestamp_millis;
         }
 
         let random = thread_rng().gen_range(0..=u64::MAX);
@@ -292,6 +310,7 @@ impl TestBlockHeader {
             builder_commitment,
             metadata,
             timestamp,
+            timestamp_millis,
             random,
         }
     }
@@ -308,6 +327,7 @@ impl Default for TestBlockHeader {
             builder_commitment: Default::default(),
             metadata,
             timestamp: 0,
+            timestamp_millis: 0,
             random: 0,
         }
     }
@@ -343,22 +363,30 @@ impl<
         ))
     }
 
-    fn genesis(
+    fn genesis<V: Versions>(
         _instance_state: &<TYPES::ValidatedState as ValidatedState<TYPES>>::Instance,
-        payload_commitment: VidCommitment,
-        builder_commitment: BuilderCommitment,
-        _metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+        payload: TYPES::BlockPayload,
+        metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) -> Self {
-        let metadata = TestMetadata {
-            num_transactions: 0,
-        };
+        let builder_commitment =
+            <TestBlockPayload as BlockPayload<TYPES>>::builder_commitment(&payload, metadata);
+
+        let payload_bytes = payload.encode();
+        let genesis_version = V::Base::version();
+        let payload_commitment = vid_commitment::<V>(
+            &payload_bytes,
+            &metadata.encode(),
+            GENESIS_VID_NUM_STORAGE_NODES,
+            genesis_version,
+        );
 
         Self {
             block_number: 0,
             payload_commitment,
             builder_commitment,
-            metadata,
+            metadata: *metadata,
             timestamp: 0,
+            timestamp_millis: 0,
             random: 0,
         }
     }
@@ -385,6 +413,14 @@ impl<
             self.block_number,
             self.payload_commitment.as_ref(),
         )
+    }
+
+    fn timestamp(&self) -> u64 {
+        self.timestamp
+    }
+
+    fn timestamp_millis(&self) -> u64 {
+        self.timestamp_millis
     }
 }
 

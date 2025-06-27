@@ -42,8 +42,7 @@ jobs:
 
       - name: Run clippy
         run: |
-          cargo clippy --workspace --features testing --all-targets --keep-going \
-          -- -D warnings
+          cargo clippy --features testing --all-targets --keep-going -- -D warnings
 
   clippy-embedded:
       name: clippy (embedded-db)
@@ -57,5 +56,4 @@ jobs:
 
         - name: Run clippy
           run: |
-            cargo clippy --workspace --features "embedded-db testing" --all-targets --keep-going \
-            -- -D warnings
+            cargo clippy --workspace --features "embedded-db testing" --all-targets --keep-going -- -D warnings

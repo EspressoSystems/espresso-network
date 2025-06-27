@@ -40,7 +40,7 @@ use snafu::{OptionExt, Snafu};
 use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, StatusCode};
 use vbs::version::StaticVersionType;
 
-use crate::{api::load_api, Payload, QueryError, VidCommon};
+use crate::{api::load_api, Header, Payload, QueryError, VidCommon};
 
 pub(crate) mod data_source;
 mod fetch;
@@ -231,6 +231,7 @@ where
     State: 'static + Send + Sync + ReadState,
     <State as ReadState>::State: Send + Sync + AvailabilityDataSource<Types>,
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     let id = match req.opt_integer_param("height")? {
@@ -253,6 +254,7 @@ where
     State: 'static + Send + Sync + ReadState,
     <State as ReadState>::State: Send + Sync + AvailabilityDataSource<Types>,
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     let from = req.integer_param::<_, usize>("from")?;
@@ -302,6 +304,7 @@ where
     State: 'static + Send + Sync + ReadState,
     <State as ReadState>::State: Send + Sync + AvailabilityDataSource<Types>,
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     let id = if let Some(height) = req.opt_integer_param("height")? {
@@ -325,6 +328,7 @@ pub fn define_api<State, Types: NodeType, Ver: StaticVersionType + 'static>(
 where
     State: 'static + Send + Sync + ReadState,
     <State as ReadState>::State: Send + Sync + AvailabilityDataSource<Types>,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     let mut api = load_api::<State, Error, Ver>(
@@ -636,6 +640,59 @@ where
                 },
             }
         }
+        .boxed()
+    })?
+    .stream("stream_transactions", move |req, state| {
+        async move {
+            let height = req.integer_param::<_, usize>("height")?;
+
+            let namespace: Option<i64> = req
+                .opt_integer_param::<_, usize>("namespace")?
+                .map(|i| {
+                    i.try_into().map_err(|err| Error::Custom {
+                        message: format!(
+                            "Invalid 'namespace': could not convert usize to i64: {err}"
+                        ),
+                        status: StatusCode::BAD_REQUEST,
+                    })
+                })
+                .transpose()?;
+
+            state
+                .read(|state| {
+                    async move {
+                        Ok(state
+                            .subscribe_blocks(height)
+                            .await
+                            .map(move |block| {
+                                let transactions = block.enumerate().enumerate();
+                                let header = block.header();
+                                let filtered_txs = transactions
+                                    .filter_map(|(i, (index, _tx))| {
+                                        if let Some(requested_ns) = namespace {
+                                            let ns_id = QueryableHeader::<Types>::namespace_id(
+                                                header,
+                                                &index.ns_index,
+                                            )?;
+
+                                            if ns_id.into() != requested_ns {
+                                                return None;
+                                            }
+                                        }
+
+                                        TransactionQueryData::new(&block, index, i as u64)
+                                    })
+                                    .collect::<Vec<_>>();
+
+                                futures::stream::iter(filtered_txs.into_iter().map(Ok))
+                            })
+                            .flatten())
+                    }
+                    .boxed()
+                })
+                .await
+        }
+        .try_flatten_stream()
         .boxed()
     })?
     .at("get_block_summary", move |req, state| {

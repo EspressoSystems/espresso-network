@@ -21,6 +21,7 @@ use crate::{Contract, Contracts};
 /// - `epoch_start_block`: block height for the first *activated* epoch
 /// - `exit_escrow_period`: exit escrow period for stake table (in seconds)
 /// - `multisig`: new owner/multisig that owns all the proxy contracts
+/// - `multisig_pauser`: new multisig that owns the pauser role
 /// - `initial_token_supply`: initial token supply for the token contract
 /// - `token_name`: name of the token
 /// - `token_symbol`: symbol of the token
@@ -32,6 +33,12 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     token_recipient: Option<Address>,
     #[builder(default)]
     mock_light_client: bool,
+    #[builder(default)]
+    use_multisig: bool,
+    #[builder(default)]
+    dry_run: bool,
+    #[builder(default)]
+    rpc_url: String,
     #[builder(default)]
     genesis_lc_state: Option<LightClientStateSol>,
     #[builder(default)]
@@ -47,11 +54,21 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     #[builder(default)]
     multisig: Option<Address>,
     #[builder(default)]
+    multisig_pauser: Option<Address>,
+    #[builder(default)]
     initial_token_supply: Option<U256>,
     #[builder(default)]
     token_name: Option<String>,
     #[builder(default)]
     token_symbol: Option<String>,
+    #[builder(default)]
+    timelock_admin: Option<Address>,
+    #[builder(default)]
+    timelock_delay: Option<U256>,
+    #[builder(default)]
+    timelock_executors: Option<Vec<Address>>,
+    #[builder(default)]
+    timelock_proposers: Option<Vec<Address>>,
 }
 
 impl<P: Provider + WalletProvider> DeployerArgs<P> {
@@ -89,6 +106,34 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     crate::transfer_ownership(provider, target, addr, multisig).await?;
                 }
             },
+            Contract::EspTokenV2 => {
+                let use_multisig = self.use_multisig;
+
+                if use_multisig {
+                    crate::upgrade_esp_token_v2_multisig_owner(
+                        provider,
+                        contracts,
+                        self.rpc_url.clone(),
+                        Some(self.dry_run),
+                    )
+                    .await?;
+                } else {
+                    crate::upgrade_esp_token_v2(provider, contracts).await?;
+
+                    if let Some(multisig) = self.multisig {
+                        let token_proxy = contracts
+                            .address(Contract::EspTokenProxy)
+                            .expect("fail to get EspTokenProxy address");
+                        crate::transfer_ownership(
+                            provider,
+                            Contract::EspTokenProxy,
+                            token_proxy,
+                            multisig,
+                        )
+                        .await?;
+                    }
+                }
+            },
             Contract::LightClientProxy => {
                 assert!(
                     self.genesis_lc_state.is_some(),
@@ -121,8 +166,11 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 );
 
                 let use_mock = self.mock_light_client;
+                let dry_run = self.dry_run;
+                let use_multisig = self.use_multisig;
                 let mut blocks_per_epoch = self.blocks_per_epoch.unwrap();
                 let epoch_start_block = self.epoch_start_block.unwrap();
+                let rpc_url = self.rpc_url.clone();
 
                 // TEST-ONLY: if this config is not yet set, we use a large default value
                 // to avoid contract complaining about invalid zero-valued blocks_per_epoch.
@@ -131,27 +179,42 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 if use_mock && blocks_per_epoch == 0 {
                     blocks_per_epoch = u64::MAX;
                 }
-                tracing::info!(%blocks_per_epoch, "Upgrading LightClientV2 with ");
-                crate::upgrade_light_client_v2(
-                    provider,
-                    contracts,
-                    use_mock,
-                    blocks_per_epoch,
-                    epoch_start_block,
-                )
-                .await?;
-
-                if let Some(multisig) = self.multisig {
-                    let lc_proxy = contracts
-                        .address(Contract::LightClientProxy)
-                        .expect("fail to get LightClientProxy address");
-                    crate::transfer_ownership(
+                tracing::info!(%blocks_per_epoch, ?dry_run, ?use_multisig, "Upgrading LightClientV2 with ");
+                if use_multisig {
+                    crate::upgrade_light_client_v2_multisig_owner(
                         provider,
-                        Contract::LightClientProxy,
-                        lc_proxy,
-                        multisig,
+                        contracts,
+                        crate::LightClientV2UpgradeParams {
+                            blocks_per_epoch,
+                            epoch_start_block,
+                        },
+                        use_mock,
+                        rpc_url,
+                        Some(dry_run),
                     )
                     .await?;
+                } else {
+                    crate::upgrade_light_client_v2(
+                        provider,
+                        contracts,
+                        use_mock,
+                        blocks_per_epoch,
+                        epoch_start_block,
+                    )
+                    .await?;
+
+                    if let Some(multisig) = self.multisig {
+                        let lc_proxy = contracts
+                            .address(Contract::LightClientProxy)
+                            .expect("fail to get LightClientProxy address");
+                        crate::transfer_ownership(
+                            provider,
+                            Contract::LightClientProxy,
+                            lc_proxy,
+                            multisig,
+                        )
+                        .await?;
+                    }
                 }
             },
             Contract::StakeTableProxy => {
@@ -175,20 +238,66 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 // NOTE: we don't transfer ownership to multisig, we only do so after V2 upgrade
             },
             Contract::StakeTableV2 => {
-                crate::upgrade_stake_table_v2(provider, contracts).await?;
-
-                if let Some(multisig) = self.multisig {
-                    let stake_table_proxy = contracts
-                        .address(Contract::StakeTableProxy)
-                        .expect("fail to get StakeTableProxy address");
-                    crate::transfer_ownership(
+                let use_multisig = self.use_multisig;
+                let dry_run = self.dry_run;
+                let multisig_pauser = self.multisig_pauser.context(
+                    "Multisig pauser address must be set for the upgrade to StakeTableV2",
+                )?;
+                tracing::info!(?dry_run, ?use_multisig, "Upgrading to StakeTableV2 with ");
+                if use_multisig {
+                    crate::upgrade_stake_table_v2_multisig_owner(
                         provider,
-                        Contract::StakeTableProxy,
-                        stake_table_proxy,
-                        multisig,
+                        contracts,
+                        self.rpc_url.clone(),
+                        self.multisig.context(
+                            "Multisig address must be set when upgrading to --use-multisig flag is present",
+                        )?,
+                        multisig_pauser,
+                        Some(dry_run),
                     )
                     .await?;
+                } else {
+                    crate::upgrade_stake_table_v2(provider, contracts, multisig_pauser, admin)
+                        .await?;
+
+                    if let Some(multisig) = self.multisig {
+                        let stake_table_proxy = contracts
+                            .address(Contract::StakeTableProxy)
+                            .expect("fail to get StakeTableProxy address");
+                        crate::transfer_ownership(
+                            provider,
+                            Contract::StakeTableProxy,
+                            stake_table_proxy,
+                            multisig,
+                        )
+                        .await?;
+                    }
                 }
+            },
+            Contract::Timelock => {
+                let timelock_delay = self
+                    .timelock_delay
+                    .context("Timelock delay must be set when deploying Timelock")?;
+                let timelock_proposers = self
+                    .timelock_proposers
+                    .clone()
+                    .context("Timelock proposers must be set when deploying Timelock")?;
+                let timelock_executors = self
+                    .timelock_executors
+                    .clone()
+                    .context("Timelock executors must be set when deploying Timelock")?;
+                let timelock_admin = self
+                    .timelock_admin
+                    .context("Timelock admin must be set when deploying Timelock")?;
+                crate::deploy_timelock(
+                    provider,
+                    contracts,
+                    timelock_delay,
+                    timelock_proposers,
+                    timelock_executors,
+                    timelock_admin,
+                )
+                .await?;
             },
             _ => {
                 panic!("Deploying {} not supported.", target);

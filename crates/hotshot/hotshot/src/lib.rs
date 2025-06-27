@@ -13,7 +13,7 @@ pub mod documentation;
 use committable::Committable;
 use futures::future::{select, Either};
 use hotshot_types::{
-    drb::{DrbResult, INITIAL_DRB_RESULT},
+    drb::{drb_difficulty_selector, DrbResult, INITIAL_DRB_RESULT},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     simple_certificate::LightClientStateUpdateCertificate,
@@ -63,6 +63,7 @@ use hotshot_types::{
     event::{EventType, LeafInfo},
     message::{DataMessage, Message, MessageKind, Proposal},
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
+    storage_metrics::StorageMetricsValue,
     traits::{
         consensus_api::ConsensusApi,
         network::ConnectedNetwork,
@@ -148,6 +149,9 @@ pub struct SystemContext<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versi
     /// Reference to the internal storage for consensus datum.
     pub storage: I::Storage,
 
+    /// Storage metrics
+    pub storage_metrics: Arc<StorageMetricsValue>,
+
     /// shared lock for upgrade information
     pub upgrade_lock: UpgradeLock<TYPES, V>,
 }
@@ -174,6 +178,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> Clone
             internal_event_stream: self.internal_event_stream.clone(),
             id: self.id,
             storage: self.storage.clone(),
+            storage_metrics: Arc::clone(&self.storage_metrics),
             upgrade_lock: self.upgrade_lock.clone(),
         }
     }
@@ -201,8 +206,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
-        metrics: ConsensusMetricsValue,
+        consensus_metrics: ConsensusMetricsValue,
         storage: I::Storage,
+        storage_metrics: StorageMetricsValue,
     ) -> Arc<Self> {
         let internal_chan = broadcast(EVENT_CHANNEL_SIZE);
         let external_chan = broadcast(EXTERNAL_EVENT_CHANNEL_SIZE);
@@ -216,8 +222,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             memberships,
             network,
             initializer,
-            metrics,
+            consensus_metrics,
             storage,
+            storage_metrics,
             internal_chan,
             external_chan,
         )
@@ -241,8 +248,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         membership_coordinator: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
-        metrics: ConsensusMetricsValue,
+        consensus_metrics: ConsensusMetricsValue,
         storage: I::Storage,
+        storage_metrics: StorageMetricsValue,
         internal_channel: (
             Sender<Arc<HotShotEvent<TYPES>>>,
             Receiver<Arc<HotShotEvent<TYPES>>>,
@@ -251,9 +259,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
     ) -> Arc<Self> {
         debug!("Creating a new hotshot");
 
-        tracing::warn!("Starting consensus with HotShotConfig:\n\n {:?}", config);
+        tracing::warn!("Starting consensus with HotShotConfig:\n\n {config:?}");
 
-        let consensus_metrics = Arc::new(metrics);
+        let consensus_metrics = Arc::new(consensus_metrics);
+        let storage_metrics = Arc::new(storage_metrics);
         let anchored_leaf = initializer.anchor_leaf;
         let instance_state = initializer.instance_state;
 
@@ -272,6 +281,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
 
         let upgrade_lock =
             UpgradeLock::<TYPES, V>::from_certificate(&initializer.decided_upgrade_certificate);
+
+        debug!("Setting DRB difficulty selector in membership");
+        let drb_difficulty_selector = drb_difficulty_selector(upgrade_lock.clone(), &config);
+
+        membership_coordinator
+            .set_drb_difficulty_selector(drb_difficulty_selector)
+            .await;
 
         // Allow overflow on the external channel, otherwise sending to it may block.
         external_rx.set_overflow(true);
@@ -349,6 +365,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             config.epoch_height,
             initializer.state_cert,
             config.drb_difficulty,
+            config.drb_upgrade_difficulty,
         );
 
         let consensus = Arc::new(RwLock::new(consensus));
@@ -375,6 +392,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             external_event_stream: (external_tx, external_rx.deactivate()),
             anchored_leaf: anchored_leaf.clone(),
             storage,
+            storage_metrics,
             upgrade_lock,
         });
 
@@ -636,8 +654,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
-        metrics: ConsensusMetricsValue,
+        consensus_metrics: ConsensusMetricsValue,
         storage: I::Storage,
+        storage_metrics: StorageMetricsValue,
     ) -> Result<
         (
             SystemContextHandle<TYPES, I, V>,
@@ -655,8 +674,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             memberships,
             network,
             initializer,
-            metrics,
+            consensus_metrics,
             storage,
+            storage_metrics,
         )
         .await;
         let handle = Arc::clone(&hotshot).run_tasks().await;
@@ -799,8 +819,9 @@ where
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
-        metrics: ConsensusMetricsValue,
+        consensus_metrics: ConsensusMetricsValue,
         storage: I::Storage,
+        storage_metrics: StorageMetricsValue,
     ) -> (
         SystemContextHandle<TYPES, I, V>,
         SystemContextHandle<TYPES, I, V>,
@@ -815,8 +836,9 @@ where
             memberships.clone(),
             Arc::clone(&network),
             initializer.clone(),
-            metrics.clone(),
+            consensus_metrics.clone(),
             storage.clone(),
+            storage_metrics.clone(),
         )
         .await;
         let right_system_context = SystemContext::new(
@@ -828,8 +850,9 @@ where
             memberships,
             network,
             initializer,
-            metrics,
+            consensus_metrics,
             storage,
+            storage_metrics,
         )
         .await;
 
@@ -1210,7 +1233,7 @@ async fn load_start_epoch_info<TYPES: NodeType>(
     let first_epoch_number =
         TYPES::Epoch::new(epoch_from_block_number(epoch_start_block, epoch_height));
 
-    tracing::warn!("Calling set_first_epoch for epoch {:?}", first_epoch_number);
+    tracing::warn!("Calling set_first_epoch for epoch {first_epoch_number}");
     membership
         .write()
         .await
@@ -1218,23 +1241,26 @@ async fn load_start_epoch_info<TYPES: NodeType>(
 
     for epoch_info in start_epoch_info {
         if let Some(block_header) = &epoch_info.block_header {
-            tracing::info!("Calling add_epoch_root for epoch {:?}", epoch_info.epoch);
-            let write_callback = {
-                let membership_reader = membership.read().await;
-                membership_reader
-                    .add_epoch_root(epoch_info.epoch, block_header.clone())
-                    .await
-            };
+            tracing::info!("Calling add_epoch_root for epoch {}", epoch_info.epoch);
 
-            if let Ok(Some(write_callback)) = write_callback {
-                let mut membership_writer = membership.write().await;
-                write_callback(&mut *membership_writer);
-            }
+            Membership::add_epoch_root(
+                Arc::clone(membership),
+                epoch_info.epoch,
+                block_header.clone(),
+            )
+            .await
+            .unwrap_or_else(|err| {
+                // REVIEW NOTE: Should we panic here? a failure here seems like it should be fatal
+                tracing::error!(
+                    "Failed to add epoch root for epoch {}: {err}",
+                    epoch_info.epoch
+                );
+            });
         }
     }
 
     for epoch_info in start_epoch_info {
-        tracing::info!("Calling add_drb_result for epoch {:?}", epoch_info.epoch);
+        tracing::info!("Calling add_drb_result for epoch {}", epoch_info.epoch);
         membership
             .write()
             .await

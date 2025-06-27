@@ -65,14 +65,14 @@ Docker images and the [docker-compose-demo.yaml](docker-compose-demo.yaml) file 
 Docker-based demo fetches the images from the `ghcr` repository, where they are updated with every push to `main` on
 GitHub. For testing uncommitted changes, you can also run the binaries by manually building and running the services.
 
-Build all executables with `cargo build --release`. You may then start a sequencer network. First, start an
-orchestrator. Choose a port `$PORT` to run it on and decide how many sequencer nodes `$N` you will use, then run
+Build all executables with `cargo build --release`. You may then start an Espresso network. First, start an
+orchestrator. Choose a port `$PORT` to run it on and decide how many Espresso nodes `$N` you will use, then run
 `target/release/orchestrator -p $PORT -n $N`.
 
-The sequencer will distribute a HotShot configuration to all the nodes which connect to it, which specifies consensus
-parameters like view timers. There is a default config, but you can override any parameters you want by passing
-additional options to the `orchestrator` executable. Run `target/release/orchestrator --help` to see a list of available
-options.
+The Espresso Network will distribute a HotShot configuration to all the nodes which connect to it, which specifies
+consensus parameters like view timers. There is a default config, but you can override any parameters you want by
+passing additional options to the `orchestrator` executable. Run `target/release/orchestrator --help` to see a list of
+available options.
 
 Next, you must launch a `cdn` instance, which is necessary to facilitate consensus.
 
@@ -82,7 +82,7 @@ just dev-cdn -- -p 1738
 
 In this case, we run it on port 1738.
 
-Once you have started the orchestrator and the CDN, you must connect `$N` sequencer nodes to them, after which the
+Once you have started the orchestrator and the CDN, you must connect `$N` Espresso nodes to them, after which the
 network will start up automatically. To start one node, run
 
 ```bash
@@ -134,7 +134,7 @@ To generate documentation in `./docs` for solidity code run
 forge doc
 ```
 
-#### Deployment
+#### Deployment via Foundry
 
 To deploy the contracts to a local testnet, first run a dev chain (e.g. `anvil`), then run
 
@@ -150,12 +150,88 @@ To additionally verify the contract on etherscan set the `ETHERSCAN_API_KEY` env
 
 Running the script will save a file with details about the deployment in `contracts/broadcast/$CHAIN_ID`.
 
-#### Folder Structure Rationale
+#### Deployment via Rust
+
+**Build and Run**
+
+```bash
+cargo run --bin deploy -- [FLAGS/OPTIONS]
+```
+
+Or, for help
+
+```bash
+cargo run --bin deploy -- --help
+```
+
+**Configuration**
+
+You can configure the deployer using CLI flags or environment variables. Most options can be set via environment
+variables (see the code for the full list `sequencer/src/bin/deploy.rs`). Common environment variables:
+
+- `ESPRESSO_SEQUENCER_L1_PROVIDER` — L1 JSON-RPC endpoint
+- `ESPRESSO_SEQUENCER_ETH_MNEMONIC` — Mnemonic for the deployer wallet
+- `ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS` — Multisig admin address
+- `ESPRESSO_DEPLOYER_ACCOUNT_INDEX` — Account index in the wallet
+- `ESPRESSO_SEQUENCER_URL` — Sequencer node URL for HotShot config
+
+You can use a `.env` file and load it with:
+
+```bash
+set -a
+source .env
+set +a
+```
+
+#### Deployment via Docker
+
+You can run the deployer in a container but you need to stand up all services via docker compose
+
+```bash
+just pull
+just demo deploy-prover-contracts
+```
+
+If making dev changes locally run, `./scripts/build-docker-images-native --image $IMAGE_TO_BE_REBUILT` instead of
+`just pull`.
+
+#### Dry run upgrades via Docker
+
+You can only run a dry run for multisig upgrades but you need to stand up all services via docker compose Example:
+
+```bash
+just pull
+just demo
+docker compose run --rm upgrade-prover-contracts-v2 /bin/deploy --upgrade-light-client-v2 --dry-run --use-multisig
+```
+
+If making dev changes locally run, `./scripts/build-docker-images-native` instead of `just pull`.
+
+For AWS ECS, ensure all required environment variables and secrets are set in your task definition.
+
+### Logging
+
+You can control the log level using the `RUST_LOG` environment variable. For example:
+
+```bash
+RUST_LOG=info cargo run --bin deploy -- [FLAGS]
+RUST_LOG=debug cargo run --bin deploy -- [FLAGS]
+```
+
+For Docker:
+
+```bash
+docker run --env-file .env.docker -e RUST_LOG=debug ...
+```
+
+(see .env.docker.example for the vars required for .env.docker)
+
+### Folder Structure Rationale
 
 - code for demo purposes goes into the `contracts/demo` folder
 - code that eventually ends up in production goes into the `contracts/src` folder
 
-#### Benchmarking and profiling
+### Benchmarking and profiling
 
 The gas consumption for verifying a plonk proof as well as updating the state of the light client contract can be seen
 by running:

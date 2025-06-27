@@ -33,6 +33,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     light_client::StateKeyPair,
     signature_key::BLSPubKey,
+    storage_metrics::StorageMetricsValue,
     traits::{
         election::Membership,
         network::Topic,
@@ -159,6 +160,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
             epoch_start_block: 0,
             stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
             drb_difficulty: DIFFICULTY_LEVEL,
+            drb_upgrade_difficulty: DIFFICULTY_LEVEL,
         };
         update_config(&mut config);
 
@@ -202,7 +204,6 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
                             membership,
                             config.epoch_height,
                             &hs_storage.clone(),
-                            DIFFICULTY_LEVEL,
                         );
 
                         let hotshot = SystemContext::init(
@@ -223,6 +224,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
                             .unwrap(),
                             ConsensusMetricsValue::new(&*data_source.populate_metrics()),
                             hs_storage,
+                            StorageMetricsValue::new(&*data_source.populate_metrics()),
                         )
                         .await
                         .unwrap()

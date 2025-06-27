@@ -22,7 +22,7 @@ use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
 use espresso_types::{
     traits::{EventConsumer, MembershipPersistence},
-    v0_3::StakeTableFetcher,
+    v0_3::Fetcher,
     BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes, ValidatedState,
 };
 use genesis::L1Finalized;
@@ -199,7 +199,7 @@ pub async fn init_node<
     genesis: Genesis,
     network_params: NetworkParams,
     metrics: &dyn Metrics,
-    persistence: P,
+    mut persistence: P,
     l1_params: L1Params,
     storage: Option<RequestResponseStorage>,
     seq_versions: V,
@@ -310,19 +310,19 @@ where
     .with_context(|| "Failed to derive Libp2p peer ID")?;
 
     // Print the libp2p public key
-    info!("Starting Libp2p with PeerID: {}", libp2p_public_key);
+    info!("Starting Libp2p with PeerID: {libp2p_public_key}");
 
     let (mut network_config, wait_for_orchestrator) = match (
         persistence.load_config().await?,
         network_params.config_peers,
     ) {
         (Some(config), _) => {
-            tracing::info!("loaded network config from storage, rejoining existing network");
+            tracing::warn!("loaded network config from storage, rejoining existing network");
             (config, false)
         },
         // If we were told to fetch the config from an already-started peer, do so.
         (None, Some(peers)) => {
-            tracing::info!(?peers, "loading network config from peers");
+            tracing::warn!(?peers, "loading network config from peers");
             let peers = StatePeers::<SequencerApiVersion>::from_urls(
                 peers,
                 network_params.catchup_backoff,
@@ -330,7 +330,7 @@ where
             );
             let config = peers.fetch_config(validator_config.clone()).await?;
 
-            tracing::info!(
+            tracing::warn!(
                 node_id = config.node_index,
                 stake_table = ?config.config.known_nodes_with_stake,
                 "loaded config",
@@ -340,8 +340,8 @@ where
         },
         // Otherwise, this is a fresh network; load from the orchestrator.
         (None, None) => {
-            tracing::info!("loading network config from orchestrator");
-            tracing::error!(
+            tracing::warn!("loading network config from orchestrator");
+            tracing::warn!(
                 "waiting for other nodes to connect, DO NOT RESTART until fully connected"
             );
             let config = get_complete_config(
@@ -355,13 +355,13 @@ where
             .await?
             .0;
 
-            tracing::info!(
+            tracing::warn!(
                 node_id = config.node_index,
                 stake_table = ?config.config.known_nodes_with_stake,
                 "loaded config",
             );
             persistence.save_config(&config).await?;
-            tracing::error!("all nodes connected");
+            tracing::warn!("all nodes connected");
             (config, true)
         },
     };
@@ -377,10 +377,10 @@ where
         .stake_table_capacity
         .unwrap_or(hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY);
 
-    tracing::info!("setting epoch_height={epoch_height:?}");
-    tracing::info!("setting drb_difficulty={drb_difficulty:?}");
-    tracing::info!("setting epoch_start_block={epoch_start_block:?}");
-    tracing::info!("setting stake_table_capacity={stake_table_capacity:?}");
+    tracing::warn!("setting epoch_height={epoch_height:?}");
+    tracing::warn!("setting drb_difficulty={drb_difficulty:?}");
+    tracing::warn!("setting epoch_start_block={epoch_start_block:?}");
+    tracing::warn!("setting stake_table_capacity={stake_table_capacity:?}");
     network_config.config.epoch_height = epoch_height;
     network_config.config.drb_difficulty = drb_difficulty;
     network_config.config.epoch_start_block = epoch_start_block;
@@ -481,7 +481,7 @@ where
         ..Default::default()
     };
     for (address, amount) in genesis.accounts {
-        tracing::info!(%address, %amount, "Prefunding account for demo");
+        tracing::warn!(%address, %amount, "Prefunding account for demo");
         genesis_state.prefund_account(address, amount);
     }
 
@@ -511,17 +511,21 @@ where
         },
     };
 
-    let fetcher = StakeTableFetcher::new(
+    persistence.enable_metrics(metrics);
+
+    let fetcher = Fetcher::new(
         Arc::new(state_catchup_providers.clone()),
         Arc::new(Mutex::new(persistence.clone())),
         l1_client.clone(),
         genesis.chain_config,
     );
     fetcher.spawn_update_loop().await;
+    let block_reward = fetcher.fetch_block_reward().await.ok().unwrap_or_default();
     // Create the HotShot membership
     let mut membership = EpochCommittees::new_stake(
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
+        block_reward,
         fetcher,
     );
     membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
@@ -532,7 +536,6 @@ where
         membership,
         network_config.config.epoch_height,
         &persistence.clone(),
-        network_config.config.drb_difficulty,
     );
 
     let instance_state = NodeState {
@@ -547,6 +550,7 @@ where
         epoch_height: Some(epoch_height),
         state_catchup: Arc::new(state_catchup_providers.clone()),
         coordinator: coordinator.clone(),
+        genesis_version: genesis.genesis_version,
     };
 
     // Initialize the Libp2p network
@@ -676,7 +680,7 @@ pub mod testing {
         signature_key::BLSKeyPair,
         traits::{
             block_contents::BlockHeader, metrics::NoMetrics, network::Topic,
-            signature_key::BuilderSignatureKey,
+            signature_key::BuilderSignatureKey, EncodeBytes,
         },
         HotShotConfig, PeerConfig,
     };
@@ -904,6 +908,7 @@ pub mod testing {
                         .genesis_st_state(genesis_stake)
                         .blocks_per_epoch(blocks_per_epoch)
                         .epoch_start_block(epoch_start_block)
+                        .multisig_pauser(self.signer.address())
                         .build()
                         .unwrap();
                     args.deploy_all(&mut contracts)
@@ -929,7 +934,7 @@ pub mod testing {
 
                     Upgrade::pos_view_based(st_addr)
                 },
-                _ => panic!("Upgrade not configured for version {:?}", version),
+                _ => panic!("Upgrade not configured for version {version:?}"),
             };
 
             let mut upgrades = std::collections::BTreeMap::new();
@@ -1027,6 +1032,7 @@ pub mod testing {
                 epoch_start_block: 1,
                 stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
                 drb_difficulty: 10,
+                drb_upgrade_difficulty: 20,
             };
 
             let anvil = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
@@ -1220,7 +1226,7 @@ pub mod testing {
                 .expect("failed to create L1 client");
             l1_client.spawn_tasks().await;
 
-            let fetcher = StakeTableFetcher::new(
+            let fetcher = Fetcher::new(
                 Arc::new(catchup_providers.clone()),
                 Arc::new(Mutex::new(persistence.clone())),
                 l1_client.clone(),
@@ -1228,9 +1234,11 @@ pub mod testing {
             );
             fetcher.spawn_update_loop().await;
 
+            let block_reward = fetcher.fetch_block_reward().await.ok().unwrap_or_default();
             let mut membership = EpochCommittees::new_stake(
                 config.known_nodes_with_stake.clone(),
                 config.known_da_nodes.clone(),
+                block_reward,
                 fetcher,
             );
             membership.reload_stake(50).await;
@@ -1242,7 +1250,6 @@ pub mod testing {
                 membership,
                 config.epoch_height,
                 &persistence.clone(),
-                config.drb_difficulty,
             );
 
             let node_state = NodeState::new(
@@ -1252,6 +1259,7 @@ pub mod testing {
                 Arc::new(catchup_providers.clone()),
                 V::Base::VERSION,
                 coordinator.clone(),
+                Version { major: 0, minor: 1 },
             )
             .with_current_version(V::Base::version())
             .with_genesis(state)
@@ -1296,11 +1304,11 @@ pub mod testing {
     }
 
     // Wait for decide event, make sure it matches submitted transaction. Return the block number
-    // containing the transaction.
+    // containing the transaction and the block payload size
     pub async fn wait_for_decide_on_handle(
         events: &mut (impl Stream<Item = Event> + Unpin),
         submitted_txn: &Transaction,
-    ) -> u64 {
+    ) -> (u64, usize) {
         let commitment = submitted_txn.commit();
 
         // Keep getting events until we see a Decide event
@@ -1309,19 +1317,23 @@ pub mod testing {
             tracing::info!("Received event from handle: {event:?}");
 
             if let Decide { leaf_chain, .. } = event.event {
-                if let Some(height) = leaf_chain.iter().find_map(|LeafInfo { leaf, .. }| {
-                    if leaf
-                        .block_payload()
-                        .as_ref()?
-                        .transaction_commitments(leaf.block_header().metadata())
-                        .contains(&commitment)
-                    {
-                        Some(leaf.block_header().block_number())
-                    } else {
-                        None
-                    }
-                }) {
-                    return height;
+                if let Some((height, size)) =
+                    leaf_chain.iter().find_map(|LeafInfo { leaf, .. }| {
+                        if leaf
+                            .block_payload()
+                            .as_ref()?
+                            .transaction_commitments(leaf.block_header().metadata())
+                            .contains(&commitment)
+                        {
+                            let size = leaf.block_payload().unwrap().encode().len();
+                            Some((leaf.block_header().block_number(), size))
+                        } else {
+                            None
+                        }
+                    })
+                {
+                    tracing::info!(height, "transaction {commitment} sequenced");
+                    return (height, size);
                 }
             } else {
                 // Keep waiting
@@ -1339,11 +1351,8 @@ mod test {
     use hotshot::types::EventType::Decide;
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_types::{
-        data::vid_commitment,
         event::LeafInfo,
-        traits::block_contents::{
-            BlockHeader, BlockPayload, EncodeBytes, GENESIS_VID_NUM_STORAGE_NODES,
-        },
+        traits::block_contents::{BlockHeader, BlockPayload},
     };
     use sequencer_utils::test_utils::setup_test;
     use testing::{wait_for_decide_on_handle, TestConfigBuilder};
@@ -1425,23 +1434,9 @@ mod test {
                 Payload::from_transactions([], &ValidatedState::default(), &NodeState::mock())
                     .await
                     .unwrap();
-            let genesis_commitment = {
-                // TODO we should not need to collect payload bytes just to compute vid_commitment
-                let payload_bytes = genesis_payload.encode();
-                vid_commitment::<TestVersions>(
-                    &payload_bytes,
-                    &genesis_ns_table.encode(),
-                    GENESIS_VID_NUM_STORAGE_NODES,
-                    <TestVersions as Versions>::Base::VERSION,
-                )
-            };
+
             let genesis_state = NodeState::mock();
-            Header::genesis(
-                &genesis_state,
-                genesis_commitment,
-                empty_builder_commitment(),
-                genesis_ns_table,
-            )
+            Header::genesis::<TestVersions>(&genesis_state, genesis_payload, &genesis_ns_table)
         };
 
         loop {

@@ -2,7 +2,8 @@ pub mod create_node_validator_api;
 
 use std::{fmt, future::Future, io::BufRead, pin::Pin, str::FromStr, time::Duration};
 
-use espresso_types::{BackoffParams, SeqTypes};
+use alloy::primitives::Address;
+use espresso_types::{config::PublicHotShotConfig, v0_3::Validator, BackoffParams, SeqTypes};
 use futures::{
     channel::mpsc::{self, SendError, Sender},
     future::{BoxFuture, Either},
@@ -13,6 +14,7 @@ use hotshot_query_service::{
     types::HeightIndexed,
 };
 use hotshot_types::{signature_key::BLSPubKey, PeerConfig};
+use indexmap::IndexMap;
 use prometheus_parse::{Sample, Scrape};
 use serde::{Deserialize, Serialize};
 use tide_disco::{api::ApiError, socket::Connection, Api};
@@ -290,13 +292,6 @@ where
 }
 
 #[derive(Debug, Deserialize)]
-pub struct PublicHotShotConfig {
-    pub known_nodes_with_stake: Vec<PeerConfig<SeqTypes>>,
-    pub epoch_height: Option<u64>,
-    pub epoch_start_block: Option<u64>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct SequencerConfig {
     pub config: PublicHotShotConfig,
 }
@@ -353,6 +348,32 @@ pub async fn get_node_stake_table_from_sequencer(
     };
 
     Ok(peer_configs)
+}
+
+// [get_node_validators_from_sequencer] retrieves the validators from the
+// Sequencer for a given epoch.
+pub async fn get_node_validators_from_sequencer(
+    client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+    epoch: u64,
+) -> Result<IndexMap<Address, Validator<BLSPubKey>>, hotshot_query_service::Error> {
+    let path = format!("node/validators/{epoch}");
+    // Let's figure out our epoch height
+    let request = client
+        .get(&path)
+        // We need to set the Accept header, otherwise the Content-Type
+        // will be application/octet-stream, and we won't be able to
+        // deserialize the response.
+        .header("Accept", "application/json");
+
+    let validators: IndexMap<Address, Validator<BLSPubKey>> = match request.send().await {
+        Ok(validators) => validators,
+        Err(err) => {
+            tracing::info!("retrieve validators request failed: {}", err);
+            return Err(err);
+        },
+    };
+
+    Ok(validators)
 }
 
 pub enum GetNodeIdentityFromUrlError {

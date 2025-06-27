@@ -35,6 +35,7 @@ use hotshot_types::{
     consensus::{Consensus, OuterConsensus},
     constants::EVENT_CHANNEL_SIZE,
     message::{Message, UpgradeLock},
+    storage_metrics::StorageMetricsValue,
     traits::{
         network::ConnectedNetwork,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
@@ -199,6 +200,7 @@ pub fn add_network_event_task<
         epoch: genesis_epoch_from_version::<V, TYPES>(),
         membership_coordinator: handle.membership_coordinator.clone(),
         storage: handle.storage(),
+        storage_metrics: handle.storage_metrics(),
         consensus: OuterConsensus::new(handle.consensus()),
         upgrade_lock: handle.hotshot.upgrade_lock.clone(),
         transmit_tasks: BTreeMap::new(),
@@ -330,8 +332,9 @@ where
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
-        metrics: ConsensusMetricsValue,
+        consensus_metrics: ConsensusMetricsValue,
         storage: I::Storage,
+        storage_metrics: StorageMetricsValue,
     ) -> SystemContextHandle<TYPES, I, V> {
         let epoch_height = config.epoch_height;
 
@@ -344,8 +347,9 @@ where
             memberships.clone(),
             network,
             initializer,
-            metrics,
+            consensus_metrics,
             storage.clone(),
+            storage_metrics,
         )
         .await;
         let consensus_registry = ConsensusTaskRegistry::new();
@@ -456,7 +460,7 @@ where
                                 }
                             }
                             Some(Err(e)) => {
-                                tracing::error!("Relay Task, send_handle, Error receiving event: {:?}", e);
+                                tracing::error!("Relay Task, send_handle, Error receiving event: {e:?}");
                             }
                             None => {
                                 tracing::info!("Relay Task, send_handle, Event stream closed");
@@ -503,7 +507,7 @@ where
                                 }
                             }
                             Some(Err(e)) => {
-                                tracing::error!("Relay Task, recv_handle, Error receiving event from network: {:?}", e);
+                                tracing::error!("Relay Task, recv_handle, Error receiving event from network: {e:?}");
                             }
                             None => {
                                 tracing::info!("Relay Task, recv_handle, Network event stream closed");

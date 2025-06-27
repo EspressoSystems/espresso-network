@@ -36,6 +36,45 @@ members = [
     "request-response",
     "sdks/crypto-helper",
     "sequencer",
+    "sequencer-sqlite",
+    "staking-cli",
+    "tests",
+    "types",
+    "utils",
+    "vid",
+]
+
+# All crates except sequencer-sqlite, to avoid turning on embedded-db feature
+# for the whole workspace by default.
+default-members = [
+    "alloy-compat",
+    "builder",
+    "client",
+    "contracts/rust/adapter",
+    "contracts/rust/deployer",
+    "contracts/rust/diff-test",
+    "contracts/rust/gen-vk-contract",
+    "crates/hotshot/builder-api",
+    "crates/hotshot/example-types",
+    "crates/hotshot/examples",
+    "crates/hotshot/hotshot",
+    "crates/hotshot/libp2p-networking",
+    "crates/hotshot/macros",
+    "crates/hotshot/orchestrator",
+    "crates/hotshot/task",
+    "crates/hotshot/task-impls",
+    "crates/hotshot/testing",
+    "crates/hotshot/types",
+    "crates/hotshot/utils",
+    "hotshot-builder-core",
+    "hotshot-builder-core-refactored",
+    "hotshot-events-service",
+    "hotshot-query-service",
+    "hotshot-state-prover",
+    "node-metrics",
+    "request-response",
+    "sdks/crypto-helper",
+    "sequencer",
     "staking-cli",
     "tests",
     "types",
@@ -220,7 +259,7 @@ vergen = { version = "8.3", features = ["git", "gitcl"] }
 zeroize = "1.7"
 committable = "0.2"
 portpicker = "0.1.1"
-pretty_assertions = "1.4"
+pretty_assertions = { version = "1.4", features = ["unstable"] }
 static_assertions = "1.1"
 num-traits = "0.2"
 derivative = "2.2"
@@ -258,3 +297,12 @@ opt-level = 0
 opt-level = 0
 [profile.test.package.hotshot-state-prover]
 opt-level = 3
+
+# Geared towards building our docker images for local development
+# - Compile quickly
+# - Optimized enough to run demo
+# - Avoids huge binaries
+[profile.test-docker]
+inherits = "test"
+strip = true
+debug = "none"

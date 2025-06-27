@@ -615,8 +615,9 @@ mod test {
     use crate::{
         availability::{
             AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch, FetchStream, LeafId,
-            LeafQueryData, PayloadMetadata, PayloadQueryData, StateCertQueryData, TransactionHash,
-            TransactionQueryData, UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
+            LeafQueryData, NamespaceId, PayloadMetadata, PayloadQueryData, StateCertQueryData,
+            TransactionHash, TransactionQueryData, UpdateAvailabilityData, VidCommonMetadata,
+            VidCommonQueryData,
         },
         metrics::PrometheusMetrics,
         node::{NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
@@ -796,14 +797,20 @@ mod test {
         async fn count_transactions_in_range(
             &self,
             range: impl RangeBounds<usize> + Send,
+            namespace: Option<NamespaceId<MockTypes>>,
         ) -> QueryResult<usize> {
-            self.hotshot_qs.count_transactions_in_range(range).await
+            self.hotshot_qs
+                .count_transactions_in_range(range, namespace)
+                .await
         }
         async fn payload_size_in_range(
             &self,
             range: impl RangeBounds<usize> + Send,
+            namespace: Option<NamespaceId<MockTypes>>,
         ) -> QueryResult<usize> {
-            self.hotshot_qs.payload_size_in_range(range).await
+            self.hotshot_qs
+                .payload_size_in_range(range, namespace)
+                .await
         }
         async fn vid_share<ID>(&self, id: ID) -> QueryResult<VidShare>
         where
@@ -941,11 +948,11 @@ mod test {
         let port = pick_unused_port().unwrap();
         let _server = BackgroundTask::spawn(
             "server",
-            app.serve(format!("0.0.0.0:{}", port), MockBase::instance()),
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
         );
 
         let client =
-            Client::<Error, MockBase>::new(format!("http://localhost:{}", port).parse().unwrap());
+            Client::<Error, MockBase>::new(format!("http://localhost:{port}").parse().unwrap());
         assert!(client.connect(Some(Duration::from_secs(60))).await);
 
         client.post::<()>("mod/ext/42").send().await.unwrap();

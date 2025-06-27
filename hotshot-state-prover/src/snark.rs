@@ -6,9 +6,7 @@ use ark_std::{
     rand::{CryptoRng, RngCore},
 };
 /// BLS verification key, base field and Schnorr verification key
-use hotshot_types::light_client::{
-    CircuitField, LightClientState, PublicInput, StakeTableState, StateVerKey,
-};
+use hotshot_types::light_client::{CircuitField, LightClientState, StakeTableState, StateVerKey};
 use jf_plonk::{
     errors::PlonkError,
     proof_system::{PlonkKzgSnark, UniversalSNARK},
@@ -24,6 +22,8 @@ pub type VerifyingKey = jf_plonk::proof_system::structs::VerifyingKey<Bn254>;
 pub type Proof = jf_plonk::proof_system::structs::Proof<Bn254>;
 /// Universal SRS
 pub type UniversalSrs = jf_plonk::proof_system::structs::UniversalSrs<Bn254>;
+/// Public input to the light client state prover service
+pub type PublicInput = crate::circuit::GenericPublicInput<CircuitField>;
 
 /// Given a SRS, returns the proving key and verifying key for state update
 /// # Errors

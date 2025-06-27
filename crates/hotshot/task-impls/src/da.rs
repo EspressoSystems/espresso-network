@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{marker::PhantomData, sync::Arc};
+use std::{marker::PhantomData, sync::Arc, time::Instant};
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
@@ -17,6 +17,7 @@ use hotshot_types::{
     message::{Proposal, UpgradeLock},
     simple_certificate::DaCertificate2,
     simple_vote::{DaData2, DaVote2},
+    storage_metrics::StorageMetricsValue,
     traits::{
         network::ConnectedNetwork,
         node_implementation::{NodeImplementation, NodeType, Versions},
@@ -75,6 +76,9 @@ pub struct DaTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Version
     /// This node's storage ref
     pub storage: I::Storage,
 
+    /// Storage metrics
+    pub storage_metrics: Arc<StorageMetricsValue>,
+
     /// Lock for a decided upgrade
     pub upgrade_lock: UpgradeLock<TYPES, V>,
 }
@@ -91,7 +95,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
             HotShotEvent::DaProposalRecv(proposal, sender) => {
                 let sender = sender.clone();
                 tracing::debug!(
-                    "DA proposal received for view: {:?}",
+                    "DA proposal received for view: {}",
                     proposal.data.view_number()
                 );
                 // ED NOTE: Assuming that the next view leader is the one who sends DA proposal for this view
@@ -109,7 +113,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 if let Some(entry) = self.consensus.read().await.saved_payloads().get(&view) {
                     ensure!(
                         entry.payload.encode() == proposal.data.encoded_transactions,
-                        "Received DA proposal for view {view:?} but we already have a payload for that view and they are not identical.  Throwing it away",
+                        "Received DA proposal for view {view} but we already have a payload for that view and they are not identical.  Throwing it away",
                     );
                 }
 
@@ -154,8 +158,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 ensure!(
                   cur_view <= view_number + 1,
                   debug!(
-                    "Validated DA proposal for prior view but it's too old now Current view {:?}, DA Proposal view {:?}", 
-                    cur_view,
+                    "Validated DA proposal for prior view but it's too old now Current view {cur_view}, DA Proposal view {}", 
                     proposal.data.view_number()
                   )
                 );
@@ -223,11 +226,16 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     None
                 };
 
+                let now = Instant::now();
                 self.storage
                     .append_da2(proposal, payload_commitment)
                     .await
                     .wrap()
                     .context(error!("Failed to append DA proposal to storage"))?;
+                self.storage_metrics
+                    .append_da_duration
+                    .add_point(now.elapsed().as_secs_f64());
+
                 // Generate and send vote
                 let vote = DaVote2::create_signed_vote(
                     DaData2 {
@@ -242,7 +250,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 )
                 .await?;
 
-                tracing::debug!("Sending vote to the DA leader {:?}", vote.view_number());
+                tracing::debug!("Sending vote to the DA leader {}", vote.view_number());
 
                 broadcast_event(Arc::new(HotShotEvent::DaVoteSend(vote)), &event_stream).await;
                 let mut consensus_writer = self.consensus.write().await;
@@ -322,9 +330,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                                 .and_then(|epoch_map| epoch_map.get(&target_epoch))
                             {
                                 tracing::debug!(
-                                    "Primary network is down. Calculated own VID share for epoch {:?}, my id {:?}",
-                                    target_epoch,
-                                    my_id
+                                    "Primary network is down. Calculated own VID share for epoch {target_epoch:?}, my id {my_id}"
                                 );
                                 broadcast_event(
                                     Arc::new(HotShotEvent::VidShareRecv(
@@ -340,7 +346,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 }
             },
             HotShotEvent::DaVoteRecv(ref vote) => {
-                tracing::debug!("DA vote recv, Main Task {:?}", vote.view_number());
+                tracing::debug!("DA vote recv, Main Task {}", vote.view_number());
                 // Check if we are the leader and the vote is from the sender.
                 let view = vote.view_number();
                 let epoch = vote.data.epoch;
@@ -384,7 +390,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 );
 
                 if *view - *self.cur_view > 1 {
-                    tracing::info!("View changed by more than 1 going to view {view:?}");
+                    tracing::info!("View changed by more than 1 going to view {view}");
                 }
                 self.cur_view = view;
             },

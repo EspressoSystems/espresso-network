@@ -6,10 +6,10 @@ use async_trait::async_trait;
 use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
-    Leaf2, NetworkConfig,
+    v0_3::{EventKey, IndexedStake, StakeTableEvent},
+    Leaf2, NetworkConfig, ValidatorMap,
 };
-use hotshot::{types::BLSPubKey, InitializerEpochInfo};
+use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
     DhtPersistentStorage, SerializableRecord,
 };
@@ -26,8 +26,8 @@ use hotshot_types::{
         LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate2,
         UpgradeCertificate,
     },
+    traits::metrics::Metrics,
 };
-use indexmap::IndexMap;
 
 use crate::{NodeType, SeqTypes, ViewNumber};
 
@@ -256,14 +256,13 @@ impl SequencerPersistence for NoStorage {
     ) -> anyhow::Result<Option<LightClientStateUpdateCertificate<SeqTypes>>> {
         Ok(None)
     }
+
+    fn enable_metrics(&mut self, _metrics: &dyn Metrics) {}
 }
 
 #[async_trait]
 impl MembershipPersistence for NoStorage {
-    async fn load_stake(
-        &self,
-        _epoch: EpochNumber,
-    ) -> anyhow::Result<Option<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>>> {
+    async fn load_stake(&self, _epoch: EpochNumber) -> anyhow::Result<Option<ValidatorMap>> {
         Ok(None)
     }
 
@@ -271,11 +270,7 @@ impl MembershipPersistence for NoStorage {
         Ok(None)
     }
 
-    async fn store_stake(
-        &self,
-        _epoch: EpochNumber,
-        _stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
-    ) -> anyhow::Result<()> {
+    async fn store_stake(&self, _epoch: EpochNumber, _stake: ValidatorMap) -> anyhow::Result<()> {
         Ok(())
     }
 

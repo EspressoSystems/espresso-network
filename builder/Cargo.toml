@@ -6,9 +6,10 @@ authors = { workspace = true }
 edition = { workspace = true }
 
 [features]
-default = ["fee", "pos"]
+default = ["fee", "pos", "drb-and-header"]
 fee = []
 pos = []
+drb-and-header = []
 
 [dependencies]
 alloy = { workspace = true }

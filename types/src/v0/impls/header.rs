@@ -3,16 +3,15 @@ use std::fmt;
 use anyhow::{ensure, Context};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
-use hotshot::types::BLSPubKey;
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
 use hotshot_types::{
-    data::{VidCommitment, ViewNumber},
+    data::{vid_commitment, VidCommitment, ViewNumber},
     light_client::LightClientState,
     traits::{
-        block_contents::{BlockHeader, BuilderFee},
-        node_implementation::{ConsensusTime, NodeType},
+        block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
+        node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::BuilderSignatureKey,
-        BlockPayload, ValidatedState as _,
+        BlockPayload, EncodeBytes, ValidatedState as _,
     },
     utils::BuilderCommitment,
 };
@@ -30,17 +29,17 @@ use super::{
     instance_state::NodeState,
     state::ValidatedState,
     v0_1::{IterableFeeInfo, RewardMerkleCommitment, RewardMerkleTree, REWARD_MERKLE_TREE_HEIGHT},
-    v0_3::{ChainConfig, Validator},
+    v0_3::ChainConfig,
 };
 use crate::{
     eth_signature_key::BuilderSignature,
     v0::{
         header::{EitherOrVersion, VersionedHeader},
-        impls::reward::{find_validator_info, first_two_epochs},
+        impls::reward::{find_validator_info, first_two_epochs, RewardDistributor},
     },
-    v0_1, v0_2, v0_3, BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
-    FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsTable, SeqTypes,
-    UpgradeType,
+    v0_1, v0_2, v0_3, v0_4, BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
+    FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable,
+    PayloadByteLen, SeqTypes, TimestampMillis, UpgradeType,
 };
 
 impl v0_1::Header {
@@ -86,6 +85,11 @@ impl Committable for Header {
                 .u64_field("version_minor", 3)
                 .field("fields", fields.commit())
                 .finalize(),
+            Self::V4(fields) => RawCommitmentBuilder::new(&Self::tag())
+                .u64_field("version_major", 0)
+                .u64_field("version_minor", 4)
+                .field("fields", fields.commit())
+                .finalize(),
         }
     }
 
@@ -110,6 +114,11 @@ impl Serialize for Header {
             .serialize(serializer),
             Self::V3(fields) => VersionedHeader {
                 version: EitherOrVersion::Version(Version { major: 0, minor: 3 }),
+                fields: fields.clone(),
+            }
+            .serialize(serializer),
+            Self::V4(fields) => VersionedHeader {
+                version: EitherOrVersion::Version(Version { major: 0, minor: 4 }),
                 fields: fields.clone(),
             }
             .serialize(serializer),
@@ -158,6 +167,10 @@ impl<'de> Deserialize<'de> for Header {
                         seq.next_element()?
                             .ok_or_else(|| de::Error::missing_field("fields"))?,
                     )),
+                    EitherOrVersion::Version(Version { major: 0, minor: 4 }) => Ok(Header::V4(
+                        seq.next_element()?
+                            .ok_or_else(|| de::Error::missing_field("fields"))?,
+                    )),
                     EitherOrVersion::Version(v) => {
                         Err(serde::de::Error::custom(format!("invalid version {v:?}")))
                     },
@@ -187,6 +200,9 @@ impl<'de> Deserialize<'de> for Header {
                             serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
                         )),
                         EitherOrVersion::Version(Version { major: 0, minor: 3 }) => Ok(Header::V3(
+                            serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
+                        )),
+                        EitherOrVersion::Version(Version { major: 0, minor: 4 }) => Ok(Header::V4(
                             serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
                         )),
                         EitherOrVersion::Version(v) => {
@@ -246,6 +262,7 @@ impl Header {
             Self::V1(_) => Version { major: 0, minor: 1 },
             Self::V2(_) => Version { major: 0, minor: 2 },
             Self::V3(_) => Version { major: 0, minor: 3 },
+            Self::V4(_) => Version { major: 0, minor: 4 },
         }
     }
     #[allow(clippy::too_many_arguments)]
@@ -253,6 +270,7 @@ impl Header {
         chain_config: ChainConfig,
         height: u64,
         timestamp: u64,
+        timestamp_millis: u64,
         l1_head: u64,
         l1_finalized: Option<L1BlockInfo>,
         payload_commitment: VidCommitment,
@@ -265,15 +283,11 @@ impl Header {
         builder_signature: Vec<BuilderSignature>,
         version: Version,
     ) -> Self {
-        let Version { major, minor } = version;
-
-        // Ensure the major version is 0, otherwise panic
-        assert!(major == 0, "Invalid major version {major}");
         // Ensure FeeInfo contains at least 1 element
         assert!(!fee_info.is_empty(), "Invalid fee_info length: 0");
 
-        match minor {
-            1 => Self::V1(v0_1::Header {
+        match (version.major, version.minor) {
+            (0, 1) => Self::V1(v0_1::Header {
                 chain_config: v0_1::ResolvableChainConfig::from(v0_1::ChainConfig::from(
                     chain_config,
                 )),
@@ -289,7 +303,7 @@ impl Header {
                 fee_info: fee_info[0], // NOTE this is asserted to exist above
                 builder_signature: builder_signature.first().copied(),
             }),
-            2 => Self::V2(v0_2::Header {
+            (0, 2) => Self::V2(v0_2::Header {
                 chain_config: v0_1::ResolvableChainConfig::from(v0_1::ChainConfig::from(
                     chain_config,
                 )),
@@ -305,10 +319,26 @@ impl Header {
                 fee_info: fee_info[0], // NOTE this is asserted to exist above
                 builder_signature: builder_signature.first().copied(),
             }),
-            3 => Self::V3(v0_3::Header {
+            (0, 3) => Self::V3(v0_3::Header {
                 chain_config: chain_config.into(),
                 height,
                 timestamp,
+                l1_head,
+                l1_finalized,
+                payload_commitment,
+                builder_commitment,
+                ns_table,
+                block_merkle_tree_root,
+                fee_merkle_tree_root,
+                fee_info: fee_info[0], // NOTE this is asserted to exist above
+                builder_signature: builder_signature.first().copied(),
+                reward_merkle_tree_root,
+            }),
+            (0, 4) => Self::V4(v0_4::Header {
+                chain_config: chain_config.into(),
+                height,
+                timestamp,
+                timestamp_millis: TimestampMillis::from_millis(timestamp_millis),
                 l1_head,
                 l1_finalized,
                 payload_commitment,
@@ -335,6 +365,7 @@ macro_rules! field {
             Self::V1(data) => &data.$name,
             Self::V2(data) => &data.$name,
             Self::V3(data) => &data.$name,
+            Self::V4(data) => &data.$name,
         }
     };
 }
@@ -345,6 +376,7 @@ macro_rules! field_mut {
             Self::V1(data) => &mut data.$name,
             Self::V2(data) => &mut data.$name,
             Self::V3(data) => &mut data.$name,
+            Self::V4(data) => &mut data.$name,
         }
     };
 }
@@ -360,10 +392,11 @@ impl Header {
         l1_deposits: &[FeeInfo],
         builder_fee: Vec<BuilderFee<SeqTypes>>,
         mut timestamp: u64,
+        mut timestamp_millis: u64,
         mut state: ValidatedState,
         chain_config: ChainConfig,
         version: Version,
-        validator: Option<Validator<BLSPubKey>>,
+        reward_distributor: Option<RewardDistributor>,
     ) -> anyhow::Result<Self> {
         ensure!(
             version.major == 0,
@@ -384,6 +417,14 @@ impl Header {
                 parent_header.timestamp()
             );
             timestamp = parent_header.timestamp();
+        }
+
+        if timestamp_millis < parent_header.timestamp_millis() {
+            tracing::warn!(
+                "Espresso timestamp {timestamp} behind parent {}, local clock may be out of sync",
+                parent_header.timestamp_millis()
+            );
+            timestamp_millis = parent_header.timestamp_millis();
         }
 
         // Ensure the L1 block references don't decrease. Again, we can trust `parent.l1_*` are
@@ -412,6 +453,13 @@ impl Header {
             if timestamp < l1_timestamp {
                 tracing::warn!("Espresso timestamp {timestamp} behind L1 timestamp {l1_timestamp}, local clock may be out of sync");
                 timestamp = l1_timestamp;
+            }
+
+            let l1_timestamp_millis = l1_timestamp * 1_000;
+
+            if timestamp_millis < l1_timestamp_millis {
+                tracing::warn!("Espresso timestamp_millis {timestamp_millis} behind L1 timestamp {l1_timestamp_millis}, local clock may be out of sync");
+                timestamp_millis = l1_timestamp_millis;
             }
         }
 
@@ -459,17 +507,14 @@ impl Header {
 
         let fee_merkle_tree_root = state.fee_merkle_tree.commitment();
 
-        let Version { major, minor } = version;
-
-        assert!(major == 0, "Invalid major version {major}");
-
-        if let Some(validator) = validator {
-            let reward_state = validator.apply_rewards(state.reward_merkle_tree.clone())?;
+        if let Some(reward_distributor) = reward_distributor {
+            let reward_state =
+                reward_distributor.apply_rewards(state.reward_merkle_tree.clone())?;
             state.reward_merkle_tree = reward_state;
         }
 
-        let header = match minor {
-            1 => Self::V1(v0_1::Header {
+        let header = match (version.major, version.minor) {
+            (0, 1) => Self::V1(v0_1::Header {
                 chain_config: v0_1::ResolvableChainConfig::from(v0_1::ChainConfig::from(
                     chain_config,
                 )),
@@ -485,7 +530,7 @@ impl Header {
                 fee_info: fee_info[0],
                 builder_signature: builder_signature.first().copied(),
             }),
-            2 => Self::V2(v0_2::Header {
+            (0, 2) => Self::V2(v0_2::Header {
                 chain_config: v0_1::ResolvableChainConfig::from(v0_1::ChainConfig::from(
                     chain_config,
                 )),
@@ -501,10 +546,26 @@ impl Header {
                 fee_info: fee_info[0],
                 builder_signature: builder_signature.first().copied(),
             }),
-            3 => Self::V3(v0_3::Header {
+            (0, 3) => Self::V3(v0_3::Header {
                 chain_config: chain_config.into(),
                 height,
                 timestamp,
+                l1_head: l1.head,
+                l1_finalized: l1.finalized,
+                payload_commitment,
+                builder_commitment,
+                ns_table,
+                block_merkle_tree_root,
+                fee_merkle_tree_root,
+                reward_merkle_tree_root: state.reward_merkle_tree.commitment(),
+                fee_info: fee_info[0],
+                builder_signature: builder_signature.first().copied(),
+            }),
+            (0, 4) => Self::V4(v0_4::Header {
+                chain_config: chain_config.into(),
+                height,
+                timestamp,
+                timestamp_millis: TimestampMillis::from_millis(timestamp_millis),
                 l1_head: l1.head,
                 l1_finalized: l1.finalized,
                 payload_commitment,
@@ -557,6 +618,7 @@ impl Header {
             Self::V1(fields) => v0_3::ResolvableChainConfig::from(&fields.chain_config),
             Self::V2(fields) => v0_3::ResolvableChainConfig::from(&fields.chain_config),
             Self::V3(fields) => fields.chain_config,
+            Self::V4(fields) => fields.chain_config,
         }
     }
 
@@ -568,12 +630,40 @@ impl Header {
         &mut *field_mut!(self.height)
     }
 
-    pub fn timestamp(&self) -> u64 {
-        *field!(self.timestamp)
+    pub fn timestamp_internal(&self) -> u64 {
+        match self {
+            Self::V1(fields) => fields.timestamp,
+            Self::V2(fields) => fields.timestamp,
+            Self::V3(fields) => fields.timestamp,
+            Self::V4(fields) => fields.timestamp,
+        }
     }
 
-    pub fn timestamp_mut(&mut self) -> &mut u64 {
-        &mut *field_mut!(self.timestamp)
+    pub fn timestamp_millis_internal(&self) -> u64 {
+        match self {
+            Self::V1(fields) => fields.timestamp * 1_000,
+            Self::V2(fields) => fields.timestamp * 1_000,
+            Self::V3(fields) => fields.timestamp * 1_000,
+            Self::V4(fields) => fields.timestamp_millis.u64(),
+        }
+    }
+
+    pub fn set_timestamp(&mut self, timestamp: u64, timestamp_millis: u64) {
+        match self {
+            Self::V1(fields) => {
+                fields.timestamp = timestamp;
+            },
+            Self::V2(fields) => {
+                fields.timestamp = timestamp;
+            },
+            Self::V3(fields) => {
+                fields.timestamp = timestamp;
+            },
+            Self::V4(fields) => {
+                fields.timestamp = timestamp;
+                fields.timestamp_millis = TimestampMillis::from_millis(timestamp_millis);
+            },
+        };
     }
 
     /// The Espresso block header includes a reference to the current head of the L1 chain.
@@ -674,6 +764,7 @@ impl Header {
             Self::V1(fields) => vec![fields.fee_info],
             Self::V2(fields) => vec![fields.fee_info],
             Self::V3(fields) => vec![fields.fee_info],
+            Self::V4(fields) => vec![fields.fee_info],
         }
     }
 
@@ -684,6 +775,7 @@ impl Header {
             Self::V1(_) => empty_reward_merkle_tree.commitment(),
             Self::V2(_) => empty_reward_merkle_tree.commitment(),
             Self::V3(fields) => fields.reward_merkle_tree_root,
+            Self::V4(fields) => fields.reward_merkle_tree_root,
         }
     }
 
@@ -704,6 +796,7 @@ impl Header {
             Self::V1(fields) => fields.builder_signature.as_slice().to_vec(),
             Self::V2(fields) => fields.builder_signature.as_slice().to_vec(),
             Self::V3(fields) => fields.builder_signature.as_slice().to_vec(),
+            Self::V4(fields) => fields.builder_signature.as_slice().to_vec(),
         }
     }
 }
@@ -768,6 +861,7 @@ impl BlockHeader<SeqTypes> for Header {
                 Some(upgrade) => match upgrade.upgrade_type {
                     UpgradeType::Fee { chain_config } => chain_config,
                     UpgradeType::Epoch { chain_config } => chain_config,
+                    UpgradeType::DrbAndHeader { chain_config } => chain_config,
                 },
                 None => Header::get_chain_config(&validated_state, instance_state).await?,
             }
@@ -850,23 +944,28 @@ impl BlockHeader<SeqTypes> for Header {
                 .context("remembering block proof")?;
         }
 
-        let mut leader_config = None;
+        let mut compute_reward = None;
         // Rewards are distributed only if the current epoch is not the first or second epoch
         // this is because we don't have stake table from the contract for the first two epochs
         let proposed_header_height = parent_leaf.height() + 1;
         if version >= EpochVersion::version()
             && !first_two_epochs(proposed_header_height, instance_state).await?
         {
-            leader_config = Some(
-                find_validator_info(
-                    instance_state,
-                    &mut validated_state,
-                    parent_leaf,
-                    ViewNumber::new(view_number),
-                )
-                .await?,
-            );
+            let leader = find_validator_info(
+                instance_state,
+                &mut validated_state,
+                parent_leaf,
+                ViewNumber::new(view_number),
+            )
+            .await?;
+            let block_reward = instance_state.block_reward().await;
+            compute_reward = Some(RewardDistributor::new(leader, block_reward));
         };
+
+        let now = OffsetDateTime::now_utc();
+
+        let timestamp = now.unix_timestamp() as u64;
+        let timestamp_millis = TimestampMillis::from_time(&now).u64();
 
         Ok(Self::from_info(
             payload_commitment,
@@ -876,20 +975,32 @@ impl BlockHeader<SeqTypes> for Header {
             l1_snapshot,
             &l1_deposits,
             vec![builder_fee],
-            OffsetDateTime::now_utc().unix_timestamp() as u64,
+            timestamp,
+            timestamp_millis,
             validated_state,
             chain_config,
             version,
-            leader_config,
+            compute_reward,
         )?)
     }
 
-    fn genesis(
+    fn genesis<V: Versions>(
         instance_state: &NodeState,
-        payload_commitment: VidCommitment,
-        builder_commitment: BuilderCommitment,
-        ns_table: <<SeqTypes as NodeType>::BlockPayload as BlockPayload<SeqTypes>>::Metadata,
+        payload: <SeqTypes as NodeType>::BlockPayload,
+        metadata: &<<SeqTypes as NodeType>::BlockPayload as BlockPayload<SeqTypes>>::Metadata,
     ) -> Self {
+        let payload_bytes = payload.encode();
+        let builder_commitment = payload.builder_commitment(metadata);
+
+        let vid_commitment_version = instance_state.genesis_version;
+
+        let payload_commitment = vid_commitment::<V>(
+            &payload_bytes,
+            &metadata.encode(),
+            GENESIS_VID_NUM_STORAGE_NODES,
+            vid_commitment_version,
+        );
+
         let ValidatedState {
             fee_merkle_tree,
             block_merkle_tree,
@@ -900,12 +1011,18 @@ impl BlockHeader<SeqTypes> for Header {
         let fee_merkle_tree_root = fee_merkle_tree.commitment();
         let reward_merkle_tree_root = reward_merkle_tree.commitment();
 
+        let time = instance_state.genesis_header.timestamp;
+
+        let timestamp = time.unix_timestamp();
+        let timestamp_millis = time.unix_timestamp_millis();
+
         //  The Header is versioned,
         //  so we create the genesis header for the current version of the sequencer.
         Self::create(
             instance_state.chain_config,
             0,
-            instance_state.genesis_header.timestamp.unix_timestamp(),
+            timestamp,
+            timestamp_millis,
             instance_state
                 .l1_genesis
                 .map(|block| block.number)
@@ -913,7 +1030,7 @@ impl BlockHeader<SeqTypes> for Header {
             instance_state.l1_genesis,
             payload_commitment,
             builder_commitment.clone(),
-            ns_table.clone(),
+            metadata.clone(),
             fee_merkle_tree_root,
             block_merkle_tree_root,
             reward_merkle_tree_root,
@@ -921,6 +1038,14 @@ impl BlockHeader<SeqTypes> for Header {
             vec![],
             instance_state.current_version,
         )
+    }
+
+    fn timestamp(&self) -> u64 {
+        self.timestamp_internal()
+    }
+
+    fn timestamp_millis(&self) -> u64 {
+        self.timestamp_millis_internal()
     }
 
     fn block_number(&self) -> u64 {
@@ -961,8 +1086,18 @@ impl BlockHeader<SeqTypes> for Header {
 }
 
 impl QueryableHeader<SeqTypes> for Header {
-    fn timestamp(&self) -> u64 {
-        self.timestamp()
+    type NamespaceId = NamespaceId;
+    type NamespaceIndex = NsIndex;
+
+    fn namespace_id(&self, i: &NsIndex) -> Option<NamespaceId> {
+        self.ns_table().read_ns_id(i)
+    }
+
+    fn namespace_size(&self, i: &NsIndex, payload_size: usize) -> u64 {
+        self.ns_table()
+            .ns_range(i, &PayloadByteLen(payload_size))
+            .byte_len()
+            .0 as u64
     }
 }
 
@@ -970,7 +1105,6 @@ impl ExplorerHeader<SeqTypes> for Header {
     type BalanceAmount = FeeAmount;
     type WalletAddress = Vec<FeeAccount>;
     type ProposerId = Vec<FeeAccount>;
-    type NamespaceId = NamespaceId;
 
     // TODO what are these expected values w/ multiple Fees
     fn proposer_id(&self) -> Self::ProposerId {
@@ -995,7 +1129,7 @@ impl ExplorerHeader<SeqTypes> for Header {
         FeeAmount::from(0)
     }
 
-    fn namespace_ids(&self) -> Vec<Self::NamespaceId> {
+    fn namespace_ids(&self) -> Vec<NamespaceId> {
         self.ns_table()
             .iter()
             .map(|i| self.ns_table().read_ns_id_unchecked(&i))
@@ -1030,6 +1164,7 @@ mod test_headers {
     struct TestCase {
         // Parent header info.
         parent_timestamp: u64,
+        parent_timestamp_millis: u64,
         parent_l1_head: u64,
         parent_l1_finalized: Option<L1BlockInfo>,
 
@@ -1037,10 +1172,12 @@ mod test_headers {
         l1_head: u64,
         l1_finalized: Option<L1BlockInfo>,
         timestamp: u64,
+        timestamp_millis: u64,
         l1_deposits: Vec<FeeInfo>,
 
         // Expected new header info.
         expected_timestamp: u64,
+        expected_timestamp_millis: u64,
         expected_l1_head: u64,
         expected_l1_finalized: Option<L1BlockInfo>,
     }
@@ -1051,12 +1188,13 @@ mod test_headers {
 
             // Check test case validity.
             assert!(self.expected_timestamp >= self.parent_timestamp);
+            assert!(self.expected_timestamp_millis >= self.parent_timestamp_millis);
             assert!(self.expected_l1_head >= self.parent_l1_head);
             assert!(self.expected_l1_finalized >= self.parent_l1_finalized);
 
             let genesis = GenesisForTest::default().await;
             let mut parent = genesis.header.clone();
-            *parent.timestamp_mut() = self.parent_timestamp;
+            parent.set_timestamp(self.parent_timestamp, self.parent_timestamp_millis);
             *parent.l1_head_mut() = self.parent_l1_head;
             *parent.l1_finalized_mut() = self.parent_l1_finalized;
 
@@ -1110,6 +1248,7 @@ mod test_headers {
                     fee_signature,
                 }],
                 self.timestamp,
+                self.timestamp_millis,
                 validated_state.clone(),
                 genesis.instance_state.chain_config,
                 Version { major: 0, minor: 1 },
@@ -1118,6 +1257,7 @@ mod test_headers {
             .unwrap();
             assert_eq!(header.height(), parent.height() + 1);
             assert_eq!(header.timestamp(), self.expected_timestamp);
+            assert_eq!(header.timestamp_millis(), self.expected_timestamp_millis);
             assert_eq!(header.l1_head(), self.expected_l1_head);
             assert_eq!(header.l1_finalized(), self.expected_l1_finalized);
 
@@ -1154,7 +1294,9 @@ mod test_headers {
     async fn test_new_header_advance_timestamp() {
         TestCase {
             timestamp: 1,
+            timestamp_millis: 1_000,
             expected_timestamp: 1,
+            expected_timestamp_millis: 1_000,
             ..Default::default()
         }
         .run()
@@ -1201,10 +1343,12 @@ mod test_headers {
             l1_head: 1,
             l1_finalized,
             timestamp: 0,
+            timestamp_millis: 0,
 
             expected_l1_head: 1,
             expected_l1_finalized: l1_finalized,
             expected_timestamp: 1,
+            expected_timestamp_millis: 1_000,
 
             ..Default::default()
         }
@@ -1216,8 +1360,11 @@ mod test_headers {
     async fn test_new_header_timestamp_behind() {
         TestCase {
             parent_timestamp: 1,
+            parent_timestamp_millis: 1_000,
             timestamp: 0,
+            timestamp_millis: 0,
             expected_timestamp: 1,
+            expected_timestamp_millis: 1_000,
 
             ..Default::default()
         }
@@ -1450,6 +1597,7 @@ mod test_headers {
             genesis.instance_state.chain_config,
             1,
             2,
+            2_000_000_000,
             3,
             Default::default(),
             header.payload_commitment(),
@@ -1474,6 +1622,7 @@ mod test_headers {
             genesis.instance_state.chain_config,
             1,
             2,
+            2_000_000_000,
             3,
             Default::default(),
             header.payload_commitment(),
@@ -1498,6 +1647,7 @@ mod test_headers {
             genesis.instance_state.chain_config,
             1,
             2,
+            2_000_000_000,
             3,
             Default::default(),
             header.payload_commitment(),

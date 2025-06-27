@@ -145,6 +145,9 @@ pub struct NsTableBuilder {
     pub(crate) num_entries: usize,
 }
 
+/// Index of a transaction.
+pub type Index = hotshot_query_service::availability::TransactionIndex<crate::SeqTypes>;
+
 /// Index for an entry in a ns table.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct NsIndex(pub(crate) usize);
@@ -190,8 +193,6 @@ pub struct Payload {
 /// namespace table.
 #[derive(Clone, Debug, Display, Eq, Hash, PartialEq)]
 pub struct PayloadByteLen(pub(crate) usize);
-
-pub use hotshot_query_service::availability::TransactionIndex as Index;
 
 /// Cartesian product of [`NsIter`], [`TxIter`].
 pub struct Iter<'a> {

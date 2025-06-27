@@ -4,11 +4,15 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{collections::HashSet, fmt::Debug, time::Duration};
+use std::{collections::HashSet, fmt::Debug, sync::Arc, time::Duration};
 
-use hotshot_types::traits::{network::NetworkError, node_implementation::NodeType};
+use bimap::BiMap;
+use hotshot_types::traits::{
+    network::NetworkError, node_implementation::NodeType, signature_key::SignatureKey,
+};
 use libp2p::{request_response::ResponseChannel, Multiaddr};
 use libp2p_identity::PeerId;
+use parking_lot::Mutex;
 use tokio::{
     sync::mpsc::{Receiver, UnboundedReceiver, UnboundedSender},
     time::{sleep, timeout},
@@ -33,6 +37,9 @@ pub struct NetworkNodeHandle<T: NodeType> {
 
     /// send an action to the networkbehaviour
     send_network: UnboundedSender<ClientRequest>,
+
+    /// The map from consensus keys to peer IDs
+    consensus_key_to_pid_map: Arc<Mutex<BiMap<T::SignatureKey, PeerId>>>,
 
     /// the local address we're listening on
     listen_addr: Multiaddr,
@@ -83,11 +90,16 @@ impl NetworkNodeReceiver {
 pub async fn spawn_network_node<T: NodeType, D: DhtPersistentStorage>(
     config: NetworkNodeConfig<T>,
     dht_persistent_storage: D,
+    consensus_key_to_pid_map: Arc<Mutex<BiMap<T::SignatureKey, PeerId>>>,
     id: usize,
 ) -> Result<(NetworkNodeReceiver, NetworkNodeHandle<T>), NetworkError> {
-    let mut network = NetworkNode::new(config.clone(), dht_persistent_storage)
-        .await
-        .map_err(|e| NetworkError::ConfigError(format!("failed to create network node: {e}")))?;
+    let mut network = NetworkNode::new(
+        config.clone(),
+        dht_persistent_storage,
+        Arc::clone(&consensus_key_to_pid_map),
+    )
+    .await
+    .map_err(|e| NetworkError::ConfigError(format!("failed to create network node: {e}")))?;
     // randomly assigned port
     let listen_addr = config
         .bind_address
@@ -110,6 +122,7 @@ pub async fn spawn_network_node<T: NodeType, D: DhtPersistentStorage>(
     let handle = NetworkNodeHandle::<T> {
         network_config: config,
         send_network: send_chan,
+        consensus_key_to_pid_map,
         listen_addr,
         peer_id,
         id,
@@ -194,18 +207,26 @@ impl<T: NodeType> NetworkNodeHandle<T> {
             .map_err(|err| NetworkError::ChannelReceiveError(err.to_string()))
     }
 
-    /// Looks up a node's `PeerId` by its staking key. Is authenticated through
-    /// `get_record` assuming each record should be signed.
+    /// Looks up a node's `PeerId` by its consensus key.
     ///
     /// # Errors
     /// If the DHT lookup fails
     pub async fn lookup_node(
         &self,
-        key: &[u8],
+        consensus_key: &T::SignatureKey,
         dht_timeout: Duration,
     ) -> Result<PeerId, NetworkError> {
+        // First check if we already have an open connection to the peer
+        if let Some(pid) = self
+            .consensus_key_to_pid_map
+            .lock()
+            .get_by_left(consensus_key)
+        {
+            return Ok(*pid);
+        }
+
         // Create the record key
-        let key = RecordKey::new(Namespace::Lookup, key.to_vec());
+        let key = RecordKey::new(Namespace::Lookup, consensus_key.to_bytes());
 
         // Get the record from the DHT
         let pid = self.get_record_timeout(key, dht_timeout).await?;

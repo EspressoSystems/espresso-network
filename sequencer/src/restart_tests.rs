@@ -1,8 +1,23 @@
 #![cfg(test)]
 
-use std::{collections::HashSet, path::Path, time::Duration};
+use std::{
+    collections::{BTreeMap, HashSet},
+    path::Path,
+    time::Duration,
+};
 
-use alloy::node_bindings::{Anvil, AnvilInstance};
+use alloy::{
+    network::EthereumWallet,
+    node_bindings::Anvil,
+    primitives::Address,
+    providers::{
+        ext::AnvilApi,
+        fillers::{BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller},
+        layers::AnvilProvider,
+        Provider, ProviderBuilder, RootProvider,
+    },
+    signers::local::LocalSigner,
+};
 use anyhow::bail;
 use cdn_broker::{
     reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
@@ -10,32 +25,41 @@ use cdn_broker::{
 };
 use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
+use committable::{Commitment, Committable};
 use derivative::Derivative;
+use espresso_contract_deployer::{
+    builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table, Contract,
+    Contracts,
+};
 use espresso_types::{
-    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig, FeeAccount,
-    MockSequencerVersions, PrivKey, PubKey, SeqTypes, Transaction,
+    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig, EpochVersion,
+    FeeAccount, L1Client, Leaf2, PrivKey, PubKey, SeqTypes, SequencerVersions, Transaction, V0_0,
 };
 use futures::{
     future::{join_all, try_join_all, BoxFuture, FutureExt},
     stream::{BoxStream, StreamExt},
 };
 use hotshot::traits::implementations::derive_libp2p_peer_id;
+use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_orchestrator::run_orchestrator;
 use hotshot_testing::{
     block_builder::{SimpleBuilderImplementation, TestBuilderImplementation},
     test_builder::BuilderChange,
 };
 use hotshot_types::{
+    data::EpochNumber,
     event::{Event, EventType},
     light_client::StateKeyPair,
     network::{Libp2pConfig, NetworkConfig},
     traits::{node_implementation::ConsensusTime, signature_key::SignatureKey},
+    PeerConfig,
 };
 use itertools::Itertools;
 use options::Modules;
 use portpicker::pick_unused_port;
 use run::init_with_storage;
 use sequencer_utils::test_utils::setup_test;
+use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
 use surf_disco::{error::ClientError, Url};
 use tempfile::TempDir;
 use tokio::{
@@ -47,13 +71,16 @@ use vec1::vec1;
 
 use super::*;
 use crate::{
-    api::{self, data_source::testing::TestableSequencerDataSource, options::Query},
+    api::{
+        self, data_source::testing::TestableSequencerDataSource, options::Query,
+        test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
+    },
     genesis::{L1Finalized, StakeTableConfig},
     network::cdn::{TestingDef, WrappedSignatureKey},
-    testing::wait_for_decide_on_handle,
+    testing::{staking_priv_keys, wait_for_decide_on_handle},
     SequencerApiVersion,
 };
-
+type MockSequencerVersions = SequencerVersions<EpochVersion, V0_0>;
 async fn test_restart_helper(network: (usize, usize), restart: (usize, usize), cdn: bool) {
     setup_test();
 
@@ -241,12 +268,15 @@ struct TestNode<S: TestableSequencerDataSource> {
     modules: Modules,
     opt: Options,
     num_nodes: usize,
+    reference_state: Arc<RwLock<BTreeMap<u64, Commitment<Leaf2>>>>,
+    /// Number of epochs to wait after restart before running progress check.
+    wait_for_epoch: EpochNumber,
 }
 
 impl<S: TestableSequencerDataSource> TestNode<S> {
     #[tracing::instrument]
     async fn new(network: NetworkParams<'_>, node: &NodeParams) -> Self {
-        tracing::info!(?network, ?node, "creating node",);
+        tracing::info!(?network, ?node, "creating node");
 
         let opts = api::Options::from(api::options::Http::with_port(node.api_port));
         let storage = S::create_storage().await;
@@ -312,6 +342,8 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             opt,
             num_nodes: network.peer_ports.len(),
             context: None,
+            reference_state: Default::default(),
+            wait_for_epoch: EpochNumber::new(3),
         }
     }
 
@@ -378,6 +410,13 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         }
     }
 
+    fn node_id(&self) -> Option<u64> {
+        let Some(context) = &self.context else {
+            return None;
+        };
+        Some(context.node_id())
+    }
+
     fn check_progress_with_timeout(&self) -> BoxFuture<anyhow::Result<()>> {
         async {
             let Some(context) = &self.context else {
@@ -398,7 +437,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             // conservative: of course if we actually make progress, not every view will time out,
             // and we will take less than this amount of time.
             let timeout_duration =
-                2 * Duration::from_millis(next_view_timeout) * (self.num_nodes as u32);
+                4 * Duration::from_millis(next_view_timeout) * (self.num_nodes as u32);
             match timeout(timeout_duration, self.check_progress()).await {
                 Ok(res) => res,
                 Err(_) => bail!("timed out waiting for progress on node {node_id}"),
@@ -432,21 +471,61 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             let EventType::Decide { leaf_chain, .. } = event.event else {
                 continue;
             };
+
             for leaf in leaf_chain.iter() {
+                let height = leaf.leaf.height();
+
+                // Check that this nodes proposals are decided
                 if leaf.leaf.view_number().u64() % (num_nodes.get() as u64) == node_id {
-                    tracing::info!(
-                        node_id,
-                        height = leaf.leaf.height(),
-                        "got leaf proposed by this node"
-                    );
+                    tracing::info!(node_id, height, "got leaf proposed by this node");
                     return Ok(());
                 }
                 tracing::info!(
                     node_id,
-                    height = leaf.leaf.height(),
+                    height,
                     view = leaf.leaf.view_number().u64(),
                     "leaf not proposed by this node"
                 );
+            }
+        }
+
+        bail!("node {node_id} event stream ended unexpectedly");
+    }
+
+    /// Collect the first 50 committed leaves from the event stream for this node,
+    /// and write them into the test node state
+    /// This is later used to verify that the node's state is consistent
+    async fn populate_state_from_event_stream(&self) -> anyhow::Result<()> {
+        let Some(context) = &self.context else {
+            tracing::info!("skipping state check on stopped node");
+            return Ok(());
+        };
+
+        let node_id = context.node_id();
+        tracing::info!(node_id, "verifying state of node");
+
+        let mut events = context.event_stream().await;
+        let mut collected_leaves = 0;
+        let mut state_write = self.reference_state.write().await;
+
+        while let Some(event) = events.next().await {
+            let EventType::Decide { leaf_chain, .. } = event.event else {
+                continue;
+            };
+
+            {
+                for leaf in leaf_chain.iter() {
+                    let leaf = leaf.leaf.clone();
+                    let height = leaf.height();
+                    state_write.insert(height, leaf.commit());
+
+                    tracing::info!("node_id={node_id} state height= {height}");
+                    collected_leaves += 1;
+                }
+
+                if collected_leaves == 30 {
+                    return Ok(());
+                }
             }
         }
 
@@ -484,7 +563,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         let mut events = ctx.event_stream().await;
         let tx = Transaction::random(&mut rand::thread_rng());
         ctx.submit_transaction(tx.clone()).await.unwrap();
-        let block = timeout(
+        let (block, _) = timeout(
             Duration::from_secs(60),
             wait_for_decide_on_handle(&mut events, &tx),
         )
@@ -497,7 +576,45 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             sleep(Duration::from_secs(1)).await;
         }
     }
+
+    /// Wait for the given Epoch.
+    async fn wait_for_epoch(&self) {
+        let epoch = self.wait_for_epoch;
+        let Some(context) = &self.context else {
+            tracing::info!("skipping progress check on stopped node");
+            return;
+        };
+
+        let node_id = context.node_id();
+        tracing::info!(node_id, "waiting for epoch: {epoch:?}");
+        let mut events = context.event_stream().await;
+
+        let timeout_duration = Duration::from_secs(60);
+        timeout(timeout_duration, async {
+            while let Some(event) = events.next().await {
+                let EventType::Decide { qc, .. } = event.event else {
+                    continue;
+                };
+                if qc.data.epoch >= Some(epoch) {
+                    tracing::info!(node_id, "reached epoch: {epoch:?}");
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("timed out waiting for epoch after restart");
+    }
 }
+
+type AnvilFillProvider = AnvilProvider<
+    FillProvider<
+        JoinFill<
+            alloy::providers::Identity,
+            JoinFill<GasFiller, JoinFill<BlobGasFiller, JoinFill<NonceFiller, ChainIdFiller>>>,
+        >,
+        RootProvider,
+    >,
+>;
 
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -510,7 +627,7 @@ struct TestNetwork {
     broker_task: Option<JoinHandle<()>>,
     marshal_task: Option<JoinHandle<()>>,
     #[derivative(Debug = "ignore")]
-    _anvil: AnvilInstance,
+    anvil: AnvilFillProvider,
 }
 
 impl Drop for TestNetwork {
@@ -532,28 +649,31 @@ impl TestNetwork {
         let mut ports = PortPicker::default();
 
         let tmp = TempDir::new().unwrap();
-        let genesis_file = tmp.path().join("genesis.toml");
-        let genesis = Genesis {
-            chain_config: ChainConfig {
-                base_fee: 1.into(),
-                ..Default::default()
+        let genesis_file_path = tmp.path().join("genesis.toml");
+
+        let mut genesis = Genesis {
+            chain_config: Default::default(),
+            // TODO we apparently have two `capacity` configurations
+            stake_table: StakeTableConfig {
+                capacity: STAKE_TABLE_CAPACITY_FOR_TEST,
             },
-            stake_table: StakeTableConfig { capacity: 10 },
-            l1_finalized: L1Finalized::Number { number: 0 },
+            l1_finalized: L1Finalized::Number { number: 20 },
             header: Default::default(),
             upgrades: Default::default(),
-            base_version: Version { major: 0, minor: 1 },
-            upgrade_version: Version { major: 0, minor: 2 },
-            epoch_height: None,
+            base_version: Version { major: 0, minor: 3 },
+            upgrade_version: Version { major: 0, minor: 3 },
+            epoch_height: Some(15),
             drb_difficulty: None,
-            epoch_start_block: None,
-            stake_table_capacity: None,
+            epoch_start_block: Some(1),
+            // TODO we apparently have two `capacity` configurations
+            stake_table_capacity: Some(STAKE_TABLE_CAPACITY_FOR_TEST),
+            drb_upgrade_difficulty: None,
             // Start with a funded account, so we can test catchup after restart.
             accounts: [(builder_account(), 1000000000.into())]
                 .into_iter()
                 .collect(),
+            genesis_version: Version { major: 0, minor: 1 },
         };
-        genesis.to_file(&genesis_file).unwrap();
 
         let node_params = (0..da_nodes + regular_nodes)
             .map(|i| NodeParams::new(&mut ports, i as u64, i < da_nodes))
@@ -581,8 +701,14 @@ impl TestNetwork {
         };
 
         let anvil_port = ports.pick();
-        let anvil = Anvil::new().port(anvil_port).block_time(1u64).spawn();
+        let anvil = Anvil::new()
+            .args(["--slots-in-an-epoch", "1"])
+            .port(anvil_port)
+            .spawn();
         let anvil_endpoint = anvil.endpoint();
+
+        let l1_client = L1Client::anvil(&anvil).expect("create l1 client");
+        let anvil = AnvilProvider::new(l1_client.clone().provider, Arc::new(anvil));
 
         let api_ports = node_params
             .iter()
@@ -594,7 +720,7 @@ impl TestNetwork {
             .map(|node| node.api_port)
             .collect::<Vec<_>>();
         let network_params = NetworkParams {
-            genesis_file: &genesis_file,
+            genesis_file: &genesis_file_path,
             orchestrator_port,
             cdn_port,
             l1_provider: &anvil_endpoint,
@@ -617,8 +743,37 @@ impl TestNetwork {
             orchestrator_task,
             broker_task,
             marshal_task,
-            _anvil: anvil,
+            anvil,
         };
+
+        // Deploy stake contracts and delegate.
+        let stake_table_address = network.deploy(&genesis).await.unwrap();
+
+        // Add contract address to `ChainConfig`.
+        let chain_config = ChainConfig {
+            base_fee: 1.into(),
+            stake_table_contract: Some(stake_table_address),
+            ..Default::default()
+        };
+        genesis.chain_config = chain_config;
+        genesis.to_file(&genesis_file_path).unwrap();
+
+        let finalized = l1_client
+            .get_block(alloy::eips::BlockId::finalized())
+            .full()
+            .await
+            .unwrap();
+        let head = l1_client
+            .get_block(alloy::eips::BlockId::latest())
+            .full()
+            .await
+            .unwrap();
+
+        tracing::info!(
+            "latest block head: {}, latest finalized: {}",
+            head.unwrap().header.number,
+            finalized.unwrap().header.number
+        );
 
         join_all(
             network
@@ -630,6 +785,108 @@ impl TestNetwork {
         .await;
 
         network
+    }
+
+    /// Deploy stake contracts and delegate.
+    async fn deploy(&self, genesis: &Genesis) -> anyhow::Result<Address> {
+        let stake_table_version = StakeTableContractVersion::V2;
+        let delegation_config = DelegationConfig::EqualAmounts;
+
+        let anvil_instance = &self.anvil.anvil();
+        let l1_url: reqwest::Url = anvil_instance.endpoint().parse().unwrap();
+
+        let l1_signer_key = anvil_instance.keys()[0].clone();
+        let signer = LocalSigner::from(l1_signer_key);
+
+        let deployer = ProviderBuilder::new()
+            .wallet(EthereumWallet::from(signer.clone()))
+            .on_http(l1_url.clone());
+
+        let blocks_per_epoch = genesis.epoch_height;
+        let epoch_start_block = genesis.epoch_start_block;
+
+        let staking_keys: Vec<(BLSPrivKey, StateKeyPair)> = self
+            .da_nodes
+            .iter()
+            .chain(self.regular_nodes.iter())
+            .map(|node| {
+                let keys = node.opt.private_keys().unwrap();
+                (keys.0, StateKeyPair::from_sign_key(keys.1))
+            })
+            .collect();
+
+        let (bls, state): (Vec<BLSPrivKey>, Vec<StateKeyPair>) =
+            staking_keys.clone().into_iter().unzip();
+        let staking_priv_keys = staking_priv_keys(&bls, &state, staking_keys.len());
+
+        let hss_staking: Vec<PeerConfig<SeqTypes>> = staking_keys
+            .iter()
+            .map(|(bls, state)| PeerConfig {
+                stake_table_entry: BLSPubKey::from_private(bls).stake_table_entry(U256::from(1)),
+                state_ver_key: state.ver_key(),
+            })
+            .collect();
+
+        let (genesis_state, genesis_stake) = light_client_genesis_from_stake_table(
+            &hss_staking.into(),
+            STAKE_TABLE_CAPACITY_FOR_TEST,
+        )
+        .unwrap();
+
+        let mut contracts = Contracts::new();
+        let args = DeployerArgsBuilder::default()
+            .deployer(deployer.clone())
+            .mock_light_client(true)
+            .genesis_lc_state(genesis_state)
+            .genesis_st_state(genesis_stake)
+            .blocks_per_epoch(blocks_per_epoch.unwrap())
+            .epoch_start_block(epoch_start_block.unwrap())
+            .multisig_pauser(signer.address())
+            .build()
+            .unwrap();
+
+        match stake_table_version {
+            StakeTableContractVersion::V1 => args.deploy_to_stake_table_v1(&mut contracts).await,
+            StakeTableContractVersion::V2 => args.deploy_all(&mut contracts).await,
+        }
+        .context("failed to deploy contracts")?;
+
+        let stake_table_address = contracts
+            .address(Contract::StakeTableProxy)
+            .expect("StakeTableProxy address not found");
+        let token_addr = contracts
+            .address(Contract::EspTokenProxy)
+            .expect("EspTokenProxy address not found");
+
+        tracing::info!(?stake_table_address, ?token_addr);
+
+        setup_stake_table_contract_for_test(
+            l1_url.clone(),
+            &deployer,
+            stake_table_address,
+            token_addr,
+            staking_priv_keys,
+            delegation_config,
+        )
+        .await
+        .expect("stake table setup failed");
+
+        self.anvil
+            .anvil_set_interval_mining(1)
+            .await
+            .expect("interval mining");
+
+        Ok(stake_table_address)
+    }
+
+    async fn wait_for_epoch(&self) {
+        join_all(
+            self.da_nodes
+                .iter()
+                .map(TestNode::wait_for_epoch)
+                .chain(self.regular_nodes.iter().map(TestNode::wait_for_epoch)),
+        )
+        .await;
     }
 
     async fn check_progress(&self) {
@@ -647,6 +904,51 @@ impl TestNetwork {
         .unwrap();
     }
 
+    /// Check that state has not diverged between nodes and that all nodes were
+    /// checked. Mostly useful in tests that do not restart all nodes, as those
+    /// cases confirm that state has not regressed.
+    async fn check_state(&self) {
+        // populate each test node's state
+        try_join_all(
+            self.da_nodes
+                .iter()
+                .map(TestNode::populate_state_from_event_stream)
+                .chain(
+                    self.regular_nodes
+                        .iter()
+                        .map(TestNode::populate_state_from_event_stream),
+                ),
+        )
+        .await
+        .unwrap();
+
+        let mut nodes_iter = self.da_nodes.iter().chain(self.regular_nodes.iter());
+
+        let first_node = nodes_iter.next().unwrap();
+        let ref_id = first_node.node_id().expect("Node id not found");
+        let ref_state = first_node.reference_state.read().await.clone();
+
+        // assert that all the nodes have same leaves from their event streams
+        // this also ensures validated state consistency
+        // Note: Nodes may have started consuming the event stream at different points,
+        // since the stream might have been partially processed before this check.
+        // Therefore, we only compare leaves at heights that are present in both
+        // the current node and the reference state.
+        for node in nodes_iter {
+            let node_id = node.node_id().expect("Node id not found");
+            let state = node.reference_state.read().await.clone();
+
+            for (height, commitment) in state.iter() {
+                if let Some(ref_commitment) = ref_state.get(height) {
+                    assert_eq!(
+                        ref_commitment, commitment,
+                        "State mismatch between node {node_id} and reference node {ref_id}"
+                    );
+                }
+            }
+        }
+    }
+
     async fn check_builder(&self) {
         self.da_nodes[0].check_builder(self.builder_port).await;
     }
@@ -659,7 +961,9 @@ impl TestNetwork {
     async fn restart(&mut self, da_nodes: usize, regular_nodes: usize) {
         self.restart_helper(0..da_nodes, 0..regular_nodes, false)
             .await;
+        self.wait_for_epoch().await;
         self.check_progress().await;
+        self.check_state().await;
     }
 
     /// Restart indicated nodes, ensuring progress is maintained at all times.
@@ -858,10 +1162,10 @@ async fn start_broker(ports: &mut PortPicker, dir: &Path) -> JoinHandle<()> {
     let public_port = ports.pick();
     let private_port = ports.pick();
     let broker_config: BrokerConfig<TestingDef<SeqTypes>> = BrokerConfig {
-        public_advertise_endpoint: format!("127.0.0.1:{}", public_port),
-        public_bind_endpoint: format!("127.0.0.1:{}", public_port),
-        private_advertise_endpoint: format!("127.0.0.1:{}", private_port),
-        private_bind_endpoint: format!("127.0.0.1:{}", private_port),
+        public_advertise_endpoint: format!("127.0.0.1:{public_port}"),
+        public_bind_endpoint: format!("127.0.0.1:{public_port}"),
+        private_advertise_endpoint: format!("127.0.0.1:{private_port}"),
+        private_bind_endpoint: format!("127.0.0.1:{private_port}"),
 
         metrics_bind_endpoint: None,
         discovery_endpoint: dir.display().to_string(),

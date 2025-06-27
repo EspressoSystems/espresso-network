@@ -17,7 +17,7 @@ use std::{collections::VecDeque, num::NonZeroUsize};
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use futures::stream::{self, StreamExt, TryStreamExt};
-use hotshot_types::traits::node_implementation::NodeType;
+use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
 use itertools::Itertools;
 use sqlx::{FromRow, Row};
 use tagged_base64::{Tagged, TaggedBase64};
@@ -41,6 +41,7 @@ use crate::{
         MonetaryValue, SearchResult, TransactionIdentifier, TransactionRange, TransactionSummary,
         TransactionSummaryFilter,
     },
+    types::HeightIndexed,
     Header, Payload, QueryError, QueryResult, Transaction as HotshotTransaction,
 };
 
@@ -83,7 +84,7 @@ impl From<sqlx::Error> for GetSearchResultsError {
 impl<'r, Types> FromRow<'r, <Db as Database>::Row> for BlockSummary<Types>
 where
     Types: NodeType,
-    Header<Types>: QueryableHeader<Types> + ExplorerHeader<Types>,
+    Header<Types>: BlockHeader<Types> + ExplorerHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
@@ -96,7 +97,7 @@ where
 impl<'r, Types> FromRow<'r, <Db as Database>::Row> for BlockDetail<Types>
 where
     Types: NodeType,
-    Header<Types>: QueryableHeader<Types> + ExplorerHeader<Types>,
+    Header<Types>: BlockHeader<Types> + ExplorerHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
     BalanceAmount<Types>: Into<MonetaryValue>,
 {
@@ -178,20 +179,36 @@ lazy_static::lazy_static! {
     };
 
 
-    static ref GET_TRANSACTION_SUMMARIES_QUERY_FOR_NO_FILTER: String = {
+    static ref GET_BLOCKS_CONTAINING_TRANSACTIONS_NO_FILTER_QUERY: String = {
         format!(
             "SELECT {BLOCK_COLUMNS}
-                FROM header AS h
-                JOIN payload AS p ON h.height = p.height
-                WHERE h.height IN (
-                    SELECT t.block_height
-                        FROM transactions AS t
-                        WHERE
-                            (t.block_height, t.namespace, t.position) <= ($1, $2, $3)
-                        ORDER BY t.block_height DESC, t.namespace DESC, t.position DESC
-                        LIMIT $4
-                )
-                ORDER BY h.height DESC"
+               FROM header AS h
+               JOIN payload AS p ON h.height = p.height
+               WHERE h.height IN (
+                   SELECT t.block_height
+                       FROM transactions AS t
+                       WHERE (t.block_height, t.ns_id, t.position) <= ($1, $2, $3)
+                       ORDER BY t.block_height DESC, t.ns_id DESC, t.position DESC
+                       LIMIT $4
+               )
+               ORDER BY h.height DESC"
+        )
+    };
+
+    static ref GET_BLOCKS_CONTAINING_TRANSACTIONS_IN_NAMESPACE_QUERY: String = {
+        format!(
+            "SELECT {BLOCK_COLUMNS}
+               FROM header AS h
+               JOIN payload AS p ON h.height = p.height
+               WHERE h.height IN (
+                   SELECT t.block_height
+                       FROM transactions AS t
+                       WHERE (t.block_height, t.ns_id, t.position) <= ($1, $2, $3)
+                         AND t.ns_id = $5
+                       ORDER BY t.block_height DESC, t.ns_id DESC, t.position DESC
+                       LIMIT $4
+               )
+               ORDER BY h.height DESC"
         )
     };
 
@@ -227,7 +244,7 @@ lazy_static::lazy_static! {
                     SELECT t1.block_height
                         FROM transactions AS t1
                         WHERE t1.block_height = $1
-                        ORDER BY t1.block_height, t1.namespace, t1.position
+                        ORDER BY t1.block_height, t1.ns_id, t1.position
                         OFFSET $2
                         LIMIT 1
                 )
@@ -244,7 +261,7 @@ lazy_static::lazy_static! {
                     SELECT t1.block_height
                         FROM transactions AS t1
                         WHERE t1.hash = $1
-                        ORDER BY t1.block_height DESC, t1.namespace DESC, t1.position DESC
+                        ORDER BY t1.block_height DESC, t1.ns_id DESC, t1.position DESC
                         LIMIT 1
                 )
                 ORDER BY h.height DESC"
@@ -271,7 +288,7 @@ where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types> + ExplorerHeader<Types>,
-    crate::Transaction<Types>: explorer::traits::ExplorerTransaction,
+    crate::Transaction<Types>: explorer::traits::ExplorerTransaction<Types>,
     BalanceAmount<Types>: Into<explorer::monetary_value::MonetaryValue>,
 {
     async fn get_block_summaries(
@@ -330,14 +347,14 @@ where
         // returned results based on.
         let transaction_target_query = match target {
             TransactionIdentifier::Latest => query(
-                "SELECT block_height AS height, namespace, position FROM transactions ORDER BY block_height DESC, namespace DESC, position DESC LIMIT 1",
+                "SELECT block_height AS height, ns_id, position FROM transactions ORDER BY block_height DESC, ns_id DESC, position DESC LIMIT 1",
             ),
             TransactionIdentifier::HeightAndOffset(height, _) => query(
-                "SELECT block_height AS height, namespace, position FROM transactions WHERE block_height = $1 ORDER BY namespace DESC, position DESC LIMIT 1",
+                "SELECT block_height AS height, ns_id, position FROM transactions WHERE block_height = $1 ORDER BY ns_id DESC, position DESC LIMIT 1",
             )
             .bind(*height as i64),
             TransactionIdentifier::Hash(hash) => query(
-                "SELECT block_height AS height, namespace, position FROM transactions WHERE hash = $1 ORDER BY block_height DESC, namespace DESC, position DESC LIMIT 1",
+                "SELECT block_height AS height, ns_id, position FROM transactions WHERE hash = $1 ORDER BY block_height DESC, ns_id DESC, position DESC LIMIT 1",
             )
             .bind(hash.to_string()),
         };
@@ -351,7 +368,7 @@ where
         };
 
         let block_height = transaction_target.get::<i64, _>("height") as usize;
-        let namespace = transaction_target.get::<i64, _>("namespace");
+        let namespace = transaction_target.get::<i64, _>("ns_id");
         let position = transaction_target.get::<i64, _>("position");
         let offset = if let TransactionIdentifier::HeightAndOffset(_, offset) = target {
             *offset
@@ -367,13 +384,21 @@ where
         // identified transactions, as only those blocks are needed to pull all
         // of the relevant transactions.
         let query_stmt = match filter {
-            TransactionSummaryFilter::RollUp(_) => return Ok(vec![]),
-
-            TransactionSummaryFilter::None => query(&GET_TRANSACTION_SUMMARIES_QUERY_FOR_NO_FILTER)
-                .bind(block_height as i64)
-                .bind(namespace)
-                .bind(position)
-                .bind((range.num_transactions.get() + offset) as i64),
+            TransactionSummaryFilter::RollUp(ns) => {
+                query(&GET_BLOCKS_CONTAINING_TRANSACTIONS_IN_NAMESPACE_QUERY)
+                    .bind(block_height as i64)
+                    .bind(namespace)
+                    .bind(position)
+                    .bind((range.num_transactions.get() + offset) as i64)
+                    .bind((*ns).into())
+            },
+            TransactionSummaryFilter::None => {
+                query(&GET_BLOCKS_CONTAINING_TRANSACTIONS_NO_FILTER_QUERY)
+                    .bind(block_height as i64)
+                    .bind(namespace)
+                    .bind(position)
+                    .bind((range.num_transactions.get() + offset) as i64)
+            },
 
             TransactionSummaryFilter::Block(block) => {
                 query(&GET_TRANSACTION_SUMMARIES_QUERY_FOR_BLOCK).bind(*block as i64)
@@ -385,22 +410,36 @@ where
             .map(|row| BlockQueryData::from_row(&row?));
 
         let transaction_summary_stream = block_stream.flat_map(|row| match row {
-            Ok(block) => stream::iter(
-                block
-                    .enumerate()
-                    .enumerate()
-                    .map(|(index, (_, txn))| {
-                        TransactionSummary::try_from((&block, index, txn)).map_err(|err| {
-                            QueryError::Error {
-                                message: err.to_string(),
+            Ok(block) => {
+                tracing::info!(height = block.height(), "selected block");
+                stream::iter(
+                    block
+                        .enumerate()
+                        .filter(|(ix, _)| {
+                            if let TransactionSummaryFilter::RollUp(ns) = filter {
+                                let tx_ns = QueryableHeader::<Types>::namespace_id(
+                                    block.header(),
+                                    &ix.ns_index,
+                                );
+                                tx_ns.as_ref() == Some(ns)
+                            } else {
+                                true
                             }
                         })
-                    })
-                    .collect::<Vec<QueryResult<TransactionSummary<Types>>>>()
-                    .into_iter()
-                    .rev()
-                    .collect::<Vec<QueryResult<TransactionSummary<Types>>>>(),
-            ),
+                        .enumerate()
+                        .map(|(index, (_, txn))| {
+                            TransactionSummary::try_from((&block, index, txn)).map_err(|err| {
+                                QueryError::Error {
+                                    message: err.to_string(),
+                                }
+                            })
+                        })
+                        .collect::<Vec<QueryResult<TransactionSummary<Types>>>>()
+                        .into_iter()
+                        .rev()
+                        .collect::<Vec<QueryResult<TransactionSummary<Types>>>>(),
+                )
+            },
             Err(err) => stream::iter(vec![Err(err.into())]),
         });
 
@@ -537,7 +576,7 @@ where
         let genesis_overview = {
             let blocks = NodeStorage::<Types>::block_height(self).await? as u64;
             let transactions =
-                NodeStorage::<Types>::count_transactions_in_range(self, ..).await? as u64;
+                NodeStorage::<Types>::count_transactions_in_range(self, .., None).await? as u64;
             GenesisOverview {
                 rollups: 0,
                 transactions,

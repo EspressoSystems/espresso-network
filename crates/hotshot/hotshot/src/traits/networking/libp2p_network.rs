@@ -25,7 +25,7 @@ use std::{
 use anyhow::{anyhow, Context};
 use async_lock::RwLock;
 use async_trait::async_trait;
-use bimap::BiHashMap;
+use bimap::BiMap;
 use futures::future::join_all;
 #[cfg(feature = "hotshot-testing")]
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtNoPersistence;
@@ -367,8 +367,7 @@ pub fn derive_libp2p_multiaddr(addr: &String) -> anyhow::Result<Multiaddr> {
             // If it did, warn the user
             if failed {
                 warn!(
-                    "Failed to resolve domain name {}, assuming it has not yet been provisioned",
-                    host
+                    "Failed to resolve domain name {host}, assuming it has not yet been provisioned"
                 );
             }
 
@@ -378,7 +377,7 @@ pub fn derive_libp2p_multiaddr(addr: &String) -> anyhow::Result<Multiaddr> {
 
     // Convert the multiaddr string to a `Multiaddr`
     multiaddr_string.parse().with_context(|| {
-        format!("Failed to convert Multiaddr string to Multiaddr: {multiaddr_string}",)
+        format!("Failed to convert Multiaddr string to Multiaddr: {multiaddr_string}")
     })
 }
 
@@ -436,7 +435,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
 
         let replication_factor = NonZeroUsize::new(min(
             default_replication_factor.get(),
-            config.config.num_nodes_with_stake.get() * 2 / 3,
+            config.config.num_nodes_with_stake.get() / 2,
         ))
         .with_context(|| "Failed to calculate replication factor")?;
 
@@ -521,20 +520,22 @@ impl<T: NodeType> Libp2pNetwork<T> {
         id: usize,
         #[cfg(feature = "hotshot-testing")] reliability_config: Option<Box<dyn NetworkReliability>>,
     ) -> Result<Libp2pNetwork<T>, NetworkError> {
-        let (mut rx, network_handle) =
-            spawn_network_node::<T, D>(config.clone(), dht_persistent_storage, id)
-                .await
-                .map_err(|e| {
-                    NetworkError::ConfigError(format!("failed to spawn network node: {e}"))
-                })?;
+        // Create a map from consensus keys to Libp2p peer IDs
+        let consensus_key_to_pid_map = Arc::new(parking_lot::Mutex::new(BiMap::new()));
+
+        let (mut rx, network_handle) = spawn_network_node::<T, D>(
+            config.clone(),
+            dht_persistent_storage,
+            Arc::clone(&consensus_key_to_pid_map),
+            id,
+        )
+        .await
+        .map_err(|e| NetworkError::ConfigError(format!("failed to spawn network node: {e}")))?;
 
         // Add our own address to the bootstrap addresses
         let addr = network_handle.listen_addr();
         let pid = network_handle.peer_id();
         bootstrap_addrs.write().await.push((pid, addr));
-
-        let mut pubkey_pid_map = BiHashMap::new();
-        pubkey_pid_map.insert(pk.clone(), network_handle.peer_id());
 
         // Subscribe to the relevant topics
         let subscribed_topics = HashSet::from_iter(vec![QC_TOPIC.to_string()]);
@@ -598,13 +599,13 @@ impl<T: NodeType> Libp2pNetwork<T> {
                 #[allow(clippy::cast_possible_truncation)]
                 const THRESHOLD: u64 = (LOOK_AHEAD as f64 * 0.8) as u64;
 
-                trace!("Performing lookup for peer {:?}", pk);
+                trace!("Performing lookup for peer {pk}");
 
                 // only run if we are not too close to the next view number
                 if latest_seen_view.load(Ordering::Relaxed) + THRESHOLD <= *view_number {
                     // look up
-                    if let Err(err) = handle.lookup_node(&pk.to_bytes(), dht_timeout).await {
-                        warn!("Failed to perform lookup for key {:?}: {}", pk, err);
+                    if let Err(err) = handle.lookup_node(&pk, dht_timeout).await {
+                        warn!("Failed to perform lookup for key {pk}: {err}");
                     };
                 }
             }
@@ -652,7 +653,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
 
                 // Wait for the network to connect to at least 1 peer
                 if let Err(e) = handle.wait_to_connect(1, id).await {
-                    error!("Failed to connect to peers: {:?}", e);
+                    error!("Failed to connect to peers: {e:?}");
                     return Err::<(), NetworkError>(e);
                 }
                 info!("Connected to required number of peers");
@@ -821,7 +822,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
                         boxed_sync(async move {
                             if let Err(e) = handle_2.gossip_no_serialize(topic_2, msg) {
                                 metrics_2.num_failed_messages.add(1);
-                                warn!("Failed to broadcast to libp2p: {:?}", e);
+                                warn!("Failed to broadcast to libp2p: {e:?}");
                             }
                         })
                     }),
@@ -891,7 +892,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         let pid = match self
             .inner
             .handle
-            .lookup_node(&recipient.to_bytes(), self.inner.dht_timeout)
+            .lookup_node(&recipient, self.inner.dht_timeout)
             .await
         {
             Ok(pid) => pid,
@@ -917,7 +918,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
                         boxed_sync(async move {
                             if let Err(e) = handle_2.direct_request_no_serialize(pid, msg) {
                                 metrics_2.num_failed_messages.add(1);
-                                warn!("Failed to broadcast to libp2p: {:?}", e);
+                                warn!("Failed to broadcast to libp2p: {e:?}");
                             }
                         })
                     }),
@@ -998,10 +999,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         let future_leader = match membership.leader(future_view).await {
             Ok(l) => l,
             Err(e) => {
-                return tracing::info!(
-                    "Failed to calculate leader for view {:?}: {e}",
-                    future_view
-                );
+                return tracing::info!("Failed to calculate leader for view {future_view}: {e}");
             },
         };
 

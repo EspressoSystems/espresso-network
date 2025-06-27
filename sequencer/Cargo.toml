@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["fee", "pos"]
+default = ["fee", "pos", "drb-and-header"]
 testing = [
     "hotshot-testing",
     "espresso-types/testing",
@@ -21,9 +21,11 @@ sqlite-unbundled = [
 ]
 fee = []
 pos = []
+drb-and-header = []
 
 [[bin]]
 name = "espresso-dev-node"
+path = "src/bin/espresso-dev-node.rs"
 required-features = ["testing", "embedded-db"]
 
 [dev-dependencies]
@@ -104,6 +106,7 @@ rand = { workspace = true }
 rand_chacha = { workspace = true }
 rand_distr = { workspace = true }
 request-response = { path = "../request-response" }
+reqwest = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }
 semver = { workspace = true }

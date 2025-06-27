@@ -11,9 +11,14 @@ async function main() {
   try {
     // Initialize web3 provider using the RPC URL from environment variables
     const web3Provider = new ethers.JsonRpcProvider(getEnvVar("RPC_URL"));
-
+    let useHardwareWallet = false;
+    try {
+      useHardwareWallet = getEnvVar("USE_HARDWARE_WALLET") === "true";
+    } catch (error) {
+      console.error("USE_HARDWARE_WALLET is not set, defaulting to false");
+    }
     // Get the signer, this signer must be one of the signers on the Safe Multisig Wallet
-    const orchestratorSigner = getSigner(web3Provider);
+    const orchestratorSigner = getSigner(web3Provider, useHardwareWallet);
 
     // Set up Eth Adapter with ethers and the signer
     const ethAdapter = new EthersAdapter({
@@ -68,6 +73,7 @@ async function main() {
       tokenAddress,
       validator,
       stakeAmountInWei,
+      useHardwareWallet,
     );
 
     console.log(
@@ -96,6 +102,7 @@ export async function proposeStakeTransaction(
   tokenAddress: string,
   validator: string,
   stakeAmountInWei: bigint,
+  useHardwareWallet: boolean,
 ) {
   // Define the ABI of the function to be called
   const stakeAbi = ["function delegate(address,uint256)"];
@@ -108,6 +115,7 @@ export async function proposeStakeTransaction(
     safeSDK,
     stakeTableAddress,
     stakeData,
+    useHardwareWallet,
   );
 
   // Propose the transaction which can be signed by other owners via the Safe UI

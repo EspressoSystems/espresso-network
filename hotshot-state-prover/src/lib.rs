@@ -9,6 +9,9 @@ pub mod service;
 /// SNARK proof generation
 pub mod snark;
 
+/// Legacy prover
+pub mod legacy;
+
 #[cfg(test)]
 mod test_utils;
 

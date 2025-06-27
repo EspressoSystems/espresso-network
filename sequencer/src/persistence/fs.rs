@@ -5,6 +5,7 @@ use std::{
     ops::RangeInclusive,
     path::{Path, PathBuf},
     sync::Arc,
+    time::Instant,
 };
 
 use anyhow::{anyhow, Context};
@@ -14,10 +15,10 @@ use clap::Parser;
 use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
-    Leaf, Leaf2, NetworkConfig, Payload, SeqTypes,
+    v0_3::{EventKey, IndexedStake, StakeTableEvent},
+    Leaf, Leaf2, NetworkConfig, Payload, SeqTypes, ValidatorMap,
 };
-use hotshot::{types::BLSPubKey, InitializerEpochInfo};
+use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
     DhtPersistentStorage, SerializableRecord,
 };
@@ -36,14 +37,17 @@ use hotshot_types::{
     },
     traits::{
         block_contents::{BlockHeader, BlockPayload},
+        metrics::Metrics,
         node_implementation::{ConsensusTime, NodeType},
     },
     vote::HasViewNumber,
 };
-use indexmap::IndexMap;
 use itertools::Itertools;
 
-use crate::{ViewNumber, RECENT_STAKE_TABLES_LIMIT};
+use crate::{
+    persistence::persistence_metrics::PersistenceMetricsValue, ViewNumber,
+    RECENT_STAKE_TABLES_LIMIT,
+};
 
 /// Options for file system backed persistence.
 #[derive(Parser, Clone, Debug)]
@@ -119,6 +123,7 @@ impl PersistenceOptions for Options {
                 migrated,
                 view_retention,
             })),
+            metrics: Arc::new(PersistenceMetricsValue::default()),
         })
     }
 
@@ -134,6 +139,8 @@ pub struct Persistence {
     // implementation does not support transaction isolation for concurrent reads and writes. We can
     // improve this in the future by switching to a SQLite-based file system implementation.
     inner: Arc<RwLock<Inner>>,
+    /// A reference to the metrics trait
+    metrics: Arc<PersistenceMetricsValue>,
 }
 
 #[derive(Debug)]
@@ -728,7 +735,11 @@ impl SequencerPersistence for Persistence {
                 let proposal: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
                     convert_proposal(proposal.clone());
                 let proposal_bytes = bincode::serialize(&proposal).context("serialize proposal")?;
+                let now = Instant::now();
                 file.write_all(&proposal_bytes)?;
+                self.metrics
+                    .internal_append_vid_duration
+                    .add_point(now.elapsed().as_secs_f64());
                 Ok(())
             },
         )
@@ -758,7 +769,11 @@ impl SequencerPersistence for Persistence {
                 let proposal: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
                     convert_proposal(proposal.clone());
                 let proposal_bytes = bincode::serialize(&proposal).context("serialize proposal")?;
+                let now = Instant::now();
                 file.write_all(&proposal_bytes)?;
+                self.metrics
+                    .internal_append_vid2_duration
+                    .add_point(now.elapsed().as_secs_f64());
                 Ok(())
             },
         )
@@ -785,7 +800,11 @@ impl SequencerPersistence for Persistence {
             },
             |mut file| {
                 let proposal_bytes = bincode::serialize(&proposal).context("serialize proposal")?;
+                let now = Instant::now();
                 file.write_all(&proposal_bytes)?;
+                self.metrics
+                    .internal_append_da_duration
+                    .add_point(now.elapsed().as_secs_f64());
                 Ok(())
             },
         )
@@ -865,8 +884,11 @@ impl SequencerPersistence for Persistence {
             },
             |mut file| {
                 let proposal_bytes = bincode::serialize(&proposal).context("serialize proposal")?;
-
+                let now = Instant::now();
                 file.write_all(&proposal_bytes)?;
+                self.metrics
+                    .internal_append_quorum2_duration
+                    .add_point(now.elapsed().as_secs_f64());
                 Ok(())
             },
         )
@@ -1019,7 +1041,11 @@ impl SequencerPersistence for Persistence {
             },
             |mut file| {
                 let proposal_bytes = bincode::serialize(&proposal).context("serialize proposal")?;
+                let now = Instant::now();
                 file.write_all(&proposal_bytes)?;
+                self.metrics
+                    .internal_append_da2_duration
+                    .add_point(now.elapsed().as_secs_f64());
                 Ok(())
             },
         )
@@ -1476,14 +1502,15 @@ impl SequencerPersistence for Persistence {
 
         Ok(result)
     }
+
+    fn enable_metrics(&mut self, _metrics: &dyn Metrics) {
+        // todo!()
+    }
 }
 
 #[async_trait]
 impl MembershipPersistence for Persistence {
-    async fn load_stake(
-        &self,
-        epoch: EpochNumber,
-    ) -> anyhow::Result<Option<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>>> {
+    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<ValidatorMap>> {
         let inner = self.inner.read().await;
         let path = &inner.stake_table_dir_path();
         let file_path = path.join(epoch.to_string()).with_extension("txt");
@@ -1511,11 +1538,7 @@ impl MembershipPersistence for Persistence {
             .collect()
     }
 
-    async fn store_stake(
-        &self,
-        epoch: EpochNumber,
-        stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
-    ) -> anyhow::Result<()> {
+    async fn store_stake(&self, epoch: EpochNumber, stake: ValidatorMap) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
         let dir_path = &inner.stake_table_dir_path();
 
@@ -1832,6 +1855,15 @@ fn migrate_network_config(
         config.insert("epoch_height".into(), 0.into());
     }
 
+    // HotShotConfig was upgraded to include `drb_difficulty` and `drb_upgrade_difficulty` parameters. Initialize with a default
+    // if missing.
+    if !config.contains_key("drb_difficulty") {
+        config.insert("drb_difficulty".into(), 0.into());
+    }
+    if !config.contains_key("drb_upgrade_difficulty") {
+        config.insert("drb_upgrade_difficulty".into(), 0.into());
+    }
+
     Ok(network_config)
 }
 
@@ -1896,11 +1928,14 @@ mod test {
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_query_service::testing::mocks::MockVersions;
     use hotshot_types::{
-        data::{vid_commitment, QuorumProposal2},
+        data::QuorumProposal2,
         light_client::LightClientState,
         simple_certificate::QuorumCertificate,
         simple_vote::QuorumData,
-        traits::{node_implementation::Versions, EncodeBytes},
+        traits::{
+            block_contents::GENESIS_VID_NUM_STORAGE_NODES, node_implementation::Versions,
+            EncodeBytes,
+        },
         vid::advz::advz_scheme,
     };
     use jf_vid::VidScheme;
@@ -1951,7 +1986,9 @@ mod test {
                 "stop_proposing_time": 2,
                 "start_voting_time": 1,
                 "stop_voting_time": 2,
-                "epoch_height": 0
+                "epoch_height": 0,
+                "drb_difficulty": 0,
+                "drb_upgrade_difficulty": 0,
             }
         });
 
@@ -1971,7 +2008,9 @@ mod test {
                 "stop_proposing_time": 2,
                 "start_voting_time": 1,
                 "stop_voting_time": 2,
-                "epoch_height": 0
+                "epoch_height": 0,
+                "drb_difficulty": 0,
+                "drb_upgrade_difficulty": 0,
             }
         });
 
@@ -1996,7 +2035,9 @@ mod test {
                 "stop_proposing_time": 0,
                 "start_voting_time": 9007199254740991u64,
                 "stop_voting_time": 0,
-                "epoch_height": 0
+                "epoch_height": 0,
+                "drb_difficulty": 0,
+                "drb_upgrade_difficulty": 0,
             }
         });
 
@@ -2016,7 +2057,9 @@ mod test {
                 "stop_proposing_time": 2,
                 "start_voting_time": 1,
                 "stop_voting_time": 2,
-                "epoch_height": 0
+                "epoch_height": 0,
+                "drb_difficulty": 0,
+                "drb_upgrade_difficulty": 0,
             }
         });
 
@@ -2055,22 +2098,11 @@ mod test {
                 Payload::from_transactions([], &validated_state, &instance_state)
                     .await
                     .unwrap();
-            let builder_commitment = payload.builder_commitment(&metadata);
+
             let payload_bytes = payload.encode();
 
-            let payload_commitment = vid_commitment::<TestVersions>(
-                &payload_bytes,
-                &metadata.encode(),
-                4,
-                <TestVersions as Versions>::Base::VERSION,
-            );
-
-            let block_header = Header::genesis(
-                &instance_state,
-                payload_commitment,
-                builder_commitment,
-                metadata,
-            );
+            let block_header =
+                Header::genesis::<TestVersions>(&instance_state, payload.clone(), &metadata);
 
             let state_cert = LightClientStateUpdateCertificate::<SeqTypes> {
                 epoch: EpochNumber::new(i),
@@ -2117,7 +2149,7 @@ mod test {
             let mut leaf = Leaf::from_quorum_proposal(&quorum_proposal);
             leaf.fill_block_payload::<TestVersions>(
                 payload,
-                4,
+                GENESIS_VID_NUM_STORAGE_NODES,
                 <TestVersions as Versions>::Base::VERSION,
             )
             .unwrap();
@@ -2162,7 +2194,9 @@ mod test {
                 .unwrap();
 
             drop(inner);
-            let disperse = advz_scheme(4).disperse(payload_bytes.clone()).unwrap();
+            let disperse = advz_scheme(GENESIS_VID_NUM_STORAGE_NODES)
+                .disperse(payload_bytes.clone())
+                .unwrap();
 
             let vid = ADVZDisperseShare::<SeqTypes> {
                 view_number: ViewNumber::new(i),

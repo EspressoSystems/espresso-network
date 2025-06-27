@@ -6,7 +6,7 @@
 
 use std::{collections::BTreeMap, sync::Arc, time::Instant};
 
-use async_broadcast::{Receiver, Sender};
+use async_broadcast::{broadcast, Receiver, Sender};
 use async_trait::async_trait;
 use either::Either;
 use hotshot_task::{
@@ -32,7 +32,6 @@ use hotshot_types::{
     vote::{Certificate, HasViewNumber},
 };
 use hotshot_utils::anytrace::*;
-use tokio::task::JoinHandle;
 use tracing::instrument;
 
 use self::handlers::{ProposalDependency, ProposalDependencyHandle};
@@ -49,7 +48,7 @@ pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>
     pub cur_epoch: Option<TYPES::Epoch>,
 
     /// Table for the in-progress proposal dependency tasks.
-    pub proposal_dependencies: BTreeMap<TYPES::View, JoinHandle<()>>,
+    pub proposal_dependencies: BTreeMap<TYPES::View, Sender<()>>,
 
     /// Formed QCs
     pub formed_quorum_certificates: BTreeMap<TYPES::View, QuorumCertificate2<TYPES>>,
@@ -110,10 +109,16 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
         dependency_type: ProposalDependency,
         view_number: TYPES::View,
         event_receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
+        cancel_receiver: Receiver<()>,
     ) -> EventDependency<Arc<HotShotEvent<TYPES>>> {
         let id = self.id;
         EventDependency::new(
             event_receiver,
+            cancel_receiver,
+            format!(
+                "ProposalDependency::{:?} for view {:?}, my id {:?}",
+                dependency_type, view_number, self.id
+            ),
             Box::new(move |event| {
                 let event = event.as_ref();
                 let event_view = match dependency_type {
@@ -188,41 +193,48 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
         view_number: TYPES::View,
         event_receiver: &Receiver<Arc<HotShotEvent<TYPES>>>,
         event: Arc<HotShotEvent<TYPES>>,
+        cancel_receiver: &Receiver<()>,
     ) -> AndDependency<Vec<Vec<Arc<HotShotEvent<TYPES>>>>> {
         let mut proposal_dependency = self.create_event_dependency(
             ProposalDependency::Proposal,
             view_number,
             event_receiver.clone(),
+            cancel_receiver.clone(),
         );
 
         let mut qc_dependency = self.create_event_dependency(
             ProposalDependency::Qc,
             view_number,
             event_receiver.clone(),
+            cancel_receiver.clone(),
         );
 
         let mut view_sync_dependency = self.create_event_dependency(
             ProposalDependency::ViewSyncCert,
             view_number,
             event_receiver.clone(),
+            cancel_receiver.clone(),
         );
 
         let mut timeout_dependency = self.create_event_dependency(
             ProposalDependency::TimeoutCert,
             view_number,
             event_receiver.clone(),
+            cancel_receiver.clone(),
         );
 
         let mut payload_commitment_dependency = self.create_event_dependency(
             ProposalDependency::PayloadAndMetadata,
             view_number,
             event_receiver.clone(),
+            cancel_receiver.clone(),
         );
 
         let mut vid_share_dependency = self.create_event_dependency(
             ProposalDependency::VidShare,
             view_number,
             event_receiver.clone(),
+            cancel_receiver.clone(),
         );
 
         let epoch_height = self.epoch_height;
@@ -231,6 +243,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
         // form a current qc that isn't during transition
         let mut next_epoch_qc_dependency = EventDependency::new(
             event_receiver.clone(),
+            cancel_receiver.clone(),
+            format!(
+                "ProposalDependency Next epoch QC for view {:?}, my id {:?}",
+                view_number, self.id
+            ),
             Box::new(move |event| {
                 if let HotShotEvent::NextEpochQc2Formed(Either::Left(next_epoch_qc)) =
                     event.as_ref()
@@ -352,7 +369,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 .next_epoch()
                 .await
                 .context(warn!(
-                    "Missing the randomized stake table for epoch {:?}",
+                    "Missing the randomized stake table for epoch {}",
                     epoch_number.unwrap() + 1
                 ))?
                 .leader(view_number)
@@ -372,7 +389,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
         );
 
         tracing::debug!(
-            "Attempting to make dependency task for view {view_number:?} and event {event:?}"
+            "Attempting to make dependency task for view {view_number} and event {event:?}"
         );
 
         ensure!(
@@ -380,8 +397,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
             "Task already exists"
         );
 
-        let dependency_chain =
-            self.create_and_complete_dependencies(view_number, &event_receiver, event);
+        let (cancel_sender, cancel_receiver) = broadcast(1);
+
+        let dependency_chain = self.create_and_complete_dependencies(
+            view_number,
+            &event_receiver,
+            event,
+            &cancel_receiver,
+        );
 
         let dependency_task = DependencyTask::new(
             dependency_chain,
@@ -404,7 +427,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
             },
         );
         self.proposal_dependencies
-            .insert(view_number, dependency_task.run());
+            .insert(view_number, cancel_sender);
+
+        dependency_task.run();
 
         Ok(())
     }
@@ -421,9 +446,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
 
             // Cancel the old dependency tasks.
             for view in (*self.latest_proposed_view + 1)..=(*new_view) {
-                if let Some(dependency) = self.proposal_dependencies.remove(&TYPES::View::new(view))
-                {
-                    dependency.abort();
+                let maybe_cancel_sender =
+                    self.proposal_dependencies.remove(&TYPES::View::new(view));
+                if maybe_cancel_sender.as_ref().is_some_and(|s| !s.is_closed()) {
+                    tracing::error!("Aborting proposal dependency task for view {view}");
+                    let _ = maybe_cancel_sender.unwrap().try_broadcast(());
                 }
             }
 
@@ -687,8 +714,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
     /// Cancel all tasks the consensus tasks has spawned before the given view
     pub fn cancel_tasks(&mut self, view: TYPES::View) {
         let keep = self.proposal_dependencies.split_off(&view);
-        while let Some((_, task)) = self.proposal_dependencies.pop_first() {
-            task.abort();
+        while let Some((view, cancel_sender)) = self.proposal_dependencies.pop_first() {
+            if !cancel_sender.is_closed() {
+                tracing::error!("Aborting proposal dependency task for view {view}");
+                let _ = cancel_sender.try_broadcast(());
+            }
         }
         self.proposal_dependencies = keep;
     }
@@ -710,8 +740,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TaskState
     }
 
     fn cancel_subtasks(&mut self) {
-        while let Some((_, handle)) = self.proposal_dependencies.pop_first() {
-            handle.abort();
+        while let Some((view, cancel_sender)) = self.proposal_dependencies.pop_first() {
+            if !cancel_sender.is_closed() {
+                tracing::error!("Aborting proposal dependency task for view {view}");
+                let _ = cancel_sender.try_broadcast(());
+            }
         }
     }
 }

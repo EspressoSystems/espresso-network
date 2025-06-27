@@ -7,10 +7,7 @@ use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
 use committable::Commitment;
 use futures::{FutureExt, TryFutureExt};
-use hotshot::{
-    types::{BLSPubKey, EventType},
-    HotShotInitializer, InitializerEpochInfo,
-};
+use hotshot::{types::EventType, HotShotInitializer, InitializerEpochInfo};
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
 use hotshot_types::{
     data::{
@@ -27,24 +24,24 @@ use hotshot_types::{
     },
     stake_table::HSStakeTable,
     traits::{
+        metrics::Metrics,
         node_implementation::{ConsensusTime, NodeType, Versions},
         storage::Storage,
         ValidatedState as HotShotState,
     },
     utils::genesis_epoch_from_version,
 };
-use indexmap::IndexMap;
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::{
     impls::NodeState,
     utils::BackoffParams,
     v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment},
-    v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
+    v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
 use crate::{
     v0::impls::ValidatedState, v0_3::ChainConfig, BlockMerkleTree, Event, FeeAccount,
-    FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig, SeqTypes,
+    FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig, SeqTypes, ValidatorMap,
 };
 
 #[async_trait]
@@ -114,7 +111,7 @@ pub trait StateCatchup: Send + Sync {
                         .await
                         .map_err(|err| {
                             err.context(format!(
-                                "fetching accounts {accounts:?}, height {height}, view {view:?}"
+                                "fetching accounts {accounts:?}, height {height}, view {view}"
                             ))
                         })
                 }
@@ -208,7 +205,7 @@ pub trait StateCatchup: Send + Sync {
                         .await
                         .map_err(|err| {
                             err.context(format!(
-                                "fetching reward accounts {accounts:?}, height {height}, view {view:?}"
+                                "fetching reward accounts {accounts:?}, height {height}, view {view}"
                             ))
                         })
                 }
@@ -393,20 +390,13 @@ pub enum EventsPersistenceRead {
 /// Trait used by `Memberships` implementations to interact with persistence layer.
 pub trait MembershipPersistence: Send + Sync + 'static {
     /// Load stake table for epoch from storage
-    async fn load_stake(
-        &self,
-        epoch: EpochNumber,
-    ) -> anyhow::Result<Option<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>>>;
+    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<ValidatorMap>>;
 
     /// Load stake tables for storage for latest `n` known epochs
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
 
     /// Store stake table at `epoch` in the persistence layer
-    async fn store_stake(
-        &self,
-        epoch: EpochNumber,
-        stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
-    ) -> anyhow::Result<()>;
+    async fn store_stake(&self, epoch: EpochNumber, stake: ValidatorMap) -> anyhow::Result<()>;
 
     async fn store_events(
         &self,
@@ -529,7 +519,7 @@ pub trait SequencerPersistence:
                 ensure!(
                     leaf.view_number() == high_qc.view_number,
                     format!(
-                        "loaded anchor leaf from view {:?}, but high QC is from view {:?}",
+                        "loaded anchor leaf from view {}, but high QC is from view {}",
                         leaf.view_number(),
                         high_qc.view_number
                     )
@@ -788,6 +778,8 @@ pub trait SequencerPersistence:
         &self,
         state_cert: LightClientStateUpdateCertificate<SeqTypes>,
     ) -> anyhow::Result<()>;
+
+    fn enable_metrics(&mut self, metrics: &dyn Metrics);
 }
 
 #[async_trait]

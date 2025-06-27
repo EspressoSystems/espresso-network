@@ -5,12 +5,10 @@ use anyhow::bail;
 #[cfg(any(test, feature = "testing"))]
 use async_lock::RwLock;
 use async_trait::async_trait;
-use hotshot::types::BLSPubKey;
 use hotshot_types::{
     data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::states::InstanceState,
     HotShotConfig,
 };
-use indexmap::IndexMap;
 #[cfg(any(test, feature = "testing"))]
 use vbs::version::StaticVersionType;
 use vbs::version::Version;
@@ -19,15 +17,19 @@ use super::{
     state::ValidatedState,
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0_1::NoStorage,
-    v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
+    v0_3::{EventKey, IndexedStake, StakeTableEvent},
     SeqTypes, UpgradeType, ViewBasedUpgrade,
-};
-use crate::v0::{
-    traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
-    Upgrade, UpgradeMode,
 };
 #[cfg(any(test, feature = "testing"))]
 use crate::EpochCommittees;
+use crate::{
+    v0::{
+        traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
+        Upgrade, UpgradeMode,
+    },
+    v0_1::RewardAmount,
+    ValidatorMap,
+};
 
 /// Represents the immutable state of a node.
 ///
@@ -45,6 +47,7 @@ pub struct NodeState {
     #[debug(skip)]
     pub coordinator: EpochMembershipCoordinator<SeqTypes>,
     pub epoch_height: Option<u64>,
+    pub genesis_version: Version,
 
     /// Map containing all planned and executed upgrades.
     ///
@@ -64,12 +67,17 @@ pub struct NodeState {
     pub current_version: Version,
 }
 
+impl NodeState {
+    pub async fn block_reward(&self) -> RewardAmount {
+        let coordinator = self.coordinator.clone();
+        let membership = coordinator.membership().read().await;
+        membership.block_reward()
+    }
+}
+
 #[async_trait]
 impl MembershipPersistence for NoStorage {
-    async fn load_stake(
-        &self,
-        _epoch: EpochNumber,
-    ) -> anyhow::Result<Option<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>>> {
+    async fn load_stake(&self, _epoch: EpochNumber) -> anyhow::Result<Option<ValidatorMap>> {
         Ok(None)
     }
 
@@ -77,11 +85,7 @@ impl MembershipPersistence for NoStorage {
         Ok(None)
     }
 
-    async fn store_stake(
-        &self,
-        _epoch: EpochNumber,
-        _stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
-    ) -> anyhow::Result<()> {
+    async fn store_stake(&self, _epoch: EpochNumber, _stake: ValidatorMap) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -112,6 +116,7 @@ impl NodeState {
         catchup: impl StateCatchup + 'static,
         current_version: Version,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
+        genesis_version: Version,
     ) -> Self {
         Self {
             node_id,
@@ -128,15 +133,17 @@ impl NodeState {
             current_version,
             epoch_height: None,
             coordinator,
+            genesis_version,
         }
     }
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock() -> Self {
+        use alloy::primitives::U256;
         use hotshot_example_types::storage_types::TestStorage;
         use vbs::version::StaticVersion;
 
-        use crate::v0_3::StakeTableFetcher;
+        use crate::{v0_1::RewardAmount, v0_3::Fetcher};
 
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
@@ -145,11 +152,12 @@ impl NodeState {
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
             vec![],
-            StakeTableFetcher::mock(),
+            RewardAmount(U256::ZERO),
+            Fetcher::mock(),
         )));
 
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage, 10);
+        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
         Self::new(
             0,
             chain_config,
@@ -157,15 +165,17 @@ impl NodeState {
             Arc::new(mock::MockStateCatchup::default()),
             StaticVersion::<0, 1>::version(),
             coordinator,
+            Version { major: 0, minor: 1 },
         )
     }
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v2() -> Self {
+        use alloy::primitives::U256;
         use hotshot_example_types::storage_types::TestStorage;
         use vbs::version::StaticVersion;
 
-        use crate::v0_3::StakeTableFetcher;
+        use crate::{v0_1::RewardAmount, v0_3::Fetcher};
 
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
@@ -174,10 +184,11 @@ impl NodeState {
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
             vec![],
-            StakeTableFetcher::mock(),
+            RewardAmount(U256::ZERO),
+            Fetcher::mock(),
         )));
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage, 10);
+        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
 
         Self::new(
             0,
@@ -186,26 +197,29 @@ impl NodeState {
             Arc::new(mock::MockStateCatchup::default()),
             StaticVersion::<0, 2>::version(),
             coordinator,
+            Version { major: 0, minor: 1 },
         )
     }
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v3() -> Self {
+        use alloy::primitives::U256;
         use hotshot_example_types::storage_types::TestStorage;
         use vbs::version::StaticVersion;
 
-        use crate::v0_3::StakeTableFetcher;
+        use crate::{v0_1::RewardAmount, v0_3::Fetcher};
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
 
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
             vec![],
-            StakeTableFetcher::mock(),
+            RewardAmount(U256::ZERO),
+            Fetcher::mock(),
         )));
 
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage, 10);
+        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
         Self::new(
             0,
             ChainConfig::default(),
@@ -213,6 +227,7 @@ impl NodeState {
             mock::MockStateCatchup::default(),
             StaticVersion::<0, 3>::version(),
             coordinator,
+            Version { major: 0, minor: 1 },
         )
     }
 
@@ -271,10 +286,11 @@ impl From<BTreeMap<Version, Upgrade>> for UpgradeMap {
 #[cfg(any(test, feature = "testing"))]
 impl Default for NodeState {
     fn default() -> Self {
+        use alloy::primitives::U256;
         use hotshot_example_types::storage_types::TestStorage;
         use vbs::version::StaticVersion;
 
-        use crate::v0_3::StakeTableFetcher;
+        use crate::{v0_1::RewardAmount, v0_3::Fetcher};
 
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
@@ -283,10 +299,11 @@ impl Default for NodeState {
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
             vec![],
-            StakeTableFetcher::mock(),
+            RewardAmount(U256::ZERO),
+            Fetcher::mock(),
         )));
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage, 10);
+        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
 
         Self::new(
             1u64,
@@ -295,6 +312,7 @@ impl Default for NodeState {
             Arc::new(mock::MockStateCatchup::default()),
             StaticVersion::<0, 1>::version(),
             coordinator,
+            Version { major: 0, minor: 1 },
         )
     }
 }
@@ -405,7 +423,7 @@ pub mod mock {
             let src = &self.state[&view].fee_merkle_tree;
             assert_eq!(src.commitment(), fee_merkle_tree_root);
 
-            tracing::info!("catchup: fetching accounts {accounts:?} for view {view:?}");
+            tracing::info!("catchup: fetching accounts {accounts:?} for view {view}");
             let tree = retain_accounts(src, accounts.iter().copied())
                 .with_context(|| "failed to retain accounts")?;
 
@@ -431,7 +449,7 @@ pub mod mock {
             view: ViewNumber,
             mt: &mut BlockMerkleTree,
         ) -> anyhow::Result<()> {
-            tracing::info!("catchup: fetching frontier for view {view:?}");
+            tracing::info!("catchup: fetching frontier for view {view}");
             let src = &self.state[&view].block_merkle_tree;
 
             assert_eq!(src.commitment(), mt.commitment());

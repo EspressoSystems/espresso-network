@@ -27,8 +27,9 @@ use super::{
 };
 use crate::{
     availability::{
-        BlockId, BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, QueryablePayload,
-        StateCertQueryData, TransactionHash, TransactionQueryData, VidCommonQueryData,
+        BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceId, PayloadQueryData,
+        QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
+        TransactionQueryData, VidCommonQueryData,
     },
     data_source::{
         storage::{PayloadMetadata, VidCommonMetadata},
@@ -329,6 +330,7 @@ where
 impl<Types, T> AvailabilityStorage<Types> for Transaction<T>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
     T: AvailabilityStorage<Types>,
 {
@@ -471,6 +473,7 @@ where
 impl<Types, T> UpdateAvailabilityStorage<Types> for Transaction<T>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
     T: UpdateAvailabilityStorage<Types> + Send + Sync,
 {
@@ -517,6 +520,7 @@ where
 impl<Types, T> NodeStorage<Types> for Transaction<T>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     T: NodeStorage<Types> + Send + Sync,
 {
     async fn block_height(&mut self) -> QueryResult<usize> {
@@ -527,17 +531,21 @@ where
     async fn count_transactions_in_range(
         &mut self,
         range: impl RangeBounds<usize> + Send,
+        namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
         self.maybe_fail_read(FailableAction::Any).await?;
-        self.inner.count_transactions_in_range(range).await
+        self.inner
+            .count_transactions_in_range(range, namespace)
+            .await
     }
 
     async fn payload_size_in_range(
         &mut self,
         range: impl RangeBounds<usize> + Send,
+        namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
         self.maybe_fail_read(FailableAction::Any).await?;
-        self.inner.payload_size_in_range(range).await
+        self.inner.payload_size_in_range(range, namespace).await
     }
 
     async fn vid_share<ID>(&mut self, id: ID) -> QueryResult<VidShare>
@@ -564,16 +572,18 @@ where
     }
 }
 
-impl<T> AggregatesStorage for Transaction<T>
+impl<Types, T> AggregatesStorage<Types> for Transaction<T>
 where
-    T: AggregatesStorage + Send + Sync,
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    T: AggregatesStorage<Types> + Send + Sync,
 {
     async fn aggregates_height(&mut self) -> anyhow::Result<usize> {
         self.maybe_fail_read(FailableAction::Any).await?;
         self.inner.aggregates_height().await
     }
 
-    async fn load_prev_aggregate(&mut self) -> anyhow::Result<Option<Aggregate>> {
+    async fn load_prev_aggregate(&mut self) -> anyhow::Result<Option<Aggregate<Types>>> {
         self.maybe_fail_read(FailableAction::Any).await?;
         self.inner.load_prev_aggregate().await
     }
@@ -582,13 +592,14 @@ where
 impl<T, Types> UpdateAggregatesStorage<Types> for Transaction<T>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     T: UpdateAggregatesStorage<Types> + Send + Sync,
 {
     async fn update_aggregates(
         &mut self,
-        prev: Aggregate,
+        prev: Aggregate<Types>,
         blocks: &[PayloadMetadata<Types>],
-    ) -> anyhow::Result<Aggregate> {
+    ) -> anyhow::Result<Aggregate<Types>> {
         self.maybe_fail_write(FailableAction::Any).await?;
         self.inner.update_aggregates(prev, blocks).await
     }

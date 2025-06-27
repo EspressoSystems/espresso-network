@@ -309,7 +309,7 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
             .iter()
         {
             if !recipients.contains(&node.0) {
-                tracing::trace!("Skipping node because not in recipient list: {:?}", &node.0);
+                tracing::trace!("Skipping node because not in recipient list: {:?}", node.0);
                 continue;
             }
             // TODO delay/drop etc here

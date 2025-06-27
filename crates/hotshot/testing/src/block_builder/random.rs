@@ -144,7 +144,7 @@ impl<TYPES: NodeType<Transaction = TestTransaction>> RandomBuilderTask<TYPES> {
                 .await
                 .push(block.metadata.block_hash.clone(), block)
             {
-                tracing::warn!("Block {} evicted", hash);
+                tracing::warn!("Block {hash} evicted");
             };
             if time_per_block < start.elapsed() {
                 tracing::warn!(

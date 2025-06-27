@@ -11,7 +11,6 @@ use std::{
     sync::Arc,
 };
 
-use alloy::primitives::U256;
 use async_broadcast::{broadcast, Receiver, Sender};
 use async_lock::RwLock;
 use futures::future::join_all;
@@ -33,6 +32,7 @@ use hotshot_types::{
     drb::INITIAL_DRB_RESULT,
     epoch_membership::EpochMembershipCoordinator,
     simple_certificate::QuorumCertificate2,
+    storage_metrics::StorageMetricsValue,
     traits::{
         election::Membership,
         network::ConnectedNetwork,
@@ -172,7 +172,7 @@ where
         let spinning_task_state = SpinningTask {
             epoch_height: launcher.metadata.test_config.epoch_height,
             epoch_start_block: launcher.metadata.test_config.epoch_start_block,
-            start_epoch_info: Vec::new(), // #2652 REVIEW NOTE: Same as other instances of start_epoch_info
+            start_epoch_info: Vec::new(),
             handles: Arc::clone(&handles),
             late_start,
             latest_view: None,
@@ -192,6 +192,7 @@ where
             restart_contexts: HashMap::new(),
             channel_generator: launcher.resource_generators.channel_generator,
             state_cert: None,
+            node_stakes: launcher.metadata.node_stakes.clone(),
         };
         let spinning_task = TestTask::<SpinningTask<TYPES, N, I, V>>::new(
             spinning_task_state,
@@ -278,7 +279,7 @@ where
                     TestResult::Fail(e) => error_list.push(e),
                 },
                 Err(e) => {
-                    tracing::error!("Error Joining the test task {:?}", e);
+                    tracing::error!("Error Joining the test task {e:?}");
                 },
             }
         }
@@ -359,7 +360,7 @@ where
             }
             let node_id = self.next_node_id;
             self.next_node_id += 1;
-            tracing::debug!("launch node {}", i);
+            tracing::debug!("launch node {i}");
 
             config.builder_urls = builder_urls
                 .clone()
@@ -415,7 +416,7 @@ where
                     let validator_config = ValidatorConfig::generated_from_seed_indexed(
                         [0u8; 32],
                         node_id,
-                        U256::from(1),
+                        self.launcher.metadata.node_stakes.get(node_id),
                         is_da,
                     );
 
@@ -528,7 +529,6 @@ where
         let public_key = validator_config.public_key.clone();
         let state_private_key = validator_config.state_private_key.clone();
         let epoch_height = config.epoch_height;
-        let drb_difficulty = config.drb_difficulty;
 
         SystemContext::new(
             public_key,
@@ -540,12 +540,12 @@ where
                 Arc::new(RwLock::new(memberships)),
                 epoch_height,
                 &storage.clone(),
-                drb_difficulty,
             ),
             network,
             initializer,
             ConsensusMetricsValue::default(),
             storage,
+            StorageMetricsValue::default(),
         )
         .await
     }
@@ -573,7 +573,6 @@ where
         let public_key = validator_config.public_key.clone();
         let state_private_key = validator_config.state_private_key.clone();
         let epoch_height = config.epoch_height;
-        let drb_difficulty = config.drb_difficulty;
 
         SystemContext::new_from_channels(
             public_key,
@@ -581,16 +580,12 @@ where
             state_private_key,
             node_id,
             config,
-            EpochMembershipCoordinator::new(
-                memberships,
-                epoch_height,
-                &storage.clone(),
-                drb_difficulty,
-            ),
+            EpochMembershipCoordinator::new(memberships, epoch_height, &storage.clone()),
             network,
             initializer,
             ConsensusMetricsValue::default(),
             storage,
+            StorageMetricsValue::default(),
             internal_channel,
             external_channel,
         )

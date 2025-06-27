@@ -13,6 +13,7 @@ use espresso_types::v0_3::ChainConfig;
 
 pub mod fs;
 pub mod no_storage;
+mod persistence_metrics;
 pub mod sql;
 
 #[async_trait]
@@ -42,7 +43,7 @@ mod tests {
             EventConsumer, EventsPersistenceRead, MembershipPersistence, NullEventConsumer,
             PersistenceOptions, SequencerPersistence,
         },
-        v0_3::{StakeTableFetcher, Validator},
+        v0_3::{Fetcher, Validator},
         Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes,
         SequencerVersions, ValidatedState,
     };
@@ -1272,7 +1273,7 @@ mod tests {
     async fn assert_events_eq<P: TestablePersistence>(
         persistence: &P,
         block: u64,
-        stake_table_fetcher: &StakeTableFetcher,
+        stake_table_fetcher: &Fetcher,
         l1_client: &L1Client,
         stake_table_contract: Address,
     ) -> anyhow::Result<()> {
@@ -1282,13 +1283,13 @@ mod tests {
         assert!(stored_l1.is_some());
         assert!(events.iter().all(|((l1_block, _), _)| *l1_block <= block));
         // Fetch events directly from the contract and compare with persisted data
-        let contract_events = StakeTableFetcher::fetch_events_from_contract(
+        let contract_events = Fetcher::fetch_events_from_contract(
             l1_client.clone(),
             stake_table_contract,
             None,
             block,
         )
-        .await?
+        .await
         .sort_events()?;
         assert_eq!(
             contract_events, events,
@@ -1480,6 +1481,7 @@ mod tests {
             .genesis_st_state(genesis_stake)
             .blocks_per_epoch(blocks_per_epoch)
             .epoch_start_block(1)
+            .multisig_pauser(network_config.signer().address())
             .build()
             .unwrap();
 
@@ -1537,7 +1539,7 @@ mod tests {
         .unwrap();
         l1_client.spawn_tasks().await;
 
-        let fetcher = StakeTableFetcher::new(
+        let fetcher = Fetcher::new(
             Arc::new(NullStateCatchup::default()),
             Arc::new(Mutex::new(persistence.clone())),
             l1_client.clone(),
@@ -1576,14 +1578,10 @@ mod tests {
 
             assert!(l1_block > prev_l1_block, "events not updated");
 
-            let contract_events = StakeTableFetcher::fetch_events_from_contract(
-                l1_client.clone(),
-                st_addr,
-                None,
-                l1_block,
-            )
-            .await?
-            .sort_events()?;
+            let contract_events =
+                Fetcher::fetch_events_from_contract(l1_client.clone(), st_addr, None, l1_block)
+                    .await
+                    .sort_events()?;
             assert_eq!(persisted_events, contract_events);
 
             prev_l1_block = l1_block;

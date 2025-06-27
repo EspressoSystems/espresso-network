@@ -79,6 +79,7 @@ async fn test_vote_dependency_handle() {
         ];
 
         let (event_sender, mut event_receiver) = broadcast(1024);
+        let (_, cancel_receiver) = broadcast(1);
         let view_number = ViewNumber::new(node_id);
 
         let vote_dependency_handle_state =
@@ -90,6 +91,7 @@ async fn test_vote_dependency_handle() {
                 instance_state: handle.hotshot.instance_state(),
                 membership_coordinator: handle.hotshot.membership_coordinator.clone(),
                 storage: handle.storage(),
+                storage_metrics: handle.storage_metrics(),
                 view_number,
                 sender: event_sender.clone(),
                 receiver: event_receiver.clone().deactivate(),
@@ -99,6 +101,7 @@ async fn test_vote_dependency_handle() {
                 state_private_key: handle.state_private_key().clone(),
                 first_epoch: None,
                 stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
+                cancel_receiver,
             };
 
         vote_dependency_handle_state

@@ -22,7 +22,7 @@ use committable::{Commitment, Committable};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use vbs::version::Version;
 
-use super::signature_key::BuilderSignatureKey;
+use super::{node_implementation::Versions, signature_key::BuilderSignatureKey};
 use crate::{
     data::{Leaf2, VidCommitment},
     light_client::LightClientState,
@@ -127,6 +127,9 @@ pub trait BlockPayload<TYPES: NodeType>:
         &'a self,
         metadata: &'a Self::Metadata,
     ) -> impl 'a + Iterator<Item = Self::Transaction>;
+
+    /// Get the number of bytes of transactions in the payload.
+    fn txn_bytes(&self) -> usize;
 }
 
 /// extra functions required on block to be usable by hotshot-testing
@@ -178,15 +181,20 @@ pub trait BlockHeader<TYPES: NodeType>:
     ) -> impl Future<Output = Result<Self, Self::Error>> + Send;
 
     /// Build the genesis header, payload, and metadata.
-    fn genesis(
+    fn genesis<V: Versions>(
         instance_state: &<TYPES::ValidatedState as ValidatedState<TYPES>>::Instance,
-        payload_commitment: VidCommitment,
-        builder_commitment: BuilderCommitment,
-        metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+        payload: TYPES::BlockPayload,
+        metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) -> Self;
 
     /// Get the block number.
     fn block_number(&self) -> u64;
+
+    /// Get the timestamp.
+    fn timestamp(&self) -> u64;
+
+    /// Get the timestamp in milliseconds.
+    fn timestamp_millis(&self) -> u64;
 
     /// Get the payload commitment.
     fn payload_commitment(&self) -> VidCommitment;

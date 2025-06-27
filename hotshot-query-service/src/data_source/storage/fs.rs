@@ -51,7 +51,7 @@ use crate::{
             BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadQueryData, QueryableHeader,
             QueryablePayload, TransactionHash, TransactionQueryData, VidCommonQueryData,
         },
-        StateCertQueryData,
+        NamespaceId, StateCertQueryData,
     },
     data_source::{update, VersionedDataSource},
     metrics::PrometheusMetrics,
@@ -70,6 +70,7 @@ const CACHED_STATE_CERT_COUNT: usize = 5;
 pub struct FileSystemStorageInner<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     index_by_leaf_hash: HashMap<LeafHash<Types>, u64>,
@@ -90,6 +91,7 @@ where
 impl<Types> FileSystemStorageInner<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     fn get_block_index(&self, id: BlockId<Types>) -> QueryResult<usize> {
@@ -128,18 +130,22 @@ where
 #[derive(Debug)]
 pub struct FileSystemStorage<Types: NodeType>
 where
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     inner: RwLock<FileSystemStorageInner<Types>>,
     metrics: PrometheusMetrics,
 }
 
-impl<Types: NodeType> PrunerConfig for FileSystemStorage<Types> where
-    Payload<Types>: QueryablePayload<Types>
+impl<Types: NodeType> PrunerConfig for FileSystemStorage<Types>
+where
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
 {
 }
 impl<Types: NodeType> PruneStorage for FileSystemStorage<Types>
 where
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     type Pruner = ();
@@ -148,6 +154,7 @@ where
 #[async_trait]
 impl<Types: NodeType> MigrateTypes<Types> for FileSystemStorage<Types>
 where
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     async fn migrate_types(&self, _batch_size: u64) -> anyhow::Result<()> {
@@ -351,6 +358,7 @@ pub trait Revert {
 impl<Types> Revert for RwLockWriteGuard<'_, FileSystemStorageInner<Types>>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     fn revert(&mut self) {
@@ -364,6 +372,7 @@ where
 impl<Types> Revert for RwLockReadGuard<'_, FileSystemStorageInner<Types>>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     fn revert(&mut self) {
@@ -384,6 +393,7 @@ impl<T: Revert> Drop for Transaction<T> {
 impl<Types> update::Transaction for Transaction<RwLockWriteGuard<'_, FileSystemStorageInner<Types>>>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     async fn commit(mut self) -> anyhow::Result<()> {
@@ -406,6 +416,7 @@ where
 impl<Types> update::Transaction for Transaction<RwLockReadGuard<'_, FileSystemStorageInner<Types>>>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     async fn commit(self) -> anyhow::Result<()> {
@@ -421,6 +432,7 @@ where
 
 impl<Types: NodeType> VersionedDataSource for FileSystemStorage<Types>
 where
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     type Transaction<'a>
@@ -759,6 +771,7 @@ where
     async fn count_transactions_in_range(
         &mut self,
         range: impl RangeBounds<usize> + Send,
+        namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
         if !matches!(range.start_bound(), Bound::Unbounded | Bound::Included(0))
             || !matches!(range.end_bound(), Bound::Unbounded)
@@ -768,18 +781,31 @@ where
             });
         }
 
+        if namespace.is_some() {
+            return Err(QueryError::Error {
+                message: "file system does not support per-namespace stats".into(),
+            });
+        }
+
         Ok(self.inner.num_transactions)
     }
 
     async fn payload_size_in_range(
         &mut self,
         range: impl RangeBounds<usize> + Send,
+        namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
         if !matches!(range.start_bound(), Bound::Unbounded | Bound::Included(0))
             || !matches!(range.end_bound(), Bound::Unbounded)
         {
             return Err(QueryError::Error {
                 message: "partial aggregates are not supported with file system backend".into(),
+            });
+        }
+
+        if namespace.is_some() {
+            return Err(QueryError::Error {
+                message: "file system does not support per-namespace stats".into(),
             });
         }
 
@@ -875,12 +901,16 @@ where
     }
 }
 
-impl<T: Revert + Send> AggregatesStorage for Transaction<T> {
+impl<Types, T: Revert + Send> AggregatesStorage<Types> for Transaction<T>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+{
     async fn aggregates_height(&mut self) -> anyhow::Result<usize> {
         Ok(0)
     }
 
-    async fn load_prev_aggregate(&mut self) -> anyhow::Result<Option<Aggregate>> {
+    async fn load_prev_aggregate(&mut self) -> anyhow::Result<Option<Aggregate<Types>>> {
         Ok(None)
     }
 }
@@ -888,12 +918,13 @@ impl<T: Revert + Send> AggregatesStorage for Transaction<T> {
 impl<Types, T: Revert + Send> UpdateAggregatesStorage<Types> for Transaction<T>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
 {
     async fn update_aggregates(
         &mut self,
-        _prev: Aggregate,
+        _prev: Aggregate<Types>,
         _blocks: &[PayloadMetadata<Types>],
-    ) -> anyhow::Result<Aggregate> {
+    ) -> anyhow::Result<Aggregate<Types>> {
         Ok(Aggregate::default())
     }
 }
@@ -903,6 +934,7 @@ impl<T: Revert> PrunedHeightStorage for Transaction<T> {}
 impl<Types> HasMetrics for FileSystemStorage<Types>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     fn metrics(&self) -> &PrometheusMetrics {

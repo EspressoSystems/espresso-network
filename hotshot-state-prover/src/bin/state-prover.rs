@@ -3,6 +3,7 @@ use std::time::Duration;
 use alloy::{
     primitives::{utils::parse_units, Address},
     providers::{Provider, ProviderBuilder},
+    rpc::client::RpcClient,
     signers::{
         local::{coins_bip39::English, MnemonicBuilder},
         Signer,
@@ -10,8 +11,8 @@ use alloy::{
 };
 use clap::Parser;
 use espresso_contract_deployer::network_config::fetch_epoch_config_from_sequencer;
-use espresso_types::parse_duration;
-use hotshot_state_prover::service::{run_prover_once, run_prover_service, StateProverConfig};
+use espresso_types::{parse_duration, v0_1::SwitchingTransport, L1ClientOptions};
+use hotshot_state_prover::service::StateProverConfig;
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
 use sequencer_utils::logging;
 use url::Url;
@@ -47,13 +48,19 @@ struct Args {
     )]
     max_retries: u64,
 
-    /// URL of layer 1 Ethereum JSON-RPC provider.
+    /// Url we will use for RPC communication with L1.
     #[clap(
         long,
         env = "ESPRESSO_SEQUENCER_L1_PROVIDER",
-        default_value = "http://localhost:8545"
+        default_value = "http://localhost:8545",
+        value_delimiter = ',',
+        num_args = 1..,
     )]
-    l1_provider: Url,
+    pub l1_provider_url: Vec<Url>,
+
+    /// Configuration for the L1 client.
+    #[clap(flatten)]
+    pub l1_options: L1ClientOptions,
 
     /// Address of LightClient contract on layer 1.
     #[clap(long, env = "ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS")]
@@ -104,7 +111,10 @@ async fn main() {
     args.logging.init();
 
     // prepare config for state prover from user options
-    let l1_provider = ProviderBuilder::new().on_http(args.l1_provider.clone());
+    let transport = SwitchingTransport::new(args.l1_options, args.l1_provider_url)
+        .expect("failed to create switching transport, check your l1 provider urls");
+    let rpc_client = RpcClient::new(transport.clone(), false);
+    let l1_provider = ProviderBuilder::new().on_client(rpc_client.clone());
     let chain_id = l1_provider.get_chain_id().await.unwrap();
     let signer = MnemonicBuilder::<English>::default()
         .phrase(args.eth_mnemonic)
@@ -147,7 +157,7 @@ async fn main() {
         relay_server: args.relay_server,
         update_interval: args.update_interval,
         retry_interval: args.retry_interval,
-        provider_endpoint: args.l1_provider,
+        l1_rpc_client: rpc_client,
         light_client_address: args.light_client_address,
         signer,
         sequencer_url: args.sequencer_url,
@@ -161,16 +171,45 @@ async fn main() {
 
     // validate that the light client contract is a proxy, panics otherwise
     config.validate_light_client_contract().await.unwrap();
+    let is_legacy = match hotshot_state_prover::legacy::service::is_contract_legacy(
+        &l1_provider,
+        args.light_client_address,
+    )
+    .await
+    {
+        Ok(is_legacy) => is_legacy,
+        Err(err) => {
+            tracing::error!("Error checking the contract version: {err}");
+            return;
+        },
+    };
+    tracing::info!(
+        "Detected contract version {}",
+        if is_legacy { "v1" } else { "v2" }
+    );
+
+    // This bind version doesn't represent anything now, but it's required by the service trait
+    let bind_version = StaticVersion::<0, 1> {};
 
     if args.daemon {
         // Launching the prover service daemon
-        if let Err(err) = run_prover_service(config, StaticVersion::<0, 1> {}).await {
-            tracing::error!("Error running prover service: {:?}", err);
+        let result = if is_legacy {
+            hotshot_state_prover::legacy::service::run_prover_service(config, bind_version).await
+        } else {
+            hotshot_state_prover::service::run_prover_service(config, bind_version).await
+        };
+        if let Err(err) = result {
+            tracing::error!("Error running prover service: {err}");
         };
     } else {
         // Run light client state update once
-        if let Err(err) = run_prover_once(config, StaticVersion::<0, 1> {}).await {
-            tracing::error!("Error running prover once: {:?}", err);
+        let result = if is_legacy {
+            hotshot_state_prover::legacy::service::run_prover_once(config, bind_version).await
+        } else {
+            hotshot_state_prover::service::run_prover_once(config, bind_version).await
         };
+        if let Err(err) = result {
+            tracing::error!("Error running prover once: {err}");
+        }
     }
 }

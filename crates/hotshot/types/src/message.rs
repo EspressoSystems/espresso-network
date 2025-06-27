@@ -668,6 +668,11 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
         self.version_infallible(view).await >= V::Epochs::VERSION
     }
 
+    /// Return whether epochs are enabled in the given view
+    pub async fn upgraded_drb_and_header(&self, view: TYPES::View) -> bool {
+        self.version_infallible(view).await >= V::DrbAndHeaderUpgrade::VERSION
+    }
+
     /// Serialize a message with a version number, using `message.view_number()` and an optional decided upgrade certificate to determine the message's version.
     ///
     /// # Errors
@@ -686,7 +691,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
             v if v == V::Base::VERSION => Serializer::<V::Base>::serialize(&message),
             v if v == V::Upgrade::VERSION => Serializer::<V::Upgrade>::serialize(&message),
             v => {
-                bail!("Attempted to serialize with version {}, which is incompatible. This should be impossible.", v);
+                bail!("Attempted to serialize with version {v}, which is incompatible. This should be impossible.");
             },
         };
 
@@ -713,7 +718,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
             v if v == V::Base::VERSION => Serializer::<V::Base>::deserialize(message),
             v if v == V::Upgrade::VERSION => Serializer::<V::Upgrade>::deserialize(message),
             v => {
-                bail!("Cannot deserialize message with stated version {}", v);
+                bail!("Cannot deserialize message with stated version {v}");
             },
         }
         .wrap()

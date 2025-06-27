@@ -1,12 +1,13 @@
 use std::{collections::VecDeque, num::NonZeroUsize, sync::Arc, time::Duration};
 
+use alloy::primitives::U256;
 use anyhow::Context;
 use async_broadcast::broadcast;
 use async_lock::{Mutex, RwLock};
 use espresso_types::{
     eth_signature_key::EthKeyPair,
-    v0_1::NoStorage,
-    v0_3::{ChainConfig, StakeTableFetcher},
+    v0_1::{NoStorage, RewardAmount},
+    v0_3::Fetcher,
     EpochCommittees, FeeAmount, NodeState, Payload, SeqTypes, ValidatedState,
 };
 use hotshot::traits::BlockPayload;
@@ -41,10 +42,12 @@ pub struct BuilderConfig {
 }
 
 pub fn build_instance_state<V: Versions>(
-    chain_config: ChainConfig,
+    genesis: sequencer::Genesis,
     l1_params: L1Params,
     state_peers: Vec<Url>,
 ) -> NodeState {
+    let chain_config = genesis.chain_config;
+    let genesis_version = genesis.genesis_version;
     let l1_client = l1_params
         .options
         .connect(l1_params.urls)
@@ -56,7 +59,7 @@ pub fn build_instance_state<V: Versions>(
         &NoMetrics,
     ));
 
-    let fetcher = StakeTableFetcher::new(
+    let fetcher = Fetcher::new(
         peers.clone(),
         Arc::new(Mutex::new(NoStorage)),
         l1_client.clone(),
@@ -67,11 +70,11 @@ pub fn build_instance_state<V: Versions>(
         Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
             vec![],
+            RewardAmount(U256::ZERO),
             fetcher,
         ))),
         100,
         &Arc::new(sequencer::persistence::no_storage::NoStorage),
-        10,
     );
 
     NodeState::new(
@@ -81,6 +84,7 @@ pub fn build_instance_state<V: Versions>(
         peers,
         V::Base::version(),
         coordinator,
+        genesis_version,
     )
 }
 

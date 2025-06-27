@@ -117,9 +117,7 @@ async fn enforce_max_block_size() {
     let tx_count_expected = test.all_txs().len();
 
     let chain_config = ChainConfig {
-        max_block_size: BlockSize::from(
-            (payload_byte_len_expected + ns_table_byte_len_expected) as u64,
-        ),
+        max_block_size: BlockSize::from(payload_byte_len_expected as u64),
         ..Default::default()
     };
 
@@ -142,9 +140,7 @@ async fn enforce_max_block_size() {
     // WARN log should be emitted
 
     let chain_config = ChainConfig {
-        max_block_size: BlockSize::from(
-            (payload_byte_len_expected + ns_table_byte_len_expected - 1) as u64,
-        ),
+        max_block_size: BlockSize::from((payload_byte_len_expected - 1) as u64),
         ..Default::default()
     };
     let instance_state = NodeState::default().with_chain_config(chain_config);

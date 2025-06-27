@@ -29,6 +29,35 @@ pub async fn main() -> anyhow::Result<()> {
     let upgrade = genesis.upgrade_version;
 
     match (base, upgrade) {
+        #[cfg(all(feature = "pos", feature = "drb-and-header"))]
+        (
+            espresso_types::EpochVersion::VERSION,
+            espresso_types::DrbAndHeaderUpgradeVersion::VERSION,
+        ) => {
+            run(
+                genesis,
+                modules,
+                opt,
+                SequencerVersions::<
+                    espresso_types::EpochVersion,
+                    espresso_types::DrbAndHeaderUpgradeVersion,
+                >::new(),
+            )
+            .await
+        },
+        #[cfg(feature = "drb-and-header")]
+        (espresso_types::DrbAndHeaderUpgradeVersion::VERSION, _) => {
+            run(
+                genesis,
+                modules,
+                opt,
+                SequencerVersions::<
+                    espresso_types::DrbAndHeaderUpgradeVersion,
+                    espresso_types::DrbAndHeaderUpgradeVersion,
+                >::new(),
+            )
+            .await
+        },
         #[cfg(all(feature = "fee", feature = "pos"))]
         (FeeVersion::VERSION, espresso_types::EpochVersion::VERSION) => {
             run(
@@ -290,8 +319,10 @@ mod test {
             upgrade_version: Version { major: 0, minor: 2 },
             epoch_height: None,
             drb_difficulty: None,
+            drb_upgrade_difficulty: None,
             epoch_start_block: None,
             stake_table_capacity: None,
+            genesis_version: Version { major: 0, minor: 1 },
         };
         genesis.to_file(&genesis_file).unwrap();
 

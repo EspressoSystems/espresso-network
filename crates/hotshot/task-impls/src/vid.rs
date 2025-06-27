@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::{OuterConsensus, PayloadWithMetadata},
-    data::{PackedBundle, VidDisperse, VidDisperseShare},
+    data::{PackedBundle, VidDisperse, VidDisperseAndDuration, VidDisperseShare},
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal, UpgradeLock},
     simple_vote::HasEpoch,
@@ -95,12 +95,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     .ok()?
                     != self.public_key
                 {
-                    tracing::debug!(
-                        "We are not the leader in the current epoch. Do not send the VID dispersal."
-                    );
+                    tracing::debug!("We are not the leader in the current epoch. Do not send the VID dispersal.");
                     return None;
                 }
-                let vid_disperse = VidDisperse::calculate_vid_disperse::<V>(
+                let VidDisperseAndDuration {
+                    disperse: vid_disperse,
+                    duration: disperse_duration,
+                } = VidDisperse::calculate_vid_disperse::<V>(
                     &payload,
                     &self.membership_coordinator,
                     *view_number,
@@ -119,6 +120,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 });
 
                 let mut consensus_writer = self.consensus.write().await;
+                consensus_writer
+                    .metrics
+                    .vid_disperse_duration
+                    .add_point(disperse_duration.as_secs_f64());
                 // Make sure we save the payload; we might need it to send the next epoch VID shares.
                 if let Err(e) =
                     consensus_writer.update_saved_payloads(*view_number, payload_with_metadata)
@@ -179,7 +184,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 }
 
                 if *view - *self.cur_view > 1 {
-                    info!("View changed by more than 1 going to view {view:?}");
+                    info!("View changed by more than 1 going to view {view}");
                 }
                 self.cur_view = view;
 
@@ -216,7 +221,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 let payload = Arc::clone(payload);
                 drop(consensus_reader);
 
-                let next_epoch_vid_disperse = VidDisperse::calculate_vid_disperse::<V>(
+                let VidDisperseAndDuration {
+                    disperse: next_epoch_vid_disperse,
+                    duration: _,
+                } = VidDisperse::calculate_vid_disperse::<V>(
                     &payload.payload,
                     &self.membership_coordinator,
                     proposal_view_number,
