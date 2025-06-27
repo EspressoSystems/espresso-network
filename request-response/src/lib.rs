@@ -344,12 +344,12 @@ impl<
 
                 // Conditionally get the outgoing request, creating a new one if it doesn't exist or if
                 // the existing one has been dropped and not yet removed
-                match outgoing_requests_write
+                if let Some(outgoing_request) = outgoing_requests_write
                     .get(&request_hash)
                     .and_then(Weak::upgrade)
-                { Some(outgoing_request) => {
+                {
                     OutgoingRequest(outgoing_request)
-                } _ => {
+                } else {
                     // Create a new broadcast channel for the response
                     let (sender, receiver) = async_broadcast::broadcast(1);
 
@@ -378,7 +378,7 @@ impl<
 
                     // Return the new outgoing request
                     outgoing_request
-                }}
+                }
             };
 
             // Create a request message and serialize it
