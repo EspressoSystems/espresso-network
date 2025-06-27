@@ -149,7 +149,7 @@ impl TestSystem {
         (
             PrivateKeySigner::random_with(rng),
             BLSKeyPair::generate(rng),
-            StateKeyPair::generate_from_seed(rng.gen()),
+            StateKeyPair::generate_from_seed(rng.r#gen()),
         )
     }
 

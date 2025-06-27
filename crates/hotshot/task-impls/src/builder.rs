@@ -216,20 +216,20 @@ pub mod v0_1 {
             // Manually deserialize the result as one of the enum types. Bincode doesn't support deserialize_any,
             // so we can't go directly into our target type.
 
-            if let Ok(available_block_header_input_v2) = vbs::Serializer::<Version>::deserialize::<
+            match vbs::Serializer::<Version>::deserialize::<
                 AvailableBlockHeaderInputV2<TYPES>,
             >(&result)
-            {
+            { Ok(available_block_header_input_v2) => {
                 Ok(AvailableBlockHeaderInputV2Either::Current(
                     available_block_header_input_v2,
                 ))
-            } else {
+            } _ => {
                 vbs::Serializer::<Version>::deserialize::<AvailableBlockHeaderInputV2Legacy<TYPES>>(
                     &result,
                 )
                 .map_err(|e| BuilderClientError::Api(format!("Failed to deserialize: {e:?}")))
                 .map(AvailableBlockHeaderInputV2Either::Legacy)
-            }
+            }}
         }
 
         /// Claim block

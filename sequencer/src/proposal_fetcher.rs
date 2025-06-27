@@ -6,16 +6,16 @@ use async_lock::RwLock;
 use clap::Parser;
 use committable::Commitment;
 use derivative::Derivative;
-use espresso_types::{parse_duration, v0::traits::SequencerPersistence, PubKey, ValidatedState};
+use espresso_types::{PubKey, ValidatedState, parse_duration, v0::traits::SequencerPersistence};
 use futures::stream::StreamExt;
 use hotshot::types::EventType;
 use hotshot_types::{
     data::{Leaf2, ViewNumber},
     traits::{
+        ValidatedState as _,
         metrics::{Counter, Gauge, Metrics},
         network::ConnectedNetwork,
         node_implementation::{ConsensusTime, Versions},
-        ValidatedState as _,
     },
     utils::{View, ViewInner},
 };
@@ -23,8 +23,8 @@ use tokio::time::{sleep, timeout};
 use tracing::Instrument;
 
 use crate::{
-    context::{Consensus, TaskList},
     SeqTypes,
+    context::{Consensus, TaskList},
 };
 
 #[derive(Clone, Copy, Debug, Parser)]
@@ -189,7 +189,8 @@ where
                 },
             }
 
-            let future = self.consensus.read().await.request_proposal(view, leaf)?;
+            let binding = self.consensus.read().await;
+            let future = binding.request_proposal(view, leaf)?;
             let proposal = timeout(self.cfg.fetch_timeout, future)
                 .await
                 .context("timed out fetching proposal")?

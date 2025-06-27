@@ -345,7 +345,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     });
                 }
             },
-            HotShotEvent::DaVoteRecv(ref vote) => {
+            HotShotEvent::DaVoteRecv(vote) => {
                 tracing::debug!("DA vote recv, Main Task {}", vote.view_number());
                 // Check if we are the leader and the vote is from the sender.
                 let view = vote.view_number();

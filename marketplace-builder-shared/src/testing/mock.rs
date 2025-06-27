@@ -195,7 +195,7 @@ pub fn parent_references(view: u64) -> ParentBlockReferences<TestTypes> {
         builder_commitment: BuilderCommitment::from_bytes(
             rng.sample_iter(Standard).take(32).collect::<Vec<_>>(),
         ),
-        tx_count: rng.gen(),
+        tx_count: rng.r#gen(),
         last_nonempty_view: None,
     }
 }

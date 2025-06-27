@@ -344,7 +344,7 @@ where
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<libp2p::core::transport::TransportEvent<Self::ListenerUpgrade, Self::Error>>
     {
-        match self.as_mut().project().inner.poll(cx) {
+        match Transport::poll(self.as_mut().project().inner, cx) {
             Poll::Ready(event) => Poll::Ready(match event {
                 // If we have an incoming connection, we need to perform the authentication handshake
                 TransportEvent::Incoming {
@@ -513,7 +513,7 @@ mod test {
     macro_rules! new_identity {
         () => {{
             // Gen a new seed
-            let seed = rand::rngs::OsRng.gen::<[u8; 32]>();
+            let seed = rand::rngs::OsRng.r#gen::<[u8; 32]>();
 
             // Create a new keypair
             let keypair = BLSPubKey::generated_from_seed_indexed(seed, 1337);

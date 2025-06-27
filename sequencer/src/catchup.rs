@@ -7,41 +7,41 @@ use std::{
 };
 
 use alloy::primitives::U256;
-use anyhow::{anyhow, bail, ensure, Context};
+use anyhow::{Context, anyhow, bail, ensure};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
+    BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
+    FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions, ValidatedState,
     config::PublicNetworkConfig,
     traits::SequencerPersistence,
     v0::traits::StateCatchup,
     v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment, RewardMerkleTree},
     v0_3::ChainConfig,
-    BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions, ValidatedState,
 };
 use futures::{
+    StreamExt,
     future::{Future, FutureExt, TryFuture, TryFutureExt},
     stream::FuturesUnordered,
-    StreamExt,
 };
 use hotshot_types::{
+    ValidatorConfig,
     consensus::Consensus,
     data::ViewNumber,
     message::UpgradeLock,
     network::NetworkConfig,
     stake_table::HSStakeTable,
     traits::{
+        ValidatedState as ValidatedStateTrait,
         metrics::{Counter, CounterFamily, Metrics},
         network::ConnectedNetwork,
         node_implementation::{ConsensusTime as _, NodeType, Versions},
-        ValidatedState as ValidatedStateTrait,
     },
-    utils::{verify_leaf_chain, View, ViewInner},
-    ValidatorConfig,
+    utils::{View, ViewInner, verify_leaf_chain},
 };
 use itertools::Itertools;
-use jf_merkle_tree::{prelude::MerkleNode, ForgetableMerkleTreeScheme, MerkleTreeScheme};
+use jf_merkle_tree::{ForgetableMerkleTreeScheme, MerkleTreeScheme, prelude::MerkleNode};
 use parking_lot::Mutex;
 use priority_queue::PriorityQueue;
 use serde::de::DeserializeOwned;
@@ -164,7 +164,7 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
         while let Some((id, score)) = scores.pop() {
             let client = &self.clients[id];
             tracing::info!("fetching from {}", client.url);
-            match timeout(timeout_dur, f(client.clone()).into_future()).await {
+            match timeout(timeout_dur, TryFutureExt::into_future(f(client.clone()))).await {
                 Ok(Ok(t)) => {
                     requests.insert(id, true);
                     res = Ok(t);

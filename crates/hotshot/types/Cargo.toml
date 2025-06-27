@@ -1,7 +1,7 @@
 [package]
 authors = ["Espresso Systems <hello@espressosys.com>"]
 description = "Types and traits for the HotShot consesus module"
-edition = "2021"
+edition = "2024"
 name = "hotshot-types"
 version = "0.1.11"
 license = "MIT"

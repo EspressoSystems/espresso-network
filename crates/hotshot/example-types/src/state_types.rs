@@ -142,7 +142,7 @@ impl<TYPES: NodeType<BlockPayload = TestBlockPayload>> TestableState<TYPES> for 
         const RANDOM_TX_BASE_SIZE: usize = 8;
 
         // Generate a random transaction
-        let mut tx = rng.gen::<[u8; RANDOM_TX_BASE_SIZE]>().to_vec();
+        let mut tx = rng.r#gen::<[u8; RANDOM_TX_BASE_SIZE]>().to_vec();
 
         // Create and add padding to the transaction
         let padding = vec![0; padding.try_into().expect("transaction padding too large")];

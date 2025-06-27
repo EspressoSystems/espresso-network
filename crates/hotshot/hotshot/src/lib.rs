@@ -950,7 +950,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TwinsHandlerSta
         &mut self,
         event: &HotShotEvent<TYPES>,
     ) -> Vec<Either<HotShotEvent<TYPES>, HotShotEvent<TYPES>>> {
-        let random: bool = rand::thread_rng().gen();
+        let random: bool = rand::thread_rng().r#gen();
 
         #[allow(clippy::match_bool)]
         match random {

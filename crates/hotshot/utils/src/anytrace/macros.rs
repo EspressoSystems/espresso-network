@@ -23,13 +23,13 @@ macro_rules! trace {
         message: format!("{}: {}", line_info!(), format!($message))
       }
   };
-  ($error:expr) => {
+  ($error:expr_2021) => {
       Error {
         level: Level::Trace,
         message: format!("{}: {}", line_info!(), $error)
       }
   };
-  ($fmt:expr, $($arg:tt)*) => {
+  ($fmt:expr_2021, $($arg:tt)*) => {
       Error {
         level: Level::Trace,
         message: format!("{}: {}", line_info!(), format!($fmt, $($arg)*))
@@ -52,13 +52,13 @@ macro_rules! debug {
         message: format!("{}: {}", line_info!(), format!($message))
       }
   };
-  ($error:expr) => {
+  ($error:expr_2021) => {
       Error {
         level: Level::Debug,
         message: format!("{}: {}", line_info!(), $error)
       }
   };
-  ($fmt:expr, $($arg:tt)*) => {
+  ($fmt:expr_2021, $($arg:tt)*) => {
       Error {
         level: Level::Debug,
         message: format!("{}: {}", line_info!(), format!($fmt, $($arg)*))
@@ -81,13 +81,13 @@ macro_rules! info {
         message: format!("{}: {}", line_info!(), format!($message))
       }
   };
-  ($error:expr) => {
+  ($error:expr_2021) => {
       Error {
         level: Level::Info,
         message: format!("{}: {}", line_info!(), $error)
       }
   };
-  ($fmt:expr, $($arg:tt)*) => {
+  ($fmt:expr_2021, $($arg:tt)*) => {
       Error {
         level: Level::Info,
         message: format!("{}: {}", line_info!(), format!($fmt, $($arg)*))
@@ -110,13 +110,13 @@ macro_rules! warn {
         message: format!("{}: {}", line_info!(), format!($message))
       }
   };
-  ($error:expr) => {
+  ($error:expr_2021) => {
       Error {
         level: Level::Warn,
         message: format!("{}: {}", line_info!(), $error)
       }
   };
-  ($fmt:expr, $($arg:tt)*) => {
+  ($fmt:expr_2021, $($arg:tt)*) => {
       Error {
         level: Level::Warn,
         message: format!("{}: {}", line_info!(), format!($fmt, $($arg)*))
@@ -139,13 +139,13 @@ macro_rules! error {
         message: format!("{}: {}", line_info!(), format!($message))
       }
   };
-  ($error:expr) => {
+  ($error:expr_2021) => {
       Error {
         level: Level::Error,
         message: format!("{}: {}", line_info!(), $error)
       }
   };
-  ($fmt:expr, $($arg:tt)*) => {
+  ($fmt:expr_2021, $($arg:tt)*) => {
       Error {
         level: Level::Error,
         message: format!("{}: {}", line_info!(), format!($fmt, $($arg)*))
@@ -157,7 +157,7 @@ pub use error;
 #[macro_export]
 /// Log a `anytrace::Error` at the corresponding level.
 macro_rules! log {
-    ($result:expr) => {
+    ($result:expr_2021) => {
         if let Err(ref error) = $result {
             let mut error_level = error.level;
             if error_level == Level::Unspecified {
@@ -197,7 +197,7 @@ pub use log;
 ///   - a condition and a format expression, in which case the message is formatted and logged at the `Unspecified` level.
 ///   - a condition and an `Error`, in which case the given error is logged unchanged.
 macro_rules! ensure {
-  ($condition:expr) => {
+  ($condition:expr_2021) => {
       if !$condition {
         let result = Err(Error {
           level: Level::Unspecified,
@@ -209,7 +209,7 @@ macro_rules! ensure {
         return result;
      }
   };
-  ($condition:expr, $message:literal) => {
+  ($condition:expr_2021, $message:literal) => {
       if !$condition {
         let result = Err(Error {
           level: Level::Unspecified,
@@ -221,7 +221,7 @@ macro_rules! ensure {
         return result;
       }
   };
-  ($condition:expr, $fmt:expr, $($arg:tt)*) => {
+  ($condition:expr_2021, $fmt:expr_2021, $($arg:tt)*) => {
       if !$condition {
         let result = Err(Error {
           level: Level::Unspecified,
@@ -233,7 +233,7 @@ macro_rules! ensure {
         return result;
       }
   };
-  ($condition:expr, $error:expr) => {
+  ($condition:expr_2021, $error:expr_2021) => {
       if !$condition {
         let result = Err($error);
 
@@ -274,7 +274,7 @@ macro_rules! bail {
 
       return result;
   };
-  ($fmt:expr, $($arg:tt)*) => {
+  ($fmt:expr_2021, $($arg:tt)*) => {
       let result = Err(Error {
         level: Level::Unspecified,
         message: format!("{}: {}", line_info!(), format!($fmt, $($arg)*))
@@ -284,7 +284,7 @@ macro_rules! bail {
 
       return result;
   };
-  ($error:expr) => {
+  ($error:expr_2021) => {
       let result = Err($error);
 
       log!(result);

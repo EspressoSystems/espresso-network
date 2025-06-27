@@ -772,7 +772,7 @@ pub(crate) async fn update_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>
                 .await
                 .update_state_cert(state_cert.clone())?;
         }
-        if let Some(ref next_epoch_justify_qc) = maybe_next_epoch_justify_qc {
+        if let Some(next_epoch_justify_qc) = maybe_next_epoch_justify_qc {
             if let Err(e) = validation_info
                 .storage
                 .update_next_epoch_high_qc2(next_epoch_justify_qc.clone())
@@ -783,7 +783,7 @@ pub(crate) async fn update_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>
         }
     }
     let mut consensus_writer = validation_info.consensus.write().await;
-    if let Some(ref next_epoch_justify_qc) = maybe_next_epoch_justify_qc {
+    if let Some(next_epoch_justify_qc) = maybe_next_epoch_justify_qc {
         if justify_qc
             .data
             .block_number

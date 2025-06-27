@@ -363,7 +363,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         };
 
         // Create a random request id
-        let request_id = rand::thread_rng().gen();
+        let request_id = rand::thread_rng().r#gen();
 
         // Request and verify the shares from all other nodes, timing out after `duration` seconds
         let received_shares = Arc::new(parking_lot::Mutex::new(Vec::new()));
@@ -4863,7 +4863,7 @@ mod test {
             for _count in 0..namespace {
                 // Generate a random payload length between 4 and 10 bytes
                 let payload_len = rng.gen_range(4..=10);
-                let payload: Vec<u8> = (0..payload_len).map(|_| rng.gen()).collect();
+                let payload: Vec<u8> = (0..payload_len).map(|_| rng.r#gen()).collect();
 
                 let txn = Transaction::new(NamespaceId::from(namespace as u32), payload);
 
@@ -5027,7 +5027,7 @@ mod test {
         for namespace in 1..=4 {
             for _count in 0..namespace {
                 let payload_len = rng.gen_range(4..=10);
-                let payload: Vec<u8> = (0..payload_len).map(|_| rng.gen()).collect();
+                let payload: Vec<u8> = (0..payload_len).map(|_| rng.r#gen()).collect();
 
                 let txn = Transaction::new(NamespaceId::from(namespace as u32), payload);
 

@@ -22,14 +22,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use async_lock::RwLock;
 use clap::Parser;
 use committable::Committable;
 use derivative::Derivative;
 use espresso_types::{
-    parse_duration, v0_1::IterableFeeInfo, ADVZNamespaceProofQueryData, BlockMerkleTree,
-    FeeMerkleTree, Header, SeqTypes,
+    ADVZNamespaceProofQueryData, BlockMerkleTree, FeeMerkleTree, Header, SeqTypes, parse_duration,
+    v0_1::IterableFeeInfo,
 };
 use futures::{
     future::{FutureExt, TryFuture, TryFutureExt},
@@ -48,13 +48,13 @@ use hotshot_types::traits::{
 use jf_merkle_tree::{
     ForgetableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme,
 };
-use rand::{seq::SliceRandom, RngCore};
+use rand::{RngCore, seq::SliceRandom};
 use sequencer::SequencerApiVersion;
 use sequencer_utils::logging;
 use serde::de::DeserializeOwned;
 use strum::{EnumDiscriminants, VariantArray};
-use surf_disco::{error::ClientError, socket, Error, StatusCode, Url};
-use tide_disco::{error::ServerError, App};
+use surf_disco::{Error, StatusCode, Url, error::ClientError, socket};
+use tide_disco::{App, error::ServerError};
 use time::OffsetDateTime;
 use tokio::{task::spawn, time::sleep};
 use toml::toml;
@@ -518,7 +518,7 @@ impl<T: Queryable> ResourceManager<T> {
 
         let mut i = 0;
         loop {
-            match f().into_future().await {
+            match TryFutureExt::into_future(f()).await {
                 Ok(res) if i == 0 => {
                     // Succeeded on the first try, get on with it.
                     return Ok(res);
@@ -528,7 +528,7 @@ impl<T: Queryable> ResourceManager<T> {
                     // be sure the endpoint is healed.
                     tracing::info!("succeeded after {i} retries; checking health");
                     for _ in 0..self.cfg.min_retries {
-                        f().into_future().await.context(
+                        TryFutureExt::into_future(f()).await.context(
                             "operation is flaky; succeeded on retry but not fully healed",
                         )?;
                     }
@@ -667,8 +667,16 @@ impl<T: Queryable> ResourceManager<T> {
             .await
         {
             Ok(range) => {
-                ensure!(to - from <= limit, "range endpoint succeeded and returned {} results for request over limit; limit: {limit} from: {from} to: {to}", range.len());
-                ensure!(range.len() == to - from, "range endpoint returned wrong number of results; from: {from} to: {to} results: {}", range.len());
+                ensure!(
+                    to - from <= limit,
+                    "range endpoint succeeded and returned {} results for request over limit; limit: {limit} from: {from} to: {to}",
+                    range.len()
+                );
+                ensure!(
+                    range.len() == to - from,
+                    "range endpoint returned wrong number of results; from: {from} to: {to} results: {}",
+                    range.len()
+                );
                 for (i, obj) in range.iter().enumerate() {
                     ensure!(
                         obj.height() == from + i,

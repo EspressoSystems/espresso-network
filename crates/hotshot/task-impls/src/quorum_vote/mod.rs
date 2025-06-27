@@ -776,7 +776,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 }
                 self.vote_dependencies = current_tasks;
             },
-            HotShotEvent::ViewChange(mut view, _) => {
+            &HotShotEvent::ViewChange(mut view, _) => {
                 view = TYPES::View::new(view.saturating_sub(1));
                 if !self.update_latest_voted_view(view).await {
                     tracing::debug!("view not updated");

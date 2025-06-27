@@ -732,7 +732,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             (self.consensus.read().await.high_qc().clone(), None, None)
         } else if proposal_cert.is_some() {
             // If we have a view change evidence, we need to wait to propose with the transition QC
-            if let Ok(Some((qc, next_epoch_qc))) = self.wait_for_transition_qc().await {
+            match self.wait_for_transition_qc().await { Ok(Some((qc, next_epoch_qc))) => {
                 let Some(epoch) = maybe_epoch else {
                     bail!(error!(
                         "No epoch found on view change evidence, but we are in epoch mode"
@@ -754,7 +754,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                         },
                     }
                 }
-            } else {
+            } _ => {
                 let Ok((qc, maybe_next_epoch_qc, maybe_state_cert)) =
                     self.wait_for_highest_qc().await
                 else {
@@ -767,7 +767,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                     bail!(error!("High is in transition but we need to propose with transition QC, do nothing"));
                 }
                 (qc, maybe_next_epoch_qc, maybe_state_cert)
-            }
+            }}
         } else {
             match self.wait_for_highest_qc().await {
                 Ok((qc, maybe_next_epoch_qc, maybe_state_cert)) => {

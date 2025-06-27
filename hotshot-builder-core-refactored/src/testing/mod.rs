@@ -183,7 +183,7 @@ impl TestServiceWrapper {
 
     /// Submits transactions randomly either through public or private mempool
     pub(crate) async fn submit_transactions(&self, transactions: Vec<TestTransaction>) {
-        if thread_rng().gen() {
+        if thread_rng().r#gen() {
             self.submit_transactions_public(transactions).await
         } else {
             self.submit_transactions_private(transactions)

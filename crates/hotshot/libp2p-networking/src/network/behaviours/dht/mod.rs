@@ -180,14 +180,14 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
         }
 
         // Check the cache before making the (expensive) query
-        if let Some(entry) = kad.store_mut().get(&key.clone().into()) {
+        match kad.store_mut().get(&key.clone().into()) { Some(entry) => {
             // The key already exists in the cache, send the value to all channels
             for chan in chans {
                 if chan.send(entry.value.clone()).is_err() {
                     warn!("Get DHT: channel closed before get record request result could be sent");
                 }
             }
-        } else {
+        } _ => {
             // Check if the key is already being queried
             if let Some(qid) = self.outstanding_dht_query_keys.get(&key) {
                 // The key was already being queried. Add the channel to the existing query
@@ -215,7 +215,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                 self.outstanding_dht_query_keys.insert(key, qid);
                 self.in_progress_record_queries.insert(qid, query);
             }
-        }
+        }}
     }
 
     /// Spawn a task which will retry the query after a backoff.
@@ -317,7 +317,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                 }
 
                 // Find the record with the highest expiry
-                if let Some(record) = records.into_iter().max_by_key(|r| r.expires.unwrap()) {
+                match records.into_iter().max_by_key(|r| r.expires.unwrap()) { Some(record) => {
                     // Only return the record if we can store it (validation passed)
                     if store.put(record.clone()).is_ok() {
                         // Send the record to all channels that are still open
@@ -329,9 +329,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                     } else {
                         error!("Failed to store record in local store");
                     }
-                }
-                // disagreement => query more nodes
-                else {
+                } _ => {
                     // there is some internal disagreement or not enough nodes returned
                     // Initiate new query that hits more replicas
                     if retry_count > 0 {
@@ -347,14 +345,14 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                         });
                     }
                     warn!("Get DHT: Internal disagreement for get dht request {progress:?}! Giving up because out of retries. ");
-                }
+                }}
             }
         }
     }
 
     /// Update state based on put query
     fn handle_put_query(&mut self, record_results: PutRecordResult, id: QueryId) {
-        if let Some(mut query) = self.in_progress_put_record_queries.remove(&id) {
+        match self.in_progress_put_record_queries.remove(&id) { Some(mut query) => {
             // dropped so we handle further
             if query.notify.is_canceled() {
                 return;
@@ -378,9 +376,9 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                     self.retry_put(query);
                 },
             }
-        } else {
+        } _ => {
             warn!("Put DHT: completed DHT query that is no longer tracked.");
-        }
+        }}
     }
 
     /// Send that the bootstrap succeeded

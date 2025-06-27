@@ -416,7 +416,7 @@ impl<TYPES: NodeType> UpgradeCertificate<TYPES> {
         upgrade_lock: &UpgradeLock<TYPES, V>,
     ) -> Result<()> {
         ensure!(epoch == membership.epoch(), "Epochs don't match!");
-        if let Some(ref cert) = upgrade_certificate {
+        if let Some(cert) = upgrade_certificate {
             let membership_stake_table = membership.stake_table().await;
             let membership_upgrade_threshold = membership.upgrade_threshold().await;
 

@@ -360,11 +360,11 @@ pub(crate) async fn handle_quorum_proposal_recv<
 
     let parent = match parent_leaf {
         Some(leaf) => {
-            if let (Some(state), _) = consensus_reader.state_and_delta(leaf.view_number()) {
+            match consensus_reader.state_and_delta(leaf.view_number()) { (Some(state), _) => {
                 Some((leaf, Arc::clone(&state)))
-            } else {
+            } _ => {
                 bail!("Parent state not found! Consensus internally inconsistent");
-            }
+            }}
         },
         None => None,
     };

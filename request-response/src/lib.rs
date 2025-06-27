@@ -344,12 +344,12 @@ impl<
 
                 // Conditionally get the outgoing request, creating a new one if it doesn't exist or if
                 // the existing one has been dropped and not yet removed
-                if let Some(outgoing_request) = outgoing_requests_write
+                match outgoing_requests_write
                     .get(&request_hash)
                     .and_then(Weak::upgrade)
-                {
+                { Some(outgoing_request) => {
                     OutgoingRequest(outgoing_request)
-                } else {
+                } _ => {
                     // Create a new broadcast channel for the response
                     let (sender, receiver) = async_broadcast::broadcast(1);
 
@@ -378,7 +378,7 @@ impl<
 
                     // Return the new outgoing request
                     outgoing_request
-                }
+                }}
             };
 
             // Create a request message and serialize it
@@ -990,7 +990,7 @@ mod tests {
                     .push(Arc::clone(&protocol._receiving_task_handle));
 
                 // Create a random request
-                let request = TestRequest(vec![rand::thread_rng().gen(); 100]);
+                let request = TestRequest(vec![rand::thread_rng().r#gen(); 100]);
 
                 // Get the hash of the request
                 let request_hash = blake3::hash(&request.0).as_bytes().to_vec();
@@ -1116,7 +1116,7 @@ mod tests {
         let one = Arc::new(participants.remove(0));
 
         // Create the request that they should all be able to join on
-        let request = TestRequest(vec![rand::thread_rng().gen(); 100]);
+        let request = TestRequest(vec![rand::thread_rng().r#gen(); 100]);
 
         // Create a join set to wait for all the tasks to finish
         let mut join_set = JoinSet::new();

@@ -330,7 +330,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                 .await;
             },
 
-            HotShotEvent::ViewSyncPreCommitVoteRecv(ref vote) => {
+            HotShotEvent::ViewSyncPreCommitVoteRecv(vote) => {
                 let mut map = self.pre_commit_relay_map.write().await;
                 let vote_view = vote.view_number();
                 let relay = vote.date().relay;
@@ -380,7 +380,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                 relay_map.insert(relay, vote_collector);
             },
 
-            HotShotEvent::ViewSyncCommitVoteRecv(ref vote) => {
+            HotShotEvent::ViewSyncCommitVoteRecv(vote) => {
                 let mut map = self.commit_relay_map.write().await;
                 let vote_view = vote.view_number();
                 let relay = vote.date().relay;

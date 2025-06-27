@@ -328,13 +328,13 @@ mod tests {
         for _ in 0..100 {
             // Create a random keypair
             let (public_key, private_key) =
-                BLSPubKey::generated_from_seed_indexed([1; 32], rng.gen::<u64>());
+                BLSPubKey::generated_from_seed_indexed([1; 32], rng.r#gen::<u64>());
 
             // Create a valid request with some random content
             let mut request = RequestMessage::new_signed(
                 &public_key,
                 &private_key,
-                &vec![rng.gen::<u8>(); rng.gen_range(1..10000)],
+                &vec![rng.r#gen::<u8>(); rng.gen_range(1..10000)],
             )
             .expect("Failed to create signed request");
 
@@ -379,16 +379,16 @@ mod tests {
             let mut rng = rand::thread_rng();
 
             // Generate a random message type
-            let is_request = rng.gen::<u8>() % 2 == 0;
+            let is_request = rng.r#gen::<u8>() % 2 == 0;
 
             // The request content will be a random vector of bytes
-            let request = vec![rng.gen::<u8>(); rng.gen_range(0..10000)];
+            let request = vec![rng.r#gen::<u8>(); rng.gen_range(0..10000)];
 
             // Create a message
             let message = if is_request {
                 // Create a random keypair
                 let (public_key, private_key) =
-                    BLSPubKey::generated_from_seed_indexed([1; 32], rng.gen::<u64>());
+                    BLSPubKey::generated_from_seed_indexed([1; 32], rng.r#gen::<u64>());
 
                 // Create a new signed request
                 let request = RequestMessage::new_signed(&public_key, &private_key, &request)
@@ -399,7 +399,7 @@ mod tests {
                 // Create a response message
                 Message::Response(ResponseMessage {
                     request_hash: blake3::hash(&request),
-                    response: vec![rng.gen::<u8>(); rng.gen_range(0..10000)],
+                    response: vec![rng.r#gen::<u8>(); rng.gen_range(0..10000)],
                 })
             };
 
@@ -426,7 +426,7 @@ mod tests {
             let mut bytes = Vec::new();
 
             // Generate the value to test over
-            let value = vec![rng.gen::<u8>(); rng.gen_range(0..10000)];
+            let value = vec![rng.r#gen::<u8>(); rng.gen_range(0..10000)];
 
             // Write the length-prefixed value
             write_length_prefixed(&mut bytes, &value).unwrap();

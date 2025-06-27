@@ -266,7 +266,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                 tracing::debug!("Sending upgrade vote {:?}", vote.view_number());
                 broadcast_event(Arc::new(HotShotEvent::UpgradeVoteSend(vote)), &tx).await;
             },
-            HotShotEvent::UpgradeVoteRecv(ref vote) => {
+            HotShotEvent::UpgradeVoteRecv(vote) => {
                 tracing::debug!("Upgrade vote recv, Main Task {:?}", vote.view_number());
 
                 // Check if we are the leader.

@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use async_broadcast::{InactiveReceiver, Receiver, Sender};
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
@@ -32,7 +32,7 @@ use hotshot_types::{
 };
 use tracing::instrument;
 
-use crate::{traits::NodeImplementation, types::Event, SystemContext, Versions};
+use crate::{SystemContext, Versions, traits::NodeImplementation, types::Event};
 
 /// Event streaming handle for a [`SystemContext`] instance running in the background
 ///
@@ -87,7 +87,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
     }
 
     /// obtains a stream to expose to the user
-    pub fn event_stream(&self) -> impl Stream<Item = Event<TYPES>> {
+    pub fn event_stream(&self) -> impl Stream<Item = Event<TYPES>> + use<TYPES, I, V> {
         self.output_event_stream.1.activate_cloned()
     }
 

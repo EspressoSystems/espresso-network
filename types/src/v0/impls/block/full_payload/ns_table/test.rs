@@ -57,7 +57,7 @@ fn ns_table_byte_len() {
         R: RngCore,
     {
         for i in 0..num_bytes {
-            ns_table.bytes.push(rng.gen());
+            ns_table.bytes.push(rng.r#gen());
             if i == num_bytes - 1 {
                 break; // final iteration: no error expected
             }
