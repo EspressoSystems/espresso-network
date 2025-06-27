@@ -4,7 +4,10 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use async_broadcast::{InactiveReceiver, Sender};
 use chrono::Utc;
@@ -349,6 +352,7 @@ pub(crate) async fn update_shared_state<
     I: NodeImplementation<TYPES>,
     V: Versions,
 >(
+    id: u64,
     consensus: OuterConsensus<TYPES>,
     sender: Sender<Arc<HotShotEvent<TYPES>>>,
     receiver: InactiveReceiver<Arc<HotShotEvent<TYPES>>>,
@@ -426,6 +430,9 @@ pub(crate) async fn update_shared_state<
     let version = upgrade_lock.version(view_number).await?;
 
     let now = Instant::now();
+    if id == 5 {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
     let (validated_state, state_delta) = parent_state
         .validate_and_apply_header(
             &instance_state,
