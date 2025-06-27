@@ -16,13 +16,13 @@ use std::{
     net::{IpAddr, ToSocketAddrs},
     num::NonZeroUsize,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use bimap::BiMap;
@@ -32,15 +32,15 @@ use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtN
 pub use hotshot_libp2p_networking::network::{GossipConfig, RequestResponseConfig};
 use hotshot_libp2p_networking::{
     network::{
+        DEFAULT_REPLICATION_FACTOR,
+        NetworkEvent::{self, DirectRequest, DirectResponse, GossipMsg},
+        NetworkNodeConfig, NetworkNodeConfigBuilder, NetworkNodeHandle, NetworkNodeReceiver,
         behaviours::dht::{
             record::{Namespace, RecordKey, RecordValue},
             store::persistent::DhtPersistentStorage,
         },
         spawn_network_node,
         transport::construct_auth_message,
-        NetworkEvent::{self, DirectRequest, DirectResponse, GossipMsg},
-        NetworkNodeConfig, NetworkNodeConfigBuilder, NetworkNodeHandle, NetworkNodeReceiver,
-        DEFAULT_REPLICATION_FACTOR,
     },
     reexport::Multiaddr,
 };
@@ -49,7 +49,7 @@ use hotshot_types::traits::network::{
     AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
 };
 use hotshot_types::{
-    boxed_sync,
+    BoxSyncFuture, boxed_sync,
     constants::LOOK_AHEAD,
     data::ViewNumber,
     network::NetworkConfig,
@@ -59,18 +59,17 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeType},
         signature_key::{PrivateSignatureKey, SignatureKey},
     },
-    BoxSyncFuture,
 };
 use libp2p_identity::{
-    ed25519::{self, SecretKey},
     Keypair, PeerId,
+    ed25519::{self, SecretKey},
 };
 use serde::Serialize;
 use tokio::{
     select, spawn,
     sync::{
-        mpsc::{channel, error::TrySendError, Receiver, Sender},
         Mutex,
+        mpsc::{Receiver, Sender, channel, error::TrySendError},
     },
     time::sleep,
 };
@@ -703,7 +702,9 @@ impl<T: NodeType> Libp2pNetwork<T> {
             },
             DirectResponse(_msg, _) => {},
             NetworkEvent::IsBootstrapped => {
-                error!("handle_recvd_events received `NetworkEvent::IsBootstrapped`, which should be impossible.");
+                error!(
+                    "handle_recvd_events received `NetworkEvent::IsBootstrapped`, which should be impossible."
+                );
             },
             NetworkEvent::ConnectedPeersUpdate(_) => {},
         }
@@ -810,7 +811,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         #[cfg(feature = "hotshot-testing")]
         {
             let metrics = self.inner.metrics.clone();
-            if let Some(ref config) = &self.inner.reliability_config {
+            if let Some(config) = &self.inner.reliability_config {
                 let handle = Arc::clone(&self.inner.handle);
 
                 let fut = config.clone().chaos_send_msg(
@@ -907,7 +908,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         #[cfg(feature = "hotshot-testing")]
         {
             let metrics = self.inner.metrics.clone();
-            if let Some(ref config) = &self.inner.reliability_config {
+            if let Some(config) = &self.inner.reliability_config {
                 let handle = Arc::clone(&self.inner.handle);
 
                 let fut = config.clone().chaos_send_msg(

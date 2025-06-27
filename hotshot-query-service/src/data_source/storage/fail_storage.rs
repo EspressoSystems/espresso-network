@@ -20,25 +20,26 @@ use futures::future::Future;
 use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
 
 use super::{
-    pruning::{PruneStorage, PrunedHeightStorage, PrunerCfg, PrunerConfig},
-    sql::MigrateTypes,
     Aggregate, AggregatesStorage, AvailabilityStorage, NodeStorage, UpdateAggregatesStorage,
     UpdateAvailabilityStorage,
+    pruning::{PruneStorage, PrunedHeightStorage, PrunerCfg, PrunerConfig},
+    sql::MigrateTypes,
 };
 use crate::{
+    Header, Payload, QueryError, QueryResult,
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceId, PayloadQueryData,
         QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
         TransactionQueryData, VidCommonQueryData,
     },
     data_source::{
+        VersionedDataSource,
         storage::{PayloadMetadata, VidCommonMetadata},
-        update, VersionedDataSource,
+        update,
     },
     metrics::PrometheusMetrics,
     node::{SyncStatus, TimeWindowQueryData, WindowStart},
     status::HasMetrics,
-    Header, Payload, QueryError, QueryResult,
 };
 
 /// A specific action that can be targeted to inject an error.

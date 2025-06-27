@@ -1,22 +1,22 @@
 use std::ops::Add;
 
 use alloy::primitives::{Address, U256};
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use committable::{Commitment, Committable};
 use hotshot_query_service::merklized_state::MerklizedState;
 use hotshot_types::{
     data::{BlockError, ViewNumber},
     traits::{
-        block_contents::BlockHeader, node_implementation::ConsensusTime,
-        signature_key::BuilderSignatureKey, states::StateDelta, ValidatedState as HotShotState,
+        ValidatedState as HotShotState, block_contents::BlockHeader,
+        node_implementation::ConsensusTime, signature_key::BuilderSignatureKey, states::StateDelta,
     },
 };
 use itertools::Itertools;
 use jf_merkle_tree::{
-    prelude::{MerkleProof, Sha3Digest, Sha3Node},
     AppendableMerkleTreeScheme, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
     LookupResult, MerkleCommitment, MerkleTreeError, MerkleTreeScheme,
     PersistentUniversalMerkleTreeScheme, UniversalMerkleTreeScheme,
+    prelude::{MerkleProof, Sha3Digest, Sha3Node},
 };
 use num_traits::CheckedSub;
 use serde::{Deserialize, Serialize};
@@ -25,22 +25,22 @@ use time::OffsetDateTime;
 use vbs::version::{StaticVersionType, Version};
 
 use super::{
+    BlockMerkleCommitment, BlockSize, EpochVersion, FeeMerkleCommitment, L1Client,
     fee_info::FeeError,
     instance_state::NodeState,
     reward::{find_validator_info, first_two_epochs},
     v0_1::{
-        IterableFeeInfo, RewardAccount, RewardAmount, RewardMerkleCommitment, RewardMerkleTree,
-        REWARD_MERKLE_TREE_HEIGHT,
+        IterableFeeInfo, REWARD_MERKLE_TREE_HEIGHT, RewardAccount, RewardAmount,
+        RewardMerkleCommitment, RewardMerkleTree,
     },
-    BlockMerkleCommitment, BlockSize, EpochVersion, FeeMerkleCommitment, L1Client,
 };
 use crate::{
+    BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, Delta, FEE_MERKLE_TREE_HEIGHT, FeeAccount,
+    FeeAmount, FeeInfo, FeeMerkleTree, Header, Leaf2, NsTableValidationError, PayloadByteLen,
+    SeqTypes, UpgradeType,
     traits::StateCatchup,
     v0::impls::reward::RewardDistributor,
     v0_3::{ChainConfig, ResolvableChainConfig},
-    BlockMerkleTree, Delta, FeeAccount, FeeAmount, FeeInfo, FeeMerkleTree, Header, Leaf2,
-    NsTableValidationError, PayloadByteLen, SeqTypes, UpgradeType, BLOCK_MERKLE_TREE_HEIGHT,
-    FEE_MERKLE_TREE_HEIGHT,
 };
 
 /// This enum is not used in code but functions as an index of
@@ -78,7 +78,9 @@ pub enum ProposalValidationError {
         max_block_size: BlockSize,
         block_size: BlockSize,
     },
-    #[error("Insufficient Fee: block_size={max_block_size}, base_fee={base_fee}, proposed_fee={proposed_fee}")]
+    #[error(
+        "Insufficient Fee: block_size={max_block_size}, base_fee={base_fee}, proposed_fee={proposed_fee}"
+    )]
     InsufficientFee {
         max_block_size: BlockSize,
         base_fee: FeeAmount,
@@ -119,7 +121,9 @@ pub enum ProposalValidationError {
         system: u64,
         diff: u64,
     },
-    #[error("Inconsistent timestamps on header: timestamp:={timestamp}, timestamp_millis={timestamp_millis}")]
+    #[error(
+        "Inconsistent timestamps on header: timestamp:={timestamp}, timestamp_millis={timestamp_millis}"
+    )]
     InconsistentTimestamps {
         timestamp: u64,
         timestamp_millis: u64,
@@ -1156,15 +1160,15 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for RewardMerkleTree {
 #[cfg(test)]
 mod test {
     use hotshot::{helpers::initialize_logging, traits::BlockPayload};
-    use hotshot_query_service::{testing::mocks::MockVersions, Resolvable};
+    use hotshot_query_service::{Resolvable, testing::mocks::MockVersions};
     use hotshot_types::traits::signature_key::BuilderSignatureKey;
     use sequencer_utils::ser::FromStringOrInteger;
     use tracing::debug;
 
     use super::*;
     use crate::{
-        eth_signature_key::EthKeyPair, v0_1, v0_2, v0_3, v0_4, BlockSize, FeeAccountProof,
-        FeeMerkleProof, Leaf, Payload, TimestampMillis, Transaction,
+        BlockSize, FeeAccountProof, FeeMerkleProof, Leaf, Payload, TimestampMillis, Transaction,
+        eth_signature_key::EthKeyPair, v0_1, v0_2, v0_3, v0_4,
     };
 
     impl Transaction {

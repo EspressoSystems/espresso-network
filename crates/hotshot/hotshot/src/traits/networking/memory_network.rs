@@ -13,8 +13,8 @@ use core::time::Duration;
 use std::{
     fmt::Debug,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -22,7 +22,7 @@ use async_lock::{Mutex, RwLock};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use hotshot_types::{
-    boxed_sync,
+    BoxSyncFuture, boxed_sync,
     traits::{
         network::{
             AsyncGenerator, BroadcastDelay, ConnectedNetwork, TestableNetworkingImplementation,
@@ -31,13 +31,12 @@ use hotshot_types::{
         node_implementation::NodeType,
         signature_key::SignatureKey,
     },
-    BoxSyncFuture,
 };
 use tokio::{
     spawn,
-    sync::mpsc::{channel, error::SendError, Receiver, Sender},
+    sync::mpsc::{Receiver, Sender, channel, error::SendError},
 };
-use tracing::{debug, error, info, info_span, instrument, trace, warn, Instrument};
+use tracing::{Instrument, debug, error, info, info_span, instrument, trace, warn};
 
 use super::{NetworkError, NetworkReliability};
 
@@ -261,7 +260,7 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
             // TODO delay/drop etc here
             let (key, node) = node;
             trace!(?key, "Sending message to node");
-            if let Some(ref config) = &self.inner.reliability_config {
+            if let Some(config) = &self.inner.reliability_config {
                 {
                     let node2 = node.clone();
                     let fut = config.chaos_send_msg(
@@ -315,7 +314,7 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
             // TODO delay/drop etc here
             let (key, node) = node;
             trace!(?key, "Sending message to node");
-            if let Some(ref config) = &self.inner.reliability_config {
+            if let Some(config) = &self.inner.reliability_config {
                 {
                     let node2 = node.clone();
                     let fut = config.chaos_send_msg(
@@ -353,7 +352,7 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
         trace!("Message bincoded, finding recipient");
         if let Some(node) = self.inner.master_map.map.get(&recipient) {
             let node = node.value().clone();
-            if let Some(ref config) = &self.inner.reliability_config {
+            if let Some(config) = &self.inner.reliability_config {
                 {
                     let fut = config.chaos_send_msg(
                         message.clone(),

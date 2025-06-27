@@ -27,12 +27,12 @@ use super::{
     traits::{ExplorerHeader, ExplorerTransaction},
 };
 use crate::{
+    Header, Payload, Resolvable, Transaction,
     availability::{
         BlockQueryData, NamespaceId, QueryableHeader, QueryablePayload, TransactionHash,
     },
     node::BlockHash,
     types::HeightIndexed,
-    Header, Payload, Resolvable, Transaction,
 };
 
 /// BlockIdentifier is an enum that represents multiple ways of referring to
@@ -53,8 +53,8 @@ impl<Types: NodeType> Display for BlockIdentifier<Types> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             BlockIdentifier::Latest => write!(f, "latest"),
-            BlockIdentifier::Height(height) => write!(f, "{}", height),
-            BlockIdentifier::Hash(hash) => write!(f, "{}", hash),
+            BlockIdentifier::Height(height) => write!(f, "{height}"),
+            BlockIdentifier::Hash(hash) => write!(f, "{hash}"),
         }
     }
 }
@@ -83,9 +83,9 @@ impl<Types: NodeType> Display for TransactionIdentifier<Types> {
         match self {
             TransactionIdentifier::Latest => write!(f, "latest"),
             TransactionIdentifier::HeightAndOffset(height, offset) => {
-                write!(f, "{} {}", height, offset)
+                write!(f, "{height} {offset}")
             },
-            TransactionIdentifier::Hash(hash) => write!(f, "{}", hash),
+            TransactionIdentifier::Hash(hash) => write!(f, "{hash}"),
         }
     }
 }
@@ -224,8 +224,8 @@ pub enum TimestampConversionError {
 impl Display for TimestampConversionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TimestampConversionError::TimeError(err) => write!(f, "{:?}", err),
-            TimestampConversionError::IntError(err) => write!(f, "{:?}", err),
+            TimestampConversionError::TimeError(err) => write!(f, "{err:?}"),
+            TimestampConversionError::IntError(err) => write!(f, "{err:?}"),
         }
     }
 }
@@ -254,7 +254,7 @@ impl From<TryFromIntError> for TimestampConversionError {
 impl From<TimestampConversionError> for crate::QueryError {
     fn from(value: TimestampConversionError) -> Self {
         Self::Error {
-            message: format!("{:?}", value),
+            message: format!("{value:?}"),
         }
     }
 }

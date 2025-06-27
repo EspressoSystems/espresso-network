@@ -10,7 +10,7 @@ use hotshot_contract_adapter::{
         EdOnBN254PointSol, G1PointSol, G2PointSol,
         StakeTableV2::{self, StakeTableV2Errors},
     },
-    stake_table::{sign_address_bls, sign_address_schnorr, StakeTableContractVersion},
+    stake_table::{StakeTableContractVersion, sign_address_bls, sign_address_schnorr},
 };
 use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
 
@@ -143,10 +143,10 @@ mod test {
     use alloy::providers::WalletProvider as _;
     use espresso_contract_deployer::build_provider;
     use espresso_types::{
-        v0_3::{Fetcher, StakeTableEvent},
         L1Client,
+        v0_3::{Fetcher, StakeTableEvent},
     };
-    use rand::{rngs::StdRng, SeedableRng as _};
+    use rand::{SeedableRng as _, rngs::StdRng};
 
     use super::*;
     use crate::deploy::TestSystem;

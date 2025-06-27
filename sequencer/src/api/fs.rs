@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use hotshot_query_service::data_source::FileSystemDataSource;
 
 use super::data_source::{Provider, SequencerDataSource};
-use crate::{catchup::CatchupStorage, persistence::fs::Options, SeqTypes};
+use crate::{SeqTypes, catchup::CatchupStorage, persistence::fs::Options};
 
 pub type DataSource = FileSystemDataSource<SeqTypes, Provider>;
 

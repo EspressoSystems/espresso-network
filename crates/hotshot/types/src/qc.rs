@@ -88,11 +88,7 @@ where
                 .fold(
                     U256::ZERO,
                     |acc, (entry, b)| {
-                        if *b {
-                            acc + entry.stake_amount
-                        } else {
-                            acc
-                        }
+                        if *b { acc + entry.stake_amount } else { acc }
                     },
                 );
         if total_weight < qc_pp.threshold {
@@ -140,11 +136,7 @@ where
                 .fold(
                     U256::ZERO,
                     |acc, (entry, b)| {
-                        if *b {
-                            acc + entry.stake_amount
-                        } else {
-                            acc
-                        }
+                        if *b { acc + entry.stake_amount } else { acc }
                     },
                 );
         if total_weight < qc_vp.threshold {
@@ -194,10 +186,10 @@ where
 #[cfg(test)]
 mod tests {
     use jf_signature::{
-        bls_over_bn254::{BLSOverBN254CurveSignatureScheme, KeyPair},
         SignatureScheme,
+        bls_over_bn254::{BLSOverBN254CurveSignatureScheme, KeyPair},
     };
-    use vbs::{version::StaticVersion, BinarySerializer, Serializer};
+    use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
     use super::*;
     type Version = StaticVersion<0, 1>;

@@ -21,15 +21,15 @@ use hotshot_types::traits::node_implementation::NodeType;
 
 use super::{AvailabilityProvider, FetchRequest, Fetchable, Fetcher, Notifiers};
 use crate::{
+    Header, Payload, QueryResult,
     availability::{QueryableHeader, QueryablePayload, TransactionHash, TransactionQueryData},
     data_source::{
         storage::{
-            pruning::PrunedHeightStorage, AvailabilityStorage, NodeStorage,
-            UpdateAvailabilityStorage,
+            AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage,
+            pruning::PrunedHeightStorage,
         },
         update::VersionedDataSource,
     },
-    Header, Payload, QueryResult,
 };
 
 #[derive(Clone, Copy, Debug, From)]

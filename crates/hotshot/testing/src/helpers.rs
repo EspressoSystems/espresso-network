@@ -12,9 +12,9 @@ use async_lock::RwLock;
 use bitvec::bitvec;
 use committable::Committable;
 use hotshot::{
+    HotShotInitializer, SystemContext,
     traits::{BlockPayload, NodeImplementation, TestableNodeImplementation},
     types::{SignatureKey, SystemContextHandle},
-    HotShotInitializer, SystemContext,
 };
 use hotshot_example_types::{
     block_types::TestTransaction,
@@ -24,9 +24,10 @@ use hotshot_example_types::{
 };
 use hotshot_task_impls::events::HotShotEvent;
 use hotshot_types::{
+    ValidatorConfig,
     consensus::ConsensusMetricsValue,
     data::{
-        vid_commitment, Leaf2, VidCommitment, VidDisperse, VidDisperseAndDuration, VidDisperseShare,
+        Leaf2, VidCommitment, VidDisperse, VidDisperseAndDuration, VidDisperseShare, vid_commitment,
     },
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::{Proposal, UpgradeLock},
@@ -35,13 +36,12 @@ use hotshot_types::{
     stake_table::StakeTableEntries,
     storage_metrics::StorageMetricsValue,
     traits::{
+        EncodeBytes,
         election::Membership,
         node_implementation::{NodeType, Versions},
-        EncodeBytes,
     },
-    utils::{option_epoch_from_block_number, View, ViewInner},
+    utils::{View, ViewInner, option_epoch_from_block_number},
     vote::{Certificate, HasViewNumber, Vote},
-    ValidatorConfig,
 };
 use serde::Serialize;
 use vbs::version::Version;
@@ -188,13 +188,12 @@ pub async fn build_cert<
             .expect("Failed to create VersionedVoteData!")
             .commit();
 
-    let cert = CERT::create_signed_certificate(
+    CERT::create_signed_certificate(
         vote_commitment,
         vote.date().clone(),
         real_qc_sig,
         vote.view_number(),
-    );
-    cert
+    )
 }
 
 pub fn vid_share<TYPES: NodeType>(
@@ -255,13 +254,11 @@ pub async fn build_assembled_sig<
         sig_lists.push(original_signature);
     }
 
-    let real_qc_sig = <TYPES::SignatureKey as SignatureKey>::assemble(
+    <TYPES::SignatureKey as SignatureKey>::assemble(
         &real_qc_pp,
         signers.as_bitslice(),
         &sig_lists[..],
-    );
-
-    real_qc_sig
+    )
 }
 
 /// get the keypair for a node id

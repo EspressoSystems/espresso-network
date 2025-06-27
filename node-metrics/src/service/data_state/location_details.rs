@@ -60,7 +60,7 @@ mod tests {
         let location_details = LocationDetails::new(Some(coords), Some(country.clone()));
 
         assert_eq!(
-            format!("{:?}", location_details),
+            format!("{location_details:?}"),
             format!(
                 "LocationDetails {{ coords: Some({:?}), country: Some({:?}) }}",
                 coords, country

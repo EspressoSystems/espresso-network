@@ -15,9 +15,9 @@
 use std::{collections::VecDeque, fmt::Debug};
 
 use atomic_store::{
-    append_log, load_store::BincodeLoadStore, AppendLog, AtomicStoreLoader, PersistenceError,
+    AppendLog, AtomicStoreLoader, PersistenceError, append_log, load_store::BincodeLoadStore,
 };
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use tracing::{debug, warn};
 
 /// A caching append log for ledger objects.
@@ -359,7 +359,7 @@ mod test {
         assert_eq!(log.iter().len(), 5);
         for i in 0..5 {
             let mut iter = log.iter();
-            assert_eq!(iter.nth(i as usize).unwrap(), Some(i), "{:?}", log);
+            assert_eq!(iter.nth(i as usize).unwrap(), Some(i), "{log:?}");
 
             // `nth` should not only have returned the `n`th element, but also advanced the iterator.
             assert_eq!(

@@ -11,20 +11,20 @@
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 
 use super::node_implementation::NodeType;
 use crate::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, QuorumProposal, QuorumProposal2, QuorumProposalWrapper,
         VidCommitment, VidDisperseShare,
+        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
     },
     drb::{DrbInput, DrbResult},
     event::HotShotAction,
-    message::{convert_proposal, Proposal},
+    message::{Proposal, convert_proposal},
     simple_certificate::{
         LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
         QuorumCertificate2, UpgradeCertificate,
@@ -39,7 +39,7 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
     /// Add a proposal to the stored VID proposals.
     /// TODO(Chengyu): fix this
     async fn append_vid2(&self, proposal: &Proposal<TYPES, VidDisperseShare2<TYPES>>)
-        -> Result<()>;
+    -> Result<()>;
 
     async fn append_vid_general(
         &self,

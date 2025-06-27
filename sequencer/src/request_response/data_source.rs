@@ -4,19 +4,18 @@
 
 use std::{marker::PhantomData, sync::Arc};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use espresso_types::{
-    retain_accounts,
+    NodeState, PubKey, SeqTypes, retain_accounts,
     traits::SequencerPersistence,
     v0_1::{RewardAccount, RewardMerkleTree},
-    NodeState, PubKey, SeqTypes,
 };
-use hotshot::{traits::NodeImplementation, SystemContext};
+use hotshot::{SystemContext, traits::NodeImplementation};
 use hotshot_query_service::{
     data_source::{
-        storage::{FileSystemStorage, NodeStorage, SqlStorage},
         VersionedDataSource,
+        storage::{FileSystemStorage, NodeStorage, SqlStorage},
     },
     node::BlockId,
 };
@@ -38,7 +37,7 @@ use request_response::data_source::DataSource as DataSourceTrait;
 use super::request::{Request, Response};
 use crate::{
     api::BlocksFrontier,
-    catchup::{add_fee_accounts_to_state, add_reward_accounts_to_state, CatchupStorage},
+    catchup::{CatchupStorage, add_fee_accounts_to_state, add_reward_accounts_to_state},
 };
 
 /// A type alias for SQL storage
@@ -71,11 +70,11 @@ pub struct DataSource<
 /// Implement the trait that allows the [`RequestResponseProtocol`] to calculate/derive a response for a specific request
 #[async_trait]
 impl<
-        I: NodeImplementation<SeqTypes>,
-        V: Versions,
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-    > DataSourceTrait<Request> for DataSource<I, V, N, P>
+    I: NodeImplementation<SeqTypes>,
+    V: Versions,
+    N: ConnectedNetwork<PubKey>,
+    P: SequencerPersistence,
+> DataSourceTrait<Request> for DataSource<I, V, N, P>
 {
     async fn derive_response_for(&self, request: &Request) -> Result<Response> {
         match request {

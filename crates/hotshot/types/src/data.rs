@@ -34,7 +34,7 @@ use crate::{
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
     impl_has_epoch, impl_has_none_epoch,
-    message::{convert_proposal, Proposal, UpgradeLock},
+    message::{Proposal, UpgradeLock, convert_proposal},
     simple_certificate::{
         LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
         QuorumCertificate2, TimeoutCertificate, TimeoutCertificate2, UpgradeCertificate,
@@ -42,19 +42,19 @@ use crate::{
     },
     simple_vote::{HasEpoch, QuorumData, QuorumData2, UpgradeProposalData, VersionedVoteData},
     traits::{
+        BlockPayload,
         block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock},
         node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::SignatureKey,
         states::TestableState,
-        BlockPayload,
     },
     utils::{
-        bincode_opts, genesis_epoch_from_version, option_epoch_from_block_number,
-        EpochTransitionIndicator,
+        EpochTransitionIndicator, bincode_opts, genesis_epoch_from_version,
+        option_epoch_from_block_number,
     },
     vid::{
-        advz::{advz_scheme, ADVZCommitment, ADVZShare},
-        avidm::{init_avidm_param, AvidMCommitment, AvidMScheme, AvidMShare},
+        advz::{ADVZCommitment, ADVZShare, advz_scheme},
+        avidm::{AvidMCommitment, AvidMScheme, AvidMShare, init_avidm_param},
     },
     vote::{Certificate, HasViewNumber},
 };
@@ -1273,16 +1273,21 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
             //    - no longer care because we have passed `decide_by` without deciding the certificate.
             (None, Some(parent_cert)) => {
                 let decided_upgrade_certificate_read = decided_upgrade_certificate.read().await;
-                ensure!(self.view_number() > parent_cert.data.new_version_first_view
-                    || (self.view_number() > parent_cert.data.decide_by && decided_upgrade_certificate_read.is_none()),
-                       "The new leaf is missing an upgrade certificate that was present in its parent, and should still be live."
+                ensure!(
+                    self.view_number() > parent_cert.data.new_version_first_view
+                        || (self.view_number() > parent_cert.data.decide_by
+                            && decided_upgrade_certificate_read.is_none()),
+                    "The new leaf is missing an upgrade certificate that was present in its parent, and should still be live."
                 );
             },
             // If we both have a certificate, they should be identical.
             // Technically, this prevents us from initiating a new upgrade in the view immediately following an upgrade.
             // I think this is a fairly lax restriction.
             (Some(cert), Some(parent_cert)) => {
-                ensure!(cert == parent_cert, "The new leaf does not extend the parent leaf, because it has attached a different upgrade certificate.");
+                ensure!(
+                    cert == parent_cert,
+                    "The new leaf does not extend the parent leaf, because it has attached a different upgrade certificate."
+                );
             },
         }
 
@@ -1653,16 +1658,21 @@ impl<TYPES: NodeType> Leaf<TYPES> {
             //    - no longer care because we have passed `decide_by` without deciding the certificate.
             (None, Some(parent_cert)) => {
                 let decided_upgrade_certificate_read = decided_upgrade_certificate.read().await;
-                ensure!(self.view_number() > parent_cert.data.new_version_first_view
-                    || (self.view_number() > parent_cert.data.decide_by && decided_upgrade_certificate_read.is_none()),
-                       "The new leaf is missing an upgrade certificate that was present in its parent, and should still be live."
+                ensure!(
+                    self.view_number() > parent_cert.data.new_version_first_view
+                        || (self.view_number() > parent_cert.data.decide_by
+                            && decided_upgrade_certificate_read.is_none()),
+                    "The new leaf is missing an upgrade certificate that was present in its parent, and should still be live."
                 );
             },
             // If we both have a certificate, they should be identical.
             // Technically, this prevents us from initiating a new upgrade in the view immediately following an upgrade.
             // I think this is a fairly lax restriction.
             (Some(cert), Some(parent_cert)) => {
-                ensure!(cert == parent_cert, "The new leaf does not extend the parent leaf, because it has attached a different upgrade certificate.");
+                ensure!(
+                    cert == parent_cert,
+                    "The new leaf does not extend the parent leaf, because it has attached a different upgrade certificate."
+                );
             },
         }
 
@@ -1824,10 +1834,10 @@ pub mod null_block {
     use crate::{
         data::VidCommitment,
         traits::{
+            BlockPayload,
             block_contents::BuilderFee,
             node_implementation::{NodeType, Versions},
             signature_key::BuilderSignatureKey,
-            BlockPayload,
         },
         vid::advz::advz_scheme,
     };

@@ -3,15 +3,15 @@ use std::time::Duration;
 use alloy::primitives::Address;
 use anyhow::Context;
 use espresso_types::{FeeAccount, FeeAmount, FeeMerkleTree, Header};
-use futures::{stream::BoxStream, StreamExt};
+use futures::{StreamExt, stream::BoxStream};
 use jf_merkle_tree::{
-    prelude::{MerkleProof, Sha3Node},
     MerkleTreeScheme,
+    prelude::{MerkleProof, Sha3Node},
 };
 use surf_disco::{
+    Url,
     error::ClientError,
     socket::{Connection, Unsupported},
-    Url,
 };
 use tokio::time::sleep;
 use vbs::version::StaticVersion;

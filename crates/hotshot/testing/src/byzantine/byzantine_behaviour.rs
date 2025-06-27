@@ -13,8 +13,8 @@ use hotshot::{
 use hotshot_task_impls::{
     events::HotShotEvent,
     network::{
-        test::{ModifierClosure, NetworkEventTaskStateModifier},
         NetworkEventTaskState,
+        test::{ModifierClosure, NetworkEventTaskStateModifier},
     },
 };
 use hotshot_types::{

@@ -59,7 +59,7 @@ impl VerificationResult {
 /// need to provide a way to our FFI consumer to free the memory we allocated in this way.
 ///
 /// This function needs to be called for every ValidationResult created via FFI.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_error_string(s: *mut c_char) {
     if !s.is_null() {
         unsafe {
@@ -73,7 +73,7 @@ pub unsafe extern "C" fn free_error_string(s: *mut c_char) {
 // root_bytes: Byte representation of a Sha3Node merkle root.
 // header_bytes: Byte representation of the HotShot header being validated as a Merkle leaf.
 // circuit_block_bytes: Circuit representation of the HotShot header commitment returned by the light client contract.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn verify_merkle_proof_helper(
     proof_ptr: *const u8,
     proof_len: usize,
@@ -137,7 +137,7 @@ pub extern "C" fn verify_merkle_proof_helper(
 // commit_bytes: Byte representation of a TaggedBase64 payload commitment string.
 // ns_table_bytes: Raw bytes of the namespace table.
 // tx_comm_bytes: Byte representation of a hex encoded Sha256 digest that the transaction set commits to.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn verify_namespace_helper(
     namespace: u64,
     proof_ptr: *const u8,
@@ -172,16 +172,14 @@ pub extern "C" fn verify_namespace_helper(
 
     if ns != namespace.into() {
         return VerificationResult::err(&format!(
-            "namespace mismatch: proven {} != expected {}",
-            ns, namespace
+            "namespace mismatch: proven {ns} != expected {namespace}"
         ));
     };
 
     let txns_comm = hash_txns(namespace, &txns);
     if txns_comm != txn_comm_str {
         return VerificationResult::err(&format!(
-            "commitment mismatch: proven {} != expected {}",
-            txns_comm, txn_comm_str
+            "commitment mismatch: proven {txns_comm} != expected {txn_comm_str}"
         ));
     }
 
@@ -195,7 +193,7 @@ fn hash_txns(namespace: u32, txns: &[Transaction]) -> String {
         hasher.update(txn.payload());
     }
     let hash_result = hasher.finalize();
-    format!("{:x}", hash_result)
+    format!("{hash_result:x}")
 }
 
 pub fn field_to_u256<F: PrimeField>(f: F) -> U256 {

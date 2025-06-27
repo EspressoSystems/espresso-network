@@ -21,21 +21,21 @@ use snafu::OptionExt;
 use sqlx::FromRow;
 
 use super::{
-    super::transaction::{query, Transaction, TransactionMode},
-    QueryBuilder, BLOCK_COLUMNS, LEAF_COLUMNS, PAYLOAD_COLUMNS, PAYLOAD_METADATA_COLUMNS,
+    super::transaction::{Transaction, TransactionMode, query},
+    BLOCK_COLUMNS, LEAF_COLUMNS, PAYLOAD_COLUMNS, PAYLOAD_METADATA_COLUMNS, QueryBuilder,
     STATE_CERT_COLUMNS, VID_COMMON_COLUMNS, VID_COMMON_METADATA_COLUMNS,
 };
 use crate::{
+    ErrorSnafu, Header, MissingSnafu, Payload, QueryError, QueryResult,
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceInfo, NamespaceMap,
         PayloadQueryData, QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
         TransactionQueryData, VidCommonQueryData,
     },
     data_source::storage::{
-        sql::sqlx::Row, AvailabilityStorage, PayloadMetadata, VidCommonMetadata,
+        AvailabilityStorage, PayloadMetadata, VidCommonMetadata, sql::sqlx::Row,
     },
     types::HeightIndexed,
-    ErrorSnafu, Header, MissingSnafu, Payload, QueryError, QueryResult,
 };
 
 #[async_trait]

@@ -6,10 +6,10 @@ use alloy::{
     primitives::{Address, U256},
     providers::{Provider, ProviderBuilder},
 };
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use clap::{Parser, Subcommand};
 use client::SequencerClient;
-use espresso_types::{eth_signature_key::EthKeyPair, parse_duration, Header};
+use espresso_types::{Header, eth_signature_key::EthKeyPair, parse_duration};
 use futures::stream::StreamExt;
 use hotshot_contract_adapter::sol_types::FeeContract;
 use sequencer_utils::logging;

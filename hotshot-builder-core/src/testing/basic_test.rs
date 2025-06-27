@@ -28,10 +28,10 @@ mod tests {
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
-        data::{vid_commitment, DaProposal2, Leaf2, QuorumProposal2, QuorumProposalWrapper},
+        data::{DaProposal2, Leaf2, QuorumProposal2, QuorumProposalWrapper, vid_commitment},
         signature_key::{BuilderKey, SchnorrPubKey},
         simple_vote::QuorumData2,
-        traits::{block_contents::BlockHeader, node_implementation::Versions, EncodeBytes},
+        traits::{EncodeBytes, block_contents::BlockHeader, node_implementation::Versions},
         utils::{BuilderCommitment, EpochTransitionIndicator},
     };
     use marketplace_builder_shared::{
@@ -51,7 +51,7 @@ mod tests {
         builder_state::{
             DaProposalMessage, DecideMessage, QuorumProposalMessage, TransactionSource,
         },
-        service::{handle_received_txns, GlobalState, ProxyGlobalState, ReceivedTransaction},
+        service::{GlobalState, ProxyGlobalState, ReceivedTransaction, handle_received_txns},
     };
     /// This test simulates multiple builder states receiving messages from the channels and processing them
     #[tokio::test]

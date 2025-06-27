@@ -24,10 +24,10 @@ use derivative::Derivative;
 use derive_more::Display;
 use hotshot_types::traits::node_implementation::NodeType;
 use jf_merkle_tree::{
-    prelude::MerkleProof, DigestAlgorithm, Element, ForgetableMerkleTreeScheme, Index,
-    MerkleCommitment, NodeValue, ToTraversalPath,
+    DigestAlgorithm, Element, ForgetableMerkleTreeScheme, Index, MerkleCommitment, NodeValue,
+    ToTraversalPath, prelude::MerkleProof,
 };
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use tagged_base64::TaggedBase64;
 
 use crate::QueryResult;

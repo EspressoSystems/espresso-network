@@ -9,8 +9,8 @@ use std::{
 use anyhow::Result;
 use committable::Committable;
 use espresso_types::{
-    v0_1::{ADVZNsProof, RewardAccount, RewardMerkleTree},
     FeeAccount, FeeMerkleTree, NamespaceId, NsProof, PubKey, Transaction,
+    v0_1::{ADVZNsProof, RewardAccount, RewardMerkleTree},
 };
 // re-exported here to avoid breaking changes in consumers
 // "deprecated" does not work with "pub use": https://github.com/rust-lang/rust/issues/30827
@@ -19,15 +19,15 @@ pub type ADVZNamespaceProofQueryData = espresso_types::ADVZNamespaceProofQueryDa
 #[deprecated(note = "use espresso_types::NamespaceProofQueryData")]
 pub type NamespaceProofQueryData = espresso_types::NamespaceProofQueryData;
 
-use futures::{try_join, FutureExt};
+use futures::{FutureExt, try_join};
 use hotshot_query_service::{
+    ApiState, Error, VidCommon,
     availability::{self, AvailabilityDataSource, CustomSnafu, FetchBlockSnafu},
     explorer::{self, ExplorerDataSource},
     merklized_state::{
         self, MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
     },
     node::{self, NodeDataSource},
-    ApiState, Error, VidCommon,
 };
 use hotshot_types::{
     data::{EpochNumber, VidCommitment, VidShare, ViewNumber},
@@ -41,17 +41,17 @@ use jf_merkle_tree::MerkleTreeScheme;
 use serde::de::Error as _;
 use snafu::OptionExt;
 use tagged_base64::TaggedBase64;
-use tide_disco::{method::ReadState, Api, Error as _, StatusCode};
+use tide_disco::{Api, Error as _, StatusCode, method::ReadState};
 use tracing::warn;
 use vbs::version::{StaticVersion, StaticVersionType};
 use vid::avid_m::namespaced::NsAvidMScheme;
 
 use super::{
+    StorageState,
     data_source::{
         CatchupDataSource, HotShotConfigDataSource, NodeStateDataSource, RequestResponseDataSource,
         SequencerDataSource, StakeTableDataSource, StateSignatureDataSource, SubmitDataSource,
     },
-    StorageState,
 };
 use crate::{SeqTypes, SequencerApiVersion, SequencerPersistence};
 

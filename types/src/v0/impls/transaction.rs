@@ -1,7 +1,7 @@
 use committable::{Commitment, Committable};
 use hotshot_query_service::explorer::ExplorerTransaction;
 use hotshot_types::traits::block_contents::Transaction as HotShotTransaction;
-use serde::{de::Error, Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, de::Error};
 
 use super::NsPayloadBuilder;
 use crate::{NamespaceId, SeqTypes, Transaction};

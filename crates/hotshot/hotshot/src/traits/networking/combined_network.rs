@@ -11,22 +11,22 @@ use std::{
     future::Future,
     num::NonZeroUsize,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
 
-use async_broadcast::{broadcast, InactiveReceiver, Sender};
+use async_broadcast::{InactiveReceiver, Sender, broadcast};
 use async_lock::RwLock;
 use async_trait::async_trait;
-use futures::{join, select, FutureExt};
+use futures::{FutureExt, join, select};
 #[cfg(feature = "hotshot-testing")]
 use hotshot_types::traits::network::{
     AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
 };
 use hotshot_types::{
-    boxed_sync,
+    BoxSyncFuture, boxed_sync,
     constants::{
         COMBINED_NETWORK_CACHE_SIZE, COMBINED_NETWORK_DELAY_DURATION,
         COMBINED_NETWORK_MIN_PRIMARY_FAILURES, COMBINED_NETWORK_PRIMARY_CHECK_INTERVAL,
@@ -37,14 +37,13 @@ use hotshot_types::{
         network::{BroadcastDelay, ConnectedNetwork, Topic},
         node_implementation::NodeType,
     },
-    BoxSyncFuture,
 };
 use lru::LruCache;
 use parking_lot::RwLock as PlRwLock;
 use tokio::{spawn, sync::mpsc::error::TrySendError, time::sleep};
 use tracing::{debug, info, warn};
 
-use super::{push_cdn_network::PushCdnNetwork, NetworkError};
+use super::{NetworkError, push_cdn_network::PushCdnNetwork};
 use crate::traits::implementations::Libp2pNetwork;
 
 /// Thread-safe ref counted lock to a map of channels to the delayed tasks
@@ -195,7 +194,9 @@ impl<TYPES: NodeType> CombinedNetworks<TYPES> {
                 }
                 // The task hasn't been cancelled, the primary probably failed.
                 // Increment the primary fail counter and send the message.
-                debug!("Sending on secondary after delay, message possibly has not reached recipient on primary");
+                debug!(
+                    "Sending on secondary after delay, message possibly has not reached recipient on primary"
+                );
                 primary_fail_counter.fetch_add(1, Ordering::Relaxed);
                 secondary_future.await
             });

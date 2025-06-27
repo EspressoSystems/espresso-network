@@ -6,18 +6,18 @@ use std::{
     task::Poll,
 };
 
-use anyhow::{ensure, Context, Result as AnyhowResult};
+use anyhow::{Context, Result as AnyhowResult, ensure};
 use bimap::BiMap;
-use futures::{future::poll_fn, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, future::poll_fn};
 use hotshot_types::traits::signature_key::SignatureKey;
 use libp2p::{
+    Transport,
     core::{
+        StreamMuxer,
         muxing::StreamMuxerExt,
         transport::{DialOpts, TransportEvent},
-        StreamMuxer,
     },
     identity::PeerId,
-    Transport,
 };
 use parking_lot::Mutex;
 use pin_project::pin_project;
@@ -152,7 +152,6 @@ impl<T: Transport, S: SignatureKey + 'static, C: StreamMuxer + Unpin>
     where
         T::Error: From<<C as StreamMuxer>::Error> + From<IoError>,
         T::Output: AsOutput<C> + Send,
-
         C::Substream: Unpin + Send,
     {
         // Create a new upgrade that performs the authentication handshake on top
@@ -300,7 +299,6 @@ where
     T::ListenerUpgrade: Send + 'static,
     T::Output: AsOutput<C> + Send,
     T::Error: From<<C as StreamMuxer>::Error> + From<IoError>,
-
     C::Substream: Unpin + Send,
 {
     // `Dial` is for connecting out, `ListenerUpgrade` is for accepting incoming connections
@@ -344,7 +342,7 @@ where
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<libp2p::core::transport::TransportEvent<Self::ListenerUpgrade, Self::Error>>
     {
-        match self.as_mut().project().inner.poll(cx) {
+        match Transport::poll(self.as_mut().project().inner, cx) {
             Poll::Ready(event) => Poll::Ready(match event {
                 // If we have an incoming connection, we need to perform the authentication handshake
                 TransportEvent::Incoming {
@@ -513,7 +511,7 @@ mod test {
     macro_rules! new_identity {
         () => {{
             // Gen a new seed
-            let seed = rand::rngs::OsRng.gen::<[u8; 32]>();
+            let seed = rand::rngs::OsRng.r#gen::<[u8; 32]>();
 
             // Create a new keypair
             let keypair = BLSPubKey::generated_from_seed_indexed(seed, 1337);

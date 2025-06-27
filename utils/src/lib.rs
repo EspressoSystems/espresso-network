@@ -109,7 +109,7 @@ where
         Err(err) => {
             return Err(anyhow!(
                 "contract call 0x{hash:x}: error getting transaction receipt: {err}"
-            ))
+            ));
         },
     };
 

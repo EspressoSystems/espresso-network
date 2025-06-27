@@ -26,10 +26,10 @@ use hotshot_types::{
         UpgradeCertificate,
     },
     traits::{
+        BlockPayload,
         block_contents::BlockHeader,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::SignatureKey,
-        BlockPayload,
     },
     utils::{
         epoch_from_block_number, is_epoch_root, is_epoch_transition, is_last_block,
@@ -179,7 +179,9 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                             return None;
                         }
                     } else {
-                        tracing::error!("Received an epoch root QC but we don't have the corresponding state cert.");
+                        tracing::error!(
+                            "Received an epoch root QC but we don't have the corresponding state cert."
+                        );
                         return None;
                     }
                 } else {
@@ -380,7 +382,9 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                             continue;
                         }
                     } else {
-                        tracing::error!("Received an epoch root QC but we don't have the corresponding state cert.");
+                        tracing::error!(
+                            "Received an epoch root QC but we don't have the corresponding state cert."
+                        );
                         continue;
                     }
                 } else {
@@ -405,7 +409,9 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             let Ok(maybe_qc_state_cert) =
                 tokio::time::timeout(time_left, self.wait_for_qc_event(rx.clone())).await
             else {
-                tracing::info!("Some nodes did not respond with their HighQc in time. Continuing with the highest QC that we received: {highest_qc:?}");
+                tracing::info!(
+                    "Some nodes did not respond with their HighQc in time. Continuing with the highest QC that we received: {highest_qc:?}"
+                );
                 return Ok((highest_qc, next_epoch_qc, state_cert));
             };
             let Some((qc, maybe_next_epoch_qc, maybe_state_cert)) = maybe_qc_state_cert else {
@@ -514,7 +520,11 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             if is_epoch_root(parent_block_number, self.epoch_height) {
                 ensure!(
                     maybe_state_cert.as_ref().is_some_and(|state_cert| {
-                        check_qc_state_cert_correspondence(&parent_qc, state_cert, self.epoch_height)
+                        check_qc_state_cert_correspondence(
+                            &parent_qc,
+                            state_cert,
+                            self.epoch_height,
+                        )
                     }),
                     "We are proposing with parent epoch root QC but we don't have the corresponding state cert."
                 );
@@ -764,7 +774,9 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                     is_epoch_transition(bn, self.epoch_height)
                         && !is_last_block(bn, self.epoch_height)
                 }) {
-                    bail!(error!("High is in transition but we need to propose with transition QC, do nothing"));
+                    bail!(error!(
+                        "High is in transition but we need to propose with transition QC, do nothing"
+                    ));
                 }
                 (qc, maybe_next_epoch_qc, maybe_state_cert)
             }

@@ -66,6 +66,7 @@ use jf_merkle_tree::prelude::MerkleProof;
 use tagged_base64::TaggedBase64;
 
 use crate::{
+    Header, Payload, QueryResult, Transaction,
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
         PayloadQueryData, QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
@@ -83,7 +84,6 @@ use crate::{
     },
     merklized_state::{MerklizedState, Snapshot},
     node::{SyncStatus, TimeWindowQueryData, WindowStart},
-    Header, Payload, QueryResult, Transaction,
 };
 
 pub mod fail_storage;

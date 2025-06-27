@@ -21,9 +21,9 @@ use async_lock::{Mutex, RwLock};
 use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
 use espresso_types::{
+    BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes, ValidatedState,
     traits::{EventConsumer, MembershipPersistence},
     v0_3::Fetcher,
-    BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes, ValidatedState,
 };
 use genesis::L1Finalized;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
@@ -45,14 +45,15 @@ use espresso_types::v0::traits::SequencerPersistence;
 pub use genesis::Genesis;
 use hotshot::{
     traits::implementations::{
-        derive_libp2p_multiaddr, derive_libp2p_peer_id, CdnMetricsValue, CdnTopic,
-        CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork, MemoryNetwork, PushCdnNetwork,
-        RequestResponseConfig, WrappedSignatureKey,
+        CdnMetricsValue, CdnTopic, CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork,
+        MemoryNetwork, PushCdnNetwork, RequestResponseConfig, WrappedSignatureKey,
+        derive_libp2p_multiaddr, derive_libp2p_peer_id,
     },
     types::SignatureKey,
 };
-use hotshot_orchestrator::client::{get_complete_config, OrchestratorClient};
+use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
+    ValidatorConfig,
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StateKeyPair, StateSignKey},
@@ -64,7 +65,6 @@ use hotshot_types::{
         storage::Storage,
     },
     utils::BuilderCommitment,
-    ValidatorConfig,
 };
 pub use options::Options;
 use serde::{Deserialize, Serialize};
@@ -633,11 +633,11 @@ pub mod testing {
         node_bindings::{Anvil, AnvilInstance},
         primitives::U256,
         providers::{
+            ProviderBuilder, RootProvider,
             fillers::{
                 BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller,
             },
             layers::AnvilProvider,
-            ProviderBuilder, RootProvider,
         },
         signers::{
             k256::ecdsa::SigningKey,
@@ -648,14 +648,14 @@ pub mod testing {
     use catchup::NullStateCatchup;
     use committable::Committable;
     use espresso_contract_deployer::{
-        builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
-        Contract, Contracts,
+        Contract, Contracts, builder::DeployerArgsBuilder,
+        network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        eth_signature_key::EthKeyPair,
-        v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
         EpochVersion, Event, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction,
         Upgrade, UpgradeMap,
+        eth_signature_key::EthKeyPair,
+        v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
     };
     use futures::{
         future::join_all,
@@ -663,8 +663,8 @@ pub mod testing {
     };
     use hotshot::{
         traits::{
-            implementations::{MasterMap, MemoryNetwork},
             BlockPayload,
+            implementations::{MasterMap, MemoryNetwork},
         },
         types::EventType::Decide,
     };
@@ -675,19 +675,19 @@ pub mod testing {
         BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,
     };
     use hotshot_types::{
+        HotShotConfig, PeerConfig,
         event::LeafInfo,
         light_client::StateKeyPair,
         signature_key::BLSKeyPair,
         traits::{
-            block_contents::BlockHeader, metrics::NoMetrics, network::Topic,
-            signature_key::BuilderSignatureKey, EncodeBytes,
+            EncodeBytes, block_contents::BlockHeader, metrics::NoMetrics, network::Topic,
+            signature_key::BuilderSignatureKey,
         },
-        HotShotConfig, PeerConfig,
     };
     use portpicker::pick_unused_port;
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
-    use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
+    use staking_cli::demo::{DelegationConfig, setup_stake_table_contract_for_test};
     use tokio::spawn;
     use vbs::version::Version;
 
@@ -1010,11 +1010,10 @@ pub mod testing {
                 da_staked_committee_size: num_nodes,
                 view_sync_timeout: Duration::from_secs(1),
                 data_request_delay: Duration::from_secs(1),
-                builder_urls: vec1::vec1![Url::parse(&format!(
-                    "http://127.0.0.1:{}",
-                    pick_unused_port().unwrap()
-                ))
-                .unwrap()],
+                builder_urls: vec1::vec1![
+                    Url::parse(&format!("http://127.0.0.1:{}", pick_unused_port().unwrap()))
+                        .unwrap()
+                ],
                 builder_timeout: Duration::from_secs(1),
                 start_threshold: (
                     known_nodes_with_stake.clone().len() as u64,
@@ -1355,7 +1354,7 @@ mod test {
         traits::block_contents::{BlockHeader, BlockPayload},
     };
     use sequencer_utils::test_utils::setup_test;
-    use testing::{wait_for_decide_on_handle, TestConfigBuilder};
+    use testing::{TestConfigBuilder, wait_for_decide_on_handle};
 
     use self::testing::run_test_builder;
     use super::*;

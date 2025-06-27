@@ -13,9 +13,9 @@ use hotshot_contract_adapter::{
     sol_types::{LightClientStateSol, StakeTableStateSol},
 };
 use hotshot_types::{
+    PeerConfig,
     stake_table::HSStakeTable,
     traits::node_implementation::{ConsensusTime, NodeType},
-    PeerConfig,
 };
 use tokio::time::sleep;
 use vbs::version::StaticVersion;

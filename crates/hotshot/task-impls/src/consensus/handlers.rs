@@ -13,7 +13,7 @@ use hotshot_types::{
     simple_certificate::EpochRootQuorumCertificate,
     simple_vote::{EpochRootQuorumVote, HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
     traits::node_implementation::{ConsensusTime, NodeImplementation, NodeType},
-    utils::{is_epoch_root, is_epoch_transition, is_last_block, EpochTransitionIndicator},
+    utils::{EpochTransitionIndicator, is_epoch_root, is_epoch_transition, is_last_block},
     vote::{HasViewNumber, Vote},
 };
 use hotshot_utils::anytrace::*;
@@ -295,7 +295,9 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
         if is_epoch_root {
             // For epoch root QC, we are sending high QC and state cert
             let Some(state_cert) = state_cert else {
-                bail!("We are sending an epoch root QC but we don't have the corresponding state cert.");
+                bail!(
+                    "We are sending an epoch root QC but we don't have the corresponding state cert."
+                );
             };
             ensure!(
                 check_qc_state_cert_correspondence(&high_qc, &state_cert, task_state.epoch_height),
@@ -520,7 +522,9 @@ pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>
     )
     .await;
 
-    tracing::error!("We did not receive evidence for view {view_number} in time, sending timeout vote for that view!");
+    tracing::error!(
+        "We did not receive evidence for view {view_number} in time, sending timeout vote for that view!"
+    );
 
     broadcast_event(
         Event {

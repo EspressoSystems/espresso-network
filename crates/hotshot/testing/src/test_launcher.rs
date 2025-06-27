@@ -9,11 +9,11 @@ use std::{collections::HashMap, marker::PhantomData, rc::Rc, sync::Arc};
 use hotshot::traits::{NodeImplementation, TestableNodeImplementation};
 use hotshot_example_types::storage_types::TestStorage;
 use hotshot_types::{
+    HotShotConfig, ValidatorConfig,
     traits::{
         network::{AsyncGenerator, ConnectedNetwork},
         node_implementation::{NodeType, Versions},
     },
-    HotShotConfig, ValidatorConfig,
 };
 
 use super::{test_builder::TestDescription, test_runner::TestRunner};

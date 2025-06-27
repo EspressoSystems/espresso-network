@@ -25,10 +25,10 @@ use std::{fmt::Debug, path::Path, str::FromStr};
 
 use alloy::primitives::U256;
 use committable::Committable;
-use hotshot_query_service::{testing::mocks::MockVersions, VidCommon};
+use hotshot_query_service::{VidCommon, testing::mocks::MockVersions};
 use hotshot_types::{
     data::vid_commitment,
-    traits::{signature_key::BuilderSignatureKey, BlockPayload, EncodeBytes},
+    traits::{BlockPayload, EncodeBytes, signature_key::BuilderSignatureKey},
     vid::{advz::advz_scheme, avidm::init_avidm_param},
 };
 use jf_merkle_tree::MerkleTreeScheme;
@@ -36,18 +36,19 @@ use jf_vid::VidScheme;
 use pretty_assertions::assert_eq;
 use rand::{Rng, RngCore};
 use sequencer_utils::{commitment_to_u256, test_utils::setup_test};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use tagged_base64::TaggedBase64;
 use vbs::{
-    version::{StaticVersion, StaticVersionType, Version},
     BinarySerializer,
+    version::{StaticVersion, StaticVersionType, Version},
 };
 
 use crate::{
-    v0_1::{self, ADVZNsProof},
-    v0_2, ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
+    ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
     NamespaceProofQueryData, NsProof, NsTable, Payload, Transaction, ValidatedState,
+    v0_1::{self, ADVZNsProof},
+    v0_2,
 };
 
 type V1Serializer = vbs::Serializer<StaticVersion<0, 1>>;

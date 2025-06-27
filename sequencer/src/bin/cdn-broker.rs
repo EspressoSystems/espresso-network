@@ -2,11 +2,11 @@
 //! a `Broker` object.
 use anyhow::{Context, Result};
 use cdn_broker::{
-    reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
     Broker, Config,
+    reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
 };
 use clap::Parser;
-use espresso_types::{parse_size, SeqTypes};
+use espresso_types::{SeqTypes, parse_size};
 use hotshot_types::traits::{node_implementation::NodeType, signature_key::SignatureKey};
 use sequencer::network::cdn::{ProductionDef, WrappedSignatureKey};
 use sha2::Digest;

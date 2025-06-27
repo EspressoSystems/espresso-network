@@ -16,10 +16,10 @@ use hotshot_types::{
     message::{Proposal, UpgradeLock},
     simple_vote::HasEpoch,
     traits::{
+        BlockPayload,
         block_contents::BlockHeader,
         node_implementation::{NodeImplementation, NodeType, Versions},
         signature_key::SignatureKey,
-        BlockPayload,
     },
     utils::{is_epoch_transition, option_epoch_from_block_number},
 };
@@ -95,7 +95,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     .ok()?
                     != self.public_key
                 {
-                    tracing::debug!("We are not the leader in the current epoch. Do not send the VID dispersal.");
+                    tracing::debug!(
+                        "We are not the leader in the current epoch. Do not send the VID dispersal."
+                    );
                     return None;
                 }
                 let VidDisperseAndDuration {

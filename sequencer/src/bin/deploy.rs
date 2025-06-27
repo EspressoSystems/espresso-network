@@ -1,17 +1,17 @@
 use std::{fs::File, io::stdout, path::PathBuf, thread::sleep, time::Duration};
 
 use alloy::{
-    primitives::{utils::format_ether, Address, U256},
+    primitives::{Address, U256, utils::format_ether},
     providers::{Provider, WalletProvider},
 };
 use anyhow::Context as _;
 use clap::{Parser, Subcommand};
 use espresso_contract_deployer::{
-    build_provider, build_provider_ledger,
+    Contract, Contracts, DeployedContracts, build_provider, build_provider_ledger,
     builder::DeployerArgsBuilder,
     network_config::{light_client_genesis, light_client_genesis_from_stake_table},
     provider::connect_ledger,
-    verify_node_js_files, Contract, Contracts, DeployedContracts,
+    verify_node_js_files,
 };
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;

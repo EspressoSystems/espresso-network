@@ -14,18 +14,18 @@ use async_trait::async_trait;
 use bincode::config::Options;
 use cdn_broker::reexports::{
     connection::protocols::{Quic, Tcp},
-    def::{hook::NoMessageHook, ConnectionDef, RunDef, Topic as TopicTrait},
+    def::{ConnectionDef, RunDef, Topic as TopicTrait, hook::NoMessageHook},
     discovery::{Embedded, Redis},
 };
 #[cfg(feature = "hotshot-testing")]
 use cdn_broker::{Broker, Config as BrokerConfig};
 pub use cdn_client::reexports::crypto::signature::KeyPair;
 use cdn_client::{
+    Client, Config as ClientConfig,
     reexports::{
         crypto::signature::{Serializable, SignatureScheme},
         message::{Broadcast, Direct, Message as PushCdnMessage},
     },
-    Client, Config as ClientConfig,
 };
 #[cfg(feature = "hotshot-testing")]
 use cdn_marshal::{Config as MarshalConfig, Marshal};
@@ -34,7 +34,7 @@ use hotshot_types::traits::network::{
     AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
 };
 use hotshot_types::{
-    boxed_sync,
+    BoxSyncFuture, boxed_sync,
     data::ViewNumber,
     traits::{
         metrics::{Counter, Metrics, NoMetrics},
@@ -43,12 +43,11 @@ use hotshot_types::{
         signature_key::SignatureKey,
     },
     utils::bincode_opts,
-    BoxSyncFuture,
 };
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use parking_lot::Mutex;
 #[cfg(feature = "hotshot-testing")]
-use rand::{rngs::StdRng, RngCore, SeedableRng};
+use rand::{RngCore, SeedableRng, rngs::StdRng};
 use tokio::{spawn, sync::mpsc::error::TrySendError, time::sleep};
 #[cfg(feature = "hotshot-testing")]
 use tracing::error;

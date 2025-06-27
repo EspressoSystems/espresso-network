@@ -11,7 +11,7 @@
 // see <https://www.gnu.org/licenses/>.
 
 use hotshot::traits::{
-    election::static_committee::StaticCommittee, implementations::MemoryNetwork, NodeImplementation,
+    NodeImplementation, election::static_committee::StaticCommittee, implementations::MemoryNetwork,
 };
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
@@ -24,9 +24,9 @@ use hotshot_types::{
     traits::node_implementation::{NodeType, Versions},
 };
 use jf_merkle_tree::{
+    ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
     prelude::{MerkleProof, Sha3Digest, Sha3Node},
     universal_merkle_tree::UniversalMerkleTree,
-    ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
 };
 use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersion;
@@ -52,20 +52,12 @@ impl QueryableHeader<MockTypes> for MockHeader {
 
     fn namespace_id(&self, i: &i64) -> Option<i64> {
         // Test types only support a single namespace.
-        if *i == 0 {
-            Some(0)
-        } else {
-            None
-        }
+        if *i == 0 { Some(0) } else { None }
     }
 
     fn namespace_size(&self, i: &i64, payload_size: usize) -> u64 {
         // Test types only support a single namespace.
-        if *i == 0 {
-            payload_size as u64
-        } else {
-            0
-        }
+        if *i == 0 { payload_size as u64 } else { 0 }
     }
 }
 

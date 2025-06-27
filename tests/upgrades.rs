@@ -2,12 +2,12 @@ use std::time::Duration;
 
 use anyhow::Result;
 use espresso_types::{EpochVersion, FeeVersion, UpgradeMode};
-use futures::{future::join_all, StreamExt};
+use futures::{StreamExt, future::join_all};
 use sequencer::Genesis;
 use vbs::version::StaticVersionType;
 
 use crate::{
-    common::{load_genesis_file, NativeDemo, TestConfig, TestRequirements},
+    common::{NativeDemo, TestConfig, TestRequirements, load_genesis_file},
     smoke::assert_native_demo_works,
 };
 
@@ -16,7 +16,7 @@ async fn assert_pos_upgrade_happens(genesis: &Genesis) -> Result<()> {
 
     // The requirements passed to `TestConfig` are ignored here.
     let testing = TestConfig::new(Default::default()).await.unwrap();
-    println!("Testing upgrade {:?}", testing);
+    println!("Testing upgrade {testing:?}");
 
     let base_version = FeeVersion::version();
     let upgrade_version = EpochVersion::version();
@@ -25,7 +25,7 @@ async fn assert_pos_upgrade_happens(genesis: &Genesis) -> Result<()> {
     let _ = testing.readiness().await?;
 
     let initial = testing.test_state().await;
-    println!("Initial State:{}", initial);
+    println!("Initial State:{initial}");
 
     let clients = testing.sequencer_clients;
 

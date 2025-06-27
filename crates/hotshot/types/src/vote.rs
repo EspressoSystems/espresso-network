@@ -19,6 +19,7 @@ use hotshot_utils::anytrace::*;
 use tracing::error;
 
 use crate::{
+    PeerConfig,
     epoch_membership::EpochMembership,
     light_client::{LightClientState, StakeTableState},
     message::UpgradeLock,
@@ -29,7 +30,6 @@ use crate::{
         node_implementation::{NodeType, Versions},
         signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
     },
-    PeerConfig,
 };
 
 /// A simple vote that has a signer and commitment to the data voted on.
@@ -144,11 +144,11 @@ pub struct VoteAccumulator<
 }
 
 impl<
-        TYPES: NodeType,
-        VOTE: Vote<TYPES>,
-        CERT: Certificate<TYPES, VOTE::Commitment, Voteable = VOTE::Commitment>,
-        V: Versions,
-    > VoteAccumulator<TYPES, VOTE, CERT, V>
+    TYPES: NodeType,
+    VOTE: Vote<TYPES>,
+    CERT: Certificate<TYPES, VOTE::Commitment, Voteable = VOTE::Commitment>,
+    V: Versions,
+> VoteAccumulator<TYPES, VOTE, CERT, V>
 {
     /// Add a vote to the total accumulated votes for the given epoch.
     /// Returns the accumulator or the certificate if we

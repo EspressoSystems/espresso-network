@@ -7,7 +7,7 @@ use ark_ec::{AffineRepr, CurveGroup as _};
 use ark_ed_on_bn254::EdwardsConfig;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use hotshot_types::{
-    light_client::{hash_bytes_to_field, StateKeyPair, StateVerKey},
+    light_client::{StateKeyPair, StateVerKey, hash_bytes_to_field},
     signature_key::{BLSKeyPair, BLSPubKey, BLSSignature},
     traits::signature_key::SignatureKey,
 };
@@ -17,7 +17,7 @@ use jf_signature::{
 };
 
 use crate::sol_types::{
-    StakeTableV2::{getVersionReturn, ConsensusKeysUpdatedV2, ValidatorRegisteredV2},
+    StakeTableV2::{ConsensusKeysUpdatedV2, ValidatorRegisteredV2, getVersionReturn},
     *,
 };
 
@@ -234,12 +234,14 @@ mod test {
         authenticate_bls_sig(key_pair.ver_key_ref(), address, &sig).unwrap();
 
         // signed with wrong key
-        assert!(authenticate_bls_sig(
-            key_pair.ver_key_ref(),
-            address,
-            &sign_address_bls(&BLSKeyPair::generate(&mut rand::thread_rng()), address)
-        )
-        .is_err());
+        assert!(
+            authenticate_bls_sig(
+                key_pair.ver_key_ref(),
+                address,
+                &sign_address_bls(&BLSKeyPair::generate(&mut rand::thread_rng()), address)
+            )
+            .is_err()
+        );
 
         // tamper with the signature
         let mut sig = sig;

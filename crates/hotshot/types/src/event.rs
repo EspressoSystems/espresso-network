@@ -13,15 +13,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     data::{
-        vid_disperse::ADVZDisperseShare, DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal,
-        QuorumProposalWrapper, UpgradeProposal, VidDisperseShare,
+        DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposalWrapper,
+        UpgradeProposal, VidDisperseShare, vid_disperse::ADVZDisperseShare,
     },
     error::HotShotError,
-    message::{convert_proposal, Proposal},
+    message::{Proposal, convert_proposal},
     simple_certificate::{
         LightClientStateUpdateCertificate, QuorumCertificate, QuorumCertificate2,
     },
-    traits::{node_implementation::NodeType, ValidatedState},
+    traits::{ValidatedState, node_implementation::NodeType},
 };
 
 /// A status event emitted by a `HotShot` instance

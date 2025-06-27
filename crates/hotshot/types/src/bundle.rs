@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::traits::{
-    block_contents::BuilderFee, node_implementation::NodeType, signature_key::BuilderSignatureKey,
-    BlockPayload,
+    BlockPayload, block_contents::BuilderFee, node_implementation::NodeType,
+    signature_key::BuilderSignatureKey,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

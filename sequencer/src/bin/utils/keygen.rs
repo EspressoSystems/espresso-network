@@ -27,11 +27,11 @@ enum Scheme {
 }
 
 impl Scheme {
-    fn gen(self, seed: [u8; 32], index: u64, env_file: &mut impl Write) -> anyhow::Result<()> {
+    fn generate(self, seed: [u8; 32], index: u64, env_file: &mut impl Write) -> anyhow::Result<()> {
         match self {
             Self::All => {
-                Self::Bls.gen(seed, index, env_file)?;
-                Self::Schnorr.gen(seed, index, env_file)?;
+                Self::Bls.generate(seed, index, env_file)?;
+                Self::Schnorr.generate(seed, index, env_file)?;
             },
             Self::Bls => {
                 let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed(seed, index);
@@ -141,7 +141,7 @@ pub fn run(opts: Options) -> anyhow::Result<()> {
             .create(true)
             .truncate(true)
             .open(&path)?;
-        opts.scheme.gen(seed, index as u64, &mut file)?;
+        opts.scheme.generate(seed, index as u64, &mut file)?;
 
         tracing::info!("private keys written to {}", path.display());
     }

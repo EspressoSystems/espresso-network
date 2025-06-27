@@ -8,9 +8,9 @@ use std::future::Future;
 
 use async_broadcast::{Receiver, RecvError};
 use futures::{
+    FutureExt,
     future::BoxFuture,
     stream::{FuturesUnordered, StreamExt},
-    FutureExt,
 };
 
 /// Type which describes the idea of waiting for a dependency to complete
@@ -88,15 +88,12 @@ impl<T: Clone + Send + Sync> Dependency<T> for OrDependency<T> {
     /// Returns the value of the first completed dependency
     async fn completed(self) -> Option<T> {
         let mut futures = FuturesUnordered::from_iter(self.deps);
-        loop {
-            if let Some(maybe) = futures.next().await {
-                if maybe.is_some() {
-                    return maybe;
-                }
-            } else {
-                return None;
+        while let Some(maybe) = futures.next().await {
+            if let Some(value) = maybe {
+                return Some(value);
             }
         }
+        None
     }
 }
 
@@ -196,7 +193,7 @@ impl<T: Clone + Send + Sync + 'static> Dependency<T> for EventDependency<T> {
 
 #[cfg(test)]
 mod tests {
-    use async_broadcast::{broadcast, Receiver};
+    use async_broadcast::{Receiver, broadcast};
 
     use super::{AndDependency, Dependency, EventDependency, OrDependency};
 
@@ -226,7 +223,7 @@ mod tests {
             deps.push(eq_dep(
                 rx.clone(),
                 cancel_rx.clone(),
-                format!("it_works {}", i),
+                format!("it_works {i}"),
                 5,
             ));
         }
@@ -248,7 +245,7 @@ mod tests {
             deps.push(eq_dep(
                 rx.clone(),
                 cancel_rx.clone(),
-                format!("or_dep {}", i),
+                format!("or_dep {i}"),
                 5,
             ));
         }
@@ -437,7 +434,7 @@ mod tests {
             deps.push(eq_dep(
                 rx.clone(),
                 cancel_rx.clone(),
-                format!("cancel_and_dep {}", i),
+                format!("cancel_and_dep {i}"),
                 i,
             ))
         }
@@ -462,7 +459,7 @@ mod tests {
             deps.push(eq_dep(
                 rx.clone(),
                 cancel_rx.clone(),
-                format!("cancel_event_dep {}", i),
+                format!("cancel_event_dep {i}"),
                 i,
             ))
         }

@@ -5,29 +5,29 @@ use anyhow::Context;
 use async_broadcast::broadcast;
 use async_lock::{Mutex, RwLock};
 use espresso_types::{
+    EpochCommittees, FeeAmount, NodeState, Payload, SeqTypes, ValidatedState,
     eth_signature_key::EthKeyPair,
     v0_1::{NoStorage, RewardAmount},
     v0_3::Fetcher,
-    EpochCommittees, FeeAmount, NodeState, Payload, SeqTypes, ValidatedState,
 };
 use hotshot::traits::BlockPayload;
 use hotshot_builder_core::{
     builder_state::{BuilderState, MessageType},
     service::{
-        run_non_permissioned_standalone_builder_service, GlobalState, ProxyGlobalState,
-        ReceivedTransaction,
+        GlobalState, ProxyGlobalState, ReceivedTransaction,
+        run_non_permissioned_standalone_builder_service,
     },
 };
 use hotshot_types::{
-    data::{fake_commitment, vid_commitment, ViewNumber},
+    data::{ViewNumber, fake_commitment, vid_commitment},
     epoch_membership::EpochMembershipCoordinator,
     traits::{
-        block_contents::GENESIS_VID_NUM_STORAGE_NODES, metrics::NoMetrics,
-        node_implementation::Versions, EncodeBytes,
+        EncodeBytes, block_contents::GENESIS_VID_NUM_STORAGE_NODES, metrics::NoMetrics,
+        node_implementation::Versions,
     },
 };
 use marketplace_builder_shared::{block::ParentBlockReferences, utils::EventServiceStream};
-use sequencer::{catchup::StatePeers, L1Params, SequencerApiVersion};
+use sequencer::{L1Params, SequencerApiVersion, catchup::StatePeers};
 use tide_disco::Url;
 use tokio::spawn;
 use vbs::version::StaticVersionType;
@@ -250,9 +250,9 @@ mod test {
     use portpicker::pick_unused_port;
     use sequencer::{
         api::{
+            Options,
             options::HotshotEvents,
             test_helpers::{TestNetwork, TestNetworkConfigBuilder},
-            Options,
         },
         persistence,
         testing::TestConfigBuilder,
@@ -262,7 +262,7 @@ mod test {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::testing::{test_builder_impl, NonPermissionedBuilderTestConfig};
+    use crate::testing::{NonPermissionedBuilderTestConfig, test_builder_impl};
 
     /// Test the non-permissioned builder core
     /// It creates a memory hotshot network and launches the hotshot event streaming api

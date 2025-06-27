@@ -4,6 +4,7 @@ use alloy::primitives::U256;
 use anyhow::Ok;
 use async_lock::RwLock;
 use hotshot_types::{
+    PeerConfig,
     data::Leaf2,
     drb::DrbResult,
     stake_table::HSStakeTable,
@@ -12,7 +13,6 @@ use hotshot_types::{
         node_implementation::{NodeType, Versions},
         signature_key::SignatureKey,
     },
-    PeerConfig,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]

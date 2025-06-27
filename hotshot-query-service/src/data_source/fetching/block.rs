@@ -21,29 +21,28 @@ use futures::future::{BoxFuture, FutureExt};
 use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
 
 use super::{
-    header::{fetch_header_and_then, HeaderCallback},
     AvailabilityProvider, FetchRequest, Fetchable, Fetcher, Heights, Notifiers, RangedFetchable,
     Storable,
+    header::{HeaderCallback, fetch_header_and_then},
 };
 use crate::{
+    Header, Payload, QueryResult,
     availability::{
         BlockId, BlockQueryData, PayloadMetadata, PayloadQueryData, QueryableHeader,
         QueryablePayload,
     },
     data_source::{
-        storage::{
-            pruning::PrunedHeightStorage, AvailabilityStorage, NodeStorage,
-            UpdateAvailabilityStorage,
-        },
         VersionedDataSource,
+        storage::{
+            AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage,
+            pruning::PrunedHeightStorage,
+        },
     },
     fetching::{
-        self,
+        self, Callback,
         request::{self, PayloadRequest},
-        Callback,
     },
     types::HeightIndexed,
-    Header, Payload, QueryResult,
 };
 pub(super) type PayloadFetcher<Types, S, P> =
     fetching::Fetcher<request::PayloadRequest, PayloadCallback<Types, S, P>>;

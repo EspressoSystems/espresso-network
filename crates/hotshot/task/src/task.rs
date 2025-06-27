@@ -10,7 +10,7 @@ use async_broadcast::{Receiver, RecvError, Sender};
 use async_trait::async_trait;
 use futures::future::try_join_all;
 use hotshot_utils::anytrace::*;
-use tokio::task::{spawn, JoinHandle};
+use tokio::task::{JoinHandle, spawn};
 
 /// Trait for events that long-running tasks handle
 pub trait TaskEvent: PartialEq {

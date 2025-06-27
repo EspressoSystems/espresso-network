@@ -5,7 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use std::{
-    collections::{btree_map::Entry, BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, btree_map::Entry},
     fmt::Debug,
     future::Future,
     marker::PhantomData,
@@ -88,11 +88,11 @@ pub trait AggregatableVote<
 }
 
 impl<
-        TYPES: NodeType,
-        VOTE: Vote<TYPES> + AggregatableVote<TYPES, VOTE, CERT>,
-        CERT: Certificate<TYPES, VOTE::Commitment, Voteable = VOTE::Commitment> + Clone + Debug,
-        V: Versions,
-    > VoteCollectionTaskState<TYPES, VOTE, CERT, V>
+    TYPES: NodeType,
+    VOTE: Vote<TYPES> + AggregatableVote<TYPES, VOTE, CERT>,
+    CERT: Certificate<TYPES, VOTE::Commitment, Voteable = VOTE::Commitment> + Clone + Debug,
+    V: Versions,
+> VoteCollectionTaskState<TYPES, VOTE, CERT, V>
 {
     /// Take one vote and accumulate it. Returns either the cert or the updated state
     /// after the vote is accumulated

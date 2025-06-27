@@ -20,19 +20,19 @@ use hotshot_types::traits::node_implementation::{ConsensusTime, NodeType};
 
 use super::Storable;
 use crate::{
+    Header, Payload, QueryResult,
     availability::{QueryableHeader, QueryablePayload, StateCertQueryData},
     data_source::{
+        VersionedDataSource,
         fetching::{
             AvailabilityProvider, FetchRequest, Fetchable, Fetcher, Notifiers, PassiveFetch,
         },
         storage::{
-            pruning::PrunedHeightStorage, AvailabilityStorage, NodeStorage,
-            UpdateAvailabilityStorage,
+            AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage,
+            pruning::PrunedHeightStorage,
         },
-        VersionedDataSource,
     },
     fetching::request::StateCertRequest,
-    Header, Payload, QueryResult,
 };
 
 impl FetchRequest for StateCertRequest {}

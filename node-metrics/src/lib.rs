@@ -102,8 +102,8 @@ pub mod service;
 use api::node_validator::v0::SurfDiscoAvailabilityAPIStream;
 use clap::Parser;
 use futures::{
-    channel::mpsc::{self, Sender},
     StreamExt,
+    channel::mpsc::{self, Sender},
 };
 use service::data_state::MAX_VOTERS_HISTORY;
 use tide_disco::App;
@@ -112,8 +112,8 @@ use url::Url;
 
 use crate::{
     api::node_validator::v0::{
-        create_node_validator_api::{create_node_validator_processing, NodeValidatorConfig},
-        BridgeLeafAndBlockStreamToSenderTask, StateClientMessageSender, STATIC_VER_0_1,
+        BridgeLeafAndBlockStreamToSenderTask, STATIC_VER_0_1, StateClientMessageSender,
+        create_node_validator_api::{NodeValidatorConfig, create_node_validator_processing},
     },
     service::{client_message::InternalClientMessage, server_message::ServerMessage},
 };
@@ -222,7 +222,7 @@ pub async fn run_standalone_service(options: Options) {
     match app.register_module("node-validator", node_validator_api) {
         Ok(_) => {},
         Err(err) => {
-            panic!("error registering node validator api: {:?}", err);
+            panic!("error registering node validator api: {err:?}");
         },
     }
 
@@ -286,14 +286,14 @@ pub async fn run_standalone_service(options: Options) {
         Ok(node_validator_task_state) => node_validator_task_state,
 
         Err(err) => {
-            panic!("error defining node validator api: {:?}", err);
+            panic!("error defining node validator api: {err:?}");
         },
     };
 
     let port = options.port();
     // We would like to wait until being signaled
     let app_serve_handle = spawn(async move {
-        let app_serve_result = app.serve(format!("0.0.0.0:{}", port), STATIC_VER_0_1).await;
+        let app_serve_result = app.serve(format!("0.0.0.0:{port}"), STATIC_VER_0_1).await;
         tracing::info!("app serve result: {:?}", app_serve_result);
     });
 

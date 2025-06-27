@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use committable::{Commitment, Committable};
 use hotshot_types::{
-    data::{fake_commitment, Leaf2, VidCommitment},
+    data::{Leaf2, VidCommitment, fake_commitment},
     traits::{
         block_contents::Transaction,
         node_implementation::{ConsensusTime, NodeType},

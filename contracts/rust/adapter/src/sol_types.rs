@@ -28,12 +28,12 @@ pub use crate::bindings::{
     esptokenv2::EspTokenV2,
     feecontract::FeeContract::{self, Deposit},
     lightclient::{
+        BN254::G1Point as G1PointSol,
         IPlonkVerifier::{PlonkProof as PlonkProofSol, VerifyingKey as VerifyingKeySol},
         LightClient::{
             self, LightClientErrors, LightClientInstance, LightClientState as LightClientStateSol,
             StakeTableState as StakeTableStateSol,
         },
-        BN254::G1Point as G1PointSol,
     },
     lightclientmock::{self, LightClientMock},
     lightclientv2::{self, LightClientV2},
@@ -42,8 +42,8 @@ pub use crate::bindings::{
     plonkverifierv2::PlonkVerifierV2,
     staketable::StakeTable,
     staketablev2::{
-        self, EdOnBN254::EdOnBN254Point as EdOnBN254PointSol, StakeTableV2,
-        BN254::G2Point as G2PointSol,
+        self, BN254::G2Point as G2PointSol, EdOnBN254::EdOnBN254Point as EdOnBN254PointSol,
+        StakeTableV2,
     },
     timelock::Timelock,
 };
@@ -190,11 +190,11 @@ impl From<staketablev2::BN254::G1Point> for G1PointSol {
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use self::{
-    staketablev2::{EdOnBN254::EdOnBN254Point, BN254::G2Point},
     StakeTableV2::{
         ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit,
         ValidatorRegistered, ValidatorRegisteredV2,
     },
+    staketablev2::{BN254::G2Point, EdOnBN254::EdOnBN254Point},
 };
 
 impl PartialEq for ValidatorRegistered {

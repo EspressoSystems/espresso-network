@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::{bail, Error};
+use anyhow::{Error, bail};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use chrono::{DateTime, Local};

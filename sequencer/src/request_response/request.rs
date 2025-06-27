@@ -2,12 +2,12 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use committable::Commitment;
 use espresso_types::{
+    FeeAccount, FeeMerkleTree, Leaf2,
     v0_1::{RewardAccount, RewardMerkleTree},
     v0_3::ChainConfig,
-    FeeAccount, FeeMerkleTree, Leaf2,
 };
 use hotshot_types::data::VidShare;
-use request_response::{request::Request as RequestTrait, Serializable};
+use request_response::{Serializable, request::Request as RequestTrait};
 use serde::{Deserialize, Serialize};
 
 use crate::api::BlocksFrontier;

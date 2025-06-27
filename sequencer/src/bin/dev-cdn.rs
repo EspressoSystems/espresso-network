@@ -5,15 +5,15 @@ use std::path::Path;
 
 use anyhow::Result;
 use cdn_broker::{
-    reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
     Broker, Config as BrokerConfig,
+    reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
 };
 use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
 use espresso_types::SeqTypes;
 use hotshot_types::traits::{node_implementation::NodeType, signature_key::SignatureKey};
 use portpicker::pick_unused_port;
-use rand::{rngs::StdRng, RngCore, SeedableRng};
+use rand::{RngCore, SeedableRng, rngs::StdRng};
 use sequencer::network::cdn::{TestingDef, WrappedSignatureKey};
 use tokio::spawn;
 

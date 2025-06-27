@@ -16,17 +16,18 @@ use alloy::primitives::U256;
 use async_lock::RwLock;
 use async_trait::async_trait;
 use futures::{
-    future::{join_all, Future},
+    future::{Future, join_all},
     stream::StreamExt,
 };
 use hotshot::{
+    HotShotInitializer, SystemContext,
     traits::implementations::{MasterMap, MemoryNetwork},
     types::{Event, SystemContextHandle},
-    HotShotInitializer, SystemContext,
 };
 use hotshot_example_types::{state_types::TestInstanceState, storage_types::TestStorage};
 use hotshot_testing::block_builder::{SimpleBuilderImplementation, TestBuilderImplementation};
 use hotshot_types::{
+    HotShotConfig, PeerConfig,
     consensus::ConsensusMetricsValue,
     data::ViewNumber,
     drb::INITIAL_DRB_RESULT,
@@ -40,24 +41,23 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, Versions},
         signature_key::SignatureKey as _,
     },
-    HotShotConfig, PeerConfig,
 };
 use tokio::{
     runtime::Handle,
     task::{block_in_place, yield_now},
 };
-use tracing::{info_span, Instrument};
+use tracing::{Instrument, info_span};
 use url::Url;
 
 use super::mocks::{MockMembership, MockNodeImpl, MockTransaction, MockTypes};
 use crate::{
+    SignatureKey,
     availability::{AvailabilityDataSource, UpdateAvailabilityData},
     data_source::{FileSystemDataSource, SqlDataSource, VersionedDataSource},
     fetching::provider::NoFetching,
     node::NodeDataSource,
     status::{StatusDataSource, UpdateStatusData},
     task::BackgroundTask,
-    SignatureKey,
 };
 
 struct MockNode<D: DataSourceLifeCycle, V: Versions> {

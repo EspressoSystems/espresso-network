@@ -6,7 +6,7 @@
 
 use std::{collections::BTreeSet, hash::Hash};
 
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 
 /// Helper which allows producing random numbers within a range and preventing duplicates
 /// If consumed as a regular iterator, will return a randomly ordered permutation of all
@@ -342,12 +342,12 @@ pub struct RandomOverlapQuorumFilterConfig<
 > {}
 
 impl<
-        const SEED: u64,
-        const MEMBERS_MIN: u64,
-        const MEMBERS_MAX: u64,
-        const OVERLAP_MIN: u64,
-        const OVERLAP_MAX: u64,
-    > QuorumFilterConfig
+    const SEED: u64,
+    const MEMBERS_MIN: u64,
+    const MEMBERS_MAX: u64,
+    const OVERLAP_MIN: u64,
+    const OVERLAP_MAX: u64,
+> QuorumFilterConfig
     for RandomOverlapQuorumFilterConfig<SEED, MEMBERS_MIN, MEMBERS_MAX, OVERLAP_MIN, OVERLAP_MAX>
 {
     fn execute(epoch: u64, count: usize) -> BTreeSet<usize> {

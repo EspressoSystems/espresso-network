@@ -28,15 +28,15 @@ use hotshot_types::{
 };
 
 use super::{
+    StateCertQueryData,
     fetch::Fetch,
     query_data::{
         BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadMetadata, PayloadQueryData,
         QueryableHeader, QueryablePayload, TransactionHash, TransactionQueryData,
         VidCommonMetadata, VidCommonQueryData,
     },
-    StateCertQueryData,
 };
-use crate::{types::HeightIndexed, Header, Payload};
+use crate::{Header, Payload, types::HeightIndexed};
 
 #[derive(Derivative, From, Display)]
 #[derivative(Ord = "feature_allow_slow_enum")]

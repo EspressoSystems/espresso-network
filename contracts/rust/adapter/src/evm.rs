@@ -17,8 +17,8 @@ impl DecodeRevert
             Err(err) => {
                 let decoded = err.as_decoded_interface_error::<E>();
                 let msg = match decoded {
-                    Some(e) => format!("{:?}", e),
-                    None => format!("{:?}", err),
+                    Some(e) => format!("{e:?}"),
+                    None => format!("{err:?}"),
                 };
                 Err(anyhow::anyhow!(msg))
             },

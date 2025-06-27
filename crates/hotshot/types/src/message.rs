@@ -18,17 +18,17 @@ use std::{
 use async_lock::RwLock;
 use committable::Committable;
 use hotshot_utils::anytrace::*;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use vbs::{
-    version::{StaticVersionType, Version},
     BinarySerializer, Serializer,
+    version::{StaticVersionType, Version},
 };
 
 use crate::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
         QuorumProposalWrapper, UpgradeProposal,
+        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
     },
     epoch_membership::EpochMembership,
     request_response::ProposalRequestPayload,
@@ -691,7 +691,9 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
             v if v == V::Base::VERSION => Serializer::<V::Base>::serialize(&message),
             v if v == V::Upgrade::VERSION => Serializer::<V::Upgrade>::serialize(&message),
             v => {
-                bail!("Attempted to serialize with version {v}, which is incompatible. This should be impossible.");
+                bail!(
+                    "Attempted to serialize with version {v}, which is incompatible. This should be impossible."
+                );
             },
         };
 
@@ -729,7 +731,9 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
         let expected_version = self.version(view).await?;
 
         if actual_version != expected_version {
-            return Err(error!(format!("Message has invalid version number for its view. Expected: {expected_version}, Actual: {actual_version}, View: {view:?}")));
+            return Err(error!(format!(
+                "Message has invalid version number for its view. Expected: {expected_version}, Actual: {actual_version}, View: {view:?}"
+            )));
         };
 
         Ok(deserialized_message)

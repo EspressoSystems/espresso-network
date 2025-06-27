@@ -22,14 +22,14 @@
 //!
 
 use std::{
-    collections::{hash_map::Entry, BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, hash_map::Entry},
     fmt::Debug,
     sync::Arc,
     time::Duration,
 };
 
 use async_lock::{Mutex, Semaphore};
-use backoff::{backoff::Backoff, ExponentialBackoff};
+use backoff::{ExponentialBackoff, backoff::Backoff};
 use derivative::Derivative;
 use tokio::{spawn, time::sleep};
 

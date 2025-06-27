@@ -27,8 +27,8 @@ use serde::{Deserialize, Serialize};
 use tagged_base64::tagged;
 
 use crate::{
-    utils::bytes_to_field::{self, bytes_to_field, field_to_bytes},
     VidError, VidResult, VidScheme,
+    utils::bytes_to_field::{self, bytes_to_field, field_to_bytes},
 };
 
 mod config;
@@ -452,10 +452,10 @@ impl VidScheme for AvidMScheme {
 /// Unit tests
 #[cfg(test)]
 pub mod tests {
-    use rand::{seq::SliceRandom, RngCore};
+    use rand::{RngCore, seq::SliceRandom};
 
     use super::F;
-    use crate::{avid_m::AvidMScheme, utils::bytes_to_field, VidScheme};
+    use crate::{VidScheme, avid_m::AvidMScheme, utils::bytes_to_field};
 
     #[test]
     fn test_padding() {
@@ -490,10 +490,9 @@ pub mod tests {
 
             for payload_byte_len in payload_byte_lens {
                 println!(
-                    "recovery_threshold:: {} num_storage_nodes: {} payload_byte_len: {}",
-                    recovery_threshold, num_storage_nodes, payload_byte_len
+                    "recovery_threshold:: {recovery_threshold} num_storage_nodes: {num_storage_nodes} payload_byte_len: {payload_byte_len}"
                 );
-                println!("weights: {:?}", weights);
+                println!("weights: {weights:?}");
 
                 let payload = {
                     let mut bytes_random = vec![0u8; payload_byte_len];

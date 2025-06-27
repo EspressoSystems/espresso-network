@@ -29,14 +29,14 @@ use hotshot_types::{
     simple_certificate::{DaCertificate, QuorumCertificate, UpgradeCertificate},
     simple_vote::{DaData, DaVote, QuorumData, QuorumVote, UpgradeProposalData, UpgradeVote},
     traits::{
-        node_implementation::ConsensusTime, signature_key::SignatureKey, BlockPayload, EncodeBytes,
+        BlockPayload, EncodeBytes, node_implementation::ConsensusTime, signature_key::SignatureKey,
     },
 };
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use vbs::{
-    version::{StaticVersion, StaticVersionType, Version},
     BinarySerializer,
+    version::{StaticVersion, StaticVersionType, Version},
 };
 
 #[cfg(feature = "testing")]
@@ -46,10 +46,11 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
     use alloy::primitives::U256;
     use async_lock::RwLock;
     use espresso_types::{
-        v0_1::RewardAmount, v0_3::Fetcher, EpochCommittees, Leaf, Payload, SeqTypes, Transaction,
+        EpochCommittees, Leaf, Payload, SeqTypes, Transaction, v0_1::RewardAmount, v0_3::Fetcher,
     };
     use hotshot_example_types::{node_types::TestVersions, storage_types::TestStorage};
     use hotshot_types::{
+        PeerConfig,
         data::vid_disperse::{ADVZDisperse, ADVZDisperseShare},
         epoch_membership::EpochMembershipCoordinator,
         simple_certificate::{
@@ -60,7 +61,6 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
             TimeoutData, TimeoutVote, ViewSyncCommitData, ViewSyncCommitVote, ViewSyncFinalizeData,
             ViewSyncFinalizeVote, ViewSyncPreCommitData, ViewSyncPreCommitVote,
         },
-        PeerConfig,
     };
 
     let (sender, priv_key) = PubKey::generated_from_seed_indexed(Default::default(), 0);

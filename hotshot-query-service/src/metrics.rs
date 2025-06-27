@@ -20,8 +20,8 @@ use std::{
 use hotshot_types::traits::metrics;
 use itertools::Itertools;
 use prometheus::{
-    core::{AtomicU64, GenericCounter, GenericCounterVec, GenericGauge, GenericGaugeVec},
     Encoder, HistogramVec, Opts, Registry, TextEncoder,
+    core::{AtomicU64, GenericCounter, GenericCounterVec, GenericGauge, GenericGaugeVec},
 };
 use snafu::Snafu;
 
@@ -173,8 +173,7 @@ impl tide_disco::metrics::Metrics for PrometheusMetrics {
         encoder.encode(&metric_families, &mut buffer)?;
         String::from_utf8(buffer).map_err(|err| MetricsError::Prometheus {
             source: prometheus::Error::Msg(format!(
-                "could not convert Prometheus output to UTF-8: {}",
-                err
+                "could not convert Prometheus output to UTF-8: {err}"
             )),
         })
     }
@@ -562,18 +561,22 @@ mod test {
         );
 
         // Check fully-qualified counter name in export.
-        assert!(metrics
-            .export()
-            .unwrap()
-            .lines()
-            .contains(&"subgroup1_subgroup2_counter 42"));
+        assert!(
+            metrics
+                .export()
+                .unwrap()
+                .lines()
+                .contains(&"subgroup1_subgroup2_counter 42")
+        );
 
         // Check fully-qualified text name in export.
-        assert!(metrics
-            .export()
-            .unwrap()
-            .lines()
-            .contains(&"subgroup1_subgroup2_text 1"));
+        assert!(
+            metrics
+                .export()
+                .unwrap()
+                .lines()
+                .contains(&"subgroup1_subgroup2_text 1")
+        );
     }
 
     #[test]

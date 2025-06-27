@@ -9,7 +9,7 @@ use marketplace_builder_shared::testing::{
 use tracing_test::traced_test;
 
 use crate::{
-    service::{BuilderConfig, GlobalState, ALLOW_EMPTY_BLOCK_PERIOD},
+    service::{ALLOW_EMPTY_BLOCK_PERIOD, BuilderConfig, GlobalState},
     testing::TestServiceWrapper,
 };
 

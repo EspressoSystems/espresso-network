@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{AvidMCommit, AvidMShare, RawAvidMShare};
 use crate::{
-    avid_m::{AvidMScheme, MerkleTree},
     VidError, VidResult, VidScheme,
+    avid_m::{AvidMScheme, MerkleTree},
 };
 
 /// Dummy struct for namespaced AvidM scheme
@@ -230,7 +230,7 @@ impl NsAvidMScheme {
 /// Unit tests
 #[cfg(test)]
 pub mod tests {
-    use rand::{seq::SliceRandom, RngCore};
+    use rand::{RngCore, seq::SliceRandom};
 
     use crate::avid_m::namespaced::NsAvidMScheme;
 
@@ -254,10 +254,9 @@ pub mod tests {
         let params = NsAvidMScheme::setup(recovery_threshold, total_weights as usize).unwrap();
 
         println!(
-            "recovery_threshold:: {} num_storage_nodes: {} payload_byte_len: {}",
-            recovery_threshold, num_storage_nodes, payload_byte_len
+            "recovery_threshold:: {recovery_threshold} num_storage_nodes: {num_storage_nodes} payload_byte_len: {payload_byte_len}"
         );
-        println!("weights: {:?}", weights);
+        println!("weights: {weights:?}");
 
         let payload = {
             let mut bytes_random = vec![0u8; payload_byte_len];

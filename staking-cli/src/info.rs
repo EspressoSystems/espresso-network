@@ -1,8 +1,8 @@
-use alloy::primitives::{utils::format_ether, Address};
+use alloy::primitives::{Address, utils::format_ether};
 use anyhow::Result;
 use espresso_types::{
-    v0_3::{Fetcher, Validator},
     L1Client,
+    v0_3::{Fetcher, Validator},
 };
 use hotshot_types::signature_key::BLSPubKey;
 use url::Url;

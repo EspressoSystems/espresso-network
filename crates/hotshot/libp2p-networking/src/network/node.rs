@@ -20,12 +20,12 @@ use std::{
 };
 
 use bimap::BiMap;
-use futures::{channel::mpsc, SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt, channel::mpsc};
 use hotshot_types::{
     constants::KAD_DEFAULT_REPUB_INTERVAL_SEC, traits::node_implementation::NodeType,
 };
 use libp2p::{
-    autonat,
+    Multiaddr, StreamProtocol, Swarm, SwarmBuilder, autonat,
     core::transport::ListenerId,
     gossipsub::{
         Behaviour as Gossipsub, ConfigBuilder as GossipsubConfigBuilder, Event as GossipEvent,
@@ -36,30 +36,30 @@ use libp2p::{
         Info as IdentifyInfo,
     },
     identity::Keypair,
-    kad::{store::MemoryStore, Behaviour, Config, Mode, Record},
+    kad::{Behaviour, Config, Mode, Record, store::MemoryStore},
     request_response::{
         Behaviour as RequestResponse, Config as Libp2pRequestResponseConfig, ProtocolSupport,
     },
     swarm::SwarmEvent,
-    Multiaddr, StreamProtocol, Swarm, SwarmBuilder,
 };
 use libp2p_identity::PeerId;
 use parking_lot::Mutex;
 use rand::{prelude::SliceRandom, thread_rng};
 use tokio::{
     select, spawn,
-    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
 };
-use tracing::{debug, error, info, info_span, instrument, warn, Instrument};
+use tracing::{Instrument, debug, error, info, info_span, instrument, warn};
 
 pub use self::{
     config::{
-        GossipConfig, NetworkNodeConfig, NetworkNodeConfigBuilder, NetworkNodeConfigBuilderError,
-        RequestResponseConfig, DEFAULT_REPLICATION_FACTOR,
+        DEFAULT_REPLICATION_FACTOR, GossipConfig, NetworkNodeConfig, NetworkNodeConfigBuilder,
+        NetworkNodeConfigBuilderError, RequestResponseConfig,
     },
-    handle::{spawn_network_node, NetworkNodeHandle, NetworkNodeReceiver},
+    handle::{NetworkNodeHandle, NetworkNodeReceiver, spawn_network_node},
 };
 use super::{
+    BoxedTransport, ClientRequest, NetworkDef, NetworkError, NetworkEvent, NetworkEventInternal,
     behaviours::dht::{
         bootstrap::{DHTBootstrapTask, InputEvent},
         store::{
@@ -68,8 +68,7 @@ use super::{
         },
     },
     cbor::Cbor,
-    gen_transport, BoxedTransport, ClientRequest, NetworkDef, NetworkError, NetworkEvent,
-    NetworkEventInternal,
+    gen_transport,
 };
 use crate::network::behaviours::{
     dht::{DHTBehaviour, DHTProgress, KadPutQuery},

@@ -13,12 +13,12 @@
 //! A generic algorithm for updating a HotShot Query Service data source with new data.
 use std::iter::once;
 
-use anyhow::{ensure, Context};
+use anyhow::{Context, ensure};
 use async_trait::async_trait;
 use futures::future::Future;
 use hotshot::types::{Event, EventType};
 use hotshot_types::{
-    data::{ns_table::parse_ns_table, Leaf2, VidCommitment, VidDisperseShare, VidShare},
+    data::{Leaf2, VidCommitment, VidDisperseShare, VidShare, ns_table::parse_ns_table},
     event::LeafInfo,
     traits::{
         block_contents::{BlockHeader, BlockPayload, EncodeBytes, GENESIS_VID_NUM_STORAGE_NODES},
@@ -26,17 +26,17 @@ use hotshot_types::{
     },
     vid::{
         advz::advz_scheme,
-        avidm::{init_avidm_param, AvidMScheme},
+        avidm::{AvidMScheme, init_avidm_param},
     },
 };
 use jf_vid::VidScheme;
 
 use crate::{
+    Header, Payload, VidCommon,
     availability::{
         BlockInfo, BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload,
         StateCertQueryData, UpdateAvailabilityData, VidCommonQueryData,
     },
-    Header, Payload, VidCommon,
 };
 
 /// An extension trait for types which implement the update trait for each API module.

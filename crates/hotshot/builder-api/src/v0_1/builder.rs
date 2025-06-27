@@ -14,13 +14,13 @@ use hotshot_types::{traits::node_implementation::NodeType, utils::BuilderCommitm
 use serde::{Deserialize, Serialize};
 use tagged_base64::TaggedBase64;
 use thiserror::Error;
-use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, RequestParams, StatusCode};
+use tide_disco::{Api, RequestError, RequestParams, StatusCode, api::ApiError, method::ReadState};
 use vbs::version::StaticVersionType;
 
 use super::{
+    Version,
     block_info::AvailableBlockHeaderInputV2,
     data_source::{AcceptsTxnSubmits, BuilderDataSource},
-    Version,
 };
 use crate::api::load_api;
 

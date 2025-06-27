@@ -9,16 +9,16 @@ use std::{
     num::NonZeroUsize,
     ops::Deref,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
 
-use async_broadcast::{broadcast, Sender};
+use async_broadcast::{Sender, broadcast};
 use async_lock::RwLock;
 use async_trait::async_trait;
-use futures::{future::BoxFuture, Stream, StreamExt};
+use futures::{Stream, StreamExt, future::BoxFuture};
 use hotshot::types::{Event, EventType, SignatureKey};
 use hotshot_builder_api::{
     v0_1::{
@@ -36,12 +36,12 @@ use hotshot_types::{
     utils::BuilderCommitment,
 };
 use lru::LruCache;
-use rand::{rngs::SmallRng, Rng, RngCore, SeedableRng};
-use tide_disco::{method::ReadState, Url};
+use rand::{Rng, RngCore, SeedableRng, rngs::SmallRng};
+use tide_disco::{Url, method::ReadState};
 use tokio::{spawn, time::sleep};
 
 use super::{
-    build_block, run_builder_source_0_1, BlockEntry, BuilderTask, TestBuilderImplementation,
+    BlockEntry, BuilderTask, TestBuilderImplementation, build_block, run_builder_source_0_1,
 };
 use crate::test_builder::BuilderChange;
 

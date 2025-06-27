@@ -3,16 +3,15 @@ use rand::{Rng, RngCore};
 use sequencer_utils::test_utils::setup_test;
 
 use crate::{
+    NamespaceId, NsTable, Payload,
     v0::impls::block::{
         test::ValidTest,
         uint_bytes::{u32_max_from_byte_len, usize_max_from_byte_len, usize_to_bytes},
     },
     v0_1::{
-        NsTableBuilder,
+        NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN, NUM_NSS_BYTE_LEN, NsTableBuilder,
         NsTableValidationError::{self, *},
-        NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN, NUM_NSS_BYTE_LEN,
     },
-    NamespaceId, NsTable, Payload,
 };
 
 #[test]
@@ -57,7 +56,7 @@ fn ns_table_byte_len() {
         R: RngCore,
     {
         for i in 0..num_bytes {
-            ns_table.bytes.push(rng.gen());
+            ns_table.bytes.push(rng.r#gen());
             if i == num_bytes - 1 {
                 break; // final iteration: no error expected
             }

@@ -41,7 +41,7 @@ use crate::{
     events::{HotShotEvent, HotShotTaskCompleted},
     helpers::{broadcast_event, broadcast_view_change},
     vote_collection::{
-        create_vote_accumulator, AccumulatorInfo, HandleVoteEvent, VoteCollectionTaskState,
+        AccumulatorInfo, HandleVoteEvent, VoteCollectionTaskState, create_vote_accumulator,
     },
 };
 
@@ -330,7 +330,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                 .await;
             },
 
-            HotShotEvent::ViewSyncPreCommitVoteRecv(ref vote) => {
+            HotShotEvent::ViewSyncPreCommitVoteRecv(vote) => {
                 let mut map = self.pre_commit_relay_map.write().await;
                 let vote_view = vote.view_number();
                 let relay = vote.date().relay;
@@ -380,7 +380,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                 relay_map.insert(relay, vote_collector);
             },
 
-            HotShotEvent::ViewSyncCommitVoteRecv(ref vote) => {
+            HotShotEvent::ViewSyncCommitVoteRecv(vote) => {
                 let mut map = self.commit_relay_map.write().await;
                 let vote_view = vote.view_number();
                 let relay = vote.date().relay;
@@ -666,7 +666,9 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                     let timeout = self.view_sync_timeout;
                     async move {
                         sleep(timeout).await;
-                        tracing::warn!("Vote sending timed out in ViewSyncPreCommitCertificateRecv, Relay = {relay}");
+                        tracing::warn!(
+                            "Vote sending timed out in ViewSyncPreCommitCertificateRecv, Relay = {relay}"
+                        );
 
                         broadcast_event(
                             Arc::new(HotShotEvent::ViewSyncTimeout(
@@ -770,7 +772,9 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                     let timeout = self.view_sync_timeout;
                     async move {
                         sleep(timeout).await;
-                        tracing::warn!("Vote sending timed out in ViewSyncCommitCertificateRecv, relay = {relay}");
+                        tracing::warn!(
+                            "Vote sending timed out in ViewSyncCommitCertificateRecv, relay = {relay}"
+                        );
                         broadcast_event(
                             Arc::new(HotShotEvent::ViewSyncTimeout(
                                 TYPES::View::new(*next_view),

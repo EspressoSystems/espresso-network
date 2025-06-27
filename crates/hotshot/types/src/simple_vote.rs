@@ -15,7 +15,7 @@ use std::{
 
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::*;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use vbs::version::Version;
 
 use crate::{
@@ -629,26 +629,26 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES> + HasEpoch<TYPES>> HasEpoch<TYPES>
 // impl votable for all the data types in this file sealed marker should ensure nothing is accidentally
 // implemented for structs that aren't "voteable"
 impl<
-        TYPES: NodeType,
-        V: sealed::Sealed + Committable + Clone + Serialize + Debug + PartialEq + Hash + Eq,
-    > Voteable<TYPES> for V
+    TYPES: NodeType,
+    V: sealed::Sealed + Committable + Clone + Serialize + Debug + PartialEq + Hash + Eq,
+> Voteable<TYPES> for V
 {
 }
 
 // impl votable for all the data types in this file sealed marker should ensure nothing is accidentally
 // implemented for structs that aren't "voteable"
 impl<
-        TYPES: NodeType,
-        V: sealed::Sealed
-            + HasEpoch<TYPES>
-            + Committable
-            + Clone
-            + Serialize
-            + Debug
-            + PartialEq
-            + Hash
-            + Eq,
-    > Voteable2<TYPES> for V
+    TYPES: NodeType,
+    V: sealed::Sealed
+        + HasEpoch<TYPES>
+        + Committable
+        + Clone
+        + Serialize
+        + Debug
+        + PartialEq
+        + Hash
+        + Eq,
+> Voteable2<TYPES> for V
 {
 }
 

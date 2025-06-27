@@ -203,7 +203,7 @@ fn generate_random_node_changes(
     let mut node_changes = vec![];
 
     for _ in 0..total_nodes * 2 {
-        let updown = if rng.gen::<bool>() {
+        let updown = if rng.r#gen::<bool>() {
             NodeAction::NetworkUp
         } else {
             NodeAction::NetworkDown

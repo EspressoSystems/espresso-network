@@ -6,12 +6,12 @@ use anyhow::bail;
 use async_trait::async_trait;
 use derivative::Derivative;
 use derive_more::From;
-use espresso_types::{v0::traits::SequencerPersistence, PubKey};
+use espresso_types::{PubKey, v0::traits::SequencerPersistence};
 use hotshot::types::Event;
 use hotshot_query_service::data_source::UpdateDataSource;
 use hotshot_types::traits::{network::ConnectedNetwork, node_implementation::Versions};
 
-use super::{data_source::SequencerDataSource, StorageState};
+use super::{StorageState, data_source::SequencerDataSource};
 use crate::{EventConsumer, SeqTypes};
 
 #[derive(Derivative, From)]

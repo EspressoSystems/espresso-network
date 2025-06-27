@@ -16,10 +16,7 @@ pub trait AvidMConfig {
 
     type Digest: jf_merkle_tree::NodeValue;
 
-    type MerkleTree: jf_merkle_tree::MerkleTreeScheme<
-        Element = Self::Digest,
-        Commitment = Self::Digest,
-    >;
+    type MerkleTree: jf_merkle_tree::MerkleTreeScheme<Element = Self::Digest, Commitment = Self::Digest>;
 
     /// Digest the raw shares into the element type for Merkle tree.
     ///

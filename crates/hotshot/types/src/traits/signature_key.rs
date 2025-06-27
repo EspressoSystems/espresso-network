@@ -19,7 +19,7 @@ use ark_serialize::SerializationError;
 use bitvec::prelude::*;
 use committable::Committable;
 use jf_signature::SignatureError;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tagged_base64::{TaggedBase64, Tb64Error};
 
 use super::EncodeBytes;

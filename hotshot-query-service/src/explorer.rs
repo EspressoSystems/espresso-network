@@ -26,15 +26,15 @@ use hotshot_types::traits::node_implementation::NodeType;
 pub use monetary_value::*;
 pub use query_data::*;
 use serde::{Deserialize, Serialize};
-use tide_disco::{api::ApiError, method::ReadState, Api, StatusCode};
+use tide_disco::{Api, StatusCode, api::ApiError, method::ReadState};
 pub use traits::*;
 use vbs::version::StaticVersionType;
 
 use self::errors::InvalidLimit;
 use crate::{
+    Header, Payload, Transaction,
     api::load_api,
     availability::{QueryableHeader, QueryablePayload},
-    Header, Payload, Transaction,
 };
 
 /// [Error] is an enum that represents the various errors that can be returned
@@ -404,13 +404,12 @@ mod test {
 
     use super::*;
     use crate::{
-        availability,
+        ApiState, Error, availability,
         testing::{
             consensus::{MockNetwork, MockSqlDataSource},
-            mocks::{mock_transaction, MockBase, MockTypes, MockVersions},
+            mocks::{MockBase, MockTypes, MockVersions, mock_transaction},
             setup_test,
         },
-        ApiState, Error,
     };
 
     async fn validate(client: &Client<Error, MockBase>) {
@@ -488,7 +487,7 @@ mod test {
             let target_num = min(num_blocks as usize, 10);
             // Retrieve the 20 latest block summaries
             let block_summaries_response: BlockSummaryResponse<MockTypes> = client
-                .get(format!("blocks/latest/{}", target_num).as_str())
+                .get(format!("blocks/latest/{target_num}").as_str())
                 .send()
                 .await
                 .unwrap();
@@ -893,19 +892,17 @@ mod test {
 
         network.spawn(
             "server",
-            app.serve(format!("0.0.0.0:{}", port), MockBase::instance()),
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
         );
 
         // Start a client.
         let availability_client = Client::<Error, MockBase>::new(
-            format!("http://localhost:{}/availability", port)
+            format!("http://localhost:{port}/availability")
                 .parse()
                 .unwrap(),
         );
         let explorer_client = Client::<Error, MockBase>::new(
-            format!("http://localhost:{}/explorer", port)
-                .parse()
-                .unwrap(),
+            format!("http://localhost:{port}/explorer").parse().unwrap(),
         );
 
         assert!(

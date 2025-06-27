@@ -13,8 +13,8 @@ use hotshot_utils::anytrace::Result;
 
 use super::node_implementation::NodeType;
 use crate::{
-    data::Leaf2, drb::DrbResult, stake_table::HSStakeTable,
-    traits::signature_key::StakeTableEntryType, PeerConfig,
+    PeerConfig, data::Leaf2, drb::DrbResult, stake_table::HSStakeTable,
+    traits::signature_key::StakeTableEntryType,
 };
 
 /// A protocol for determining membership in and participating in a committee.

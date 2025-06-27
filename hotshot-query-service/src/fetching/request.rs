@@ -18,8 +18,8 @@ use derive_more::{From, Into};
 use hotshot_types::{data::VidCommitment, traits::node_implementation::NodeType};
 
 use crate::{
-    availability::{LeafHash, LeafQueryData, QcHash, StateCertQueryData},
     Payload, VidCommon,
+    availability::{LeafHash, LeafQueryData, QcHash, StateCertQueryData},
 };
 
 /// A request for a resource.

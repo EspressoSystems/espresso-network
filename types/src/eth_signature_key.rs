@@ -6,14 +6,13 @@ use std::{
 use alloy::{
     primitives::{Address, PrimitiveSignature},
     signers::{
-        self,
+        self, SignerSync,
         k256::ecdsa::{SigningKey, VerifyingKey},
         local::{
-            coins_bip39::{English, Mnemonic},
             PrivateKeySigner,
+            coins_bip39::{English, Mnemonic},
         },
         utils::public_key_to_address,
-        SignerSync,
     },
 };
 use alloy_compat::ethers_serde;
@@ -215,8 +214,8 @@ mod tests {
     fn test_fmt() {
         let key = EthKeyPair::for_test();
         let expected = "EthKeyPair(address=0xb0cfa4e5893107e2995974ef032957752bb526e9)";
-        assert_eq!(format!("{}", key), expected);
-        assert_eq!(format!("{:?}", key), expected);
+        assert_eq!(format!("{key}"), expected);
+        assert_eq!(format!("{key:?}"), expected);
     }
 
     #[test]

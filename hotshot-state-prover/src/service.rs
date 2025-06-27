@@ -8,12 +8,12 @@ use std::{
 
 use alloy::{
     network::EthereumWallet,
-    primitives::{utils::format_units, Address, U256},
+    primitives::{Address, U256, utils::format_units},
     providers::{Provider, ProviderBuilder},
     rpc::{client::RpcClient, types::TransactionReceipt},
     signers::{k256::ecdsa::SigningKey, local::LocalSigner},
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use displaydoc::Display;
 use espresso_contract_deployer::{
     is_proxy_contract, network_config::fetch_stake_table_from_sequencer,
@@ -45,7 +45,7 @@ use jf_pcs::prelude::UnivariateUniversalParams;
 use jf_plonk::errors::PlonkError;
 use jf_relation::Circuit as _;
 use surf_disco::Client;
-use tide_disco::{error::ServerError, Api};
+use tide_disco::{Api, error::ServerError};
 use time::ext::InstantExt;
 use tokio::{io, spawn, task::spawn_blocking, time::sleep};
 use url::Url;
@@ -122,7 +122,7 @@ impl ProverServiceState {
         if epoch != self.epoch {
             self.stake_table = fetch_stake_table_from_sequencer(&self.config.sequencer_url, epoch)
                 .await
-                .with_context(|| format!("Failed to update stake table for epoch: {:?}", epoch))?;
+                .with_context(|| format!("Failed to update stake table for epoch: {epoch:?}"))?;
             self.st_state = self
                 .stake_table
                 .commitment(self.config.stake_table_capacity)
@@ -275,13 +275,13 @@ async fn fetch_epoch_state_from_sequencer(
         surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
             sequencer_url.clone(),
         )
-        .get::<StateCertQueryData<SeqTypes>>(&format!("availability/state-cert/{}", epoch))
+        .get::<StateCertQueryData<SeqTypes>>(&format!("availability/state-cert/{epoch}"))
         .send()
         .await
         .map_err(|err| {
             ProverError::SequencerCommunicationError(
                 sequencer_url
-                    .join(&format!("availability/state-cert/{}", epoch))
+                    .join(&format!("availability/state-cert/{epoch}"))
                     .unwrap(),
                 err,
             )
@@ -713,12 +713,12 @@ mod test {
 
     use alloy::{
         node_bindings::Anvil,
-        providers::{layers::AnvilProvider, ProviderBuilder},
+        providers::{ProviderBuilder, layers::AnvilProvider},
         sol_types::SolValue,
     };
     use anyhow::Result;
     use espresso_contract_deployer::{
-        deploy_light_client_proxy, upgrade_light_client_v2, Contracts,
+        Contracts, deploy_light_client_proxy, upgrade_light_client_v2,
     };
     use hotshot_contract_adapter::sol_types::LightClientV2Mock;
     use jf_utils::test_rng;
@@ -726,7 +726,7 @@ mod test {
 
     use super::*;
     use crate::mock_ledger::{
-        MockLedger, MockSystemParam, EPOCH_HEIGHT_FOR_TEST, EPOCH_START_BLOCK_FOR_TEST,
+        EPOCH_HEIGHT_FOR_TEST, EPOCH_START_BLOCK_FOR_TEST, MockLedger, MockSystemParam,
         STAKE_TABLE_CAPACITY_FOR_TEST,
     };
 

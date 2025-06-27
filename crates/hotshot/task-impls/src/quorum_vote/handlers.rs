@@ -19,12 +19,12 @@ use hotshot_types::{
     simple_vote::{EpochRootQuorumVote, LightClientStateUpdateVote, QuorumData2, QuorumVote2},
     storage_metrics::StorageMetricsValue,
     traits::{
+        ValidatedState,
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::{SignatureKey, StateSignatureKey},
         storage::Storage,
-        ValidatedState,
     },
     utils::{
         epoch_from_block_number, is_epoch_transition, is_last_block, is_transition_block,
@@ -40,8 +40,8 @@ use super::QuorumVoteTaskState;
 use crate::{
     events::HotShotEvent,
     helpers::{
-        broadcast_event, decide_from_proposal, decide_from_proposal_2, fetch_proposal,
-        handle_drb_result, LeafChainTraversalOutcome,
+        LeafChainTraversalOutcome, broadcast_event, decide_from_proposal, decide_from_proposal_2,
+        fetch_proposal, handle_drb_result,
     },
     quorum_vote::Versions,
 };
@@ -115,7 +115,12 @@ async fn verify_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
                 .await
                 .context(warn!("DRB result not found"))?;
 
-            ensure!(proposal_result == computed_result, warn!("Our calculated DRB result is {computed_result:?}, which does not match the proposed DRB result of {proposal_result:?}"));
+            ensure!(
+                proposal_result == computed_result,
+                warn!(
+                    "Our calculated DRB result is {computed_result:?}, which does not match the proposed DRB result of {proposal_result:?}"
+                )
+            );
         }
 
         Ok(())

@@ -28,11 +28,11 @@ enum Scheme {
 }
 
 impl Scheme {
-    fn gen(self, seed: [u8; 32], index: u64, output: &mut impl Write) -> anyhow::Result<()> {
+    fn generate(self, seed: [u8; 32], index: u64, output: &mut impl Write) -> anyhow::Result<()> {
         match self {
             Self::All => {
-                Self::Bls.gen(seed, index, output)?;
-                Self::Schnorr.gen(seed, index, output)?;
+                Self::Bls.generate(seed, index, output)?;
+                Self::Schnorr.generate(seed, index, output)?;
             },
             Self::Bls => {
                 let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed(seed, index);
@@ -154,7 +154,7 @@ fn main() -> anyhow::Result<()> {
             Box::new(std::io::stdout())
         };
 
-        opts.scheme.gen(seed, index as u64, &mut output)?;
+        opts.scheme.generate(seed, index as u64, &mut output)?;
 
         if let Some(ref out_dir) = opts.out {
             tracing::info!(

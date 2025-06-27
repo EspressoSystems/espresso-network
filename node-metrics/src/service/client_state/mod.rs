@@ -5,8 +5,8 @@ use std::{
 
 use async_lock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use bitvec::vec::BitVec;
-use espresso_types::{v0_3::Validator, SeqTypes};
-use futures::{channel::mpsc::SendError, Sink, SinkExt, Stream, StreamExt};
+use espresso_types::{SeqTypes, v0_3::Validator};
+use futures::{Sink, SinkExt, Stream, StreamExt, channel::mpsc::SendError};
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::explorer::{BlockDetail, ExplorerHistograms};
 use hotshot_types::PeerConfig;
@@ -556,8 +556,7 @@ impl std::fmt::Display for HandleRequestValidatorsSnapshotError {
             HandleRequestValidatorsSnapshotError::ClientSendError(err) => {
                 write!(
                     f,
-                    "handle request validators snapshot error: client send error: {}",
-                    err
+                    "handle request validators snapshot error: client send error: {err}"
                 )
             },
         }
@@ -618,8 +617,7 @@ impl std::fmt::Display for HandleRequestStakeTableSnapshotError {
             HandleRequestStakeTableSnapshotError::ClientSendError(err) => {
                 write!(
                     f,
-                    "handle request stake table snapshot error: client send error: {}",
-                    err
+                    "handle request stake table snapshot error: client send error: {err}"
                 )
             },
         }
@@ -680,8 +678,7 @@ impl std::fmt::Display for HandleRequestUnrecognizedRequestError {
             HandleRequestUnrecognizedRequestError::ClientSendError(err) => {
                 write!(
                     f,
-                    "handle request unrecognized request error: client send error: {}",
-                    err
+                    "handle request unrecognized request error: client send error: {err}"
                 )
             },
         }
@@ -823,19 +820,17 @@ impl std::fmt::Display for ProcessClientMessageError {
             ProcessClientMessageError::ValidatorsSnapshot(err) => {
                 write!(
                     f,
-                    "process client message error: validators snapshot: {}",
-                    err
+                    "process client message error: validators snapshot: {err}"
                 )
             },
             ProcessClientMessageError::StakeTableSnapshot(err) => {
                 write!(
                     f,
-                    "process client message error: stake table snapshot: {}",
-                    err
+                    "process client message error: stake table snapshot: {err}"
                 )
             },
             ProcessClientMessageError::UnrecognizedRequest(err) => {
-                write!(f, "process client message error: unknown: {}", err)
+                write!(f, "process client message error: unknown: {err}")
             },
         }
     }
@@ -1237,7 +1232,9 @@ impl InternalClientMessageProcessingTask {
                 message
             } else {
                 tracing::error!("internal client message handler closed.");
-                panic!("InternalClientMessageProcessingTask stream closed, unable to process new requests from clients.");
+                panic!(
+                    "InternalClientMessageProcessingTask stream closed, unable to process new requests from clients."
+                );
             };
 
             if let Err(err) =
@@ -1615,8 +1612,8 @@ pub mod tests {
     use bitvec::vec::BitVec;
     use espresso_types::{NodeState, ValidatedState};
     use futures::{
-        channel::mpsc::{self, Sender},
         SinkExt, StreamExt,
+        channel::mpsc::{self, Sender},
     };
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_query_service::{
@@ -1641,8 +1638,8 @@ pub mod tests {
             ProcessDistributeVotersHandlingTask,
         },
         data_state::{
-            create_block_detail_from_block, default_hotshot_for_testing, DataState,
-            LocationDetails, NodeIdentity, ProcessLeafAndBlockPairStreamTask,
+            DataState, LocationDetails, NodeIdentity, ProcessLeafAndBlockPairStreamTask,
+            create_block_detail_from_block, default_hotshot_for_testing,
         },
         server_message::ServerMessage,
     };

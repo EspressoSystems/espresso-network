@@ -23,13 +23,13 @@ use async_lock::RwLock;
 use clap::Parser;
 use futures::future::{join_all, try_join_all};
 use hotshot::{
+    HotShotInitializer, SystemContext,
     traits::implementations::{MasterMap, MemoryNetwork},
     types::{SignatureKey, SystemContextHandle},
-    HotShotInitializer, SystemContext,
 };
 use hotshot_example_types::{state_types::TestInstanceState, storage_types::TestStorage};
 use hotshot_query_service::{
-    data_source,
+    Error, data_source,
     fetching::provider::NoFetching,
     run_standalone_service,
     status::UpdateStatusData,
@@ -37,17 +37,16 @@ use hotshot_query_service::{
         consensus::DataSourceLifeCycle,
         mocks::{MockBase, MockMembership, MockNodeImpl, MockTypes, MockVersions},
     },
-    Error,
 };
 use hotshot_testing::block_builder::{SimpleBuilderImplementation, TestBuilderImplementation};
 use hotshot_types::{
+    HotShotConfig, PeerConfig,
     consensus::ConsensusMetricsValue,
     epoch_membership::EpochMembershipCoordinator,
     light_client::StateKeyPair,
     signature_key::BLSPubKey,
     storage_metrics::StorageMetricsValue,
     traits::{election::Membership, network::Topic},
-    HotShotConfig, PeerConfig,
 };
 use tracing_subscriber::EnvFilter;
 use url::Url;

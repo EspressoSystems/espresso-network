@@ -10,6 +10,7 @@ pub use hotshot::traits::election::helpers::{
     RandomOverlapQuorumFilterConfig, StableQuorumFilterConfig,
 };
 use hotshot::traits::{
+    NodeImplementation,
     election::{
         dummy_catchup_membership::DummyCatchupCommittee, helpers::QuorumFilterConfig,
         randomized_committee::Committee, randomized_committee_members::RandomizedCommitteeMembers,
@@ -18,7 +19,6 @@ use hotshot::traits::{
         two_static_committees::TwoStaticCommittees,
     },
     implementations::{CombinedNetworks, Libp2pNetwork, MemoryNetwork, PushCdnNetwork},
-    NodeImplementation,
 };
 use hotshot_types::{
     constants::TEST_UPGRADE_CONSTANTS,

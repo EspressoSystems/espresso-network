@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use espresso_types::{PubKey, SeqTypes};
-use hotshot::{traits::NodeImplementation, SystemContext};
+use hotshot::{SystemContext, traits::NodeImplementation};
 use hotshot_types::{
     data::EpochNumber,
     epoch_membership::EpochMembershipCoordinator,

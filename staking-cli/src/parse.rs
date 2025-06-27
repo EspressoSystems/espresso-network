@@ -2,7 +2,7 @@ use std::{fmt::Display, str::FromStr as _};
 
 use derive_more::From;
 use hotshot_types::{light_client::StateSignKey, signature_key::BLSPrivKey};
-use rust_decimal::{prelude::ToPrimitive as _, Decimal};
+use rust_decimal::{Decimal, prelude::ToPrimitive as _};
 use tagged_base64::{TaggedBase64, Tb64Error};
 use thiserror::Error;
 

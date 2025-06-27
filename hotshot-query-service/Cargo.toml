@@ -14,7 +14,7 @@
 name = "hotshot-query-service"
 version = "0.1.76"
 authors = ["Espresso Systems <hello@espressosys.com>"]
-edition = "2021"
+edition = "2024"
 license = "GPL-3.0-or-later"
 
 [features]

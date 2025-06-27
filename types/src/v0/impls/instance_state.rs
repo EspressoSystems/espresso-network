@@ -6,29 +6,29 @@ use anyhow::bail;
 use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_types::{
-    data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::states::InstanceState,
-    HotShotConfig,
+    HotShotConfig, data::EpochNumber, epoch_membership::EpochMembershipCoordinator,
+    traits::states::InstanceState,
 };
 #[cfg(any(test, feature = "testing"))]
 use vbs::version::StaticVersionType;
 use vbs::version::Version;
 
 use super::{
+    SeqTypes, UpgradeType, ViewBasedUpgrade,
     state::ValidatedState,
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0_1::NoStorage,
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
-    SeqTypes, UpgradeType, ViewBasedUpgrade,
 };
 #[cfg(any(test, feature = "testing"))]
 use crate::EpochCommittees;
 use crate::{
+    ValidatorMap,
     v0::{
-        traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
-        Upgrade, UpgradeMode,
+        GenesisHeader, L1BlockInfo, L1Client, Timestamp, Upgrade, UpgradeMode,
+        traits::StateCatchup, v0_3::ChainConfig,
     },
     v0_1::RewardAmount,
-    ValidatorMap,
 };
 
 /// Represents the immutable state of a node.
@@ -379,9 +379,9 @@ pub mod mock {
 
     use super::*;
     use crate::{
+        BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
         retain_accounts,
         v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment},
-        BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
     };
 
     #[derive(Debug, Clone, Default)]

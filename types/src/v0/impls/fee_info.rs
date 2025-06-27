@@ -1,10 +1,10 @@
 use std::str::FromStr;
 
 use alloy::primitives::{
-    utils::{parse_units, ParseUnits},
     Address, U256,
+    utils::{ParseUnits, parse_units},
 };
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
@@ -26,8 +26,8 @@ use thiserror::Error;
 
 use super::v0_1::IterableFeeInfo;
 use crate::{
-    eth_signature_key::EthKeyPair, AccountQueryData, FeeAccount, FeeAccountProof, FeeAmount,
-    FeeInfo, FeeMerkleCommitment, FeeMerkleProof, FeeMerkleTree, SeqTypes,
+    AccountQueryData, FeeAccount, FeeAccountProof, FeeAmount, FeeInfo, FeeMerkleCommitment,
+    FeeMerkleProof, FeeMerkleTree, SeqTypes, eth_signature_key::EthKeyPair,
 };
 
 /// Possible charge fee failures

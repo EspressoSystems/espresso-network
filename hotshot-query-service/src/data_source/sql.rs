@@ -18,14 +18,13 @@ pub use refinery::Migration;
 pub use sql::Transaction;
 
 use super::{
-    fetching,
+    AvailabilityProvider, FetchingDataSource, fetching,
     storage::sql::{self, SqlStorage},
-    AvailabilityProvider, FetchingDataSource,
 };
 pub use crate::include_migrations;
 use crate::{
-    availability::{QueryableHeader, QueryablePayload},
     Header, Payload,
+    availability::{QueryableHeader, QueryablePayload},
 };
 
 pub type Builder<Types, Provider> = fetching::Builder<Types, SqlStorage, Provider>;
@@ -393,8 +392,8 @@ mod test {
             VidCommonQueryData,
         },
         data_source::{
-            storage::{NodeStorage, UpdateAvailabilityStorage},
             Transaction, VersionedDataSource,
+            storage::{NodeStorage, UpdateAvailabilityStorage},
         },
         fetching::provider::NoFetching,
         testing::{consensus::DataSourceLifeCycle, mocks::MockTypes, setup_test},

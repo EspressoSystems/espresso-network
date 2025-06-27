@@ -1,5 +1,5 @@
 use std::{
-    cmp::{min, Ordering},
+    cmp::{Ordering, min},
     num::NonZeroUsize,
     pin::Pin,
     result::Result as StdResult,
@@ -17,7 +17,7 @@ use alloy::{
         json_rpc::{RequestPacket, ResponsePacket},
         types::Block,
     },
-    transports::{http::Http, RpcError, TransportErrorKind},
+    transports::{RpcError, TransportErrorKind, http::Http},
 };
 use anyhow::Context;
 use async_trait::async_trait;
@@ -34,15 +34,15 @@ use parking_lot::RwLock;
 use tokio::{
     spawn,
     sync::{Mutex, MutexGuard, Notify},
-    time::{sleep, Duration},
+    time::{Duration, sleep},
 };
 use tower_service::Service;
 use tracing::Instrument;
 use url::Url;
 
 use super::{
-    v0_1::{L1BlockInfoWithParent, SingleTransport, SingleTransportStatus, SwitchingTransport},
     L1BlockInfo, L1ClientMetrics, L1State, L1UpdateTask,
+    v0_1::{L1BlockInfoWithParent, SingleTransport, SingleTransportStatus, SwitchingTransport},
 };
 use crate::{FeeInfo, L1Client, L1ClientOptions, L1Event, L1Snapshot};
 
@@ -459,7 +459,8 @@ impl L1Client {
     pub async fn spawn_tasks(&self) {
         let mut update_task = self.update_task.0.lock().await;
         if update_task.is_none() {
-            *update_task = Some(spawn(self.update_loop()));
+            let self_clone = self.clone();
+            *update_task = Some(spawn(self_clone.update_loop()));
         }
     }
 
@@ -473,7 +474,7 @@ impl L1Client {
         }
     }
 
-    fn update_loop(&self) -> impl Future<Output = ()> {
+    fn update_loop(&self) -> impl Future<Output = ()> + use<> {
         let opt = self.options().clone();
         let rpc = self.provider.clone();
         let ws_urls = opt.l1_ws_provider.clone();
@@ -866,7 +867,9 @@ impl L1Client {
                             break block;
                         },
                         Ok(None) => {
-                            tracing::warn!("no finalized block even though finalized snapshot is Some; this can be caused by an L1 client failover");
+                            tracing::warn!(
+                                "no finalized block even though finalized snapshot is Some; this can be caused by an L1 client failover"
+                            );
                             self.retry_delay().await;
                         },
                         Err(err) => {
@@ -1027,7 +1030,7 @@ impl L1Client {
         let start = transport.current_transport.read().generation % transport.urls.len();
         let end = start + transport.urls.len();
         loop {
-            match op().into_future().await {
+            match TryFutureExt::into_future(op()).await {
                 Ok(res) => return Ok(res),
                 Err(err) => {
                     if transport.current_transport.read().generation >= end {
@@ -1111,7 +1114,7 @@ mod test {
         primitives::utils::parse_ether,
         providers::layers::AnvilProvider,
     };
-    use espresso_contract_deployer::{deploy_fee_contract_proxy, Contracts};
+    use espresso_contract_deployer::{Contracts, deploy_fee_contract_proxy};
     use portpicker::pick_unused_port;
     use sequencer_utils::test_utils::setup_test;
     use time::OffsetDateTime;
@@ -1327,9 +1330,9 @@ mod test {
             .wait_for_finalized_block_with_timestamp(timestamp)
             .await;
         assert!(
-                block.timestamp >= timestamp,
-                "wait_for_finalized_block_with_timestamp({timestamp}) returned too early a block: {block:?}",
-            );
+            block.timestamp >= timestamp,
+            "wait_for_finalized_block_with_timestamp({timestamp}) returned too early a block: {block:?}",
+        );
         let parent = provider
             .get_block(BlockId::Number(BlockNumberOrTag::Number(block.number - 1)))
             .full()
@@ -1337,9 +1340,9 @@ mod test {
             .unwrap()
             .unwrap();
         assert!(
-                parent.header.inner.timestamp < timestamp.to::<u64>(),
-                "wait_for_finalized_block_with_timestamp({timestamp}) did not return the earliest possible block: returned {block:?}, but earlier block {parent:?} has an acceptable timestamp too",
-            );
+            parent.header.inner.timestamp < timestamp.to::<u64>(),
+            "wait_for_finalized_block_with_timestamp({timestamp}) did not return the earliest possible block: returned {block:?}, but earlier block {parent:?} has an acceptable timestamp too",
+        );
 
         // Compare against underlying provider.
         let true_block = provider
@@ -1407,9 +1410,9 @@ mod test {
 
         let new_block_height = provider.get_block_number().await.unwrap();
         assert!(
-                new_block_height >= block_height + 10,
-                "wait_for_block returned too early; initial height = {block_height}, new height = {new_block_height}",
-            );
+            new_block_height >= block_height + 10,
+            "wait_for_block returned too early; initial height = {block_height}, new height = {new_block_height}",
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

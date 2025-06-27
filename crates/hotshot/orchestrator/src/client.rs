@@ -9,13 +9,13 @@ use std::{net::SocketAddr, time::Duration};
 use clap::Parser;
 use futures::{Future, FutureExt};
 use hotshot_types::{
+    PeerConfig, ValidatorConfig,
     network::{NetworkConfig, NetworkConfigSource},
     traits::node_implementation::NodeType,
-    PeerConfig, ValidatorConfig,
 };
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
-use surf_disco::{error::ClientError, Client};
+use surf_disco::{Client, error::ClientError};
 use tide_disco::Url;
 use tokio::time::sleep;
 use tracing::{info, instrument};

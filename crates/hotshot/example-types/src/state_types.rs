@@ -10,12 +10,12 @@ use std::fmt::Debug;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use hotshot_types::{
-    data::{fake_commitment, BlockError, Leaf2, ViewNumber},
+    data::{BlockError, Leaf2, ViewNumber, fake_commitment},
     traits::{
+        BlockPayload,
         block_contents::BlockHeader,
         node_implementation::NodeType,
         states::{InstanceState, StateDelta, TestableState, ValidatedState},
-        BlockPayload,
     },
 };
 use rand::Rng;
@@ -142,7 +142,7 @@ impl<TYPES: NodeType<BlockPayload = TestBlockPayload>> TestableState<TYPES> for 
         const RANDOM_TX_BASE_SIZE: usize = 8;
 
         // Generate a random transaction
-        let mut tx = rng.gen::<[u8; RANDOM_TX_BASE_SIZE]>().to_vec();
+        let mut tx = rng.r#gen::<[u8; RANDOM_TX_BASE_SIZE]>().to_vec();
 
         // Create and add padding to the transaction
         let padding = vec![0; padding.try_into().expect("transaction padding too large")];

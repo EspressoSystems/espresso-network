@@ -11,6 +11,7 @@ use std::{
 
 use alloy::primitives::U256;
 use hotshot_types::{
+    PeerConfig,
     drb::DrbResult,
     stake_table::HSStakeTable,
     traits::{
@@ -18,7 +19,6 @@ use hotshot_types::{
         node_implementation::NodeType,
         signature_key::{SignatureKey, StakeTableEntryType},
     },
-    PeerConfig,
 };
 use hotshot_utils::anytrace::Result;
 

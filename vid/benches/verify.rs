@@ -1,7 +1,7 @@
 //! Benchmark of VID dispersal
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use rand::RngCore;
-use vid::{avid_m::AvidMScheme, VidScheme};
+use vid::{VidScheme, avid_m::AvidMScheme};
 
 fn verify_benchmark(c: &mut Criterion) {
     let param_list = [(6, 10), (50, 100)];
@@ -22,8 +22,7 @@ fn verify_benchmark(c: &mut Criterion) {
             .unwrap();
             avidm_group.bench_function(
                 format!(
-                    "AvidMVerify_({}, {})_{}",
-                    recovery_threshold, num_storage_nodes, payload_bytes_len
+                    "AvidMVerify_({recovery_threshold}, {num_storage_nodes})_{payload_bytes_len}"
                 ),
                 |b| b.iter(|| AvidMScheme::verify_share(&param, &commit, &shares[0])),
             );

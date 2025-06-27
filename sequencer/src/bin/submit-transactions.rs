@@ -13,20 +13,20 @@ use clap::Parser;
 use committable::{Commitment, Committable};
 #[cfg(feature = "benchmarking")]
 use csv::Writer;
-use espresso_types::{parse_duration, parse_size, SeqTypes, Transaction};
+use espresso_types::{SeqTypes, Transaction, parse_duration, parse_size};
 use futures::{
     channel::mpsc::{self, Sender},
     sink::SinkExt,
     stream::StreamExt,
 };
-use hotshot_query_service::{availability::BlockQueryData, types::HeightIndexed, Error};
+use hotshot_query_service::{Error, availability::BlockQueryData, types::HeightIndexed};
 use rand::{Rng, RngCore, SeedableRng};
 use rand_chacha::ChaChaRng;
 use rand_distr::Distribution;
 use sequencer::SequencerApiVersion;
 use sequencer_utils::logging;
 use surf_disco::{Client, Url};
-use tide_disco::{error::ServerError, App};
+use tide_disco::{App, error::ServerError};
 use tokio::{task::spawn, time::sleep};
 use vbs::version::StaticVersionType;
 

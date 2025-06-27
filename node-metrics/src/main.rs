@@ -1,6 +1,6 @@
 use clap::Parser;
 use hotshot::helpers::initialize_logging;
-use node_metrics::{run_standalone_service, Options};
+use node_metrics::{Options, run_standalone_service};
 
 #[tokio::main]
 async fn main() {

@@ -19,6 +19,7 @@ use tagged_base64::TaggedBase64;
 
 use super::VersionedDataSource;
 use crate::{
+    Header, Payload, QueryResult, Transaction,
     availability::{
         AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch, FetchStream, LeafId,
         LeafQueryData, NamespaceId, PayloadMetadata, PayloadQueryData, QueryableHeader,
@@ -34,7 +35,6 @@ use crate::{
     metrics::PrometheusMetrics,
     node::{NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
     status::{HasMetrics, StatusDataSource},
-    Header, Payload, QueryResult, Transaction,
 };
 /// Wrapper to add extensibility to an existing data source.
 ///

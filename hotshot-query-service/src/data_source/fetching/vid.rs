@@ -24,24 +24,24 @@ use hotshot_types::{
 };
 
 use super::{
-    header::{fetch_header_and_then, HeaderCallback},
     AvailabilityProvider, FetchRequest, Fetchable, Fetcher, Heights, Notifiers, RangedFetchable,
     Storable,
+    header::{HeaderCallback, fetch_header_and_then},
 };
 use crate::{
+    Header, Payload, QueryResult, VidCommon,
     availability::{
         BlockId, QueryableHeader, QueryablePayload, VidCommonMetadata, VidCommonQueryData,
     },
     data_source::{
-        storage::{
-            pruning::PrunedHeightStorage, AvailabilityStorage, NodeStorage,
-            UpdateAvailabilityStorage,
-        },
         VersionedDataSource,
+        storage::{
+            AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage,
+            pruning::PrunedHeightStorage,
+        },
     },
-    fetching::{self, request, Callback},
+    fetching::{self, Callback, request},
     types::HeightIndexed,
-    Header, Payload, QueryResult, VidCommon,
 };
 
 pub(super) type VidCommonFetcher<Types, S, P> =

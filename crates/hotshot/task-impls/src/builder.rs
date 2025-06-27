@@ -16,7 +16,7 @@ use hotshot_types::{
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
 };
 use serde::{Deserialize, Serialize};
-use surf_disco::{client::HealthStatus, Client, Url};
+use surf_disco::{Client, Url, client::HealthStatus};
 use tagged_base64::TaggedBase64;
 use thiserror::Error;
 use tokio::time::sleep;
@@ -128,11 +128,11 @@ impl<TYPES: NodeType, Ver: StaticVersionType> BuilderClient<TYPES, Ver> {
 
 /// Version 0.1
 pub mod v0_1 {
+    pub use hotshot_builder_api::v0_1::Version;
     use hotshot_builder_api::v0_1::block_info::{
         AvailableBlockData, AvailableBlockHeaderInputV2, AvailableBlockHeaderInputV2Either,
         AvailableBlockHeaderInputV2Legacy,
     };
-    pub use hotshot_builder_api::v0_1::Version;
     use hotshot_types::{
         constants::LEGACY_BUILDER_MODULE,
         traits::{node_implementation::NodeType, signature_key::SignatureKey},

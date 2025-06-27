@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::Result;
 
 use crate::{
-    common::{load_genesis_file, NativeDemo, TestRequirements},
+    common::{NativeDemo, TestRequirements, load_genesis_file},
     smoke::assert_native_demo_works,
 };
 

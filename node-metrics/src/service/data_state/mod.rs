@@ -7,18 +7,18 @@ use alloy::primitives::Address;
 use async_lock::RwLock;
 use bitvec::vec::BitVec;
 use circular_buffer::CircularBuffer;
-use espresso_types::{config::PublicHotShotConfig, v0_3::Validator, Header, Payload, SeqTypes};
-use futures::{channel::mpsc::SendError, Sink, SinkExt, Stream, StreamExt};
+use espresso_types::{Header, Payload, SeqTypes, config::PublicHotShotConfig, v0_3::Validator};
+use futures::{Sink, SinkExt, Stream, StreamExt, channel::mpsc::SendError};
 use hotshot_query_service::{
+    Resolvable,
     availability::{BlockQueryData, Leaf1QueryData},
     explorer::{BlockDetail, ExplorerHeader, Timestamp},
-    Resolvable,
 };
 use hotshot_types::{
-    signature_key::BLSPubKey,
-    traits::{block_contents::BlockHeader, BlockPayload, EncodeBytes},
-    utils::epoch_from_block_number,
     PeerConfig,
+    signature_key::BLSPubKey,
+    traits::{BlockPayload, EncodeBytes, block_contents::BlockHeader},
+    utils::epoch_from_block_number,
 };
 use indexmap::IndexMap;
 pub use location_details::LocationDetails;
@@ -27,8 +27,8 @@ use time::OffsetDateTime;
 use tokio::{spawn, task::JoinHandle};
 
 use crate::api::node_validator::v0::{
-    get_node_stake_table_from_sequencer, get_node_validators_from_sequencer, LeafAndBlock,
-    Version01,
+    LeafAndBlock, Version01, get_node_stake_table_from_sequencer,
+    get_node_validators_from_sequencer,
 };
 
 /// MAX_HISTORY represents the last N records that are stored within the
@@ -352,7 +352,9 @@ where
             {
                 Ok(stake_table) => stake_table,
                 Err(err) => {
-                    tracing::error!("process_incoming_leaf_and_block: error getting stake table from sequencer: {err}");
+                    tracing::error!(
+                        "process_incoming_leaf_and_block: error getting stake table from sequencer: {err}"
+                    );
                     return Err(ProcessLeafError::FailedToGetNewStakeTable);
                 },
             };
@@ -376,7 +378,11 @@ where
             {
                 Ok(validators) => validators,
                 Err(err) => {
-                    tracing::error!("process_incoming_leaf_and_block: error getting validators for epoch {}: {}", upcoming_epoch, err);
+                    tracing::error!(
+                        "process_incoming_leaf_and_block: error getting validators for epoch {}: {}",
+                        upcoming_epoch,
+                        err
+                    );
                     return Err(ProcessLeafError::FailedToGetNewStakeTable);
                 },
             };
@@ -614,19 +620,29 @@ impl ProcessLeafAndBlockPairStreamTask {
                 // will fail, and be fruitless.
                 match err {
                     ProcessLeafError::BlockSendError(err) => {
-                        panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying sink is closed, blocks will stagnate: {err}")
+                        panic!(
+                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying sink is closed, blocks will stagnate: {err}"
+                        )
                     },
                     ProcessLeafError::VotersSendError(err) => {
-                        panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying sink is closed, voters will stagnate: {err}")
+                        panic!(
+                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying sink is closed, voters will stagnate: {err}"
+                        )
                     },
                     ProcessLeafError::StakeTableSendError(err) => {
-                        panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying stake table is closed, stake table will stagnate: {err}")
+                        panic!(
+                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying stake table is closed, stake table will stagnate: {err}"
+                        )
                     },
                     ProcessLeafError::ValidatorSendError(err) => {
-                        panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying validator sink is closed, validators will stagnate: {err}")
+                        panic!(
+                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying validator sink is closed, validators will stagnate: {err}"
+                        )
                     },
                     ProcessLeafError::FailedToGetNewStakeTable => {
-                        panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying stake table is closed, blocks will stagnate")
+                        panic!(
+                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying stake table is closed, blocks will stagnate"
+                        )
                     },
                 }
             }
@@ -771,7 +787,9 @@ impl ProcessNodeIdentityStreamTask {
                 // `process_incoming_node_identity` are due to `SendError` which
                 // will ultimately mean that further processing attempts will fail
                 // and be fruitless.
-                panic!("ProcessNodeIdentityStreamTask: process_incoming_node_identity failed, underlying sink is closed, node identities will stagnate: {err}");
+                panic!(
+                    "ProcessNodeIdentityStreamTask: process_incoming_node_identity failed, underlying sink is closed, node identities will stagnate: {err}"
+                );
             }
         }
     }
@@ -832,10 +850,10 @@ mod tests {
 
     use async_lock::RwLock;
     use espresso_types::{
-        v0_1::RewardMerkleTree, v0_3::ChainConfig, BlockMerkleTree, FeeMerkleTree, NodeState,
-        ValidatedState,
+        BlockMerkleTree, FeeMerkleTree, NodeState, ValidatedState, v0_1::RewardMerkleTree,
+        v0_3::ChainConfig,
     };
-    use futures::{channel::mpsc, SinkExt, StreamExt};
+    use futures::{SinkExt, StreamExt, channel::mpsc};
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_query_service::{
         availability::{BlockQueryData, Leaf1QueryData},
@@ -849,7 +867,7 @@ mod tests {
 
     use super::{DataState, ProcessLeafAndBlockPairStreamTask};
     use crate::service::data_state::{
-        default_hotshot_for_testing, LocationDetails, NodeIdentity, ProcessNodeIdentityStreamTask,
+        LocationDetails, NodeIdentity, ProcessNodeIdentityStreamTask, default_hotshot_for_testing,
     };
 
     #[tokio::test(flavor = "multi_thread")]
@@ -956,12 +974,14 @@ mod tests {
         drop(block_receiver);
         drop(leaf_sender);
 
-        assert!(timeout(
-            Duration::from_millis(200),
-            process_leaf_stream_task_handle.task_handle.take().unwrap()
-        )
-        .await
-        .is_ok());
+        assert!(
+            timeout(
+                Duration::from_millis(200),
+                process_leaf_stream_task_handle.task_handle.take().unwrap()
+            )
+            .await
+            .is_ok()
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
