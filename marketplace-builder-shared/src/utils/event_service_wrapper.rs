@@ -89,6 +89,7 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
     /// Establish initial connection to the events service at `api_url`
     pub async fn connect(api_url: Url) -> anyhow::Result<impl Stream<Item = Event<Types>> + Unpin> {
         let connection = Self::connect_inner(api_url.clone()).await?;
+        warn!(?api_url, "Connected to hotshot events API");
 
         let this = Self {
             api_url,
