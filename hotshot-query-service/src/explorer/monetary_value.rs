@@ -414,10 +414,7 @@ mod test {
                 let have = result;
                 let want = MonetaryValue::usd(10000);
 
-                assert_eq!(
-                    have, want,
-                    "{value} parse result: have {have}, want {want}",
-                );
+                assert_eq!(have, want, "{value} parse result: have {have}, want {want}",);
             }
         }
 
@@ -443,10 +440,7 @@ mod test {
                 let have = result;
                 let want = MonetaryValue::usd(10000000);
 
-                assert_eq!(
-                    have, want,
-                    "{value} parse result: have {have}, want {want}",
-                );
+                assert_eq!(have, want, "{value} parse result: have {have}, want {want}",);
             }
         }
 
@@ -480,10 +474,7 @@ mod test {
                 let value = case.0;
                 let have = serde_json::from_str::<MonetaryValue>(value).unwrap();
                 let want = case.1;
-                assert_eq!(
-                    have, want,
-                    "{value} parse result: have {have}, want {want}"
-                );
+                assert_eq!(have, want, "{value} parse result: have {have}, want {want}");
             }
         }
     }

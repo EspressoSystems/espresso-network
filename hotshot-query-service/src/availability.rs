@@ -1132,10 +1132,7 @@ mod test {
                     break (i, leaf, block, common);
                 }
             };
-            assert_eq!(
-                leaf,
-                client.get(&format!("leaf/{i}")).send().await.unwrap()
-            );
+            assert_eq!(leaf, client.get(&format!("leaf/{i}")).send().await.unwrap());
             assert_eq!(
                 block,
                 client.get(&format!("block/{i}")).send().await.unwrap()
@@ -1522,10 +1519,7 @@ mod test {
                     break (i, leaf, block, common);
                 }
             };
-            assert_eq!(
-                leaf,
-                client.get(&format!("leaf/{i}")).send().await.unwrap()
-            );
+            assert_eq!(leaf, client.get(&format!("leaf/{i}")).send().await.unwrap());
             assert_eq!(
                 block,
                 client.get(&format!("block/{i}")).send().await.unwrap()

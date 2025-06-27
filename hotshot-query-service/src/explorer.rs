@@ -903,9 +903,7 @@ mod test {
                 .unwrap(),
         );
         let explorer_client = Client::<Error, MockBase>::new(
-            format!("http://localhost:{port}/explorer")
-                .parse()
-                .unwrap(),
+            format!("http://localhost:{port}/explorer").parse().unwrap(),
         );
 
         assert!(
