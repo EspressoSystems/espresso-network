@@ -1352,9 +1352,8 @@ impl SequencerPersistence for Persistence {
         let path = &inner.drb_dir_path();
         let file_path = path.join(epoch.to_string()).with_extension("bin");
         let bytes = fs::read(&file_path).context("read")?;
-        Ok(bincode::deserialize(&bytes).context(format!(
-            "failed to deserialize DrbInput for epoch {epoch}"
-        ))?)
+        Ok(bincode::deserialize(&bytes)
+            .context(format!("failed to deserialize DrbInput for epoch {epoch}"))?)
     }
 
     async fn store_drb_result(

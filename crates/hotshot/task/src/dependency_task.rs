@@ -112,12 +112,7 @@ mod test {
 
         let mut handles = vec![];
         for i in 0..10 {
-            let dep = eq_dep(
-                rx.clone(),
-                cancel_rx.clone(),
-                format!("many_works {i}"),
-                i,
-            );
+            let dep = eq_dep(rx.clone(), cancel_rx.clone(), format!("many_works {i}"), i);
             let handle = DummyHandle {
                 sender: res_tx.clone(),
             };

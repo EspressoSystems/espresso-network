@@ -19,9 +19,7 @@ fn main() {
         <<Fr as Field>::BasePrimeField as PrimeField>::into_bigint(domain.group_gen_inv);
     let group_gen_str = format!("0x{group_gen:X}").to_lowercase();
     let group_gen_inv_str = format!("0x{group_gen_inv:X}").to_lowercase();
-    println!(
-        "groupGen: {group_gen_str}, groupGenInv: {group_gen_inv_str}",
-    );
+    println!("groupGen: {group_gen_str}, groupGenInv: {group_gen_inv_str}",);
 
     let mut domain_elements_str = "".to_owned();
 

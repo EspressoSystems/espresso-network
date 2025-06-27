@@ -48,9 +48,7 @@ impl AssertFailure for Output {
         if self.status.success() {
             let stderr = String::from_utf8(self.stderr.clone()).expect("stderr is utf8");
             let stdout = String::from_utf8(self.stdout.clone()).expect("stdout is utf8");
-            panic!(
-                "Command succeeded but should have failed:\nstderr: {stderr}\nstdout: {stdout}"
-            );
+            panic!("Command succeeded but should have failed:\nstderr: {stderr}\nstdout: {stdout}");
         }
         self
     }
