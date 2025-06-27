@@ -123,12 +123,12 @@ pub async fn create_node_validator_processing(
     let hotshot_config = get_config_stake_table_from_sequencer(hotshot_client.clone())
         .await
         .map_err(CreateNodeValidatorProcessingError::FailedToGetStakeTable)?;
-    let mut stake_table = hotshot_config.known_nodes_with_stake();
+    let mut stake_table = hotshot_config.known_nodes_with_stake.clone();
     let mut validator_map = IndexMap::new();
 
-    if hotshot_config.blocks_per_epoch() > 0 {
-        let epoch_starting_block = hotshot_config.epoch_start_block();
-        let num_blocks_per_epoch = hotshot_config.blocks_per_epoch();
+    let epoch_starting_block = hotshot_config.epoch_start_block.unwrap_or(0);
+    let num_blocks_per_epoch = hotshot_config.epoch_height.unwrap_or(0);
+    if hotshot_config.epoch_height.is_some() && num_blocks_per_epoch > 0 {
         tracing::info!(
             "epoch starting block: {}, num blocks per epoch: {}",
             epoch_starting_block,
