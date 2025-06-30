@@ -3,6 +3,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     future::Future,
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 use alloy::{
@@ -14,7 +15,10 @@ use alloy::{
 use anyhow::{bail, ensure, Context};
 use async_lock::{Mutex, RwLock};
 use committable::Committable;
-use futures::stream::{self, StreamExt};
+use futures::{
+    future::BoxFuture,
+    stream::{self, StreamExt},
+};
 use hotshot::types::{BLSPubKey, SchnorrPubKey, SignatureKey as _};
 use hotshot_contract_adapter::sol_types::{
     EspToken::{self, EspTokenInstance},
@@ -739,7 +743,6 @@ impl Fetcher {
         to_block: u64,
     ) -> StakeTableEvents {
         let stake_table_contract = StakeTableV2::new(contract, l1_client.provider.clone());
-
         // get the block number when the contract was initialized
         // to avoid fetching events from block number 0
         let from_block = match from_block {
@@ -777,6 +780,7 @@ impl Fetcher {
             Some(chunk)
         });
 
+        let max_retry_duration = l1_client.options().l1_events_max_retry_duration;
         // fetch registered events
         // retry if the call to the provider to fetch the events fails
         let registered_events = stream::iter(chunks.clone()).then(|(from, to)| {
@@ -784,58 +788,61 @@ impl Fetcher {
             let stake_table_contract = stake_table_contract.clone();
             async move {
                 tracing::debug!(from, to, "fetch ValidatorRegistered events in range");
-                loop {
-                    match stake_table_contract
-                        .clone()
-                        .ValidatorRegistered_filter()
-                        .from_block(from)
-                        .to_block(to)
-                        .query()
-                        .await
-                    {
-                        Ok(events) => break stream::iter(events),
-                        Err(err) => {
-                            tracing::warn!(from, to, %err, "ValidatorRegistered Error");
-                            sleep(retry_delay).await;
-                        },
-                    }
-                }
+                let events = retry(
+                    retry_delay,
+                    max_retry_duration,
+                    "ValidatorRegistered event fetch",
+                    move || {
+                        let stake_table_contract = stake_table_contract.clone();
+                        Box::pin(async move {
+                            stake_table_contract
+                                .ValidatorRegistered_filter()
+                                .from_block(from)
+                                .to_block(to)
+                                .query()
+                                .await
+                        })
+                    },
+                )
+                .await;
+                stream::iter(events)
             }
         });
 
         // fetch registered events v2
         // retry if the call to the provider to fetch the events fails
         let registered_events_v2 = stream::iter(chunks.clone()).then(|(from, to)| {
-            let retry_delay = l1_client.options().l1_retry_delay;
-            let stake_table_contract = stake_table_contract.clone();
-            async move {
-                tracing::debug!(from, to, "fetch ValidatorRegisteredV2 events in range");
-                loop {
-                    match stake_table_contract
-                        .clone()
+    let retry_delay = l1_client.options().l1_retry_delay;
+    let max_retry_duration = l1_client.options().l1_events_max_retry_duration;
+    let stake_table_contract = stake_table_contract.clone();
+    async move {
+        tracing::debug!(from, to, "fetch ValidatorRegisteredV2 events in range");
+        let events = retry(
+            retry_delay,
+            max_retry_duration,
+            "ValidatorRegisteredV2 event fetch",
+            move || {
+                let stake_table_contract = stake_table_contract.clone();
+                Box::pin(async move {
+                    stake_table_contract
                         .ValidatorRegisteredV2_filter()
                         .from_block(from)
                         .to_block(to)
                         .query()
                         .await
-                    {
-                        Ok(events) => {
-                            break stream::iter(events.into_iter().filter(|(event, log)| {
-                                if let Err(e) = event.authenticate() {
-                                    tracing::warn!(%e, "Failed to authenticate ValidatorRegisteredV2 event: {}", log.display());
-                                    return false;
-                                }
-                                true
-                            }));
-                        },
-                        Err(err) => {
-                            tracing::warn!(from, to, %err, "ValidatorRegisteredV2 Error");
-                            sleep(retry_delay).await;
-                        },
-                    }
-                }
+                })
+            },
+        ).await;
+
+        stream::iter(events.into_iter().filter(|(event, log)| {
+            if let Err(e) = event.authenticate() {
+                tracing::warn!(%e, "Failed to authenticate ValidatorRegisteredV2 event: {}", log.display());
+                return false;
             }
-        });
+            true
+        }))
+    }
+});
 
         // fetch validator de registration events
         let deregistered_events = stream::iter(chunks.clone()).then(|(from, to)| {
@@ -843,21 +850,24 @@ impl Fetcher {
             let stake_table_contract = stake_table_contract.clone();
             async move {
                 tracing::debug!(from, to, "fetch ValidatorExit events in range");
-                loop {
-                    match stake_table_contract
-                        .ValidatorExit_filter()
-                        .from_block(from)
-                        .to_block(to)
-                        .query()
-                        .await
-                    {
-                        Ok(events) => break stream::iter(events),
-                        Err(err) => {
-                            tracing::warn!(from, to, %err, "ValidatorExit Error");
-                            sleep(retry_delay).await;
-                        },
-                    }
-                }
+                let events = retry(
+                    retry_delay,
+                    max_retry_duration,
+                    "ValidatorExit event fetch",
+                    move || {
+                        let stake_table_contract = stake_table_contract.clone();
+                        Box::pin(async move {
+                            stake_table_contract
+                                .ValidatorExit_filter()
+                                .from_block(from)
+                                .to_block(to)
+                                .query()
+                                .await
+                        })
+                    },
+                )
+                .await;
+                stream::iter(events)
             }
         });
 
@@ -867,103 +877,110 @@ impl Fetcher {
             let stake_table_contract = stake_table_contract.clone();
             async move {
                 tracing::debug!(from, to, "fetch Delegated events in range");
-                loop {
-                    match stake_table_contract
-                        .Delegated_filter()
-                        .from_block(from)
-                        .to_block(to)
-                        .query()
-                        .await
-                    {
-                        Ok(events) => break stream::iter(events),
-                        Err(err) => {
-                            tracing::warn!(from, to, %err, "Delegated Error");
-                            sleep(retry_delay).await;
-                        },
-                    }
-                }
+                let events = retry(
+                    retry_delay,
+                    max_retry_duration,
+                    "Delegated event fetch",
+                    move || {
+                        let stake_table_contract = stake_table_contract.clone();
+                        Box::pin(async move {
+                            stake_table_contract
+                                .Delegated_filter()
+                                .from_block(from)
+                                .to_block(to)
+                                .query()
+                                .await
+                        })
+                    },
+                )
+                .await;
+                stream::iter(events)
             }
         });
+
         // fetch undelegated events
         let undelegated_events = stream::iter(chunks.clone()).then(|(from, to)| {
             let retry_delay = l1_client.options().l1_retry_delay;
             let stake_table_contract = stake_table_contract.clone();
             async move {
                 tracing::debug!(from, to, "fetch Undelegated events in range");
-                loop {
-                    match stake_table_contract
-                        .Undelegated_filter()
-                        .from_block(from)
-                        .to_block(to)
-                        .query()
-                        .await
-                    {
-                        Ok(events) => break stream::iter(events),
-                        Err(err) => {
-                            tracing::warn!(from, to, %err, "Undelegated Error");
-                            sleep(retry_delay).await;
-                        },
-                    }
-                }
+                let events = retry(
+                    retry_delay,
+                    max_retry_duration,
+                    "Undelegated event fetch",
+                    move || {
+                        let stake_table_contract = stake_table_contract.clone();
+                        Box::pin(async move {
+                            stake_table_contract
+                                .Undelegated_filter()
+                                .from_block(from)
+                                .to_block(to)
+                                .query()
+                                .await
+                        })
+                    },
+                )
+                .await;
+                stream::iter(events)
             }
         });
-
         // fetch consensus keys updated events
         let keys_update_events = stream::iter(chunks.clone()).then(|(from, to)| {
             let retry_delay = l1_client.options().l1_retry_delay;
             let stake_table_contract = stake_table_contract.clone();
             async move {
                 tracing::debug!(from, to, "fetch ConsensusKeysUpdated events in range");
-                loop {
-                    match stake_table_contract
-                        .ConsensusKeysUpdated_filter()
-                        .from_block(from)
-                        .to_block(to)
-                        .query()
-                        .await
-                    {
-                        Ok(events) => break stream::iter(events),
-                        Err(err) => {
-                            tracing::warn!(from, to, %err, "ConsensusKeysUpdated Error");
-                            sleep(retry_delay).await;
-                        },
-                    }
-                }
+                let events = retry(
+                    retry_delay,
+                    max_retry_duration,
+                    "ConsensusKeysUpdated event fetch",
+                    move || {
+                        let stake_table_contract = stake_table_contract.clone();
+                        Box::pin(async move {
+                            stake_table_contract
+                                .ConsensusKeysUpdated_filter()
+                                .from_block(from)
+                                .to_block(to)
+                                .query()
+                                .await
+                        })
+                    },
+                )
+                .await;
+                stream::iter(events)
             }
         });
-
         // fetch consensus keys updated v2 events
         let keys_update_events_v2 = stream::iter(chunks).then(|(from, to)| {
-            let retry_delay = l1_client.options().l1_retry_delay;
-            let stake_table_contract = stake_table_contract.clone();
-            async move {
-                tracing::debug!(from, to, "fetch ConsensusKeysUpdatedV2 events in range");
-                loop {
-                    match stake_table_contract
+    let retry_delay = l1_client.options().l1_retry_delay;
+    let stake_table_contract = stake_table_contract.clone();
+    async move {
+        tracing::debug!(from, to, "fetch ConsensusKeysUpdatedV2 events in range");
+        let events = retry(
+            retry_delay,max_retry_duration,
+            "ConsensusKeysUpdatedV2 event fetch",
+            move || {
+                let stake_table_contract = stake_table_contract.clone();
+                Box::pin(async move {
+                    stake_table_contract
                         .ConsensusKeysUpdatedV2_filter()
                         .from_block(from)
                         .to_block(to)
                         .query()
                         .await
-                    {
-                        Ok(events) => {
-                            break stream::iter(events.into_iter().filter(|(event, log)| {
-                                if let Err(e) = event.authenticate() {
-                                    tracing::warn!(%e, "Failed to authenticate ConsensusKeysUpdatedV2 event {}", log.display());
-                                    return false;
-                                }
-                                true
-                            }));
-                        },
-                        Err(err) => {
-                            tracing::warn!(from, to, %err, "ConsensusKeysUpdatedV2 Error");
-                            sleep(retry_delay).await;
-                        },
-                    }
-                }
-            }
-        });
+                })
+            },
+        ).await;
 
+        stream::iter(events.into_iter().filter(|(event, log)| {
+            if let Err(e) = event.authenticate() {
+                tracing::warn!(%e, "Failed to authenticate ConsensusKeysUpdatedV2 event {}", log.display());
+                return false;
+            }
+            true
+        }))
+    }
+});
         let registrations = registered_events.flatten().collect().await;
         let registrations_v2 = registered_events_v2.flatten().collect().await;
         let deregistrations = deregistered_events.flatten().collect().await;
@@ -1257,6 +1274,41 @@ impl Fetcher {
         let persistence = NoStorage;
 
         Self::new(peers, Arc::new(Mutex::new(persistence)), l1, chain_config)
+    }
+}
+
+async fn retry<F, T, E>(
+    retry_delay: Duration,
+    max_duration: Duration,
+    operation_name: &str,
+    mut operation: F,
+) -> T
+where
+    F: FnMut() -> BoxFuture<'static, Result<T, E>>,
+    E: std::fmt::Display,
+{
+    let start = Instant::now();
+    loop {
+        match operation().await {
+            Ok(result) => return result,
+            Err(err) => {
+                if start.elapsed() >= max_duration {
+                    panic!(
+                        "\nFailed to complete operation `{operation_name}` after 15 minutes.\n\
+                        error: {err}\n\n\
+                         This might be caused by:\n\
+                           - The current block range being too large for your RPC provider.\n\
+                           - The event query returning more data than your RPC allows as some RPC providers limit the number of events returned.\n\n\
+                         Suggested solution:\n\
+                           - Reduce the value of the environment variable `ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE` \
+                             to query smaller ranges.\n\
+                           - Use a different RPC provider with higher rate limits."
+                    );
+                }
+                tracing::warn!(%err, "Retrying `{operation_name}` after error");
+                sleep(retry_delay).await;
+            },
+        }
     }
 }
 
@@ -2050,6 +2102,7 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
+
     use alloy::{primitives::Address, rpc::types::Log};
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use pretty_assertions::assert_matches;
@@ -2057,7 +2110,7 @@ mod tests {
     use sequencer_utils::test_utils::setup_test;
 
     use super::*;
-    use crate::v0::impls::testing::*;
+    use crate::{v0::impls::testing::*, L1ClientOptions};
 
     #[test]
     fn test_from_l1_events() -> anyhow::Result<()> {
@@ -2595,5 +2648,35 @@ mod tests {
             reconstructed_stake_table, expected,
             "Stake table reconstructed from events does not match the expected stake table "
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[should_panic]
+    async fn test_large_max_events_range_panic() {
+        setup_test();
+
+        // decaf stake table contract address
+        let contract_address = "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037";
+
+        let l1 = L1ClientOptions {
+            l1_events_max_retry_duration: Duration::from_secs(30),
+            // max block range for public node rpc is 50000 so this should result in a panic
+            l1_events_max_block_range: 1 * 10_u64.pow(9),
+            l1_retry_delay: Duration::from_secs(1),
+            ..Default::default()
+        }
+        .connect(vec!["https://ethereum-sepolia.publicnode.com"
+            .parse()
+            .unwrap()])
+        .expect("unable to construct l1 client");
+
+        let latest_block = l1.provider.get_block_number().await.unwrap();
+        let _events = Fetcher::fetch_events_from_contract(
+            l1,
+            contract_address.parse().unwrap(),
+            None,
+            latest_block,
+        )
+        .await;
     }
 }
