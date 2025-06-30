@@ -1,17 +1,17 @@
 use std::time::Duration;
 
 use alloy::{
-    primitives::{utils::parse_units, Address},
+    primitives::{Address, utils::parse_units},
     providers::{Provider, ProviderBuilder},
     rpc::client::RpcClient,
     signers::{
-        local::{coins_bip39::English, MnemonicBuilder},
         Signer,
+        local::{MnemonicBuilder, coins_bip39::English},
     },
 };
 use clap::Parser;
 use espresso_contract_deployer::network_config::fetch_epoch_config_from_sequencer;
-use espresso_types::{parse_duration, v0_1::SwitchingTransport, L1ClientOptions};
+use espresso_types::{L1ClientOptions, parse_duration, v0_1::SwitchingTransport};
 use hotshot_state_prover::service::StateProverConfig;
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
 use sequencer_utils::logging;

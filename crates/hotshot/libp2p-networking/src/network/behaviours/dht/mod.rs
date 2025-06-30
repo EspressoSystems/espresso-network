@@ -10,17 +10,17 @@ use std::{collections::HashMap, marker::PhantomData, num::NonZeroUsize, time::Du
 
 /// a local caching layer for the DHT key value pairs
 use futures::{
-    channel::{mpsc, oneshot::Sender},
     SinkExt,
+    channel::{mpsc, oneshot::Sender},
 };
 use hotshot_types::traits::signature_key::SignatureKey;
 use lazy_static::lazy_static;
 use libp2p::kad::{
-    /* handler::KademliaHandlerIn, */ store::MemoryStore, BootstrapOk, GetClosestPeersOk,
-    GetRecordOk, GetRecordResult, ProgressStep, PutRecordResult, QueryId, QueryResult, Record,
+    Behaviour as KademliaBehaviour, BootstrapError, Event as KademliaEvent, store::RecordStore,
 };
 use libp2p::kad::{
-    store::RecordStore, Behaviour as KademliaBehaviour, BootstrapError, Event as KademliaEvent,
+    BootstrapOk, GetClosestPeersOk, GetRecordOk, GetRecordResult, ProgressStep, PutRecordResult,
+    QueryId, QueryResult, Record, /* handler::KademliaHandlerIn, */ store::MemoryStore,
 };
 use libp2p_identity::PeerId;
 use store::{
@@ -323,7 +323,9 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                         // Send the record to all channels that are still open
                         for n in notify {
                             if n.send(record.value.clone()).is_err() {
-                                warn!("Get DHT: channel closed before get record request result could be sent");
+                                warn!(
+                                    "Get DHT: channel closed before get record request result could be sent"
+                                );
                             }
                         }
                     } else {
@@ -336,7 +338,9 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                     // Initiate new query that hits more replicas
                     if retry_count > 0 {
                         let new_retry_count = retry_count - 1;
-                        warn!("Get DHT: Internal disagreement for get dht request {progress:?}! requerying with more nodes. {new_retry_count:?} retries left");
+                        warn!(
+                            "Get DHT: Internal disagreement for get dht request {progress:?}! requerying with more nodes. {new_retry_count:?} retries left"
+                        );
                         self.retry_get(KadGetQuery {
                             backoff,
                             progress: DHTProgress::NotStarted,
@@ -346,7 +350,9 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                             records: Vec::new(),
                         });
                     }
-                    warn!("Get DHT: Internal disagreement for get dht request {progress:?}! Giving up because out of retries. ");
+                    warn!(
+                        "Get DHT: Internal disagreement for get dht request {progress:?}! Giving up because out of retries. "
+                    );
                 }
             }
         }
@@ -363,7 +369,9 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
             match record_results {
                 Ok(_) => {
                     if query.notify.send(()).is_err() {
-                        warn!("Put DHT: client channel closed before put record request could be sent");
+                        warn!(
+                            "Put DHT: client channel closed before put record request could be sent"
+                        );
                     }
                 },
                 Err(e) => {

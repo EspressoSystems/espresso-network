@@ -6,19 +6,18 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use async_trait::async_trait;
 use clap::Parser;
 use committable::Committable;
 use derivative::Derivative;
 use derive_more::derive::{From, Into};
 use espresso_types::{
-    parse_duration, parse_size,
+    BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
+    ValidatorMap, parse_duration, parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
-    BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
-    ValidatorMap,
 };
 use futures::stream::StreamExt;
 use hotshot::InitializerEpochInfo;
@@ -26,33 +25,33 @@ use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
     DhtPersistentStorage, SerializableRecord,
 };
 use hotshot_query_service::{
+    VidCommon,
     availability::LeafQueryData,
     data_source::{
+        Transaction as _, VersionedDataSource,
         storage::{
             pruning::PrunerCfg,
             sql::{
-                include_migrations, query_as, syntax_helpers::MAX_FN, Config, Db, SqlStorage,
-                Transaction, TransactionMode, Write,
+                Config, Db, SqlStorage, Transaction, TransactionMode, Write, include_migrations,
+                query_as, syntax_helpers::MAX_FN,
             },
         },
-        Transaction as _, VersionedDataSource,
     },
     fetching::{
-        request::{LeafRequest, PayloadRequest, VidCommonRequest},
         Provider,
+        request::{LeafRequest, PayloadRequest, VidCommonRequest},
     },
     merklized_state::MerklizedState,
-    VidCommon,
 };
 use hotshot_types::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper, VidCommitment,
         VidDisperseShare,
+        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
     },
     drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
-    message::{convert_proposal, Proposal},
+    message::{Proposal, convert_proposal},
     simple_certificate::{
         LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
         QuorumCertificate2, UpgradeCertificate,
@@ -65,11 +64,11 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use itertools::Itertools;
-use sqlx::{query, Executor, Row};
+use sqlx::{Executor, Row, query};
 
 use crate::{
-    catchup::SqlStateCatchup, persistence::persistence_metrics::PersistenceMetricsValue, NodeType,
-    SeqTypes, ViewNumber, RECENT_STAKE_TABLES_LIMIT,
+    NodeType, RECENT_STAKE_TABLES_LIMIT, SeqTypes, ViewNumber, catchup::SqlStateCatchup,
+    persistence::persistence_metrics::PersistenceMetricsValue,
 };
 
 /// Options for Postgres-backed persistence.
@@ -2595,26 +2594,26 @@ mod testing {
 mod test {
 
     use committable::{Commitment, CommitmentBoundsArkless};
-    use espresso_types::{traits::NullEventConsumer, Header, Leaf, NodeState, ValidatedState};
+    use espresso_types::{Header, Leaf, NodeState, ValidatedState, traits::NullEventConsumer};
     use futures::stream::TryStreamExt;
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_types::{
         data::{
-            ns_table::parse_ns_table, vid_disperse::VidDisperseShare2, EpochNumber, QuorumProposal2,
+            EpochNumber, QuorumProposal2, ns_table::parse_ns_table, vid_disperse::VidDisperseShare2,
         },
         message::convert_proposal,
         simple_certificate::QuorumCertificate,
         simple_vote::QuorumData,
         traits::{
+            EncodeBytes,
             block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
             node_implementation::Versions,
             signature_key::SignatureKey,
-            EncodeBytes,
         },
         utils::EpochTransitionIndicator,
         vid::{
             advz::advz_scheme,
-            avidm::{init_avidm_param, AvidMScheme},
+            avidm::{AvidMScheme, init_avidm_param},
         },
     };
     use jf_vid::VidScheme;
@@ -2622,7 +2621,7 @@ mod test {
     use vbs::version::StaticVersionType;
 
     use super::*;
-    use crate::{persistence::tests::TestablePersistence as _, BLSPubKey, PubKey};
+    use crate::{BLSPubKey, PubKey, persistence::tests::TestablePersistence as _};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_quorum_proposals_leaf_hash_migration() {
@@ -3259,10 +3258,10 @@ mod postgres_tests {
         data::vid_commitment,
         simple_certificate::QuorumCertificate,
         traits::{
+            EncodeBytes,
             block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
             election::Membership,
             signature_key::BuilderSignatureKey,
-            EncodeBytes,
         },
     };
     use sequencer_utils::test_utils::setup_test;

@@ -2,12 +2,12 @@ use std::time::Duration;
 
 use anyhow::Result;
 use espresso_types::{EpochVersion, FeeVersion, UpgradeMode};
-use futures::{future::join_all, StreamExt};
+use futures::{StreamExt, future::join_all};
 use sequencer::Genesis;
 use vbs::version::StaticVersionType;
 
 use crate::{
-    common::{load_genesis_file, NativeDemo, TestConfig, TestRequirements},
+    common::{NativeDemo, TestConfig, TestRequirements, load_genesis_file},
     smoke::assert_native_demo_works,
 };
 

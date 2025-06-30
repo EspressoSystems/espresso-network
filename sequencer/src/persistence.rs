@@ -28,72 +28,72 @@ mod tests {
     use alloy::{
         network::EthereumWallet,
         primitives::Address,
-        providers::{ext::AnvilApi, Provider, ProviderBuilder},
+        providers::{Provider, ProviderBuilder, ext::AnvilApi},
     };
     use anyhow::bail;
     use async_lock::{Mutex, RwLock};
     use async_trait::async_trait;
     use committable::{Commitment, Committable};
     use espresso_contract_deployer::{
-        builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
-        Contract, Contracts,
+        Contract, Contracts, builder::DeployerArgsBuilder,
+        network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
+        Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes,
+        SequencerVersions, ValidatedState,
         traits::{
             EventConsumer, EventsPersistenceRead, MembershipPersistence, NullEventConsumer,
             PersistenceOptions, SequencerPersistence,
         },
         v0_3::{Fetcher, Validator},
-        Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes,
-        SequencerVersions, ValidatedState,
     };
-    use futures::{future::join_all, StreamExt, TryStreamExt};
+    use futures::{StreamExt, TryStreamExt, future::join_all};
     use hotshot::{
-        types::{BLSPubKey, SignatureKey},
         InitializerEpochInfo,
+        types::{BLSPubKey, SignatureKey},
     };
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_query_service::{availability::BlockQueryData, testing::mocks::MockVersions};
     use hotshot_types::{
         data::{
-            ns_table::parse_ns_table, vid_commitment, vid_disperse::VidDisperseShare2, DaProposal2,
-            EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidDisperseShare,
-            ViewNumber,
+            DaProposal2, EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
+            VidDisperseShare, ViewNumber, ns_table::parse_ns_table, vid_commitment,
+            vid_disperse::VidDisperseShare2,
         },
         event::{EventType, HotShotAction, LeafInfo},
         light_client::StateKeyPair,
-        message::{convert_proposal, Proposal, UpgradeLock},
+        message::{Proposal, UpgradeLock, convert_proposal},
         simple_certificate::{
             NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
         },
         simple_vote::{NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData},
         traits::{
+            EncodeBytes,
             block_contents::BlockHeader,
             node_implementation::{ConsensusTime, Versions},
-            EncodeBytes,
         },
         utils::EpochTransitionIndicator,
-        vid::avidm::{init_avidm_param, AvidMScheme},
+        vid::avidm::{AvidMScheme, init_avidm_param},
         vote::HasViewNumber,
     };
     use indexmap::IndexMap;
     use portpicker::pick_unused_port;
     use sequencer_utils::test_utils::setup_test;
-    use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
+    use staking_cli::demo::{DelegationConfig, setup_stake_table_contract_for_test};
     use surf_disco::Client;
     use tide_disco::error::ServerError;
     use tokio::{spawn, time::sleep};
     use vbs::version::{StaticVersion, StaticVersionType, Version};
 
     use crate::{
+        RECENT_STAKE_TABLES_LIMIT, SequencerApiVersion,
         api::{
-            test_helpers::{TestNetwork, TestNetworkConfigBuilder, STAKE_TABLE_CAPACITY_FOR_TEST},
             Options,
+            test_helpers::{STAKE_TABLE_CAPACITY_FOR_TEST, TestNetwork, TestNetworkConfigBuilder},
         },
         catchup::NullStateCatchup,
-        testing::{staking_priv_keys, TestConfigBuilder},
-        SequencerApiVersion, RECENT_STAKE_TABLES_LIMIT,
+        testing::{TestConfigBuilder, staking_priv_keys},
     };
 
     #[async_trait]
@@ -1036,16 +1036,20 @@ mod tests {
         // No garbage collection should have run.
         for i in 0..4 {
             tracing::info!(i, "check proposal availability");
-            assert!(storage
-                .load_vid_share(ViewNumber::new(i))
-                .await
-                .unwrap()
-                .is_some());
-            assert!(storage
-                .load_da_proposal(ViewNumber::new(i))
-                .await
-                .unwrap()
-                .is_some());
+            assert!(
+                storage
+                    .load_vid_share(ViewNumber::new(i))
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+            assert!(
+                storage
+                    .load_da_proposal(ViewNumber::new(i))
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
         }
         tracing::info!("check anchor leaf updated");
         assert_eq!(
@@ -1083,16 +1087,20 @@ mod tests {
         // Garbage collection should have run.
         for i in 0..4 {
             tracing::info!(i, "check proposal garbage collected");
-            assert!(storage
-                .load_vid_share(ViewNumber::new(i))
-                .await
-                .unwrap()
-                .is_none());
-            assert!(storage
-                .load_da_proposal(ViewNumber::new(i))
-                .await
-                .unwrap()
-                .is_none());
+            assert!(
+                storage
+                    .load_vid_share(ViewNumber::new(i))
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                storage
+                    .load_da_proposal(ViewNumber::new(i))
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
         }
         tracing::info!("check anchor leaf updated");
         assert_eq!(
@@ -1254,20 +1262,26 @@ mod tests {
             .append_decided_leaves(ViewNumber::new(2), [], &NullEventConsumer)
             .await
             .unwrap();
-        assert!(storage
-            .load_da_proposal(ViewNumber::new(0))
-            .await
-            .unwrap()
-            .is_none());
-        assert!(storage
-            .load_vid_share(ViewNumber::new(0))
-            .await
-            .unwrap()
-            .is_none());
-        assert!(storage
-            .load_quorum_proposal(ViewNumber::new(0))
-            .await
-            .is_err());
+        assert!(
+            storage
+                .load_da_proposal(ViewNumber::new(0))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            storage
+                .load_vid_share(ViewNumber::new(0))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            storage
+                .load_quorum_proposal(ViewNumber::new(0))
+                .await
+                .is_err()
+        );
     }
 
     async fn assert_events_eq<P: TestablePersistence>(

@@ -47,14 +47,14 @@ pub enum OverallSafetyTaskErr<TYPES: NodeType> {
     #[error("Too many view failures: {0:?}")]
     TooManyFailures(HashSet<TYPES::View>),
 
-    #[error("Inconsistent failed views: expected: {expected_failed_views:?}, actual: {actual_failed_views:?}")]
+    #[error(
+        "Inconsistent failed views: expected: {expected_failed_views:?}, actual: {actual_failed_views:?}"
+    )]
     InconsistentFailedViews {
         expected_failed_views: Vec<TYPES::View>,
         actual_failed_views: HashSet<TYPES::View>,
     },
-    #[error(
-        "Not enough round results: results_count: {results_count}, views_count: {views_count}"
-    )]
+    #[error("Not enough round results: results_count: {results_count}, views_count: {views_count}")]
     NotEnoughRoundResults {
         results_count: usize,
         views_count: usize,

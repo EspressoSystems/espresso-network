@@ -8,17 +8,17 @@ use std::{
     collections::HashMap,
     num::NonZeroUsize,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
 };
 
-use async_broadcast::{broadcast, Sender};
+use async_broadcast::{Sender, broadcast};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
-use futures::{future::BoxFuture, Stream, StreamExt};
+use futures::{Stream, StreamExt, future::BoxFuture};
 use hotshot::{
     traits::BlockPayload,
     types::{Event, EventType, SignatureKey},
@@ -41,11 +41,11 @@ use hotshot_types::{
     utils::BuilderCommitment,
 };
 use lru::LruCache;
-use tide_disco::{method::ReadState, App, Url};
+use tide_disco::{App, Url, method::ReadState};
 use tokio::spawn;
 use vbs::version::StaticVersionType;
 
-use super::{build_block, run_builder_source, BlockEntry, BuilderTask, TestBuilderImplementation};
+use super::{BlockEntry, BuilderTask, TestBuilderImplementation, build_block, run_builder_source};
 use crate::test_builder::BuilderChange;
 
 pub struct SimpleBuilderImplementation;

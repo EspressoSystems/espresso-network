@@ -1,10 +1,10 @@
 use alloy::{
     eips::BlockId,
     network::EthereumWallet,
-    primitives::{utils::parse_ether, Address, U256},
-    signers::local::{coins_bip39::English, MnemonicBuilder},
+    primitives::{Address, U256, utils::parse_ether},
+    signers::local::{MnemonicBuilder, coins_bip39::English},
 };
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
 use demo::DelegationConfig;

@@ -4,27 +4,27 @@ use std::{
 };
 
 use alloy::primitives::U256;
-use async_broadcast::{broadcast, InactiveReceiver, Sender};
+use async_broadcast::{InactiveReceiver, Sender, broadcast};
 use async_lock::{Mutex, RwLock};
 use hotshot_utils::{
-    anytrace::{self, Error, Level, Result, Wrap, DEFAULT_LOG_LEVEL},
+    anytrace::{self, DEFAULT_LOG_LEVEL, Error, Level, Result, Wrap},
     ensure, error, line_info, log, warn,
 };
 
 use crate::{
+    PeerConfig,
     data::Leaf2,
-    drb::{compute_drb_result, DrbDifficultySelectorFn, DrbInput, DrbResult},
+    drb::{DrbDifficultySelectorFn, DrbInput, DrbResult, compute_drb_result},
     stake_table::HSStakeTable,
     traits::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeType},
         storage::{
-            load_drb_progress_fn, store_drb_progress_fn, store_drb_result_fn, LoadDrbProgressFn,
-            Storage, StoreDrbProgressFn, StoreDrbResultFn,
+            LoadDrbProgressFn, Storage, StoreDrbProgressFn, StoreDrbResultFn, load_drb_progress_fn,
+            store_drb_progress_fn, store_drb_result_fn,
         },
     },
     utils::{root_block_in_epoch, transition_block_for_epoch},
-    PeerConfig,
 };
 
 type EpochMap<TYPES> =
@@ -421,7 +421,9 @@ where
     ) -> Result<()> {
         let root_epoch = TYPES::Epoch::new(epoch.saturating_sub(2));
         let Ok(root_membership) = self.stake_table_for_epoch(Some(root_epoch)).await else {
-            return Err(anytrace::error!("We tried to fetch drb result for epoch {epoch:?} but we don't have its root epoch {root_epoch:?}. This should not happen"));
+            return Err(anytrace::error!(
+                "We tried to fetch drb result for epoch {epoch:?} but we don't have its root epoch {root_epoch:?}. This should not happen"
+            ));
         };
 
         let Ok(drb_membership) = root_membership.next_epoch_stake_table().await else {
@@ -451,7 +453,7 @@ where
             let Some(ref drb_difficulty_selector) = *self.drb_difficulty_selector.read().await
             else {
                 return Err(anytrace::error!(
-                  "The DRB difficulty selector is missing from the epoch membership coordinator. This node will not be able to spawn any DRB calculation tasks from catchup."
+                    "The DRB difficulty selector is missing from the epoch membership coordinator. This node will not be able to spawn any DRB calculation tasks from catchup."
                 ));
             };
 

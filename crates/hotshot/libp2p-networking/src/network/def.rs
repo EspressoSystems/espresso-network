@@ -6,23 +6,23 @@
 
 use hotshot_types::traits::signature_key::SignatureKey;
 use libp2p::{
-    autonat,
+    Multiaddr, autonat,
     gossipsub::{Behaviour as GossipBehaviour, Event as GossipEvent, IdentTopic},
     identify::{Behaviour as IdentifyBehaviour, Event as IdentifyEvent},
     kad::store::MemoryStore,
     request_response::{OutboundRequestId, ResponseChannel},
-    Multiaddr,
 };
 use libp2p_identity::PeerId;
 use libp2p_swarm_derive::NetworkBehaviour;
 use tracing::{debug, error};
 
 use super::{
+    NetworkEventInternal,
     behaviours::dht::store::{
         persistent::{DhtPersistentStorage, PersistentStore},
         validated::ValidatedStore,
     },
-    cbor, NetworkEventInternal,
+    cbor,
 };
 
 /// Overarching network behaviour performing:

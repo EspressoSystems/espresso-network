@@ -13,44 +13,44 @@ use alloy::{
     rpc::client::RpcClient,
     signers::{
         k256::ecdsa::SigningKey,
-        local::{coins_bip39::English, LocalSigner, MnemonicBuilder},
+        local::{LocalSigner, MnemonicBuilder, coins_bip39::English},
     },
 };
 use anyhow::Context;
 use async_trait::async_trait;
 use clap::{Parser, ValueEnum};
 use espresso_contract_deployer::{
-    self as deployer, network_config::light_client_genesis_from_stake_table, Contract, Contracts,
-    DeployedContracts, HttpProviderWithWallet,
+    self as deployer, Contract, Contracts, DeployedContracts, HttpProviderWithWallet,
+    network_config::light_client_genesis_from_stake_table,
 };
 use espresso_types::{
-    parse_duration, v0_3::ChainConfig, EpochVersion, L1ClientOptions, SeqTypes, SequencerVersions,
-    ValidatedState,
+    EpochVersion, L1ClientOptions, SeqTypes, SequencerVersions, ValidatedState, parse_duration,
+    v0_3::ChainConfig,
 };
-use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
+use futures::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
-use hotshot_state_prover::service::{run_prover_service, StateProverConfig};
+use hotshot_state_prover::service::{StateProverConfig, run_prover_service};
 use hotshot_types::{
-    stake_table::{one_honest_threshold, HSStakeTable},
+    stake_table::{HSStakeTable, one_honest_threshold},
     utils::epoch_from_block_number,
 };
 use itertools::izip;
 use portpicker::pick_unused_port;
 use sequencer::{
+    SequencerApiVersion,
     api::{
         options,
-        test_helpers::{TestNetwork, TestNetworkConfigBuilder, STAKE_TABLE_CAPACITY_FOR_TEST},
+        test_helpers::{STAKE_TABLE_CAPACITY_FOR_TEST, TestNetwork, TestNetworkConfigBuilder},
     },
     persistence,
-    state_signature::relay_server::{run_relay_server_with_state, StateRelayServerState},
+    state_signature::relay_server::{StateRelayServerState, run_relay_server_with_state},
     testing::TestConfigBuilder,
-    SequencerApiVersion,
 };
 use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
-use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
+use staking_cli::demo::{DelegationConfig, setup_stake_table_contract_for_test};
 use tempfile::NamedTempFile;
-use tide_disco::{error::ServerError, method::ReadState, Api, Error as _, StatusCode};
+use tide_disco::{Api, Error as _, StatusCode, error::ServerError, method::ReadState};
 use tokio::spawn;
 use url::Url;
 use vbs::version::StaticVersionType;

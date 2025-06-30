@@ -436,15 +436,15 @@ pub use error::Error;
 use futures::{future::BoxFuture, stream::StreamExt};
 use hotshot::types::SystemContextHandle;
 use hotshot_types::traits::{
-    node_implementation::{NodeImplementation, NodeType, Versions},
     BlockPayload,
+    node_implementation::{NodeImplementation, NodeType, Versions},
 };
 pub use hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate};
 pub use resolvable::Resolvable;
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 use task::BackgroundTask;
-use tide_disco::{method::ReadState, App, StatusCode};
+use tide_disco::{App, StatusCode, method::ReadState};
 use vbs::version::StaticVersionType;
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -601,7 +601,7 @@ mod test {
 
     use async_lock::RwLock;
     use async_trait::async_trait;
-    use atomic_store::{load_store::BincodeLoadStore, AtomicStore, AtomicStoreLoader, RollingLog};
+    use atomic_store::{AtomicStore, AtomicStoreLoader, RollingLog, load_store::BincodeLoadStore};
     use futures::future::FutureExt;
     use hotshot_types::{data::VidShare, simple_certificate::QuorumCertificate2};
     use portpicker::pick_unused_port;

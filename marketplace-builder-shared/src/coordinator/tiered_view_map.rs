@@ -3,7 +3,7 @@
 //! number
 
 use std::{
-    collections::{btree_map::Entry, BTreeMap},
+    collections::{BTreeMap, btree_map::Entry},
     hash::Hash,
     ops::RangeBounds,
 };
@@ -13,7 +13,7 @@ use hotshot_types::{
     traits::node_implementation::{ConsensusTime, NodeType},
     utils::BuilderCommitment,
 };
-use nonempty_collections::{nem, NEMap};
+use nonempty_collections::{NEMap, nem};
 
 use crate::block::{BlockId, BuilderStateId};
 
@@ -183,7 +183,7 @@ mod tests {
 
     use hotshot_example_types::node_types::TestTypes;
     use hotshot_types::{data::ViewNumber, traits::node_implementation::ConsensusTime};
-    use rand::{distributions::Standard, thread_rng, Rng};
+    use rand::{Rng, distributions::Standard, thread_rng};
     use tracing_test::traced_test;
 
     use super::*;

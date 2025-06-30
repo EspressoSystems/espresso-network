@@ -3,11 +3,11 @@ use anyhow::Context;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
+    BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
+    Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
     traits::{SequencerPersistence, StateCatchup},
     v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment},
     v0_3::ChainConfig,
-    BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
 };
 use hotshot::traits::NodeImplementation;
 use hotshot_types::{
@@ -22,17 +22,17 @@ use request_response::RequestType;
 use tokio::time::timeout;
 
 use crate::request_response::{
-    request::{Request, Response},
     RequestResponseProtocol,
+    request::{Request, Response},
 };
 
 #[async_trait]
 impl<
-        I: NodeImplementation<SeqTypes>,
-        V: Versions,
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-    > StateCatchup for RequestResponseProtocol<I, V, N, P>
+    I: NodeImplementation<SeqTypes>,
+    V: Versions,
+    N: ConnectedNetwork<PubKey>,
+    P: SequencerPersistence,
+> StateCatchup for RequestResponseProtocol<I, V, N, P>
 {
     async fn try_fetch_leaf(
         &self,

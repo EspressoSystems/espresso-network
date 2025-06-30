@@ -1,7 +1,7 @@
 use crate::{
-    v0::traits::{FromNsPayloadBytes, NsPayloadBytesRange},
     NamespaceId, NsPayload, NsPayloadByteLen, NumTxs, NumTxsRange, NumTxsUnchecked, Transaction,
     TxIndex, TxIter, TxPayloadRange, TxTableEntriesRange,
+    v0::traits::{FromNsPayloadBytes, NsPayloadBytesRange},
 };
 
 impl NsPayload {

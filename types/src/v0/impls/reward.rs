@@ -1,10 +1,10 @@
 use std::{collections::HashSet, iter::once, str::FromStr};
 
 use alloy::primitives::{
-    utils::{parse_units, ParseUnits},
     Address, U256,
+    utils::{ParseUnits, parse_units},
 };
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
@@ -26,14 +26,14 @@ use sequencer_utils::{
 };
 
 use super::{
+    Leaf2, NodeState, ValidatedState,
     v0_1::{
-        RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardAmount, RewardInfo,
-        RewardMerkleCommitment, RewardMerkleProof, RewardMerkleTree, COMMISSION_BASIS_POINTS,
+        COMMISSION_BASIS_POINTS, RewardAccount, RewardAccountProof, RewardAccountQueryData,
+        RewardAmount, RewardInfo, RewardMerkleCommitment, RewardMerkleProof, RewardMerkleTree,
     },
     v0_3::Validator,
-    Leaf2, NodeState, ValidatedState,
 };
-use crate::{eth_signature_key::EthKeyPair, Delta, FeeAccount};
+use crate::{Delta, FeeAccount, eth_signature_key::EthKeyPair};
 
 impl Committable for RewardInfo {
     fn commit(&self) -> Commitment<Self> {
@@ -610,12 +610,14 @@ pub mod tests {
         assert_eq!(*leader_commission, distributor.block_reward);
 
         distributor.validator.commission = 10001;
-        assert!(distributor
-            .compute_rewards()
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("must not exceed"));
+        assert!(
+            distributor
+                .compute_rewards()
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("must not exceed")
+        );
     }
 
     #[test]

@@ -5,7 +5,7 @@ use bincode::Options;
 use cdn_broker::reexports::{
     connection::protocols::{Quic, Tcp, TcpTls},
     crypto::signature::{Serializable, SignatureScheme},
-    def::{hook::NoMessageHook, ConnectionDef, RunDef, Topic as TopicTrait},
+    def::{ConnectionDef, RunDef, Topic as TopicTrait, hook::NoMessageHook},
     discovery::{Embedded, Redis},
 };
 use hotshot::types::SignatureKey;

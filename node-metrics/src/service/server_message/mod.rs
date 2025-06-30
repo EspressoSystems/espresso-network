@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use bitvec::vec::BitVec;
-use espresso_types::{v0_3::Validator, SeqTypes};
+use espresso_types::{SeqTypes, v0_3::Validator};
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::explorer::{BlockDetail, ExplorerHistograms};
 use hotshot_types::PeerConfig;

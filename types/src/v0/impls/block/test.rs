@@ -9,8 +9,8 @@ use rand::RngCore;
 use sequencer_utils::test_utils::setup_test;
 
 use crate::{
-    v0_1::ADVZNsProof, v0_3::ChainConfig, BlockSize, NamespaceId, NodeState, Payload, Transaction,
-    TxProof, ValidatedState,
+    BlockSize, NamespaceId, NodeState, Payload, Transaction, TxProof, ValidatedState,
+    v0_1::ADVZNsProof, v0_3::ChainConfig,
 };
 
 #[tokio::test(flavor = "multi_thread")]
@@ -67,9 +67,11 @@ async fn basic_correctness() {
                 assert_eq!(tx, tx2);
                 tx_proof
             };
-            assert!(tx_proof2
-                .verify(block.ns_table(), &tx, &vid_commit, &vid_common)
-                .unwrap());
+            assert!(
+                tx_proof2
+                    .verify(block.ns_table(), &tx, &vid_commit, &vid_common)
+                    .unwrap()
+            );
         }
         assert!(
             all_txs.is_empty(),

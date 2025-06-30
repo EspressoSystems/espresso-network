@@ -195,7 +195,7 @@ where
         None => {
             return Err(E::custom(
                 "no non-breaking space found in expected MonetaryValue",
-            ))
+            ));
         },
     };
 

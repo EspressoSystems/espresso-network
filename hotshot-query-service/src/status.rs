@@ -29,7 +29,7 @@ use derive_more::From;
 use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
-use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, StatusCode};
+use tide_disco::{Api, RequestError, StatusCode, api::ApiError, method::ReadState};
 use vbs::version::StaticVersionType;
 
 use crate::api::load_api;
@@ -121,6 +121,7 @@ mod test {
 
     use super::*;
     use crate::{
+        ApiState, Error,
         data_source::ExtensibleDataSource,
         task::BackgroundTask,
         testing::{
@@ -128,7 +129,6 @@ mod test {
             mocks::{MockBase, MockVersions},
             setup_test, sleep,
         },
-        ApiState, Error,
     };
 
     #[tokio::test(flavor = "multi_thread")]

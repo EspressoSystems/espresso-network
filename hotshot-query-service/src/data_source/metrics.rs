@@ -15,9 +15,9 @@
 use async_trait::async_trait;
 
 use crate::{
+    QueryError, QueryResult,
     metrics::PrometheusMetrics,
     status::{HasMetrics, StatusDataSource},
-    QueryError, QueryResult,
 };
 
 /// A minimal data source for the status API provided in this crate, with no persistent storage.

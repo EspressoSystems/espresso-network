@@ -1,15 +1,15 @@
 use std::{marker::PhantomData, sync::Arc};
 
-use async_broadcast::{broadcast, InactiveReceiver, Sender as BroadcastSender};
+use async_broadcast::{InactiveReceiver, Sender as BroadcastSender, broadcast};
 use async_trait::async_trait;
 use futures::{
     future::BoxFuture,
     stream::{BoxStream, Stream, StreamExt},
 };
 use hotshot_types::{
+    PeerConfig,
     event::{Event, EventType, LegacyEvent},
     traits::node_implementation::NodeType,
-    PeerConfig,
 };
 use serde::{Deserialize, Serialize};
 use tide_disco::method::ReadState;

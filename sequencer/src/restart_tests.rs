@@ -11,32 +11,33 @@ use alloy::{
     node_bindings::Anvil,
     primitives::Address,
     providers::{
+        Provider, ProviderBuilder, RootProvider,
         ext::AnvilApi,
         fillers::{BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller},
         layers::AnvilProvider,
-        Provider, ProviderBuilder, RootProvider,
     },
     signers::local::LocalSigner,
 };
 use anyhow::bail;
 use cdn_broker::{
-    reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
     Broker, Config as BrokerConfig,
+    reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
 };
 use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
 use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_contract_deployer::{
-    builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table, Contract,
-    Contracts,
+    Contract, Contracts, builder::DeployerArgsBuilder,
+    network_config::light_client_genesis_from_stake_table,
 };
 use espresso_types::{
-    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig, EpochVersion,
-    FeeAccount, L1Client, Leaf2, PrivKey, PubKey, SeqTypes, SequencerVersions, Transaction, V0_0,
+    EpochVersion, FeeAccount, L1Client, Leaf2, PrivKey, PubKey, SeqTypes, SequencerVersions,
+    Transaction, V0_0, eth_signature_key::EthKeyPair, traits::PersistenceOptions,
+    v0_3::ChainConfig,
 };
 use futures::{
-    future::{join_all, try_join_all, BoxFuture, FutureExt},
+    future::{BoxFuture, FutureExt, join_all, try_join_all},
     stream::{BoxStream, StreamExt},
 };
 use hotshot::traits::implementations::derive_libp2p_peer_id;
@@ -47,23 +48,23 @@ use hotshot_testing::{
     test_builder::BuilderChange,
 };
 use hotshot_types::{
+    PeerConfig,
     data::EpochNumber,
     event::{Event, EventType},
     light_client::StateKeyPair,
     network::{Libp2pConfig, NetworkConfig},
     traits::{node_implementation::ConsensusTime, signature_key::SignatureKey},
-    PeerConfig,
 };
 use itertools::Itertools;
 use options::Modules;
 use portpicker::pick_unused_port;
 use run::init_with_storage;
 use sequencer_utils::test_utils::setup_test;
-use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
-use surf_disco::{error::ClientError, Url};
+use staking_cli::demo::{DelegationConfig, setup_stake_table_contract_for_test};
+use surf_disco::{Url, error::ClientError};
 use tempfile::TempDir;
 use tokio::{
-    task::{spawn, JoinHandle},
+    task::{JoinHandle, spawn},
     time::{sleep, timeout},
 };
 use vbs::version::Version;
@@ -71,6 +72,7 @@ use vec1::vec1;
 
 use super::*;
 use crate::{
+    SequencerApiVersion,
     api::{
         self, data_source::testing::TestableSequencerDataSource, options::Query,
         test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
@@ -78,7 +80,6 @@ use crate::{
     genesis::{L1Finalized, StakeTableConfig},
     network::cdn::{TestingDef, WrappedSignatureKey},
     testing::{staking_priv_keys, wait_for_decide_on_handle},
-    SequencerApiVersion,
 };
 type MockSequencerVersions = SequencerVersions<EpochVersion, V0_0>;
 async fn test_restart_helper(network: (usize, usize), restart: (usize, usize), cdn: bool) {
@@ -1236,7 +1237,10 @@ impl PortPicker {
             if self.allocated.insert(port) {
                 break port;
             }
-            tracing::warn!(port, "picked port which is already allocated, will try again. If this error persists, try reducing the number of ports being used.");
+            tracing::warn!(
+                port,
+                "picked port which is already allocated, will try again. If this error persists, try reducing the number of ports being used."
+            );
         }
     }
 }

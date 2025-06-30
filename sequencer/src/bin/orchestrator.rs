@@ -3,7 +3,7 @@ use std::{num::NonZeroUsize, time::Duration};
 use alloy::hex::{self, FromHexError};
 use clap::Parser;
 use derive_more::From;
-use espresso_types::{parse_duration, Ratio, SeqTypes};
+use espresso_types::{Ratio, SeqTypes, parse_duration};
 use hotshot_orchestrator::run_orchestrator;
 use hotshot_types::network::{Libp2pConfig, NetworkConfig};
 use sequencer_utils::logging;

@@ -31,12 +31,12 @@ use sqlx::{Arguments, FromRow, Row};
 
 use super::{Database, Db, Query, QueryAs, Transaction};
 use crate::{
+    Header, Leaf2, Payload, QueryError, QueryResult,
     availability::{
         BlockId, BlockQueryData, LeafQueryData, PayloadQueryData, QueryableHeader,
         QueryablePayload, StateCertQueryData, VidCommonQueryData,
     },
     data_source::storage::{PayloadMetadata, VidCommonMetadata},
-    Header, Leaf2, Payload, QueryError, QueryResult,
 };
 
 pub(super) mod availability;
@@ -234,8 +234,7 @@ where
     }
 }
 
-const PAYLOAD_METADATA_COLUMNS: &str =
-    "h.height AS height, h.hash AS hash, h.payload_hash AS payload_hash, p.size AS payload_size, p.num_transactions AS num_transactions";
+const PAYLOAD_METADATA_COLUMNS: &str = "h.height AS height, h.hash AS hash, h.payload_hash AS payload_hash, p.size AS payload_size, p.num_transactions AS num_transactions";
 
 impl<'r, Types> FromRow<'r, <Db as Database>::Row> for PayloadMetadata<Types>
 where

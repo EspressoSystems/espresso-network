@@ -3,8 +3,8 @@ use std::fmt;
 use alloy::{
     network::{EthereumWallet, TransactionBuilder as _},
     primitives::{
-        utils::{format_ether, parse_ether},
         Address, U256,
+        utils::{format_ether, parse_ether},
     },
     providers::{Provider, ProviderBuilder, WalletProvider},
     rpc::types::TransactionRequest,
@@ -23,10 +23,10 @@ use rand_chacha::ChaCha20Rng;
 use url::Url;
 
 use crate::{
-    delegation::delegate,
-    parse::{parse_bls_priv_key, parse_state_priv_key, Commission},
-    registration::register_validator,
     Config,
+    delegation::delegate,
+    parse::{Commission, parse_bls_priv_key, parse_state_priv_key},
+    registration::register_validator,
 };
 
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]

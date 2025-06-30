@@ -5721,10 +5721,10 @@ pub mod EspTokenV2 {
     /// Instantiation and getters/setters.
     #[automatically_derived]
     impl<
-            T: alloy_contract::private::Transport + ::core::clone::Clone,
-            P: alloy_contract::private::Provider<T, N>,
-            N: alloy_contract::private::Network,
-        > EspTokenV2Instance<T, P, N>
+        T: alloy_contract::private::Transport + ::core::clone::Clone,
+        P: alloy_contract::private::Provider<T, N>,
+        N: alloy_contract::private::Network,
+    > EspTokenV2Instance<T, P, N>
     {
         /**Creates a new wrapper around an on-chain [`EspTokenV2`](self) contract instance.
 
@@ -5795,10 +5795,10 @@ pub mod EspTokenV2 {
     /// Function calls.
     #[automatically_derived]
     impl<
-            T: alloy_contract::private::Transport + ::core::clone::Clone,
-            P: alloy_contract::private::Provider<T, N>,
-            N: alloy_contract::private::Network,
-        > EspTokenV2Instance<T, P, N>
+        T: alloy_contract::private::Transport + ::core::clone::Clone,
+        P: alloy_contract::private::Provider<T, N>,
+        N: alloy_contract::private::Network,
+    > EspTokenV2Instance<T, P, N>
     {
         /// Creates a new call builder using this contract instance's provider and address.
         ///
@@ -5929,10 +5929,10 @@ pub mod EspTokenV2 {
     /// Event filters.
     #[automatically_derived]
     impl<
-            T: alloy_contract::private::Transport + ::core::clone::Clone,
-            P: alloy_contract::private::Provider<T, N>,
-            N: alloy_contract::private::Network,
-        > EspTokenV2Instance<T, P, N>
+        T: alloy_contract::private::Transport + ::core::clone::Clone,
+        P: alloy_contract::private::Provider<T, N>,
+        N: alloy_contract::private::Network,
+    > EspTokenV2Instance<T, P, N>
     {
         /// Creates a new event filter using this contract instance's provider and address.
         ///

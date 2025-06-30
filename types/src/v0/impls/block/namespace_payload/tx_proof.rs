@@ -1,10 +1,10 @@
 use hotshot_types::{
     traits::EncodeBytes,
-    vid::advz::{advz_scheme, ADVZCommitment, ADVZCommon, ADVZScheme},
+    vid::advz::{ADVZCommitment, ADVZCommon, ADVZScheme, advz_scheme},
 };
 use jf_vid::{
-    payload_prover::{PayloadProver, Statement},
     VidScheme,
+    payload_prover::{PayloadProver, Statement},
 };
 
 use crate::{

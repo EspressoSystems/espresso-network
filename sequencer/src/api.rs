@@ -1,6 +1,6 @@
 use std::{pin::Pin, sync::Arc, time::Duration};
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use async_lock::RwLock;
 use async_once_cell::Lazy;
 use async_trait::async_trait;
@@ -11,13 +11,13 @@ use data_source::{
 };
 use derivative::Derivative;
 use espresso_types::{
+    AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
+    Transaction, ValidatorMap,
     config::PublicNetworkConfig,
     retain_accounts,
     v0::traits::SequencerPersistence,
     v0_1::{RewardAccount, RewardAmount, RewardMerkleTree},
     v0_3::ChainConfig,
-    AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
-    Transaction, ValidatorMap,
 };
 use futures::{
     future::{BoxFuture, Future, FutureExt},
@@ -27,9 +27,10 @@ use hotshot_events_service::events_source::{
     EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
 };
 use hotshot_query_service::{
-    availability::VidCommonQueryData, data_source::ExtensibleDataSource, VidCommon,
+    VidCommon, availability::VidCommonQueryData, data_source::ExtensibleDataSource,
 };
 use hotshot_types::{
+    PeerConfig,
     data::{VidCommitment, VidShare, ViewNumber},
     event::{Event, LegacyEvent},
     light_client::StateSignatureRequestBody,
@@ -38,9 +39,8 @@ use hotshot_types::{
         network::ConnectedNetwork,
         node_implementation::{NodeType, Versions},
     },
-    vid::avidm::{init_avidm_param, AvidMScheme},
+    vid::avidm::{AvidMScheme, init_avidm_param},
     vote::HasViewNumber,
-    PeerConfig,
 };
 use itertools::Itertools;
 use jf_merkle_tree::MerkleTreeScheme;
@@ -50,14 +50,14 @@ use tokio::time::timeout;
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
 use crate::{
-    catchup::{add_fee_accounts_to_state, add_reward_accounts_to_state, CatchupStorage},
+    SeqTypes, SequencerApiVersion, SequencerContext,
+    catchup::{CatchupStorage, add_fee_accounts_to_state, add_reward_accounts_to_state},
     context::Consensus,
     request_response::{
         data_source::retain_reward_accounts,
         request::{Request, Response},
     },
     state_signature::StateSigner,
-    SeqTypes, SequencerApiVersion, SequencerContext,
 };
 
 pub mod data_source;
@@ -363,7 +363,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         };
 
         // Create a random request id
-        let request_id = rand::thread_rng().gen();
+        let request_id = rand::thread_rng().r#gen();
 
         // Request and verify the shares from all other nodes, timing out after `duration` seconds
         let received_shares = Arc::new(parking_lot::Mutex::new(Vec::new()));
@@ -476,11 +476,11 @@ where
 }
 
 impl<
-        N: ConnectedNetwork<PubKey>,
-        V: Versions,
-        P: SequencerPersistence,
-        D: CatchupStorage + Send + Sync,
-    > CatchupDataSource for StorageState<N, P, D, V>
+    N: ConnectedNetwork<PubKey>,
+    V: Versions,
+    P: SequencerPersistence,
+    D: CatchupStorage + Send + Sync,
+> CatchupDataSource for StorageState<N, P, D, V>
 {
     #[tracing::instrument(skip(self, instance))]
     async fn get_accounts(
@@ -806,19 +806,19 @@ pub mod test_helpers {
     use alloy::{
         network::EthereumWallet,
         primitives::{Address, U256},
-        providers::{ext::AnvilApi, ProviderBuilder},
+        providers::{ProviderBuilder, ext::AnvilApi},
     };
     use committable::Committable;
     use espresso_contract_deployer::{
-        builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
-        Contract, Contracts,
+        Contract, Contracts, builder::DeployerArgsBuilder,
+        network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
         EpochVersion, MockSequencerVersions, NamespaceId, ValidatedState,
+        v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
     };
     use futures::{
-        future::{join_all, FutureExt},
+        future::{FutureExt, join_all},
         stream::StreamExt,
     };
     use hotshot::types::{Event, EventType};
@@ -831,10 +831,10 @@ pub mod test_helpers {
     use jf_merkle_tree::{MerkleCommitment, MerkleTreeScheme};
     use portpicker::pick_unused_port;
     use sequencer_utils::test_utils::setup_test;
-    use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
+    use staking_cli::demo::{DelegationConfig, setup_stake_table_contract_for_test};
     use surf_disco::Client;
     use tempfile::TempDir;
-    use tide_disco::{error::ServerError, Api, App, Error, StatusCode};
+    use tide_disco::{Api, App, Error, StatusCode, error::ServerError};
     use tokio::{spawn, task::JoinHandle, time::sleep};
     use url::Url;
     use vbs::version::{StaticVersion, StaticVersionType};
@@ -844,7 +844,7 @@ pub mod test_helpers {
         catchup::NullStateCatchup,
         network,
         persistence::no_storage,
-        testing::{run_legacy_builder, wait_for_decide_on_handle, TestConfig, TestConfigBuilder},
+        testing::{TestConfig, TestConfigBuilder, run_legacy_builder, wait_for_decide_on_handle},
     };
 
     pub const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 10;
@@ -906,9 +906,8 @@ pub mod test_helpers {
     impl<const NUM_NODES: usize>
         TestNetworkConfigBuilder<{ NUM_NODES }, no_storage::Options, NullStateCatchup>
     {
-        pub fn with_num_nodes(
-        ) -> TestNetworkConfigBuilder<{ NUM_NODES }, no_storage::Options, NullStateCatchup>
-        {
+        pub fn with_num_nodes()
+        -> TestNetworkConfigBuilder<{ NUM_NODES }, no_storage::Options, NullStateCatchup> {
             TestNetworkConfigBuilder {
                 state: std::array::from_fn(|_| ValidatedState::default()),
                 persistence: Some([no_storage::Options; { NUM_NODES }]),
@@ -1487,8 +1486,8 @@ mod api_tests {
     use committable::Committable;
     use data_source::testing::TestableSequencerDataSource;
     use espresso_types::{
-        traits::{EventConsumer, PersistenceOptions},
         Header, Leaf2, MockSequencerVersions, NamespaceId, NamespaceProofQueryData, ValidatedState,
+        traits::{EventConsumer, PersistenceOptions},
     };
     use futures::{future, stream::StreamExt};
     use hotshot_example_types::node_types::{EpochsTestVersions, TestVersions};
@@ -1497,22 +1496,22 @@ mod api_tests {
     };
     use hotshot_types::{
         data::{
-            ns_table::parse_ns_table, vid_disperse::VidDisperseShare2, DaProposal2, EpochNumber,
-            QuorumProposal2, QuorumProposalWrapper, VidCommitment,
+            DaProposal2, EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
+            ns_table::parse_ns_table, vid_disperse::VidDisperseShare2,
         },
         event::LeafInfo,
         message::Proposal,
         simple_certificate::QuorumCertificate2,
-        traits::{node_implementation::ConsensusTime, signature_key::SignatureKey, EncodeBytes},
+        traits::{EncodeBytes, node_implementation::ConsensusTime, signature_key::SignatureKey},
         utils::EpochTransitionIndicator,
-        vid::avidm::{init_avidm_param, AvidMScheme},
+        vid::avidm::{AvidMScheme, init_avidm_param},
     };
     use portpicker::pick_unused_port;
     use sequencer_utils::test_utils::setup_test;
     use surf_disco::Client;
     use test_helpers::{
-        catchup_test_helper, state_signature_test_helper, status_test_helper, submit_test_helper,
-        TestNetwork, TestNetworkConfigBuilder,
+        TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, state_signature_test_helper,
+        status_test_helper, submit_test_helper,
     };
     use tide_disco::error::ServerError;
     use vbs::version::StaticVersion;
@@ -1521,7 +1520,7 @@ mod api_tests {
     use crate::{
         network,
         persistence::no_storage::NoStorage,
-        testing::{wait_for_decide_on_handle, TestConfigBuilder},
+        testing::{TestConfigBuilder, wait_for_decide_on_handle},
     };
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1828,33 +1827,43 @@ mod api_tests {
                 .unwrap();
 
             // Check that all data has been garbage collected for the decided views.
-            assert!(persistence
-                .load_da_proposal(leaf.view_number())
-                .await
-                .unwrap()
-                .is_none());
-            assert!(persistence
-                .load_vid_share(leaf.view_number())
-                .await
-                .unwrap()
-                .is_none());
-            assert!(persistence
-                .load_quorum_proposal(leaf.view_number())
-                .await
-                .is_err());
+            assert!(
+                persistence
+                    .load_da_proposal(leaf.view_number())
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                persistence
+                    .load_vid_share(leaf.view_number())
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                persistence
+                    .load_quorum_proposal(leaf.view_number())
+                    .await
+                    .is_err()
+            );
         }
 
         // Check that data has _not_ been garbage collected for the missing view.
-        assert!(persistence
-            .load_da_proposal(ViewNumber::new(2))
-            .await
-            .unwrap()
-            .is_some());
-        assert!(persistence
-            .load_vid_share(ViewNumber::new(2))
-            .await
-            .unwrap()
-            .is_some());
+        assert!(
+            persistence
+                .load_da_proposal(ViewNumber::new(2))
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            persistence
+                .load_vid_share(ViewNumber::new(2))
+                .await
+                .unwrap()
+                .is_some()
+        );
         persistence
             .load_quorum_proposal(ViewNumber::new(2))
             .await
@@ -2029,16 +2038,17 @@ mod test {
     use async_lock::Mutex;
     use committable::{Commitment, Committable};
     use espresso_contract_deployer::{
-        builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
-        Contract, Contracts,
+        Contract, Contracts, builder::DeployerArgsBuilder,
+        network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
+        EpochVersion, FeeAmount, FeeVersion, Header, L1ClientOptions, MockSequencerVersions,
+        NamespaceId, RewardDistributor, SequencerVersions, ValidatedState,
         config::PublicHotShotConfig,
         traits::{NullEventConsumer, PersistenceOptions},
-        v0_1::{RewardAmount, COMMISSION_BASIS_POINTS},
+        v0_1::{COMMISSION_BASIS_POINTS, RewardAmount},
         v0_3::Fetcher,
-        validators_from_l1_events, EpochVersion, FeeAmount, FeeVersion, Header, L1ClientOptions,
-        MockSequencerVersions, NamespaceId, RewardDistributor, SequencerVersions, ValidatedState,
+        validators_from_l1_events,
     };
     use futures::{
         future::{self, join_all},
@@ -2052,16 +2062,16 @@ mod test {
             BlockQueryData, BlockSummaryQueryData, LeafQueryData, TransactionQueryData,
             VidCommonQueryData,
         },
-        data_source::{sql::Config, storage::SqlStorage, VersionedDataSource},
+        data_source::{VersionedDataSource, sql::Config, storage::SqlStorage},
         explorer::TransactionSummariesResponse,
         types::HeightIndexed,
     };
     use hotshot_types::{
+        ValidatorConfig,
         data::EpochNumber,
         event::LeafInfo,
         traits::{election::Membership, metrics::NoMetrics, node_implementation::ConsensusTime},
         utils::epoch_from_block_number,
-        ValidatorConfig,
     };
     use jf_merkle_tree::prelude::{MerkleProof, Sha3Node};
     use portpicker::pick_unused_port;
@@ -2070,8 +2080,8 @@ mod test {
     use staking_cli::demo::DelegationConfig;
     use surf_disco::Client;
     use test_helpers::{
-        catchup_test_helper, state_signature_test_helper, status_test_helper, submit_test_helper,
-        TestNetwork, TestNetworkConfigBuilder,
+        TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, state_signature_test_helper,
+        status_test_helper, submit_test_helper,
     };
     use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus};
     use tokio::time::sleep;
@@ -2090,7 +2100,7 @@ mod test {
         },
         catchup::{NullStateCatchup, StatePeers},
         persistence::no_storage,
-        testing::{wait_for_decide_on_handle, TestConfig, TestConfigBuilder},
+        testing::{TestConfig, TestConfigBuilder, wait_for_decide_on_handle},
     };
 
     #[tokio::test(flavor = "multi_thread")]
@@ -4863,7 +4873,7 @@ mod test {
             for _count in 0..namespace {
                 // Generate a random payload length between 4 and 10 bytes
                 let payload_len = rng.gen_range(4..=10);
-                let payload: Vec<u8> = (0..payload_len).map(|_| rng.gen()).collect();
+                let payload: Vec<u8> = (0..payload_len).map(|_| rng.r#gen()).collect();
 
                 let txn = Transaction::new(NamespaceId::from(namespace as u32), payload);
 
@@ -4910,7 +4920,10 @@ mod test {
                 .send()
                 .await
                 .unwrap();
-            assert_eq!(to_endpoint_count, namespace as u64, "Incorrect transaction count for range endpoint (to only) for namespace {namespace}: expected {namespace}, got {to_endpoint_count}");
+            assert_eq!(
+                to_endpoint_count, namespace as u64,
+                "Incorrect transaction count for range endpoint (to only) for namespace {namespace}: expected {namespace}, got {to_endpoint_count}"
+            );
 
             // check the range endpoint
             let from_to_endpoint_count = client
@@ -4920,7 +4933,10 @@ mod test {
                 .send()
                 .await
                 .unwrap();
-            assert_eq!(from_to_endpoint_count, namespace as u64, "Incorrect transaction count for range endpoint (from-to) for namespace {namespace}: expected {namespace}, got {from_to_endpoint_count}");
+            assert_eq!(
+                from_to_endpoint_count, namespace as u64,
+                "Incorrect transaction count for range endpoint (from-to) for namespace {namespace}: expected {namespace}, got {from_to_endpoint_count}"
+            );
 
             let ns_size = client
                 .get::<usize>(&format!("node/payloads/size/namespace/{namespace}"))
@@ -5027,7 +5043,7 @@ mod test {
         for namespace in 1..=4 {
             for _count in 0..namespace {
                 let payload_len = rng.gen_range(4..=10);
-                let payload: Vec<u8> = (0..payload_len).map(|_| rng.gen()).collect();
+                let payload: Vec<u8> = (0..payload_len).map(|_| rng.r#gen()).collect();
 
                 let txn = Transaction::new(NamespaceId::from(namespace as u32), payload);
 

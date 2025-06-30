@@ -30,7 +30,7 @@ use tracing_test::traced_test;
 
 use crate::{
     service::{BuilderConfig, GlobalState, ProxyGlobalState},
-    testing::{assert_eq_generic_err, sign, TestServiceWrapper, MOCK_LEADER_KEYS},
+    testing::{MOCK_LEADER_KEYS, TestServiceWrapper, assert_eq_generic_err, sign},
 };
 
 /// This test simulates consensus performing as expected and builder processing a number

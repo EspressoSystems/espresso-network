@@ -1,5 +1,5 @@
 use std::{
-    collections::{hash_map::Entry, BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, hash_map::Entry},
     path::PathBuf,
     time::Duration,
 };
@@ -13,17 +13,17 @@ use espresso_contract_deployer::network_config::{
 use espresso_types::SeqTypes;
 use futures::FutureExt;
 use hotshot_types::{
+    PeerConfig,
     light_client::{LegacyStateSignatureRequestBody, StateSignaturesBundle, StateVerKey},
     stake_table::one_honest_threshold,
     traits::signature_key::{StakeTableEntryType, StateSignatureKey},
     utils::{epoch_from_block_number, is_gt_epoch_root},
-    PeerConfig,
 };
 use tide_disco::{
+    Api, App, Error as _, StatusCode,
     api::ApiError,
     error::ServerError,
     method::{ReadState, WriteState},
-    Api, App, Error as _, StatusCode,
 };
 use tokio::{sync::oneshot, time::sleep};
 use url::Url;

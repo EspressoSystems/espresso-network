@@ -26,8 +26,8 @@ use hotshot_types::{
         ViewSyncFinalizeVote2, ViewSyncPreCommitVote2,
     },
     traits::{
-        block_contents::BuilderFee, network::DataRequest, node_implementation::NodeType,
-        signature_key::SignatureKey, BlockPayload,
+        BlockPayload, block_contents::BuilderFee, network::DataRequest,
+        node_implementation::NodeType, signature_key::SignatureKey,
     },
     utils::BuilderCommitment,
     vote::HasViewNumber,

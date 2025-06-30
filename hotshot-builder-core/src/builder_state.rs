@@ -1,14 +1,14 @@
 use core::panic;
 use std::{
     cmp::PartialEq,
-    collections::{hash_map::Entry, HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque, hash_map::Entry},
     fmt::Debug,
     marker::PhantomData,
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use async_broadcast::{broadcast, Receiver as BroadcastReceiver, Sender as BroadcastSender};
+use async_broadcast::{Receiver as BroadcastReceiver, Sender as BroadcastSender, broadcast};
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
 use futures::StreamExt;
@@ -16,9 +16,9 @@ use hotshot_types::{
     data::{DaProposal2, Leaf2, QuorumProposalWrapper},
     message::Proposal,
     traits::{
+        EncodeBytes,
         block_contents::{BlockHeader, BlockPayload},
         node_implementation::{ConsensusTime, NodeType, Versions},
-        EncodeBytes,
     },
     utils::BuilderCommitment,
 };
@@ -397,8 +397,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
                 .iter()
                 .map(|builder_state_id| format!(
                     "{}@{}",
-                    builder_state_id.parent_commitment,
-                    builder_state_id.parent_view
+                    builder_state_id.parent_commitment, builder_state_id.parent_view
                 ))
                 .collect::<Vec<String>>(),
             quorum_proposal.data.block_header().payload_commitment(),
@@ -453,7 +452,9 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
             .da_proposal_payload_commit_to_da_proposal
             .entry((payload_builder_commitment.clone(), view_number))
         else {
-            tracing::debug!("Payload commitment already exists in the da_proposal_payload_commit_to_da_proposal hashmap, so ignoring it");
+            tracing::debug!(
+                "Payload commitment already exists in the da_proposal_payload_commit_to_da_proposal hashmap, so ignoring it"
+            );
             return;
         };
 
@@ -475,7 +476,9 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
         //      (the correct parent is missing and this is the highest view))
         //    spawn a clone
         if quorum_proposal.data.view_number() != view_number {
-            tracing::debug!("Not spawning a clone despite matching DA and quorum payload commitments, as they corresponds to different view numbers");
+            tracing::debug!(
+                "Not spawning a clone despite matching DA and quorum payload commitments, as they corresponds to different view numbers"
+            );
             return;
         }
 
@@ -515,7 +518,9 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
             .quorum_proposal_payload_commit_to_quorum_proposal
             .entry((payload_builder_commitment.clone(), view_number))
         else {
-            tracing::debug!("Payload commitment already exists in the quorum_proposal_payload_commit_to_quorum_proposal hashmap, so ignoring it");
+            tracing::debug!(
+                "Payload commitment already exists in the quorum_proposal_payload_commit_to_quorum_proposal hashmap, so ignoring it"
+            );
             return;
         };
 
@@ -536,7 +541,9 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
 
         // also make sure we clone for the same view number( check incase payload commitments are same)
         if da_proposal_info.view_number != view_number {
-            tracing::debug!("Not spawning a clone despite matching DA and quorum payload commitments, as they corresponds to different view numbers");
+            tracing::debug!(
+                "Not spawning a clone despite matching DA and quorum payload commitments, as they corresponds to different view numbers"
+            );
             return;
         }
 
@@ -1205,7 +1212,9 @@ mod test {
             .spawned_builder_states
             .contains_key(&builder_state_id)
         {
-            panic!("global_state shouldn't have corresponding builder_state_id without matching quorum proposal.");
+            panic!(
+                "global_state shouldn't have corresponding builder_state_id without matching quorum proposal."
+            );
         }
 
         // sub-test two
@@ -1228,7 +1237,9 @@ mod test {
             .spawned_builder_states
             .contains_key(&builder_state_id_1)
         {
-            panic!("global_state shouldn't have corresponding builder_state_id without matching quorum proposal.");
+            panic!(
+                "global_state shouldn't have corresponding builder_state_id without matching quorum proposal."
+            );
         }
 
         // sub-test three
@@ -1262,7 +1273,9 @@ mod test {
         {
             tracing::debug!("global_state updated successfully");
         } else {
-            panic!("global_state should have corresponding builder_state_id as now we have matching quorum proposal.");
+            panic!(
+                "global_state should have corresponding builder_state_id as now we have matching quorum proposal."
+            );
         }
     }
 
@@ -1328,7 +1341,9 @@ mod test {
             .spawned_builder_states
             .contains_key(&builder_state_id)
         {
-            panic!("global_state shouldn't have corresponding builder_state_id without matching quorum proposal.");
+            panic!(
+                "global_state shouldn't have corresponding builder_state_id without matching quorum proposal."
+            );
         }
 
         // sub-test two
@@ -1366,7 +1381,9 @@ mod test {
         {
             tracing::debug!("global_state updated successfully");
         } else {
-            panic!("global_state should have corresponding builder_state_id as now we have matching da proposal.");
+            panic!(
+                "global_state should have corresponding builder_state_id as now we have matching da proposal."
+            );
         }
     }
 

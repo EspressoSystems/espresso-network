@@ -3,8 +3,8 @@ use std::{sync::Arc, time::Duration};
 use async_lock::RwLock;
 use espresso_types::SeqTypes;
 use futures::{
-    channel::mpsc::{self, Receiver, SendError, Sender},
     Sink, SinkExt,
+    channel::mpsc::{self, Receiver, SendError, Sender},
 };
 use hotshot_types::utils::epoch_from_block_number;
 use indexmap::IndexMap;
@@ -12,7 +12,7 @@ use tokio::{spawn, task::JoinHandle};
 use url::Url;
 
 use super::{
-    get_config_stake_table_from_sequencer, LeafAndBlock, ProcessNodeIdentityUrlStreamTask,
+    LeafAndBlock, ProcessNodeIdentityUrlStreamTask, get_config_stake_table_from_sequencer,
 };
 use crate::{
     api::node_validator::v0::{
@@ -94,7 +94,9 @@ impl SubmitPublicUrlsToScrapeTask {
                 let send_result = url_sender.send(url.clone()).await;
                 if let Err(err) = send_result {
                     tracing::error!("url sender closed: {}", err);
-                    panic!("SubmitPublicUrlsToScrapeTask url sender is closed, unrecoverable, the node state will stagnate.");
+                    panic!(
+                        "SubmitPublicUrlsToScrapeTask url sender is closed, unrecoverable, the node state will stagnate."
+                    );
                 }
             }
 

@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{AvidMCommit, AvidMShare, RawAvidMShare};
 use crate::{
-    avid_m::{AvidMScheme, MerkleTree},
     VidError, VidResult, VidScheme,
+    avid_m::{AvidMScheme, MerkleTree},
 };
 
 /// Dummy struct for namespaced AvidM scheme
@@ -230,7 +230,7 @@ impl NsAvidMScheme {
 /// Unit tests
 #[cfg(test)]
 pub mod tests {
-    use rand::{seq::SliceRandom, RngCore};
+    use rand::{RngCore, seq::SliceRandom};
 
     use crate::avid_m::namespaced::NsAvidMScheme;
 

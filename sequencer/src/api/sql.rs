@@ -1,27 +1,27 @@
 use std::collections::{HashSet, VecDeque};
 
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
-    get_l1_deposits,
-    v0_1::{IterableFeeInfo, RewardAccount, RewardMerkleTree, REWARD_MERKLE_TREE_HEIGHT},
-    v0_3::ChainConfig,
     BlockMerkleTree, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2, NodeState, ValidatedState,
+    get_l1_deposits,
+    v0_1::{IterableFeeInfo, REWARD_MERKLE_TREE_HEIGHT, RewardAccount, RewardMerkleTree},
+    v0_3::ChainConfig,
 };
 use hotshot::traits::ValidatedState as _;
 use hotshot_query_service::{
+    Resolvable,
     availability::LeafId,
     data_source::{
+        VersionedDataSource,
         sql::{Config, SqlDataSource, Transaction},
         storage::{
-            sql::{query_as, Db, TransactionMode, Write},
             AvailabilityStorage, MerklizedStateStorage, NodeStorage, SqlStorage,
+            sql::{Db, TransactionMode, Write, query_as},
         },
-        VersionedDataSource,
     },
     merklized_state::Snapshot,
-    Resolvable,
 };
 use hotshot_types::{
     data::{EpochNumber, QuorumProposalWrapper, ViewNumber},
@@ -31,21 +31,21 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use jf_merkle_tree::{
-    prelude::MerkleNode, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
-    LookupResult, MerkleTreeScheme,
+    ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
+    MerkleTreeScheme, prelude::MerkleNode,
 };
 use sqlx::{Encode, Type};
 use vbs::version::StaticVersionType;
 
 use super::{
-    data_source::{Provider, SequencerDataSource},
     BlocksFrontier,
+    data_source::{Provider, SequencerDataSource},
 };
 use crate::{
-    catchup::{CatchupStorage, NullStateCatchup},
-    persistence::{sql::Options, ChainConfigPersistence},
-    state::compute_state_update,
     SeqTypes,
+    catchup::{CatchupStorage, NullStateCatchup},
+    persistence::{ChainConfigPersistence, sql::Options},
+    state::compute_state_update,
 };
 
 pub type DataSource = SqlDataSource<SeqTypes, Provider>;
@@ -185,7 +185,10 @@ impl CatchupStorage for SqlStorage {
             match state.block_merkle_tree.lookup(height - 1) {
                 LookupResult::Ok(_, proof) => Ok(proof),
                 _ => {
-                    bail!("state snapshot {view:?},{height} was found but does not contain frontier at height {}; this should not be possible", height - 1);
+                    bail!(
+                        "state snapshot {view:?},{height} was found but does not contain frontier at height {}; this should not be possible",
+                        height - 1
+                    );
                 },
             }
         }

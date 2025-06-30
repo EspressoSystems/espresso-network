@@ -7,12 +7,12 @@ use alloy::{
 };
 use ark_bn254::{Bn254, Fq, Fr, G1Affine, G2Affine};
 use ark_ec::{
+    AffineRepr,
     short_weierstrass::{Affine, SWCurveConfig},
     twisted_edwards::{self, TECurveConfig},
-    AffineRepr,
 };
 use ark_ff::{Fp2, Fp2Config, MontFp, PrimeField};
-use ark_std::{rand::Rng, UniformRand};
+use ark_std::{UniformRand, rand::Rng};
 use jf_pcs::prelude::Commitment;
 use jf_plonk::{
     constants::KECCAK256_STATE_SIZE,

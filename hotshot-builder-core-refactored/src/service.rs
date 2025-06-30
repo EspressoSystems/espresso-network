@@ -1,27 +1,27 @@
 use std::{
     fmt::Display,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
 
-pub use async_broadcast::{broadcast, RecvError, TryRecvError};
+pub use async_broadcast::{RecvError, TryRecvError, broadcast};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::Commitment;
 use futures::{
+    Stream, TryStreamExt,
     future::BoxFuture,
     stream::{FuturesOrdered, FuturesUnordered, StreamExt},
-    Stream, TryStreamExt,
 };
 use hotshot::types::Event;
 use hotshot_builder_api::{
     v0_1::{
         block_info::{AvailableBlockData, AvailableBlockInfo},
         builder::{
-            define_api, submit_api, BuildError, Error as BuilderApiError, TransactionStatus,
+            BuildError, Error as BuilderApiError, TransactionStatus, define_api, submit_api,
         },
         data_source::{AcceptsTxnSubmits, BuilderDataSource},
     },
@@ -31,10 +31,10 @@ use hotshot_types::{
     data::VidCommitment,
     event::EventType,
     traits::{
+        EncodeBytes,
         block_contents::{BlockPayload, Transaction},
         node_implementation::{ConsensusTime, NodeType},
         signature_key::{BuilderSignatureKey, SignatureKey},
-        EncodeBytes,
     },
     utils::BuilderCommitment,
 };
@@ -46,7 +46,7 @@ use marketplace_builder_shared::{
     utils::BuilderKeys,
 };
 use tagged_base64::TaggedBase64;
-use tide_disco::{app::AppError, method::ReadState, App};
+use tide_disco::{App, app::AppError, method::ReadState};
 use tokio::{
     spawn,
     task::JoinHandle,

@@ -7,11 +7,11 @@ use std::{
 
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
-    primitives::{utils::format_ether, Address, U256},
+    primitives::{Address, U256, utils::format_ether},
     providers::Provider,
     rpc::types::Log,
 };
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use async_lock::{Mutex, RwLock};
 use committable::Committable;
 use futures::stream::{self, StreamExt};
@@ -24,10 +24,11 @@ use hotshot_contract_adapter::sol_types::{
     },
 };
 use hotshot_types::{
-    data::{vid_disperse::VID_TARGET_TOTAL_STAKE, EpochNumber},
+    PeerConfig,
+    data::{EpochNumber, vid_disperse::VID_TARGET_TOTAL_STAKE},
     drb::{
-        election::{generate_stake_cdf, select_randomized_leader, RandomizedCommittee},
         DrbResult,
+        election::{RandomizedCommittee, generate_stake_cdf, select_randomized_leader},
     },
     stake_table::{HSStakeTable, StakeTableEntry},
     traits::{
@@ -35,7 +36,6 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeType},
         signature_key::StakeTableEntryType,
     },
-    PeerConfig,
 };
 use indexmap::IndexMap;
 use thiserror::Error;
@@ -45,13 +45,13 @@ use tracing::Instrument;
 #[cfg(any(test, feature = "testing"))]
 use super::v0_3::DAMembers;
 use super::{
+    Header, L1Client, Leaf2, PubKey, SeqTypes,
     traits::{MembershipPersistence, StateCatchup},
     v0_3::{ChainConfig, EventKey, Fetcher, StakeTableEvent, StakeTableUpdateTask, Validator},
-    Header, L1Client, Leaf2, PubKey, SeqTypes,
 };
 use crate::{
     traits::EventsPersistenceRead,
-    v0_1::{L1Provider, RewardAmount, BLOCKS_PER_YEAR, COMMISSION_BASIS_POINTS, INFLATION_RATE},
+    v0_1::{BLOCKS_PER_YEAR, COMMISSION_BASIS_POINTS, INFLATION_RATE, L1Provider, RewardAmount},
     v0_3::{EventSortingError, ExpectedStakeTableError, FetchRewardError, StakeTableError},
 };
 
@@ -590,7 +590,8 @@ impl Fetcher {
     pub async fn spawn_update_loop(&self) {
         let mut update_task = self.update_task.0.lock().await;
         if update_task.is_none() {
-            *update_task = Some(spawn(self.update_loop()));
+            let self_clone = self.clone();
+            *update_task = Some(spawn(self_clone.update_loop()));
         }
     }
 
@@ -598,7 +599,7 @@ impl Fetcher {
     /// This function polls the finalized block number from the L1 client at an interval
     /// and fetches stake table from contract
     /// and updates the persistence
-    fn update_loop(&self) -> impl Future<Output = ()> {
+    fn update_loop(&self) -> impl Future<Output = ()> + use<> {
         let span = tracing::warn_span!("Stake table update loop");
         let self_clone = self.clone();
         let state = self.l1_client.state.clone();
@@ -1200,7 +1201,9 @@ impl Fetcher {
         };
 
         let Some(l1_finalized_block_info) = header.l1_finalized() else {
-            bail!("The epoch root for epoch {epoch} is missing the L1 finalized block info. This is a fatal error. Consensus is blocked and will not recover.");
+            bail!(
+                "The epoch root for epoch {epoch} is missing the L1 finalized block info. This is a fatal error. Consensus is blocked and will not recover."
+            );
         };
 
         let events = match self
@@ -1844,9 +1847,9 @@ impl Membership<SeqTypes> for EpochCommittees {
 
         let Some(drb) = drb_leaf.next_drb_result else {
             tracing::error!(
-          "We received a leaf that should contain a DRB result, but the DRB result is missing: {:?}",
-          drb_leaf
-        );
+                "We received a leaf that should contain a DRB result, but the DRB result is missing: {:?}",
+                drb_leaf
+            );
 
             bail!("DRB leaf is missing the DRB result.");
         };
@@ -1856,7 +1859,9 @@ impl Membership<SeqTypes> for EpochCommittees {
 
     fn add_drb_result(&mut self, epoch: Epoch, drb: DrbResult) {
         let Some(raw_stake_table) = self.state.get(&epoch) else {
-            tracing::error!("add_drb_result({epoch}, {drb:?}) was called, but we do not yet have the stake table for epoch {epoch}");
+            tracing::error!(
+                "add_drb_result({epoch}, {drb:?}) was called, but we do not yet have the stake table for epoch {epoch}"
+            );
             return;
         };
 
@@ -2252,10 +2257,12 @@ mod tests {
         .into();
 
         // first ensure that wan build a valid stake table
-        assert!(active_validator_set_from_l1_events(
-            vec![register.clone(), delegate.clone()].into_iter()
-        )
-        .is_ok());
+        assert!(
+            active_validator_set_from_l1_events(
+                vec![register.clone(), delegate.clone()].into_iter()
+            )
+            .is_ok()
+        );
 
         // add the invalid key update (re-using the same consensus keys)
         let key_update = ConsensusKeysUpdated::from(&val).into();

@@ -8,25 +8,25 @@ use ark_bn254::{Bn254, Fq, Fr, G1Affine, G2Affine};
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ed_on_bn254::{EdwardsConfig as EdOnBn254Config, Fq as FqEd254};
 use ark_ff::field_hashers::{DefaultFieldHasher, HashToField};
-use ark_poly::{domain::radix2::Radix2EvaluationDomain, EvaluationDomain};
-use ark_std::rand::{rngs::StdRng, Rng, SeedableRng};
+use ark_poly::{EvaluationDomain, domain::radix2::Radix2EvaluationDomain};
+use ark_std::rand::{Rng, SeedableRng, rngs::StdRng};
 use clap::{Parser, ValueEnum};
 use hotshot_contract_adapter::{field_to_u256, jellyfish::*, sol_types::*, u256_to_field};
 use hotshot_state_prover::mock_ledger::{
-    gen_plonk_proof_for_test, MockLedger, MockSystemParam, STAKE_TABLE_CAPACITY_FOR_TEST,
+    MockLedger, MockSystemParam, STAKE_TABLE_CAPACITY_FOR_TEST, gen_plonk_proof_for_test,
 };
 use hotshot_types::utils::{epoch_from_block_number, is_epoch_root, is_ge_epoch_root};
 use jf_pcs::prelude::Commitment;
 use jf_plonk::{
     proof_system::{
-        structs::{Proof, VerifyingKey},
         PlonkKzgSnark,
+        structs::{Proof, VerifyingKey},
     },
     testing_apis::Verifier,
     transcript::{PlonkTranscript, SolidityTranscript},
 };
 use jf_signature::{
-    bls_over_bn254::{hash_to_curve, KeyPair as BLSKeyPair, Signature},
+    bls_over_bn254::{KeyPair as BLSKeyPair, Signature, hash_to_curve},
     constants::CS_ID_BLS_BN254,
     schnorr::KeyPair as SchnorrKeyPair,
 };
@@ -314,13 +314,15 @@ fn main() {
             ) = gen_plonk_proof_for_test(1)[0].clone();
 
             // ensure they are correct params
-            assert!(PlonkKzgSnark::batch_verify::<SolidityTranscript>(
-                &[&vk],
-                &[&public_input],
-                &[&proof],
-                &[None]
-            )
-            .is_ok());
+            assert!(
+                PlonkKzgSnark::batch_verify::<SolidityTranscript>(
+                    &[&vk],
+                    &[&public_input],
+                    &[&proof],
+                    &[None]
+                )
+                .is_ok()
+            );
 
             let vk_parsed: VerifyingKeySol = vk.into();
             let mut pi_parsed = [U256::default(); 11];

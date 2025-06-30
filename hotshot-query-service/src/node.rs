@@ -27,10 +27,10 @@ use futures::FutureExt;
 use hotshot_types::traits::node_implementation::NodeType;
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
-use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, StatusCode};
+use tide_disco::{Api, RequestError, StatusCode, api::ApiError, method::ReadState};
 use vbs::version::StaticVersionType;
 
-use crate::{api::load_api, availability::QueryableHeader, Header, QueryError};
+use crate::{Header, QueryError, api::load_api, availability::QueryableHeader};
 
 pub(crate) mod data_source;
 pub(crate) mod query_data;
@@ -226,8 +226,8 @@ mod test {
         data::{VidDisperseShare, VidShare},
         event::{EventType, LeafInfo},
         traits::{
-            block_contents::{BlockHeader, BlockPayload},
             EncodeBytes,
+            block_contents::{BlockHeader, BlockPayload},
         },
     };
     use portpicker::pick_unused_port;
@@ -239,14 +239,14 @@ mod test {
 
     use super::*;
     use crate::{
+        ApiState, Error, Header,
         data_source::ExtensibleDataSource,
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork, MockSqlDataSource},
-            mocks::{mock_transaction, MockBase, MockTypes, MockVersions},
+            mocks::{MockBase, MockTypes, MockVersions, mock_transaction},
             setup_test,
         },
-        ApiState, Error, Header,
     };
 
     #[tokio::test(flavor = "multi_thread")]

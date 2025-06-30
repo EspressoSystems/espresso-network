@@ -11,8 +11,8 @@ use url::Url;
 use vec1::Vec1;
 
 use crate::{
-    constants::REQUEST_DATA_DELAY, upgrade_config::UpgradeConfig, HotShotConfig, NodeType,
-    PeerConfig, ValidatorConfig,
+    HotShotConfig, NodeType, PeerConfig, ValidatorConfig, constants::REQUEST_DATA_DELAY,
+    upgrade_config::UpgradeConfig,
 };
 
 /// Default builder URL, used as placeholder

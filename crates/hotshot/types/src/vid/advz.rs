@@ -10,16 +10,16 @@ use std::{fmt::Debug, ops::Range};
 
 use ark_bn254::Bn254;
 use jf_pcs::{
-    prelude::{UnivariateKzgPCS, UnivariateUniversalParams},
     PolynomialCommitmentScheme,
+    prelude::{UnivariateKzgPCS, UnivariateUniversalParams},
 };
 use jf_vid::{
+    VidDisperse, VidResult, VidScheme,
     advz::{
         self,
         payload_prover::{LargeRangeProof, SmallRangeProof},
     },
     payload_prover::{PayloadProver, Statement},
-    VidDisperse, VidResult, VidScheme,
 };
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};

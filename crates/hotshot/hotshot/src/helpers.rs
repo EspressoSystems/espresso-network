@@ -1,4 +1,4 @@
-use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
 
 /// Initializes logging
 pub fn initialize_logging() {

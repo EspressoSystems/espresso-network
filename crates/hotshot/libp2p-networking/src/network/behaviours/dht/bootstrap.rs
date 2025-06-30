@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use futures::{channel::mpsc, StreamExt};
+use futures::{StreamExt, channel::mpsc};
 use tokio::{spawn, sync::mpsc::UnboundedSender, time::timeout};
 
 use crate::network::ClientRequest;

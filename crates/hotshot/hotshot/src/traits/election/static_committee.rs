@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use alloy::primitives::U256;
 use hotshot_types::{
+    PeerConfig,
     drb::DrbResult,
     stake_table::HSStakeTable,
     traits::{
@@ -15,7 +16,6 @@ use hotshot_types::{
         node_implementation::NodeType,
         signature_key::{SignatureKey, StakeTableEntryType},
     },
-    PeerConfig,
 };
 use hotshot_utils::anytrace::*;
 
@@ -48,9 +48,14 @@ impl<TYPES: NodeType> StaticCommittee<TYPES> {
     fn check_first_epoch(&self, epoch: Option<<TYPES as NodeType>::Epoch>) {
         if let Some(epoch) = epoch {
             if let Some(first_epoch) = self.first_epoch {
-                assert!(first_epoch <= epoch, "Called a method in StaticCommittee where first_epoch={first_epoch:} but epoch={epoch}");
+                assert!(
+                    first_epoch <= epoch,
+                    "Called a method in StaticCommittee where first_epoch={first_epoch:} but epoch={epoch}"
+                );
             } else {
-                panic!("Called a method in StaticCommittee with non-None epoch={epoch}, but set_first_epoch was not yet called");
+                panic!(
+                    "Called a method in StaticCommittee with non-None epoch={epoch}, but set_first_epoch was not yet called"
+                );
             }
         }
     }

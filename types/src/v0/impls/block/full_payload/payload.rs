@@ -14,10 +14,10 @@ use sha2::Digest;
 use thiserror::Error;
 
 use crate::{
-    v0::impls::{NodeState, ValidatedState},
-    v0_3::ChainConfig,
     Index, Iter, NamespaceId, NsIndex, NsPayload, NsPayloadBuilder, NsPayloadRange, NsTable,
     NsTableBuilder, Payload, PayloadByteLen, SeqTypes, Transaction, TxIndex, TxProof,
+    v0::impls::{NodeState, ValidatedState},
+    v0_3::ChainConfig,
 };
 
 #[derive(serde::Deserialize, serde::Serialize, Error, Debug, Eq, PartialEq)]
@@ -98,7 +98,9 @@ impl Payload {
             // accounting for block byte length limit
             block_byte_len += tx_size;
             if block_byte_len > max_block_byte_len {
-                tracing::warn!("transactions truncated to fit in maximum block byte length {max_block_byte_len}");
+                tracing::warn!(
+                    "transactions truncated to fit in maximum block byte length {max_block_byte_len}"
+                );
                 break;
             }
 

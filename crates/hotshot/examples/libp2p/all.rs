@@ -11,12 +11,12 @@ pub mod types;
 use hotshot::helpers::initialize_logging;
 use hotshot_example_types::{node_types::TestVersions, state_types::TestTypes};
 use hotshot_orchestrator::client::ValidatorArgs;
-use infra::{gen_local_address, BUILDER_BASE_PORT, VALIDATOR_BASE_PORT};
+use infra::{BUILDER_BASE_PORT, VALIDATOR_BASE_PORT, gen_local_address};
 use tokio::spawn;
 use tracing::instrument;
 
 use crate::{
-    infra::{read_orchestrator_init_config, run_orchestrator, OrchestratorArgs},
+    infra::{OrchestratorArgs, read_orchestrator_init_config, run_orchestrator},
     types::{Network, NodeImpl, ThisRun},
 };
 
