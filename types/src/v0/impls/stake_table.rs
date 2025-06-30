@@ -2661,7 +2661,7 @@ mod tests {
         let l1 = L1ClientOptions {
             l1_events_max_retry_duration: Duration::from_secs(30),
             // max block range for public node rpc is 50000 so this should result in a panic
-            l1_events_max_block_range: 1 * 10_u64.pow(9),
+            l1_events_max_block_range: 10_u64.pow(9),
             l1_retry_delay: Duration::from_secs(1),
             ..Default::default()
         }
