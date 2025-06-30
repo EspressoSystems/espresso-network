@@ -3,7 +3,7 @@ pub mod create_node_validator_api;
 use std::{fmt, future::Future, io::BufRead, pin::Pin, str::FromStr, time::Duration};
 
 use alloy::primitives::Address;
-use espresso_types::{config::PublicHotShotConfig, v0_3::Validator, BackoffParams, SeqTypes};
+use espresso_types::{v0_3::Validator, BackoffParams, SeqTypes};
 use futures::{
     channel::mpsc::{self, SendError, Sender},
     future::{BoxFuture, Either},
@@ -291,11 +291,6 @@ where
     Ok(api)
 }
 
-#[derive(Debug, Deserialize)]
-pub struct SequencerConfig {
-    pub config: PublicHotShotConfig,
-}
-
 /// [get_config_stake_table_from_sequencer] retrieves the stake table from the
 /// Sequencer.  It expects a [surf_disco::Client] to be provided so that it can
 /// make the request to the Hotshot Query Service.  It will return a
@@ -312,7 +307,7 @@ pub async fn get_config_stake_table_from_sequencer(
         .header("Accept", "application/json");
     let stake_table_result = request.send().await;
 
-    let sequencer_config: SequencerConfig = match stake_table_result {
+    let sequencer_config: PublicNetworkConfig = match stake_table_result {
         Ok(public_hot_shot_config) => public_hot_shot_config,
         Err(err) => {
             tracing::info!("retrieve stake table request failed: {}", err);
@@ -1149,6 +1144,42 @@ impl Drop for ProcessNodeIdentityUrlStreamTask {
     }
 }
 
+/// [PublicNetworkConfig] is a struct that represents the configuration of the
+/// Sequencer.  It contains a single field, `config`, which is of type
+/// [PublicHotShotConfig].
+///
+/// We utilize this struct to deserialize a minimal representation of the
+/// configuration that is a subset of the full structure we will be receiving.
+/// This is done in an effort to make us as backwards compatible as possible
+/// with the Sequencer, as we do not want to break existing clients that may
+/// be relying on the old structure.
+///
+/// Note that this type corresponds to the [espresso_types::config::PublicNetworkConfig]
+/// type, which is the full configuration that we will be receiving from the
+/// Sequencer.
+#[derive(Debug, Deserialize)]
+pub struct PublicNetworkConfig {
+    pub config: PublicHotShotConfig,
+}
+
+/// PublicHotShotConfig is a minimal configuration structure that is meant to
+/// mirror the PublicHotShotConfig that is defined in
+/// [espresso_types::config::PublicHotShotConfig].
+///
+/// However, it is designed to be backwards-compatible across all deployed
+/// environments.  This may lead to the potential for there to be a mismatch
+/// between the types listed here.  That is a potential risk, but it is
+/// important for us to support backwards compatibility with older environments
+/// that may not have the same types defined. To mitigate this risk, we
+/// have this tests:
+/// [tests::test_public_hotshot_config_backwards_compatibility]
+#[derive(Debug, Deserialize)]
+pub struct PublicHotShotConfig {
+    pub known_nodes_with_stake: Vec<PeerConfig<SeqTypes>>,
+    pub epoch_height: Option<u64>,
+    pub epoch_start_block: Option<u64>,
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{BufRead, BufReader};
@@ -1279,5 +1310,48 @@ mod tests {
 
         assert_eq!(node_identity_location.country(), &Some("US".to_string()));
         assert_eq!(node_identity_location.coords, Some((-40.7128, -74.0060)));
+    }
+
+    /// [test_public_hotshot_config_deserialization] tests the
+    /// deserialization of the [super::PublicHotShotConfig] from a
+    /// [espresso_types::config::PublicNetworkConfig]. This is to ensure that
+    /// the [PublicHotShotConfig] can be serialized and deserialized correctly,
+    /// and that it matches the expected structure.
+    #[test]
+    fn test_public_hotshot_config_deserialization() {
+        use super::PublicNetworkConfig;
+
+        let network_config = espresso_types::NetworkConfig::default();
+        let server_config = espresso_types::config::PublicNetworkConfig::from(network_config);
+
+        let serialized =
+            serde_json::to_string(&server_config).expect("failed to serialize PublicNetworkConfig");
+
+        let deserialized: PublicNetworkConfig =
+            serde_json::from_str(&serialized).expect("failed to deserialize PublicHotShotConfig");
+
+        let deserialized_config = deserialized.config;
+
+        // Check that the deserialized config matches the expected values.
+        assert_eq!(
+            deserialized_config.known_nodes_with_stake.len(),
+            server_config
+                .hotshot_config()
+                .known_nodes_with_stake()
+                .len()
+        );
+        assert_eq!(
+            deserialized_config.epoch_height,
+            Some(server_config.hotshot_config().blocks_per_epoch())
+        );
+        assert_eq!(
+            deserialized_config.epoch_start_block,
+            Some(server_config.hotshot_config().epoch_start_block())
+        );
+
+        assert_eq!(
+            deserialized_config.known_nodes_with_stake.clone(),
+            server_config.hotshot_config().known_nodes_with_stake()
+        )
     }
 }
