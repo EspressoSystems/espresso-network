@@ -123,12 +123,12 @@
 <a href=#123 id=123 data-nosnippet>123</a>    <span class="kw">let </span>hotshot_config = get_config_stake_table_from_sequencer(hotshot_client.clone())
 <a href=#124 id=124 data-nosnippet>124</a>        .<span class="kw">await
 <a href=#125 id=125 data-nosnippet>125</a>        </span>.map_err(CreateNodeValidatorProcessingError::FailedToGetStakeTable)<span class="question-mark">?</span>;
-<a href=#126 id=126 data-nosnippet>126</a>    <span class="kw">let </span><span class="kw-2">mut </span>stake_table = hotshot_config.known_nodes_with_stake();
+<a href=#126 id=126 data-nosnippet>126</a>    <span class="kw">let </span><span class="kw-2">mut </span>stake_table = hotshot_config.known_nodes_with_stake.clone();
 <a href=#127 id=127 data-nosnippet>127</a>    <span class="kw">let </span><span class="kw-2">mut </span>validator_map = IndexMap::new();
 <a href=#128 id=128 data-nosnippet>128</a>
-<a href=#129 id=129 data-nosnippet>129</a>    <span class="kw">if </span>hotshot_config.blocks_per_epoch() &gt; <span class="number">0 </span>{
-<a href=#130 id=130 data-nosnippet>130</a>        <span class="kw">let </span>epoch_starting_block = hotshot_config.epoch_start_block();
-<a href=#131 id=131 data-nosnippet>131</a>        <span class="kw">let </span>num_blocks_per_epoch = hotshot_config.blocks_per_epoch();
+<a href=#129 id=129 data-nosnippet>129</a>    <span class="kw">let </span>epoch_starting_block = hotshot_config.epoch_start_block.unwrap_or(<span class="number">0</span>);
+<a href=#130 id=130 data-nosnippet>130</a>    <span class="kw">let </span>num_blocks_per_epoch = hotshot_config.epoch_height.unwrap_or(<span class="number">0</span>);
+<a href=#131 id=131 data-nosnippet>131</a>    <span class="kw">if </span>hotshot_config.epoch_height.is_some() &amp;&amp; num_blocks_per_epoch &gt; <span class="number">0 </span>{
 <a href=#132 id=132 data-nosnippet>132</a>        <span class="macro">tracing::info!</span>(
 <a href=#133 id=133 data-nosnippet>133</a>            <span class="string">"epoch starting block: {}, num blocks per epoch: {}"</span>,
 <a href=#134 id=134 data-nosnippet>134</a>            epoch_starting_block,
