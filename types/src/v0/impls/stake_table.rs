@@ -41,6 +41,7 @@ use hotshot_types::{
     },
     PeerConfig,
 };
+use humantime::format_duration;
 use indexmap::IndexMap;
 use thiserror::Error;
 use tokio::{spawn, time::sleep};
@@ -1294,15 +1295,21 @@ where
             Err(err) => {
                 if start.elapsed() >= max_duration {
                     panic!(
-                        "\nFailed to complete operation `{operation_name}` after 15 minutes.\n\
-                        error: {err}\n\n\
-                         This might be caused by:\n\
-                           - The current block range being too large for your RPC provider.\n\
-                           - The event query returning more data than your RPC allows as some RPC providers limit the number of events returned.\n\n\
-                         Suggested solution:\n\
-                           - Reduce the value of the environment variable `ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE` \
-                             to query smaller ranges.\n\
-                           - Use a different RPC provider with higher rate limits."
+                        r#"
+                    Failed to complete operation `{operation_name}` after `{}`.
+                    error: {err}
+                    
+
+                    This might be caused by:
+                    - The current block range being too large for your RPC provider.
+                    - The event query returning more data than your RPC allows as some RPC providers limit the number of events returned.
+                    - RPC provider outage
+
+                    Suggested solution:
+                    - Reduce the value of the environment variable `ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE` to query smaller ranges.
+                    - Add multiple RPC providers
+                    - Use a different RPC provider with higher rate limits."#,
+                        format_duration(max_duration)
                     );
                 }
                 tracing::warn!(%err, "Retrying `{operation_name}` after error");
