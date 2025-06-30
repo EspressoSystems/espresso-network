@@ -1458,11 +1458,14 @@ impl EpochCommittees {
             // Initially, the block reward is zero if the node starts on pre-epoch version
             // but it is updated on the first call to `add_epoch_root()`
             if self.block_reward == RewardAmount(U256::ZERO) {
-                if let Ok(reward) = self.fetcher.fetch_block_reward().await {
-                    block_reward = Some(reward);
-                } else {
-                    tracing::error!("Failed to fetch block reward while loading the stake table from persistence. This node will be unable to participate until the next epoch.");
-                };
+                match self.fetcher.fetch_block_reward().await {
+                    Ok(reward) => {
+                        block_reward = Some(reward);
+                    },
+                    Err(e) => {
+                        tracing::error!("Failed to fetch block reward while loading the stake table from persistence. This node will be unable to participate until the next epoch. Error: {}", e);
+                    },
+                }
             }
         }
 
