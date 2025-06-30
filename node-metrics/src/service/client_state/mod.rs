@@ -556,8 +556,7 @@ impl std::fmt::Display for HandleRequestValidatorsSnapshotError {
             HandleRequestValidatorsSnapshotError::ClientSendError(err) => {
                 write!(
                     f,
-                    "handle request validators snapshot error: client send error: {}",
-                    err
+                    "handle request validators snapshot error: client send error: {err}"
                 )
             },
         }
@@ -618,8 +617,7 @@ impl std::fmt::Display for HandleRequestStakeTableSnapshotError {
             HandleRequestStakeTableSnapshotError::ClientSendError(err) => {
                 write!(
                     f,
-                    "handle request stake table snapshot error: client send error: {}",
-                    err
+                    "handle request stake table snapshot error: client send error: {err}"
                 )
             },
         }
@@ -680,8 +678,7 @@ impl std::fmt::Display for HandleRequestUnrecognizedRequestError {
             HandleRequestUnrecognizedRequestError::ClientSendError(err) => {
                 write!(
                     f,
-                    "handle request unrecognized request error: client send error: {}",
-                    err
+                    "handle request unrecognized request error: client send error: {err}"
                 )
             },
         }
@@ -823,19 +820,17 @@ impl std::fmt::Display for ProcessClientMessageError {
             ProcessClientMessageError::ValidatorsSnapshot(err) => {
                 write!(
                     f,
-                    "process client message error: validators snapshot: {}",
-                    err
+                    "process client message error: validators snapshot: {err}"
                 )
             },
             ProcessClientMessageError::StakeTableSnapshot(err) => {
                 write!(
                     f,
-                    "process client message error: stake table snapshot: {}",
-                    err
+                    "process client message error: stake table snapshot: {err}"
                 )
             },
             ProcessClientMessageError::UnrecognizedRequest(err) => {
-                write!(f, "process client message error: unknown: {}", err)
+                write!(f, "process client message error: unknown: {err}")
             },
         }
     }
