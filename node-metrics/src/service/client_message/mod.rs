@@ -145,7 +145,7 @@ mod tests {
         ];
 
         for message in messages.iter() {
-            assert_eq!(format!("{:?}", message), format!("{:?}", message));
+            assert_eq!(format!("{message:?}"), format!("{:?}", message));
         }
     }
 
