@@ -1308,12 +1308,7 @@ impl EpochCommittees {
     /// to be called before calling `self.stake()` so that
     /// `Self.stake_table` only needs to be updated once in a given
     /// life-cycle but may be read from many times.
-    fn update(
-        &mut self,
-        epoch: EpochNumber,
-        validators: ValidatorMap,
-        block_reward: Option<RewardAmount>,
-    ) {
+    fn insert_committee(&mut self, epoch: EpochNumber, validators: ValidatorMap) {
         let mut address_mapping = HashMap::new();
         let stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>> = validators
             .values()
@@ -1344,10 +1339,6 @@ impl EpochCommittees {
                 address_mapping,
             },
         );
-
-        if let Some(block_reward) = block_reward {
-            self.block_reward = block_reward;
-        }
     }
 
     pub fn validators(&self, epoch: &Epoch) -> anyhow::Result<ValidatorMap> {
@@ -1490,8 +1481,20 @@ impl EpochCommittees {
             },
         };
 
+        match self.fetcher.fetch_block_reward().await {
+            Ok(block_reward) => {
+                tracing::info!("Fetched block reward: {block_reward}");
+                self.block_reward = block_reward;
+            },
+            Err(err) => {
+                tracing::error!(
+                    "Failed to fetch the block reward when reloading the stake tables: {err}"
+                );
+                return;
+            },
+        }
         for (epoch, stake_table) in loaded_stake {
-            self.update(epoch, stake_table, None);
+            self.insert_committee(epoch, stake_table);
         }
     }
 
@@ -1728,21 +1731,6 @@ impl Membership<SeqTypes> for EpochCommittees {
         epoch: Epoch,
         block_header: Header,
     ) -> anyhow::Result<()> {
-        let membership_reader = membership.read().await;
-        if membership_reader.state.contains_key(&epoch) {
-            tracing::info!(
-                "We already have the stake table for epoch {}. Skipping L1 fetching.",
-                epoch
-            );
-            return Ok(());
-        }
-        let fetcher = Arc::clone(&membership_reader.fetcher);
-        drop(membership_reader);
-
-        let stake_tables = fetcher.fetch(epoch, block_header).await?;
-
-        let mut block_reward = None;
-
         {
             let membership_reader = membership.read().await;
             // Assumes the stake table contract proxy address does not change
@@ -1751,10 +1739,33 @@ impl Membership<SeqTypes> for EpochCommittees {
             // the `fetch_block_reward` logic can be updated to support per-epoch rewards.
             // Initially, the block reward is zero if the node starts on pre-epoch version
             // but it is updated on the first call to `add_epoch_root()`
-            if membership_reader.block_reward == RewardAmount(U256::ZERO) {
-                block_reward = Some(fetcher.fetch_block_reward().await?);
+            if membership_reader.block_reward.0.is_zero() {
+                tracing::warn!(%epoch,
+                    "Block reward is zero. attempting to fetch it from L1",
+
+                );
+                let fetcher = membership_reader.fetcher.clone();
+                drop(membership_reader);
+                let block_reward = fetcher.fetch_block_reward().await.inspect_err(|err| {
+                    tracing::error!(?epoch, ?err, "failed to fetch block_reward");
+                })?;
+                let mut membership_writer = membership.write().await;
+                membership_writer.block_reward = block_reward;
             }
         }
+
+        let membership_reader = membership.read().await;
+        if membership_reader.state.contains_key(&epoch) {
+            tracing::info!(
+                "We already have the stake table for epoch {}. Skipping L1 fetching.",
+                epoch
+            );
+            return Ok(());
+        }
+        let fetcher = membership_reader.fetcher.clone();
+        drop(membership_reader);
+
+        let stake_tables = fetcher.fetch(epoch, block_header).await?;
 
         // Store stake table in persistence
         {
@@ -1768,7 +1779,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         }
 
         let mut membership_writer = membership.write().await;
-        membership_writer.update(epoch, stake_tables, block_reward);
+        membership_writer.insert_committee(epoch, stake_tables);
         Ok(())
     }
 
