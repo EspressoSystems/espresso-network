@@ -845,6 +845,14 @@ impl TestNetwork {
             .token_name("Espresso".to_string())
             .token_symbol("ESP".to_string())
             .initial_token_supply(U256::from(3590000000u64))
+            .ops_timelock_delay(U256::from(0))
+            .ops_timelock_admin(signer.address())
+            .ops_timelock_proposers(vec![signer.address()])
+            .ops_timelock_executors(vec![signer.address()])
+            .safe_exit_timelock_delay(U256::from(10))
+            .safe_exit_timelock_admin(signer.address())
+            .safe_exit_timelock_proposers(vec![signer.address()])
+            .safe_exit_timelock_executors(vec![signer.address()])
             .build()
             .unwrap();
 

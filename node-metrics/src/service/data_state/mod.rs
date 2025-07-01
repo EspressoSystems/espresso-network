@@ -7,7 +7,7 @@ use alloy::primitives::Address;
 use async_lock::RwLock;
 use bitvec::vec::BitVec;
 use circular_buffer::CircularBuffer;
-use espresso_types::{config::PublicHotShotConfig, v0_3::Validator, Header, Payload, SeqTypes};
+use espresso_types::{v0_3::Validator, Header, Payload, SeqTypes};
 use futures::{channel::mpsc::SendError, Sink, SinkExt, Stream, StreamExt};
 use hotshot_query_service::{
     availability::{BlockQueryData, Leaf1QueryData},
@@ -28,7 +28,7 @@ use tokio::{spawn, task::JoinHandle};
 
 use crate::api::node_validator::v0::{
     get_node_stake_table_from_sequencer, get_node_validators_from_sequencer, LeafAndBlock,
-    Version01,
+    PublicHotShotConfig, Version01,
 };
 
 /// MAX_HISTORY represents the last N records that are stored within the
@@ -324,9 +324,9 @@ where
     // Are we in a new epoch?
     // Do we need to replace our stake table?
     tracing::debug!("processing block height: {block_height}");
-    if hotshot_config.blocks_per_epoch() > 0 {
-        let num_blocks_per_epoch = hotshot_config.blocks_per_epoch();
-        let epoch_starting_block = hotshot_config.epoch_start_block();
+    let epoch_starting_block = hotshot_config.epoch_start_block.unwrap_or(0);
+    let num_blocks_per_epoch = hotshot_config.epoch_height.unwrap_or(0);
+    if hotshot_config.epoch_height.is_some() && num_blocks_per_epoch > 0 {
         let previous_epoch = epoch_number_helper(
             block_height.saturating_sub(1),
             epoch_starting_block,
@@ -789,44 +789,6 @@ impl Drop for ProcessNodeIdentityStreamTask {
 }
 
 #[cfg(test)]
-pub fn default_hotshot_for_testing() -> hotshot_types::HotShotConfig<SeqTypes> {
-    use std::time::Duration;
-
-    use hotshot_types::HotShotConfig;
-    use url::Url;
-
-    HotShotConfig {
-        fixed_leader_for_gpuvid: 0,
-        num_nodes_with_stake: 10.try_into().unwrap(),
-        known_da_nodes: vec![],
-        known_nodes_with_stake: vec![],
-        next_view_timeout: Duration::from_secs(5).as_millis() as u64,
-        num_bootstrap: 1usize,
-        da_staked_committee_size: 3,
-        view_sync_timeout: Duration::from_secs(1),
-        data_request_delay: Duration::from_secs(1),
-        builder_urls: vec![Url::parse("http://127.0.0.1:1234").unwrap()]
-            .try_into()
-            .unwrap(),
-        builder_timeout: Duration::from_secs(1),
-        start_threshold: (0, 0),
-        start_proposing_view: 0,
-        stop_proposing_view: 0,
-        start_voting_view: 0,
-        stop_voting_view: 0,
-        start_proposing_time: 0,
-        start_voting_time: 0,
-        stop_proposing_time: 0,
-        stop_voting_time: 0,
-        epoch_height: 30,
-        epoch_start_block: 1,
-        stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
-        drb_difficulty: 10,
-        drb_upgrade_difficulty: 20,
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use std::{sync::Arc, time::Duration};
 
@@ -848,8 +810,9 @@ mod tests {
     use url::Url;
 
     use super::{DataState, ProcessLeafAndBlockPairStreamTask};
-    use crate::service::data_state::{
-        default_hotshot_for_testing, LocationDetails, NodeIdentity, ProcessNodeIdentityStreamTask,
+    use crate::{
+        api::node_validator::v0::PublicHotShotConfig,
+        service::data_state::{LocationDetails, NodeIdentity, ProcessNodeIdentityStreamTask},
     };
 
     #[tokio::test(flavor = "multi_thread")]
@@ -883,13 +846,15 @@ mod tests {
         let (epoch_validators_sender, _epoch_validators_receiver) =
             futures::channel::mpsc::channel(1);
 
-        let hotshot_config = default_hotshot_for_testing();
-
         let mut process_leaf_stream_task_handle = ProcessLeafAndBlockPairStreamTask::new(
             leaf_receiver,
             data_state.clone(),
             surf_disco::Client::new("http://localhost/".parse().unwrap()),
-            hotshot_config.into(),
+            PublicHotShotConfig {
+                epoch_start_block: None,
+                epoch_height: None,
+                known_nodes_with_stake: vec![],
+            },
             (
                 block_sender,
                 voters_sender,

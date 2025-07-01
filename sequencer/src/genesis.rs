@@ -563,7 +563,7 @@ mod test {
             max_block_size = 30000
             base_fee = 1
             fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "{:?}"
+            fee_contract = "{proxy_addr:?}"
 
             [header]
             timestamp = 123456
@@ -571,7 +571,6 @@ mod test {
             [l1_finalized]
             number = 42
         "#,
-            proxy_addr,
         )
         .to_string();
 
@@ -638,11 +637,10 @@ mod test {
             max_block_size = 30000
             base_fee = 1
             fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "{:?}"
+            fee_contract = "{proxy_addr:?}"
 
            
         "#,
-            proxy_addr,
         )
         .to_string();
 
@@ -816,15 +814,14 @@ mod test {
             max_block_size = 30000
             base_fee = 1
             fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "{:?}"
+            fee_contract = "{proxy_addr:?}"
 
             [header]
             timestamp = 123456
 
             [l1_finalized]
             number = 42
-        "#,
-            proxy_addr
+        "#
         )
         .to_string();
 
@@ -929,7 +926,7 @@ mod test {
         let genesis: Genesis = toml::from_str(&toml).unwrap_or_else(|err| panic!("{err:#}"));
 
         let (version, genesis_upgrade) = genesis.upgrades.last_key_value().unwrap();
-        println!("{:?}", genesis_upgrade);
+        println!("{genesis_upgrade:?}");
 
         assert_eq!(*version, Version { major: 0, minor: 2 });
 

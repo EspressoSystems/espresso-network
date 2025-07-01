@@ -381,7 +381,7 @@ mod tests {
             storage
                 .store_drb_result(epoch, drb)
                 .await
-                .unwrap_or_else(|_| panic!("Failed to store DRB result for epoch {}", i));
+                .unwrap_or_else(|_| panic!("Failed to store DRB result for epoch {i}"));
         }
 
         let results = storage.load_start_epoch_info().await.unwrap();
@@ -1289,7 +1289,7 @@ mod tests {
             None,
             block,
         )
-        .await?
+        .await
         .sort_events()?;
         assert_eq!(
             contract_events, events,
@@ -1485,6 +1485,14 @@ mod tests {
             .token_name("Espresso".to_string())
             .token_symbol("ESP".to_string())
             .initial_token_supply(U256::from(3590000000u64))
+            .ops_timelock_delay(U256::from(0))
+            .ops_timelock_admin(network_config.signer().address())
+            .ops_timelock_proposers(vec![network_config.signer().address()])
+            .ops_timelock_executors(vec![network_config.signer().address()])
+            .safe_exit_timelock_delay(U256::from(10))
+            .safe_exit_timelock_admin(network_config.signer().address())
+            .safe_exit_timelock_proposers(vec![network_config.signer().address()])
+            .safe_exit_timelock_executors(vec![network_config.signer().address()])
             .build()
             .unwrap();
 
@@ -1583,7 +1591,7 @@ mod tests {
 
             let contract_events =
                 Fetcher::fetch_events_from_contract(l1_client.clone(), st_addr, None, l1_block)
-                    .await?
+                    .await
                     .sort_events()?;
             assert_eq!(persisted_events, contract_events);
 

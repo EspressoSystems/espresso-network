@@ -1,6 +1,5 @@
 use std::{pin::Pin, sync::Arc, time::Duration};
 
-use alloy::primitives::Address;
 use anyhow::{bail, Context};
 use async_lock::RwLock;
 use async_once_cell::Lazy;
@@ -16,15 +15,14 @@ use espresso_types::{
     retain_accounts,
     v0::traits::SequencerPersistence,
     v0_1::{RewardAccount, RewardAmount, RewardMerkleTree},
-    v0_3::{ChainConfig, Validator},
+    v0_3::ChainConfig,
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
-    Transaction,
+    Transaction, ValidatorMap,
 };
 use futures::{
     future::{BoxFuture, Future, FutureExt},
     stream::BoxStream,
 };
-use hotshot::types::BLSPubKey;
 use hotshot_events_service::events_source::{
     EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
 };
@@ -44,7 +42,6 @@ use hotshot_types::{
     vote::HasViewNumber,
     PeerConfig,
 };
-use indexmap::IndexMap;
 use itertools::Itertools;
 use jf_merkle_tree::MerkleTreeScheme;
 use rand::Rng;
@@ -224,7 +221,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     async fn get_validators(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
-    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+    ) -> anyhow::Result<ValidatorMap> {
         self.as_ref().get_validators(epoch).await
     }
 
@@ -294,7 +291,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     async fn get_validators(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
-    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+    ) -> anyhow::Result<ValidatorMap> {
         let mem = self
             .consensus()
             .await
@@ -1012,6 +1009,14 @@ pub mod test_helpers {
                 .token_name("Espresso".to_string())
                 .token_symbol("ESP".to_string())
                 .initial_token_supply(U256::from(3590000000u64))
+                .ops_timelock_delay(U256::from(0))
+                .ops_timelock_admin(signer.address())
+                .ops_timelock_proposers(vec![signer.address()])
+                .ops_timelock_executors(vec![signer.address()])
+                .safe_exit_timelock_delay(U256::from(10))
+                .safe_exit_timelock_admin(signer.address())
+                .safe_exit_timelock_proposers(vec![signer.address()])
+                .safe_exit_timelock_executors(vec![signer.address()])
                 .build()
                 .unwrap();
 
@@ -3319,7 +3324,7 @@ mod test {
         // Basically epoch 3 and epoch 4 as epoch height is 20
         // get all the validators
         let validators = client
-            .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/3")
+            .get::<ValidatorMap>("node/validators/3")
             .send()
             .await
             .expect("failed to get validator");
@@ -3334,7 +3339,7 @@ mod test {
         }
         // get all the validators
         let validators = client
-            .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/4")
+            .get::<ValidatorMap>("node/validators/4")
             .send()
             .await
             .expect("failed to get validator");
@@ -3453,8 +3458,7 @@ mod test {
                 None,
                 l1_block.number(),
             )
-            .await
-            .expect("failed to get stake table from contract");
+            .await;
             let sorted_events = events.sort_events().expect("failed to sort");
 
             let mut sorted_dedup_removed = sorted_events.clone();
@@ -3551,14 +3555,14 @@ mod test {
         // Verify that there are no validators for epoch # 1 and epoch # 2
         {
             client
-                .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/1")
+                .get::<ValidatorMap>("node/validators/1")
                 .send()
                 .await
                 .unwrap()
                 .is_empty();
 
             client
-                .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/2")
+                .get::<ValidatorMap>("node/validators/2")
                 .send()
                 .await
                 .unwrap()
@@ -3567,7 +3571,7 @@ mod test {
 
         // Get the epoch # 3 validators
         let validators = client
-            .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/3")
+            .get::<ValidatorMap>("node/validators/3")
             .send()
             .await
             .expect("validators");
@@ -3631,7 +3635,7 @@ mod test {
             drop(membership);
 
             let validators = client
-                .get::<IndexMap<Address, Validator<BLSPubKey>>>(&format!("node/validators/{epoch}"))
+                .get::<ValidatorMap>(&format!("node/validators/{epoch}"))
                 .send()
                 .await
                 .expect("validators");
@@ -4667,6 +4671,14 @@ mod test {
             .token_name("Espresso".to_string())
             .token_symbol("ESP".to_string())
             .initial_token_supply(U256::from(3590000000u64))
+            .ops_timelock_delay(U256::from(0))
+            .ops_timelock_admin(network_config.signer().address())
+            .ops_timelock_proposers(vec![network_config.signer().address()])
+            .ops_timelock_executors(vec![network_config.signer().address()])
+            .safe_exit_timelock_delay(U256::from(0))
+            .safe_exit_timelock_admin(network_config.signer().address())
+            .safe_exit_timelock_proposers(vec![network_config.signer().address()])
+            .safe_exit_timelock_executors(vec![network_config.signer().address()])
             .build()
             .unwrap();
 
@@ -4898,7 +4910,7 @@ mod test {
 
         let duration = start.elapsed();
 
-        println!("Time elapsed to submit transactions: {:?}", duration);
+        println!("Time elapsed to submit transactions: {duration:?}");
 
         let last_tx_height = tx_heights.last().unwrap();
         for namespace in 1..=4 {

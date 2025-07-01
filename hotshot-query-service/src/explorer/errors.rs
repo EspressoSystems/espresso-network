@@ -76,7 +76,7 @@ impl Serialize for Unimplemented {
     {
         let mut st = serializer.serialize_struct("Unimplemented", 2)?;
         st.serialize_field("code", &self.code())?;
-        st.serialize_field("message", &format!("{}", self))?;
+        st.serialize_field("message", &format!("{self}"))?;
         st.end()
     }
 }
@@ -117,7 +117,7 @@ impl Serialize for InvalidLimit {
     {
         let mut st = serializer.serialize_struct("InvalidLimit", 2)?;
         st.serialize_field("code", &self.code())?;
-        st.serialize_field("message", &format!("{}", self))?;
+        st.serialize_field("message", &format!("{self}"))?;
         st.end()
     }
 }
@@ -162,7 +162,7 @@ impl Serialize for NotFound {
         let mut st = serializer.serialize_struct("NotFound", 2)?;
         st.serialize_field("code", &self.code())?;
         st.serialize_field("key", &self.key())?;
-        st.serialize_field("message", &format!("{}", self))?;
+        st.serialize_field("message", &format!("{self}"))?;
         st.end()
     }
 }
@@ -215,7 +215,7 @@ impl Serialize for QueryError {
         let mut st = serializer.serialize_struct("QueryError", 2)?;
         st.serialize_field("code", &self.code())?;
         st.serialize_field("error", &self.error())?;
-        st.serialize_field("message", &format!("{}", self))?;
+        st.serialize_field("message", &format!("{self}"))?;
         st.end()
     }
 }
@@ -259,7 +259,7 @@ impl Serialize for BadQuery {
     {
         let mut st = serializer.serialize_struct("BadQuery", 2)?;
         st.serialize_field("code", &self.code())?;
-        st.serialize_field("message", &format!("{}", self))?;
+        st.serialize_field("message", &format!("{self}"))?;
         st.end()
     }
 }

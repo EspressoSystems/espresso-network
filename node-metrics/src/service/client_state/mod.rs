@@ -556,8 +556,7 @@ impl std::fmt::Display for HandleRequestValidatorsSnapshotError {
             HandleRequestValidatorsSnapshotError::ClientSendError(err) => {
                 write!(
                     f,
-                    "handle request validators snapshot error: client send error: {}",
-                    err
+                    "handle request validators snapshot error: client send error: {err}"
                 )
             },
         }
@@ -618,8 +617,7 @@ impl std::fmt::Display for HandleRequestStakeTableSnapshotError {
             HandleRequestStakeTableSnapshotError::ClientSendError(err) => {
                 write!(
                     f,
-                    "handle request stake table snapshot error: client send error: {}",
-                    err
+                    "handle request stake table snapshot error: client send error: {err}"
                 )
             },
         }
@@ -680,8 +678,7 @@ impl std::fmt::Display for HandleRequestUnrecognizedRequestError {
             HandleRequestUnrecognizedRequestError::ClientSendError(err) => {
                 write!(
                     f,
-                    "handle request unrecognized request error: client send error: {}",
-                    err
+                    "handle request unrecognized request error: client send error: {err}"
                 )
             },
         }
@@ -823,19 +820,17 @@ impl std::fmt::Display for ProcessClientMessageError {
             ProcessClientMessageError::ValidatorsSnapshot(err) => {
                 write!(
                     f,
-                    "process client message error: validators snapshot: {}",
-                    err
+                    "process client message error: validators snapshot: {err}"
                 )
             },
             ProcessClientMessageError::StakeTableSnapshot(err) => {
                 write!(
                     f,
-                    "process client message error: stake table snapshot: {}",
-                    err
+                    "process client message error: stake table snapshot: {err}"
                 )
             },
             ProcessClientMessageError::UnrecognizedRequest(err) => {
-                write!(f, "process client message error: unknown: {}", err)
+                write!(f, "process client message error: unknown: {err}")
             },
         }
     }
@@ -1632,19 +1627,22 @@ pub mod tests {
     };
 
     use super::{ClientThreadState, InternalClientMessageProcessingTask};
-    use crate::service::{
-        client_id::ClientId,
-        client_message::{ClientMessage, InternalClientMessage},
-        client_state::{
-            ProcessDistributeBlockDetailHandlingTask, ProcessDistributeNodeIdentityHandlingTask,
-            ProcessDistributeStakeTableHandlingTask, ProcessDistributeValidatorHandlingTask,
-            ProcessDistributeVotersHandlingTask,
+    use crate::{
+        api::node_validator::v0::PublicHotShotConfig,
+        service::{
+            client_id::ClientId,
+            client_message::{ClientMessage, InternalClientMessage},
+            client_state::{
+                ProcessDistributeBlockDetailHandlingTask,
+                ProcessDistributeNodeIdentityHandlingTask, ProcessDistributeStakeTableHandlingTask,
+                ProcessDistributeValidatorHandlingTask, ProcessDistributeVotersHandlingTask,
+            },
+            data_state::{
+                create_block_detail_from_block, DataState, LocationDetails, NodeIdentity,
+                ProcessLeafAndBlockPairStreamTask,
+            },
+            server_message::ServerMessage,
         },
-        data_state::{
-            create_block_detail_from_block, default_hotshot_for_testing, DataState,
-            LocationDetails, NodeIdentity, ProcessLeafAndBlockPairStreamTask,
-        },
-        server_message::ServerMessage,
     };
 
     pub fn create_test_client_thread_state() -> ClientThreadState<Sender<ServerMessage>> {
@@ -1989,7 +1987,11 @@ pub mod tests {
             leaf_receiver,
             data_state,
             surf_disco::client::Client::new("http://localhost/".parse().unwrap()),
-            default_hotshot_for_testing().into(),
+            PublicHotShotConfig {
+                epoch_height: None,
+                epoch_start_block: None,
+                known_nodes_with_stake: vec![],
+            },
             (
                 block_detail_sender,
                 voters_sender,
