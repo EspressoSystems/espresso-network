@@ -38,10 +38,6 @@ processes:
   deploy-sequencer-contracts:
     # The contract addresses are implicitly inherited from .env. We need to unset these or else the
     # script will think they're already deployed.
-    environment:
-      - ESP_TOKEN_NAME="Espresso"
-      - ESP_TOKEN_SYMBOL="ESP"
-      - ESP_TOKEN_INITIAL_SUPPLY=3590000000
     command:
       unset
       ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
