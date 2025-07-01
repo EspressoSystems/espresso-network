@@ -1470,7 +1470,7 @@ impl EpochCommittees {
                 self.block_reward = block_reward;
             },
             Err(err) => {
-                tracing::error!(
+                tracing::warn!(
                     "Failed to fetch the block reward when reloading the stake tables: {err}"
                 );
                 return;
@@ -1766,8 +1766,7 @@ impl Membership<SeqTypes> for EpochCommittees {
             let membership_reader = membership.read().await;
             if membership_reader.state.contains_key(&epoch) {
                 tracing::info!(
-                    "We already have the stake table for epoch {}. Skipping L1 fetching.",
-                    epoch
+                    "We already have the stake table for epoch {epoch}. Skipping L1 fetching.",
                 );
                 return Ok(());
             }
