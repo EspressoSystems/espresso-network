@@ -1750,7 +1750,13 @@ impl Membership<SeqTypes> for EpochCommittees {
         {
             let membership_reader = membership.upgradable_read().await;
             if membership_reader.block_reward.0.is_zero() {
-                let block_reward = fetcher.fetch_block_reward().await?;
+                tracing::warn!(%epoch,
+                    "Block reward is zero. attempting to fetch it from L1",
+
+                );
+                let block_reward = fetcher.fetch_block_reward().await.inspect_err(|err| {
+                    tracing::error!(?epoch, ?err, "failed to fetch block_reward");
+                })?;
                 let mut writer = RwLockUpgradableReadGuard::upgrade(membership_reader).await;
                 writer.block_reward = block_reward;
             };
