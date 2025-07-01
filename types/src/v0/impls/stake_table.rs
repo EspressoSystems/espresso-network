@@ -1460,8 +1460,20 @@ impl EpochCommittees {
     }
 
     pub async fn reload_stake(&mut self, limit: u64) {
-        // Load the 50 latest stored stake tables
+        match self.fetcher.fetch_block_reward().await {
+            Ok(block_reward) => {
+                tracing::info!("Fetched block reward: {block_reward}");
+                self.block_reward = block_reward;
+            },
+            Err(err) => {
+                tracing::error!(
+                    "Failed to fetch the block reward when reloading the stake tables: {err}"
+                );
+                return;
+            },
+        }
 
+        // Load the 50 latest stored stake tables
         let loaded_stake = match self
             .fetcher
             .persistence
@@ -1481,18 +1493,6 @@ impl EpochCommittees {
             },
         };
 
-        match self.fetcher.fetch_block_reward().await {
-            Ok(block_reward) => {
-                tracing::info!("Fetched block reward: {block_reward}");
-                self.block_reward = block_reward;
-            },
-            Err(err) => {
-                tracing::error!(
-                    "Failed to fetch the block reward when reloading the stake tables: {err}"
-                );
-                return;
-            },
-        }
         for (epoch, stake_table) in loaded_stake {
             self.insert_committee(epoch, stake_table);
         }
