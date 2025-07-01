@@ -12,7 +12,7 @@ use alloy::{
     rpc::types::Log,
 };
 use anyhow::{bail, ensure, Context};
-use async_lock::{Mutex, RwLock};
+use async_lock::{Mutex, RwLock, RwLockUpgradableReadGuard};
 use committable::Committable;
 use futures::stream::{self, StreamExt};
 use hotshot::types::{BLSPubKey, SchnorrPubKey, SignatureKey as _};
@@ -1190,11 +1190,16 @@ impl Fetcher {
         }
     }
 
-    pub async fn fetch(&self, epoch: Epoch, header: Header) -> anyhow::Result<ValidatorMap> {
-        let chain_config = self.get_chain_config(&header).await?;
+    pub async fn update_chain_config(&self, header: &Header) -> anyhow::Result<()> {
+        let chain_config = self.get_chain_config(header).await?;
         // update chain config
         *self.chain_config.lock().await = chain_config;
 
+        Ok(())
+    }
+
+    pub async fn fetch(&self, epoch: Epoch, header: &Header) -> anyhow::Result<ValidatorMap> {
+        let chain_config = *self.chain_config.lock().await;
         let Some(address) = chain_config.stake_table_contract else {
             bail!("No stake table contract address found in Chain config");
         };
@@ -1237,9 +1242,8 @@ impl Fetcher {
             None => peers
                 .fetch_chain_config(header_cf.commit())
                 .await
-                .map_err(|err| {
+                .inspect_err(|err| {
                     tracing::error!("failed to get chain_config from peers. err: {err:?}");
-                    err
                 })?,
         };
 
@@ -1731,18 +1735,39 @@ impl Membership<SeqTypes> for EpochCommittees {
         epoch: Epoch,
         block_header: Header,
     ) -> anyhow::Result<()> {
-        let membership_reader = membership.read().await;
-        if membership_reader.state.contains_key(&epoch) {
-            tracing::info!(
-                "We already have the stake table for epoch {}. Skipping L1 fetching.",
-                epoch
-            );
-            return Ok(());
-        }
-        let fetcher = membership_reader.fetcher.clone();
-        drop(membership_reader);
+        let fetcher = { membership.read().await.fetcher.clone() };
 
-        let stake_tables = fetcher.fetch(epoch, block_header).await?;
+        // Update the chain config if the block header contains a newer one.
+        fetcher.update_chain_config(&block_header).await?;
+
+        // Fetch the block reward and update it if its zero.
+        // Assumes the stake table contract proxy address does not change
+        // In the future, if we want to support updates to the stake table contract address via chain config,
+        // or allow the contract to handle additional block reward calculation parameters (e.g., inflation, block time),
+        // the `fetch_block_reward` logic can be updated to support per-epoch rewards.
+        // Initially, the block reward is zero if the node starts on pre-epoch version
+        // but it is updated on the first call to `add_epoch_root()`
+        {
+            let membership_reader = membership.upgradable_read().await;
+            if membership_reader.block_reward.0.is_zero() {
+                let block_reward = fetcher.fetch_block_reward().await?;
+                let mut writer = RwLockUpgradableReadGuard::upgrade(membership_reader).await;
+                writer.block_reward = block_reward;
+            };
+        }
+
+        {
+            let membership_reader = membership.read().await;
+            if membership_reader.state.contains_key(&epoch) {
+                tracing::info!(
+                    "We already have the stake table for epoch {}. Skipping L1 fetching.",
+                    epoch
+                );
+                return Ok(());
+            }
+        }
+
+        let stake_tables = fetcher.fetch(epoch, &block_header).await?;
 
         // Store stake table in persistence
         {
@@ -1755,33 +1780,9 @@ impl Membership<SeqTypes> for EpochCommittees {
             }
         }
 
-        let mut block_reward = None;
-
-        {
-            // Assumes the stake table contract proxy address does not change
-            // In the future, if we want to support updates to the stake table contract address via chain config,
-            // or allow the contract to handle additional block reward calculation parameters (e.g., inflation, block time),
-            // the `fetch_block_reward` logic can be updated to support per-epoch rewards.
-            // Initially, the block reward is zero if the node starts on pre-epoch version
-            // but it is updated on the first call to `add_epoch_root()`
-            if membership.read().await.block_reward.0.is_zero() {
-                tracing::warn!(%epoch,
-                    "Block reward is zero. attempting to fetch it from L1",
-
-                );
-
-                let reward = fetcher.fetch_block_reward().await.inspect_err(|err| {
-                    tracing::error!(?epoch, ?err, "failed to fetch block_reward");
-                })?;
-                block_reward = Some(reward);
-            }
-        }
-
         let mut membership_writer = membership.write().await;
         membership_writer.insert_committee(epoch, stake_tables);
-        if let Some(block_reward) = block_reward {
-            membership_writer.block_reward = block_reward;
-        }
+
         Ok(())
     }
 
