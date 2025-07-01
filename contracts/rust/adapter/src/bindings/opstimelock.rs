@@ -265,7 +265,7 @@ library TimelockController {
     type OperationState is uint8;
 }
 
-interface Timelock {
+interface OpsTimelock {
     error AccessControlBadConfirmation();
     error AccessControlUnauthorizedAccount(address account, bytes32 neededRole);
     error FailedInnerCall();
@@ -1327,7 +1327,7 @@ interface Timelock {
     clippy::style,
     clippy::empty_structs_with_brackets
 )]
-pub mod Timelock {
+pub mod OpsTimelock {
     use alloy::sol_types as alloy_sol_types;
 
     use super::*;
@@ -6849,9 +6849,9 @@ pub mod Timelock {
             }
         }
     };
-    ///Container for all the [`Timelock`](self) function calls.
+    ///Container for all the [`OpsTimelock`](self) function calls.
     #[derive()]
-    pub enum TimelockCalls {
+    pub enum OpsTimelockCalls {
         #[allow(missing_docs)]
         CANCELLER_ROLE(CANCELLER_ROLECall),
         #[allow(missing_docs)]
@@ -6910,7 +6910,7 @@ pub mod Timelock {
         updateDelay(updateDelayCall),
     }
     #[automatically_derived]
-    impl TimelockCalls {
+    impl OpsTimelockCalls {
         /// All the selectors of this enum.
         ///
         /// Note that the selectors might not be in the same order as the variants.
@@ -6949,8 +6949,8 @@ pub mod Timelock {
         ];
     }
     #[automatically_derived]
-    impl alloy_sol_types::SolInterface for TimelockCalls {
-        const NAME: &'static str = "TimelockCalls";
+    impl alloy_sol_types::SolInterface for OpsTimelockCalls {
+        const NAME: &'static str = "OpsTimelockCalls";
         const MIN_DATA_LENGTH: usize = 0usize;
         const COUNT: usize = 28usize;
         #[inline]
@@ -7023,332 +7023,344 @@ pub mod Timelock {
             data: &[u8],
             validate: bool,
         ) -> alloy_sol_types::Result<Self> {
-            static DECODE_SHIMS: &[fn(&[u8], bool) -> alloy_sol_types::Result<TimelockCalls>] = &[
-                {
-                    fn schedule(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <scheduleCall as alloy_sol_types::SolCall>::abi_decode_raw(data, validate)
-                            .map(TimelockCalls::schedule)
-                    }
-                    schedule
-                },
-                {
-                    fn supportsInterface(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <supportsInterfaceCall as alloy_sol_types::SolCall>::abi_decode_raw(
-                            data, validate,
-                        )
-                        .map(TimelockCalls::supportsInterface)
-                    }
-                    supportsInterface
-                },
-                {
-                    fn EXECUTOR_ROLE(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <EXECUTOR_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw(
-                            data, validate,
-                        )
-                        .map(TimelockCalls::EXECUTOR_ROLE)
-                    }
-                    EXECUTOR_ROLE
-                },
-                {
-                    fn execute(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <executeCall as alloy_sol_types::SolCall>::abi_decode_raw(data, validate)
-                            .map(TimelockCalls::execute)
-                    }
-                    execute
-                },
-                {
-                    fn isOperationReady(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <isOperationReadyCall as alloy_sol_types::SolCall>::abi_decode_raw(
-                            data, validate,
-                        )
-                        .map(TimelockCalls::isOperationReady)
-                    }
-                    isOperationReady
-                },
-                {
-                    fn onERC721Received(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <onERC721ReceivedCall as alloy_sol_types::SolCall>::abi_decode_raw(
-                            data, validate,
-                        )
-                        .map(TimelockCalls::onERC721Received)
-                    }
-                    onERC721Received
-                },
-                {
-                    fn getRoleAdmin(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <getRoleAdminCall as alloy_sol_types::SolCall>::abi_decode_raw(
-                            data, validate,
-                        )
-                        .map(TimelockCalls::getRoleAdmin)
-                    }
-                    getRoleAdmin
-                },
-                {
-                    fn isOperationDone(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <isOperationDoneCall as alloy_sol_types::SolCall>::abi_decode_raw(
-                            data, validate,
-                        )
-                        .map(TimelockCalls::isOperationDone)
-                    }
-                    isOperationDone
-                },
-                {
-                    fn grantRole(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <grantRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(data, validate)
-                            .map(TimelockCalls::grantRole)
-                    }
-                    grantRole
-                },
-                {
-                    fn isOperation(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <isOperationCall as alloy_sol_types::SolCall>::abi_decode_raw(
-                            data, validate,
-                        )
-                        .map(TimelockCalls::isOperation)
-                    }
-                    isOperation
-                },
-                {
-                    fn renounceRole(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <renounceRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(
-                            data, validate,
-                        )
-                        .map(TimelockCalls::renounceRole)
-                    }
-                    renounceRole
-                },
-                {
-                    fn isOperationPending(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <isOperationPendingCall as alloy_sol_types::SolCall>::abi_decode_raw(
-                            data, validate,
-                        )
-                        .map(TimelockCalls::isOperationPending)
-                    }
-                    isOperationPending
-                },
-                {
-                    fn updateDelay(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <updateDelayCall as alloy_sol_types::SolCall>::abi_decode_raw(
-                            data, validate,
-                        )
-                        .map(TimelockCalls::updateDelay)
-                    }
-                    updateDelay
-                },
-                {
-                    fn getOperationState(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <getOperationStateCall as alloy_sol_types::SolCall>::abi_decode_raw(
-                            data, validate,
-                        )
-                        .map(TimelockCalls::getOperationState)
-                    }
-                    getOperationState
-                },
-                {
-                    fn hashOperation(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <hashOperationCall as alloy_sol_types::SolCall>::abi_decode_raw(
-                            data, validate,
-                        )
-                        .map(TimelockCalls::hashOperation)
-                    }
-                    hashOperation
-                },
-                {
-                    fn scheduleBatch(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <scheduleBatchCall as alloy_sol_types::SolCall>::abi_decode_raw(
-                            data, validate,
-                        )
-                        .map(TimelockCalls::scheduleBatch)
-                    }
-                    scheduleBatch
-                },
-                {
-                    fn PROPOSER_ROLE(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <PROPOSER_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw(
-                            data, validate,
-                        )
-                        .map(TimelockCalls::PROPOSER_ROLE)
-                    }
-                    PROPOSER_ROLE
-                },
-                {
-                    fn hasRole(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <hasRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(data, validate)
-                            .map(TimelockCalls::hasRole)
-                    }
-                    hasRole
-                },
-                {
-                    fn DEFAULT_ADMIN_ROLE(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <DEFAULT_ADMIN_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw(
-                            data, validate,
-                        )
-                        .map(TimelockCalls::DEFAULT_ADMIN_ROLE)
-                    }
-                    DEFAULT_ADMIN_ROLE
-                },
-                {
-                    fn CANCELLER_ROLE(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <CANCELLER_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw(
-                            data, validate,
-                        )
-                        .map(TimelockCalls::CANCELLER_ROLE)
-                    }
-                    CANCELLER_ROLE
-                },
-                {
-                    fn hashOperationBatch(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <hashOperationBatchCall as alloy_sol_types::SolCall>::abi_decode_raw(
-                            data, validate,
-                        )
-                        .map(TimelockCalls::hashOperationBatch)
-                    }
-                    hashOperationBatch
-                },
-                {
-                    fn onERC1155BatchReceived(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <onERC1155BatchReceivedCall as alloy_sol_types::SolCall>::abi_decode_raw(
-                            data, validate,
-                        )
-                        .map(TimelockCalls::onERC1155BatchReceived)
-                    }
-                    onERC1155BatchReceived
-                },
-                {
-                    fn cancel(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <cancelCall as alloy_sol_types::SolCall>::abi_decode_raw(data, validate)
-                            .map(TimelockCalls::cancel)
-                    }
-                    cancel
-                },
-                {
-                    fn getTimestamp(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <getTimestampCall as alloy_sol_types::SolCall>::abi_decode_raw(
-                            data, validate,
-                        )
-                        .map(TimelockCalls::getTimestamp)
-                    }
-                    getTimestamp
-                },
-                {
-                    fn revokeRole(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <revokeRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(data, validate)
-                            .map(TimelockCalls::revokeRole)
-                    }
-                    revokeRole
-                },
-                {
-                    fn executeBatch(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <executeBatchCall as alloy_sol_types::SolCall>::abi_decode_raw(
-                            data, validate,
-                        )
-                        .map(TimelockCalls::executeBatch)
-                    }
-                    executeBatch
-                },
-                {
-                    fn onERC1155Received(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <onERC1155ReceivedCall as alloy_sol_types::SolCall>::abi_decode_raw(
-                            data, validate,
-                        )
-                        .map(TimelockCalls::onERC1155Received)
-                    }
-                    onERC1155Received
-                },
-                {
-                    fn getMinDelay(
-                        data: &[u8],
-                        validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockCalls> {
-                        <getMinDelayCall as alloy_sol_types::SolCall>::abi_decode_raw(
-                            data, validate,
-                        )
-                        .map(TimelockCalls::getMinDelay)
-                    }
-                    getMinDelay
-                },
-            ];
+            static DECODE_SHIMS: &[fn(&[u8], bool) -> alloy_sol_types::Result<OpsTimelockCalls>] =
+                &[
+                    {
+                        fn schedule(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <scheduleCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::schedule)
+                        }
+                        schedule
+                    },
+                    {
+                        fn supportsInterface(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <supportsInterfaceCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::supportsInterface)
+                        }
+                        supportsInterface
+                    },
+                    {
+                        fn EXECUTOR_ROLE(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <EXECUTOR_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::EXECUTOR_ROLE)
+                        }
+                        EXECUTOR_ROLE
+                    },
+                    {
+                        fn execute(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <executeCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::execute)
+                        }
+                        execute
+                    },
+                    {
+                        fn isOperationReady(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <isOperationReadyCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::isOperationReady)
+                        }
+                        isOperationReady
+                    },
+                    {
+                        fn onERC721Received(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <onERC721ReceivedCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::onERC721Received)
+                        }
+                        onERC721Received
+                    },
+                    {
+                        fn getRoleAdmin(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <getRoleAdminCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::getRoleAdmin)
+                        }
+                        getRoleAdmin
+                    },
+                    {
+                        fn isOperationDone(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <isOperationDoneCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::isOperationDone)
+                        }
+                        isOperationDone
+                    },
+                    {
+                        fn grantRole(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <grantRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::grantRole)
+                        }
+                        grantRole
+                    },
+                    {
+                        fn isOperation(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <isOperationCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::isOperation)
+                        }
+                        isOperation
+                    },
+                    {
+                        fn renounceRole(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <renounceRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::renounceRole)
+                        }
+                        renounceRole
+                    },
+                    {
+                        fn isOperationPending(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <isOperationPendingCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::isOperationPending)
+                        }
+                        isOperationPending
+                    },
+                    {
+                        fn updateDelay(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <updateDelayCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::updateDelay)
+                        }
+                        updateDelay
+                    },
+                    {
+                        fn getOperationState(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <getOperationStateCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::getOperationState)
+                        }
+                        getOperationState
+                    },
+                    {
+                        fn hashOperation(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <hashOperationCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::hashOperation)
+                        }
+                        hashOperation
+                    },
+                    {
+                        fn scheduleBatch(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <scheduleBatchCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::scheduleBatch)
+                        }
+                        scheduleBatch
+                    },
+                    {
+                        fn PROPOSER_ROLE(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <PROPOSER_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::PROPOSER_ROLE)
+                        }
+                        PROPOSER_ROLE
+                    },
+                    {
+                        fn hasRole(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <hasRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::hasRole)
+                        }
+                        hasRole
+                    },
+                    {
+                        fn DEFAULT_ADMIN_ROLE(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <DEFAULT_ADMIN_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::DEFAULT_ADMIN_ROLE)
+                        }
+                        DEFAULT_ADMIN_ROLE
+                    },
+                    {
+                        fn CANCELLER_ROLE(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <CANCELLER_ROLECall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::CANCELLER_ROLE)
+                        }
+                        CANCELLER_ROLE
+                    },
+                    {
+                        fn hashOperationBatch(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <hashOperationBatchCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::hashOperationBatch)
+                        }
+                        hashOperationBatch
+                    },
+                    {
+                        fn onERC1155BatchReceived(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <onERC1155BatchReceivedCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data,
+                                validate,
+                            )
+                            .map(OpsTimelockCalls::onERC1155BatchReceived)
+                        }
+                        onERC1155BatchReceived
+                    },
+                    {
+                        fn cancel(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <cancelCall as alloy_sol_types::SolCall>::abi_decode_raw(data, validate)
+                                .map(OpsTimelockCalls::cancel)
+                        }
+                        cancel
+                    },
+                    {
+                        fn getTimestamp(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <getTimestampCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::getTimestamp)
+                        }
+                        getTimestamp
+                    },
+                    {
+                        fn revokeRole(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <revokeRoleCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::revokeRole)
+                        }
+                        revokeRole
+                    },
+                    {
+                        fn executeBatch(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <executeBatchCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::executeBatch)
+                        }
+                        executeBatch
+                    },
+                    {
+                        fn onERC1155Received(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <onERC1155ReceivedCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::onERC1155Received)
+                        }
+                        onERC1155Received
+                    },
+                    {
+                        fn getMinDelay(
+                            data: &[u8],
+                            validate: bool,
+                        ) -> alloy_sol_types::Result<OpsTimelockCalls> {
+                            <getMinDelayCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data, validate,
+                            )
+                            .map(OpsTimelockCalls::getMinDelay)
+                        }
+                        getMinDelay
+                    },
+                ];
             let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
                 return Err(alloy_sol_types::Error::unknown_selector(
                     <Self as alloy_sol_types::SolInterface>::NAME,
@@ -7540,9 +7552,9 @@ pub mod Timelock {
             }
         }
     }
-    ///Container for all the [`Timelock`](self) custom errors.
+    ///Container for all the [`OpsTimelock`](self) custom errors.
     #[derive(Debug, PartialEq, Eq, Hash)]
-    pub enum TimelockErrors {
+    pub enum OpsTimelockErrors {
         #[allow(missing_docs)]
         AccessControlBadConfirmation(AccessControlBadConfirmation),
         #[allow(missing_docs)]
@@ -7561,7 +7573,7 @@ pub mod Timelock {
         TimelockUnexpectedOperationState(TimelockUnexpectedOperationState),
     }
     #[automatically_derived]
-    impl TimelockErrors {
+    impl OpsTimelockErrors {
         /// All the selectors of this enum.
         ///
         /// Note that the selectors might not be in the same order as the variants.
@@ -7580,8 +7592,8 @@ pub mod Timelock {
         ];
     }
     #[automatically_derived]
-    impl alloy_sol_types::SolInterface for TimelockErrors {
-        const NAME: &'static str = "TimelockErrors";
+    impl alloy_sol_types::SolInterface for OpsTimelockErrors {
+        const NAME: &'static str = "OpsTimelockErrors";
         const MIN_DATA_LENGTH: usize = 0usize;
         const COUNT: usize = 8usize;
         #[inline]
@@ -7628,16 +7640,20 @@ pub mod Timelock {
             data: &[u8],
             validate: bool,
         ) -> alloy_sol_types::Result<Self> {
-            static DECODE_SHIMS: &[fn(&[u8], bool) -> alloy_sol_types::Result<TimelockErrors>] = &[
+            static DECODE_SHIMS: &[fn(
+                &[u8],
+                bool,
+            )
+                -> alloy_sol_types::Result<OpsTimelockErrors>] = &[
                 {
                     fn FailedInnerCall(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockErrors> {
+                    ) -> alloy_sol_types::Result<OpsTimelockErrors> {
                         <FailedInnerCall as alloy_sol_types::SolError>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TimelockErrors::FailedInnerCall)
+                        .map(OpsTimelockErrors::FailedInnerCall)
                     }
                     FailedInnerCall
                 },
@@ -7645,11 +7661,11 @@ pub mod Timelock {
                     fn TimelockInsufficientDelay(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockErrors> {
+                    ) -> alloy_sol_types::Result<OpsTimelockErrors> {
                         <TimelockInsufficientDelay as alloy_sol_types::SolError>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TimelockErrors::TimelockInsufficientDelay)
+                        .map(OpsTimelockErrors::TimelockInsufficientDelay)
                     }
                     TimelockInsufficientDelay
                 },
@@ -7657,12 +7673,12 @@ pub mod Timelock {
                     fn TimelockUnexpectedOperationState(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockErrors> {
+                    ) -> alloy_sol_types::Result<OpsTimelockErrors> {
                         <TimelockUnexpectedOperationState as alloy_sol_types::SolError>::abi_decode_raw(
                                 data,
                                 validate,
                             )
-                            .map(TimelockErrors::TimelockUnexpectedOperationState)
+                            .map(OpsTimelockErrors::TimelockUnexpectedOperationState)
                     }
                     TimelockUnexpectedOperationState
                 },
@@ -7670,11 +7686,11 @@ pub mod Timelock {
                     fn AccessControlBadConfirmation(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockErrors> {
+                    ) -> alloy_sol_types::Result<OpsTimelockErrors> {
                         <AccessControlBadConfirmation as alloy_sol_types::SolError>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TimelockErrors::AccessControlBadConfirmation)
+                        .map(OpsTimelockErrors::AccessControlBadConfirmation)
                     }
                     AccessControlBadConfirmation
                 },
@@ -7682,12 +7698,12 @@ pub mod Timelock {
                     fn TimelockUnexecutedPredecessor(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockErrors> {
+                    ) -> alloy_sol_types::Result<OpsTimelockErrors> {
                         <TimelockUnexecutedPredecessor as alloy_sol_types::SolError>::abi_decode_raw(
                                 data,
                                 validate,
                             )
-                            .map(TimelockErrors::TimelockUnexecutedPredecessor)
+                            .map(OpsTimelockErrors::TimelockUnexecutedPredecessor)
                     }
                     TimelockUnexecutedPredecessor
                 },
@@ -7695,12 +7711,12 @@ pub mod Timelock {
                     fn AccessControlUnauthorizedAccount(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockErrors> {
+                    ) -> alloy_sol_types::Result<OpsTimelockErrors> {
                         <AccessControlUnauthorizedAccount as alloy_sol_types::SolError>::abi_decode_raw(
                                 data,
                                 validate,
                             )
-                            .map(TimelockErrors::AccessControlUnauthorizedAccount)
+                            .map(OpsTimelockErrors::AccessControlUnauthorizedAccount)
                     }
                     AccessControlUnauthorizedAccount
                 },
@@ -7708,11 +7724,11 @@ pub mod Timelock {
                     fn TimelockUnauthorizedCaller(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockErrors> {
+                    ) -> alloy_sol_types::Result<OpsTimelockErrors> {
                         <TimelockUnauthorizedCaller as alloy_sol_types::SolError>::abi_decode_raw(
                             data, validate,
                         )
-                        .map(TimelockErrors::TimelockUnauthorizedCaller)
+                        .map(OpsTimelockErrors::TimelockUnauthorizedCaller)
                     }
                     TimelockUnauthorizedCaller
                 },
@@ -7720,12 +7736,12 @@ pub mod Timelock {
                     fn TimelockInvalidOperationLength(
                         data: &[u8],
                         validate: bool,
-                    ) -> alloy_sol_types::Result<TimelockErrors> {
+                    ) -> alloy_sol_types::Result<OpsTimelockErrors> {
                         <TimelockInvalidOperationLength as alloy_sol_types::SolError>::abi_decode_raw(
                                 data,
                                 validate,
                             )
-                            .map(TimelockErrors::TimelockInvalidOperationLength)
+                            .map(OpsTimelockErrors::TimelockInvalidOperationLength)
                     }
                     TimelockInvalidOperationLength
                 },
@@ -7827,9 +7843,9 @@ pub mod Timelock {
             }
         }
     }
-    ///Container for all the [`Timelock`](self) events.
+    ///Container for all the [`OpsTimelock`](self) events.
     #[derive(Debug, PartialEq, Eq, Hash)]
-    pub enum TimelockEvents {
+    pub enum OpsTimelockEvents {
         #[allow(missing_docs)]
         CallExecuted(CallExecuted),
         #[allow(missing_docs)]
@@ -7848,7 +7864,7 @@ pub mod Timelock {
         RoleRevoked(RoleRevoked),
     }
     #[automatically_derived]
-    impl TimelockEvents {
+    impl OpsTimelockEvents {
         /// All the selectors of this enum.
         ///
         /// Note that the selectors might not be in the same order as the variants.
@@ -7899,8 +7915,8 @@ pub mod Timelock {
         ];
     }
     #[automatically_derived]
-    impl alloy_sol_types::SolEventInterface for TimelockEvents {
-        const NAME: &'static str = "TimelockEvents";
+    impl alloy_sol_types::SolEventInterface for OpsTimelockEvents {
+        const NAME: &'static str = "OpsTimelockEvents";
         const COUNT: usize = 8usize;
         fn decode_raw_log(
             topics: &[alloy_sol_types::Word],
@@ -7965,7 +7981,7 @@ pub mod Timelock {
         }
     }
     #[automatically_derived]
-    impl alloy_sol_types::private::IntoLogData for TimelockEvents {
+    impl alloy_sol_types::private::IntoLogData for OpsTimelockEvents {
         fn to_log_data(&self) -> alloy_sol_types::private::LogData {
             match self {
                 Self::CallExecuted(inner) => {
@@ -8020,9 +8036,9 @@ pub mod Timelock {
         }
     }
     use alloy::contract as alloy_contract;
-    /**Creates a new wrapper around an on-chain [`Timelock`](self) contract instance.
+    /**Creates a new wrapper around an on-chain [`OpsTimelock`](self) contract instance.
 
-    See the [wrapper's documentation](`TimelockInstance`) for more details.*/
+    See the [wrapper's documentation](`OpsTimelockInstance`) for more details.*/
     #[inline]
     pub const fn new<
         T: alloy_contract::private::Transport + ::core::clone::Clone,
@@ -8031,8 +8047,8 @@ pub mod Timelock {
     >(
         address: alloy_sol_types::private::Address,
         provider: P,
-    ) -> TimelockInstance<T, P, N> {
-        TimelockInstance::<T, P, N>::new(address, provider)
+    ) -> OpsTimelockInstance<T, P, N> {
+        OpsTimelockInstance::<T, P, N>::new(address, provider)
     }
     /**Deploys this contract using the given `provider` and constructor arguments, if any.
 
@@ -8050,9 +8066,9 @@ pub mod Timelock {
         proposers: alloy::sol_types::private::Vec<alloy::sol_types::private::Address>,
         executors: alloy::sol_types::private::Vec<alloy::sol_types::private::Address>,
         admin: alloy::sol_types::private::Address,
-    ) -> impl ::core::future::Future<Output = alloy_contract::Result<TimelockInstance<T, P, N>>>
+    ) -> impl ::core::future::Future<Output = alloy_contract::Result<OpsTimelockInstance<T, P, N>>>
     {
-        TimelockInstance::<T, P, N>::deploy(provider, minDelay, proposers, executors, admin)
+        OpsTimelockInstance::<T, P, N>::deploy(provider, minDelay, proposers, executors, admin)
     }
     /**Creates a `RawCallBuilder` for deploying this contract using the given `provider`
     and constructor arguments, if any.
@@ -8071,12 +8087,14 @@ pub mod Timelock {
         executors: alloy::sol_types::private::Vec<alloy::sol_types::private::Address>,
         admin: alloy::sol_types::private::Address,
     ) -> alloy_contract::RawCallBuilder<T, P, N> {
-        TimelockInstance::<T, P, N>::deploy_builder(provider, minDelay, proposers, executors, admin)
+        OpsTimelockInstance::<T, P, N>::deploy_builder(
+            provider, minDelay, proposers, executors, admin,
+        )
     }
-    /**A [`Timelock`](self) instance.
+    /**A [`OpsTimelock`](self) instance.
 
     Contains type-safe methods for interacting with an on-chain instance of the
-    [`Timelock`](self) contract located at a given `address`, using a given
+    [`OpsTimelock`](self) contract located at a given `address`, using a given
     provider `P`.
 
     If the contract bytecode is available (see the [`sol!`](alloy_sol_types::sol!)
@@ -8085,16 +8103,16 @@ pub mod Timelock {
 
     See the [module-level documentation](self) for all the available methods.*/
     #[derive(Clone)]
-    pub struct TimelockInstance<T, P, N = alloy_contract::private::Ethereum> {
+    pub struct OpsTimelockInstance<T, P, N = alloy_contract::private::Ethereum> {
         address: alloy_sol_types::private::Address,
         provider: P,
         _network_transport: ::core::marker::PhantomData<(N, T)>,
     }
     #[automatically_derived]
-    impl<T, P, N> ::core::fmt::Debug for TimelockInstance<T, P, N> {
+    impl<T, P, N> ::core::fmt::Debug for OpsTimelockInstance<T, P, N> {
         #[inline]
         fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-            f.debug_tuple("TimelockInstance")
+            f.debug_tuple("OpsTimelockInstance")
                 .field(&self.address)
                 .finish()
         }
@@ -8105,11 +8123,11 @@ pub mod Timelock {
             T: alloy_contract::private::Transport + ::core::clone::Clone,
             P: alloy_contract::private::Provider<T, N>,
             N: alloy_contract::private::Network,
-        > TimelockInstance<T, P, N>
+        > OpsTimelockInstance<T, P, N>
     {
-        /**Creates a new wrapper around an on-chain [`Timelock`](self) contract instance.
+        /**Creates a new wrapper around an on-chain [`OpsTimelock`](self) contract instance.
 
-        See the [wrapper's documentation](`TimelockInstance`) for more details.*/
+        See the [wrapper's documentation](`OpsTimelockInstance`) for more details.*/
         #[inline]
         pub const fn new(address: alloy_sol_types::private::Address, provider: P) -> Self {
             Self {
@@ -8130,7 +8148,7 @@ pub mod Timelock {
             proposers: alloy::sol_types::private::Vec<alloy::sol_types::private::Address>,
             executors: alloy::sol_types::private::Vec<alloy::sol_types::private::Address>,
             admin: alloy::sol_types::private::Address,
-        ) -> alloy_contract::Result<TimelockInstance<T, P, N>> {
+        ) -> alloy_contract::Result<OpsTimelockInstance<T, P, N>> {
             let call_builder =
                 Self::deploy_builder(provider, minDelay, proposers, executors, admin);
             let contract_address = call_builder.deploy().await?;
@@ -8185,11 +8203,11 @@ pub mod Timelock {
             &self.provider
         }
     }
-    impl<T, P: ::core::clone::Clone, N> TimelockInstance<T, &P, N> {
+    impl<T, P: ::core::clone::Clone, N> OpsTimelockInstance<T, &P, N> {
         /// Clones the provider and returns a new instance with the cloned provider.
         #[inline]
-        pub fn with_cloned_provider(self) -> TimelockInstance<T, P, N> {
-            TimelockInstance {
+        pub fn with_cloned_provider(self) -> OpsTimelockInstance<T, P, N> {
+            OpsTimelockInstance {
                 address: self.address,
                 provider: ::core::clone::Clone::clone(&self.provider),
                 _network_transport: ::core::marker::PhantomData,
@@ -8202,7 +8220,7 @@ pub mod Timelock {
             T: alloy_contract::private::Transport + ::core::clone::Clone,
             P: alloy_contract::private::Provider<T, N>,
             N: alloy_contract::private::Network,
-        > TimelockInstance<T, P, N>
+        > OpsTimelockInstance<T, P, N>
     {
         /// Creates a new call builder using this contract instance's provider and address.
         ///
@@ -8498,7 +8516,7 @@ pub mod Timelock {
             T: alloy_contract::private::Transport + ::core::clone::Clone,
             P: alloy_contract::private::Provider<T, N>,
             N: alloy_contract::private::Network,
-        > TimelockInstance<T, P, N>
+        > OpsTimelockInstance<T, P, N>
     {
         /// Creates a new event filter using this contract instance's provider and address.
         ///
