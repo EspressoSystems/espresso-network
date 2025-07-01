@@ -1731,29 +1731,6 @@ impl Membership<SeqTypes> for EpochCommittees {
         epoch: Epoch,
         block_header: Header,
     ) -> anyhow::Result<()> {
-        {
-            let membership_reader = membership.read().await;
-            // Assumes the stake table contract proxy address does not change
-            // In the future, if we want to support updates to the stake table contract address via chain config,
-            // or allow the contract to handle additional block reward calculation parameters (e.g., inflation, block time),
-            // the `fetch_block_reward` logic can be updated to support per-epoch rewards.
-            // Initially, the block reward is zero if the node starts on pre-epoch version
-            // but it is updated on the first call to `add_epoch_root()`
-            if membership_reader.block_reward.0.is_zero() {
-                tracing::warn!(%epoch,
-                    "Block reward is zero. attempting to fetch it from L1",
-
-                );
-                let fetcher = membership_reader.fetcher.clone();
-                drop(membership_reader);
-                let block_reward = fetcher.fetch_block_reward().await.inspect_err(|err| {
-                    tracing::error!(?epoch, ?err, "failed to fetch block_reward");
-                })?;
-                let mut membership_writer = membership.write().await;
-                membership_writer.block_reward = block_reward;
-            }
-        }
-
         let membership_reader = membership.read().await;
         if membership_reader.state.contains_key(&epoch) {
             tracing::info!(
@@ -1778,8 +1755,33 @@ impl Membership<SeqTypes> for EpochCommittees {
             }
         }
 
+        let mut block_reward = None;
+
+        {
+            // Assumes the stake table contract proxy address does not change
+            // In the future, if we want to support updates to the stake table contract address via chain config,
+            // or allow the contract to handle additional block reward calculation parameters (e.g., inflation, block time),
+            // the `fetch_block_reward` logic can be updated to support per-epoch rewards.
+            // Initially, the block reward is zero if the node starts on pre-epoch version
+            // but it is updated on the first call to `add_epoch_root()`
+            if membership.read().await.block_reward.0.is_zero() {
+                tracing::warn!(%epoch,
+                    "Block reward is zero. attempting to fetch it from L1",
+
+                );
+
+                let reward = fetcher.fetch_block_reward().await.inspect_err(|err| {
+                    tracing::error!(?epoch, ?err, "failed to fetch block_reward");
+                })?;
+                block_reward = Some(reward);
+            }
+        }
+
         let mut membership_writer = membership.write().await;
         membership_writer.insert_committee(epoch, stake_tables);
+        if let Some(block_reward) = block_reward {
+            membership_writer.block_reward = block_reward;
+        }
         Ok(())
     }
 
