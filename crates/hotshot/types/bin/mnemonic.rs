@@ -10,7 +10,7 @@ pub fn main() {
     println!("\nKeys:\n");
 
     for key in &keys {
-        println!("{}", key);
+        println!("{key}");
     }
 
     println!("\nMnemonics:\n");
@@ -20,6 +20,6 @@ pub fn main() {
             BLSPubKey::try_from(&tagged_base64::TaggedBase64::parse(&key).unwrap()).unwrap(),
         );
 
-        println!("{}", mnemonic);
+        println!("{mnemonic}");
     }
 }

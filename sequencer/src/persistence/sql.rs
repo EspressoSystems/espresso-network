@@ -16,11 +16,12 @@ use espresso_types::{
     parse_duration, parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
-    v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
+    v0_3::{EventKey, IndexedStake, StakeTableEvent},
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
+    ValidatorMap,
 };
 use futures::stream::StreamExt;
-use hotshot::{types::BLSPubKey, InitializerEpochInfo};
+use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
     DhtPersistentStorage, SerializableRecord,
 };
@@ -63,7 +64,6 @@ use hotshot_types::{
     },
     vote::HasViewNumber,
 };
-use indexmap::IndexMap;
 use itertools::Itertools;
 use sqlx::{query, Executor, Row};
 
@@ -128,7 +128,7 @@ pub fn build_sqlite_path(path: &str) -> anyhow::Result<PathBuf> {
     // if `sqlite` sub dir does not exist then create it
     if !sub_dir.exists() {
         std::fs::create_dir_all(&sub_dir)
-            .with_context(|| format!("failed to create directory: {:?}", sub_dir))?;
+            .with_context(|| format!("failed to create directory: {sub_dir:?}"))?;
     }
 
     Ok(sub_dir.join("database"))
@@ -2143,10 +2143,7 @@ impl SequencerPersistence for Persistence {
 
 #[async_trait]
 impl MembershipPersistence for Persistence {
-    async fn load_stake(
-        &self,
-        epoch: EpochNumber,
-    ) -> anyhow::Result<Option<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>>> {
+    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<ValidatorMap>> {
         let result = self
             .db
             .read()
@@ -2190,11 +2187,7 @@ impl MembershipPersistence for Persistence {
             .collect()
     }
 
-    async fn store_stake(
-        &self,
-        epoch: EpochNumber,
-        stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
-    ) -> anyhow::Result<()> {
+    async fn store_stake(&self, epoch: EpochNumber, stake: ValidatorMap) -> anyhow::Result<()> {
         let mut tx = self.db.write().await?;
 
         let stake_table_bytes = bincode::serialize(&stake).context("serializing stake table")?;

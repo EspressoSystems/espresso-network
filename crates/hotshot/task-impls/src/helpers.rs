@@ -1311,6 +1311,8 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
     da_cert: &DaCertificate2<TYPES>,
     consensus: &OuterConsensus<TYPES>,
     receiver: &Receiver<Arc<HotShotEvent<TYPES>>>,
+    cancel_receiver: Receiver<()>,
+    id: u64,
 ) -> Result<Proposal<TYPES, VidDisperseShare<TYPES>>> {
     tracing::debug!("getting the second VID share for epoch {:?}", target_epoch);
     let maybe_second_vid_share = consensus
@@ -1336,6 +1338,12 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
     let da_cert_clone = da_cert.clone();
     let Some(event) = EventDependency::new(
         receiver,
+        cancel_receiver,
+        format!(
+            "VoteDependency Second VID share for view {:?}, my id {:?}",
+            vid_share.data.view_number(),
+            id
+        ),
         Box::new(move |event| {
             let event = event.as_ref();
             if let HotShotEvent::VidShareValidated(second_vid_share) = event {

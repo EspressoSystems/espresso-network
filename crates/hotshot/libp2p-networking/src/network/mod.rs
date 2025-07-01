@@ -19,6 +19,7 @@ pub mod cbor;
 use std::{collections::HashSet, fmt::Debug, sync::Arc};
 
 use async_lock::RwLock;
+use bimap::BiMap;
 use futures::channel::oneshot::Sender;
 use hotshot_types::traits::{network::NetworkError, node_implementation::NodeType};
 use libp2p::{
@@ -33,9 +34,10 @@ use libp2p::{
     Multiaddr, Transport,
 };
 use libp2p_identity::PeerId;
+use parking_lot::Mutex;
 use quic::tokio::Transport as QuicTransport;
 use tracing::instrument;
-use transport::StakeTableAuthentication;
+use transport::ConsensusKeyAuthentication;
 
 pub use self::{
     def::NetworkDef,
@@ -162,6 +164,7 @@ pub async fn gen_transport<T: NodeType>(
     identity: Keypair,
     stake_table: Option<Arc<RwLock<T::Membership>>>,
     auth_message: Option<Vec<u8>>,
+    consensus_key_to_pid_map: Arc<Mutex<BiMap<T::SignatureKey, PeerId>>>,
 ) -> Result<BoxedTransport, NetworkError> {
     // Create the initial `Quic` transport
     let transport = {
@@ -171,8 +174,8 @@ pub async fn gen_transport<T: NodeType>(
     };
 
     // Require authentication against the stake table
-    let transport: StakeTableAuthentication<_, T, _> =
-        StakeTableAuthentication::new(transport, stake_table, auth_message);
+    let transport: ConsensusKeyAuthentication<_, T::SignatureKey, _> =
+        ConsensusKeyAuthentication::new(transport, auth_message, consensus_key_to_pid_map);
 
     // Support DNS resolution
     let transport = {
