@@ -813,37 +813,42 @@ impl Fetcher {
         // fetch registered events v2
         // retry if the call to the provider to fetch the events fails
         let registered_events_v2 = stream::iter(chunks.clone()).then(|(from, to)| {
-    let retry_delay = l1_client.options().l1_retry_delay;
-    let max_retry_duration = l1_client.options().l1_events_max_retry_duration;
-    let stake_table_contract = stake_table_contract.clone();
-    async move {
-        tracing::debug!(from, to, "fetch ValidatorRegisteredV2 events in range");
-        let events = retry(
-            retry_delay,
-            max_retry_duration,
-            "ValidatorRegisteredV2 event fetch",
-            move || {
-                let stake_table_contract = stake_table_contract.clone();
-                Box::pin(async move {
-                    stake_table_contract
-                        .ValidatorRegisteredV2_filter()
-                        .from_block(from)
-                        .to_block(to)
-                        .query()
-                        .await
-                })
-            },
-        ).await;
+            let retry_delay = l1_client.options().l1_retry_delay;
+            let max_retry_duration = l1_client.options().l1_events_max_retry_duration;
+            let stake_table_contract = stake_table_contract.clone();
+            async move {
+                tracing::debug!(from, to, "fetch ValidatorRegisteredV2 events in range");
+                let events = retry(
+                    retry_delay,
+                    max_retry_duration,
+                    "ValidatorRegisteredV2 event fetch",
+                    move || {
+                        let stake_table_contract = stake_table_contract.clone();
+                        Box::pin(async move {
+                            stake_table_contract
+                                .ValidatorRegisteredV2_filter()
+                                .from_block(from)
+                                .to_block(to)
+                                .query()
+                                .await
+                        })
+                    },
+                )
+                .await;
 
-        stream::iter(events.into_iter().filter(|(event, log)| {
-            if let Err(e) = event.authenticate() {
-                tracing::warn!(%e, "Failed to authenticate ValidatorRegisteredV2 event: {}", log.display());
-                return false;
+                stream::iter(events.into_iter().filter(|(event, log)| {
+                    if let Err(e) = event.authenticate() {
+                        tracing::warn!(
+                            %e,
+                            "Failed to authenticate ValidatorRegisteredV2 event: {}",
+                            log.display()
+                        );
+                        return false;
+                    }
+                    true
+                }))
             }
-            true
-        }))
-    }
-});
+        });
 
         // fetch validator de registration events
         let deregistered_events = stream::iter(chunks.clone()).then(|(from, to)| {
@@ -953,35 +958,41 @@ impl Fetcher {
         });
         // fetch consensus keys updated v2 events
         let keys_update_events_v2 = stream::iter(chunks).then(|(from, to)| {
-    let retry_delay = l1_client.options().l1_retry_delay;
-    let stake_table_contract = stake_table_contract.clone();
-    async move {
-        tracing::debug!(from, to, "fetch ConsensusKeysUpdatedV2 events in range");
-        let events = retry(
-            retry_delay,max_retry_duration,
-            "ConsensusKeysUpdatedV2 event fetch",
-            move || {
-                let stake_table_contract = stake_table_contract.clone();
-                Box::pin(async move {
-                    stake_table_contract
-                        .ConsensusKeysUpdatedV2_filter()
-                        .from_block(from)
-                        .to_block(to)
-                        .query()
-                        .await
-                })
-            },
-        ).await;
+            let retry_delay = l1_client.options().l1_retry_delay;
+            let stake_table_contract = stake_table_contract.clone();
+            async move {
+                tracing::debug!(from, to, "fetch ConsensusKeysUpdatedV2 events in range");
+                let events = retry(
+                    retry_delay,
+                    max_retry_duration,
+                    "ConsensusKeysUpdatedV2 event fetch",
+                    move || {
+                        let stake_table_contract = stake_table_contract.clone();
+                        Box::pin(async move {
+                            stake_table_contract
+                                .ConsensusKeysUpdatedV2_filter()
+                                .from_block(from)
+                                .to_block(to)
+                                .query()
+                                .await
+                        })
+                    },
+                )
+                .await;
 
-        stream::iter(events.into_iter().filter(|(event, log)| {
-            if let Err(e) = event.authenticate() {
-                tracing::warn!(%e, "Failed to authenticate ConsensusKeysUpdatedV2 event {}", log.display());
-                return false;
+                stream::iter(events.into_iter().filter(|(event, log)| {
+                    if let Err(e) = event.authenticate() {
+                        tracing::warn!(
+                            %e,
+                            "Failed to authenticate ConsensusKeysUpdatedV2 event {}",
+                            log.display()
+                        );
+                        return false;
+                    }
+                    true
+                }))
             }
-            true
-        }))
-    }
-});
+        });
         let registrations = registered_events.flatten().collect().await;
         let registrations_v2 = registered_events_v2.flatten().collect().await;
         let deregistrations = deregistered_events.flatten().collect().await;
