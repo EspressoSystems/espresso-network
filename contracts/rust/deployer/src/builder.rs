@@ -333,7 +333,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 .await?;
             },
             _ => {
-                panic!("Deploying {} not supported.", target);
+                panic!("Deploying {target} not supported.");
             },
         }
         Ok(())
