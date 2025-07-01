@@ -13,6 +13,9 @@ import { EspToken } from "../src/EspToken.sol";
 import { EspTokenV2 } from "../src/EspTokenV2.sol";
 import { SafeExitTimelock } from "../src/SafeExitTimelock.sol";
 import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
+import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
+import { OwnableUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
 contract EspTokenUpgradabilityTest is Test {
     address public admin;
@@ -136,7 +139,13 @@ contract EspTokenUpgradabilityTest is Test {
 
         address nonExecutor = makeAddr("nonExecutor");
         vm.startPrank(nonExecutor);
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                nonExecutor,
+                timelock.EXECUTOR_ROLE()
+            )
+        );
         timelock.execute(address(token), 0, transferOwnershipData, bytes32(0), bytes32(0));
         vm.stopPrank();
     }
@@ -157,7 +166,13 @@ contract EspTokenUpgradabilityTest is Test {
         vm.startPrank(nonProposer);
         bytes memory transferOwnershipData =
             abi.encodeWithSignature("transferOwnership(address)", tokenGrantRecipient);
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                nonProposer,
+                timelock.PROPOSER_ROLE()
+            )
+        );
         timelock.schedule(
             address(token), 0, transferOwnershipData, bytes32(0), bytes32(0), minDelaySeconds
         );
@@ -218,7 +233,13 @@ contract EspTokenUpgradabilityTest is Test {
 
         // Try to have a non-executor execute the delay update
         vm.startPrank(admin);
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                admin,
+                timelock.EXECUTOR_ROLE()
+            )
+        );
         timelock.execute(address(timelock), 0, updateDelayData, bytes32(0), bytes32(0));
         vm.stopPrank();
     }
@@ -234,7 +255,9 @@ contract EspTokenUpgradabilityTest is Test {
 
         // Even admin cannot update delay directly
         vm.startPrank(admin);
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(TimelockController.TimelockUnauthorizedCaller.selector, admin)
+        );
         timelock.updateDelay(20);
         vm.stopPrank();
     }
@@ -252,8 +275,9 @@ contract EspTokenUpgradabilityTest is Test {
         assertEq(token.owner(), address(timelock));
 
         vm.startPrank(proposers[0]);
+        address newOwner = address(0);
         bytes memory transferOwnershipData =
-            abi.encodeWithSignature("transferOwnership(address)", address(0));
+            abi.encodeWithSignature("transferOwnership(address)", newOwner);
         timelock.schedule(
             address(token), 0, transferOwnershipData, bytes32(0), bytes32(0), minDelaySeconds
         );
@@ -268,7 +292,9 @@ contract EspTokenUpgradabilityTest is Test {
         assert(operationState == TimelockController.OperationState.Ready);
 
         vm.startPrank(executors[0]);
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(OwnableUpgradeable.OwnableInvalidOwner.selector, newOwner)
+        );
         timelock.execute(address(token), 0, transferOwnershipData, bytes32(0), bytes32(0));
         vm.stopPrank();
     }
