@@ -91,11 +91,11 @@ impl Display for MonetaryValue {
         let whole = abs_value / max_post_decimal_digits;
         let fraction = abs_value % max_post_decimal_digits;
 
-        let fraction_str = format!("{:0width$}", fraction, width = significant_figures);
+        let fraction_str = format!("{fraction:0significant_figures$}");
         if fraction == 0 {
-            write!(f, "{}\u{00a0}{}{}", currency, sign, whole)
+            write!(f, "{currency}\u{00a0}{sign}{whole}")
         } else {
-            write!(f, "{}\u{00a0}{}{}.{}", currency, sign, whole, fraction_str)
+            write!(f, "{currency}\u{00a0}{sign}{whole}.{fraction_str}")
         }
     }
 }
@@ -406,7 +406,7 @@ mod test {
 
                 let result = match result {
                     Err(err) => {
-                        panic!("{} failed to parse: {}", value, err);
+                        panic!("{value} failed to parse: {err}");
                     },
                     Ok(result) => result,
                 };
@@ -414,11 +414,7 @@ mod test {
                 let have = result;
                 let want = MonetaryValue::usd(10000);
 
-                assert_eq!(
-                    have, want,
-                    "{} parse result: have {}, want {}",
-                    value, have, want,
-                );
+                assert_eq!(have, want, "{value} parse result: have {have}, want {want}",);
             }
         }
 
@@ -436,7 +432,7 @@ mod test {
 
                 let result = match result {
                     Err(err) => {
-                        panic!("{} failed to parse: {}", value, err);
+                        panic!("{value} failed to parse: {err}");
                     },
                     Ok(result) => result,
                 };
@@ -444,11 +440,7 @@ mod test {
                 let have = result;
                 let want = MonetaryValue::usd(10000000);
 
-                assert_eq!(
-                    have, want,
-                    "{} parse result: have {}, want {}",
-                    value, have, want,
-                );
+                assert_eq!(have, want, "{value} parse result: have {have}, want {want}",);
             }
         }
 
@@ -482,11 +474,7 @@ mod test {
                 let value = case.0;
                 let have = serde_json::from_str::<MonetaryValue>(value).unwrap();
                 let want = case.1;
-                assert_eq!(
-                    have, want,
-                    "{} parse result: have {}, want {}",
-                    value, have, want
-                );
+                assert_eq!(have, want, "{value} parse result: have {have}, want {want}");
             }
         }
     }
@@ -513,8 +501,7 @@ mod test {
             let want = case.1;
             assert_eq!(
                 have, want,
-                "{} encode result: have {}, want {}",
-                value, have, want
+                "{value} encode result: have {have}, want {want}"
             );
         }
     }
@@ -535,8 +522,7 @@ mod test {
                 let deserialized = serde_json::from_str::<MonetaryValue>(&serialized).unwrap();
                 assert_eq!(
                     value, deserialized,
-                    "{} {} encoded result: {}: have {}, want {}",
-                    currency, i, serialized, deserialized, value
+                    "{currency} {i} encoded result: {serialized}: have {deserialized}, want {value}"
                 );
             }
         }

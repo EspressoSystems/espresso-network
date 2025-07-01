@@ -544,13 +544,13 @@ impl SqlStorage {
 
         #[cfg(not(feature = "embedded-db"))]
         if config.reset {
-            query(&format!("DROP SCHEMA IF EXISTS {} CASCADE", schema))
+            query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
                 .execute(conn.as_mut())
                 .await?;
         }
 
         #[cfg(not(feature = "embedded-db"))]
-        query(&format!("CREATE SCHEMA IF NOT EXISTS {}", schema))
+        query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
             .execute(conn.as_mut())
             .await?;
 

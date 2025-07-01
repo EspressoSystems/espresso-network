@@ -642,6 +642,59 @@ where
         }
         .boxed()
     })?
+    .stream("stream_transactions", move |req, state| {
+        async move {
+            let height = req.integer_param::<_, usize>("height")?;
+
+            let namespace: Option<i64> = req
+                .opt_integer_param::<_, usize>("namespace")?
+                .map(|i| {
+                    i.try_into().map_err(|err| Error::Custom {
+                        message: format!(
+                            "Invalid 'namespace': could not convert usize to i64: {err}"
+                        ),
+                        status: StatusCode::BAD_REQUEST,
+                    })
+                })
+                .transpose()?;
+
+            state
+                .read(|state| {
+                    async move {
+                        Ok(state
+                            .subscribe_blocks(height)
+                            .await
+                            .map(move |block| {
+                                let transactions = block.enumerate().enumerate();
+                                let header = block.header();
+                                let filtered_txs = transactions
+                                    .filter_map(|(i, (index, _tx))| {
+                                        if let Some(requested_ns) = namespace {
+                                            let ns_id = QueryableHeader::<Types>::namespace_id(
+                                                header,
+                                                &index.ns_index,
+                                            )?;
+
+                                            if ns_id.into() != requested_ns {
+                                                return None;
+                                            }
+                                        }
+
+                                        TransactionQueryData::new(&block, index, i as u64)
+                                    })
+                                    .collect::<Vec<_>>();
+
+                                futures::stream::iter(filtered_txs.into_iter().map(Ok))
+                            })
+                            .flatten())
+                    }
+                    .boxed()
+                })
+                .await
+        }
+        .try_flatten_stream()
+        .boxed()
+    })?
     .at("get_block_summary", move |req, state| {
         async move {
             let id: usize = req.integer_param("height")?;
@@ -757,13 +810,13 @@ mod test {
         // Ignore the genesis block (start from height 1).
         for i in 1.. {
             match client
-                .get::<BlockQueryData<MockTypes>>(&format!("block/{}", i))
+                .get::<BlockQueryData<MockTypes>>(&format!("block/{i}"))
                 .send()
                 .await
             {
                 Ok(block) => {
                     if !block.is_empty() {
-                        let leaf = client.get(&format!("leaf/{}", i)).send().await.unwrap();
+                        let leaf = client.get(&format!("leaf/{i}")).send().await.unwrap();
                         blocks.push((leaf, block));
                     }
                 },
@@ -775,7 +828,7 @@ mod test {
                     );
                     return (i, blocks);
                 },
-                Err(err) => panic!("unexpected error {}", err),
+                Err(err) => panic!("unexpected error {err}"),
             }
         }
         unreachable!()
@@ -793,7 +846,7 @@ mod test {
 
             // Check that looking up the leaf various ways returns the correct leaf.
             let leaf: LeafQueryData<MockTypes> =
-                client.get(&format!("leaf/{}", i)).send().await.unwrap();
+                client.get(&format!("leaf/{i}")).send().await.unwrap();
             assert_eq!(leaf.height(), i);
             assert_eq!(
                 leaf,
@@ -806,7 +859,7 @@ mod test {
 
             // Check that looking up the block various ways returns the correct block.
             let block: BlockQueryData<MockTypes> =
-                client.get(&format!("block/{}", i)).send().await.unwrap();
+                client.get(&format!("block/{i}")).send().await.unwrap();
             let expected_payload = PayloadQueryData::from(block.clone());
             assert_eq!(leaf.block_hash(), block.hash());
             assert_eq!(block.height(), i);
@@ -861,7 +914,7 @@ mod test {
             );
 
             let block_summary = client
-                .get(&format!("block/summary/{}", i))
+                .get(&format!("block/summary/{i}"))
                 .send()
                 .await
                 .unwrap();
@@ -1023,12 +1076,12 @@ mod test {
         .unwrap();
         network.spawn(
             "server",
-            app.serve(format!("0.0.0.0:{}", port), MockBase::instance()),
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
         );
 
         // Start a client.
         let client = Client::<Error, MockBase>::new(
-            format!("http://localhost:{}/availability", port)
+            format!("http://localhost:{port}/availability")
                 .parse()
                 .unwrap(),
         );
@@ -1079,13 +1132,10 @@ mod test {
                     break (i, leaf, block, common);
                 }
             };
-            assert_eq!(
-                leaf,
-                client.get(&format!("leaf/{}", i)).send().await.unwrap()
-            );
+            assert_eq!(leaf, client.get(&format!("leaf/{i}")).send().await.unwrap());
             assert_eq!(
                 block,
-                client.get(&format!("block/{}", i)).send().await.unwrap()
+                client.get(&format!("block/{i}")).send().await.unwrap()
             );
             assert_eq!(
                 common,
@@ -1110,7 +1160,7 @@ mod test {
 
             // Check that looking up the leaf various ways returns the correct leaf.
             let leaf: Leaf1QueryData<MockTypes> =
-                client.get(&format!("leaf/{}", i)).send().await.unwrap();
+                client.get(&format!("leaf/{i}")).send().await.unwrap();
             assert_eq!(leaf.leaf.height(), i);
             assert_eq!(
                 leaf,
@@ -1126,7 +1176,7 @@ mod test {
 
             // Check that looking up the block various ways returns the correct block.
             let block: BlockQueryData<MockTypes> =
-                client.get(&format!("block/{}", i)).send().await.unwrap();
+                client.get(&format!("block/{i}")).send().await.unwrap();
             let expected_payload = PayloadQueryData::from(block.clone());
             assert_eq!(leaf.leaf.block_header().commit(), block.hash());
             assert_eq!(block.height(), i);
@@ -1184,7 +1234,7 @@ mod test {
             );
 
             let block_summary = client
-                .get(&format!("block/summary/{}", i))
+                .get(&format!("block/summary/{i}"))
                 .send()
                 .await
                 .unwrap();
@@ -1346,12 +1396,12 @@ mod test {
         .unwrap();
         network.spawn(
             "server",
-            app.serve(format!("0.0.0.0:{}", port), MockBase::instance()),
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
         );
 
         // Start a client.
         let client = Client::<Error, MockBase>::new(
-            format!("http://localhost:{}/availability", port)
+            format!("http://localhost:{port}/availability")
                 .parse()
                 .unwrap(),
         );
@@ -1377,7 +1427,7 @@ mod test {
 
         for epoch in 1..4 {
             let state_cert: StateCertQueryData<MockTypes> = client
-                .get(&format!("state-cert/{}", epoch))
+                .get(&format!("state-cert/{epoch}"))
                 .send()
                 .await
                 .unwrap();
@@ -1413,12 +1463,12 @@ mod test {
         .unwrap();
         network.spawn(
             "server",
-            app.serve(format!("0.0.0.0:{}", port), MockBase::instance()),
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
         );
 
         // Start a client.
         let client = Client::<Error, MockBase>::new(
-            format!("http://localhost:{}/availability", port)
+            format!("http://localhost:{port}/availability")
                 .parse()
                 .unwrap(),
         );
@@ -1469,13 +1519,10 @@ mod test {
                     break (i, leaf, block, common);
                 }
             };
-            assert_eq!(
-                leaf,
-                client.get(&format!("leaf/{}", i)).send().await.unwrap()
-            );
+            assert_eq!(leaf, client.get(&format!("leaf/{i}")).send().await.unwrap());
             assert_eq!(
                 block,
-                client.get(&format!("block/{}", i)).send().await.unwrap()
+                client.get(&format!("block/{i}")).send().await.unwrap()
             );
             assert_eq!(
                 common,
@@ -1566,11 +1613,11 @@ mod test {
         let port = pick_unused_port().unwrap();
         let _server = BackgroundTask::spawn(
             "server",
-            app.serve(format!("0.0.0.0:{}", port), MockBase::instance()),
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
         );
 
         let client = Client::<Error, MockBase>::new(
-            format!("http://localhost:{}/availability", port)
+            format!("http://localhost:{port}/availability")
                 .parse()
                 .unwrap(),
         );
@@ -1622,12 +1669,12 @@ mod test {
         .unwrap();
         network.spawn(
             "server",
-            app.serve(format!("0.0.0.0:{}", port), MockBase::instance()),
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
         );
 
         // Start a client.
         let client = Client::<Error, MockBase>::new(
-            format!("http://localhost:{}/availability", port)
+            format!("http://localhost:{port}/availability")
                 .parse()
                 .unwrap(),
         );
@@ -1710,7 +1757,7 @@ mod test {
         .unwrap();
         network.spawn(
             "server",
-            app.serve(format!("0.0.0.0:{}", port), MockBase::instance()),
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
         );
 
         let ds = network.data_source();
@@ -1752,12 +1799,12 @@ mod test {
         .unwrap();
         network.spawn(
             "server",
-            app.serve(format!("0.0.0.0:{}", port), MockBase::instance()),
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
         );
 
         // Start a client.
         let client = Client::<Error, MockBase>::new(
-            format!("http://localhost:{}/availability", port)
+            format!("http://localhost:{port}/availability")
                 .parse()
                 .unwrap(),
         );
