@@ -744,19 +744,25 @@ impl Fetcher {
         to_block: u64,
     ) -> StakeTableEvents {
         let stake_table_contract = StakeTableV2::new(contract, l1_client.provider.clone());
+        let max_retry_duration = l1_client.options().l1_events_max_retry_duration;
         // get the block number when the contract was initialized
         // to avoid fetching events from block number 0
         let from_block = match from_block {
             Some(block) => block,
             None => {
+                let start = Instant::now();
+
                 loop {
                     match stake_table_contract.initializedAtBlock().call().await {
-                        Ok(init_block) => {
-                            break init_block._0.to::<u64>();
-                        },
+                        Ok(init_block) => break init_block._0.to::<u64>(),
                         Err(err) => {
-                            // Retry fetching incase of an error
-                            tracing::warn!(%err, "Failed to retrieve initial block, retrying..");
+                            if start.elapsed() >= max_retry_duration {
+                                panic!(
+                                    "Failed to retrieve initial block after `{}`: {err}",
+                                    format_duration(max_retry_duration)
+                                );
+                            }
+                            tracing::warn!(%err, "Failed to retrieve initial block, retrying...");
                             sleep(l1_client.options().l1_retry_delay).await;
                         },
                     }
@@ -781,7 +787,6 @@ impl Fetcher {
             Some(chunk)
         });
 
-        let max_retry_duration = l1_client.options().l1_events_max_retry_duration;
         // fetch registered events
         // retry if the call to the provider to fetch the events fails
         let registered_events = stream::iter(chunks.clone()).then(|(from, to)| {
