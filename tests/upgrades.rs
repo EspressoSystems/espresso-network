@@ -16,7 +16,7 @@ async fn assert_pos_upgrade_happens(genesis: &Genesis) -> Result<()> {
 
     // The requirements passed to `TestConfig` are ignored here.
     let testing = TestConfig::new(Default::default()).await.unwrap();
-    println!("Testing upgrade {:?}", testing);
+    println!("Testing upgrade {testing:?}");
 
     let base_version = FeeVersion::version();
     let upgrade_version = EpochVersion::version();
@@ -25,7 +25,7 @@ async fn assert_pos_upgrade_happens(genesis: &Genesis) -> Result<()> {
     let _ = testing.readiness().await?;
 
     let initial = testing.test_state().await;
-    println!("Initial State:{}", initial);
+    println!("Initial State:{initial}");
 
     let clients = testing.sequencer_clients;
 

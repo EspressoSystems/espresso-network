@@ -32,6 +32,7 @@ use hotshot_types::{
 };
 use sha2::Digest;
 use vec1::vec1;
+use hotshot_testing::predicates::event::view_change;
 
 const TIMEOUT: Duration = Duration::from_millis(35);
 
@@ -126,7 +127,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_1() {
 
     let expectations = vec![
         Expectations::from_outputs(vec![]),
-        Expectations::from_outputs(all_predicates![quorum_proposal_send(),]),
+        Expectations::from_outputs(all_predicates![quorum_proposal_send(), view_change()]),
     ];
 
     let quorum_proposal_task_state =
@@ -301,11 +302,11 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
     ];
 
     let expectations = vec![
-        Expectations::from_outputs(vec![]),
-        Expectations::from_outputs(vec![]),
-        Expectations::from_outputs(all_predicates![quorum_proposal_send(),]),
-        Expectations::from_outputs(vec![]),
-        Expectations::from_outputs(vec![]),
+        Expectations::from_outputs(vec![view_change()]),
+        Expectations::from_outputs(vec![view_change()]),
+        Expectations::from_outputs(all_predicates![quorum_proposal_send(), view_change()]),
+        Expectations::from_outputs(vec![view_change()]),
+        Expectations::from_outputs(vec![view_change()]),
     ];
 
     let quorum_proposal_task_state =
@@ -681,11 +682,11 @@ async fn test_quorum_proposal_task_liveness_check() {
     ];
 
     let expectations = vec![
-        Expectations::from_outputs(vec![]),
-        Expectations::from_outputs(vec![]),
-        Expectations::from_outputs(all_predicates![quorum_proposal_send(),]),
-        Expectations::from_outputs(vec![]),
-        Expectations::from_outputs(vec![]),
+        Expectations::from_outputs(vec![view_change()]),
+        Expectations::from_outputs(vec![view_change()]),
+        Expectations::from_outputs(all_predicates![quorum_proposal_send(), view_change()]),
+        Expectations::from_outputs(vec![view_change()]),
+        Expectations::from_outputs(vec![view_change()]),
     ];
 
     let quorum_proposal_task_state =

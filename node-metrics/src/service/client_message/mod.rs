@@ -5,7 +5,7 @@ use super::client_id::ClientId;
 /// [ClientMessage] represents the messages that the client can send to the
 /// server for a request.
 ///
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ClientMessage {
     SubscribeLatestBlock,
     SubscribeNodeIdentity,
@@ -15,6 +15,23 @@ pub enum ClientMessage {
     RequestNodeIdentitySnapshot,
     RequestHistogramSnapshot,
     RequestVotersSnapshot,
+
+    // Added for Validators and Stake Tables support.
+    // These are explicitly added afterwards in order to preserve existing
+    // enumeration values.  This is done explicitly for backwards compatibility.
+    SubscribeStakeTables,
+    SubscribeValidators,
+    RequestValidatorsSnapshot,
+    RequestStakeTableSnapshot,
+
+    /// This allows the use-case of a user sending a message that is not a
+    /// valid recognized request to be handled explicitly by the server rather
+    /// than the underlying mechanism of tide-disco.
+    /// If not for this case [tide_disco] would silently ignore the error and
+    /// drop the client connection, resulting in the client receiving no
+    /// response / feedback about the mistake in the request.
+    #[serde(untagged)]
+    UnrecognizedCommand(serde_json::Value),
 }
 
 /// InternalClientMessage represents the message requests that the client can
@@ -33,7 +50,7 @@ impl ClientMessage {
     /// [to_internal_with_client_id] converts the [ClientMessage] into an
     /// [InternalClientMessage] with the given [ClientId].
     pub fn to_internal_with_client_id<K>(&self, client_id: ClientId) -> InternalClientMessage<K> {
-        InternalClientMessage::Request(client_id, *self)
+        InternalClientMessage::Request(client_id, self.clone())
     }
 }
 
@@ -62,6 +79,25 @@ mod tests {
         }
     }
 
+    /// [test_client_message_unrecognized_message] is a test that ensures that
+    /// the catch-all variants for the [ClientMessage] succeeds in receiving
+    /// unrecognized messages.
+    #[test]
+    fn test_client_message_unrecognized_message() {
+        let test_cases = ["\"FooBar\"", "{}", "null", "{\"command\":\"whoami\"}"];
+
+        for unrecognized_message in test_cases.iter() {
+            let message: ClientMessage = serde_json::from_str(unrecognized_message).unwrap();
+            match message {
+                ClientMessage::UnrecognizedCommand(_) => {
+                    // If we reach here, the test passes as we expect the result
+                    // to be an unrecognized command.
+                },
+                _ => panic!("Expected UnrecognizedCommand variant"),
+            }
+        }
+    }
+
     #[test]
     fn test_client_message_partial_eq() {
         let messages = [
@@ -71,6 +107,11 @@ mod tests {
             ClientMessage::RequestBlocksSnapshot,
             ClientMessage::RequestNodeIdentitySnapshot,
             ClientMessage::RequestHistogramSnapshot,
+            ClientMessage::RequestVotersSnapshot,
+            ClientMessage::SubscribeValidators,
+            ClientMessage::SubscribeStakeTables,
+            ClientMessage::RequestValidatorsSnapshot,
+            ClientMessage::RequestStakeTableSnapshot,
         ];
 
         for (l, r) in zip(messages.iter(), messages.iter()) {
@@ -96,10 +137,15 @@ mod tests {
             ClientMessage::RequestBlocksSnapshot,
             ClientMessage::RequestNodeIdentitySnapshot,
             ClientMessage::RequestHistogramSnapshot,
+            ClientMessage::RequestVotersSnapshot,
+            ClientMessage::SubscribeValidators,
+            ClientMessage::SubscribeStakeTables,
+            ClientMessage::RequestValidatorsSnapshot,
+            ClientMessage::RequestStakeTableSnapshot,
         ];
 
         for message in messages.iter() {
-            assert_eq!(format!("{:?}", message), format!("{:?}", message));
+            assert_eq!(format!("{message:?}"), format!("{:?}", message));
         }
     }
 
@@ -115,6 +161,11 @@ mod tests {
             ClientMessage::RequestBlocksSnapshot,
             ClientMessage::RequestNodeIdentitySnapshot,
             ClientMessage::RequestHistogramSnapshot,
+            ClientMessage::RequestVotersSnapshot,
+            ClientMessage::SubscribeValidators,
+            ClientMessage::SubscribeStakeTables,
+            ClientMessage::RequestValidatorsSnapshot,
+            ClientMessage::RequestStakeTableSnapshot,
         ];
 
         for message in messages.iter() {
@@ -133,6 +184,11 @@ mod tests {
             ClientMessage::RequestBlocksSnapshot,
             ClientMessage::RequestNodeIdentitySnapshot,
             ClientMessage::RequestHistogramSnapshot,
+            ClientMessage::RequestVotersSnapshot,
+            ClientMessage::SubscribeValidators,
+            ClientMessage::SubscribeStakeTables,
+            ClientMessage::RequestValidatorsSnapshot,
+            ClientMessage::RequestStakeTableSnapshot,
         ];
 
         for message in messages {

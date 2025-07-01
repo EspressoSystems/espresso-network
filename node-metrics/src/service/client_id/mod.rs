@@ -79,7 +79,7 @@ mod tests {
     #[test]
     fn test_client_id_debug() {
         let client_id = ClientId::from_count(1);
-        assert_eq!(format!("{:?}", client_id), "ClientId(1)");
+        assert_eq!(format!("{client_id:?}"), "ClientId(1)");
     }
 
     #[test]

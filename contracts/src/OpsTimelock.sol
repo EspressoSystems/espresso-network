@@ -3,9 +3,12 @@ pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/governance/TimelockController.sol";
 
-/// @title TimelockController
-/// @notice A timelock controller for the StakeTable contract
-contract Timelock is TimelockController {
+/// @title OpsTimelock
+/// @notice A timelock controller for contracts that require faster updates
+/// @dev Timelock used for operational control during early protocol phases.
+/// Grants privileged access to core team for upgrades or config changes
+/// with a short delay.
+contract OpsTimelock is TimelockController {
     constructor(
         uint256 minDelay,
         address[] memory proposers,

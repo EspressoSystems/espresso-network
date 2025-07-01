@@ -33,7 +33,7 @@ impl AssertSuccess for Output {
         if !self.status.success() {
             let stderr = String::from_utf8(self.stderr.clone()).expect("stderr is utf8");
             let stdout = String::from_utf8(self.stdout.clone()).expect("stdout is utf8");
-            panic!("Command failed:\nstderr: {}\nstdout: {}", stderr, stdout);
+            panic!("Command failed:\nstderr: {stderr}\nstdout: {stdout}");
         }
         self
     }
@@ -48,10 +48,7 @@ impl AssertFailure for Output {
         if self.status.success() {
             let stderr = String::from_utf8(self.stderr.clone()).expect("stderr is utf8");
             let stdout = String::from_utf8(self.stdout.clone()).expect("stdout is utf8");
-            panic!(
-                "Command succeeded but should have failed:\nstderr: {}\nstdout: {}",
-                stderr, stdout
-            );
+            panic!("Command succeeded but should have failed:\nstderr: {stderr}\nstdout: {stdout}");
         }
         self
     }
@@ -501,7 +498,7 @@ async fn test_cli_stake_table_full(#[case] version: StakeTableContractVersion) -
     let out = cmd.arg("stake-table").output()?.assert_success().utf8();
 
     // Print output to fix test more easily.
-    println!("{}", out);
+    println!("{out}");
     out.contains("Validator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: BLS_VER_KEY~ksjrqSN9jEvKOeCNNySv9Gcg7UjZvROpOm99zHov8SgxfzhLyno8IUfE1nxOBhGnajBmeTbchVI94ZUg5VLgAT2DBKXBnIC6bY9y2FBaK1wPpIQVgx99-fAzWqbweMsiXKFYwiT-0yQjJBXkWyhtCuTHT4l3CRok68mkobI09q0c comm=12.34 % stake=0.123000000000000000 ESP");
     out.contains(
         " - Delegator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: stake=0.123000000000000000 ESP",
@@ -529,7 +526,7 @@ async fn test_cli_stake_table_compact(#[case] version: StakeTableContractVersion
         .utf8();
 
     // Print output to fix test more easily.
-    println!("{}", out);
+    println!("{out}");
     out.contains("Validator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: BLS_VER_KEY~ksjrqSN9jEvKOeCNNySv9Gcg7UjZ.. comm=12.34 % stake=0.123000000000000000 ESP");
     out.contains(
         " - Delegator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: stake=0.123000000000000000 ESP",
