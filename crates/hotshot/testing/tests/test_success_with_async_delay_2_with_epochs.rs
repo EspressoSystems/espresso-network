@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use hotshot_example_types::{
     node_types::{
@@ -54,8 +54,12 @@ cross_tests!(
         delay_settings.delay_option = DelayOptions::Random;
         delay_settings.min_time_in_milliseconds = 5;
         delay_settings.max_time_in_milliseconds = 20;
+        let mut config_map = HashMap::new();
+        for i in 0..10 {
+            config_map.insert(i as u64, config.clone());
+        }
         config.add_setting(SupportedTraitTypesForAsyncDelay::ValidatedState, &delay_settings);
-        metadata.async_delay_config = config;
+        metadata.async_delay_config = config_map;
         metadata
     },
 );

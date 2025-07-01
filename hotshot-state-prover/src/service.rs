@@ -122,7 +122,7 @@ impl ProverServiceState {
         if epoch != self.epoch {
             self.stake_table = fetch_stake_table_from_sequencer(&self.config.sequencer_url, epoch)
                 .await
-                .with_context(|| format!("Failed to update stake table for epoch: {:?}", epoch))?;
+                .with_context(|| format!("Failed to update stake table for epoch: {epoch:?}"))?;
             self.st_state = self
                 .stake_table
                 .commitment(self.config.stake_table_capacity)
@@ -275,13 +275,13 @@ async fn fetch_epoch_state_from_sequencer(
         surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
             sequencer_url.clone(),
         )
-        .get::<StateCertQueryData<SeqTypes>>(&format!("availability/state-cert/{}", epoch))
+        .get::<StateCertQueryData<SeqTypes>>(&format!("availability/state-cert/{epoch}"))
         .send()
         .await
         .map_err(|err| {
             ProverError::SequencerCommunicationError(
                 sequencer_url
-                    .join(&format!("availability/state-cert/{}", epoch))
+                    .join(&format!("availability/state-cert/{epoch}"))
                     .unwrap(),
                 err,
             )
