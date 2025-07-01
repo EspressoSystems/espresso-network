@@ -90,7 +90,7 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
 
         let commit = advz_scheme(num_storage_nodes)
             .commit_only(bytes)
-            .map_err(|err| {
+            .inspect_err(|err| {
                 tracing::error!(%err, ?req, "failed to compute legacy VID commitment");
             })
             .ok()?;
@@ -224,7 +224,7 @@ where
             .get::<()>(&format!("availability/payload/hash/{}", req.0))
             .bytes()
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 tracing::info!(%err, %req_hash, %client_url, "failed to fetch payload bytes");
             })
             .ok()?;
@@ -234,21 +234,21 @@ where
             .get::<()>(&format!("availability/vid/common/payload-hash/{}", req.0))
             .bytes()
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 tracing::info!(%err, %req_hash, %client_url, "failed to fetch VID common bytes");
             })
             .ok()?;
 
         let payload =
             vbs::Serializer::<Ver>::deserialize::<PayloadQueryData<Types>>(&payload_bytes)
-                .map_err(|err| {
+                .inspect_err(|err| {
                     tracing::info!(%err, %req_hash, "failed to deserialize PayloadQueryData");
                 })
                 .ok();
 
         let common =
             vbs::Serializer::<Ver>::deserialize::<VidCommonQueryData<Types>>(&common_bytes)
-                .map_err(|err| {
+                .inspect_err(|err| {
                     tracing::info!(%err, %req_hash,
                         "error deserializing VidCommonQueryData",
                     );
@@ -275,7 +275,7 @@ where
                 let commit = advz_scheme(num_storage_nodes)
                     .commit_only(bytes)
                     .map(VidCommitment::V0)
-                    .map_err(|err| {
+                    .inspect_err(|err| {
                         tracing::error!(%err, %req_hash,  %num_storage_nodes, "failed to compute VID commitment (V0)");
                     })
                     .ok()?;
@@ -295,7 +295,7 @@ where
                 let bytes = payload.data().encode();
 
                 let avidm_param = init_avidm_param(common.total_weights)
-                    .map_err(|err| {
+                    .inspect_err(|err| {
                         tracing::error!(%err, %req_hash, "failed to initialize AVIDM params. total_weight={}", common.total_weights);
                     })
                     .ok()?;
@@ -305,7 +305,7 @@ where
                     .get::<Header<Types>>(&format!("availability/header/{}", payload.height()))
                     .send()
                     .await
-                    .map_err(|err| {
+                    .inspect_err(|err| {
                         tracing::warn!(%client_url, %err, "failed to fetch header for payload. height={}", payload.height());
                     })
                     .ok()?;
@@ -327,7 +327,7 @@ where
                     ns_table::parse_ns_table(bytes.len(), &metadata),
                 )
                 .map(VidCommitment::V1)
-                .map_err(|err| {
+                .inspect_err(|err| {
                     tracing::error!(%err, %req_hash, "failed to compute AVIDM commitment");
                 })
                 .ok()?;
