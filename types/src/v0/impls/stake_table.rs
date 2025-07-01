@@ -1490,29 +1490,8 @@ impl EpochCommittees {
             },
         };
 
-        let mut block_reward = None;
-
-        {
-            // Assumes the stake table contract proxy address does not change
-            // In the future, if we want to support updates to the stake table contract address via chain config,
-            // or allow the contract to handle additional block reward calculation parameters (e.g., inflation, block time),
-            // the `fetch_block_reward` logic can be updated to support per-epoch rewards.
-            // Initially, the block reward is zero if the node starts on pre-epoch version
-            // but it is updated on the first call to `add_epoch_root()`
-            if self.block_reward == RewardAmount(U256::ZERO) {
-                match self.fetcher.fetch_block_reward().await {
-                    Ok(reward) => {
-                        block_reward = Some(reward);
-                    },
-                    Err(e) => {
-                        tracing::error!("Failed to fetch block reward while loading the stake table from persistence. This node will be unable to participate until the next epoch. Error: {}", e);
-                    },
-                }
-            }
-        }
-
         for (epoch, stake_table) in loaded_stake {
-            self.update(epoch, stake_table, block_reward);
+            self.update(epoch, stake_table, None);
         }
     }
 
