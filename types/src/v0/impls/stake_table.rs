@@ -634,38 +634,36 @@ impl Fetcher {
                     if let Some(block) = state.lock().await.last_finalized {
                         break block;
                     }
-                    tracing::debug!(
-                        "Finalized block not yet available. Retrying in {l1_retry:?}",
-                    );
+                    tracing::debug!("Finalized block not yet available. Retrying in {l1_retry:?}",);
                     sleep(l1_retry).await;
                 };
 
-                tracing::debug!(
-                    "Attempting to fetch stake table at L1 block {finalized_block:?}",
-                );
+                tracing::debug!("Attempting to fetch stake table at L1 block {finalized_block:?}",);
 
                 loop {
                     match self_clone
                         .fetch_and_store_stake_table_events(stake_contract_address, finalized_block)
                         .await
-                        {
-                            Ok(events) => {
-                                tracing::info!("Successfully fetched and stored stake table events at block={finalized_block:?}");
-                                tracing::debug!("events={events:?}");
-                                break;
-                            },
-                            Err(e) => {
-                                tracing::error!(
-                                    "Error fetching stake table at block {finalized_block:?}. err= {e:#}",
-                                );
-                                sleep(l1_retry).await;
-                            },
-                        }
+                    {
+                        Ok(events) => {
+                            tracing::info!(
+                                "Successfully fetched and stored stake table events at \
+                                 block={finalized_block:?}"
+                            );
+                            tracing::debug!("events={events:?}");
+                            break;
+                        },
+                        Err(e) => {
+                            tracing::error!(
+                                "Error fetching stake table at block {finalized_block:?}. err= \
+                                 {e:#}",
+                            );
+                            sleep(l1_retry).await;
+                        },
                     }
+                }
 
-                tracing::debug!(
-                    "Waiting {update_delay:?} before next stake table update...",
-                );
+                tracing::debug!("Waiting {update_delay:?} before next stake table update...",);
                 sleep(update_delay).await;
             }
         }
@@ -1234,7 +1232,10 @@ impl Fetcher {
         };
 
         let Some(l1_finalized_block_info) = header.l1_finalized() else {
-            bail!("The epoch root for epoch {epoch} is missing the L1 finalized block info. This is a fatal error. Consensus is blocked and will not recover.");
+            bail!(
+                "The epoch root for epoch {epoch} is missing the L1 finalized block info. This is \
+                 a fatal error. Consensus is blocked and will not recover."
+            );
         };
 
         let events = match self
@@ -1919,9 +1920,10 @@ impl Membership<SeqTypes> for EpochCommittees {
 
         let Some(drb) = drb_leaf.next_drb_result else {
             tracing::error!(
-          "We received a leaf that should contain a DRB result, but the DRB result is missing: {:?}",
-          drb_leaf
-        );
+                "We received a leaf that should contain a DRB result, but the DRB result is \
+                 missing: {:?}",
+                drb_leaf
+            );
 
             bail!("DRB leaf is missing the DRB result.");
         };
@@ -1931,7 +1933,10 @@ impl Membership<SeqTypes> for EpochCommittees {
 
     fn add_drb_result(&mut self, epoch: Epoch, drb: DrbResult) {
         let Some(raw_stake_table) = self.state.get(&epoch) else {
-            tracing::error!("add_drb_result({epoch}, {drb:?}) was called, but we do not yet have the stake table for epoch {epoch}");
+            tracing::error!(
+                "add_drb_result({epoch}, {drb:?}) was called, but we do not yet have the stake \
+                 table for epoch {epoch}"
+            );
             return;
         };
 
@@ -2349,7 +2354,8 @@ mod tests {
         let log: Log = serde_json::from_str(serialized).unwrap();
         assert_eq!(
             log.display(),
-            "Log(block=105,index=112,transaction_hash=0x0000000000000000000000000000000000000000000000000000000000000069)"
+            "Log(block=105,index=112,\
+             transaction_hash=0x0000000000000000000000000000000000000000000000000000000000000069)"
         )
     }
 

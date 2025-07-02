@@ -527,7 +527,10 @@ async fn test_cli_stake_table_compact(#[case] version: StakeTableContractVersion
 
     // Print output to fix test more easily.
     println!("{out}");
-    out.contains("Validator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: BLS_VER_KEY~ksjrqSN9jEvKOeCNNySv9Gcg7UjZ.. comm=12.34 % stake=0.123000000000000000 ESP");
+    out.contains(
+        "Validator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: \
+         BLS_VER_KEY~ksjrqSN9jEvKOeCNNySv9Gcg7UjZ.. comm=12.34 % stake=0.123000000000000000 ESP",
+    );
     out.contains(
         " - Delegator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: stake=0.123000000000000000 ESP",
     );

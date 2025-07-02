@@ -135,7 +135,8 @@ impl AvidMNsProofV1 {
                 Ok(proof) => Some(AvidMNsProofV1::IncorrectEncoding(proof)),
                 Err(e) => {
                     tracing::error!(
-                        "error generating incorrect encoding proof for namespace index {ns_index}: {:?}",
+                        "error generating incorrect encoding proof for namespace index \
+                         {ns_index}: {:?}",
                         e
                     );
                     None

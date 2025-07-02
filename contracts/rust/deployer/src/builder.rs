@@ -258,7 +258,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         contracts,
                         self.rpc_url.clone(),
                         self.multisig.context(
-                            "Multisig address must be set when upgrading to --use-multisig flag is present",
+                            "Multisig address must be set when upgrading to --use-multisig flag \
+                             is present",
                         )?,
                         multisig_pauser,
                         Some(dry_run),

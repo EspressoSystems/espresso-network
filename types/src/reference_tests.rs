@@ -286,9 +286,9 @@ change in the serialization of this data structure.
     // Check that we can deserialize from the reference JSON object.
     let parsed: T = serde_json::from_value(expected).unwrap();
     assert_eq!(
-        *reference,
-        parsed,
-        "Reference object commitment does not match commitment of parsed JSON. This is indicative of
+        *reference, parsed,
+        "Reference object commitment does not match commitment of parsed JSON. This is indicative \
+         of
         inconsistency or non-determinism in the commitment scheme.",
     );
 

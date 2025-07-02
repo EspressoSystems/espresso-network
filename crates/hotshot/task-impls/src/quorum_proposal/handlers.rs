@@ -179,7 +179,10 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                             return None;
                         }
                     } else {
-                        tracing::error!("Received an epoch root QC but we don't have the corresponding state cert.");
+                        tracing::error!(
+                            "Received an epoch root QC but we don't have the corresponding state \
+                             cert."
+                        );
                         return None;
                     }
                 } else {
@@ -245,8 +248,11 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         // TODO configure timeout
         while self.view_start_time.elapsed() < wait_duration {
             let time_spent = Instant::now()
-            .checked_duration_since(self.view_start_time)
-            .ok_or(error!("Time elapsed since the start of the task is negative. This should never happen."))?;
+                .checked_duration_since(self.view_start_time)
+                .ok_or(error!(
+                    "Time elapsed since the start of the task is negative. This should never \
+                     happen."
+                ))?;
             let time_left = wait_duration
                 .checked_sub(time_spent)
                 .ok_or(info!("No time left"))?;
@@ -380,7 +386,10 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                             continue;
                         }
                     } else {
-                        tracing::error!("Received an epoch root QC but we don't have the corresponding state cert.");
+                        tracing::error!(
+                            "Received an epoch root QC but we don't have the corresponding state \
+                             cert."
+                        );
                         continue;
                     }
                 } else {
@@ -398,14 +407,20 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         while self.view_start_time.elapsed() < wait_duration {
             let time_spent = Instant::now()
                 .checked_duration_since(self.view_start_time)
-                .ok_or(error!("Time elapsed since the start of the task is negative. This should never happen."))?;
+                .ok_or(error!(
+                    "Time elapsed since the start of the task is negative. This should never \
+                     happen."
+                ))?;
             let time_left = wait_duration
                 .checked_sub(time_spent)
                 .ok_or(info!("No time left"))?;
             let Ok(maybe_qc_state_cert) =
                 tokio::time::timeout(time_left, self.wait_for_qc_event(rx.clone())).await
             else {
-                tracing::info!("Some nodes did not respond with their HighQc in time. Continuing with the highest QC that we received: {highest_qc:?}");
+                tracing::info!(
+                    "Some nodes did not respond with their HighQc in time. Continuing with the \
+                     highest QC that we received: {highest_qc:?}"
+                );
                 return Ok((highest_qc, next_epoch_qc, state_cert));
             };
             let Some((qc, maybe_next_epoch_qc, maybe_state_cert)) = maybe_qc_state_cert else {
@@ -506,7 +521,8 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                 ensure!(
                     builder_commitment == empty_payload.builder_commitment(&metadata)
                         && metadata == empty_metadata,
-                    "We're trying to propose non empty block in the epoch transition. Do not propose. View number: {}. Parent Block number: {}",
+                    "We're trying to propose non empty block in the epoch transition. Do not \
+                     propose. View number: {}. Parent Block number: {}",
                     self.view_number,
                     parent_block_number,
                 );
@@ -514,9 +530,14 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             if is_epoch_root(parent_block_number, self.epoch_height) {
                 ensure!(
                     maybe_state_cert.as_ref().is_some_and(|state_cert| {
-                        check_qc_state_cert_correspondence(&parent_qc, state_cert, self.epoch_height)
+                        check_qc_state_cert_correspondence(
+                            &parent_qc,
+                            state_cert,
+                            self.epoch_height,
+                        )
                     }),
-                    "We are proposing with parent epoch root QC but we don't have the corresponding state cert."
+                    "We are proposing with parent epoch root QC but we don't have the \
+                     corresponding state cert."
                 );
             }
         }
@@ -549,7 +570,8 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         // We might have ended up here because we were in the epoch transition.
         if epoch_membership.leader(self.view_number).await? != self.public_key {
             tracing::warn!(
-                "We are not the leader in the epoch for which we are about to propose. Do not send the quorum proposal."
+                "We are not the leader in the epoch for which we are about to propose. Do not \
+                 send the quorum proposal."
             );
             return Ok(());
         }
@@ -564,8 +586,8 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                 maybe_next_epoch_qc
                     .as_ref()
                     .is_some_and(|neqc| neqc.data.leaf_commit == parent_qc.data.leaf_commit),
-                "Jusify QC on our proposal is for an epoch transition block \
-                    but we don't have the corresponding next epoch QC. Do not propose."
+                "Jusify QC on our proposal is for an epoch transition block but we don't have the \
+                 corresponding next epoch QC. Do not propose."
             );
             maybe_next_epoch_qc
         } else {
@@ -723,8 +745,8 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                     .is_none_or(|neqc| neqc.data.leaf_commit != qc.data.leaf_commit)
             {
                 bail!(error!(
-                    "We've formed a transition QC but we haven't formed \
-                    the corresponding next epoch QC. Do not propose."
+                    "We've formed a transition QC but we haven't formed the corresponding next \
+                     epoch QC. Do not propose."
                 ));
             }
             (qc, next_epoch_qc, state_cert)
@@ -764,7 +786,10 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                     is_epoch_transition(bn, self.epoch_height)
                         && !is_last_block(bn, self.epoch_height)
                 }) {
-                    bail!(error!("High is in transition but we need to propose with transition QC, do nothing"));
+                    bail!(error!(
+                        "High is in transition but we need to propose with transition QC, do \
+                         nothing"
+                    ));
                 }
                 (qc, maybe_next_epoch_qc, maybe_state_cert)
             }

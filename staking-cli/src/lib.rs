@@ -158,7 +158,8 @@ impl Config {
             if let Ok(stake_table_address) = std::env::var(stake_table_env_var) {
                 config.stake_table_address = stake_table_address.parse()?;
                 tracing::info!(
-                    "Using stake table address from env {stake_table_env_var}: {stake_table_address}",
+                    "Using stake table address from env {stake_table_env_var}: \
+                     {stake_table_address}",
                 );
             }
         }

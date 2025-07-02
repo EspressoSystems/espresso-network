@@ -114,7 +114,10 @@ pub fn read_orchestrator_init_config<TYPES: NodeType>() -> (NetworkConfig<TYPES>
                 .short('c')
                 .long("config_file")
                 .value_name("FILE")
-                .help("Sets a custom config file with default values, some might be changed if they are set manually in the command line")
+                .help(
+                    "Sets a custom config file with default values, some might be changed if they \
+                     are set manually in the command line",
+                )
                 .required(true),
         )
         .arg(
@@ -178,7 +181,10 @@ pub fn read_orchestrator_init_config<TYPES: NodeType>() -> (NetworkConfig<TYPES>
                 .short('f')
                 .long("fixed_leader_for_gpuvid")
                 .value_name("BOOL")
-                .help("Sets the number of fixed leader for gpu vid, only be used when leaders running on gpu")
+                .help(
+                    "Sets the number of fixed leader for gpu vid, only be used when leaders \
+                     running on gpu",
+                )
                 .required(false),
         )
         .arg(
@@ -187,7 +193,11 @@ pub fn read_orchestrator_init_config<TYPES: NodeType>() -> (NetworkConfig<TYPES>
                 .long("builder")
                 .value_name("BUILDER_TYPE")
                 .value_parser(value_parser!(BuilderType))
-                .help("Sets type of builder. `simple` or `random` to run corresponding integrated builder, `external` to use the one specified by `[config.builder_url]` in config")
+                .help(
+                    "Sets type of builder. `simple` or `random` to run corresponding integrated \
+                     builder, `external` to use the one specified by `[config.builder_url]` in \
+                     config",
+                )
                 .required(false),
         )
         .arg(
@@ -532,10 +542,17 @@ pub trait RunDa<
         // `failed_num_views` could include uncommitted views
         let failed_num_views = total_num_views - num_successful_commits;
         // When posting to the orchestrator, note that the total number of views also include un-finalized views.
-        println!("[{node_index}]: Total views: {total_num_views}, Failed views: {failed_num_views}, num_successful_commits: {num_successful_commits}");
+        println!(
+            "[{node_index}]: Total views: {total_num_views}, Failed views: {failed_num_views}, \
+             num_successful_commits: {num_successful_commits}"
+        );
         // Output run results
         let total_time_elapsed = start.elapsed(); // in seconds
-        println!("[{node_index}]: {rounds} rounds completed in {total_time_elapsed:?} - Total transactions sent: {total_transactions_sent} - Total transactions committed: {total_transactions_committed} - Total commitments: {num_successful_commits}");
+        println!(
+            "[{node_index}]: {rounds} rounds completed in {total_time_elapsed:?} - Total \
+             transactions sent: {total_transactions_sent} - Total transactions committed: \
+             {total_transactions_committed} - Total commitments: {num_successful_commits}"
+        );
         if total_transactions_committed != 0 {
             // prevent division by 0
             let total_time_elapsed_sec = std::cmp::max(total_time_elapsed.as_secs(), 1u64);
@@ -544,7 +561,10 @@ pub trait RunDa<
                 * (transaction_size_in_bytes + 8)
                 / total_time_elapsed_sec;
             let avg_latency_in_sec = total_latency / num_latency;
-            println!("[{node_index}]: throughput: {throughput_bytes_per_sec} bytes/sec, avg_latency: {avg_latency_in_sec} sec.");
+            println!(
+                "[{node_index}]: throughput: {throughput_bytes_per_sec} bytes/sec, avg_latency: \
+                 {avg_latency_in_sec} sec."
+            );
 
             BenchResults {
                 partial_results: "Unset".to_string(),

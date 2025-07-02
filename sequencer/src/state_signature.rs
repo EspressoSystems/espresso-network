@@ -191,7 +191,11 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                             .send()
                             .await
                         {
-                            tracing::error!("Error posting signature for legacy light client to the relay server: {:?}", error);
+                            tracing::error!(
+                                "Error posting signature for legacy light client to the relay \
+                                 server: {:?}",
+                                error
+                            );
                         }
                     }
                 }

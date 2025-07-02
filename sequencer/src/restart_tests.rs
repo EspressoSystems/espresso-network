@@ -1083,7 +1083,8 @@ impl TestNetwork {
         } else {
             assert!(
                 !assert_progress,
-                "test requested that progress continue after shutdown, but also requested that too many nodes be shut down: {}/{} DA, {}/{} regular",
+                "test requested that progress continue after shutdown, but also requested that \
+                 too many nodes be shut down: {}/{} DA, {}/{} regular",
                 da_nodes.len(),
                 self.da_nodes.len(),
                 regular_nodes.len(),
@@ -1244,7 +1245,11 @@ impl PortPicker {
             if self.allocated.insert(port) {
                 break port;
             }
-            tracing::warn!(port, "picked port which is already allocated, will try again. If this error persists, try reducing the number of ports being used.");
+            tracing::warn!(
+                port,
+                "picked port which is already allocated, will try again. If this error persists, \
+                 try reducing the number of ports being used."
+            );
         }
     }
 }

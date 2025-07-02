@@ -1222,7 +1222,8 @@ pub mod testing {
                 },
                 Err(e) => {
                     tracing::warn!(
-                        "Failed to create local catchup provider: {e:#}. Only using remote catchup."
+                        "Failed to create local catchup provider: {e:#}. Only using remote \
+                         catchup."
                     );
                 },
             };

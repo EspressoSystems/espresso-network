@@ -248,7 +248,8 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             .map(|e| e + 1);
         if epoch > highest_epoch {
             return Err(anyhow::anyhow!(
-                "requested stake table for epoch {epoch:?} is beyond the current epoch + 1 {highest_epoch:?}"
+                "requested stake table for epoch {epoch:?} is beyond the current epoch + 1 \
+                 {highest_epoch:?}"
             ));
         }
         let mem = self
@@ -4915,7 +4916,8 @@ mod test {
                 .unwrap();
             assert_eq!(
                 count, namespace as u64,
-                "Incorrect transaction count for namespace {namespace}: expected {namespace}, got {count}"
+                "Incorrect transaction count for namespace {namespace}: expected {namespace}, got \
+                 {count}"
             );
 
             // check the range endpoint
@@ -4926,7 +4928,11 @@ mod test {
                 .send()
                 .await
                 .unwrap();
-            assert_eq!(to_endpoint_count, namespace as u64, "Incorrect transaction count for range endpoint (to only) for namespace {namespace}: expected {namespace}, got {to_endpoint_count}");
+            assert_eq!(
+                to_endpoint_count, namespace as u64,
+                "Incorrect transaction count for range endpoint (to only) for namespace \
+                 {namespace}: expected {namespace}, got {to_endpoint_count}"
+            );
 
             // check the range endpoint
             let from_to_endpoint_count = client
@@ -4936,7 +4942,11 @@ mod test {
                 .send()
                 .await
                 .unwrap();
-            assert_eq!(from_to_endpoint_count, namespace as u64, "Incorrect transaction count for range endpoint (from-to) for namespace {namespace}: expected {namespace}, got {from_to_endpoint_count}");
+            assert_eq!(
+                from_to_endpoint_count, namespace as u64,
+                "Incorrect transaction count for range endpoint (from-to) for namespace \
+                 {namespace}: expected {namespace}, got {from_to_endpoint_count}"
+            );
 
             let ns_size = client
                 .get::<usize>(&format!("node/payloads/size/namespace/{namespace}"))
@@ -4947,7 +4957,8 @@ mod test {
             let expected_ns_size = *sizes.get(&namespace).unwrap();
             assert_eq!(
                 ns_size, expected_ns_size,
-                "Incorrect payload size for namespace {namespace}: expected {expected_ns_size}, got {ns_size}"
+                "Incorrect payload size for namespace {namespace}: expected {expected_ns_size}, \
+                 got {ns_size}"
             );
 
             let ns_size_to = client
@@ -4959,7 +4970,8 @@ mod test {
                 .unwrap();
             assert_eq!(
                 ns_size_to, expected_ns_size,
-                "Incorrect payload size for namespace {namespace} up to height {last_tx_height}: expected {expected_ns_size}, got {ns_size_to}"
+                "Incorrect payload size for namespace {namespace} up to height {last_tx_height}: \
+                 expected {expected_ns_size}, got {ns_size_to}"
             );
 
             let ns_size_from_to = client
@@ -4971,7 +4983,8 @@ mod test {
                 .unwrap();
             assert_eq!(
                 ns_size_from_to, expected_ns_size,
-                "Incorrect payload size for namespace {namespace} from 0 to height {last_tx_height}: expected {expected_ns_size}, got {ns_size_from_to}"
+                "Incorrect payload size for namespace {namespace} from 0 to height \
+                 {last_tx_height}: expected {expected_ns_size}, got {ns_size_from_to}"
             );
         }
 
@@ -4982,7 +4995,8 @@ mod test {
             .unwrap();
         assert_eq!(
             total_tx_count, total_transactions,
-            "Incorrect total transaction count: expected {total_transactions}, got {total_tx_count}"
+            "Incorrect total transaction count: expected {total_transactions}, got \
+             {total_tx_count}"
         );
 
         let total_payload_size = client
@@ -4994,7 +5008,8 @@ mod test {
         let expected_total_size: usize = sizes.values().copied().sum();
         assert_eq!(
             total_payload_size, expected_total_size,
-            "Incorrect total payload size: expected {expected_total_size}, got {total_payload_size}"
+            "Incorrect total payload size: expected {expected_total_size}, got \
+             {total_payload_size}"
         );
     }
 

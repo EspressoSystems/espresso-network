@@ -55,19 +55,19 @@ pub fn advz_scheme(num_storage_nodes: usize) -> ADVZScheme {
 
     #[allow(clippy::panic)]
     let num_storage_nodes = u32::try_from(num_storage_nodes).unwrap_or_else(|err| {
-        panic!(
-            "num_storage_nodes {num_storage_nodes} should fit into u32; \
-                error: {err}"
-        )
+        panic!("num_storage_nodes {num_storage_nodes} should fit into u32; error: {err}")
     });
 
     // TODO panic, return `Result`, or make `new` infallible upstream (eg. by panicking)?
     #[allow(clippy::panic)]
     ADVZScheme(
         Advz::new(num_storage_nodes, recovery_threshold, &*KZG_SRS).unwrap_or_else(|err| {
-              panic!("advz construction failure: (num_storage nodes,recovery_threshold)=({num_storage_nodes},{recovery_threshold}); \
-                      error: {err}")
-        })
+            panic!(
+                "advz construction failure: (num_storage \
+                 nodes,recovery_threshold)=({num_storage_nodes},{recovery_threshold}); error: \
+                 {err}"
+            )
+        }),
     )
 }
 
