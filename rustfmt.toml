@@ -9,3 +9,8 @@ group_imports = "StdExternalCrate"
 
 # if lines exceed the desired width, rustfmt often gives up
 format_strings = true
+
+ignore = [
+  # the contract bindings are generated files
+  "contracts/rust/adapter/src/bindings"
+]
