@@ -10,7 +10,7 @@ use alloy::{
     contract::RawCallBuilder,
     hex::{FromHex, ToHexExt},
     network::{Ethereum, EthereumWallet, TransactionBuilder},
-    primitives::{Address, Bytes, B256, U256},
+    primitives::{keccak256, Address, Bytes, B256, U256},
     providers::{
         fillers::{FillProvider, JoinFill, WalletFiller},
         utils::JoinedRecommendedFillers,
@@ -23,8 +23,9 @@ use alloy::{
     },
     transports::http::reqwest::Url,
 };
+use alloy_dyn_abi::{DynSolType, DynSolValue};
 use anyhow::{anyhow, Context, Result};
-use clap::{builder::OsStr, Parser};
+use clap::{builder::OsStr, Parser, ValueEnum};
 use derive_more::{derive::Deref, Display};
 use hotshot_contract_adapter::sol_types::*;
 
@@ -1394,7 +1395,7 @@ pub async fn deploy_timelock(
 }
 
 #[derive(Debug, Clone)]
-pub struct TimelockOperation {
+pub struct TimelockOperationData {
     /// The address of the contract to call
     target: Address,
     /// The value to send with the call
@@ -1409,12 +1410,51 @@ pub struct TimelockOperation {
     delay: U256,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum TimelockOperationType {
+    Schedule,
+    Execute,
+    Cancel,
+}
+
+/// Schedule a timelock operation
+///
+/// Parameters:
+/// - `provider`: the provider to use
+/// - `contract_type`: the type of contract to schedule the operation on
+/// - `operation`: the operation to schedule (see TimelockOperationData struct for more details)
+///
+/// Returns:
+/// - The operation id
 pub async fn schedule_timelock_operation(
-    provider: impl Provider,
-    timelock_addr: Address,
-    operation: TimelockOperation,
+    provider: &impl Provider,
+    contract_type: Contract,
+    operation: TimelockOperationData,
 ) -> Result<B256> {
-    let timelock = Timelock::new(timelock_addr, &provider);
+    let target_addr = operation.target;
+    let proxy_owner = match contract_type {
+        Contract::FeeContractProxy => {
+            let proxy = FeeContract::new(target_addr, &provider);
+            proxy.owner().call().await?._0
+        },
+        Contract::EspTokenProxy => {
+            let proxy = EspToken::new(target_addr, &provider);
+            proxy.owner().call().await?._0
+        },
+        Contract::LightClientProxy => {
+            let proxy = LightClient::new(target_addr, &provider);
+            proxy.owner().call().await?._0
+        },
+        Contract::StakeTableProxy => {
+            let proxy = StakeTable::new(target_addr, &provider);
+            proxy.owner().call().await?._0
+        },
+        _ => anyhow::bail!("Invalid contract type: {}", contract_type),
+    };
+    let timelock = Timelock::new(proxy_owner, &provider);
+    println!("timelock: {:?}", timelock);
+    println!("proxy_owner: {:?}", proxy_owner);
+    println!("operation: {:?}", operation);
     let tx_id = timelock
         .hashOperation(
             operation.target,
@@ -1455,12 +1495,42 @@ pub async fn schedule_timelock_operation(
     Ok(tx_id)
 }
 
+/// Execute a timelock operation
+///
+/// Parameters:
+/// - `provider`: the provider to use
+/// - `contract_type`: the type of contract to execute the operation on
+/// - `operation`: the operation to execute (see TimelockOperationData struct for more details)
+///
+/// Returns:
+/// - The operation id
 pub async fn execute_timelock_operation(
     provider: impl Provider,
-    timelock_addr: Address,
-    operation: TimelockOperation,
+    contract_type: Contract,
+    operation: TimelockOperationData,
 ) -> Result<B256> {
-    let timelock = Timelock::new(timelock_addr, &provider);
+    let target_addr = operation.target;
+    let proxy_owner = match contract_type {
+        Contract::FeeContractProxy => {
+            let proxy = FeeContract::new(target_addr, &provider);
+            proxy.owner().call().await?._0
+        },
+        Contract::EspTokenProxy => {
+            let proxy = EspToken::new(target_addr, &provider);
+            proxy.owner().call().await?._0
+        },
+        Contract::LightClientProxy => {
+            let proxy = LightClient::new(target_addr, &provider);
+            proxy.owner().call().await?._0
+        },
+        Contract::StakeTableProxy => {
+            let proxy = StakeTable::new(target_addr, &provider);
+            proxy.owner().call().await?._0
+        },
+        _ => anyhow::bail!("Invalid contract type: {}", contract_type),
+    };
+    // the owner of the proxy is the timelock
+    let timelock = Timelock::new(proxy_owner, &provider);
     let tx_id = timelock
         .hashOperation(
             operation.target,
@@ -1500,6 +1570,15 @@ pub async fn execute_timelock_operation(
     Ok(tx_id)
 }
 
+/// Cancel a timelock operation by id
+///
+/// Parameters:
+/// - `provider`: the provider to use
+/// - `timelock_addr`: the address of the timelock contract
+/// - `operation_id`: the id of the operation to cancel
+///
+/// Returns:
+/// - The operation id
 pub async fn cancel_timelock_operation_by_id(
     provider: impl Provider,
     timelock_addr: Address,
@@ -1521,12 +1600,41 @@ pub async fn cancel_timelock_operation_by_id(
     Ok(())
 }
 
+/// Cancel a timelock operation
+///
+/// Parameters:
+/// - `provider`: the provider to use
+/// - `contract_type`: the type of contract to cancel the operation on
+/// - `operation`: the operation to cancel (see TimelockOperationData struct for more details)
+///
+/// Returns:
+/// - The operation id
 pub async fn cancel_timelock_operation(
-    provider: impl Provider,
-    timelock_addr: Address,
-    operation: TimelockOperation,
+    provider: &impl Provider,
+    contract_type: Contract,
+    operation: TimelockOperationData,
 ) -> Result<B256> {
-    let timelock = Timelock::new(timelock_addr, &provider);
+    let target_addr = operation.target;
+    let proxy_owner = match contract_type {
+        Contract::FeeContractProxy => {
+            let proxy = FeeContract::new(target_addr, &provider);
+            proxy.owner().call().await?._0
+        },
+        Contract::EspTokenProxy => {
+            let proxy = EspToken::new(target_addr, &provider);
+            proxy.owner().call().await?._0
+        },
+        Contract::LightClientProxy => {
+            let proxy = LightClient::new(target_addr, &provider);
+            proxy.owner().call().await?._0
+        },
+        Contract::StakeTableProxy => {
+            let proxy = StakeTable::new(target_addr, &provider);
+            proxy.owner().call().await?._0
+        },
+        _ => anyhow::bail!("Invalid contract type: {}", contract_type),
+    };
+    let timelock = Timelock::new(proxy_owner, &provider);
     let tx_id = timelock
         .hashOperation(
             operation.target,
@@ -1538,8 +1646,52 @@ pub async fn cancel_timelock_operation(
         .call()
         .await?
         ._0;
-    cancel_timelock_operation_by_id(provider, timelock_addr, tx_id).await?;
+    cancel_timelock_operation_by_id(&provider, *timelock.address(), tx_id).await?;
     Ok(tx_id)
+}
+
+/// Encode a function call with the given signature and arguments
+///
+/// Parameters:
+/// - `signature`: e.g. `"transfer(address,uint256)"`
+/// - `args`: Solidity typed arguments as `Vec<&str>`
+///
+/// Returns:
+/// - Full calldata: selector + encoded arguments
+pub fn encode_function_call(signature: &str, args: Vec<String>) -> Result<Bytes> {
+    let (_name, types_str) = signature
+        .split_once('(')
+        .ok_or_else(|| anyhow!("Invalid function signature: {}", signature))?;
+
+    let types_str = types_str.trim_end_matches(')');
+    let arg_type_strs = types_str.split(',').filter(|s| !s.trim().is_empty());
+
+    let dyn_types: Vec<DynSolType> = arg_type_strs
+        .map(|s| s.trim().parse::<DynSolType>())
+        .collect::<std::result::Result<_, _>>()
+        .map_err(|e| anyhow!("Failed to parse argument types: {e}"))?;
+
+    let dyn_values: Vec<DynSolValue> = dyn_types
+        .iter()
+        .zip(args.iter())
+        .map(|(ty, arg)| ty.coerce_str(arg))
+        .collect::<std::result::Result<_, _>>()
+        .map_err(|e| anyhow!("Failed to coerce argument: {e}"))?;
+
+    const FUNCTION_SELECTOR_SIZE: usize = 4;
+    let selector = &keccak256(signature.as_bytes())[..FUNCTION_SELECTOR_SIZE];
+
+    let encoded_args = if dyn_values.len() == 1 {
+        dyn_values[0].abi_encode()
+    } else {
+        DynSolValue::Tuple(dyn_values).abi_encode()
+    };
+
+    let mut calldata = Vec::with_capacity(4 + encoded_args.len());
+    calldata.extend_from_slice(selector);
+    calldata.extend_from_slice(&encoded_args);
+
+    Ok(calldata.into())
 }
 
 #[cfg(test)]
@@ -2547,7 +2699,7 @@ mod tests {
             .to_owned();
 
         // propose a timelock operation
-        let mut operation = TimelockOperation {
+        let mut operation = TimelockOperationData {
             target: fee_contract_proxy_addr,
             value: U256::ZERO,
             data: upgrade_data.into(),
@@ -2556,7 +2708,8 @@ mod tests {
             delay,
         };
         let tx_id =
-            schedule_timelock_operation(&provider, timelock_addr, operation.clone()).await?;
+            schedule_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone())
+                .await?;
 
         // check that the tx is scheduled
         let timelock = Timelock::new(timelock_addr, &provider);
@@ -2566,18 +2719,25 @@ mod tests {
         assert!(timelock.getTimestamp(tx_id).call().await?._0 > U256::ZERO);
 
         // execute the tx since the delay is 0
-        execute_timelock_operation(&provider, timelock_addr, operation.clone()).await?;
+        execute_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone())
+            .await?;
 
         // check that the tx is executed
         assert!(timelock.isOperationDone(tx_id).call().await?._0);
         assert!(!timelock.isOperationPending(tx_id).call().await?._0);
         assert!(!timelock.isOperationReady(tx_id).call().await?._0);
+        // check that the new owner is the provider_wallet
+        let fee_contract = FeeContract::new(operation.target, &provider);
+        assert_eq!(fee_contract.owner().call().await?._0, provider_wallet);
 
         operation.value = U256::from(1);
+        //transfer ownership back to the timelock
+        let _ = fee_contract.transferOwnership(timelock_addr).send().await?;
 
-        schedule_timelock_operation(&provider, timelock_addr, operation.clone()).await?;
+        schedule_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone())
+            .await?;
 
-        cancel_timelock_operation(&provider, timelock_addr, operation).await?;
+        cancel_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone()).await?;
 
         // check that the tx is cancelled
         let next_tx_id = timelock
@@ -2592,6 +2752,76 @@ mod tests {
             .await?
             ._0;
         assert!(timelock.getTimestamp(next_tx_id).call().await?._0 == U256::ZERO);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_encode_function_call() -> Result<()> {
+        let function_signature = "transfer(address,uint256)".to_string();
+        let values = vec![
+            "0x000000000000000000000000000000000000dead".to_string(),
+            "1000".to_string(),
+        ];
+        let expected = "0xa9059cbb000000000000000000000000000000000000000000000000000000000000dead00000000000000000000000000000000000000000000000000000000000003e8".parse::<Bytes>()?;
+        let encoded = encode_function_call(&function_signature, values).expect("encoding failed");
+
+        assert_eq!(encoded, expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_encode_function_call_with_bytes32() -> Result<()> {
+        let function_signature = "setHash(bytes32)".to_string();
+        let values =
+            vec!["0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string()];
+        let expected = "0x0c4c42850123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            .parse::<Bytes>()?;
+        let encoded = encode_function_call(&function_signature, values).expect("encoding failed");
+
+        assert_eq!(encoded, expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_encode_function_call_with_bytes() -> Result<()> {
+        let function_signature = "emitData(bytes)";
+        let values = vec!["0xdeadbeef".to_string()];
+        let expected = "0xd836083e00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000004deadbeef00000000000000000000000000000000000000000000000000000000".parse::<Bytes>()?;
+        let encoded = encode_function_call(&function_signature, values).expect("encoding failed");
+
+        assert_eq!(encoded, expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_encode_function_call_with_bool() -> Result<()> {
+        let function_signature = "setFlag(bool)".to_string();
+        let mut values = vec!["true".to_string()];
+        let mut expected =
+            "0x3927f6af0000000000000000000000000000000000000000000000000000000000000001"
+                .parse::<Bytes>()?;
+        let mut encoded =
+            encode_function_call(&function_signature, values).expect("encoding failed");
+
+        assert_eq!(encoded, expected);
+
+        values = vec!["false".to_string()];
+        expected = "0x3927f6af0000000000000000000000000000000000000000000000000000000000000000"
+            .parse::<Bytes>()?;
+        encoded = encode_function_call(&function_signature, values).expect("encoding failed");
+
+        assert_eq!(encoded, expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_encode_function_call_with_string() -> Result<()> {
+        let function_signature = "logMessage(string)".to_string();
+        let values = vec!["Hello, world!".to_string()];
+        let expected = "0x7c9900520000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000d48656c6c6f2c20776f726c642100000000000000000000000000000000000000".parse::<Bytes>()?;
+        let encoded = encode_function_call(&function_signature, values).expect("encoding failed");
+
+        assert_eq!(encoded, expected);
         Ok(())
     }
 }

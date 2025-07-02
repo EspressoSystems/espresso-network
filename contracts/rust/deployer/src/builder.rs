@@ -1,14 +1,17 @@
 //! builder pattern for
 
 use alloy::{
-    primitives::{Address, U256},
+    hex::FromHex,
+    primitives::{Address, B256, U256},
     providers::{Provider, WalletProvider},
 };
 use anyhow::{Context, Result};
 use derive_builder::Builder;
 use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
 
-use crate::{Contract, Contracts};
+use crate::{
+    encode_function_call, Contract, Contracts, TimelockOperationData, TimelockOperationType,
+};
 
 /// Convenient handler that builds all the input arguments ready to be deployed.
 /// - `deployer`: deployer's wallet provider
@@ -69,6 +72,20 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     timelock_executors: Option<Vec<Address>>,
     #[builder(default)]
     timelock_proposers: Option<Vec<Address>>,
+    #[builder(default)]
+    timelock_operation_type: Option<TimelockOperationType>,
+    #[builder(default)]
+    timelock_target_contract: Option<String>,
+    #[builder(default)]
+    timelock_operation_value: Option<U256>,
+    #[builder(default)]
+    timelock_operation_function_signature: Option<String>,
+    #[builder(default)]
+    timelock_operation_function_values: Option<Vec<String>>,
+    #[builder(default)]
+    timelock_operation_salt: Option<String>,
+    #[builder(default)]
+    timelock_operation_delay: Option<U256>,
 }
 
 impl<P: Provider + WalletProvider> DeployerArgs<P> {
@@ -320,6 +337,126 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
     pub async fn deploy_all(&self, contracts: &mut Contracts) -> Result<()> {
         self.deploy_to_stake_table_v1(contracts).await?;
         self.deploy(contracts, Contract::StakeTableV2).await?;
+        Ok(())
+    }
+
+    // Perform a timelock operation
+    ///
+    /// Parameters:
+    /// - `contracts`: ref to deployed contracts
+    ///
+    pub async fn perform_timelock_operation_on_contract(
+        &self,
+        contracts: &mut Contracts,
+    ) -> Result<()> {
+        let timelock_operation_type = self
+            .timelock_operation_type
+            .clone()
+            .context("Timelock operation type not found")?;
+        let target_contract = self
+            .timelock_target_contract
+            .clone()
+            .context("Timelock target not found")?;
+        let value = self
+            .timelock_operation_value
+            .clone()
+            .context("Timelock operation value not found")?;
+        let function_signature = self
+            .timelock_operation_function_signature
+            .as_ref()
+            .context("Timelock operation function signature not found")?;
+        let function_values = self
+            .timelock_operation_function_values
+            .clone()
+            .context("Timelock operation function values not found")?;
+        let salt = self
+            .timelock_operation_salt
+            .clone()
+            .context("Timelock operation salt not found")?;
+        let delay = self
+            .timelock_operation_delay
+            .clone()
+            .context("Timelock operation delay not found")?;
+
+        let (target_addr, contract_type) = match target_contract.as_str() {
+            "FeeContract" => (
+                contracts
+                    .address(Contract::FeeContractProxy)
+                    .context("FeeContractProxy address not found")?,
+                Contract::FeeContractProxy,
+            ),
+            "EspToken" => (
+                contracts
+                    .address(Contract::EspTokenProxy)
+                    .context("EspTokenProxy address not found")?,
+                Contract::EspTokenProxy,
+            ),
+            "LightClient" => (
+                contracts
+                    .address(Contract::LightClientProxy)
+                    .context("LightClientProxy address not found")?,
+                Contract::LightClientProxy,
+            ),
+            "StakeTable" => (
+                contracts
+                    .address(Contract::StakeTableProxy)
+                    .context("StakeTableProxy address not found")?,
+                Contract::StakeTableProxy,
+            ),
+            _ => anyhow::bail!("Invalid target contract: {}", target_contract),
+        };
+
+        let function_calldata = encode_function_call(&function_signature, function_values.clone())
+            .context("Failed to encode function data")?;
+
+        // Parse salt from string to B256
+        let salt_bytes = if salt == "0x" || salt.is_empty() {
+            B256::ZERO // Use zero salt if empty
+        } else if salt.starts_with("0x") {
+            B256::from_hex(&salt[2..]).context("Invalid salt hex format")?
+        } else {
+            B256::from_hex(&salt).context("Invalid salt hex format")?
+        };
+
+        let timelock_operation_data = TimelockOperationData {
+            target: target_addr,
+            value,
+            data: function_calldata,
+            predecessor: B256::ZERO, // Default to no predecessor
+            salt: salt_bytes,
+            delay,
+        };
+
+        match timelock_operation_type {
+            TimelockOperationType::Schedule => {
+                let tx_id = crate::schedule_timelock_operation(
+                    &self.deployer,
+                    contract_type,
+                    timelock_operation_data,
+                )
+                .await?;
+                tracing::info!("Timelock operation scheduled with ID: {}", tx_id);
+            },
+            TimelockOperationType::Execute => {
+                let tx_id = crate::execute_timelock_operation(
+                    &self.deployer,
+                    contract_type,
+                    timelock_operation_data,
+                )
+                .await?;
+                tracing::info!("Timelock operation executed with ID: {}", tx_id);
+            },
+            TimelockOperationType::Cancel => {
+                let tx_id = crate::cancel_timelock_operation(
+                    &self.deployer,
+                    contract_type,
+                    timelock_operation_data,
+                )
+                .await?;
+                tracing::info!("Timelock operation cancelled with ID: {}", tx_id);
+            },
+        }
+
         Ok(())
     }
 }
