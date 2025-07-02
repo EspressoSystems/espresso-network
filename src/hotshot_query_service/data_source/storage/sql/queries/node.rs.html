@@ -177,401 +177,403 @@
 <a href=#177 id=177 data-nosnippet>177</a>        // missing in that case _or_ if the row is present but share data is NULL. Thus, we also
 <a href=#178 id=178 data-nosnippet>178</a>        // need to select the total number of VID rows and the number of present VID rows with a
 <a href=#179 id=179 data-nosnippet>179</a>        // NULL share.
-<a href=#180 id=180 data-nosnippet>180</a>        </span><span class="kw">let </span>sql = <span class="string">"SELECT l.max_height, l.total_leaves, p.null_payloads, v.total_vid, vn.null_vid, pruned_height FROM
-<a href=#181 id=181 data-nosnippet>181</a>                (SELECT max(leaf2.height) AS max_height, count(*) AS total_leaves FROM leaf2) AS l,
-<a href=#182 id=182 data-nosnippet>182</a>                (SELECT count(*) AS null_payloads FROM payload WHERE data IS NULL) AS p,
-<a href=#183 id=183 data-nosnippet>183</a>                (SELECT count(*) AS total_vid FROM vid2) AS v,
-<a href=#184 id=184 data-nosnippet>184</a>                (SELECT count(*) AS null_vid FROM vid2 WHERE share IS NULL) AS vn,
-<a href=#185 id=185 data-nosnippet>185</a>                (SELECT(SELECT last_height FROM pruned_height ORDER BY id DESC LIMIT 1) as pruned_height)
-<a href=#186 id=186 data-nosnippet>186</a>            "</span>;
-<a href=#187 id=187 data-nosnippet>187</a>        <span class="kw">let </span>row = query(sql)
-<a href=#188 id=188 data-nosnippet>188</a>            .fetch_optional(<span class="self">self</span>.as_mut())
-<a href=#189 id=189 data-nosnippet>189</a>            .<span class="kw">await</span><span class="question-mark">?
-<a href=#190 id=190 data-nosnippet>190</a>            </span>.context(NotFoundSnafu)<span class="question-mark">?</span>;
-<a href=#191 id=191 data-nosnippet>191</a>
-<a href=#192 id=192 data-nosnippet>192</a>        <span class="kw">let </span>block_height = <span class="kw">match </span>row.get::&lt;<span class="prelude-ty">Option</span>&lt;i64&gt;, <span class="kw">_</span>&gt;(<span class="string">"max_height"</span>) {
-<a href=#193 id=193 data-nosnippet>193</a>            <span class="prelude-val">Some</span>(height) =&gt; {
-<a href=#194 id=194 data-nosnippet>194</a>                <span class="comment">// The height of the block is the number of blocks below it, so the total number of
-<a href=#195 id=195 data-nosnippet>195</a>                // blocks is one more than the height of the highest block.
-<a href=#196 id=196 data-nosnippet>196</a>                </span>height <span class="kw">as </span>usize + <span class="number">1
-<a href=#197 id=197 data-nosnippet>197</a>            </span>},
-<a href=#198 id=198 data-nosnippet>198</a>            <span class="prelude-val">None </span>=&gt; {
-<a href=#199 id=199 data-nosnippet>199</a>                <span class="comment">// If there are no blocks yet, the height is 0.
-<a href=#200 id=200 data-nosnippet>200</a>                </span><span class="number">0
-<a href=#201 id=201 data-nosnippet>201</a>            </span>},
-<a href=#202 id=202 data-nosnippet>202</a>        };
-<a href=#203 id=203 data-nosnippet>203</a>        <span class="kw">let </span>total_leaves = row.get::&lt;i64, <span class="kw">_</span>&gt;(<span class="string">"total_leaves"</span>) <span class="kw">as </span>usize;
-<a href=#204 id=204 data-nosnippet>204</a>        <span class="kw">let </span>null_payloads = row.get::&lt;i64, <span class="kw">_</span>&gt;(<span class="string">"null_payloads"</span>) <span class="kw">as </span>usize;
-<a href=#205 id=205 data-nosnippet>205</a>        <span class="kw">let </span>total_vid = row.get::&lt;i64, <span class="kw">_</span>&gt;(<span class="string">"total_vid"</span>) <span class="kw">as </span>usize;
-<a href=#206 id=206 data-nosnippet>206</a>        <span class="kw">let </span>null_vid = row.get::&lt;i64, <span class="kw">_</span>&gt;(<span class="string">"null_vid"</span>) <span class="kw">as </span>usize;
-<a href=#207 id=207 data-nosnippet>207</a>        <span class="kw">let </span>pruned_height = row
-<a href=#208 id=208 data-nosnippet>208</a>            .get::&lt;<span class="prelude-ty">Option</span>&lt;i64&gt;, <span class="kw">_</span>&gt;(<span class="string">"pruned_height"</span>)
-<a href=#209 id=209 data-nosnippet>209</a>            .map(|h| h <span class="kw">as </span>usize);
-<a href=#210 id=210 data-nosnippet>210</a>
-<a href=#211 id=211 data-nosnippet>211</a>        <span class="kw">let </span>missing_leaves = block_height.saturating_sub(total_leaves);
-<a href=#212 id=212 data-nosnippet>212</a>        <span class="kw">let </span>missing_blocks = missing_leaves + null_payloads;
-<a href=#213 id=213 data-nosnippet>213</a>        <span class="kw">let </span>missing_vid_common = block_height.saturating_sub(total_vid);
-<a href=#214 id=214 data-nosnippet>214</a>        <span class="kw">let </span>missing_vid_shares = missing_vid_common + null_vid;
-<a href=#215 id=215 data-nosnippet>215</a>
-<a href=#216 id=216 data-nosnippet>216</a>        <span class="prelude-val">Ok</span>(SyncStatus {
-<a href=#217 id=217 data-nosnippet>217</a>            missing_leaves,
-<a href=#218 id=218 data-nosnippet>218</a>            missing_blocks,
-<a href=#219 id=219 data-nosnippet>219</a>            missing_vid_common,
-<a href=#220 id=220 data-nosnippet>220</a>            missing_vid_shares,
-<a href=#221 id=221 data-nosnippet>221</a>            pruned_height,
-<a href=#222 id=222 data-nosnippet>222</a>        })
-<a href=#223 id=223 data-nosnippet>223</a>    }
-<a href=#224 id=224 data-nosnippet>224</a>
-<a href=#225 id=225 data-nosnippet>225</a>    <span class="kw">async fn </span>get_header_window(
-<a href=#226 id=226 data-nosnippet>226</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#227 id=227 data-nosnippet>227</a>        start: <span class="kw">impl </span>Into&lt;WindowStart&lt;Types&gt;&gt; + Send + Sync,
-<a href=#228 id=228 data-nosnippet>228</a>        end: u64,
-<a href=#229 id=229 data-nosnippet>229</a>        limit: usize,
-<a href=#230 id=230 data-nosnippet>230</a>    ) -&gt; QueryResult&lt;TimeWindowQueryData&lt;Header&lt;Types&gt;&gt;&gt; {
-<a href=#231 id=231 data-nosnippet>231</a>        <span class="comment">// Find the specific block that starts the requested window.
-<a href=#232 id=232 data-nosnippet>232</a>        </span><span class="kw">let </span>first_block = <span class="kw">match </span>start.into() {
-<a href=#233 id=233 data-nosnippet>233</a>            WindowStart::Time(t) =&gt; {
-<a href=#234 id=234 data-nosnippet>234</a>                <span class="comment">// If the request is not to start from a specific block, but from a timestamp, we
-<a href=#235 id=235 data-nosnippet>235</a>                // use a different method to find the window, as detecting whether we have
-<a href=#236 id=236 data-nosnippet>236</a>                // sufficient data to answer the query is not as simple as just trying `load_header`
-<a href=#237 id=237 data-nosnippet>237</a>                // for a specific block ID.
-<a href=#238 id=238 data-nosnippet>238</a>                </span><span class="kw">return </span><span class="self">self</span>.time_window::&lt;Types&gt;(t, end, limit).<span class="kw">await</span>;
-<a href=#239 id=239 data-nosnippet>239</a>            },
-<a href=#240 id=240 data-nosnippet>240</a>            WindowStart::Height(h) =&gt; h,
-<a href=#241 id=241 data-nosnippet>241</a>            WindowStart::Hash(h) =&gt; <span class="self">self</span>.load_header::&lt;Types&gt;(h).<span class="kw">await</span><span class="question-mark">?</span>.block_number(),
-<a href=#242 id=242 data-nosnippet>242</a>        };
-<a href=#243 id=243 data-nosnippet>243</a>
-<a href=#244 id=244 data-nosnippet>244</a>        <span class="comment">// Find all blocks starting from `first_block` with timestamps less than `end`. Block
-<a href=#245 id=245 data-nosnippet>245</a>        // timestamps are monotonically increasing, so this query is guaranteed to return a
-<a href=#246 id=246 data-nosnippet>246</a>        // contiguous range of blocks ordered by increasing height.
-<a href=#247 id=247 data-nosnippet>247</a>        </span><span class="kw">let </span>sql = <span class="macro">format!</span>(
-<a href=#248 id=248 data-nosnippet>248</a>            <span class="string">"SELECT {HEADER_COLUMNS}
-<a href=#249 id=249 data-nosnippet>249</a>               FROM header AS h
-<a href=#250 id=250 data-nosnippet>250</a>              WHERE h.height &gt;= $1 AND h.timestamp &lt; $2
-<a href=#251 id=251 data-nosnippet>251</a>              ORDER BY h.height
-<a href=#252 id=252 data-nosnippet>252</a>              LIMIT $3"
-<a href=#253 id=253 data-nosnippet>253</a>        </span>);
-<a href=#254 id=254 data-nosnippet>254</a>        <span class="kw">let </span>rows = query(<span class="kw-2">&amp;</span>sql)
-<a href=#255 id=255 data-nosnippet>255</a>            .bind(first_block <span class="kw">as </span>i64)
-<a href=#256 id=256 data-nosnippet>256</a>            .bind(end <span class="kw">as </span>i64)
-<a href=#257 id=257 data-nosnippet>257</a>            .bind(limit <span class="kw">as </span>i64)
-<a href=#258 id=258 data-nosnippet>258</a>            .fetch(<span class="self">self</span>.as_mut());
-<a href=#259 id=259 data-nosnippet>259</a>        <span class="kw">let </span>window = rows
-<a href=#260 id=260 data-nosnippet>260</a>            .map(|row| parse_header::&lt;Types&gt;(row<span class="question-mark">?</span>))
-<a href=#261 id=261 data-nosnippet>261</a>            .try_collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-<a href=#262 id=262 data-nosnippet>262</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#263 id=263 data-nosnippet>263</a>
-<a href=#264 id=264 data-nosnippet>264</a>        <span class="comment">// Find the block just before the window.
-<a href=#265 id=265 data-nosnippet>265</a>        </span><span class="kw">let </span>prev = <span class="kw">if </span>first_block &gt; <span class="number">0 </span>{
-<a href=#266 id=266 data-nosnippet>266</a>            <span class="prelude-val">Some</span>(<span class="self">self</span>.load_header::&lt;Types&gt;(first_block <span class="kw">as </span>usize - <span class="number">1</span>).<span class="kw">await</span><span class="question-mark">?</span>)
-<a href=#267 id=267 data-nosnippet>267</a>        } <span class="kw">else </span>{
-<a href=#268 id=268 data-nosnippet>268</a>            <span class="prelude-val">None
-<a href=#269 id=269 data-nosnippet>269</a>        </span>};
-<a href=#270 id=270 data-nosnippet>270</a>
-<a href=#271 id=271 data-nosnippet>271</a>        <span class="kw">let </span>next = <span class="kw">if </span>window.len() &lt; limit {
-<a href=#272 id=272 data-nosnippet>272</a>            <span class="comment">// If we are not limited, complete the window by finding the block just after the
-<a href=#273 id=273 data-nosnippet>273</a>            // window. We order by timestamp _then_ height, because the timestamp order allows the
-<a href=#274 id=274 data-nosnippet>274</a>            // query planner to use the index on timestamp to also efficiently solve the WHERE
-<a href=#275 id=275 data-nosnippet>275</a>            // clause, but this process may turn up multiple results, due to the 1-second resolution
-<a href=#276 id=276 data-nosnippet>276</a>            // of block timestamps. The final sort by height guarantees us a unique, deterministic
-<a href=#277 id=277 data-nosnippet>277</a>            // result (the first block with a given timestamp). This sort may not be able to use an
-<a href=#278 id=278 data-nosnippet>278</a>            // index, but it shouldn't be too expensive, since there will never be more than a
-<a href=#279 id=279 data-nosnippet>279</a>            // handful of blocks with the same timestamp.
-<a href=#280 id=280 data-nosnippet>280</a>            </span><span class="kw">let </span>sql = <span class="macro">format!</span>(
-<a href=#281 id=281 data-nosnippet>281</a>                <span class="string">"SELECT {HEADER_COLUMNS}
-<a href=#282 id=282 data-nosnippet>282</a>               FROM header AS h
-<a href=#283 id=283 data-nosnippet>283</a>              WHERE h.timestamp &gt;= $1
-<a href=#284 id=284 data-nosnippet>284</a>              ORDER BY h.timestamp, h.height
-<a href=#285 id=285 data-nosnippet>285</a>              LIMIT 1"
-<a href=#286 id=286 data-nosnippet>286</a>            </span>);
-<a href=#287 id=287 data-nosnippet>287</a>            query(<span class="kw-2">&amp;</span>sql)
-<a href=#288 id=288 data-nosnippet>288</a>                .bind(end <span class="kw">as </span>i64)
-<a href=#289 id=289 data-nosnippet>289</a>                .fetch_optional(<span class="self">self</span>.as_mut())
-<a href=#290 id=290 data-nosnippet>290</a>                .<span class="kw">await</span><span class="question-mark">?
-<a href=#291 id=291 data-nosnippet>291</a>                </span>.map(parse_header::&lt;Types&gt;)
-<a href=#292 id=292 data-nosnippet>292</a>                .transpose()<span class="question-mark">?
-<a href=#293 id=293 data-nosnippet>293</a>        </span>} <span class="kw">else </span>{
-<a href=#294 id=294 data-nosnippet>294</a>            <span class="comment">// If we have been limited, return a `null` next block indicating an incomplete window.
-<a href=#295 id=295 data-nosnippet>295</a>            // The client will have to query again with an adjusted starting point to get subsequent
-<a href=#296 id=296 data-nosnippet>296</a>            // results.
-<a href=#297 id=297 data-nosnippet>297</a>            </span><span class="macro">tracing::debug!</span>(limit, <span class="string">"cutting off header window request due to limit"</span>);
-<a href=#298 id=298 data-nosnippet>298</a>            <span class="prelude-val">None
-<a href=#299 id=299 data-nosnippet>299</a>        </span>};
-<a href=#300 id=300 data-nosnippet>300</a>
-<a href=#301 id=301 data-nosnippet>301</a>        <span class="prelude-val">Ok</span>(TimeWindowQueryData { window, prev, next })
-<a href=#302 id=302 data-nosnippet>302</a>    }
-<a href=#303 id=303 data-nosnippet>303</a>}
-<a href=#304 id=304 data-nosnippet>304</a>
-<a href=#305 id=305 data-nosnippet>305</a><span class="kw">impl</span>&lt;Types, Mode: TransactionMode&gt; AggregatesStorage&lt;Types&gt; <span class="kw">for </span>Transaction&lt;Mode&gt;
-<a href=#306 id=306 data-nosnippet>306</a><span class="kw">where
-<a href=#307 id=307 data-nosnippet>307</a>    </span>Types: NodeType,
-<a href=#308 id=308 data-nosnippet>308</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
-<a href=#309 id=309 data-nosnippet>309</a>{
-<a href=#310 id=310 data-nosnippet>310</a>    <span class="kw">async fn </span>aggregates_height(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; anyhow::Result&lt;usize&gt; {
-<a href=#311 id=311 data-nosnippet>311</a>        <span class="kw">let </span>(height,): (i64,) = query_as(<span class="string">"SELECT coalesce(max(height) + 1, 0) FROM aggregate"</span>)
-<a href=#312 id=312 data-nosnippet>312</a>            .fetch_one(<span class="self">self</span>.as_mut())
-<a href=#313 id=313 data-nosnippet>313</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#314 id=314 data-nosnippet>314</a>        <span class="prelude-val">Ok</span>(height <span class="kw">as </span>usize)
-<a href=#315 id=315 data-nosnippet>315</a>    }
-<a href=#316 id=316 data-nosnippet>316</a>
-<a href=#317 id=317 data-nosnippet>317</a>    <span class="kw">async fn </span>load_prev_aggregate(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;Aggregate&lt;Types&gt;&gt;&gt; {
-<a href=#318 id=318 data-nosnippet>318</a>        <span class="comment">// Get the maximum height for which we have stored aggregated results
-<a href=#319 id=319 data-nosnippet>319</a>        // then query all the namespace info for that height
-<a href=#320 id=320 data-nosnippet>320</a>        </span><span class="kw">let </span>res: (<span class="prelude-ty">Option</span>&lt;i64&gt;,) =
-<a href=#321 id=321 data-nosnippet>321</a>            query_as(<span class="string">"SELECT max(height) FROM aggregate WHERE namespace = -1"</span>)
-<a href=#322 id=322 data-nosnippet>322</a>                .fetch_one(<span class="self">self</span>.as_mut())
-<a href=#323 id=323 data-nosnippet>323</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#324 id=324 data-nosnippet>324</a>
-<a href=#325 id=325 data-nosnippet>325</a>        <span class="kw">let </span>(<span class="prelude-val">Some</span>(max_height),) = res <span class="kw">else </span>{
-<a href=#326 id=326 data-nosnippet>326</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
-<a href=#327 id=327 data-nosnippet>327</a>        };
-<a href=#328 id=328 data-nosnippet>328</a>
-<a href=#329 id=329 data-nosnippet>329</a>        <span class="kw">let </span>rows: Vec&lt;(i64, i64, i64)&gt; = query_as(
-<a href=#330 id=330 data-nosnippet>330</a>            <span class="string">r#"
-<a href=#331 id=331 data-nosnippet>331</a>        SELECT namespace, num_transactions, payload_size from aggregate WHERE height = $1
-<a href=#332 id=332 data-nosnippet>332</a>        "#</span>,
-<a href=#333 id=333 data-nosnippet>333</a>        )
-<a href=#334 id=334 data-nosnippet>334</a>        .bind(max_height)
-<a href=#335 id=335 data-nosnippet>335</a>        .fetch_all(<span class="self">self</span>.as_mut())
-<a href=#336 id=336 data-nosnippet>336</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#337 id=337 data-nosnippet>337</a>
-<a href=#338 id=338 data-nosnippet>338</a>        <span class="kw">let </span><span class="kw-2">mut </span>num_transactions = HashMap::new();
-<a href=#339 id=339 data-nosnippet>339</a>        <span class="kw">let </span><span class="kw-2">mut </span>payload_size = HashMap::new();
-<a href=#340 id=340 data-nosnippet>340</a>
-<a href=#341 id=341 data-nosnippet>341</a>        <span class="kw">for </span>(namespace_id, num_tx, payload_sz) <span class="kw">in </span>rows {
-<a href=#342 id=342 data-nosnippet>342</a>            <span class="comment">// Null namespace is represented as - 1 in database
-<a href=#343 id=343 data-nosnippet>343</a>            // as it is part of primary key and primary key can not be NULL
-<a href=#344 id=344 data-nosnippet>344</a>            // This namespace represents the cumulative sum of all the namespaces
-<a href=#345 id=345 data-nosnippet>345</a>            </span><span class="kw">let </span>key = <span class="kw">if </span>namespace_id == -<span class="number">1 </span>{
-<a href=#346 id=346 data-nosnippet>346</a>                <span class="prelude-val">None
-<a href=#347 id=347 data-nosnippet>347</a>            </span>} <span class="kw">else </span>{
-<a href=#348 id=348 data-nosnippet>348</a>                <span class="prelude-val">Some</span>(namespace_id.into())
-<a href=#349 id=349 data-nosnippet>349</a>            };
-<a href=#350 id=350 data-nosnippet>350</a>            num_transactions.insert(key, num_tx <span class="kw">as </span>usize);
-<a href=#351 id=351 data-nosnippet>351</a>            payload_size.insert(key, payload_sz <span class="kw">as </span>usize);
-<a href=#352 id=352 data-nosnippet>352</a>        }
-<a href=#353 id=353 data-nosnippet>353</a>
-<a href=#354 id=354 data-nosnippet>354</a>        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Aggregate {
-<a href=#355 id=355 data-nosnippet>355</a>            height: max_height,
-<a href=#356 id=356 data-nosnippet>356</a>            num_transactions,
-<a href=#357 id=357 data-nosnippet>357</a>            payload_size,
-<a href=#358 id=358 data-nosnippet>358</a>        }))
-<a href=#359 id=359 data-nosnippet>359</a>    }
-<a href=#360 id=360 data-nosnippet>360</a>}
-<a href=#361 id=361 data-nosnippet>361</a>
-<a href=#362 id=362 data-nosnippet>362</a><span class="kw">impl</span>&lt;Types: NodeType&gt; UpdateAggregatesStorage&lt;Types&gt; <span class="kw">for </span>Transaction&lt;Write&gt;
-<a href=#363 id=363 data-nosnippet>363</a><span class="kw">where
-<a href=#364 id=364 data-nosnippet>364</a>    </span>Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
-<a href=#365 id=365 data-nosnippet>365</a>{
-<a href=#366 id=366 data-nosnippet>366</a>    <span class="kw">async fn </span>update_aggregates(
-<a href=#367 id=367 data-nosnippet>367</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#368 id=368 data-nosnippet>368</a>        prev: Aggregate&lt;Types&gt;,
-<a href=#369 id=369 data-nosnippet>369</a>        blocks: <span class="kw-2">&amp;</span>[PayloadMetadata&lt;Types&gt;],
-<a href=#370 id=370 data-nosnippet>370</a>    ) -&gt; anyhow::Result&lt;Aggregate&lt;Types&gt;&gt; {
-<a href=#371 id=371 data-nosnippet>371</a>        <span class="kw">let </span>height = blocks[<span class="number">0</span>].height();
-<a href=#372 id=372 data-nosnippet>372</a>        <span class="kw">let </span>(prev_tx_count, prev_size) = (prev.num_transactions, prev.payload_size);
-<a href=#373 id=373 data-nosnippet>373</a>
-<a href=#374 id=374 data-nosnippet>374</a>        <span class="kw">let </span><span class="kw-2">mut </span>rows = Vec::new();
+<a href=#180 id=180 data-nosnippet>180</a>        </span><span class="kw">let </span>sql = <span class="string">"SELECT l.max_height, l.total_leaves, p.null_payloads, v.total_vid, \
+<a href=#181 id=181 data-nosnippet>181</a>                   vn.null_vid, pruned_height FROM
+<a href=#182 id=182 data-nosnippet>182</a>                (SELECT max(leaf2.height) AS max_height, count(*) AS total_leaves FROM leaf2) AS l,
+<a href=#183 id=183 data-nosnippet>183</a>                (SELECT count(*) AS null_payloads FROM payload WHERE data IS NULL) AS p,
+<a href=#184 id=184 data-nosnippet>184</a>                (SELECT count(*) AS total_vid FROM vid2) AS v,
+<a href=#185 id=185 data-nosnippet>185</a>                (SELECT count(*) AS null_vid FROM vid2 WHERE share IS NULL) AS vn,
+<a href=#186 id=186 data-nosnippet>186</a>                (SELECT(SELECT last_height FROM pruned_height ORDER BY id DESC LIMIT 1) as \
+<a href=#187 id=187 data-nosnippet>187</a>                   pruned_height)
+<a href=#188 id=188 data-nosnippet>188</a>            "</span>;
+<a href=#189 id=189 data-nosnippet>189</a>        <span class="kw">let </span>row = query(sql)
+<a href=#190 id=190 data-nosnippet>190</a>            .fetch_optional(<span class="self">self</span>.as_mut())
+<a href=#191 id=191 data-nosnippet>191</a>            .<span class="kw">await</span><span class="question-mark">?
+<a href=#192 id=192 data-nosnippet>192</a>            </span>.context(NotFoundSnafu)<span class="question-mark">?</span>;
+<a href=#193 id=193 data-nosnippet>193</a>
+<a href=#194 id=194 data-nosnippet>194</a>        <span class="kw">let </span>block_height = <span class="kw">match </span>row.get::&lt;<span class="prelude-ty">Option</span>&lt;i64&gt;, <span class="kw">_</span>&gt;(<span class="string">"max_height"</span>) {
+<a href=#195 id=195 data-nosnippet>195</a>            <span class="prelude-val">Some</span>(height) =&gt; {
+<a href=#196 id=196 data-nosnippet>196</a>                <span class="comment">// The height of the block is the number of blocks below it, so the total number of
+<a href=#197 id=197 data-nosnippet>197</a>                // blocks is one more than the height of the highest block.
+<a href=#198 id=198 data-nosnippet>198</a>                </span>height <span class="kw">as </span>usize + <span class="number">1
+<a href=#199 id=199 data-nosnippet>199</a>            </span>},
+<a href=#200 id=200 data-nosnippet>200</a>            <span class="prelude-val">None </span>=&gt; {
+<a href=#201 id=201 data-nosnippet>201</a>                <span class="comment">// If there are no blocks yet, the height is 0.
+<a href=#202 id=202 data-nosnippet>202</a>                </span><span class="number">0
+<a href=#203 id=203 data-nosnippet>203</a>            </span>},
+<a href=#204 id=204 data-nosnippet>204</a>        };
+<a href=#205 id=205 data-nosnippet>205</a>        <span class="kw">let </span>total_leaves = row.get::&lt;i64, <span class="kw">_</span>&gt;(<span class="string">"total_leaves"</span>) <span class="kw">as </span>usize;
+<a href=#206 id=206 data-nosnippet>206</a>        <span class="kw">let </span>null_payloads = row.get::&lt;i64, <span class="kw">_</span>&gt;(<span class="string">"null_payloads"</span>) <span class="kw">as </span>usize;
+<a href=#207 id=207 data-nosnippet>207</a>        <span class="kw">let </span>total_vid = row.get::&lt;i64, <span class="kw">_</span>&gt;(<span class="string">"total_vid"</span>) <span class="kw">as </span>usize;
+<a href=#208 id=208 data-nosnippet>208</a>        <span class="kw">let </span>null_vid = row.get::&lt;i64, <span class="kw">_</span>&gt;(<span class="string">"null_vid"</span>) <span class="kw">as </span>usize;
+<a href=#209 id=209 data-nosnippet>209</a>        <span class="kw">let </span>pruned_height = row
+<a href=#210 id=210 data-nosnippet>210</a>            .get::&lt;<span class="prelude-ty">Option</span>&lt;i64&gt;, <span class="kw">_</span>&gt;(<span class="string">"pruned_height"</span>)
+<a href=#211 id=211 data-nosnippet>211</a>            .map(|h| h <span class="kw">as </span>usize);
+<a href=#212 id=212 data-nosnippet>212</a>
+<a href=#213 id=213 data-nosnippet>213</a>        <span class="kw">let </span>missing_leaves = block_height.saturating_sub(total_leaves);
+<a href=#214 id=214 data-nosnippet>214</a>        <span class="kw">let </span>missing_blocks = missing_leaves + null_payloads;
+<a href=#215 id=215 data-nosnippet>215</a>        <span class="kw">let </span>missing_vid_common = block_height.saturating_sub(total_vid);
+<a href=#216 id=216 data-nosnippet>216</a>        <span class="kw">let </span>missing_vid_shares = missing_vid_common + null_vid;
+<a href=#217 id=217 data-nosnippet>217</a>
+<a href=#218 id=218 data-nosnippet>218</a>        <span class="prelude-val">Ok</span>(SyncStatus {
+<a href=#219 id=219 data-nosnippet>219</a>            missing_leaves,
+<a href=#220 id=220 data-nosnippet>220</a>            missing_blocks,
+<a href=#221 id=221 data-nosnippet>221</a>            missing_vid_common,
+<a href=#222 id=222 data-nosnippet>222</a>            missing_vid_shares,
+<a href=#223 id=223 data-nosnippet>223</a>            pruned_height,
+<a href=#224 id=224 data-nosnippet>224</a>        })
+<a href=#225 id=225 data-nosnippet>225</a>    }
+<a href=#226 id=226 data-nosnippet>226</a>
+<a href=#227 id=227 data-nosnippet>227</a>    <span class="kw">async fn </span>get_header_window(
+<a href=#228 id=228 data-nosnippet>228</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#229 id=229 data-nosnippet>229</a>        start: <span class="kw">impl </span>Into&lt;WindowStart&lt;Types&gt;&gt; + Send + Sync,
+<a href=#230 id=230 data-nosnippet>230</a>        end: u64,
+<a href=#231 id=231 data-nosnippet>231</a>        limit: usize,
+<a href=#232 id=232 data-nosnippet>232</a>    ) -&gt; QueryResult&lt;TimeWindowQueryData&lt;Header&lt;Types&gt;&gt;&gt; {
+<a href=#233 id=233 data-nosnippet>233</a>        <span class="comment">// Find the specific block that starts the requested window.
+<a href=#234 id=234 data-nosnippet>234</a>        </span><span class="kw">let </span>first_block = <span class="kw">match </span>start.into() {
+<a href=#235 id=235 data-nosnippet>235</a>            WindowStart::Time(t) =&gt; {
+<a href=#236 id=236 data-nosnippet>236</a>                <span class="comment">// If the request is not to start from a specific block, but from a timestamp, we
+<a href=#237 id=237 data-nosnippet>237</a>                // use a different method to find the window, as detecting whether we have
+<a href=#238 id=238 data-nosnippet>238</a>                // sufficient data to answer the query is not as simple as just trying `load_header`
+<a href=#239 id=239 data-nosnippet>239</a>                // for a specific block ID.
+<a href=#240 id=240 data-nosnippet>240</a>                </span><span class="kw">return </span><span class="self">self</span>.time_window::&lt;Types&gt;(t, end, limit).<span class="kw">await</span>;
+<a href=#241 id=241 data-nosnippet>241</a>            },
+<a href=#242 id=242 data-nosnippet>242</a>            WindowStart::Height(h) =&gt; h,
+<a href=#243 id=243 data-nosnippet>243</a>            WindowStart::Hash(h) =&gt; <span class="self">self</span>.load_header::&lt;Types&gt;(h).<span class="kw">await</span><span class="question-mark">?</span>.block_number(),
+<a href=#244 id=244 data-nosnippet>244</a>        };
+<a href=#245 id=245 data-nosnippet>245</a>
+<a href=#246 id=246 data-nosnippet>246</a>        <span class="comment">// Find all blocks starting from `first_block` with timestamps less than `end`. Block
+<a href=#247 id=247 data-nosnippet>247</a>        // timestamps are monotonically increasing, so this query is guaranteed to return a
+<a href=#248 id=248 data-nosnippet>248</a>        // contiguous range of blocks ordered by increasing height.
+<a href=#249 id=249 data-nosnippet>249</a>        </span><span class="kw">let </span>sql = <span class="macro">format!</span>(
+<a href=#250 id=250 data-nosnippet>250</a>            <span class="string">"SELECT {HEADER_COLUMNS}
+<a href=#251 id=251 data-nosnippet>251</a>               FROM header AS h
+<a href=#252 id=252 data-nosnippet>252</a>              WHERE h.height &gt;= $1 AND h.timestamp &lt; $2
+<a href=#253 id=253 data-nosnippet>253</a>              ORDER BY h.height
+<a href=#254 id=254 data-nosnippet>254</a>              LIMIT $3"
+<a href=#255 id=255 data-nosnippet>255</a>        </span>);
+<a href=#256 id=256 data-nosnippet>256</a>        <span class="kw">let </span>rows = query(<span class="kw-2">&amp;</span>sql)
+<a href=#257 id=257 data-nosnippet>257</a>            .bind(first_block <span class="kw">as </span>i64)
+<a href=#258 id=258 data-nosnippet>258</a>            .bind(end <span class="kw">as </span>i64)
+<a href=#259 id=259 data-nosnippet>259</a>            .bind(limit <span class="kw">as </span>i64)
+<a href=#260 id=260 data-nosnippet>260</a>            .fetch(<span class="self">self</span>.as_mut());
+<a href=#261 id=261 data-nosnippet>261</a>        <span class="kw">let </span>window = rows
+<a href=#262 id=262 data-nosnippet>262</a>            .map(|row| parse_header::&lt;Types&gt;(row<span class="question-mark">?</span>))
+<a href=#263 id=263 data-nosnippet>263</a>            .try_collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+<a href=#264 id=264 data-nosnippet>264</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#265 id=265 data-nosnippet>265</a>
+<a href=#266 id=266 data-nosnippet>266</a>        <span class="comment">// Find the block just before the window.
+<a href=#267 id=267 data-nosnippet>267</a>        </span><span class="kw">let </span>prev = <span class="kw">if </span>first_block &gt; <span class="number">0 </span>{
+<a href=#268 id=268 data-nosnippet>268</a>            <span class="prelude-val">Some</span>(<span class="self">self</span>.load_header::&lt;Types&gt;(first_block <span class="kw">as </span>usize - <span class="number">1</span>).<span class="kw">await</span><span class="question-mark">?</span>)
+<a href=#269 id=269 data-nosnippet>269</a>        } <span class="kw">else </span>{
+<a href=#270 id=270 data-nosnippet>270</a>            <span class="prelude-val">None
+<a href=#271 id=271 data-nosnippet>271</a>        </span>};
+<a href=#272 id=272 data-nosnippet>272</a>
+<a href=#273 id=273 data-nosnippet>273</a>        <span class="kw">let </span>next = <span class="kw">if </span>window.len() &lt; limit {
+<a href=#274 id=274 data-nosnippet>274</a>            <span class="comment">// If we are not limited, complete the window by finding the block just after the
+<a href=#275 id=275 data-nosnippet>275</a>            // window. We order by timestamp _then_ height, because the timestamp order allows the
+<a href=#276 id=276 data-nosnippet>276</a>            // query planner to use the index on timestamp to also efficiently solve the WHERE
+<a href=#277 id=277 data-nosnippet>277</a>            // clause, but this process may turn up multiple results, due to the 1-second resolution
+<a href=#278 id=278 data-nosnippet>278</a>            // of block timestamps. The final sort by height guarantees us a unique, deterministic
+<a href=#279 id=279 data-nosnippet>279</a>            // result (the first block with a given timestamp). This sort may not be able to use an
+<a href=#280 id=280 data-nosnippet>280</a>            // index, but it shouldn't be too expensive, since there will never be more than a
+<a href=#281 id=281 data-nosnippet>281</a>            // handful of blocks with the same timestamp.
+<a href=#282 id=282 data-nosnippet>282</a>            </span><span class="kw">let </span>sql = <span class="macro">format!</span>(
+<a href=#283 id=283 data-nosnippet>283</a>                <span class="string">"SELECT {HEADER_COLUMNS}
+<a href=#284 id=284 data-nosnippet>284</a>               FROM header AS h
+<a href=#285 id=285 data-nosnippet>285</a>              WHERE h.timestamp &gt;= $1
+<a href=#286 id=286 data-nosnippet>286</a>              ORDER BY h.timestamp, h.height
+<a href=#287 id=287 data-nosnippet>287</a>              LIMIT 1"
+<a href=#288 id=288 data-nosnippet>288</a>            </span>);
+<a href=#289 id=289 data-nosnippet>289</a>            query(<span class="kw-2">&amp;</span>sql)
+<a href=#290 id=290 data-nosnippet>290</a>                .bind(end <span class="kw">as </span>i64)
+<a href=#291 id=291 data-nosnippet>291</a>                .fetch_optional(<span class="self">self</span>.as_mut())
+<a href=#292 id=292 data-nosnippet>292</a>                .<span class="kw">await</span><span class="question-mark">?
+<a href=#293 id=293 data-nosnippet>293</a>                </span>.map(parse_header::&lt;Types&gt;)
+<a href=#294 id=294 data-nosnippet>294</a>                .transpose()<span class="question-mark">?
+<a href=#295 id=295 data-nosnippet>295</a>        </span>} <span class="kw">else </span>{
+<a href=#296 id=296 data-nosnippet>296</a>            <span class="comment">// If we have been limited, return a `null` next block indicating an incomplete window.
+<a href=#297 id=297 data-nosnippet>297</a>            // The client will have to query again with an adjusted starting point to get subsequent
+<a href=#298 id=298 data-nosnippet>298</a>            // results.
+<a href=#299 id=299 data-nosnippet>299</a>            </span><span class="macro">tracing::debug!</span>(limit, <span class="string">"cutting off header window request due to limit"</span>);
+<a href=#300 id=300 data-nosnippet>300</a>            <span class="prelude-val">None
+<a href=#301 id=301 data-nosnippet>301</a>        </span>};
+<a href=#302 id=302 data-nosnippet>302</a>
+<a href=#303 id=303 data-nosnippet>303</a>        <span class="prelude-val">Ok</span>(TimeWindowQueryData { window, prev, next })
+<a href=#304 id=304 data-nosnippet>304</a>    }
+<a href=#305 id=305 data-nosnippet>305</a>}
+<a href=#306 id=306 data-nosnippet>306</a>
+<a href=#307 id=307 data-nosnippet>307</a><span class="kw">impl</span>&lt;Types, Mode: TransactionMode&gt; AggregatesStorage&lt;Types&gt; <span class="kw">for </span>Transaction&lt;Mode&gt;
+<a href=#308 id=308 data-nosnippet>308</a><span class="kw">where
+<a href=#309 id=309 data-nosnippet>309</a>    </span>Types: NodeType,
+<a href=#310 id=310 data-nosnippet>310</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
+<a href=#311 id=311 data-nosnippet>311</a>{
+<a href=#312 id=312 data-nosnippet>312</a>    <span class="kw">async fn </span>aggregates_height(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; anyhow::Result&lt;usize&gt; {
+<a href=#313 id=313 data-nosnippet>313</a>        <span class="kw">let </span>(height,): (i64,) = query_as(<span class="string">"SELECT coalesce(max(height) + 1, 0) FROM aggregate"</span>)
+<a href=#314 id=314 data-nosnippet>314</a>            .fetch_one(<span class="self">self</span>.as_mut())
+<a href=#315 id=315 data-nosnippet>315</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#316 id=316 data-nosnippet>316</a>        <span class="prelude-val">Ok</span>(height <span class="kw">as </span>usize)
+<a href=#317 id=317 data-nosnippet>317</a>    }
+<a href=#318 id=318 data-nosnippet>318</a>
+<a href=#319 id=319 data-nosnippet>319</a>    <span class="kw">async fn </span>load_prev_aggregate(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;Aggregate&lt;Types&gt;&gt;&gt; {
+<a href=#320 id=320 data-nosnippet>320</a>        <span class="comment">// Get the maximum height for which we have stored aggregated results
+<a href=#321 id=321 data-nosnippet>321</a>        // then query all the namespace info for that height
+<a href=#322 id=322 data-nosnippet>322</a>        </span><span class="kw">let </span>res: (<span class="prelude-ty">Option</span>&lt;i64&gt;,) =
+<a href=#323 id=323 data-nosnippet>323</a>            query_as(<span class="string">"SELECT max(height) FROM aggregate WHERE namespace = -1"</span>)
+<a href=#324 id=324 data-nosnippet>324</a>                .fetch_one(<span class="self">self</span>.as_mut())
+<a href=#325 id=325 data-nosnippet>325</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#326 id=326 data-nosnippet>326</a>
+<a href=#327 id=327 data-nosnippet>327</a>        <span class="kw">let </span>(<span class="prelude-val">Some</span>(max_height),) = res <span class="kw">else </span>{
+<a href=#328 id=328 data-nosnippet>328</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
+<a href=#329 id=329 data-nosnippet>329</a>        };
+<a href=#330 id=330 data-nosnippet>330</a>
+<a href=#331 id=331 data-nosnippet>331</a>        <span class="kw">let </span>rows: Vec&lt;(i64, i64, i64)&gt; = query_as(
+<a href=#332 id=332 data-nosnippet>332</a>            <span class="string">r#"
+<a href=#333 id=333 data-nosnippet>333</a>        SELECT namespace, num_transactions, payload_size from aggregate WHERE height = $1
+<a href=#334 id=334 data-nosnippet>334</a>        "#</span>,
+<a href=#335 id=335 data-nosnippet>335</a>        )
+<a href=#336 id=336 data-nosnippet>336</a>        .bind(max_height)
+<a href=#337 id=337 data-nosnippet>337</a>        .fetch_all(<span class="self">self</span>.as_mut())
+<a href=#338 id=338 data-nosnippet>338</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#339 id=339 data-nosnippet>339</a>
+<a href=#340 id=340 data-nosnippet>340</a>        <span class="kw">let </span><span class="kw-2">mut </span>num_transactions = HashMap::new();
+<a href=#341 id=341 data-nosnippet>341</a>        <span class="kw">let </span><span class="kw-2">mut </span>payload_size = HashMap::new();
+<a href=#342 id=342 data-nosnippet>342</a>
+<a href=#343 id=343 data-nosnippet>343</a>        <span class="kw">for </span>(namespace_id, num_tx, payload_sz) <span class="kw">in </span>rows {
+<a href=#344 id=344 data-nosnippet>344</a>            <span class="comment">// Null namespace is represented as - 1 in database
+<a href=#345 id=345 data-nosnippet>345</a>            // as it is part of primary key and primary key can not be NULL
+<a href=#346 id=346 data-nosnippet>346</a>            // This namespace represents the cumulative sum of all the namespaces
+<a href=#347 id=347 data-nosnippet>347</a>            </span><span class="kw">let </span>key = <span class="kw">if </span>namespace_id == -<span class="number">1 </span>{
+<a href=#348 id=348 data-nosnippet>348</a>                <span class="prelude-val">None
+<a href=#349 id=349 data-nosnippet>349</a>            </span>} <span class="kw">else </span>{
+<a href=#350 id=350 data-nosnippet>350</a>                <span class="prelude-val">Some</span>(namespace_id.into())
+<a href=#351 id=351 data-nosnippet>351</a>            };
+<a href=#352 id=352 data-nosnippet>352</a>            num_transactions.insert(key, num_tx <span class="kw">as </span>usize);
+<a href=#353 id=353 data-nosnippet>353</a>            payload_size.insert(key, payload_sz <span class="kw">as </span>usize);
+<a href=#354 id=354 data-nosnippet>354</a>        }
+<a href=#355 id=355 data-nosnippet>355</a>
+<a href=#356 id=356 data-nosnippet>356</a>        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Aggregate {
+<a href=#357 id=357 data-nosnippet>357</a>            height: max_height,
+<a href=#358 id=358 data-nosnippet>358</a>            num_transactions,
+<a href=#359 id=359 data-nosnippet>359</a>            payload_size,
+<a href=#360 id=360 data-nosnippet>360</a>        }))
+<a href=#361 id=361 data-nosnippet>361</a>    }
+<a href=#362 id=362 data-nosnippet>362</a>}
+<a href=#363 id=363 data-nosnippet>363</a>
+<a href=#364 id=364 data-nosnippet>364</a><span class="kw">impl</span>&lt;Types: NodeType&gt; UpdateAggregatesStorage&lt;Types&gt; <span class="kw">for </span>Transaction&lt;Write&gt;
+<a href=#365 id=365 data-nosnippet>365</a><span class="kw">where
+<a href=#366 id=366 data-nosnippet>366</a>    </span>Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
+<a href=#367 id=367 data-nosnippet>367</a>{
+<a href=#368 id=368 data-nosnippet>368</a>    <span class="kw">async fn </span>update_aggregates(
+<a href=#369 id=369 data-nosnippet>369</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#370 id=370 data-nosnippet>370</a>        prev: Aggregate&lt;Types&gt;,
+<a href=#371 id=371 data-nosnippet>371</a>        blocks: <span class="kw-2">&amp;</span>[PayloadMetadata&lt;Types&gt;],
+<a href=#372 id=372 data-nosnippet>372</a>    ) -&gt; anyhow::Result&lt;Aggregate&lt;Types&gt;&gt; {
+<a href=#373 id=373 data-nosnippet>373</a>        <span class="kw">let </span>height = blocks[<span class="number">0</span>].height();
+<a href=#374 id=374 data-nosnippet>374</a>        <span class="kw">let </span>(prev_tx_count, prev_size) = (prev.num_transactions, prev.payload_size);
 <a href=#375 id=375 data-nosnippet>375</a>
-<a href=#376 id=376 data-nosnippet>376</a>        <span class="comment">// Cumulatively sum up new statistics for each block in this chunk.
-<a href=#377 id=377 data-nosnippet>377</a>        </span><span class="kw">let </span>aggregates = blocks
-<a href=#378 id=378 data-nosnippet>378</a>            .iter()
-<a href=#379 id=379 data-nosnippet>379</a>            .scan(
-<a href=#380 id=380 data-nosnippet>380</a>                (height, prev_tx_count, prev_size),
-<a href=#381 id=381 data-nosnippet>381</a>                |(height, tx_count, size), block| {
-<a href=#382 id=382 data-nosnippet>382</a>                    <span class="kw">if </span><span class="kw-2">*</span>height != block.height {
-<a href=#383 id=383 data-nosnippet>383</a>                        <span class="kw">return </span><span class="prelude-val">Some</span>(<span class="prelude-val">Err</span>(<span class="macro">anyhow!</span>(
-<a href=#384 id=384 data-nosnippet>384</a>                            <span class="string">"blocks in update_aggregates are not sequential; expected {}, got {}"</span>,
-<a href=#385 id=385 data-nosnippet>385</a>                            <span class="kw-2">*</span>height,
-<a href=#386 id=386 data-nosnippet>386</a>                            block.height()
-<a href=#387 id=387 data-nosnippet>387</a>                        )));
-<a href=#388 id=388 data-nosnippet>388</a>                    }
-<a href=#389 id=389 data-nosnippet>389</a>                    <span class="kw-2">*</span>height += <span class="number">1</span>;
-<a href=#390 id=390 data-nosnippet>390</a>
-<a href=#391 id=391 data-nosnippet>391</a>                    <span class="comment">//  Update total global stats
-<a href=#392 id=392 data-nosnippet>392</a>                    // `None` represents stats across all namespaces.
-<a href=#393 id=393 data-nosnippet>393</a>                    // It is represented as -1 in database
-<a href=#394 id=394 data-nosnippet>394</a>
-<a href=#395 id=395 data-nosnippet>395</a>                    </span><span class="kw-2">*</span>tx_count.entry(<span class="prelude-val">None</span>).or_insert(<span class="number">0</span>) += block.num_transactions <span class="kw">as </span>usize;
-<a href=#396 id=396 data-nosnippet>396</a>                    <span class="kw-2">*</span>size.entry(<span class="prelude-val">None</span>).or_insert(<span class="number">0</span>) += block.size <span class="kw">as </span>usize;
-<a href=#397 id=397 data-nosnippet>397</a>
-<a href=#398 id=398 data-nosnippet>398</a>                    <span class="comment">// Add row for global cumulative stats (namespace = -1)
+<a href=#376 id=376 data-nosnippet>376</a>        <span class="kw">let </span><span class="kw-2">mut </span>rows = Vec::new();
+<a href=#377 id=377 data-nosnippet>377</a>
+<a href=#378 id=378 data-nosnippet>378</a>        <span class="comment">// Cumulatively sum up new statistics for each block in this chunk.
+<a href=#379 id=379 data-nosnippet>379</a>        </span><span class="kw">let </span>aggregates = blocks
+<a href=#380 id=380 data-nosnippet>380</a>            .iter()
+<a href=#381 id=381 data-nosnippet>381</a>            .scan(
+<a href=#382 id=382 data-nosnippet>382</a>                (height, prev_tx_count, prev_size),
+<a href=#383 id=383 data-nosnippet>383</a>                |(height, tx_count, size), block| {
+<a href=#384 id=384 data-nosnippet>384</a>                    <span class="kw">if </span><span class="kw-2">*</span>height != block.height {
+<a href=#385 id=385 data-nosnippet>385</a>                        <span class="kw">return </span><span class="prelude-val">Some</span>(<span class="prelude-val">Err</span>(<span class="macro">anyhow!</span>(
+<a href=#386 id=386 data-nosnippet>386</a>                            <span class="string">"blocks in update_aggregates are not sequential; expected {}, got {}"</span>,
+<a href=#387 id=387 data-nosnippet>387</a>                            <span class="kw-2">*</span>height,
+<a href=#388 id=388 data-nosnippet>388</a>                            block.height()
+<a href=#389 id=389 data-nosnippet>389</a>                        )));
+<a href=#390 id=390 data-nosnippet>390</a>                    }
+<a href=#391 id=391 data-nosnippet>391</a>                    <span class="kw-2">*</span>height += <span class="number">1</span>;
+<a href=#392 id=392 data-nosnippet>392</a>
+<a href=#393 id=393 data-nosnippet>393</a>                    <span class="comment">//  Update total global stats
+<a href=#394 id=394 data-nosnippet>394</a>                    // `None` represents stats across all namespaces.
+<a href=#395 id=395 data-nosnippet>395</a>                    // It is represented as -1 in database
+<a href=#396 id=396 data-nosnippet>396</a>
+<a href=#397 id=397 data-nosnippet>397</a>                    </span><span class="kw-2">*</span>tx_count.entry(<span class="prelude-val">None</span>).or_insert(<span class="number">0</span>) += block.num_transactions <span class="kw">as </span>usize;
+<a href=#398 id=398 data-nosnippet>398</a>                    <span class="kw-2">*</span>size.entry(<span class="prelude-val">None</span>).or_insert(<span class="number">0</span>) += block.size <span class="kw">as </span>usize;
 <a href=#399 id=399 data-nosnippet>399</a>
-<a href=#400 id=400 data-nosnippet>400</a>                    </span>rows.push((
-<a href=#401 id=401 data-nosnippet>401</a>                        block.height <span class="kw">as </span>i64,
-<a href=#402 id=402 data-nosnippet>402</a>                        -<span class="number">1</span>,
-<a href=#403 id=403 data-nosnippet>403</a>                        tx_count[<span class="kw-2">&amp;</span><span class="prelude-val">None</span>] <span class="kw">as </span>i64,
-<a href=#404 id=404 data-nosnippet>404</a>                        size[<span class="kw-2">&amp;</span><span class="prelude-val">None</span>] <span class="kw">as </span>i64,
-<a href=#405 id=405 data-nosnippet>405</a>                    ));
-<a href=#406 id=406 data-nosnippet>406</a>
-<a href=#407 id=407 data-nosnippet>407</a>                    <span class="comment">// Update per-namespace cumulative stats
-<a href=#408 id=408 data-nosnippet>408</a>                    </span><span class="kw">for </span>(<span class="kw-2">&amp;</span>ns_id, info) <span class="kw">in </span><span class="kw-2">&amp;</span>block.namespaces {
-<a href=#409 id=409 data-nosnippet>409</a>                        <span class="kw">let </span>key = <span class="prelude-val">Some</span>(ns_id);
-<a href=#410 id=410 data-nosnippet>410</a>
-<a href=#411 id=411 data-nosnippet>411</a>                        <span class="kw-2">*</span>tx_count.entry(key).or_insert(<span class="number">0</span>) += info.num_transactions <span class="kw">as </span>usize;
-<a href=#412 id=412 data-nosnippet>412</a>                        <span class="kw-2">*</span>size.entry(key).or_insert(<span class="number">0</span>) += info.size <span class="kw">as </span>usize;
-<a href=#413 id=413 data-nosnippet>413</a>                    }
-<a href=#414 id=414 data-nosnippet>414</a>
-<a href=#415 id=415 data-nosnippet>415</a>                    <span class="comment">//  Insert cumulative stats for all known namespaces
-<a href=#416 id=416 data-nosnippet>416</a>                    // Even if a namespace wasn't present in this block,
-<a href=#417 id=417 data-nosnippet>417</a>                    // we still insert its latest cumulative stats at this height.
-<a href=#418 id=418 data-nosnippet>418</a>                    </span><span class="kw">for </span>ns_id <span class="kw">in </span>tx_count.keys().filter_map(|k| k.as_ref()) {
-<a href=#419 id=419 data-nosnippet>419</a>                        <span class="kw">let </span>key = <span class="prelude-val">Some</span>(<span class="kw-2">*</span>ns_id);
-<a href=#420 id=420 data-nosnippet>420</a>                        rows.push((
-<a href=#421 id=421 data-nosnippet>421</a>                            block.height <span class="kw">as </span>i64,
-<a href=#422 id=422 data-nosnippet>422</a>                            (<span class="kw-2">*</span>ns_id).into(),
-<a href=#423 id=423 data-nosnippet>423</a>                            tx_count[<span class="kw-2">&amp;</span>key] <span class="kw">as </span>i64,
-<a href=#424 id=424 data-nosnippet>424</a>                            size[<span class="kw-2">&amp;</span>key] <span class="kw">as </span>i64,
-<a href=#425 id=425 data-nosnippet>425</a>                        ));
-<a href=#426 id=426 data-nosnippet>426</a>                    }
-<a href=#427 id=427 data-nosnippet>427</a>
-<a href=#428 id=428 data-nosnippet>428</a>                    <span class="prelude-val">Some</span>(<span class="prelude-val">Ok</span>((block.height <span class="kw">as </span>i64, tx_count.clone(), size.clone())))
-<a href=#429 id=429 data-nosnippet>429</a>                },
-<a href=#430 id=430 data-nosnippet>430</a>            )
-<a href=#431 id=431 data-nosnippet>431</a>            .collect::&lt;anyhow::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
-<a href=#432 id=432 data-nosnippet>432</a>        <span class="kw">let </span>last_aggregate = aggregates.last().cloned();
-<a href=#433 id=433 data-nosnippet>433</a>
-<a href=#434 id=434 data-nosnippet>434</a>        <span class="kw">let </span>(height, num_transactions, payload_size) =
-<a href=#435 id=435 data-nosnippet>435</a>            last_aggregate.ok_or_else(|| <span class="macro">anyhow!</span>(<span class="string">"no row"</span>))<span class="question-mark">?</span>;
-<a href=#436 id=436 data-nosnippet>436</a>
-<a href=#437 id=437 data-nosnippet>437</a>        <span class="self">self</span>.upsert(
-<a href=#438 id=438 data-nosnippet>438</a>            <span class="string">"aggregate"</span>,
-<a href=#439 id=439 data-nosnippet>439</a>            [<span class="string">"height"</span>, <span class="string">"namespace"</span>, <span class="string">"num_transactions"</span>, <span class="string">"payload_size"</span>],
-<a href=#440 id=440 data-nosnippet>440</a>            [<span class="string">"height"</span>, <span class="string">"namespace"</span>],
-<a href=#441 id=441 data-nosnippet>441</a>            rows,
-<a href=#442 id=442 data-nosnippet>442</a>        )
-<a href=#443 id=443 data-nosnippet>443</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#444 id=444 data-nosnippet>444</a>        <span class="prelude-val">Ok</span>(Aggregate {
-<a href=#445 id=445 data-nosnippet>445</a>            height,
-<a href=#446 id=446 data-nosnippet>446</a>            num_transactions,
-<a href=#447 id=447 data-nosnippet>447</a>            payload_size,
-<a href=#448 id=448 data-nosnippet>448</a>        })
-<a href=#449 id=449 data-nosnippet>449</a>    }
-<a href=#450 id=450 data-nosnippet>450</a>}
-<a href=#451 id=451 data-nosnippet>451</a>
-<a href=#452 id=452 data-nosnippet>452</a><span class="kw">impl</span>&lt;Mode: TransactionMode&gt; Transaction&lt;Mode&gt; {
-<a href=#453 id=453 data-nosnippet>453</a>    <span class="kw">async fn </span>time_window&lt;Types: NodeType&gt;(
-<a href=#454 id=454 data-nosnippet>454</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#455 id=455 data-nosnippet>455</a>        start: u64,
-<a href=#456 id=456 data-nosnippet>456</a>        end: u64,
-<a href=#457 id=457 data-nosnippet>457</a>        limit: usize,
-<a href=#458 id=458 data-nosnippet>458</a>    ) -&gt; QueryResult&lt;TimeWindowQueryData&lt;Header&lt;Types&gt;&gt;&gt; {
-<a href=#459 id=459 data-nosnippet>459</a>        <span class="comment">// Find all blocks whose timestamps fall within the window [start, end). Block timestamps
-<a href=#460 id=460 data-nosnippet>460</a>        // are monotonically increasing, so this query is guaranteed to return a contiguous range of
-<a href=#461 id=461 data-nosnippet>461</a>        // blocks ordered by increasing height.
-<a href=#462 id=462 data-nosnippet>462</a>        //
-<a href=#463 id=463 data-nosnippet>463</a>        // We order by timestamp _then_ height, because the timestamp order allows the query planner
-<a href=#464 id=464 data-nosnippet>464</a>        // to use the index on timestamp to also efficiently solve the WHERE clause, but this
-<a href=#465 id=465 data-nosnippet>465</a>        // process may turn up multiple results, due to the 1-second resolution of block timestamps.
-<a href=#466 id=466 data-nosnippet>466</a>        // The final sort by height guarantees us a unique, deterministic result (the first block
-<a href=#467 id=467 data-nosnippet>467</a>        // with a given timestamp). This sort may not be able to use an index, but it shouldn't be
-<a href=#468 id=468 data-nosnippet>468</a>        // too expensive, since there will never be more than a handful of blocks with the same
-<a href=#469 id=469 data-nosnippet>469</a>        // timestamp.
-<a href=#470 id=470 data-nosnippet>470</a>        </span><span class="kw">let </span>sql = <span class="macro">format!</span>(
-<a href=#471 id=471 data-nosnippet>471</a>            <span class="string">"SELECT {HEADER_COLUMNS}
-<a href=#472 id=472 data-nosnippet>472</a>               FROM header AS h
-<a href=#473 id=473 data-nosnippet>473</a>              WHERE h.timestamp &gt;= $1 AND h.timestamp &lt; $2
-<a href=#474 id=474 data-nosnippet>474</a>              ORDER BY h.timestamp, h.height
-<a href=#475 id=475 data-nosnippet>475</a>              LIMIT $3"
-<a href=#476 id=476 data-nosnippet>476</a>        </span>);
-<a href=#477 id=477 data-nosnippet>477</a>        <span class="kw">let </span>rows = query(<span class="kw-2">&amp;</span>sql)
-<a href=#478 id=478 data-nosnippet>478</a>            .bind(start <span class="kw">as </span>i64)
-<a href=#479 id=479 data-nosnippet>479</a>            .bind(end <span class="kw">as </span>i64)
-<a href=#480 id=480 data-nosnippet>480</a>            .bind(limit <span class="kw">as </span>i64)
-<a href=#481 id=481 data-nosnippet>481</a>            .fetch(<span class="self">self</span>.as_mut());
-<a href=#482 id=482 data-nosnippet>482</a>        <span class="kw">let </span>window: Vec&lt;<span class="kw">_</span>&gt; = rows
-<a href=#483 id=483 data-nosnippet>483</a>            .map(|row| parse_header::&lt;Types&gt;(row<span class="question-mark">?</span>))
-<a href=#484 id=484 data-nosnippet>484</a>            .try_collect()
-<a href=#485 id=485 data-nosnippet>485</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#486 id=486 data-nosnippet>486</a>
-<a href=#487 id=487 data-nosnippet>487</a>        <span class="kw">let </span>next = <span class="kw">if </span>window.len() &lt; limit {
-<a href=#488 id=488 data-nosnippet>488</a>            <span class="comment">// If we are not limited, complete the window by finding the block just after.
-<a href=#489 id=489 data-nosnippet>489</a>            </span><span class="kw">let </span>sql = <span class="macro">format!</span>(
-<a href=#490 id=490 data-nosnippet>490</a>                <span class="string">"SELECT {HEADER_COLUMNS}
-<a href=#491 id=491 data-nosnippet>491</a>               FROM header AS h
-<a href=#492 id=492 data-nosnippet>492</a>              WHERE h.timestamp &gt;= $1
-<a href=#493 id=493 data-nosnippet>493</a>              ORDER BY h.timestamp, h.height
-<a href=#494 id=494 data-nosnippet>494</a>              LIMIT 1"
-<a href=#495 id=495 data-nosnippet>495</a>            </span>);
-<a href=#496 id=496 data-nosnippet>496</a>            query(<span class="kw-2">&amp;</span>sql)
-<a href=#497 id=497 data-nosnippet>497</a>                .bind(end <span class="kw">as </span>i64)
-<a href=#498 id=498 data-nosnippet>498</a>                .fetch_optional(<span class="self">self</span>.as_mut())
-<a href=#499 id=499 data-nosnippet>499</a>                .<span class="kw">await</span><span class="question-mark">?
-<a href=#500 id=500 data-nosnippet>500</a>                </span>.map(parse_header::&lt;Types&gt;)
-<a href=#501 id=501 data-nosnippet>501</a>                .transpose()<span class="question-mark">?
-<a href=#502 id=502 data-nosnippet>502</a>        </span>} <span class="kw">else </span>{
-<a href=#503 id=503 data-nosnippet>503</a>            <span class="comment">// If we have been limited, return a `null` next block indicating an incomplete window.
-<a href=#504 id=504 data-nosnippet>504</a>            // The client will have to query again with an adjusted starting point to get subsequent
-<a href=#505 id=505 data-nosnippet>505</a>            // results.
-<a href=#506 id=506 data-nosnippet>506</a>            </span><span class="macro">tracing::debug!</span>(limit, <span class="string">"cutting off header window request due to limit"</span>);
-<a href=#507 id=507 data-nosnippet>507</a>            <span class="prelude-val">None
-<a href=#508 id=508 data-nosnippet>508</a>        </span>};
-<a href=#509 id=509 data-nosnippet>509</a>
-<a href=#510 id=510 data-nosnippet>510</a>        <span class="comment">// If the `next` block exists, _or_ if any block in the window exists, we know we have
-<a href=#511 id=511 data-nosnippet>511</a>        // enough information to definitively say at least where the window starts (we may or may
-<a href=#512 id=512 data-nosnippet>512</a>        // not have where it ends, depending on how many blocks have thus far been produced).
-<a href=#513 id=513 data-nosnippet>513</a>        // However, if we have neither a block in the window nor a block after it, we cannot say
-<a href=#514 id=514 data-nosnippet>514</a>        // whether the next block produced will have a timestamp before or after the window start.
-<a href=#515 id=515 data-nosnippet>515</a>        // In this case, we don't know what the `prev` field of the response should be, so we return
-<a href=#516 id=516 data-nosnippet>516</a>        // an error: the caller must try again after more blocks have been produced.
-<a href=#517 id=517 data-nosnippet>517</a>        </span><span class="kw">if </span>window.is_empty() &amp;&amp; next.is_none() {
-<a href=#518 id=518 data-nosnippet>518</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(QueryError::NotFound);
-<a href=#519 id=519 data-nosnippet>519</a>        }
-<a href=#520 id=520 data-nosnippet>520</a>
-<a href=#521 id=521 data-nosnippet>521</a>        <span class="comment">// Find the block just before the window.
-<a href=#522 id=522 data-nosnippet>522</a>        </span><span class="kw">let </span>sql = <span class="macro">format!</span>(
-<a href=#523 id=523 data-nosnippet>523</a>            <span class="string">"SELECT {HEADER_COLUMNS}
-<a href=#524 id=524 data-nosnippet>524</a>               FROM header AS h
-<a href=#525 id=525 data-nosnippet>525</a>              WHERE h.timestamp &lt; $1
-<a href=#526 id=526 data-nosnippet>526</a>              ORDER BY h.timestamp DESC, h.height DESC
-<a href=#527 id=527 data-nosnippet>527</a>              LIMIT 1"
-<a href=#528 id=528 data-nosnippet>528</a>        </span>);
-<a href=#529 id=529 data-nosnippet>529</a>        <span class="kw">let </span>prev = query(<span class="kw-2">&amp;</span>sql)
-<a href=#530 id=530 data-nosnippet>530</a>            .bind(start <span class="kw">as </span>i64)
-<a href=#531 id=531 data-nosnippet>531</a>            .fetch_optional(<span class="self">self</span>.as_mut())
-<a href=#532 id=532 data-nosnippet>532</a>            .<span class="kw">await</span><span class="question-mark">?
-<a href=#533 id=533 data-nosnippet>533</a>            </span>.map(parse_header::&lt;Types&gt;)
-<a href=#534 id=534 data-nosnippet>534</a>            .transpose()<span class="question-mark">?</span>;
-<a href=#535 id=535 data-nosnippet>535</a>
-<a href=#536 id=536 data-nosnippet>536</a>        <span class="prelude-val">Ok</span>(TimeWindowQueryData { window, prev, next })
-<a href=#537 id=537 data-nosnippet>537</a>    }
-<a href=#538 id=538 data-nosnippet>538</a>}
-<a href=#539 id=539 data-nosnippet>539</a>
-<a href=#540 id=540 data-nosnippet>540</a><span class="doccomment">/// Get inclusive start and end bounds for a range to pull aggregate statistics.
-<a href=#541 id=541 data-nosnippet>541</a>///
-<a href=#542 id=542 data-nosnippet>542</a>/// Returns [`None`] if there are no blocks in the given range, in which case the result should be
-<a href=#543 id=543 data-nosnippet>543</a>/// the default value of the aggregate statistic.
-<a href=#544 id=544 data-nosnippet>544</a></span><span class="kw">async fn </span>aggregate_range_bounds&lt;Types&gt;(
-<a href=#545 id=545 data-nosnippet>545</a>    tx: <span class="kw-2">&amp;mut </span>Transaction&lt;<span class="kw">impl </span>TransactionMode&gt;,
-<a href=#546 id=546 data-nosnippet>546</a>    range: <span class="kw">impl </span>RangeBounds&lt;usize&gt;,
-<a href=#547 id=547 data-nosnippet>547</a>) -&gt; QueryResult&lt;<span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;&gt;
-<a href=#548 id=548 data-nosnippet>548</a><span class="kw">where
-<a href=#549 id=549 data-nosnippet>549</a>    </span>Types: NodeType,
-<a href=#550 id=550 data-nosnippet>550</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
-<a href=#551 id=551 data-nosnippet>551</a>{
-<a href=#552 id=552 data-nosnippet>552</a>    <span class="kw">let </span>from = <span class="kw">match </span>range.start_bound() {
-<a href=#553 id=553 data-nosnippet>553</a>        Bound::Included(from) =&gt; <span class="kw-2">*</span>from,
-<a href=#554 id=554 data-nosnippet>554</a>        Bound::Excluded(from) =&gt; <span class="kw-2">*</span>from + <span class="number">1</span>,
-<a href=#555 id=555 data-nosnippet>555</a>        Bound::Unbounded =&gt; <span class="number">0</span>,
-<a href=#556 id=556 data-nosnippet>556</a>    };
-<a href=#557 id=557 data-nosnippet>557</a>    <span class="kw">let </span>to = <span class="kw">match </span>range.end_bound() {
-<a href=#558 id=558 data-nosnippet>558</a>        Bound::Included(to) =&gt; <span class="kw-2">*</span>to,
-<a href=#559 id=559 data-nosnippet>559</a>        Bound::Excluded(<span class="number">0</span>) =&gt; <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>),
-<a href=#560 id=560 data-nosnippet>560</a>        Bound::Excluded(to) =&gt; <span class="kw-2">*</span>to - <span class="number">1</span>,
-<a href=#561 id=561 data-nosnippet>561</a>        Bound::Unbounded =&gt; {
-<a href=#562 id=562 data-nosnippet>562</a>            <span class="kw">let </span>height = AggregatesStorage::&lt;Types&gt;::aggregates_height(tx)
-<a href=#563 id=563 data-nosnippet>563</a>                .<span class="kw">await
-<a href=#564 id=564 data-nosnippet>564</a>                </span>.map_err(|err| QueryError::Error {
-<a href=#565 id=565 data-nosnippet>565</a>                    message: <span class="macro">format!</span>(<span class="string">"{err:#}"</span>),
-<a href=#566 id=566 data-nosnippet>566</a>                })<span class="question-mark">?</span>;
-<a href=#567 id=567 data-nosnippet>567</a>            <span class="kw">if </span>height == <span class="number">0 </span>{
-<a href=#568 id=568 data-nosnippet>568</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
-<a href=#569 id=569 data-nosnippet>569</a>            }
-<a href=#570 id=570 data-nosnippet>570</a>            <span class="kw">if </span>height &lt; from {
-<a href=#571 id=571 data-nosnippet>571</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
-<a href=#572 id=572 data-nosnippet>572</a>            }
-<a href=#573 id=573 data-nosnippet>573</a>            height - <span class="number">1
-<a href=#574 id=574 data-nosnippet>574</a>        </span>},
-<a href=#575 id=575 data-nosnippet>575</a>    };
-<a href=#576 id=576 data-nosnippet>576</a>    <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>((from, to)))
-<a href=#577 id=577 data-nosnippet>577</a>}</code></pre></div></section></main></body></html>
+<a href=#400 id=400 data-nosnippet>400</a>                    <span class="comment">// Add row for global cumulative stats (namespace = -1)
+<a href=#401 id=401 data-nosnippet>401</a>
+<a href=#402 id=402 data-nosnippet>402</a>                    </span>rows.push((
+<a href=#403 id=403 data-nosnippet>403</a>                        block.height <span class="kw">as </span>i64,
+<a href=#404 id=404 data-nosnippet>404</a>                        -<span class="number">1</span>,
+<a href=#405 id=405 data-nosnippet>405</a>                        tx_count[<span class="kw-2">&amp;</span><span class="prelude-val">None</span>] <span class="kw">as </span>i64,
+<a href=#406 id=406 data-nosnippet>406</a>                        size[<span class="kw-2">&amp;</span><span class="prelude-val">None</span>] <span class="kw">as </span>i64,
+<a href=#407 id=407 data-nosnippet>407</a>                    ));
+<a href=#408 id=408 data-nosnippet>408</a>
+<a href=#409 id=409 data-nosnippet>409</a>                    <span class="comment">// Update per-namespace cumulative stats
+<a href=#410 id=410 data-nosnippet>410</a>                    </span><span class="kw">for </span>(<span class="kw-2">&amp;</span>ns_id, info) <span class="kw">in </span><span class="kw-2">&amp;</span>block.namespaces {
+<a href=#411 id=411 data-nosnippet>411</a>                        <span class="kw">let </span>key = <span class="prelude-val">Some</span>(ns_id);
+<a href=#412 id=412 data-nosnippet>412</a>
+<a href=#413 id=413 data-nosnippet>413</a>                        <span class="kw-2">*</span>tx_count.entry(key).or_insert(<span class="number">0</span>) += info.num_transactions <span class="kw">as </span>usize;
+<a href=#414 id=414 data-nosnippet>414</a>                        <span class="kw-2">*</span>size.entry(key).or_insert(<span class="number">0</span>) += info.size <span class="kw">as </span>usize;
+<a href=#415 id=415 data-nosnippet>415</a>                    }
+<a href=#416 id=416 data-nosnippet>416</a>
+<a href=#417 id=417 data-nosnippet>417</a>                    <span class="comment">//  Insert cumulative stats for all known namespaces
+<a href=#418 id=418 data-nosnippet>418</a>                    // Even if a namespace wasn't present in this block,
+<a href=#419 id=419 data-nosnippet>419</a>                    // we still insert its latest cumulative stats at this height.
+<a href=#420 id=420 data-nosnippet>420</a>                    </span><span class="kw">for </span>ns_id <span class="kw">in </span>tx_count.keys().filter_map(|k| k.as_ref()) {
+<a href=#421 id=421 data-nosnippet>421</a>                        <span class="kw">let </span>key = <span class="prelude-val">Some</span>(<span class="kw-2">*</span>ns_id);
+<a href=#422 id=422 data-nosnippet>422</a>                        rows.push((
+<a href=#423 id=423 data-nosnippet>423</a>                            block.height <span class="kw">as </span>i64,
+<a href=#424 id=424 data-nosnippet>424</a>                            (<span class="kw-2">*</span>ns_id).into(),
+<a href=#425 id=425 data-nosnippet>425</a>                            tx_count[<span class="kw-2">&amp;</span>key] <span class="kw">as </span>i64,
+<a href=#426 id=426 data-nosnippet>426</a>                            size[<span class="kw-2">&amp;</span>key] <span class="kw">as </span>i64,
+<a href=#427 id=427 data-nosnippet>427</a>                        ));
+<a href=#428 id=428 data-nosnippet>428</a>                    }
+<a href=#429 id=429 data-nosnippet>429</a>
+<a href=#430 id=430 data-nosnippet>430</a>                    <span class="prelude-val">Some</span>(<span class="prelude-val">Ok</span>((block.height <span class="kw">as </span>i64, tx_count.clone(), size.clone())))
+<a href=#431 id=431 data-nosnippet>431</a>                },
+<a href=#432 id=432 data-nosnippet>432</a>            )
+<a href=#433 id=433 data-nosnippet>433</a>            .collect::&lt;anyhow::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
+<a href=#434 id=434 data-nosnippet>434</a>        <span class="kw">let </span>last_aggregate = aggregates.last().cloned();
+<a href=#435 id=435 data-nosnippet>435</a>
+<a href=#436 id=436 data-nosnippet>436</a>        <span class="kw">let </span>(height, num_transactions, payload_size) =
+<a href=#437 id=437 data-nosnippet>437</a>            last_aggregate.ok_or_else(|| <span class="macro">anyhow!</span>(<span class="string">"no row"</span>))<span class="question-mark">?</span>;
+<a href=#438 id=438 data-nosnippet>438</a>
+<a href=#439 id=439 data-nosnippet>439</a>        <span class="self">self</span>.upsert(
+<a href=#440 id=440 data-nosnippet>440</a>            <span class="string">"aggregate"</span>,
+<a href=#441 id=441 data-nosnippet>441</a>            [<span class="string">"height"</span>, <span class="string">"namespace"</span>, <span class="string">"num_transactions"</span>, <span class="string">"payload_size"</span>],
+<a href=#442 id=442 data-nosnippet>442</a>            [<span class="string">"height"</span>, <span class="string">"namespace"</span>],
+<a href=#443 id=443 data-nosnippet>443</a>            rows,
+<a href=#444 id=444 data-nosnippet>444</a>        )
+<a href=#445 id=445 data-nosnippet>445</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#446 id=446 data-nosnippet>446</a>        <span class="prelude-val">Ok</span>(Aggregate {
+<a href=#447 id=447 data-nosnippet>447</a>            height,
+<a href=#448 id=448 data-nosnippet>448</a>            num_transactions,
+<a href=#449 id=449 data-nosnippet>449</a>            payload_size,
+<a href=#450 id=450 data-nosnippet>450</a>        })
+<a href=#451 id=451 data-nosnippet>451</a>    }
+<a href=#452 id=452 data-nosnippet>452</a>}
+<a href=#453 id=453 data-nosnippet>453</a>
+<a href=#454 id=454 data-nosnippet>454</a><span class="kw">impl</span>&lt;Mode: TransactionMode&gt; Transaction&lt;Mode&gt; {
+<a href=#455 id=455 data-nosnippet>455</a>    <span class="kw">async fn </span>time_window&lt;Types: NodeType&gt;(
+<a href=#456 id=456 data-nosnippet>456</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#457 id=457 data-nosnippet>457</a>        start: u64,
+<a href=#458 id=458 data-nosnippet>458</a>        end: u64,
+<a href=#459 id=459 data-nosnippet>459</a>        limit: usize,
+<a href=#460 id=460 data-nosnippet>460</a>    ) -&gt; QueryResult&lt;TimeWindowQueryData&lt;Header&lt;Types&gt;&gt;&gt; {
+<a href=#461 id=461 data-nosnippet>461</a>        <span class="comment">// Find all blocks whose timestamps fall within the window [start, end). Block timestamps
+<a href=#462 id=462 data-nosnippet>462</a>        // are monotonically increasing, so this query is guaranteed to return a contiguous range of
+<a href=#463 id=463 data-nosnippet>463</a>        // blocks ordered by increasing height.
+<a href=#464 id=464 data-nosnippet>464</a>        //
+<a href=#465 id=465 data-nosnippet>465</a>        // We order by timestamp _then_ height, because the timestamp order allows the query planner
+<a href=#466 id=466 data-nosnippet>466</a>        // to use the index on timestamp to also efficiently solve the WHERE clause, but this
+<a href=#467 id=467 data-nosnippet>467</a>        // process may turn up multiple results, due to the 1-second resolution of block timestamps.
+<a href=#468 id=468 data-nosnippet>468</a>        // The final sort by height guarantees us a unique, deterministic result (the first block
+<a href=#469 id=469 data-nosnippet>469</a>        // with a given timestamp). This sort may not be able to use an index, but it shouldn't be
+<a href=#470 id=470 data-nosnippet>470</a>        // too expensive, since there will never be more than a handful of blocks with the same
+<a href=#471 id=471 data-nosnippet>471</a>        // timestamp.
+<a href=#472 id=472 data-nosnippet>472</a>        </span><span class="kw">let </span>sql = <span class="macro">format!</span>(
+<a href=#473 id=473 data-nosnippet>473</a>            <span class="string">"SELECT {HEADER_COLUMNS}
+<a href=#474 id=474 data-nosnippet>474</a>               FROM header AS h
+<a href=#475 id=475 data-nosnippet>475</a>              WHERE h.timestamp &gt;= $1 AND h.timestamp &lt; $2
+<a href=#476 id=476 data-nosnippet>476</a>              ORDER BY h.timestamp, h.height
+<a href=#477 id=477 data-nosnippet>477</a>              LIMIT $3"
+<a href=#478 id=478 data-nosnippet>478</a>        </span>);
+<a href=#479 id=479 data-nosnippet>479</a>        <span class="kw">let </span>rows = query(<span class="kw-2">&amp;</span>sql)
+<a href=#480 id=480 data-nosnippet>480</a>            .bind(start <span class="kw">as </span>i64)
+<a href=#481 id=481 data-nosnippet>481</a>            .bind(end <span class="kw">as </span>i64)
+<a href=#482 id=482 data-nosnippet>482</a>            .bind(limit <span class="kw">as </span>i64)
+<a href=#483 id=483 data-nosnippet>483</a>            .fetch(<span class="self">self</span>.as_mut());
+<a href=#484 id=484 data-nosnippet>484</a>        <span class="kw">let </span>window: Vec&lt;<span class="kw">_</span>&gt; = rows
+<a href=#485 id=485 data-nosnippet>485</a>            .map(|row| parse_header::&lt;Types&gt;(row<span class="question-mark">?</span>))
+<a href=#486 id=486 data-nosnippet>486</a>            .try_collect()
+<a href=#487 id=487 data-nosnippet>487</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#488 id=488 data-nosnippet>488</a>
+<a href=#489 id=489 data-nosnippet>489</a>        <span class="kw">let </span>next = <span class="kw">if </span>window.len() &lt; limit {
+<a href=#490 id=490 data-nosnippet>490</a>            <span class="comment">// If we are not limited, complete the window by finding the block just after.
+<a href=#491 id=491 data-nosnippet>491</a>            </span><span class="kw">let </span>sql = <span class="macro">format!</span>(
+<a href=#492 id=492 data-nosnippet>492</a>                <span class="string">"SELECT {HEADER_COLUMNS}
+<a href=#493 id=493 data-nosnippet>493</a>               FROM header AS h
+<a href=#494 id=494 data-nosnippet>494</a>              WHERE h.timestamp &gt;= $1
+<a href=#495 id=495 data-nosnippet>495</a>              ORDER BY h.timestamp, h.height
+<a href=#496 id=496 data-nosnippet>496</a>              LIMIT 1"
+<a href=#497 id=497 data-nosnippet>497</a>            </span>);
+<a href=#498 id=498 data-nosnippet>498</a>            query(<span class="kw-2">&amp;</span>sql)
+<a href=#499 id=499 data-nosnippet>499</a>                .bind(end <span class="kw">as </span>i64)
+<a href=#500 id=500 data-nosnippet>500</a>                .fetch_optional(<span class="self">self</span>.as_mut())
+<a href=#501 id=501 data-nosnippet>501</a>                .<span class="kw">await</span><span class="question-mark">?
+<a href=#502 id=502 data-nosnippet>502</a>                </span>.map(parse_header::&lt;Types&gt;)
+<a href=#503 id=503 data-nosnippet>503</a>                .transpose()<span class="question-mark">?
+<a href=#504 id=504 data-nosnippet>504</a>        </span>} <span class="kw">else </span>{
+<a href=#505 id=505 data-nosnippet>505</a>            <span class="comment">// If we have been limited, return a `null` next block indicating an incomplete window.
+<a href=#506 id=506 data-nosnippet>506</a>            // The client will have to query again with an adjusted starting point to get subsequent
+<a href=#507 id=507 data-nosnippet>507</a>            // results.
+<a href=#508 id=508 data-nosnippet>508</a>            </span><span class="macro">tracing::debug!</span>(limit, <span class="string">"cutting off header window request due to limit"</span>);
+<a href=#509 id=509 data-nosnippet>509</a>            <span class="prelude-val">None
+<a href=#510 id=510 data-nosnippet>510</a>        </span>};
+<a href=#511 id=511 data-nosnippet>511</a>
+<a href=#512 id=512 data-nosnippet>512</a>        <span class="comment">// If the `next` block exists, _or_ if any block in the window exists, we know we have
+<a href=#513 id=513 data-nosnippet>513</a>        // enough information to definitively say at least where the window starts (we may or may
+<a href=#514 id=514 data-nosnippet>514</a>        // not have where it ends, depending on how many blocks have thus far been produced).
+<a href=#515 id=515 data-nosnippet>515</a>        // However, if we have neither a block in the window nor a block after it, we cannot say
+<a href=#516 id=516 data-nosnippet>516</a>        // whether the next block produced will have a timestamp before or after the window start.
+<a href=#517 id=517 data-nosnippet>517</a>        // In this case, we don't know what the `prev` field of the response should be, so we return
+<a href=#518 id=518 data-nosnippet>518</a>        // an error: the caller must try again after more blocks have been produced.
+<a href=#519 id=519 data-nosnippet>519</a>        </span><span class="kw">if </span>window.is_empty() &amp;&amp; next.is_none() {
+<a href=#520 id=520 data-nosnippet>520</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(QueryError::NotFound);
+<a href=#521 id=521 data-nosnippet>521</a>        }
+<a href=#522 id=522 data-nosnippet>522</a>
+<a href=#523 id=523 data-nosnippet>523</a>        <span class="comment">// Find the block just before the window.
+<a href=#524 id=524 data-nosnippet>524</a>        </span><span class="kw">let </span>sql = <span class="macro">format!</span>(
+<a href=#525 id=525 data-nosnippet>525</a>            <span class="string">"SELECT {HEADER_COLUMNS}
+<a href=#526 id=526 data-nosnippet>526</a>               FROM header AS h
+<a href=#527 id=527 data-nosnippet>527</a>              WHERE h.timestamp &lt; $1
+<a href=#528 id=528 data-nosnippet>528</a>              ORDER BY h.timestamp DESC, h.height DESC
+<a href=#529 id=529 data-nosnippet>529</a>              LIMIT 1"
+<a href=#530 id=530 data-nosnippet>530</a>        </span>);
+<a href=#531 id=531 data-nosnippet>531</a>        <span class="kw">let </span>prev = query(<span class="kw-2">&amp;</span>sql)
+<a href=#532 id=532 data-nosnippet>532</a>            .bind(start <span class="kw">as </span>i64)
+<a href=#533 id=533 data-nosnippet>533</a>            .fetch_optional(<span class="self">self</span>.as_mut())
+<a href=#534 id=534 data-nosnippet>534</a>            .<span class="kw">await</span><span class="question-mark">?
+<a href=#535 id=535 data-nosnippet>535</a>            </span>.map(parse_header::&lt;Types&gt;)
+<a href=#536 id=536 data-nosnippet>536</a>            .transpose()<span class="question-mark">?</span>;
+<a href=#537 id=537 data-nosnippet>537</a>
+<a href=#538 id=538 data-nosnippet>538</a>        <span class="prelude-val">Ok</span>(TimeWindowQueryData { window, prev, next })
+<a href=#539 id=539 data-nosnippet>539</a>    }
+<a href=#540 id=540 data-nosnippet>540</a>}
+<a href=#541 id=541 data-nosnippet>541</a>
+<a href=#542 id=542 data-nosnippet>542</a><span class="doccomment">/// Get inclusive start and end bounds for a range to pull aggregate statistics.
+<a href=#543 id=543 data-nosnippet>543</a>///
+<a href=#544 id=544 data-nosnippet>544</a>/// Returns [`None`] if there are no blocks in the given range, in which case the result should be
+<a href=#545 id=545 data-nosnippet>545</a>/// the default value of the aggregate statistic.
+<a href=#546 id=546 data-nosnippet>546</a></span><span class="kw">async fn </span>aggregate_range_bounds&lt;Types&gt;(
+<a href=#547 id=547 data-nosnippet>547</a>    tx: <span class="kw-2">&amp;mut </span>Transaction&lt;<span class="kw">impl </span>TransactionMode&gt;,
+<a href=#548 id=548 data-nosnippet>548</a>    range: <span class="kw">impl </span>RangeBounds&lt;usize&gt;,
+<a href=#549 id=549 data-nosnippet>549</a>) -&gt; QueryResult&lt;<span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;&gt;
+<a href=#550 id=550 data-nosnippet>550</a><span class="kw">where
+<a href=#551 id=551 data-nosnippet>551</a>    </span>Types: NodeType,
+<a href=#552 id=552 data-nosnippet>552</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
+<a href=#553 id=553 data-nosnippet>553</a>{
+<a href=#554 id=554 data-nosnippet>554</a>    <span class="kw">let </span>from = <span class="kw">match </span>range.start_bound() {
+<a href=#555 id=555 data-nosnippet>555</a>        Bound::Included(from) =&gt; <span class="kw-2">*</span>from,
+<a href=#556 id=556 data-nosnippet>556</a>        Bound::Excluded(from) =&gt; <span class="kw-2">*</span>from + <span class="number">1</span>,
+<a href=#557 id=557 data-nosnippet>557</a>        Bound::Unbounded =&gt; <span class="number">0</span>,
+<a href=#558 id=558 data-nosnippet>558</a>    };
+<a href=#559 id=559 data-nosnippet>559</a>    <span class="kw">let </span>to = <span class="kw">match </span>range.end_bound() {
+<a href=#560 id=560 data-nosnippet>560</a>        Bound::Included(to) =&gt; <span class="kw-2">*</span>to,
+<a href=#561 id=561 data-nosnippet>561</a>        Bound::Excluded(<span class="number">0</span>) =&gt; <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>),
+<a href=#562 id=562 data-nosnippet>562</a>        Bound::Excluded(to) =&gt; <span class="kw-2">*</span>to - <span class="number">1</span>,
+<a href=#563 id=563 data-nosnippet>563</a>        Bound::Unbounded =&gt; {
+<a href=#564 id=564 data-nosnippet>564</a>            <span class="kw">let </span>height = AggregatesStorage::&lt;Types&gt;::aggregates_height(tx)
+<a href=#565 id=565 data-nosnippet>565</a>                .<span class="kw">await
+<a href=#566 id=566 data-nosnippet>566</a>                </span>.map_err(|err| QueryError::Error {
+<a href=#567 id=567 data-nosnippet>567</a>                    message: <span class="macro">format!</span>(<span class="string">"{err:#}"</span>),
+<a href=#568 id=568 data-nosnippet>568</a>                })<span class="question-mark">?</span>;
+<a href=#569 id=569 data-nosnippet>569</a>            <span class="kw">if </span>height == <span class="number">0 </span>{
+<a href=#570 id=570 data-nosnippet>570</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
+<a href=#571 id=571 data-nosnippet>571</a>            }
+<a href=#572 id=572 data-nosnippet>572</a>            <span class="kw">if </span>height &lt; from {
+<a href=#573 id=573 data-nosnippet>573</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
+<a href=#574 id=574 data-nosnippet>574</a>            }
+<a href=#575 id=575 data-nosnippet>575</a>            height - <span class="number">1
+<a href=#576 id=576 data-nosnippet>576</a>        </span>},
+<a href=#577 id=577 data-nosnippet>577</a>    };
+<a href=#578 id=578 data-nosnippet>578</a>    <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>((from, to)))
+<a href=#579 id=579 data-nosnippet>579</a>}</code></pre></div></section></main></body></html>

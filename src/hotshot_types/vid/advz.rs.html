@@ -55,19 +55,19 @@
 <a href=#55 id=55 data-nosnippet>55</a>
 <a href=#56 id=56 data-nosnippet>56</a>    <span class="attr">#[allow(clippy::panic)]
 <a href=#57 id=57 data-nosnippet>57</a>    </span><span class="kw">let </span>num_storage_nodes = u32::try_from(num_storage_nodes).unwrap_or_else(|err| {
-<a href=#58 id=58 data-nosnippet>58</a>        <span class="macro">panic!</span>(
-<a href=#59 id=59 data-nosnippet>59</a>            <span class="string">"num_storage_nodes {num_storage_nodes} should fit into u32; \
-<a href=#60 id=60 data-nosnippet>60</a>                error: {err}"
-<a href=#61 id=61 data-nosnippet>61</a>        </span>)
-<a href=#62 id=62 data-nosnippet>62</a>    });
-<a href=#63 id=63 data-nosnippet>63</a>
-<a href=#64 id=64 data-nosnippet>64</a>    <span class="comment">// TODO panic, return `Result`, or make `new` infallible upstream (eg. by panicking)?
-<a href=#65 id=65 data-nosnippet>65</a>    </span><span class="attr">#[allow(clippy::panic)]
-<a href=#66 id=66 data-nosnippet>66</a>    </span>ADVZScheme(
-<a href=#67 id=67 data-nosnippet>67</a>        Advz::new(num_storage_nodes, recovery_threshold, <span class="kw-2">&amp;*</span>KZG_SRS).unwrap_or_else(|err| {
-<a href=#68 id=68 data-nosnippet>68</a>              <span class="macro">panic!</span>(<span class="string">"advz construction failure: (num_storage nodes,recovery_threshold)=({num_storage_nodes},{recovery_threshold}); \
-<a href=#69 id=69 data-nosnippet>69</a>                      error: {err}"</span>)
-<a href=#70 id=70 data-nosnippet>70</a>        })
+<a href=#58 id=58 data-nosnippet>58</a>        <span class="macro">panic!</span>(<span class="string">"num_storage_nodes {num_storage_nodes} should fit into u32; error: {err}"</span>)
+<a href=#59 id=59 data-nosnippet>59</a>    });
+<a href=#60 id=60 data-nosnippet>60</a>
+<a href=#61 id=61 data-nosnippet>61</a>    <span class="comment">// TODO panic, return `Result`, or make `new` infallible upstream (eg. by panicking)?
+<a href=#62 id=62 data-nosnippet>62</a>    </span><span class="attr">#[allow(clippy::panic)]
+<a href=#63 id=63 data-nosnippet>63</a>    </span>ADVZScheme(
+<a href=#64 id=64 data-nosnippet>64</a>        Advz::new(num_storage_nodes, recovery_threshold, <span class="kw-2">&amp;*</span>KZG_SRS).unwrap_or_else(|err| {
+<a href=#65 id=65 data-nosnippet>65</a>            <span class="macro">panic!</span>(
+<a href=#66 id=66 data-nosnippet>66</a>                <span class="string">"advz construction failure: (num_storage \
+<a href=#67 id=67 data-nosnippet>67</a>                 nodes,recovery_threshold)=({num_storage_nodes},{recovery_threshold}); error: \
+<a href=#68 id=68 data-nosnippet>68</a>                 {err}"
+<a href=#69 id=69 data-nosnippet>69</a>            </span>)
+<a href=#70 id=70 data-nosnippet>70</a>        }),
 <a href=#71 id=71 data-nosnippet>71</a>    )
 <a href=#72 id=72 data-nosnippet>72</a>}
 <a href=#73 id=73 data-nosnippet>73</a>

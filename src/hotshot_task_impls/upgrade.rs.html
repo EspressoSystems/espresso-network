@@ -166,267 +166,283 @@
 <a href=#166 id=166 data-nosnippet>166</a>                    <span class="kw">let </span><span class="prelude-val">Some</span>((<span class="kw">_</span>, last_proposal)) =
 <a href=#167 id=167 data-nosnippet>167</a>                        consensus_reader.last_proposals().last_key_value()
 <a href=#168 id=168 data-nosnippet>168</a>                    <span class="kw">else </span>{
-<a href=#169 id=169 data-nosnippet>169</a>                        <span class="macro">tracing::error!</span>(<span class="string">"No recent quorum proposals in consensus state -- skipping upgrade proposal vote."</span>);
-<a href=#170 id=170 data-nosnippet>170</a>                        <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="macro">error!</span>(<span class="string">"No recent quorum proposals in consensus state -- skipping upgrade proposal vote."</span>));
-<a href=#171 id=171 data-nosnippet>171</a>                    };
-<a href=#172 id=172 data-nosnippet>172</a>
-<a href=#173 id=173 data-nosnippet>173</a>                    <span class="kw">let </span>last_proposal_view: u64 = <span class="kw-2">*</span>last_proposal.data.view_number();
-<a href=#174 id=174 data-nosnippet>174</a>                    <span class="kw">let </span>last_proposal_block: u64 = last_proposal.data.block_header().block_number();
-<a href=#175 id=175 data-nosnippet>175</a>
-<a href=#176 id=176 data-nosnippet>176</a>                    drop(consensus_reader);
-<a href=#177 id=177 data-nosnippet>177</a>
-<a href=#178 id=178 data-nosnippet>178</a>                    <span class="kw">let </span>target_start_epoch =
-<a href=#179 id=179 data-nosnippet>179</a>                        epoch_from_block_number(<span class="self">self</span>.epoch_start_block, <span class="self">self</span>.epoch_height);
-<a href=#180 id=180 data-nosnippet>180</a>                    <span class="kw">let </span>last_proposal_epoch =
-<a href=#181 id=181 data-nosnippet>181</a>                        epoch_from_block_number(last_proposal_block, <span class="self">self</span>.epoch_height);
-<a href=#182 id=182 data-nosnippet>182</a>                    <span class="kw">let </span>upgrade_finish_epoch = epoch_from_block_number(
-<a href=#183 id=183 data-nosnippet>183</a>                        last_proposal_block
-<a href=#184 id=184 data-nosnippet>184</a>                            + (<span class="kw-2">*</span>proposal.data.upgrade_proposal.new_version_first_view
-<a href=#185 id=185 data-nosnippet>185</a>                                - last_proposal_view)
-<a href=#186 id=186 data-nosnippet>186</a>                            + <span class="number">10</span>,
-<a href=#187 id=187 data-nosnippet>187</a>                        <span class="self">self</span>.epoch_height,
-<a href=#188 id=188 data-nosnippet>188</a>                    );
-<a href=#189 id=189 data-nosnippet>189</a>
-<a href=#190 id=190 data-nosnippet>190</a>                    target_start_epoch == last_proposal_epoch
-<a href=#191 id=191 data-nosnippet>191</a>                        &amp;&amp; last_proposal_epoch == upgrade_finish_epoch
-<a href=#192 id=192 data-nosnippet>192</a>                } <span class="kw">else </span>{
-<a href=#193 id=193 data-nosnippet>193</a>                    <span class="bool-val">true
-<a href=#194 id=194 data-nosnippet>194</a>                </span>};
+<a href=#169 id=169 data-nosnippet>169</a>                        <span class="macro">tracing::error!</span>(
+<a href=#170 id=170 data-nosnippet>170</a>                            <span class="string">"No recent quorum proposals in consensus state -- skipping upgrade \
+<a href=#171 id=171 data-nosnippet>171</a>                             proposal vote."
+<a href=#172 id=172 data-nosnippet>172</a>                        </span>);
+<a href=#173 id=173 data-nosnippet>173</a>                        <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="macro">error!</span>(
+<a href=#174 id=174 data-nosnippet>174</a>                            <span class="string">"No recent quorum proposals in consensus state -- skipping upgrade \
+<a href=#175 id=175 data-nosnippet>175</a>                             proposal vote."
+<a href=#176 id=176 data-nosnippet>176</a>                        </span>));
+<a href=#177 id=177 data-nosnippet>177</a>                    };
+<a href=#178 id=178 data-nosnippet>178</a>
+<a href=#179 id=179 data-nosnippet>179</a>                    <span class="kw">let </span>last_proposal_view: u64 = <span class="kw-2">*</span>last_proposal.data.view_number();
+<a href=#180 id=180 data-nosnippet>180</a>                    <span class="kw">let </span>last_proposal_block: u64 = last_proposal.data.block_header().block_number();
+<a href=#181 id=181 data-nosnippet>181</a>
+<a href=#182 id=182 data-nosnippet>182</a>                    drop(consensus_reader);
+<a href=#183 id=183 data-nosnippet>183</a>
+<a href=#184 id=184 data-nosnippet>184</a>                    <span class="kw">let </span>target_start_epoch =
+<a href=#185 id=185 data-nosnippet>185</a>                        epoch_from_block_number(<span class="self">self</span>.epoch_start_block, <span class="self">self</span>.epoch_height);
+<a href=#186 id=186 data-nosnippet>186</a>                    <span class="kw">let </span>last_proposal_epoch =
+<a href=#187 id=187 data-nosnippet>187</a>                        epoch_from_block_number(last_proposal_block, <span class="self">self</span>.epoch_height);
+<a href=#188 id=188 data-nosnippet>188</a>                    <span class="kw">let </span>upgrade_finish_epoch = epoch_from_block_number(
+<a href=#189 id=189 data-nosnippet>189</a>                        last_proposal_block
+<a href=#190 id=190 data-nosnippet>190</a>                            + (<span class="kw-2">*</span>proposal.data.upgrade_proposal.new_version_first_view
+<a href=#191 id=191 data-nosnippet>191</a>                                - last_proposal_view)
+<a href=#192 id=192 data-nosnippet>192</a>                            + <span class="number">10</span>,
+<a href=#193 id=193 data-nosnippet>193</a>                        <span class="self">self</span>.epoch_height,
+<a href=#194 id=194 data-nosnippet>194</a>                    );
 <a href=#195 id=195 data-nosnippet>195</a>
-<a href=#196 id=196 data-nosnippet>196</a>                <span class="macro">ensure!</span>(
-<a href=#197 id=197 data-nosnippet>197</a>                    epoch_upgrade_checks,
-<a href=#198 id=198 data-nosnippet>198</a>                    <span class="macro">error!</span>(<span class="string">"Epoch upgrade safety check failed! Refusing to vote on upgrade."</span>)
-<a href=#199 id=199 data-nosnippet>199</a>                );
-<a href=#200 id=200 data-nosnippet>200</a>
-<a href=#201 id=201 data-nosnippet>201</a>                <span class="kw">let </span>view = proposal.data.view_number();
-<a href=#202 id=202 data-nosnippet>202</a>
-<a href=#203 id=203 data-nosnippet>203</a>                <span class="comment">// At this point, we could choose to validate
-<a href=#204 id=204 data-nosnippet>204</a>                // that the proposal was issued by the correct leader
-<a href=#205 id=205 data-nosnippet>205</a>                // for the indicated view.
-<a href=#206 id=206 data-nosnippet>206</a>                //
-<a href=#207 id=207 data-nosnippet>207</a>                // We choose not to, because we don't gain that much from it.
-<a href=#208 id=208 data-nosnippet>208</a>                // The certificate itself is only useful to the leader for that view anyway,
-<a href=#209 id=209 data-nosnippet>209</a>                // and from the node's perspective it doesn't matter who the sender is.
-<a href=#210 id=210 data-nosnippet>210</a>                // All we'd save is the cost of signing the vote, and we'd lose some flexibility.
-<a href=#211 id=211 data-nosnippet>211</a>
-<a href=#212 id=212 data-nosnippet>212</a>                // Allow an upgrade proposal that is one view older, in case we have voted on a quorum
-<a href=#213 id=213 data-nosnippet>213</a>                // proposal and updated the view.
-<a href=#214 id=214 data-nosnippet>214</a>                // `self.cur_view` should be at least 1 since there is a view change before getting
-<a href=#215 id=215 data-nosnippet>215</a>                // the `UpgradeProposalRecv` event. Otherwise, the view number subtraction below will
-<a href=#216 id=216 data-nosnippet>216</a>                // cause an overflow error.
-<a href=#217 id=217 data-nosnippet>217</a>                // TODO Come back to this - we probably don't need this, but we should also never receive a UpgradeCertificate where this fails, investigate block ready so it doesn't make one for the genesis block
-<a href=#218 id=218 data-nosnippet>218</a>                </span><span class="macro">ensure!</span>(
-<a href=#219 id=219 data-nosnippet>219</a>                    <span class="self">self</span>.cur_view != TYPES::View::genesis() &amp;&amp; <span class="kw-2">*</span>view &gt;= <span class="self">self</span>.cur_view.saturating_sub(<span class="number">1</span>),
-<a href=#220 id=220 data-nosnippet>220</a>                    <span class="macro">warn!</span>(
-<a href=#221 id=221 data-nosnippet>221</a>                      <span class="string">"Discarding old upgrade proposal; the proposal is for view {view}, but the current view is {}."</span>,
-<a href=#222 id=222 data-nosnippet>222</a>                      <span class="self">self</span>.cur_view
-<a href=#223 id=223 data-nosnippet>223</a>                    )
-<a href=#224 id=224 data-nosnippet>224</a>                );
-<a href=#225 id=225 data-nosnippet>225</a>
-<a href=#226 id=226 data-nosnippet>226</a>                <span class="comment">// We then validate that the proposal was issued by the leader for the view.
-<a href=#227 id=227 data-nosnippet>227</a>                </span><span class="kw">let </span>view_leader_key = <span class="self">self
-<a href=#228 id=228 data-nosnippet>228</a>                    </span>.membership_coordinator
-<a href=#229 id=229 data-nosnippet>229</a>                    .membership_for_epoch(<span class="self">self</span>.cur_epoch)
-<a href=#230 id=230 data-nosnippet>230</a>                    .<span class="kw">await</span><span class="question-mark">?
-<a href=#231 id=231 data-nosnippet>231</a>                    </span>.leader(view)
-<a href=#232 id=232 data-nosnippet>232</a>                    .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#233 id=233 data-nosnippet>233</a>                <span class="macro">ensure!</span>(
-<a href=#234 id=234 data-nosnippet>234</a>                    view_leader_key == <span class="kw-2">*</span>sender,
-<a href=#235 id=235 data-nosnippet>235</a>                    <span class="macro">info!</span>(
-<a href=#236 id=236 data-nosnippet>236</a>                        <span class="string">"Upgrade proposal doesn't have expected leader key for view {} \n Upgrade proposal is: {:?}"</span>, <span class="kw-2">*</span>view, proposal.data
-<a href=#237 id=237 data-nosnippet>237</a>                    )
-<a href=#238 id=238 data-nosnippet>238</a>                );
-<a href=#239 id=239 data-nosnippet>239</a>
-<a href=#240 id=240 data-nosnippet>240</a>                <span class="comment">// At this point, we've checked that:
-<a href=#241 id=241 data-nosnippet>241</a>                //   * the proposal was expected,
-<a href=#242 id=242 data-nosnippet>242</a>                //   * the proposal is valid, and
-<a href=#243 id=243 data-nosnippet>243</a>                // so we notify the application layer
-<a href=#244 id=244 data-nosnippet>244</a>                </span>broadcast_event(
-<a href=#245 id=245 data-nosnippet>245</a>                    Event {
-<a href=#246 id=246 data-nosnippet>246</a>                        view_number: <span class="self">self</span>.cur_view,
-<a href=#247 id=247 data-nosnippet>247</a>                        event: EventType::UpgradeProposal {
-<a href=#248 id=248 data-nosnippet>248</a>                            proposal: proposal.clone(),
-<a href=#249 id=249 data-nosnippet>249</a>                            sender: sender.clone(),
-<a href=#250 id=250 data-nosnippet>250</a>                        },
-<a href=#251 id=251 data-nosnippet>251</a>                    },
-<a href=#252 id=252 data-nosnippet>252</a>                    <span class="kw-2">&amp;</span><span class="self">self</span>.output_event_stream,
-<a href=#253 id=253 data-nosnippet>253</a>                )
-<a href=#254 id=254 data-nosnippet>254</a>                .<span class="kw">await</span>;
-<a href=#255 id=255 data-nosnippet>255</a>
-<a href=#256 id=256 data-nosnippet>256</a>                <span class="comment">// If everything is fine up to here, we generate and send a vote on the proposal.
-<a href=#257 id=257 data-nosnippet>257</a>                </span><span class="kw">let </span>vote = UpgradeVote::create_signed_vote(
-<a href=#258 id=258 data-nosnippet>258</a>                    proposal.data.upgrade_proposal.clone(),
-<a href=#259 id=259 data-nosnippet>259</a>                    view,
-<a href=#260 id=260 data-nosnippet>260</a>                    <span class="kw-2">&amp;</span><span class="self">self</span>.public_key,
-<a href=#261 id=261 data-nosnippet>261</a>                    <span class="kw-2">&amp;</span><span class="self">self</span>.private_key,
-<a href=#262 id=262 data-nosnippet>262</a>                    <span class="kw-2">&amp;</span><span class="self">self</span>.upgrade_lock,
+<a href=#196 id=196 data-nosnippet>196</a>                    target_start_epoch == last_proposal_epoch
+<a href=#197 id=197 data-nosnippet>197</a>                        &amp;&amp; last_proposal_epoch == upgrade_finish_epoch
+<a href=#198 id=198 data-nosnippet>198</a>                } <span class="kw">else </span>{
+<a href=#199 id=199 data-nosnippet>199</a>                    <span class="bool-val">true
+<a href=#200 id=200 data-nosnippet>200</a>                </span>};
+<a href=#201 id=201 data-nosnippet>201</a>
+<a href=#202 id=202 data-nosnippet>202</a>                <span class="macro">ensure!</span>(
+<a href=#203 id=203 data-nosnippet>203</a>                    epoch_upgrade_checks,
+<a href=#204 id=204 data-nosnippet>204</a>                    <span class="macro">error!</span>(<span class="string">"Epoch upgrade safety check failed! Refusing to vote on upgrade."</span>)
+<a href=#205 id=205 data-nosnippet>205</a>                );
+<a href=#206 id=206 data-nosnippet>206</a>
+<a href=#207 id=207 data-nosnippet>207</a>                <span class="kw">let </span>view = proposal.data.view_number();
+<a href=#208 id=208 data-nosnippet>208</a>
+<a href=#209 id=209 data-nosnippet>209</a>                <span class="comment">// At this point, we could choose to validate
+<a href=#210 id=210 data-nosnippet>210</a>                // that the proposal was issued by the correct leader
+<a href=#211 id=211 data-nosnippet>211</a>                // for the indicated view.
+<a href=#212 id=212 data-nosnippet>212</a>                //
+<a href=#213 id=213 data-nosnippet>213</a>                // We choose not to, because we don't gain that much from it.
+<a href=#214 id=214 data-nosnippet>214</a>                // The certificate itself is only useful to the leader for that view anyway,
+<a href=#215 id=215 data-nosnippet>215</a>                // and from the node's perspective it doesn't matter who the sender is.
+<a href=#216 id=216 data-nosnippet>216</a>                // All we'd save is the cost of signing the vote, and we'd lose some flexibility.
+<a href=#217 id=217 data-nosnippet>217</a>
+<a href=#218 id=218 data-nosnippet>218</a>                // Allow an upgrade proposal that is one view older, in case we have voted on a quorum
+<a href=#219 id=219 data-nosnippet>219</a>                // proposal and updated the view.
+<a href=#220 id=220 data-nosnippet>220</a>                // `self.cur_view` should be at least 1 since there is a view change before getting
+<a href=#221 id=221 data-nosnippet>221</a>                // the `UpgradeProposalRecv` event. Otherwise, the view number subtraction below will
+<a href=#222 id=222 data-nosnippet>222</a>                // cause an overflow error.
+<a href=#223 id=223 data-nosnippet>223</a>                // TODO Come back to this - we probably don't need this, but we should also never receive a UpgradeCertificate where this fails, investigate block ready so it doesn't make one for the genesis block
+<a href=#224 id=224 data-nosnippet>224</a>                </span><span class="macro">ensure!</span>(
+<a href=#225 id=225 data-nosnippet>225</a>                    <span class="self">self</span>.cur_view != TYPES::View::genesis()
+<a href=#226 id=226 data-nosnippet>226</a>                        &amp;&amp; <span class="kw-2">*</span>view &gt;= <span class="self">self</span>.cur_view.saturating_sub(<span class="number">1</span>),
+<a href=#227 id=227 data-nosnippet>227</a>                    <span class="macro">warn!</span>(
+<a href=#228 id=228 data-nosnippet>228</a>                        <span class="string">"Discarding old upgrade proposal; the proposal is for view {view}, but \
+<a href=#229 id=229 data-nosnippet>229</a>                         the current view is {}."</span>,
+<a href=#230 id=230 data-nosnippet>230</a>                        <span class="self">self</span>.cur_view
+<a href=#231 id=231 data-nosnippet>231</a>                    )
+<a href=#232 id=232 data-nosnippet>232</a>                );
+<a href=#233 id=233 data-nosnippet>233</a>
+<a href=#234 id=234 data-nosnippet>234</a>                <span class="comment">// We then validate that the proposal was issued by the leader for the view.
+<a href=#235 id=235 data-nosnippet>235</a>                </span><span class="kw">let </span>view_leader_key = <span class="self">self
+<a href=#236 id=236 data-nosnippet>236</a>                    </span>.membership_coordinator
+<a href=#237 id=237 data-nosnippet>237</a>                    .membership_for_epoch(<span class="self">self</span>.cur_epoch)
+<a href=#238 id=238 data-nosnippet>238</a>                    .<span class="kw">await</span><span class="question-mark">?
+<a href=#239 id=239 data-nosnippet>239</a>                    </span>.leader(view)
+<a href=#240 id=240 data-nosnippet>240</a>                    .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#241 id=241 data-nosnippet>241</a>                <span class="macro">ensure!</span>(
+<a href=#242 id=242 data-nosnippet>242</a>                    view_leader_key == <span class="kw-2">*</span>sender,
+<a href=#243 id=243 data-nosnippet>243</a>                    <span class="macro">info!</span>(
+<a href=#244 id=244 data-nosnippet>244</a>                        <span class="string">"Upgrade proposal doesn't have expected leader key for view {} \n Upgrade \
+<a href=#245 id=245 data-nosnippet>245</a>                         proposal is: {:?}"</span>,
+<a href=#246 id=246 data-nosnippet>246</a>                        <span class="kw-2">*</span>view, proposal.data
+<a href=#247 id=247 data-nosnippet>247</a>                    )
+<a href=#248 id=248 data-nosnippet>248</a>                );
+<a href=#249 id=249 data-nosnippet>249</a>
+<a href=#250 id=250 data-nosnippet>250</a>                <span class="comment">// At this point, we've checked that:
+<a href=#251 id=251 data-nosnippet>251</a>                //   * the proposal was expected,
+<a href=#252 id=252 data-nosnippet>252</a>                //   * the proposal is valid, and
+<a href=#253 id=253 data-nosnippet>253</a>                // so we notify the application layer
+<a href=#254 id=254 data-nosnippet>254</a>                </span>broadcast_event(
+<a href=#255 id=255 data-nosnippet>255</a>                    Event {
+<a href=#256 id=256 data-nosnippet>256</a>                        view_number: <span class="self">self</span>.cur_view,
+<a href=#257 id=257 data-nosnippet>257</a>                        event: EventType::UpgradeProposal {
+<a href=#258 id=258 data-nosnippet>258</a>                            proposal: proposal.clone(),
+<a href=#259 id=259 data-nosnippet>259</a>                            sender: sender.clone(),
+<a href=#260 id=260 data-nosnippet>260</a>                        },
+<a href=#261 id=261 data-nosnippet>261</a>                    },
+<a href=#262 id=262 data-nosnippet>262</a>                    <span class="kw-2">&amp;</span><span class="self">self</span>.output_event_stream,
 <a href=#263 id=263 data-nosnippet>263</a>                )
-<a href=#264 id=264 data-nosnippet>264</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#264 id=264 data-nosnippet>264</a>                .<span class="kw">await</span>;
 <a href=#265 id=265 data-nosnippet>265</a>
-<a href=#266 id=266 data-nosnippet>266</a>                <span class="macro">tracing::debug!</span>(<span class="string">"Sending upgrade vote {:?}"</span>, vote.view_number());
-<a href=#267 id=267 data-nosnippet>267</a>                broadcast_event(Arc::new(HotShotEvent::UpgradeVoteSend(vote)), <span class="kw-2">&amp;</span>tx).<span class="kw">await</span>;
-<a href=#268 id=268 data-nosnippet>268</a>            },
-<a href=#269 id=269 data-nosnippet>269</a>            HotShotEvent::UpgradeVoteRecv(<span class="kw-2">ref </span>vote) =&gt; {
-<a href=#270 id=270 data-nosnippet>270</a>                <span class="macro">tracing::debug!</span>(<span class="string">"Upgrade vote recv, Main Task {:?}"</span>, vote.view_number());
-<a href=#271 id=271 data-nosnippet>271</a>
-<a href=#272 id=272 data-nosnippet>272</a>                <span class="comment">// Check if we are the leader.
-<a href=#273 id=273 data-nosnippet>273</a>                </span><span class="kw">let </span>view = vote.view_number();
-<a href=#274 id=274 data-nosnippet>274</a>                <span class="kw">let </span>epoch_membership = <span class="self">self
-<a href=#275 id=275 data-nosnippet>275</a>                    </span>.membership_coordinator
-<a href=#276 id=276 data-nosnippet>276</a>                    .membership_for_epoch(<span class="self">self</span>.cur_epoch)
-<a href=#277 id=277 data-nosnippet>277</a>                    .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#278 id=278 data-nosnippet>278</a>                <span class="macro">ensure!</span>(
-<a href=#279 id=279 data-nosnippet>279</a>                    epoch_membership.leader(view).<span class="kw">await</span><span class="question-mark">? </span>== <span class="self">self</span>.public_key,
-<a href=#280 id=280 data-nosnippet>280</a>                    <span class="macro">debug!</span>(
-<a href=#281 id=281 data-nosnippet>281</a>                        <span class="string">"We are not the leader for view {} are we leader for next view? {}"</span>,
-<a href=#282 id=282 data-nosnippet>282</a>                        <span class="kw-2">*</span>view,
-<a href=#283 id=283 data-nosnippet>283</a>                        epoch_membership.leader(view + <span class="number">1</span>).<span class="kw">await</span><span class="question-mark">? </span>== <span class="self">self</span>.public_key
-<a href=#284 id=284 data-nosnippet>284</a>                    )
-<a href=#285 id=285 data-nosnippet>285</a>                );
-<a href=#286 id=286 data-nosnippet>286</a>
-<a href=#287 id=287 data-nosnippet>287</a>                handle_vote(
-<a href=#288 id=288 data-nosnippet>288</a>                    <span class="kw-2">&amp;mut </span><span class="self">self</span>.vote_collectors,
-<a href=#289 id=289 data-nosnippet>289</a>                    vote,
-<a href=#290 id=290 data-nosnippet>290</a>                    <span class="self">self</span>.public_key.clone(),
-<a href=#291 id=291 data-nosnippet>291</a>                    <span class="kw-2">&amp;</span>epoch_membership,
-<a href=#292 id=292 data-nosnippet>292</a>                    <span class="self">self</span>.id,
-<a href=#293 id=293 data-nosnippet>293</a>                    <span class="kw-2">&amp;</span>event,
-<a href=#294 id=294 data-nosnippet>294</a>                    <span class="kw-2">&amp;</span>tx,
-<a href=#295 id=295 data-nosnippet>295</a>                    <span class="kw-2">&amp;</span><span class="self">self</span>.upgrade_lock,
-<a href=#296 id=296 data-nosnippet>296</a>                    EpochTransitionIndicator::NotInTransition,
-<a href=#297 id=297 data-nosnippet>297</a>                )
-<a href=#298 id=298 data-nosnippet>298</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#299 id=299 data-nosnippet>299</a>            },
-<a href=#300 id=300 data-nosnippet>300</a>            HotShotEvent::ViewChange(new_view, epoch_number) =&gt; {
-<a href=#301 id=301 data-nosnippet>301</a>                <span class="kw">if </span><span class="kw-2">*</span>epoch_number &gt; <span class="self">self</span>.cur_epoch {
-<a href=#302 id=302 data-nosnippet>302</a>                    <span class="self">self</span>.cur_epoch = <span class="kw-2">*</span>epoch_number;
-<a href=#303 id=303 data-nosnippet>303</a>                }
-<a href=#304 id=304 data-nosnippet>304</a>                <span class="macro">ensure!</span>(<span class="self">self</span>.cur_view &lt; <span class="kw-2">*</span>new_view || <span class="kw-2">*</span><span class="self">self</span>.cur_view == <span class="number">0</span>);
-<a href=#305 id=305 data-nosnippet>305</a>
-<a href=#306 id=306 data-nosnippet>306</a>                <span class="self">self</span>.cur_view = <span class="kw-2">*</span>new_view;
-<a href=#307 id=307 data-nosnippet>307</a>
-<a href=#308 id=308 data-nosnippet>308</a>                <span class="kw">let </span>view: u64 = <span class="kw-2">*</span><span class="self">self</span>.cur_view;
-<a href=#309 id=309 data-nosnippet>309</a>                <span class="kw">let </span>time = SystemTime::now()
-<a href=#310 id=310 data-nosnippet>310</a>                    .duration_since(SystemTime::UNIX_EPOCH)
-<a href=#311 id=311 data-nosnippet>311</a>                    .wrap()
-<a href=#312 id=312 data-nosnippet>312</a>                    .context(<span class="macro">error!</span>(
-<a href=#313 id=313 data-nosnippet>313</a>                        <span class="string">"Failed to calculate duration. This should never happen."
-<a href=#314 id=314 data-nosnippet>314</a>                    </span>))<span class="question-mark">?
-<a href=#315 id=315 data-nosnippet>315</a>                    </span>.as_secs();
-<a href=#316 id=316 data-nosnippet>316</a>
-<a href=#317 id=317 data-nosnippet>317</a>                <span class="kw">let </span>leader = <span class="self">self
-<a href=#318 id=318 data-nosnippet>318</a>                    </span>.membership_coordinator
-<a href=#319 id=319 data-nosnippet>319</a>                    .membership_for_epoch(<span class="self">self</span>.cur_epoch)
-<a href=#320 id=320 data-nosnippet>320</a>                    .<span class="kw">await</span><span class="question-mark">?
-<a href=#321 id=321 data-nosnippet>321</a>                    </span>.leader(TYPES::View::new(
-<a href=#322 id=322 data-nosnippet>322</a>                        view + TYPES::UPGRADE_CONSTANTS.propose_offset,
-<a href=#323 id=323 data-nosnippet>323</a>                    ))
-<a href=#324 id=324 data-nosnippet>324</a>                    .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#325 id=325 data-nosnippet>325</a>
-<a href=#326 id=326 data-nosnippet>326</a>                <span class="kw">let </span>old_version_last_view = view + TYPES::UPGRADE_CONSTANTS.begin_offset;
-<a href=#327 id=327 data-nosnippet>327</a>                <span class="kw">let </span>new_version_first_view = view + TYPES::UPGRADE_CONSTANTS.finish_offset;
-<a href=#328 id=328 data-nosnippet>328</a>                <span class="kw">let </span>decide_by = view + TYPES::UPGRADE_CONSTANTS.decide_by_offset;
-<a href=#329 id=329 data-nosnippet>329</a>
-<a href=#330 id=330 data-nosnippet>330</a>                <span class="kw">let </span>epoch_upgrade_checks = <span class="kw">if </span>V::Upgrade::VERSION == V::Epochs::VERSION {
-<a href=#331 id=331 data-nosnippet>331</a>                    <span class="kw">let </span>consensus_reader = <span class="self">self</span>.consensus.read().<span class="kw">await</span>;
-<a href=#332 id=332 data-nosnippet>332</a>
-<a href=#333 id=333 data-nosnippet>333</a>                    <span class="kw">let </span><span class="prelude-val">Some</span>((<span class="kw">_</span>, last_proposal)) =
-<a href=#334 id=334 data-nosnippet>334</a>                        consensus_reader.last_proposals().last_key_value()
-<a href=#335 id=335 data-nosnippet>335</a>                    <span class="kw">else </span>{
-<a href=#336 id=336 data-nosnippet>336</a>                        <span class="macro">tracing::error!</span>(<span class="string">"No recent quorum proposals in consensus state -- skipping upgrade proposal."</span>);
-<a href=#337 id=337 data-nosnippet>337</a>                        <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="macro">error!</span>(<span class="string">"No recent quorum proposals in consensus state -- skipping upgrade proposal."</span>));
-<a href=#338 id=338 data-nosnippet>338</a>                    };
+<a href=#266 id=266 data-nosnippet>266</a>                <span class="comment">// If everything is fine up to here, we generate and send a vote on the proposal.
+<a href=#267 id=267 data-nosnippet>267</a>                </span><span class="kw">let </span>vote = UpgradeVote::create_signed_vote(
+<a href=#268 id=268 data-nosnippet>268</a>                    proposal.data.upgrade_proposal.clone(),
+<a href=#269 id=269 data-nosnippet>269</a>                    view,
+<a href=#270 id=270 data-nosnippet>270</a>                    <span class="kw-2">&amp;</span><span class="self">self</span>.public_key,
+<a href=#271 id=271 data-nosnippet>271</a>                    <span class="kw-2">&amp;</span><span class="self">self</span>.private_key,
+<a href=#272 id=272 data-nosnippet>272</a>                    <span class="kw-2">&amp;</span><span class="self">self</span>.upgrade_lock,
+<a href=#273 id=273 data-nosnippet>273</a>                )
+<a href=#274 id=274 data-nosnippet>274</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#275 id=275 data-nosnippet>275</a>
+<a href=#276 id=276 data-nosnippet>276</a>                <span class="macro">tracing::debug!</span>(<span class="string">"Sending upgrade vote {:?}"</span>, vote.view_number());
+<a href=#277 id=277 data-nosnippet>277</a>                broadcast_event(Arc::new(HotShotEvent::UpgradeVoteSend(vote)), <span class="kw-2">&amp;</span>tx).<span class="kw">await</span>;
+<a href=#278 id=278 data-nosnippet>278</a>            },
+<a href=#279 id=279 data-nosnippet>279</a>            HotShotEvent::UpgradeVoteRecv(<span class="kw-2">ref </span>vote) =&gt; {
+<a href=#280 id=280 data-nosnippet>280</a>                <span class="macro">tracing::debug!</span>(<span class="string">"Upgrade vote recv, Main Task {:?}"</span>, vote.view_number());
+<a href=#281 id=281 data-nosnippet>281</a>
+<a href=#282 id=282 data-nosnippet>282</a>                <span class="comment">// Check if we are the leader.
+<a href=#283 id=283 data-nosnippet>283</a>                </span><span class="kw">let </span>view = vote.view_number();
+<a href=#284 id=284 data-nosnippet>284</a>                <span class="kw">let </span>epoch_membership = <span class="self">self
+<a href=#285 id=285 data-nosnippet>285</a>                    </span>.membership_coordinator
+<a href=#286 id=286 data-nosnippet>286</a>                    .membership_for_epoch(<span class="self">self</span>.cur_epoch)
+<a href=#287 id=287 data-nosnippet>287</a>                    .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#288 id=288 data-nosnippet>288</a>                <span class="macro">ensure!</span>(
+<a href=#289 id=289 data-nosnippet>289</a>                    epoch_membership.leader(view).<span class="kw">await</span><span class="question-mark">? </span>== <span class="self">self</span>.public_key,
+<a href=#290 id=290 data-nosnippet>290</a>                    <span class="macro">debug!</span>(
+<a href=#291 id=291 data-nosnippet>291</a>                        <span class="string">"We are not the leader for view {} are we leader for next view? {}"</span>,
+<a href=#292 id=292 data-nosnippet>292</a>                        <span class="kw-2">*</span>view,
+<a href=#293 id=293 data-nosnippet>293</a>                        epoch_membership.leader(view + <span class="number">1</span>).<span class="kw">await</span><span class="question-mark">? </span>== <span class="self">self</span>.public_key
+<a href=#294 id=294 data-nosnippet>294</a>                    )
+<a href=#295 id=295 data-nosnippet>295</a>                );
+<a href=#296 id=296 data-nosnippet>296</a>
+<a href=#297 id=297 data-nosnippet>297</a>                handle_vote(
+<a href=#298 id=298 data-nosnippet>298</a>                    <span class="kw-2">&amp;mut </span><span class="self">self</span>.vote_collectors,
+<a href=#299 id=299 data-nosnippet>299</a>                    vote,
+<a href=#300 id=300 data-nosnippet>300</a>                    <span class="self">self</span>.public_key.clone(),
+<a href=#301 id=301 data-nosnippet>301</a>                    <span class="kw-2">&amp;</span>epoch_membership,
+<a href=#302 id=302 data-nosnippet>302</a>                    <span class="self">self</span>.id,
+<a href=#303 id=303 data-nosnippet>303</a>                    <span class="kw-2">&amp;</span>event,
+<a href=#304 id=304 data-nosnippet>304</a>                    <span class="kw-2">&amp;</span>tx,
+<a href=#305 id=305 data-nosnippet>305</a>                    <span class="kw-2">&amp;</span><span class="self">self</span>.upgrade_lock,
+<a href=#306 id=306 data-nosnippet>306</a>                    EpochTransitionIndicator::NotInTransition,
+<a href=#307 id=307 data-nosnippet>307</a>                )
+<a href=#308 id=308 data-nosnippet>308</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#309 id=309 data-nosnippet>309</a>            },
+<a href=#310 id=310 data-nosnippet>310</a>            HotShotEvent::ViewChange(new_view, epoch_number) =&gt; {
+<a href=#311 id=311 data-nosnippet>311</a>                <span class="kw">if </span><span class="kw-2">*</span>epoch_number &gt; <span class="self">self</span>.cur_epoch {
+<a href=#312 id=312 data-nosnippet>312</a>                    <span class="self">self</span>.cur_epoch = <span class="kw-2">*</span>epoch_number;
+<a href=#313 id=313 data-nosnippet>313</a>                }
+<a href=#314 id=314 data-nosnippet>314</a>                <span class="macro">ensure!</span>(<span class="self">self</span>.cur_view &lt; <span class="kw-2">*</span>new_view || <span class="kw-2">*</span><span class="self">self</span>.cur_view == <span class="number">0</span>);
+<a href=#315 id=315 data-nosnippet>315</a>
+<a href=#316 id=316 data-nosnippet>316</a>                <span class="self">self</span>.cur_view = <span class="kw-2">*</span>new_view;
+<a href=#317 id=317 data-nosnippet>317</a>
+<a href=#318 id=318 data-nosnippet>318</a>                <span class="kw">let </span>view: u64 = <span class="kw-2">*</span><span class="self">self</span>.cur_view;
+<a href=#319 id=319 data-nosnippet>319</a>                <span class="kw">let </span>time = SystemTime::now()
+<a href=#320 id=320 data-nosnippet>320</a>                    .duration_since(SystemTime::UNIX_EPOCH)
+<a href=#321 id=321 data-nosnippet>321</a>                    .wrap()
+<a href=#322 id=322 data-nosnippet>322</a>                    .context(<span class="macro">error!</span>(
+<a href=#323 id=323 data-nosnippet>323</a>                        <span class="string">"Failed to calculate duration. This should never happen."
+<a href=#324 id=324 data-nosnippet>324</a>                    </span>))<span class="question-mark">?
+<a href=#325 id=325 data-nosnippet>325</a>                    </span>.as_secs();
+<a href=#326 id=326 data-nosnippet>326</a>
+<a href=#327 id=327 data-nosnippet>327</a>                <span class="kw">let </span>leader = <span class="self">self
+<a href=#328 id=328 data-nosnippet>328</a>                    </span>.membership_coordinator
+<a href=#329 id=329 data-nosnippet>329</a>                    .membership_for_epoch(<span class="self">self</span>.cur_epoch)
+<a href=#330 id=330 data-nosnippet>330</a>                    .<span class="kw">await</span><span class="question-mark">?
+<a href=#331 id=331 data-nosnippet>331</a>                    </span>.leader(TYPES::View::new(
+<a href=#332 id=332 data-nosnippet>332</a>                        view + TYPES::UPGRADE_CONSTANTS.propose_offset,
+<a href=#333 id=333 data-nosnippet>333</a>                    ))
+<a href=#334 id=334 data-nosnippet>334</a>                    .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#335 id=335 data-nosnippet>335</a>
+<a href=#336 id=336 data-nosnippet>336</a>                <span class="kw">let </span>old_version_last_view = view + TYPES::UPGRADE_CONSTANTS.begin_offset;
+<a href=#337 id=337 data-nosnippet>337</a>                <span class="kw">let </span>new_version_first_view = view + TYPES::UPGRADE_CONSTANTS.finish_offset;
+<a href=#338 id=338 data-nosnippet>338</a>                <span class="kw">let </span>decide_by = view + TYPES::UPGRADE_CONSTANTS.decide_by_offset;
 <a href=#339 id=339 data-nosnippet>339</a>
-<a href=#340 id=340 data-nosnippet>340</a>                    <span class="kw">let </span>last_proposal_view: u64 = <span class="kw-2">*</span>last_proposal.data.view_number();
-<a href=#341 id=341 data-nosnippet>341</a>                    <span class="kw">let </span>last_proposal_block: u64 = last_proposal.data.block_header().block_number();
+<a href=#340 id=340 data-nosnippet>340</a>                <span class="kw">let </span>epoch_upgrade_checks = <span class="kw">if </span>V::Upgrade::VERSION == V::Epochs::VERSION {
+<a href=#341 id=341 data-nosnippet>341</a>                    <span class="kw">let </span>consensus_reader = <span class="self">self</span>.consensus.read().<span class="kw">await</span>;
 <a href=#342 id=342 data-nosnippet>342</a>
-<a href=#343 id=343 data-nosnippet>343</a>                    drop(consensus_reader);
-<a href=#344 id=344 data-nosnippet>344</a>
-<a href=#345 id=345 data-nosnippet>345</a>                    <span class="kw">let </span>target_start_epoch =
-<a href=#346 id=346 data-nosnippet>346</a>                        epoch_from_block_number(<span class="self">self</span>.epoch_start_block, <span class="self">self</span>.epoch_height);
-<a href=#347 id=347 data-nosnippet>347</a>                    <span class="kw">let </span>last_proposal_epoch =
-<a href=#348 id=348 data-nosnippet>348</a>                        epoch_from_block_number(last_proposal_block, <span class="self">self</span>.epoch_height);
-<a href=#349 id=349 data-nosnippet>349</a>                    <span class="kw">let </span>upgrade_finish_epoch = epoch_from_block_number(
-<a href=#350 id=350 data-nosnippet>350</a>                        last_proposal_block + (new_version_first_view - last_proposal_view) + <span class="number">10</span>,
-<a href=#351 id=351 data-nosnippet>351</a>                        <span class="self">self</span>.epoch_height,
-<a href=#352 id=352 data-nosnippet>352</a>                    );
-<a href=#353 id=353 data-nosnippet>353</a>
-<a href=#354 id=354 data-nosnippet>354</a>                    target_start_epoch == last_proposal_epoch
-<a href=#355 id=355 data-nosnippet>355</a>                        &amp;&amp; last_proposal_epoch == upgrade_finish_epoch
-<a href=#356 id=356 data-nosnippet>356</a>                } <span class="kw">else </span>{
-<a href=#357 id=357 data-nosnippet>357</a>                    <span class="bool-val">true
-<a href=#358 id=358 data-nosnippet>358</a>                </span>};
-<a href=#359 id=359 data-nosnippet>359</a>
-<a href=#360 id=360 data-nosnippet>360</a>                <span class="comment">// We try to form a certificate 5 views before we're leader.
-<a href=#361 id=361 data-nosnippet>361</a>                </span><span class="kw">if </span>view &gt;= <span class="self">self</span>.start_proposing_view
-<a href=#362 id=362 data-nosnippet>362</a>                    &amp;&amp; view &lt; <span class="self">self</span>.stop_proposing_view
-<a href=#363 id=363 data-nosnippet>363</a>                    &amp;&amp; time &gt;= <span class="self">self</span>.start_proposing_time
-<a href=#364 id=364 data-nosnippet>364</a>                    &amp;&amp; time &lt; <span class="self">self</span>.stop_proposing_time
-<a href=#365 id=365 data-nosnippet>365</a>                    &amp;&amp; !<span class="self">self</span>.upgraded().<span class="kw">await
-<a href=#366 id=366 data-nosnippet>366</a>                    </span>&amp;&amp; epoch_upgrade_checks
-<a href=#367 id=367 data-nosnippet>367</a>                    &amp;&amp; leader == <span class="self">self</span>.public_key
-<a href=#368 id=368 data-nosnippet>368</a>                {
-<a href=#369 id=369 data-nosnippet>369</a>                    <span class="kw">let </span>upgrade_proposal_data = UpgradeProposalData {
-<a href=#370 id=370 data-nosnippet>370</a>                        old_version: V::Base::VERSION,
-<a href=#371 id=371 data-nosnippet>371</a>                        new_version: V::Upgrade::VERSION,
-<a href=#372 id=372 data-nosnippet>372</a>                        new_version_hash: V::UPGRADE_HASH.to_vec(),
-<a href=#373 id=373 data-nosnippet>373</a>                        old_version_last_view: TYPES::View::new(old_version_last_view),
-<a href=#374 id=374 data-nosnippet>374</a>                        new_version_first_view: TYPES::View::new(new_version_first_view),
-<a href=#375 id=375 data-nosnippet>375</a>                        decide_by: TYPES::View::new(decide_by),
-<a href=#376 id=376 data-nosnippet>376</a>                    };
-<a href=#377 id=377 data-nosnippet>377</a>
-<a href=#378 id=378 data-nosnippet>378</a>                    <span class="kw">let </span>upgrade_proposal = UpgradeProposal {
-<a href=#379 id=379 data-nosnippet>379</a>                        upgrade_proposal: upgrade_proposal_data.clone(),
-<a href=#380 id=380 data-nosnippet>380</a>                        view_number: TYPES::View::new(
-<a href=#381 id=381 data-nosnippet>381</a>                            view + TYPES::UPGRADE_CONSTANTS.propose_offset,
-<a href=#382 id=382 data-nosnippet>382</a>                        ),
-<a href=#383 id=383 data-nosnippet>383</a>                    };
-<a href=#384 id=384 data-nosnippet>384</a>
-<a href=#385 id=385 data-nosnippet>385</a>                    <span class="kw">let </span>signature = TYPES::SignatureKey::sign(
-<a href=#386 id=386 data-nosnippet>386</a>                        <span class="kw-2">&amp;</span><span class="self">self</span>.private_key,
-<a href=#387 id=387 data-nosnippet>387</a>                        upgrade_proposal_data.commit().as_ref(),
-<a href=#388 id=388 data-nosnippet>388</a>                    )
-<a href=#389 id=389 data-nosnippet>389</a>                    .expect(<span class="string">"Failed to sign upgrade proposal commitment!"</span>);
-<a href=#390 id=390 data-nosnippet>390</a>
-<a href=#391 id=391 data-nosnippet>391</a>                    <span class="macro">tracing::warn!</span>(<span class="string">"Sending upgrade proposal:\n\n {upgrade_proposal:?}"</span>);
-<a href=#392 id=392 data-nosnippet>392</a>
-<a href=#393 id=393 data-nosnippet>393</a>                    <span class="kw">let </span>message = Proposal {
-<a href=#394 id=394 data-nosnippet>394</a>                        data: upgrade_proposal,
-<a href=#395 id=395 data-nosnippet>395</a>                        signature,
-<a href=#396 id=396 data-nosnippet>396</a>                        _pd: PhantomData,
-<a href=#397 id=397 data-nosnippet>397</a>                    };
-<a href=#398 id=398 data-nosnippet>398</a>
-<a href=#399 id=399 data-nosnippet>399</a>                    broadcast_event(
-<a href=#400 id=400 data-nosnippet>400</a>                        Arc::new(HotShotEvent::UpgradeProposalSend(
-<a href=#401 id=401 data-nosnippet>401</a>                            message,
-<a href=#402 id=402 data-nosnippet>402</a>                            <span class="self">self</span>.public_key.clone(),
-<a href=#403 id=403 data-nosnippet>403</a>                        )),
-<a href=#404 id=404 data-nosnippet>404</a>                        <span class="kw-2">&amp;</span>tx,
-<a href=#405 id=405 data-nosnippet>405</a>                    )
-<a href=#406 id=406 data-nosnippet>406</a>                    .<span class="kw">await</span>;
-<a href=#407 id=407 data-nosnippet>407</a>                }
-<a href=#408 id=408 data-nosnippet>408</a>            },
-<a href=#409 id=409 data-nosnippet>409</a>            <span class="kw">_ </span>=&gt; {},
-<a href=#410 id=410 data-nosnippet>410</a>        }
-<a href=#411 id=411 data-nosnippet>411</a>        <span class="prelude-val">Ok</span>(())
-<a href=#412 id=412 data-nosnippet>412</a>    }
-<a href=#413 id=413 data-nosnippet>413</a>}
+<a href=#343 id=343 data-nosnippet>343</a>                    <span class="kw">let </span><span class="prelude-val">Some</span>((<span class="kw">_</span>, last_proposal)) =
+<a href=#344 id=344 data-nosnippet>344</a>                        consensus_reader.last_proposals().last_key_value()
+<a href=#345 id=345 data-nosnippet>345</a>                    <span class="kw">else </span>{
+<a href=#346 id=346 data-nosnippet>346</a>                        <span class="macro">tracing::error!</span>(
+<a href=#347 id=347 data-nosnippet>347</a>                            <span class="string">"No recent quorum proposals in consensus state -- skipping upgrade \
+<a href=#348 id=348 data-nosnippet>348</a>                             proposal."
+<a href=#349 id=349 data-nosnippet>349</a>                        </span>);
+<a href=#350 id=350 data-nosnippet>350</a>                        <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="macro">error!</span>(
+<a href=#351 id=351 data-nosnippet>351</a>                            <span class="string">"No recent quorum proposals in consensus state -- skipping upgrade \
+<a href=#352 id=352 data-nosnippet>352</a>                             proposal."
+<a href=#353 id=353 data-nosnippet>353</a>                        </span>));
+<a href=#354 id=354 data-nosnippet>354</a>                    };
+<a href=#355 id=355 data-nosnippet>355</a>
+<a href=#356 id=356 data-nosnippet>356</a>                    <span class="kw">let </span>last_proposal_view: u64 = <span class="kw-2">*</span>last_proposal.data.view_number();
+<a href=#357 id=357 data-nosnippet>357</a>                    <span class="kw">let </span>last_proposal_block: u64 = last_proposal.data.block_header().block_number();
+<a href=#358 id=358 data-nosnippet>358</a>
+<a href=#359 id=359 data-nosnippet>359</a>                    drop(consensus_reader);
+<a href=#360 id=360 data-nosnippet>360</a>
+<a href=#361 id=361 data-nosnippet>361</a>                    <span class="kw">let </span>target_start_epoch =
+<a href=#362 id=362 data-nosnippet>362</a>                        epoch_from_block_number(<span class="self">self</span>.epoch_start_block, <span class="self">self</span>.epoch_height);
+<a href=#363 id=363 data-nosnippet>363</a>                    <span class="kw">let </span>last_proposal_epoch =
+<a href=#364 id=364 data-nosnippet>364</a>                        epoch_from_block_number(last_proposal_block, <span class="self">self</span>.epoch_height);
+<a href=#365 id=365 data-nosnippet>365</a>                    <span class="kw">let </span>upgrade_finish_epoch = epoch_from_block_number(
+<a href=#366 id=366 data-nosnippet>366</a>                        last_proposal_block + (new_version_first_view - last_proposal_view) + <span class="number">10</span>,
+<a href=#367 id=367 data-nosnippet>367</a>                        <span class="self">self</span>.epoch_height,
+<a href=#368 id=368 data-nosnippet>368</a>                    );
+<a href=#369 id=369 data-nosnippet>369</a>
+<a href=#370 id=370 data-nosnippet>370</a>                    target_start_epoch == last_proposal_epoch
+<a href=#371 id=371 data-nosnippet>371</a>                        &amp;&amp; last_proposal_epoch == upgrade_finish_epoch
+<a href=#372 id=372 data-nosnippet>372</a>                } <span class="kw">else </span>{
+<a href=#373 id=373 data-nosnippet>373</a>                    <span class="bool-val">true
+<a href=#374 id=374 data-nosnippet>374</a>                </span>};
+<a href=#375 id=375 data-nosnippet>375</a>
+<a href=#376 id=376 data-nosnippet>376</a>                <span class="comment">// We try to form a certificate 5 views before we're leader.
+<a href=#377 id=377 data-nosnippet>377</a>                </span><span class="kw">if </span>view &gt;= <span class="self">self</span>.start_proposing_view
+<a href=#378 id=378 data-nosnippet>378</a>                    &amp;&amp; view &lt; <span class="self">self</span>.stop_proposing_view
+<a href=#379 id=379 data-nosnippet>379</a>                    &amp;&amp; time &gt;= <span class="self">self</span>.start_proposing_time
+<a href=#380 id=380 data-nosnippet>380</a>                    &amp;&amp; time &lt; <span class="self">self</span>.stop_proposing_time
+<a href=#381 id=381 data-nosnippet>381</a>                    &amp;&amp; !<span class="self">self</span>.upgraded().<span class="kw">await
+<a href=#382 id=382 data-nosnippet>382</a>                    </span>&amp;&amp; epoch_upgrade_checks
+<a href=#383 id=383 data-nosnippet>383</a>                    &amp;&amp; leader == <span class="self">self</span>.public_key
+<a href=#384 id=384 data-nosnippet>384</a>                {
+<a href=#385 id=385 data-nosnippet>385</a>                    <span class="kw">let </span>upgrade_proposal_data = UpgradeProposalData {
+<a href=#386 id=386 data-nosnippet>386</a>                        old_version: V::Base::VERSION,
+<a href=#387 id=387 data-nosnippet>387</a>                        new_version: V::Upgrade::VERSION,
+<a href=#388 id=388 data-nosnippet>388</a>                        new_version_hash: V::UPGRADE_HASH.to_vec(),
+<a href=#389 id=389 data-nosnippet>389</a>                        old_version_last_view: TYPES::View::new(old_version_last_view),
+<a href=#390 id=390 data-nosnippet>390</a>                        new_version_first_view: TYPES::View::new(new_version_first_view),
+<a href=#391 id=391 data-nosnippet>391</a>                        decide_by: TYPES::View::new(decide_by),
+<a href=#392 id=392 data-nosnippet>392</a>                    };
+<a href=#393 id=393 data-nosnippet>393</a>
+<a href=#394 id=394 data-nosnippet>394</a>                    <span class="kw">let </span>upgrade_proposal = UpgradeProposal {
+<a href=#395 id=395 data-nosnippet>395</a>                        upgrade_proposal: upgrade_proposal_data.clone(),
+<a href=#396 id=396 data-nosnippet>396</a>                        view_number: TYPES::View::new(
+<a href=#397 id=397 data-nosnippet>397</a>                            view + TYPES::UPGRADE_CONSTANTS.propose_offset,
+<a href=#398 id=398 data-nosnippet>398</a>                        ),
+<a href=#399 id=399 data-nosnippet>399</a>                    };
+<a href=#400 id=400 data-nosnippet>400</a>
+<a href=#401 id=401 data-nosnippet>401</a>                    <span class="kw">let </span>signature = TYPES::SignatureKey::sign(
+<a href=#402 id=402 data-nosnippet>402</a>                        <span class="kw-2">&amp;</span><span class="self">self</span>.private_key,
+<a href=#403 id=403 data-nosnippet>403</a>                        upgrade_proposal_data.commit().as_ref(),
+<a href=#404 id=404 data-nosnippet>404</a>                    )
+<a href=#405 id=405 data-nosnippet>405</a>                    .expect(<span class="string">"Failed to sign upgrade proposal commitment!"</span>);
+<a href=#406 id=406 data-nosnippet>406</a>
+<a href=#407 id=407 data-nosnippet>407</a>                    <span class="macro">tracing::warn!</span>(<span class="string">"Sending upgrade proposal:\n\n {upgrade_proposal:?}"</span>);
+<a href=#408 id=408 data-nosnippet>408</a>
+<a href=#409 id=409 data-nosnippet>409</a>                    <span class="kw">let </span>message = Proposal {
+<a href=#410 id=410 data-nosnippet>410</a>                        data: upgrade_proposal,
+<a href=#411 id=411 data-nosnippet>411</a>                        signature,
+<a href=#412 id=412 data-nosnippet>412</a>                        _pd: PhantomData,
+<a href=#413 id=413 data-nosnippet>413</a>                    };
 <a href=#414 id=414 data-nosnippet>414</a>
-<a href=#415 id=415 data-nosnippet>415</a><span class="attr">#[async_trait]
-<a href=#416 id=416 data-nosnippet>416</a></span><span class="doccomment">/// task state implementation for the upgrade task
-<a href=#417 id=417 data-nosnippet>417</a></span><span class="kw">impl</span>&lt;TYPES: NodeType, V: Versions&gt; TaskState <span class="kw">for </span>UpgradeTaskState&lt;TYPES, V&gt; {
-<a href=#418 id=418 data-nosnippet>418</a>    <span class="kw">type </span>Event = HotShotEvent&lt;TYPES&gt;;
-<a href=#419 id=419 data-nosnippet>419</a>
-<a href=#420 id=420 data-nosnippet>420</a>    <span class="kw">async fn </span>handle_event(
-<a href=#421 id=421 data-nosnippet>421</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#422 id=422 data-nosnippet>422</a>        event: Arc&lt;<span class="self">Self</span>::Event&gt;,
-<a href=#423 id=423 data-nosnippet>423</a>        sender: <span class="kw-2">&amp;</span>Sender&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
-<a href=#424 id=424 data-nosnippet>424</a>        _receiver: <span class="kw-2">&amp;</span>Receiver&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
-<a href=#425 id=425 data-nosnippet>425</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#426 id=426 data-nosnippet>426</a>        <span class="self">self</span>.handle(event, sender.clone()).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#427 id=427 data-nosnippet>427</a>
-<a href=#428 id=428 data-nosnippet>428</a>        <span class="prelude-val">Ok</span>(())
-<a href=#429 id=429 data-nosnippet>429</a>    }
+<a href=#415 id=415 data-nosnippet>415</a>                    broadcast_event(
+<a href=#416 id=416 data-nosnippet>416</a>                        Arc::new(HotShotEvent::UpgradeProposalSend(
+<a href=#417 id=417 data-nosnippet>417</a>                            message,
+<a href=#418 id=418 data-nosnippet>418</a>                            <span class="self">self</span>.public_key.clone(),
+<a href=#419 id=419 data-nosnippet>419</a>                        )),
+<a href=#420 id=420 data-nosnippet>420</a>                        <span class="kw-2">&amp;</span>tx,
+<a href=#421 id=421 data-nosnippet>421</a>                    )
+<a href=#422 id=422 data-nosnippet>422</a>                    .<span class="kw">await</span>;
+<a href=#423 id=423 data-nosnippet>423</a>                }
+<a href=#424 id=424 data-nosnippet>424</a>            },
+<a href=#425 id=425 data-nosnippet>425</a>            <span class="kw">_ </span>=&gt; {},
+<a href=#426 id=426 data-nosnippet>426</a>        }
+<a href=#427 id=427 data-nosnippet>427</a>        <span class="prelude-val">Ok</span>(())
+<a href=#428 id=428 data-nosnippet>428</a>    }
+<a href=#429 id=429 data-nosnippet>429</a>}
 <a href=#430 id=430 data-nosnippet>430</a>
-<a href=#431 id=431 data-nosnippet>431</a>    <span class="kw">fn </span>cancel_subtasks(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {}
-<a href=#432 id=432 data-nosnippet>432</a>}</code></pre></div></section></main></body></html>
+<a href=#431 id=431 data-nosnippet>431</a><span class="attr">#[async_trait]
+<a href=#432 id=432 data-nosnippet>432</a></span><span class="doccomment">/// task state implementation for the upgrade task
+<a href=#433 id=433 data-nosnippet>433</a></span><span class="kw">impl</span>&lt;TYPES: NodeType, V: Versions&gt; TaskState <span class="kw">for </span>UpgradeTaskState&lt;TYPES, V&gt; {
+<a href=#434 id=434 data-nosnippet>434</a>    <span class="kw">type </span>Event = HotShotEvent&lt;TYPES&gt;;
+<a href=#435 id=435 data-nosnippet>435</a>
+<a href=#436 id=436 data-nosnippet>436</a>    <span class="kw">async fn </span>handle_event(
+<a href=#437 id=437 data-nosnippet>437</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#438 id=438 data-nosnippet>438</a>        event: Arc&lt;<span class="self">Self</span>::Event&gt;,
+<a href=#439 id=439 data-nosnippet>439</a>        sender: <span class="kw-2">&amp;</span>Sender&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
+<a href=#440 id=440 data-nosnippet>440</a>        _receiver: <span class="kw-2">&amp;</span>Receiver&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
+<a href=#441 id=441 data-nosnippet>441</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#442 id=442 data-nosnippet>442</a>        <span class="self">self</span>.handle(event, sender.clone()).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#443 id=443 data-nosnippet>443</a>
+<a href=#444 id=444 data-nosnippet>444</a>        <span class="prelude-val">Ok</span>(())
+<a href=#445 id=445 data-nosnippet>445</a>    }
+<a href=#446 id=446 data-nosnippet>446</a>
+<a href=#447 id=447 data-nosnippet>447</a>    <span class="kw">fn </span>cancel_subtasks(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {}
+<a href=#448 id=448 data-nosnippet>448</a>}</code></pre></div></section></main></body></html>

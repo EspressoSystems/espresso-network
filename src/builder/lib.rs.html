@@ -466,80 +466,84 @@
 <a href=#466 id=466 data-nosnippet>466</a>                )
 <a href=#467 id=467 data-nosnippet>467</a>                .expect(<span class="string">"Claim block signing failed"</span>);
 <a href=#468 id=468 data-nosnippet>468</a>                <span class="kw">let </span>available_blocks = builder_client
-<a href=#469 id=469 data-nosnippet>469</a>                        .get::&lt;Vec&lt;AvailableBlockInfo&lt;SeqTypes&gt;&gt;&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
-<a href=#470 id=470 data-nosnippet>470</a>                            <span class="string">"block_info/availableblocks/{parent_commitment}/{parent_view_number}/{hotshot_client_pub_key}/{encoded_signature}"
-<a href=#471 id=471 data-nosnippet>471</a>                        </span>))
-<a href=#472 id=472 data-nosnippet>472</a>                        .send()
-<a href=#473 id=473 data-nosnippet>473</a>                        .<span class="kw">await</span>.expect(<span class="string">"Error getting available blocks"</span>);
-<a href=#474 id=474 data-nosnippet>474</a>                <span class="macro">assert!</span>(!available_blocks.is_empty());
-<a href=#475 id=475 data-nosnippet>475</a>                <span class="kw">break </span>(available_blocks, parent_view_number);
-<a href=#476 id=476 data-nosnippet>476</a>            }
-<a href=#477 id=477 data-nosnippet>477</a>        };
-<a href=#478 id=478 data-nosnippet>478</a>
-<a href=#479 id=479 data-nosnippet>479</a>        <span class="kw">let </span>builder_commitment = available_block_info[<span class="number">0</span>].block_hash.clone();
+<a href=#469 id=469 data-nosnippet>469</a>                    .get::&lt;Vec&lt;AvailableBlockInfo&lt;SeqTypes&gt;&gt;&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
+<a href=#470 id=470 data-nosnippet>470</a>                        <span class="string">"block_info/availableblocks/{parent_commitment}/{parent_view_number}/\
+<a href=#471 id=471 data-nosnippet>471</a>                         {hotshot_client_pub_key}/{encoded_signature}"
+<a href=#472 id=472 data-nosnippet>472</a>                    </span>))
+<a href=#473 id=473 data-nosnippet>473</a>                    .send()
+<a href=#474 id=474 data-nosnippet>474</a>                    .<span class="kw">await
+<a href=#475 id=475 data-nosnippet>475</a>                    </span>.expect(<span class="string">"Error getting available blocks"</span>);
+<a href=#476 id=476 data-nosnippet>476</a>                <span class="macro">assert!</span>(!available_blocks.is_empty());
+<a href=#477 id=477 data-nosnippet>477</a>                <span class="kw">break </span>(available_blocks, parent_view_number);
+<a href=#478 id=478 data-nosnippet>478</a>            }
+<a href=#479 id=479 data-nosnippet>479</a>        };
 <a href=#480 id=480 data-nosnippet>480</a>
-<a href=#481 id=481 data-nosnippet>481</a>        <span class="comment">// sign the builder_commitment using the client_private_key
-<a href=#482 id=482 data-nosnippet>482</a>        </span><span class="kw">let </span>encoded_signature = &lt;SeqTypes <span class="kw">as </span>NodeType&gt;::SignatureKey::sign(
-<a href=#483 id=483 data-nosnippet>483</a>            <span class="kw-2">&amp;</span>hotshot_client_private_key,
-<a href=#484 id=484 data-nosnippet>484</a>            builder_commitment.as_ref(),
-<a href=#485 id=485 data-nosnippet>485</a>        )
-<a href=#486 id=486 data-nosnippet>486</a>        .expect(<span class="string">"Claim block signing failed"</span>);
-<a href=#487 id=487 data-nosnippet>487</a>
-<a href=#488 id=488 data-nosnippet>488</a>        <span class="comment">// Test claiming blocks
-<a href=#489 id=489 data-nosnippet>489</a>        </span><span class="kw">let </span>available_block_data = <span class="kw">match </span>builder_client
-<a href=#490 id=490 data-nosnippet>490</a>                .get::&lt;AvailableBlockData&lt;SeqTypes&gt;&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
-<a href=#491 id=491 data-nosnippet>491</a>                    <span class="string">"block_info/claimblock/{builder_commitment}/{view_num}/{hotshot_client_pub_key}/{encoded_signature}"
-<a href=#492 id=492 data-nosnippet>492</a>                </span>))
-<a href=#493 id=493 data-nosnippet>493</a>                .send()
-<a href=#494 id=494 data-nosnippet>494</a>                .<span class="kw">await
-<a href=#495 id=495 data-nosnippet>495</a>            </span>{
-<a href=#496 id=496 data-nosnippet>496</a>                <span class="prelude-val">Ok</span>(response) =&gt; {
-<a href=#497 id=497 data-nosnippet>497</a>                    <span class="macro">tracing::info!</span>(<span class="string">"Received Block Data: {:?}"</span>, response);
-<a href=#498 id=498 data-nosnippet>498</a>                    response
-<a href=#499 id=499 data-nosnippet>499</a>                }
-<a href=#500 id=500 data-nosnippet>500</a>                <span class="prelude-val">Err</span>(e) =&gt; {
-<a href=#501 id=501 data-nosnippet>501</a>                    <span class="macro">panic!</span>(<span class="string">"Error while claiming block {e:?}"</span>);
-<a href=#502 id=502 data-nosnippet>502</a>                }
-<a href=#503 id=503 data-nosnippet>503</a>            };
-<a href=#504 id=504 data-nosnippet>504</a>
-<a href=#505 id=505 data-nosnippet>505</a>        <span class="macro">assert_eq!</span>(
-<a href=#506 id=506 data-nosnippet>506</a>            available_block_data
-<a href=#507 id=507 data-nosnippet>507</a>                .block_payload
-<a href=#508 id=508 data-nosnippet>508</a>                .transactions(<span class="kw-2">&amp;</span>available_block_data.metadata)
-<a href=#509 id=509 data-nosnippet>509</a>                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#510 id=510 data-nosnippet>510</a>            <span class="macro">vec!</span>[txn]
-<a href=#511 id=511 data-nosnippet>511</a>        );
-<a href=#512 id=512 data-nosnippet>512</a>
-<a href=#513 id=513 data-nosnippet>513</a>        <span class="comment">// Test claiming block header input
-<a href=#514 id=514 data-nosnippet>514</a>        </span><span class="kw">let </span>_available_block_header = <span class="kw">match </span>builder_client
-<a href=#515 id=515 data-nosnippet>515</a>                .get::&lt;AvailableBlockHeaderInputV1&lt;SeqTypes&gt;&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
-<a href=#516 id=516 data-nosnippet>516</a>                    <span class="string">"block_info/claimheaderinput/{builder_commitment}/{view_num}/{hotshot_client_pub_key}/{encoded_signature}"
-<a href=#517 id=517 data-nosnippet>517</a>                </span>))
-<a href=#518 id=518 data-nosnippet>518</a>                .send()
-<a href=#519 id=519 data-nosnippet>519</a>                .<span class="kw">await
-<a href=#520 id=520 data-nosnippet>520</a>            </span>{
-<a href=#521 id=521 data-nosnippet>521</a>                <span class="prelude-val">Ok</span>(response) =&gt; {
-<a href=#522 id=522 data-nosnippet>522</a>                    <span class="macro">tracing::info!</span>(<span class="string">"Received Block Header : {:?}"</span>, response);
-<a href=#523 id=523 data-nosnippet>523</a>                    response
-<a href=#524 id=524 data-nosnippet>524</a>                }
-<a href=#525 id=525 data-nosnippet>525</a>                <span class="prelude-val">Err</span>(e) =&gt; {
-<a href=#526 id=526 data-nosnippet>526</a>                    <span class="macro">panic!</span>(<span class="string">"Error getting claiming block header {e:?}"</span>);
-<a href=#527 id=527 data-nosnippet>527</a>                }
-<a href=#528 id=528 data-nosnippet>528</a>            };
-<a href=#529 id=529 data-nosnippet>529</a>
-<a href=#530 id=530 data-nosnippet>530</a>        <span class="comment">// test getting builder key
-<a href=#531 id=531 data-nosnippet>531</a>        </span><span class="kw">match </span>builder_client
-<a href=#532 id=532 data-nosnippet>532</a>            .get::&lt;FeeAccount&gt;(<span class="string">"block_info/builderaddress"</span>)
-<a href=#533 id=533 data-nosnippet>533</a>            .send()
-<a href=#534 id=534 data-nosnippet>534</a>            .<span class="kw">await
-<a href=#535 id=535 data-nosnippet>535</a>        </span>{
-<a href=#536 id=536 data-nosnippet>536</a>            <span class="prelude-val">Ok</span>(response) =&gt; {
-<a href=#537 id=537 data-nosnippet>537</a>                <span class="macro">tracing::info!</span>(<span class="string">"Received Builder Key : {:?}"</span>, response);
-<a href=#538 id=538 data-nosnippet>538</a>                <span class="macro">assert_eq!</span>(response, builder_pub_key);
-<a href=#539 id=539 data-nosnippet>539</a>            },
-<a href=#540 id=540 data-nosnippet>540</a>            <span class="prelude-val">Err</span>(e) =&gt; {
-<a href=#541 id=541 data-nosnippet>541</a>                <span class="macro">panic!</span>(<span class="string">"Error getting builder key {e:?}"</span>);
-<a href=#542 id=542 data-nosnippet>542</a>            },
-<a href=#543 id=543 data-nosnippet>543</a>        }
-<a href=#544 id=544 data-nosnippet>544</a>    }
-<a href=#545 id=545 data-nosnippet>545</a>}</code></pre></div></section></main></body></html>
+<a href=#481 id=481 data-nosnippet>481</a>        <span class="kw">let </span>builder_commitment = available_block_info[<span class="number">0</span>].block_hash.clone();
+<a href=#482 id=482 data-nosnippet>482</a>
+<a href=#483 id=483 data-nosnippet>483</a>        <span class="comment">// sign the builder_commitment using the client_private_key
+<a href=#484 id=484 data-nosnippet>484</a>        </span><span class="kw">let </span>encoded_signature = &lt;SeqTypes <span class="kw">as </span>NodeType&gt;::SignatureKey::sign(
+<a href=#485 id=485 data-nosnippet>485</a>            <span class="kw-2">&amp;</span>hotshot_client_private_key,
+<a href=#486 id=486 data-nosnippet>486</a>            builder_commitment.as_ref(),
+<a href=#487 id=487 data-nosnippet>487</a>        )
+<a href=#488 id=488 data-nosnippet>488</a>        .expect(<span class="string">"Claim block signing failed"</span>);
+<a href=#489 id=489 data-nosnippet>489</a>
+<a href=#490 id=490 data-nosnippet>490</a>        <span class="comment">// Test claiming blocks
+<a href=#491 id=491 data-nosnippet>491</a>        </span><span class="kw">let </span>available_block_data = <span class="kw">match </span>builder_client
+<a href=#492 id=492 data-nosnippet>492</a>            .get::&lt;AvailableBlockData&lt;SeqTypes&gt;&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
+<a href=#493 id=493 data-nosnippet>493</a>                <span class="string">"block_info/claimblock/{builder_commitment}/{view_num}/{hotshot_client_pub_key}/\
+<a href=#494 id=494 data-nosnippet>494</a>                 {encoded_signature}"
+<a href=#495 id=495 data-nosnippet>495</a>            </span>))
+<a href=#496 id=496 data-nosnippet>496</a>            .send()
+<a href=#497 id=497 data-nosnippet>497</a>            .<span class="kw">await
+<a href=#498 id=498 data-nosnippet>498</a>        </span>{
+<a href=#499 id=499 data-nosnippet>499</a>            <span class="prelude-val">Ok</span>(response) =&gt; {
+<a href=#500 id=500 data-nosnippet>500</a>                <span class="macro">tracing::info!</span>(<span class="string">"Received Block Data: {:?}"</span>, response);
+<a href=#501 id=501 data-nosnippet>501</a>                response
+<a href=#502 id=502 data-nosnippet>502</a>            },
+<a href=#503 id=503 data-nosnippet>503</a>            <span class="prelude-val">Err</span>(e) =&gt; {
+<a href=#504 id=504 data-nosnippet>504</a>                <span class="macro">panic!</span>(<span class="string">"Error while claiming block {e:?}"</span>);
+<a href=#505 id=505 data-nosnippet>505</a>            },
+<a href=#506 id=506 data-nosnippet>506</a>        };
+<a href=#507 id=507 data-nosnippet>507</a>
+<a href=#508 id=508 data-nosnippet>508</a>        <span class="macro">assert_eq!</span>(
+<a href=#509 id=509 data-nosnippet>509</a>            available_block_data
+<a href=#510 id=510 data-nosnippet>510</a>                .block_payload
+<a href=#511 id=511 data-nosnippet>511</a>                .transactions(<span class="kw-2">&amp;</span>available_block_data.metadata)
+<a href=#512 id=512 data-nosnippet>512</a>                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#513 id=513 data-nosnippet>513</a>            <span class="macro">vec!</span>[txn]
+<a href=#514 id=514 data-nosnippet>514</a>        );
+<a href=#515 id=515 data-nosnippet>515</a>
+<a href=#516 id=516 data-nosnippet>516</a>        <span class="comment">// Test claiming block header input
+<a href=#517 id=517 data-nosnippet>517</a>        </span><span class="kw">let </span>_available_block_header = <span class="kw">match </span>builder_client
+<a href=#518 id=518 data-nosnippet>518</a>            .get::&lt;AvailableBlockHeaderInputV1&lt;SeqTypes&gt;&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
+<a href=#519 id=519 data-nosnippet>519</a>                <span class="string">"block_info/claimheaderinput/{builder_commitment}/{view_num}/\
+<a href=#520 id=520 data-nosnippet>520</a>                 {hotshot_client_pub_key}/{encoded_signature}"
+<a href=#521 id=521 data-nosnippet>521</a>            </span>))
+<a href=#522 id=522 data-nosnippet>522</a>            .send()
+<a href=#523 id=523 data-nosnippet>523</a>            .<span class="kw">await
+<a href=#524 id=524 data-nosnippet>524</a>        </span>{
+<a href=#525 id=525 data-nosnippet>525</a>            <span class="prelude-val">Ok</span>(response) =&gt; {
+<a href=#526 id=526 data-nosnippet>526</a>                <span class="macro">tracing::info!</span>(<span class="string">"Received Block Header : {:?}"</span>, response);
+<a href=#527 id=527 data-nosnippet>527</a>                response
+<a href=#528 id=528 data-nosnippet>528</a>            },
+<a href=#529 id=529 data-nosnippet>529</a>            <span class="prelude-val">Err</span>(e) =&gt; {
+<a href=#530 id=530 data-nosnippet>530</a>                <span class="macro">panic!</span>(<span class="string">"Error getting claiming block header {e:?}"</span>);
+<a href=#531 id=531 data-nosnippet>531</a>            },
+<a href=#532 id=532 data-nosnippet>532</a>        };
+<a href=#533 id=533 data-nosnippet>533</a>
+<a href=#534 id=534 data-nosnippet>534</a>        <span class="comment">// test getting builder key
+<a href=#535 id=535 data-nosnippet>535</a>        </span><span class="kw">match </span>builder_client
+<a href=#536 id=536 data-nosnippet>536</a>            .get::&lt;FeeAccount&gt;(<span class="string">"block_info/builderaddress"</span>)
+<a href=#537 id=537 data-nosnippet>537</a>            .send()
+<a href=#538 id=538 data-nosnippet>538</a>            .<span class="kw">await
+<a href=#539 id=539 data-nosnippet>539</a>        </span>{
+<a href=#540 id=540 data-nosnippet>540</a>            <span class="prelude-val">Ok</span>(response) =&gt; {
+<a href=#541 id=541 data-nosnippet>541</a>                <span class="macro">tracing::info!</span>(<span class="string">"Received Builder Key : {:?}"</span>, response);
+<a href=#542 id=542 data-nosnippet>542</a>                <span class="macro">assert_eq!</span>(response, builder_pub_key);
+<a href=#543 id=543 data-nosnippet>543</a>            },
+<a href=#544 id=544 data-nosnippet>544</a>            <span class="prelude-val">Err</span>(e) =&gt; {
+<a href=#545 id=545 data-nosnippet>545</a>                <span class="macro">panic!</span>(<span class="string">"Error getting builder key {e:?}"</span>);
+<a href=#546 id=546 data-nosnippet>546</a>            },
+<a href=#547 id=547 data-nosnippet>547</a>        }
+<a href=#548 id=548 data-nosnippet>548</a>    }
+<a href=#549 id=549 data-nosnippet>549</a>}</code></pre></div></section></main></body></html>
