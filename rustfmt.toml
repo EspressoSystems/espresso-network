@@ -6,3 +6,6 @@ edition = "2021"
 condense_wildcard_suffixes = true
 imports_granularity = "Crate"
 group_imports = "StdExternalCrate"
+
+# if lines exceed the desired width, rustfmt often gives up
+format_strings = true
