@@ -397,7 +397,14 @@ where
                     );
                 } else {
                     let initializer = HotShotInitializer::<TYPES>::from_genesis::<V>(
-                        TestInstanceState::new(self.launcher.metadata.async_delay_config.clone()),
+                        TestInstanceState::new(
+                            self.launcher
+                                .metadata
+                                .async_delay_config
+                                .get(&node_id)
+                                .cloned()
+                                .unwrap_or_default(),
+                        ),
                         config.epoch_height,
                         config.epoch_start_block,
                         vec![InitializerEpochInfo::<TYPES> {

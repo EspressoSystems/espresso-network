@@ -554,7 +554,7 @@ impl Options {
                 app.serve(RateLimitListener::with_port(port, limit), bind_version)
                     .await?;
             } else {
-                app.serve(format!("0.0.0.0:{}", port), bind_version).await?;
+                app.serve(format!("0.0.0.0:{port}"), bind_version).await?;
             }
             Ok(())
         }

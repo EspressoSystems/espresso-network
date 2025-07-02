@@ -1006,6 +1006,14 @@ pub mod test_helpers {
                 .blocks_per_epoch(blocks_per_epoch)
                 .epoch_start_block(epoch_start_block)
                 .multisig_pauser(signer.address())
+                .ops_timelock_delay(U256::from(0))
+                .ops_timelock_admin(signer.address())
+                .ops_timelock_proposers(vec![signer.address()])
+                .ops_timelock_executors(vec![signer.address()])
+                .safe_exit_timelock_delay(U256::from(10))
+                .safe_exit_timelock_admin(signer.address())
+                .safe_exit_timelock_proposers(vec![signer.address()])
+                .safe_exit_timelock_executors(vec![signer.address()])
                 .build()
                 .unwrap();
 
@@ -4657,6 +4665,14 @@ mod test {
             .blocks_per_epoch(blocks_per_epoch)
             .epoch_start_block(1)
             .multisig_pauser(network_config.signer().address())
+            .ops_timelock_delay(U256::from(0))
+            .ops_timelock_admin(network_config.signer().address())
+            .ops_timelock_proposers(vec![network_config.signer().address()])
+            .ops_timelock_executors(vec![network_config.signer().address()])
+            .safe_exit_timelock_delay(U256::from(0))
+            .safe_exit_timelock_admin(network_config.signer().address())
+            .safe_exit_timelock_proposers(vec![network_config.signer().address()])
+            .safe_exit_timelock_executors(vec![network_config.signer().address()])
             .build()
             .unwrap();
 
@@ -4888,7 +4904,7 @@ mod test {
 
         let duration = start.elapsed();
 
-        println!("Time elapsed to submit transactions: {:?}", duration);
+        println!("Time elapsed to submit transactions: {duration:?}");
 
         let last_tx_height = tx_heights.last().unwrap();
         for namespace in 1..=4 {

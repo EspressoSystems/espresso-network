@@ -45,7 +45,7 @@ impl fmt::Display for DelegationConfig {
             DelegationConfig::VariableAmounts => "variable-amounts",
             DelegationConfig::MultipleDelegators => "multiple-delegators",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 

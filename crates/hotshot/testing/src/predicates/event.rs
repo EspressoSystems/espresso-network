@@ -72,7 +72,7 @@ where
 pub fn all_predicates<TYPES: NodeType>(
     predicates: Vec<Box<EventPredicate<TYPES>>>,
 ) -> Box<TestPredicate<Arc<HotShotEvent<TYPES>>>> {
-    let info = format!("{:?}", predicates);
+    let info = format!("{predicates:?}");
 
     let mut unsatisfied: Vec<_> = predicates.into_iter().map(Arc::new).collect();
 
@@ -127,7 +127,7 @@ pub fn exact<TYPES>(event: HotShotEvent<TYPES>) -> Box<EventPredicate<TYPES>>
 where
     TYPES: NodeType,
 {
-    let info = format!("{:?}", event);
+    let info = format!("{event:?}");
     let event = Arc::new(event);
 
     let check: EventCallback<TYPES> = Arc::new(move |e: Arc<HotShotEvent<TYPES>>| {

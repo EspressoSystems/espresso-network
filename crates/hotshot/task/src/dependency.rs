@@ -226,7 +226,7 @@ mod tests {
             deps.push(eq_dep(
                 rx.clone(),
                 cancel_rx.clone(),
-                format!("it_works {}", i),
+                format!("it_works {i}"),
                 5,
             ));
         }
@@ -248,7 +248,7 @@ mod tests {
             deps.push(eq_dep(
                 rx.clone(),
                 cancel_rx.clone(),
-                format!("or_dep {}", i),
+                format!("or_dep {i}"),
                 5,
             ));
         }
@@ -437,7 +437,7 @@ mod tests {
             deps.push(eq_dep(
                 rx.clone(),
                 cancel_rx.clone(),
-                format!("cancel_and_dep {}", i),
+                format!("cancel_and_dep {i}"),
                 i,
             ))
         }
@@ -462,7 +462,7 @@ mod tests {
             deps.push(eq_dep(
                 rx.clone(),
                 cancel_rx.clone(),
-                format!("cancel_event_dep {}", i),
+                format!("cancel_event_dep {i}"),
                 i,
             ))
         }
