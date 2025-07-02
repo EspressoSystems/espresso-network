@@ -2,9 +2,11 @@ use std::{num::NonZeroUsize, path::PathBuf, time::Duration};
 
 use builder::non_permissioned::{build_instance_state, BuilderConfig};
 use clap::Parser;
-use espresso_types::{eth_signature_key::EthKeyPair, parse_duration, SequencerVersions};
+use espresso_types::{
+    eth_signature_key::EthKeyPair, parse_duration, SeqTypes, SequencerVersions, ValidatedState,
+};
 use futures::future::pending;
-use hotshot::traits::ValidatedState;
+use hotshot::traits::LegacyValidatedState as LegacyHotShotState;
 use hotshot_types::{
     data::ViewNumber,
     traits::node_implementation::{ConsensusTime, Versions},
@@ -164,7 +166,8 @@ async fn run<V: Versions>(
     let base_fee = genesis.max_base_fee();
     tracing::info!(?base_fee, "base_fee");
 
-    let validated_state = ValidatedState::genesis(&instance_state).0;
+    let validated_state =
+        <ValidatedState as LegacyHotShotState<SeqTypes>>::genesis(&instance_state).0;
 
     let api_response_timeout_duration = opt.max_api_timeout_duration;
 

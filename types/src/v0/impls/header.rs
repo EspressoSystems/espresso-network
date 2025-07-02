@@ -12,7 +12,7 @@ use hotshot_types::{
         block_contents::{BlockHeader, BuilderFee},
         node_implementation::{ConsensusTime, NodeType},
         signature_key::BuilderSignatureKey,
-        BlockPayload, ValidatedState as _,
+        BlockPayload, LegacyValidatedState as LegacyHotShotState, ValidatedState as _,
     },
     utils::BuilderCommitment,
 };
@@ -895,7 +895,7 @@ impl BlockHeader<SeqTypes> for Header {
             block_merkle_tree,
             reward_merkle_tree,
             ..
-        } = ValidatedState::genesis(instance_state).0;
+        } = <ValidatedState as LegacyHotShotState<SeqTypes>>::genesis(instance_state).0;
         let block_merkle_tree_root = block_merkle_tree.commitment();
         let fee_merkle_tree_root = fee_merkle_tree.commitment();
         let reward_merkle_tree_root = reward_merkle_tree.commitment();

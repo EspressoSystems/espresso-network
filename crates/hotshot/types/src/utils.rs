@@ -35,7 +35,7 @@ use crate::{
     stake_table::StakeTableEntries,
     traits::{
         node_implementation::{ConsensusTime, NodeType, Versions},
-        ValidatedState,
+        LegacyValidatedState,
     },
     vote::{Certificate, HasViewNumber},
     PeerConfig,
@@ -63,7 +63,7 @@ pub enum ViewInner<TYPES: NodeType> {
         /// Validated state.
         state: Arc<TYPES::ValidatedState>,
         /// Optional state delta.
-        delta: Option<Arc<<TYPES::ValidatedState as ValidatedState<TYPES>>::Delta>>,
+        delta: Option<Arc<<TYPES::ValidatedState as LegacyValidatedState<TYPES>>::Delta>>,
         /// An epoch to which the data belongs to. Relevant for validating against the correct stake table
         epoch: Option<TYPES::Epoch>,
     },
@@ -101,7 +101,7 @@ pub type LeafCommitment<TYPES> = Commitment<Leaf2<TYPES>>;
 /// Optional validated state and state delta.
 pub type StateAndDelta<TYPES> = (
     Option<Arc<<TYPES as NodeType>::ValidatedState>>,
-    Option<Arc<<<TYPES as NodeType>::ValidatedState as ValidatedState<TYPES>>::Delta>>,
+    Option<Arc<<<TYPES as NodeType>::ValidatedState as LegacyValidatedState<TYPES>>::Delta>>,
 );
 
 pub async fn verify_leaf_chain<T: NodeType, V: Versions>(

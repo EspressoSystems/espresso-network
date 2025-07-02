@@ -9,7 +9,7 @@ use espresso_types::{
     BlockMerkleTree, Delta, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
 };
 use futures::{future::Future, StreamExt};
-use hotshot::traits::ValidatedState as HotShotState;
+use hotshot::traits::{LegacyValidatedState as LegacyHotShotState, ValidatedState as HotShotState};
 use hotshot_query_service::{
     availability::{AvailabilityDataSource, LeafQueryData},
     data_source::{storage::pruning::PrunedHeightDataSource, Transaction, VersionedDataSource},
@@ -306,7 +306,8 @@ where
     // resolve the parent leaf future _after_ dropping our lock on the state, in case it is not
     // ready yet and another task needs a mutable lock on the state to produce the parent leaf.
     let mut parent_leaf = parent_leaf.await;
-    let mut parent_state = ValidatedState::from_header(parent_leaf.header());
+    let mut parent_state =
+        <ValidatedState as LegacyHotShotState<SeqTypes>>::from_header(parent_leaf.header());
 
     if last_height == 0 {
         // If the last height is 0, we need to insert the genesis state, since this state is

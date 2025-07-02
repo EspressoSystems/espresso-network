@@ -17,4 +17,4 @@ pub mod states;
 pub mod storage;
 
 pub use block_contents::{BlockPayload, EncodeBytes};
-pub use states::ValidatedState;
+pub use states::{LegacyValidatedState, ValidatedState};

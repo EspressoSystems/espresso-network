@@ -9,7 +9,7 @@ use espresso_types::{
     v0_3::ChainConfig,
     BlockMerkleTree, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2, NodeState, ValidatedState,
 };
-use hotshot::traits::ValidatedState as _;
+use hotshot::traits::{LegacyValidatedState as LegacyHotShotState, ValidatedState as HotShotState};
 use hotshot_query_service::{
     availability::LeafId,
     data_source::{
@@ -486,7 +486,8 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
 
     // Get the initial state.
     let mut parent = from_leaf;
-    let mut state = ValidatedState::from_header(parent.block_header());
+    let mut state =
+        <ValidatedState as LegacyHotShotState<SeqTypes>>::from_header(parent.block_header());
 
     // Pre-load the state with the accounts we care about to ensure they will be present in the
     // final state.

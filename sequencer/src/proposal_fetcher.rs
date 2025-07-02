@@ -15,7 +15,7 @@ use hotshot_types::{
         metrics::{Counter, Gauge, Metrics},
         network::ConnectedNetwork,
         node_implementation::{ConsensusTime, Versions},
-        ValidatedState as _,
+        LegacyValidatedState as LegacyHotShotState, ValidatedState as _,
     },
     utils::{View, ViewInner},
 };
@@ -211,7 +211,11 @@ where
                     view_inner: ViewInner::Da { .. }
                 })
             ) {
-                let state = Arc::new(ValidatedState::from_header(leaf.block_header()));
+                let state = Arc::new(
+                    <ValidatedState as LegacyHotShotState<SeqTypes>>::from_header(
+                        leaf.block_header(),
+                    ),
+                );
                 if let Err(err) = consensus.update_leaf(leaf, state, None) {
                     tracing::warn!("unable to update leaf: {err:#}");
                 }

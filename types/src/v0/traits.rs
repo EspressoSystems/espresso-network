@@ -29,7 +29,7 @@ use hotshot_types::{
     traits::{
         node_implementation::{ConsensusTime, NodeType, Versions},
         storage::Storage,
-        ValidatedState as HotShotState,
+        LegacyValidatedState as LegacyHotShotState, ValidatedState as HotShotState,
     },
     utils::genesis_epoch_from_version,
 };
@@ -485,7 +485,8 @@ pub trait SequencerPersistence:
         &self,
         state: NodeState,
     ) -> anyhow::Result<(HotShotInitializer<SeqTypes>, Option<ViewNumber>)> {
-        let genesis_validated_state = ValidatedState::genesis(&state).0;
+        let genesis_validated_state =
+            <ValidatedState as LegacyHotShotState<SeqTypes>>::genesis(&state).0;
         let highest_voted_view = match self
             .load_latest_acted_view()
             .await

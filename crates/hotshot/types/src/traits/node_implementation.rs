@@ -30,7 +30,7 @@ use super::{
     signature_key::{BuilderSignatureKey, StateSignatureKey},
     states::TestableState,
     storage::Storage,
-    ValidatedState,
+    LegacyValidatedState, ValidatedState,
 };
 use crate::{
     constants::DEFAULT_UPGRADE_CONSTANTS,

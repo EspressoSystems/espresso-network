@@ -50,10 +50,40 @@ pub struct QuorumData2<TYPES: NodeType> {
     /// Block number of the leaf. It's optional to be compatible with pre-epoch version.
     pub block_number: Option<u64>,
 }
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+/// Data used for a yes vote.
+#[serde(bound(deserialize = ""))]
+pub struct LegacyQuorumData2<TYPES: NodeType> {
+    /// Commitment to the leaf
+    pub leaf_commit: Commitment<Leaf2<TYPES>>,
+    /// An epoch to which the data belongs to. Relevant for validating against the correct stake table
+    pub epoch: Option<TYPES::Epoch>,
+}
+
+impl<TYPES: NodeType> QuorumData2<TYPES> {
+    pub fn to_legacy(self) -> LegacyQuorumData2<TYPES> {
+        LegacyQuorumData2 {
+            leaf_commit: self.leaf_commit,
+            epoch: self.epoch,
+        }
+    }
+}
 /// Data used for a yes vote. Used to distinguish votes sent by the next epoch nodes.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct NextEpochQuorumData2<TYPES: NodeType>(QuorumData2<TYPES>);
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub struct LegacyNextEpochQuorumData2<TYPES: NodeType>(LegacyQuorumData2<TYPES>);
+
+impl<TYPES: NodeType> NextEpochQuorumData2<TYPES> {
+    /// Convert to a legacy quorum data
+    pub fn to_legacy(self) -> LegacyNextEpochQuorumData2<TYPES> {
+        LegacyNextEpochQuorumData2(self.0.to_legacy())
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 /// Data used for a DA vote.
 pub struct DaData {
@@ -199,7 +229,9 @@ mod sealed {
 
 impl<T: NodeType> QuorumMarker for QuorumData<T> {}
 impl<T: NodeType> QuorumMarker for QuorumData2<T> {}
+impl<T: NodeType> QuorumMarker for LegacyQuorumData2<T> {}
 impl<T: NodeType> QuorumMarker for NextEpochQuorumData2<T> {}
+impl<T: NodeType> QuorumMarker for LegacyNextEpochQuorumData2<T> {}
 impl<T: NodeType> QuorumMarker for TimeoutData<T> {}
 impl<T: NodeType> QuorumMarker for TimeoutData2<T> {}
 impl<T: NodeType> QuorumMarker for ViewSyncPreCommitData<T> {}
@@ -380,6 +412,21 @@ impl<TYPES: NodeType> Committable for QuorumData2<TYPES> {
     }
 }
 
+impl<TYPES: NodeType> Committable for LegacyQuorumData2<TYPES> {
+    fn commit(&self) -> Commitment<Self> {
+        let LegacyQuorumData2 { leaf_commit, epoch } = self;
+
+        let mut cb = committable::RawCommitmentBuilder::new("Quorum data")
+            .var_size_bytes(leaf_commit.as_ref());
+
+        if let Some(ref epoch) = *epoch {
+            cb = cb.u64_field("epoch number", **epoch);
+        }
+
+        cb.finalize()
+    }
+}
+
 impl<TYPES: NodeType> Committable for NextEpochQuorumData2<TYPES> {
     fn commit(&self) -> Commitment<Self> {
         let NextEpochQuorumData2(QuorumData2 {
@@ -397,6 +444,21 @@ impl<TYPES: NodeType> Committable for NextEpochQuorumData2<TYPES> {
 
         if let Some(ref block_number) = *block_number {
             cb = cb.u64_field("block number", *block_number);
+        }
+
+        cb.finalize()
+    }
+}
+
+impl<TYPES: NodeType> Committable for LegacyNextEpochQuorumData2<TYPES> {
+    fn commit(&self) -> Commitment<Self> {
+        let LegacyNextEpochQuorumData2(LegacyQuorumData2 { leaf_commit, epoch }) = self;
+
+        let mut cb = committable::RawCommitmentBuilder::new("Quorum data")
+            .var_size_bytes(leaf_commit.as_ref());
+
+        if let Some(ref epoch) = *epoch {
+            cb = cb.u64_field("epoch number", **epoch);
         }
 
         cb.finalize()

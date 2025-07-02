@@ -10,7 +10,7 @@ mod networking;
 mod node_implementation;
 
 pub use hotshot_libp2p_networking::network::NetworkNodeConfigBuilder;
-pub use hotshot_types::traits::{BlockPayload, ValidatedState};
+pub use hotshot_types::traits::{BlockPayload, LegacyValidatedState, ValidatedState};
 pub use networking::{NetworkError, NetworkReliability};
 pub use node_implementation::{NodeImplementation, TestableNodeImplementation};
 

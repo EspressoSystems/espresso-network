@@ -14,7 +14,7 @@ use hotshot_types::{
     traits::{
         block_contents::BlockHeader,
         node_implementation::NodeType,
-        states::{InstanceState, StateDelta, TestableState, ValidatedState},
+        states::{InstanceState, LegacyValidatedState, StateDelta, TestableState, ValidatedState},
         BlockPayload,
     },
 };
@@ -90,7 +90,7 @@ impl TestableDelay for TestValidatedState {
     }
 }
 
-impl<TYPES: NodeType> ValidatedState<TYPES> for TestValidatedState {
+impl<TYPES: NodeType> LegacyValidatedState<TYPES> for TestValidatedState {
     type Error = BlockError;
 
     type Instance = TestInstanceState;
@@ -129,6 +129,14 @@ impl<TYPES: NodeType> ValidatedState<TYPES> for TestValidatedState {
 
     fn genesis(_instance: &Self::Instance) -> (Self, Self::Delta) {
         (Self::default(), TestStateDelta {})
+    }
+}
+
+impl<TYPES: NodeType> ValidatedState<TYPES> for TestValidatedState {
+    type LegacyType = Self;
+
+    fn to_legacy(self) -> Self {
+        self
     }
 }
 

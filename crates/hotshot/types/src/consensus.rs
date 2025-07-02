@@ -37,7 +37,7 @@ use crate::{
         metrics::{Counter, Gauge, Histogram, Metrics, NoMetrics},
         node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::SignatureKey,
-        BlockPayload, ValidatedState,
+        BlockPayload, LegacyValidatedState,
     },
     utils::{
         epoch_from_block_number, is_epoch_root, is_epoch_transition, is_ge_epoch_root,
@@ -800,7 +800,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         &mut self,
         leaf: Leaf2<TYPES>,
         state: Arc<TYPES::ValidatedState>,
-        delta: Option<Arc<<TYPES::ValidatedState as ValidatedState<TYPES>>::Delta>>,
+        delta: Option<Arc<<TYPES::ValidatedState as LegacyValidatedState<TYPES>>::Delta>>,
     ) -> Result<()> {
         let view_number = leaf.view_number();
         let epoch = option_epoch_from_block_number::<TYPES>(
@@ -1011,7 +1011,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         F: FnMut(
             &Leaf2<TYPES>,
             Arc<<TYPES as NodeType>::ValidatedState>,
-            Option<Arc<<<TYPES as NodeType>::ValidatedState as ValidatedState<TYPES>>::Delta>>,
+            Option<Arc<<<TYPES as NodeType>::ValidatedState as LegacyValidatedState<TYPES>>::Delta>>,
         ) -> bool,
     {
         let mut next_leaf = if let Some(view) = self.validated_state_map.get(&start_from) {

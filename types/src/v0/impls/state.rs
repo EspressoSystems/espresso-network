@@ -9,7 +9,8 @@ use hotshot_types::{
     data::{BlockError, ViewNumber},
     traits::{
         block_contents::BlockHeader, node_implementation::ConsensusTime,
-        signature_key::BuilderSignatureKey, states::StateDelta, ValidatedState as HotShotState,
+        signature_key::BuilderSignatureKey, states::StateDelta,
+        LegacyValidatedState as LegacyHotShotState, ValidatedState as HotShotState,
     },
 };
 use itertools::Itertools;
@@ -151,6 +152,17 @@ pub struct ValidatedState {
     pub chain_config: ResolvableChainConfig,
 }
 
+#[derive(Hash, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+/// State to be validated by replicas. Used for LegacyEvent.
+pub struct LegacyValidatedState {
+    /// Frontier of [`BlockMerkleTree`]
+    pub block_merkle_tree: BlockMerkleTree,
+    /// Frontier of [`FeeMerkleTree`]
+    pub fee_merkle_tree: FeeMerkleTree,
+    /// Configuration [`Header`] proposals will be validated against.
+    pub chain_config: ResolvableChainConfig,
+}
+
 impl Default for ValidatedState {
     fn default() -> Self {
         let block_merkle_tree = BlockMerkleTree::from_elems(
@@ -180,6 +192,33 @@ impl Default for ValidatedState {
             block_merkle_tree,
             fee_merkle_tree,
             reward_merkle_tree,
+            chain_config,
+        }
+    }
+}
+
+impl Default for LegacyValidatedState {
+    fn default() -> Self {
+        let block_merkle_tree = BlockMerkleTree::from_elems(
+            Some(BLOCK_MERKLE_TREE_HEIGHT),
+            Vec::<Commitment<Header>>::new(),
+        )
+        .unwrap();
+
+        // Words of wisdom from @mrain: "capacity = arity^height"
+        // "For index space 2^160, arity 256 (2^8),
+        // you should set the height as 160/8=20"
+        let fee_merkle_tree = FeeMerkleTree::from_kv_set(
+            FEE_MERKLE_TREE_HEIGHT,
+            Vec::<(FeeAccount, FeeAmount)>::new(),
+        )
+        .unwrap();
+
+        let chain_config = ResolvableChainConfig::from(ChainConfig::default());
+
+        Self {
+            block_merkle_tree,
+            fee_merkle_tree,
             chain_config,
         }
     }
@@ -939,6 +978,18 @@ pub async fn get_l1_deposits(
 }
 
 impl HotShotState<SeqTypes> for ValidatedState {
+    type LegacyType = LegacyValidatedState;
+
+    fn to_legacy(self) -> Self::LegacyType {
+        LegacyValidatedState {
+            block_merkle_tree: self.block_merkle_tree,
+            fee_merkle_tree: self.fee_merkle_tree,
+            chain_config: self.chain_config,
+        }
+    }
+}
+
+impl LegacyHotShotState<SeqTypes> for ValidatedState {
     type Error = BlockError;
     type Instance = NodeState;
 
@@ -1031,6 +1082,39 @@ impl HotShotState<SeqTypes> for ValidatedState {
     /// Construct a genesis validated state.
     fn genesis(instance: &Self::Instance) -> (Self, Self::Delta) {
         (instance.genesis_state.clone(), Delta::default())
+    }
+}
+
+impl LegacyHotShotState<SeqTypes> for LegacyValidatedState {
+    type Error = BlockError;
+    type Instance = NodeState;
+
+    type Time = ViewNumber;
+
+    type Delta = Delta;
+    fn on_commit(&self) {}
+    /// Validate parent against known values (from state) and validate
+    /// proposal descends from parent. Returns updated `ValidatedState`.
+    async fn validate_and_apply_header(
+        &self,
+        instance: &Self::Instance,
+        parent_leaf: &Leaf2,
+        proposed_header: &Header,
+        payload_byte_len: u32,
+        version: Version,
+        view_number: u64,
+    ) -> Result<(Self, Self::Delta), Self::Error> {
+        unimplemented!("LegacyValidatedState does not support validate_and_apply_header");
+    }
+    /// Construct the state with the given block header.
+    ///
+    /// This can also be used to rebuild the state for catchup.
+    fn from_header(block_header: &Header) -> Self {
+        unimplemented!("LegacyValidatedState does not support from_header");
+    }
+    /// Construct a genesis validated state.
+    fn genesis(instance: &Self::Instance) -> (Self, Self::Delta) {
+        unimplemented!("LegacyValidatedState does not support genesis");
     }
 }
 

@@ -35,7 +35,7 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
         signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
         storage::{load_drb_progress_fn, store_drb_progress_fn, Storage},
-        BlockPayload, ValidatedState,
+        BlockPayload, LegacyValidatedState,
     },
     utils::{
         epoch_from_block_number, is_epoch_root, is_epoch_transition, is_transition_block,
@@ -134,7 +134,9 @@ pub(crate) async fn fetch_proposal<TYPES: NodeType, V: Versions>(
     let mut consensus_writer = consensus.write().await;
     let leaf = Leaf2::from_quorum_proposal(&proposal.data);
     let state = Arc::new(
-        <TYPES::ValidatedState as ValidatedState<TYPES>>::from_header(proposal.data.block_header()),
+        <TYPES::ValidatedState as LegacyValidatedState<TYPES>>::from_header(
+            proposal.data.block_header(),
+        ),
     );
 
     if let Err(e) = consensus_writer.update_leaf(leaf.clone(), Arc::clone(&state), None) {
@@ -886,7 +888,9 @@ pub async fn validate_proposal_safety_and_liveness<
     );
 
     let state = Arc::new(
-        <TYPES::ValidatedState as ValidatedState<TYPES>>::from_header(proposal.data.block_header()),
+        <TYPES::ValidatedState as LegacyValidatedState<TYPES>>::from_header(
+            proposal.data.block_header(),
+        ),
     );
 
     {

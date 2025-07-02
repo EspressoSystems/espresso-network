@@ -27,8 +27,8 @@ use vbs::{
 use crate::{
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
-        DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
-        QuorumProposalWrapper, UpgradeProposal,
+        DaProposal, DaProposal2, Leaf, Leaf2, LegacyDaProposal2, LegacyQuorumProposalWrapper,
+        QuorumProposal, QuorumProposal2, QuorumProposalWrapper, UpgradeProposal,
     },
     epoch_membership::EpochMembership,
     request_response::ProposalRequestPayload,
@@ -581,6 +581,27 @@ where
         );
 
         Ok(())
+    }
+
+    pub fn to_legacy(self) -> Proposal<TYPES, LegacyQuorumProposalWrapper<TYPES>> {
+        Proposal {
+            data: self.data.to_legacy(),
+            signature: self.signature,
+            _pd: PhantomData::<TYPES>,
+        }
+    }
+}
+
+impl<TYPES> Proposal<TYPES, DaProposal2<TYPES>>
+where
+    TYPES: NodeType,
+{
+    pub fn to_legacy(self) -> Proposal<TYPES, LegacyDaProposal2<TYPES>> {
+        Proposal {
+            data: self.data.to_legacy(),
+            signature: self.signature,
+            _pd: PhantomData::<TYPES>,
+        }
     }
 }
 

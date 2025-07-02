@@ -17,6 +17,6 @@ pub use instance_state::mock;
 pub use instance_state::{NodeState, UpgradeMap};
 pub use stake_table::*;
 pub use state::{
-    get_l1_deposits, BuilderValidationError, ProposalValidationError, StateValidationError,
-    ValidatedState,
+    get_l1_deposits, BuilderValidationError, LegacyValidatedState, ProposalValidationError,
+    StateValidationError, ValidatedState,
 };

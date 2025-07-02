@@ -35,6 +35,7 @@ use crate::{
     impl_has_epoch, impl_has_none_epoch,
     message::{convert_proposal, Proposal, UpgradeLock},
     simple_certificate::{
+        LegacyNextEpochQuorumCertificate2, LegacyQuorumCertificate2,
         LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
         QuorumCertificate2, TimeoutCertificate, TimeoutCertificate2, UpgradeCertificate,
         ViewSyncFinalizeCertificate, ViewSyncFinalizeCertificate2,
@@ -169,6 +170,32 @@ pub struct DaProposal2<TYPES: NodeType> {
     /// Indicates whether we are in epoch transition
     /// In epoch transition the next epoch payload commit should be calculated additionally
     pub epoch_transition_indicator: EpochTransitionIndicator,
+}
+
+/// A proposal to start providing data availability for a block. This is the legacy version
+/// which works with the LegacyEvent structure
+#[derive(derive_more::Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
+#[serde(bound = "TYPES: NodeType")]
+pub struct LegacyDaProposal2<TYPES: NodeType> {
+    /// Encoded transactions in the block to be applied.
+    pub encoded_transactions: Arc<[u8]>,
+    /// Metadata of the block to be applied.
+    pub metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+    /// View this proposal applies to
+    pub view_number: TYPES::View,
+    /// Epoch this proposal applies to
+    pub epoch: Option<TYPES::Epoch>,
+}
+
+impl<TYPES: NodeType> DaProposal2<TYPES> {
+    pub fn to_legacy(self) -> LegacyDaProposal2<TYPES> {
+        LegacyDaProposal2 {
+            encoded_transactions: self.encoded_transactions,
+            metadata: self.metadata,
+            view_number: self.view_number,
+            epoch: self.epoch,
+        }
+    }
 }
 
 impl<TYPES: NodeType> From<DaProposal<TYPES>> for DaProposal2<TYPES> {
@@ -780,7 +807,83 @@ pub struct QuorumProposalWrapper<TYPES: NodeType> {
     pub proposal: QuorumProposal2<TYPES>,
 }
 
+/// Proposal to append a block. Used with the LegacyEvent structure.
+#[derive(derive_more::Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
+#[serde(bound(deserialize = ""))]
+pub struct LegacyQuorumProposal2<TYPES: NodeType> {
+    /// The block header to append
+    pub block_header: TYPES::BlockHeader,
+
+    /// view number for the proposal
+    pub view_number: TYPES::View,
+
+    /// The epoch number corresponding to the block number. Can be `None` for pre-epoch version.
+    pub epoch: Option<TYPES::Epoch>,
+
+    /// certificate that the proposal is chaining from
+    pub justify_qc: LegacyQuorumCertificate2<TYPES>,
+
+    /// certificate that the proposal is chaining from formed by the next epoch nodes
+    pub next_epoch_justify_qc: Option<LegacyNextEpochQuorumCertificate2<TYPES>>,
+
+    /// Possible upgrade certificate, which the leader may optionally attach.
+    pub upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
+
+    /// Possible timeout or view sync certificate. If the `justify_qc` is not for a proposal in the immediately preceding view, then either a timeout or view sync certificate must be attached.
+    pub view_change_evidence: Option<ViewChangeEvidence2<TYPES>>,
+
+    /// The DRB result for the next epoch.
+    ///
+    /// This is required only for the last block of the epoch. Nodes will verify that it's
+    /// consistent with the result from their computations.
+    #[serde(with = "serde_bytes")]
+    pub next_drb_result: Option<DrbResult>,
+}
+
+/// Wrapper around a proposal to append a block. Used with the LegacyEvent structure.
+#[derive(derive_more::Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
+#[serde(bound(deserialize = ""))]
+pub struct LegacyQuorumProposalWrapper<TYPES: NodeType> {
+    /// The wrapped proposal
+    pub proposal: LegacyQuorumProposal2<TYPES>,
+}
+
 impl<TYPES: NodeType> QuorumProposal2<TYPES> {
+    pub fn to_legacy(self) -> LegacyQuorumProposal2<TYPES> {
+        LegacyQuorumProposal2 {
+            block_header: self.block_header,
+            view_number: self.view_number,
+            epoch: self.epoch,
+            justify_qc: self.justify_qc.to_legacy(),
+            next_epoch_justify_qc: self.next_epoch_justify_qc.map(|qc| qc.to_legacy()),
+            upgrade_certificate: self.upgrade_certificate,
+            view_change_evidence: self.view_change_evidence,
+            next_drb_result: self.next_drb_result,
+        }
+    }
+
+    /// Validates whether the epoch is consistent with the version and the block number
+    /// # Errors
+    /// Returns an error if the epoch is inconsistent with the version or the block number
+    pub async fn validate_epoch<V: Versions>(
+        &self,
+        upgrade_lock: &UpgradeLock<TYPES, V>,
+        epoch_height: u64,
+    ) -> Result<()> {
+        let calculated_epoch = option_epoch_from_block_number::<TYPES>(
+            upgrade_lock.epochs_enabled(self.view_number()).await,
+            self.block_header.block_number(),
+            epoch_height,
+        );
+        ensure!(
+            calculated_epoch == self.epoch(),
+            "Quorum proposal invalid: inconsistent epoch."
+        );
+        Ok(())
+    }
+}
+
+impl<TYPES: NodeType> LegacyQuorumProposal2<TYPES> {
     /// Validates whether the epoch is consistent with the version and the block number
     /// # Errors
     /// Returns an error if the epoch is inconsistent with the version or the block number
@@ -803,6 +906,13 @@ impl<TYPES: NodeType> QuorumProposal2<TYPES> {
 }
 
 impl<TYPES: NodeType> QuorumProposalWrapper<TYPES> {
+    /// Convert to a legacy quorum proposal wrapper for use in LegacyEvent.
+    pub fn to_legacy(self) -> LegacyQuorumProposalWrapper<TYPES> {
+        LegacyQuorumProposalWrapper {
+            proposal: self.proposal.to_legacy(),
+        }
+    }
+
     /// Helper function to get the proposal's block_header
     pub fn block_header(&self) -> &TYPES::BlockHeader {
         &self.proposal.block_header
@@ -854,6 +964,56 @@ impl<TYPES: NodeType> QuorumProposalWrapper<TYPES> {
     /// Helper function to get the proposal's light client state update certificate
     pub fn state_cert(&self) -> &Option<LightClientStateUpdateCertificate<TYPES>> {
         &self.proposal.state_cert
+    }
+}
+
+impl<TYPES: NodeType> LegacyQuorumProposalWrapper<TYPES> {
+    /// Helper function to get the proposal's block_header
+    pub fn block_header(&self) -> &TYPES::BlockHeader {
+        &self.proposal.block_header
+    }
+
+    /// Helper function to get the proposal's view_number
+    pub fn view_number(&self) -> TYPES::View {
+        self.proposal.view_number
+    }
+
+    /// Helper function to get the proposal's justify_qc
+    pub fn justify_qc(&self) -> &LegacyQuorumCertificate2<TYPES> {
+        &self.proposal.justify_qc
+    }
+
+    /// Helper function to get the proposal's next_epoch_justify_qc
+    pub fn next_epoch_justify_qc(&self) -> &Option<LegacyNextEpochQuorumCertificate2<TYPES>> {
+        &self.proposal.next_epoch_justify_qc
+    }
+
+    /// Helper function to get the proposal's upgrade_certificate
+    pub fn upgrade_certificate(&self) -> &Option<UpgradeCertificate<TYPES>> {
+        &self.proposal.upgrade_certificate
+    }
+
+    /// Helper function to get the proposal's view_change_evidence
+    pub fn view_change_evidence(&self) -> &Option<ViewChangeEvidence2<TYPES>> {
+        &self.proposal.view_change_evidence
+    }
+
+    /// Helper function to get the proposal's next_drb_result
+    pub fn next_drb_result(&self) -> &Option<DrbResult> {
+        &self.proposal.next_drb_result
+    }
+
+    /// Validates whether the epoch is consistent with the version and the block number
+    /// # Errors
+    /// Returns an error if the epoch is inconsistent with the version or the block number
+    pub async fn validate_epoch<V: Versions>(
+        &self,
+        upgrade_lock: &UpgradeLock<TYPES, V>,
+        epoch_height: u64,
+    ) -> Result<()> {
+        self.proposal
+            .validate_epoch(upgrade_lock, epoch_height)
+            .await
     }
 }
 
@@ -948,6 +1108,12 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for DaProposal2<TYPES> {
     }
 }
 
+impl<TYPES: NodeType> HasViewNumber<TYPES> for LegacyDaProposal2<TYPES> {
+    fn view_number(&self) -> TYPES::View {
+        self.view_number
+    }
+}
+
 impl<TYPES: NodeType> HasViewNumber<TYPES> for QuorumProposal<TYPES> {
     fn view_number(&self) -> TYPES::View {
         self.view_number
@@ -966,13 +1132,30 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for QuorumProposalWrapper<TYPES> {
     }
 }
 
+impl<TYPES: NodeType> HasViewNumber<TYPES> for LegacyQuorumProposal2<TYPES> {
+    fn view_number(&self) -> TYPES::View {
+        self.view_number
+    }
+}
+
+impl<TYPES: NodeType> HasViewNumber<TYPES> for LegacyQuorumProposalWrapper<TYPES> {
+    fn view_number(&self) -> TYPES::View {
+        self.proposal.view_number
+    }
+}
+
 impl<TYPES: NodeType> HasViewNumber<TYPES> for UpgradeProposal<TYPES> {
     fn view_number(&self) -> TYPES::View {
         self.view_number
     }
 }
 
-impl_has_epoch!(QuorumProposal2<TYPES>, DaProposal2<TYPES>);
+impl_has_epoch!(
+    QuorumProposal2<TYPES>,
+    LegacyQuorumProposal2<TYPES>,
+    DaProposal2<TYPES>,
+    LegacyDaProposal2<TYPES>
+);
 
 impl_has_none_epoch!(
     QuorumProposal<TYPES>,
@@ -982,6 +1165,14 @@ impl_has_none_epoch!(
 );
 
 impl<TYPES: NodeType> HasEpoch<TYPES> for QuorumProposalWrapper<TYPES> {
+    /// Return an underlying proposal's epoch
+    #[allow(clippy::panic)]
+    fn epoch(&self) -> Option<TYPES::Epoch> {
+        self.proposal.epoch()
+    }
+}
+
+impl<TYPES: NodeType> HasEpoch<TYPES> for LegacyQuorumProposalWrapper<TYPES> {
     /// Return an underlying proposal's epoch
     #[allow(clippy::panic)]
     fn epoch(&self) -> Option<TYPES::Epoch> {
@@ -1089,7 +1280,63 @@ pub struct Leaf2<TYPES: NodeType> {
     pub with_epoch: bool,
 }
 
+/// Leaf2 type used with the LegacyEvent structure.
+#[derive(Serialize, Deserialize, Clone, Debug, Eq)]
+#[serde(bound(deserialize = ""))]
+pub struct LegacyLeaf2<TYPES: NodeType> {
+    /// CurView from leader when proposing leaf
+    view_number: TYPES::View,
+
+    /// Per spec, justification
+    justify_qc: LegacyQuorumCertificate2<TYPES>,
+
+    /// certificate that the proposal is chaining from formed by the next epoch nodes
+    next_epoch_justify_qc: Option<LegacyNextEpochQuorumCertificate2<TYPES>>,
+
+    /// The hash of the parent `Leaf`
+    /// So we can ask if it extends
+    parent_commitment: Commitment<Leaf2<TYPES>>,
+
+    /// Block header.
+    block_header: TYPES::BlockHeader,
+
+    /// Optional upgrade certificate, if one was attached to the quorum proposal for this view.
+    upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
+
+    /// Optional block payload.
+    ///
+    /// It may be empty for nodes not in the DA committee.
+    block_payload: Option<TYPES::BlockPayload>,
+
+    /// Possible timeout or view sync certificate. If the `justify_qc` is not for a proposal in the immediately preceding view, then either a timeout or view sync certificate must be attached.
+    pub view_change_evidence: Option<ViewChangeEvidence2<TYPES>>,
+
+    /// The DRB result for the next epoch.
+    ///
+    /// This is required only for the last block of the epoch. Nodes will verify that it's
+    /// consistent with the result from their computations.
+    #[serde(with = "serde_bytes")]
+    pub next_drb_result: Option<DrbResult>,
+
+    /// Indicates whether or not epochs were enabled.
+    pub with_epoch: bool,
+}
+
 impl<TYPES: NodeType> Leaf2<TYPES> {
+    pub fn to_legacy(self) -> LegacyLeaf2<TYPES> {
+        LegacyLeaf2 {
+            view_number: self.view_number,
+            justify_qc: self.justify_qc.to_legacy(),
+            next_epoch_justify_qc: self.next_epoch_justify_qc.map(|nec| nec.to_legacy()),
+            parent_commitment: self.parent_commitment,
+            block_header: self.block_header,
+            upgrade_certificate: self.upgrade_certificate,
+            block_payload: self.block_payload,
+            view_change_evidence: self.view_change_evidence,
+            next_drb_result: self.next_drb_result,
+            with_epoch: self.with_epoch,
+        }
+    }
     /// Create a new leaf from its components.
     ///
     /// # Panics
@@ -1350,6 +1597,54 @@ impl<TYPES: NodeType> Committable for Leaf2<TYPES> {
     }
 }
 
+impl<TYPES: NodeType> Committable for LegacyLeaf2<TYPES> {
+    fn commit(&self) -> committable::Commitment<Self> {
+        let LegacyLeaf2 {
+            view_number,
+            justify_qc,
+            next_epoch_justify_qc,
+            parent_commitment,
+            block_header,
+            upgrade_certificate,
+            block_payload: _,
+            view_change_evidence,
+            next_drb_result,
+            with_epoch,
+        } = self;
+
+        let mut cb = RawCommitmentBuilder::new("leaf commitment")
+            .u64_field("view number", **view_number)
+            .field("parent leaf commitment", *parent_commitment)
+            .field("block header", block_header.commit())
+            .field("justify qc", justify_qc.commit())
+            .optional("upgrade certificate", upgrade_certificate);
+
+        if *with_epoch {
+            cb = cb
+                .constant_str("with_epoch")
+                .optional("next_epoch_justify_qc", next_epoch_justify_qc);
+
+            if let Some(next_drb_result) = next_drb_result {
+                cb = cb
+                    .constant_str("next_drb_result")
+                    .fixed_size_bytes(next_drb_result);
+            }
+
+            match view_change_evidence {
+                Some(ViewChangeEvidence2::Timeout(cert)) => {
+                    cb = cb.field("timeout cert", cert.commit());
+                },
+                Some(ViewChangeEvidence2::ViewSync(cert)) => {
+                    cb = cb.field("viewsync cert", cert.commit());
+                },
+                None => {},
+            }
+        }
+
+        cb.finalize()
+    }
+}
+
 impl<TYPES: NodeType> Leaf<TYPES> {
     #[allow(clippy::unused_async)]
     /// Calculate the leaf commitment,
@@ -1374,6 +1669,33 @@ impl<TYPES: NodeType> PartialEq for Leaf<TYPES> {
 impl<TYPES: NodeType> PartialEq for Leaf2<TYPES> {
     fn eq(&self, other: &Self) -> bool {
         let Leaf2 {
+            view_number,
+            justify_qc,
+            next_epoch_justify_qc,
+            parent_commitment,
+            block_header,
+            upgrade_certificate,
+            block_payload: _,
+            view_change_evidence,
+            next_drb_result,
+            with_epoch,
+        } = self;
+
+        *view_number == other.view_number
+            && *justify_qc == other.justify_qc
+            && *next_epoch_justify_qc == other.next_epoch_justify_qc
+            && *parent_commitment == other.parent_commitment
+            && *block_header == other.block_header
+            && *upgrade_certificate == other.upgrade_certificate
+            && *view_change_evidence == other.view_change_evidence
+            && *next_drb_result == other.next_drb_result
+            && *with_epoch == other.with_epoch
+    }
+}
+
+impl<TYPES: NodeType> PartialEq for LegacyLeaf2<TYPES> {
+    fn eq(&self, other: &Self) -> bool {
+        let LegacyLeaf2 {
             view_number,
             justify_qc,
             next_epoch_justify_qc,

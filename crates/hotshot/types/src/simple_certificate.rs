@@ -24,10 +24,11 @@ use crate::{
     light_client::{LightClientState, StakeTableState},
     message::UpgradeLock,
     simple_vote::{
-        DaData, DaData2, HasEpoch, NextEpochQuorumData2, QuorumData, QuorumData2, QuorumMarker,
-        TimeoutData, TimeoutData2, UpgradeProposalData, VersionedVoteData, ViewSyncCommitData,
-        ViewSyncCommitData2, ViewSyncFinalizeData, ViewSyncFinalizeData2, ViewSyncPreCommitData,
-        ViewSyncPreCommitData2, Voteable,
+        DaData, DaData2, HasEpoch, LegacyNextEpochQuorumData2, LegacyQuorumData2,
+        NextEpochQuorumData2, QuorumData, QuorumData2, QuorumMarker, TimeoutData, TimeoutData2,
+        UpgradeProposalData, VersionedVoteData, ViewSyncCommitData, ViewSyncCommitData2,
+        ViewSyncFinalizeData, ViewSyncFinalizeData2, ViewSyncPreCommitData, ViewSyncPreCommitData2,
+        Voteable,
     },
     stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
@@ -695,13 +696,53 @@ impl<TYPES: NodeType> TimeoutCertificate2<TYPES> {
     }
 }
 
+impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
+    pub fn to_legacy(self) -> LegacyQuorumCertificate2<TYPES> {
+        let data = self.data.to_legacy();
+
+        let bytes: [u8; 32] = self.vote_commitment.into();
+        let vote_commitment = Commitment::from_raw(bytes);
+
+        SimpleCertificate {
+            data,
+            vote_commitment,
+            view_number: self.view_number,
+            signatures: self.signatures.clone(),
+            _pd: PhantomData,
+        }
+    }
+}
+
+impl<TYPES: NodeType> NextEpochQuorumCertificate2<TYPES> {
+    pub fn to_legacy(self) -> LegacyNextEpochQuorumCertificate2<TYPES> {
+        let data = self.data.to_legacy();
+
+        let bytes: [u8; 32] = self.vote_commitment.into();
+        let vote_commitment = Commitment::from_raw(bytes);
+
+        SimpleCertificate {
+            data,
+            vote_commitment,
+            view_number: self.view_number,
+            signatures: self.signatures.clone(),
+            _pd: PhantomData,
+        }
+    }
+}
+
 /// Type alias for a `QuorumCertificate`, which is a `SimpleCertificate` over `QuorumData`
 pub type QuorumCertificate<TYPES> = SimpleCertificate<TYPES, QuorumData<TYPES>, SuccessThreshold>;
 /// Type alias for a `QuorumCertificate2`, which is a `SimpleCertificate` over `QuorumData2`
 pub type QuorumCertificate2<TYPES> = SimpleCertificate<TYPES, QuorumData2<TYPES>, SuccessThreshold>;
-/// Type alias for a `QuorumCertificate2`, which is a `SimpleCertificate` over `QuorumData2`
+/// Type alias for a `LegacyQuorumCertificate2`, which is a `SimpleCertificate` over `LegacyQuorumData2`
+pub type LegacyQuorumCertificate2<TYPES> =
+    SimpleCertificate<TYPES, LegacyQuorumData2<TYPES>, SuccessThreshold>;
+/// Type alias for a `NextEpochQuorumCertificate2`, which is a `SimpleCertificate` over `NextEpochQuorumData2`
 pub type NextEpochQuorumCertificate2<TYPES> =
     SimpleCertificate<TYPES, NextEpochQuorumData2<TYPES>, SuccessThreshold>;
+/// Type alias for a `LegacyNextEpochQuorumCertificate2`, which is a `SimpleCertificate` over `LegacyNextEpochQuorumData2`
+pub type LegacyNextEpochQuorumCertificate2<TYPES> =
+    SimpleCertificate<TYPES, LegacyNextEpochQuorumData2<TYPES>, SuccessThreshold>;
 /// Type alias for a `DaCertificate`, which is a `SimpleCertificate` over `DaData`
 pub type DaCertificate<TYPES> = SimpleCertificate<TYPES, DaData, SuccessThreshold>;
 /// Type alias for a `DaCertificate2`, which is a `SimpleCertificate` over `DaData2`

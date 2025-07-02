@@ -26,7 +26,9 @@ use super::signature_key::BuilderSignatureKey;
 use crate::{
     data::{Leaf2, VidCommitment},
     light_client::LightClientState,
-    traits::{node_implementation::NodeType, states::InstanceState, ValidatedState},
+    traits::{
+        node_implementation::NodeType, states::InstanceState, LegacyValidatedState, ValidatedState,
+    },
     utils::BuilderCommitment,
 };
 
@@ -167,7 +169,7 @@ pub trait BlockHeader<TYPES: NodeType>:
     #[allow(clippy::too_many_arguments)]
     fn new(
         parent_state: &TYPES::ValidatedState,
-        instance_state: &<TYPES::ValidatedState as ValidatedState<TYPES>>::Instance,
+        instance_state: &<TYPES::ValidatedState as LegacyValidatedState<TYPES>>::Instance,
         parent_leaf: &Leaf2<TYPES>,
         payload_commitment: VidCommitment,
         builder_commitment: BuilderCommitment,
@@ -179,7 +181,7 @@ pub trait BlockHeader<TYPES: NodeType>:
 
     /// Build the genesis header, payload, and metadata.
     fn genesis(
-        instance_state: &<TYPES::ValidatedState as ValidatedState<TYPES>>::Instance,
+        instance_state: &<TYPES::ValidatedState as LegacyValidatedState<TYPES>>::Instance,
         payload_commitment: VidCommitment,
         builder_commitment: BuilderCommitment,
         metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,

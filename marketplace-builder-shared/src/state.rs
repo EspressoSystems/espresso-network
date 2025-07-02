@@ -7,7 +7,7 @@ use std::{
 use async_broadcast::Receiver;
 use async_lock::{Mutex, RwLock};
 use committable::{Commitment, Committable};
-use hotshot::traits::{BlockPayload, ValidatedState};
+use hotshot::traits::{BlockPayload, LegacyValidatedState};
 use hotshot_types::{
     data::{DaProposal2, Leaf2, QuorumProposalWrapper},
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
@@ -148,7 +148,9 @@ where
     ) -> Arc<Self> {
         let leaf = Leaf2::from_quorum_proposal(&quorum_proposal);
 
-        let validated_state = Types::ValidatedState::from_header(leaf.block_header());
+        let validated_state = <Types::ValidatedState as LegacyValidatedState<Types>>::from_header(
+            leaf.block_header(),
+        );
 
         let mut included_txns = self.included_txns.clone();
         included_txns.rotate();

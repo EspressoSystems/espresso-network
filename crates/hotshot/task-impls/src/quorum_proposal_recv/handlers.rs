@@ -24,7 +24,7 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::SignatureKey,
         storage::Storage,
-        ValidatedState,
+        LegacyValidatedState, ValidatedState,
     },
     utils::{
         epoch_from_block_number, is_epoch_root, is_epoch_transition, is_transition_block,
@@ -111,7 +111,9 @@ pub async fn validate_proposal_liveness<
     let leaf = Leaf2::from_quorum_proposal(&proposal.data);
 
     let state = Arc::new(
-        <TYPES::ValidatedState as ValidatedState<TYPES>>::from_header(proposal.data.block_header()),
+        <TYPES::ValidatedState as LegacyValidatedState<TYPES>>::from_header(
+            proposal.data.block_header(),
+        ),
     );
 
     if let Err(e) = consensus_writer.update_leaf(leaf.clone(), state, None) {

@@ -68,7 +68,7 @@ use hotshot_types::{
         network::ConnectedNetwork,
         node_implementation::{ConsensusTime, NodeType},
         signature_key::SignatureKey,
-        states::ValidatedState,
+        states::LegacyValidatedState,
     },
     utils::{genesis_epoch_from_version, option_epoch_from_block_number},
     HotShotConfig,
@@ -454,7 +454,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             // which contains only that leaf and nothing else.
             if self.anchored_leaf.view_number() == TYPES::View::genesis() {
                 let (validated_state, state_delta) =
-                    TYPES::ValidatedState::genesis(&self.instance_state);
+                    <TYPES::ValidatedState as LegacyValidatedState<TYPES>>::genesis(
+                        &self.instance_state,
+                    );
 
                 let qc = Arc::new(
                     QuorumCertificate2::genesis::<V>(
@@ -1031,7 +1033,8 @@ pub struct HotShotInitializer<TYPES: NodeType> {
     pub anchor_state: Arc<TYPES::ValidatedState>,
 
     /// ValidatedState::Delta for the anchor leaf, optional.
-    pub anchor_state_delta: Option<Arc<<TYPES::ValidatedState as ValidatedState<TYPES>>::Delta>>,
+    pub anchor_state_delta:
+        Option<Arc<<TYPES::ValidatedState as LegacyValidatedState<TYPES>>::Delta>>,
 
     /// Starting view number that should be equivalent to the view the node shut down with last.
     pub start_view: TYPES::View,

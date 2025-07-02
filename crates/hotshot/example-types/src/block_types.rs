@@ -18,7 +18,7 @@ use hotshot_types::{
     traits::{
         block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock, Transaction},
         node_implementation::{ConsensusTime, NodeType},
-        BlockPayload, ValidatedState,
+        BlockPayload, LegacyValidatedState,
     },
     utils::BuilderCommitment,
 };
@@ -325,7 +325,7 @@ impl<
 
     async fn new(
         _parent_state: &TYPES::ValidatedState,
-        instance_state: &<TYPES::ValidatedState as ValidatedState<TYPES>>::Instance,
+        instance_state: &<TYPES::ValidatedState as LegacyValidatedState<TYPES>>::Instance,
         parent_leaf: &Leaf2<TYPES>,
         payload_commitment: VidCommitment,
         builder_commitment: BuilderCommitment,
@@ -344,7 +344,7 @@ impl<
     }
 
     fn genesis(
-        _instance_state: &<TYPES::ValidatedState as ValidatedState<TYPES>>::Instance,
+        _instance_state: &<TYPES::ValidatedState as LegacyValidatedState<TYPES>>::Instance,
         payload_commitment: VidCommitment,
         builder_commitment: BuilderCommitment,
         _metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,

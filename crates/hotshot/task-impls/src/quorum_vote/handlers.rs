@@ -23,7 +23,7 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::{SignatureKey, StateSignatureKey},
         storage::Storage,
-        ValidatedState,
+        LegacyValidatedState,
     },
     utils::{
         epoch_from_block_number, is_epoch_transition, is_last_block, is_transition_block,

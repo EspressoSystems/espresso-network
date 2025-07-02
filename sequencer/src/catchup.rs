@@ -35,7 +35,7 @@ use hotshot_types::{
         metrics::{Counter, CounterFamily, Metrics},
         network::ConnectedNetwork,
         node_implementation::{ConsensusTime as _, NodeType, Versions},
-        ValidatedState as ValidatedStateTrait,
+        LegacyValidatedState as LegacyValidatedStateTrait, ValidatedState as ValidatedStateTrait,
     },
     utils::{verify_leaf_chain, View, ViewInner},
     ValidatorConfig,
@@ -1437,7 +1437,9 @@ pub async fn add_fee_accounts_to_state<
             // at all, we can create a new view based on the recovered leaf and add it to
             // our state map. In this case, we must also add the leaf to the saved leaves
             // map to ensure consistency.
-            let mut state = ValidatedState::from_header(leaf.block_header());
+            let mut state = <ValidatedState as LegacyValidatedStateTrait<SeqTypes>>::from_header(
+                leaf.block_header(),
+            );
             state.fee_merkle_tree = tree.clone();
             (Arc::new(state), None)
         },
@@ -1495,7 +1497,9 @@ pub async fn add_reward_accounts_to_state<
             // at all, we can create a new view based on the recovered leaf and add it to
             // our state map. In this case, we must also add the leaf to the saved leaves
             // map to ensure consistency.
-            let mut state = ValidatedState::from_header(leaf.block_header());
+            let mut state = <ValidatedState as LegacyValidatedStateTrait<SeqTypes>>::from_header(
+                leaf.block_header(),
+            );
             state.reward_merkle_tree = tree.clone();
             (Arc::new(state), None)
         },
