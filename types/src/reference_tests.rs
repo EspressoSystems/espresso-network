@@ -24,26 +24,20 @@
 use std::{fmt::Debug, path::Path, str::FromStr};
 
 use alloy::primitives::U256;
-use committable::{Commitment, CommitmentBoundsArkless, Committable};
-use hotshot::types::{BLSPubKey, SignatureKey};
+use committable::Committable;
 use hotshot_example_types::node_types::TestVersions;
 use hotshot_query_service::{
     availability::{
-        BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadMetadata, PayloadQueryData,
-        StateCertQueryData, TransactionQueryData, VidCommonQueryData,
+        BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, StateCertQueryData,
+        TransactionQueryData, VidCommonQueryData,
     },
     testing::mocks::MockVersions,
-    QuorumCertificate, VidCommon,
+    VidCommon,
 };
 use hotshot_types::{
-    data::{vid_commitment, QuorumProposal, ViewNumber},
-    message::Proposal,
-    simple_certificate::{LightClientStateUpdateCertificate, UpgradeCertificate},
-    simple_vote::{QuorumData, UpgradeProposalData},
-    traits::{
-        block_contents::BlockHeader, node_implementation::ConsensusTime,
-        signature_key::BuilderSignatureKey, BlockPayload, EncodeBytes,
-    },
+    data::vid_commitment,
+    simple_certificate::LightClientStateUpdateCertificate,
+    traits::{signature_key::BuilderSignatureKey, BlockPayload, EncodeBytes},
     vid::{advz::advz_scheme, avidm::init_avidm_param},
 };
 use jf_merkle_tree::MerkleTreeScheme;
@@ -61,7 +55,7 @@ use vbs::{
 
 use crate::{
     v0_1::{self, ADVZNsProof},
-    v0_2, ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, Leaf, NamespaceId,
+    v0_2, ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
     NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload, SeqTypes, Transaction,
     ValidatedState,
 };
