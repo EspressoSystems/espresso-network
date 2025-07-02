@@ -35,7 +35,7 @@ hotshot-example-types = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-testing = { workspace = true }
 pretty_assertions = { workspace = true }
-rand = "0.8.5"
+rand = "0.9.1"
 reqwest = { workspace = true }
 
 # Enable "testing" feature when running tests
