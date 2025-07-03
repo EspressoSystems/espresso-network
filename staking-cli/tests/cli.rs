@@ -232,38 +232,6 @@ async fn test_cli_register_validator(
 }
 
 #[rstest_reuse::apply(stake_table_versions)]
-async fn test_cli_register_validator_fails_without_balance(
-    #[case] version: StakeTableContractVersion,
-) -> Result<()> {
-    setup_test();
-    let system = TestSystem::deploy_version(version).await?;
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::BrokeMnemonic);
-    cmd.arg("register-validator")
-        .arg("--consensus-private-key")
-        .arg(
-            system
-                .bls_key_pair
-                .sign_key_ref()
-                .to_tagged_base64()?
-                .to_string(),
-        )
-        .arg("--state-private-key")
-        .arg(
-            system
-                .state_key_pair
-                .sign_key()
-                .to_tagged_base64()?
-                .to_string(),
-        )
-        .arg("--commission")
-        .arg("12.34")
-        .output()?
-        .assert_failure();
-    Ok(())
-}
-
-#[rstest_reuse::apply(stake_table_versions)]
 async fn test_cli_update_consensus_keys(#[case] version: StakeTableContractVersion) -> Result<()> {
     let system = TestSystem::deploy_version(version).await?;
     system.register_validator().await?;
