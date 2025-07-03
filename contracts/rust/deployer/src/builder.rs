@@ -28,6 +28,22 @@ use crate::{
 /// - `initial_token_supply`: initial token supply for the token contract
 /// - `token_name`: name of the token
 /// - `token_symbol`: symbol of the token
+/// - `ops_timelock_admin`: admin address for the ops timelock
+/// - `ops_timelock_delay`: delay for the ops timelock
+/// - `ops_timelock_executors`: executors for the ops timelock
+/// - `ops_timelock_proposers`: proposers for the ops timelock
+/// - `safe_exit_timelock_admin`: admin address for the safe exit timelock
+/// - `safe_exit_timelock_delay`: delay for the safe exit timelock
+/// - `safe_exit_timelock_executors`: executors for the safe exit timelock
+/// - `safe_exit_timelock_proposers`: proposers for the safe exit timelock
+/// - `timelock_operation_type`: type of the timelock operation
+/// - `timelock_target_contract`: target contract for the timelock operation
+/// - `timelock_operation_value`: value for the timelock operation
+/// - `timelock_operation_delay`: delay for the timelock operation
+/// - `timelock_operation_function_signature`: function signature for the timelock operation
+/// - `timelock_operation_function_values`: function values for the timelock operation
+/// - `timelock_operation_salt`: salt for the timelock operation
+/// - `timelock_owner`: flag to indicate whether to transfer ownership to the timelock owner
 #[derive(Builder, Clone)]
 #[builder(setter(strip_option))]
 pub struct DeployerArgs<P: Provider + WalletProvider> {
@@ -142,7 +158,16 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 )
                 .await?;
 
-                if let Some(multisig) = self.multisig {
+                if let Some(timelock_owner) = self.timelock_owner {
+                    tracing::info!("Transferring ownership to SafeExitTimelock");
+                    // deployer is the timelock owner
+                    if timelock_owner {
+                        let timelock_addr = contracts
+                            .address(Contract::SafeExitTimelock)
+                            .expect("fail to get SafeExitTimelock address");
+                        crate::transfer_ownership(provider, target, addr, timelock_addr).await?;
+                    }
+                } else if let Some(multisig) = self.multisig {
                     crate::transfer_ownership(provider, target, addr, multisig).await?;
                 }
             },
@@ -159,8 +184,21 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     .await?;
                 } else {
                     crate::upgrade_esp_token_v2(provider, contracts).await?;
+                    let addr = contracts
+                        .address(Contract::EspTokenProxy)
+                        .expect("fail to get EspTokenProxy address");
 
-                    if let Some(multisig) = self.multisig {
+                    if let Some(timelock_owner) = self.timelock_owner {
+                        tracing::info!("Transferring ownership to SafeExitTimelock");
+                        // deployer is the timelock owner
+                        if timelock_owner {
+                            let timelock_addr = contracts
+                                .address(Contract::SafeExitTimelock)
+                                .expect("fail to get SafeExitTimelock address");
+                            crate::transfer_ownership(provider, target, addr, timelock_addr)
+                                .await?;
+                        }
+                    } else if let Some(multisig) = self.multisig {
                         let token_proxy = contracts
                             .address(Contract::EspTokenProxy)
                             .expect("fail to get EspTokenProxy address");
@@ -243,7 +281,21 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     )
                     .await?;
 
-                    if let Some(multisig) = self.multisig {
+                    let addr = contracts
+                        .address(Contract::LightClientProxy)
+                        .expect("fail to get LightClientProxy address");
+
+                    if let Some(timelock_owner) = self.timelock_owner {
+                        tracing::info!("Transferring ownership to OpsTimelock");
+                        // deployer is the timelock owner
+                        if timelock_owner {
+                            let timelock_addr = contracts
+                                .address(Contract::OpsTimelock)
+                                .expect("fail to get OpsTimelock address");
+                            crate::transfer_ownership(provider, target, addr, timelock_addr)
+                                .await?;
+                        }
+                    } else if let Some(multisig) = self.multisig {
                         let lc_proxy = contracts
                             .address(Contract::LightClientProxy)
                             .expect("fail to get LightClientProxy address");
@@ -300,7 +352,21 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     crate::upgrade_stake_table_v2(provider, contracts, multisig_pauser, admin)
                         .await?;
 
-                    if let Some(multisig) = self.multisig {
+                    let addr = contracts
+                        .address(Contract::StakeTableProxy)
+                        .expect("fail to get StakeTableProxy address");
+
+                    if let Some(timelock_owner) = self.timelock_owner {
+                        tracing::info!("Transferring ownership to OpsTimelock");
+                        // deployer is the timelock owner
+                        if timelock_owner {
+                            let timelock_addr = contracts
+                                .address(Contract::OpsTimelock)
+                                .expect("fail to get OpsTimelock address");
+                            crate::transfer_ownership(provider, target, addr, timelock_addr)
+                                .await?;
+                        }
+                    } else if let Some(multisig) = self.multisig {
                         let stake_table_proxy = contracts
                             .address(Contract::StakeTableProxy)
                             .expect("fail to get StakeTableProxy address");

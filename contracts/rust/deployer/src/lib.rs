@@ -1356,6 +1356,7 @@ pub async fn deploy_ops_timelock(
     executors: Vec<Address>,
     admin: Address,
 ) -> Result<Address> {
+    tracing::info!("OpsTimelock will be deployed with the following parameters: min_delay: {:?}, proposers: {:?}, executors: {:?}, admin: {:?}", min_delay, proposers, executors, admin);
     let timelock_addr = contracts
         .deploy(
             Contract::OpsTimelock,
@@ -1417,6 +1418,7 @@ pub async fn deploy_safe_exit_timelock(
     executors: Vec<Address>,
     admin: Address,
 ) -> Result<Address> {
+    tracing::info!("SafeExitTimelock will be deployed with the following parameters: min_delay: {:?}, proposers: {:?}, executors: {:?}, admin: {:?}", min_delay, proposers, executors, admin);
     let timelock_addr = contracts
         .deploy(
             Contract::SafeExitTimelock,
