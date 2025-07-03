@@ -926,14 +926,10 @@ pub mod testing {
                     let st_addr = contracts
                         .address(Contract::StakeTableProxy)
                         .expect("StakeTableProxy address not found");
-                    let token_addr = contracts
-                        .address(Contract::EspTokenProxy)
-                        .expect("EspTokenProxy address not found");
                     setup_stake_table_contract_for_test(
                         self.l1_url.clone(),
                         &deployer,
                         st_addr,
-                        token_addr,
                         validators,
                         DelegationConfig::default(),
                     )

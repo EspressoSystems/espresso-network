@@ -267,8 +267,6 @@ impl TestSystem {
     pub fn args(&self, cmd: &mut Command, signer: Signer) {
         cmd.arg("--rpc-url")
             .arg(self.rpc_url.to_string())
-            .arg("--token-address")
-            .arg(self.token.to_string())
             .arg("--stake-table-address")
             .arg(self.stake_table.to_string())
             .arg("--account-index")

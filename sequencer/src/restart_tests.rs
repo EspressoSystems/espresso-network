@@ -872,7 +872,6 @@ impl TestNetwork {
             l1_url.clone(),
             &deployer,
             stake_table_address,
-            token_addr,
             staking_priv_keys,
             delegation_config,
         )

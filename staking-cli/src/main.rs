@@ -7,12 +7,15 @@ use alloy::{
     primitives::{utils::format_ether, Address},
     providers::{Provider, ProviderBuilder},
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use clap_serde_derive::ClapSerde;
 use hotshot_contract_adapter::{
     evm::DecodeRevert as _,
-    sol_types::EspToken::{self, EspTokenErrors},
+    sol_types::{
+        EspToken::{self, EspTokenErrors},
+        StakeTableV2,
+    },
 };
 use hotshot_types::light_client::StateKeyPair;
 use staking_cli::{
@@ -234,11 +237,22 @@ pub async fn main() -> Result<()> {
         .wallet(wallet)
         .on_http(config.rpc_url.clone());
     let stake_table_addr = config.stake_table_address;
+    let stake_table = StakeTableV2::new(stake_table_addr, provider.clone());
+    let token_addr = stake_table
+        .token()
+        .call()
+        .await
+        .with_context(|| {
+            format!(
+                "Unable to fetch stake table address from stake table contract at \
+                 {stake_table_addr}"
+            )
+        })?
+        ._0;
 
     // Commands that interact with the stake table
 
-    let token_addr = config.token_address;
-    let token = EspToken::new(config.token_address, &provider);
+    let token = EspToken::new(token_addr, &provider);
 
     let result = match config.commands {
         Commands::RegisterValidator {

@@ -37,10 +37,6 @@ pub struct Config {
     #[default(Url::parse("http://localhost:8545").unwrap())]
     pub rpc_url: Url,
 
-    /// Deployed ESP token contract address.
-    #[clap(long, env = "ESP_TOKEN_ADDRESS")]
-    pub token_address: Address,
-
     /// Deployed stake table contract address.
     #[clap(long, env = "STAKE_TABLE_ADDRESS")]
     pub stake_table_address: Address,
@@ -146,13 +142,6 @@ impl Default for Commands {
 impl Config {
     pub fn apply_env_var_overrides(self) -> Result<Self> {
         let mut config = self.clone();
-        if self.token_address == Address::ZERO {
-            let token_env_var = "ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS";
-            if let Ok(token_address) = std::env::var(token_env_var) {
-                config.token_address = token_address.parse()?;
-                tracing::info!("Using ESP token address from env {token_env_var}: {token_address}",);
-            }
-        }
         if self.stake_table_address == Address::ZERO {
             let stake_table_env_var = "ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS";
             if let Ok(stake_table_address) = std::env::var(stake_table_env_var) {

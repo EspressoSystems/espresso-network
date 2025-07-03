@@ -1029,14 +1029,10 @@ pub mod test_helpers {
             let stake_table_address = contracts
                 .address(Contract::StakeTableProxy)
                 .expect("StakeTableProxy address not found");
-            let token_addr = contracts
-                .address(Contract::EspTokenProxy)
-                .expect("EspTokenProxy address not found");
             setup_stake_table_contract_for_test(
                 l1_url.clone(),
                 &deployer,
                 stake_table_address,
-                token_addr,
                 network_config.staking_priv_keys(),
                 delegation_config,
             )
