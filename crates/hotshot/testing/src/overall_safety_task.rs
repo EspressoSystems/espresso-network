@@ -66,7 +66,7 @@ pub enum OverallSafetyTaskErr<TYPES: NodeType> {
 
 /// cross node safety properties
 #[derive(Clone, Debug)]
-pub struct OverallSafetyPropertiesDescription<TYPES: NodeType> {
+pub struct OverallSafetyPropertiesDescription {
     /// required number of successful views
     pub num_successful_views: usize,
     /// whether or not to check the leaf
@@ -86,11 +86,9 @@ pub struct OverallSafetyPropertiesDescription<TYPES: NodeType> {
     pub possible_view_failures: Vec<u64>,
     /// how long to wait between external events before timing out the test
     pub decide_timeout: Duration,
-    /// pass in the expected participation rate for each validator
-    pub expected_participation: HashMap<TYPES::SignatureKey, f64>,
 }
 
-impl<TYPES: NodeType> Default for OverallSafetyPropertiesDescription<TYPES> {
+impl Default for OverallSafetyPropertiesDescription {
     fn default() -> Self {
         Self {
             num_successful_views: 50,
@@ -100,7 +98,6 @@ impl<TYPES: NodeType> Default for OverallSafetyPropertiesDescription<TYPES> {
             expected_view_failures: vec![],
             possible_view_failures: vec![],
             decide_timeout: Duration::from_secs(4),
-            expected_participation: HashMap::new(),
         }
     }
 }
