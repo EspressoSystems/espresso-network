@@ -4566,6 +4566,44 @@ mod test {
         }
     }
 
+    /// Waits until a node has reached the given target block number.
+    /// The function returns once the first event indicates a block number higher than `target_block`.
+    async fn wait_for_block(
+        events: &mut (impl futures::Stream<Item = Event<SeqTypes>> + std::marker::Unpin),
+        target_block: u64,
+    ) {
+        while let Some(event) = events.next().await {
+            if let EventType::Decide { leaf_chain, .. } = event.event {
+                let leaf = leaf_chain[0].leaf.clone();
+                let block_number = leaf.height();
+                tracing::info!("Node decided at height: {}", leaf.height(),);
+
+                if block_number > target_block {
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Waits until a node has reached the given target view number.
+    /// The function returns once the first event indicates a view number higher than `target_view`.
+    async fn wait_for_view(
+        events: &mut (impl futures::Stream<Item = Event<SeqTypes>> + std::marker::Unpin),
+        target_view: u64,
+    ) {
+        while let Some(event) = events.next().await {
+            if let EventType::Decide { leaf_chain, .. } = event.event {
+                let leaf = leaf_chain[0].leaf.clone();
+                let view_number = leaf.height();
+                tracing::info!("Node decided at height: {}", leaf.height(),);
+
+                if view_number > target_view {
+                    break;
+                }
+            }
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_block_reward_api() -> anyhow::Result<()> {
         setup_test();

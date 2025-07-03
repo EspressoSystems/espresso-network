@@ -170,6 +170,12 @@ impl<Base: StaticVersionType + 'static, Upgrade: StaticVersionType + 'static> Ve
 
     type Epochs = EpochVersion;
     type DrbAndHeaderUpgrade = DrbAndHeaderUpgradeVersion;
+
+    fn new() -> Self {
+        Self {
+            _pd: Default::default(),
+        }
+    }
 }
 
 pub type MockSequencerVersions = SequencerVersions<StaticVersion<0, 1>, StaticVersion<0, 2>>;
