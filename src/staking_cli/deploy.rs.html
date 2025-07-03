@@ -270,48 +270,50 @@
 <a href=#270 id=270 data-nosnippet>270</a>    </span><span class="kw">pub fn </span>args(<span class="kw-2">&amp;</span><span class="self">self</span>, cmd: <span class="kw-2">&amp;mut </span>Command, signer: Signer) {
 <a href=#271 id=271 data-nosnippet>271</a>        cmd.arg(<span class="string">"--rpc-url"</span>)
 <a href=#272 id=272 data-nosnippet>272</a>            .arg(<span class="self">self</span>.rpc_url.to_string())
-<a href=#273 id=273 data-nosnippet>273</a>            .arg(<span class="string">"--token-address"</span>)
-<a href=#274 id=274 data-nosnippet>274</a>            .arg(<span class="self">self</span>.token.to_string())
-<a href=#275 id=275 data-nosnippet>275</a>            .arg(<span class="string">"--stake-table-address"</span>)
-<a href=#276 id=276 data-nosnippet>276</a>            .arg(<span class="self">self</span>.stake_table.to_string())
-<a href=#277 id=277 data-nosnippet>277</a>            .arg(<span class="string">"--account-index"</span>)
-<a href=#278 id=278 data-nosnippet>278</a>            .arg(<span class="string">"0"</span>);
-<a href=#279 id=279 data-nosnippet>279</a>
-<a href=#280 id=280 data-nosnippet>280</a>        <span class="kw">match </span>signer {
-<a href=#281 id=281 data-nosnippet>281</a>            Signer::Mnemonic =&gt; cmd.arg(<span class="string">"--mnemonic"</span>).arg(DEV_MNEMONIC),
-<a href=#282 id=282 data-nosnippet>282</a>            Signer::Ledger =&gt; cmd.arg(<span class="string">"--ledger"</span>),
-<a href=#283 id=283 data-nosnippet>283</a>        };
-<a href=#284 id=284 data-nosnippet>284</a>    }
-<a href=#285 id=285 data-nosnippet>285</a>}
-<a href=#286 id=286 data-nosnippet>286</a>
-<a href=#287 id=287 data-nosnippet>287</a><span class="attr">#[derive(Clone, Copy)]
-<a href=#288 id=288 data-nosnippet>288</a></span><span class="kw">pub enum </span>Signer {
-<a href=#289 id=289 data-nosnippet>289</a>    Ledger,
-<a href=#290 id=290 data-nosnippet>290</a>    Mnemonic,
-<a href=#291 id=291 data-nosnippet>291</a>}
-<a href=#292 id=292 data-nosnippet>292</a>
-<a href=#293 id=293 data-nosnippet>293</a><span class="attr">#[cfg(test)]
-<a href=#294 id=294 data-nosnippet>294</a></span><span class="kw">mod </span>test {
-<a href=#295 id=295 data-nosnippet>295</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
-<a href=#296 id=296 data-nosnippet>296</a>
-<a href=#297 id=297 data-nosnippet>297</a>    <span class="attr">#[tokio::test]
-<a href=#298 id=298 data-nosnippet>298</a>    </span><span class="kw">async fn </span>test_deploy() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#299 id=299 data-nosnippet>299</a>        <span class="kw">let </span>system = TestSystem::deploy().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#300 id=300 data-nosnippet>300</a>        <span class="kw">let </span>stake_table = StakeTable::new(system.stake_table, <span class="kw-2">&amp;</span>system.provider);
-<a href=#301 id=301 data-nosnippet>301</a>        <span class="comment">// sanity check that we can fetch the exit escrow period
-<a href=#302 id=302 data-nosnippet>302</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#303 id=303 data-nosnippet>303</a>            stake_table.exitEscrowPeriod().call().<span class="kw">await</span><span class="question-mark">?</span>._0,
-<a href=#304 id=304 data-nosnippet>304</a>            U256::from(system.exit_escrow_period.as_secs())
-<a href=#305 id=305 data-nosnippet>305</a>        );
-<a href=#306 id=306 data-nosnippet>306</a>
-<a href=#307 id=307 data-nosnippet>307</a>        <span class="kw">let </span>to = <span class="string">"0x1111111111111111111111111111111111111111"</span>.parse()<span class="question-mark">?</span>;
+<a href=#273 id=273 data-nosnippet>273</a>            .arg(<span class="string">"--stake-table-address"</span>)
+<a href=#274 id=274 data-nosnippet>274</a>            .arg(<span class="self">self</span>.stake_table.to_string())
+<a href=#275 id=275 data-nosnippet>275</a>            .arg(<span class="string">"--account-index"</span>)
+<a href=#276 id=276 data-nosnippet>276</a>            .arg(<span class="string">"0"</span>);
+<a href=#277 id=277 data-nosnippet>277</a>
+<a href=#278 id=278 data-nosnippet>278</a>        <span class="kw">match </span>signer {
+<a href=#279 id=279 data-nosnippet>279</a>            Signer::Ledger =&gt; cmd.arg(<span class="string">"--ledger"</span>),
+<a href=#280 id=280 data-nosnippet>280</a>            Signer::Mnemonic =&gt; cmd.arg(<span class="string">"--mnemonic"</span>).arg(DEV_MNEMONIC),
+<a href=#281 id=281 data-nosnippet>281</a>            Signer::BrokeMnemonic =&gt; cmd
+<a href=#282 id=282 data-nosnippet>282</a>                .arg(<span class="string">"--mnemonic"</span>)
+<a href=#283 id=283 data-nosnippet>283</a>                .arg(<span class="string">"roast term reopen pave choose high rally trouble upon govern hollow stand"</span>),
+<a href=#284 id=284 data-nosnippet>284</a>        };
+<a href=#285 id=285 data-nosnippet>285</a>    }
+<a href=#286 id=286 data-nosnippet>286</a>}
+<a href=#287 id=287 data-nosnippet>287</a>
+<a href=#288 id=288 data-nosnippet>288</a><span class="attr">#[derive(Clone, Copy)]
+<a href=#289 id=289 data-nosnippet>289</a></span><span class="kw">pub enum </span>Signer {
+<a href=#290 id=290 data-nosnippet>290</a>    Ledger,
+<a href=#291 id=291 data-nosnippet>291</a>    Mnemonic,
+<a href=#292 id=292 data-nosnippet>292</a>    BrokeMnemonic,
+<a href=#293 id=293 data-nosnippet>293</a>}
+<a href=#294 id=294 data-nosnippet>294</a>
+<a href=#295 id=295 data-nosnippet>295</a><span class="attr">#[cfg(test)]
+<a href=#296 id=296 data-nosnippet>296</a></span><span class="kw">mod </span>test {
+<a href=#297 id=297 data-nosnippet>297</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#298 id=298 data-nosnippet>298</a>
+<a href=#299 id=299 data-nosnippet>299</a>    <span class="attr">#[tokio::test]
+<a href=#300 id=300 data-nosnippet>300</a>    </span><span class="kw">async fn </span>test_deploy() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#301 id=301 data-nosnippet>301</a>        <span class="kw">let </span>system = TestSystem::deploy().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#302 id=302 data-nosnippet>302</a>        <span class="kw">let </span>stake_table = StakeTable::new(system.stake_table, <span class="kw-2">&amp;</span>system.provider);
+<a href=#303 id=303 data-nosnippet>303</a>        <span class="comment">// sanity check that we can fetch the exit escrow period
+<a href=#304 id=304 data-nosnippet>304</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#305 id=305 data-nosnippet>305</a>            stake_table.exitEscrowPeriod().call().<span class="kw">await</span><span class="question-mark">?</span>._0,
+<a href=#306 id=306 data-nosnippet>306</a>            U256::from(system.exit_escrow_period.as_secs())
+<a href=#307 id=307 data-nosnippet>307</a>        );
 <a href=#308 id=308 data-nosnippet>308</a>
-<a href=#309 id=309 data-nosnippet>309</a>        <span class="comment">// sanity check that we can transfer tokens
-<a href=#310 id=310 data-nosnippet>310</a>        </span>system.transfer(to, U256::from(<span class="number">123</span>)).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#311 id=311 data-nosnippet>311</a>
-<a href=#312 id=312 data-nosnippet>312</a>        <span class="comment">// sanity check that we can fetch the balance
-<a href=#313 id=313 data-nosnippet>313</a>        </span><span class="macro">assert_eq!</span>(system.balance(to).<span class="kw">await</span><span class="question-mark">?</span>, U256::from(<span class="number">123</span>));
-<a href=#314 id=314 data-nosnippet>314</a>
-<a href=#315 id=315 data-nosnippet>315</a>        <span class="prelude-val">Ok</span>(())
-<a href=#316 id=316 data-nosnippet>316</a>    }
-<a href=#317 id=317 data-nosnippet>317</a>}</code></pre></div></section></main></body></html>
+<a href=#309 id=309 data-nosnippet>309</a>        <span class="kw">let </span>to = <span class="string">"0x1111111111111111111111111111111111111111"</span>.parse()<span class="question-mark">?</span>;
+<a href=#310 id=310 data-nosnippet>310</a>
+<a href=#311 id=311 data-nosnippet>311</a>        <span class="comment">// sanity check that we can transfer tokens
+<a href=#312 id=312 data-nosnippet>312</a>        </span>system.transfer(to, U256::from(<span class="number">123</span>)).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#313 id=313 data-nosnippet>313</a>
+<a href=#314 id=314 data-nosnippet>314</a>        <span class="comment">// sanity check that we can fetch the balance
+<a href=#315 id=315 data-nosnippet>315</a>        </span><span class="macro">assert_eq!</span>(system.balance(to).<span class="kw">await</span><span class="question-mark">?</span>, U256::from(<span class="number">123</span>));
+<a href=#316 id=316 data-nosnippet>316</a>
+<a href=#317 id=317 data-nosnippet>317</a>        <span class="prelude-val">Ok</span>(())
+<a href=#318 id=318 data-nosnippet>318</a>    }
+<a href=#319 id=319 data-nosnippet>319</a>}</code></pre></div></section></main></body></html>
