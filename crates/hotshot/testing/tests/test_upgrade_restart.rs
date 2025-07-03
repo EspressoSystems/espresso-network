@@ -54,8 +54,8 @@ cross_tests!(
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
             // Make sure we keep committing rounds after the catchup, up to the 2nd epoch transition.
             num_successful_views: 110,
-            expected_view_failures: vec![40],
-            possible_view_failures: vec![38, 39, 41, 42],
+            expected_view_failures: vec![15],
+            possible_view_failures: vec![13, 14, 16, 17],
             decide_timeout: Duration::from_secs(60),
             ..Default::default()
         };
