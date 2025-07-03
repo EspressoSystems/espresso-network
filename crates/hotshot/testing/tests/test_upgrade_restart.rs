@@ -35,8 +35,8 @@ cross_tests!(
         }
 
         let spinning_properties = SpinningTaskDescription {
-            // Restart all the nodes in view 40, i.e. after the upgrade is decided but before the first epoch
-            node_changes: vec![(40, catchup_nodes)],
+            // Restart all the nodes in view 15, i.e. after the upgrade is decided but before the first view that uses the new version
+            node_changes: vec![(15, catchup_nodes)],
         };
 
         let mut metadata = TestDescription {
