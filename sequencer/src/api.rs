@@ -1,6 +1,5 @@
 use std::{pin::Pin, sync::Arc, time::Duration};
 
-use alloy::primitives::Address;
 use anyhow::{bail, Context};
 use async_lock::RwLock;
 use async_once_cell::Lazy;
@@ -16,15 +15,14 @@ use espresso_types::{
     retain_accounts,
     v0::traits::SequencerPersistence,
     v0_1::{RewardAccount, RewardAmount, RewardMerkleTree},
-    v0_3::{ChainConfig, Validator},
+    v0_3::ChainConfig,
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
-    Transaction,
+    Transaction, ValidatorMap,
 };
 use futures::{
     future::{BoxFuture, Future, FutureExt},
     stream::BoxStream,
 };
-use hotshot::types::BLSPubKey;
 use hotshot_events_service::events_source::{
     EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
 };
@@ -44,7 +42,6 @@ use hotshot_types::{
     vote::HasViewNumber,
     PeerConfig,
 };
-use indexmap::IndexMap;
 use itertools::Itertools;
 use jf_merkle_tree::MerkleTreeScheme;
 use rand::Rng;
@@ -224,7 +221,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     async fn get_validators(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
-    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+    ) -> anyhow::Result<ValidatorMap> {
         self.as_ref().get_validators(epoch).await
     }
 
@@ -251,7 +248,8 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             .map(|e| e + 1);
         if epoch > highest_epoch {
             return Err(anyhow::anyhow!(
-                "requested stake table for epoch {epoch:?} is beyond the current epoch + 1 {highest_epoch:?}"
+                "requested stake table for epoch {epoch:?} is beyond the current epoch + 1 \
+                 {highest_epoch:?}"
             ));
         }
         let mem = self
@@ -294,7 +292,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     async fn get_validators(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
-    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+    ) -> anyhow::Result<ValidatorMap> {
         let mem = self
             .consensus()
             .await
@@ -1009,6 +1007,17 @@ pub mod test_helpers {
                 .blocks_per_epoch(blocks_per_epoch)
                 .epoch_start_block(epoch_start_block)
                 .multisig_pauser(signer.address())
+                .token_name("Espresso".to_string())
+                .token_symbol("ESP".to_string())
+                .initial_token_supply(U256::from(3590000000u64))
+                .ops_timelock_delay(U256::from(0))
+                .ops_timelock_admin(signer.address())
+                .ops_timelock_proposers(vec![signer.address()])
+                .ops_timelock_executors(vec![signer.address()])
+                .safe_exit_timelock_delay(U256::from(10))
+                .safe_exit_timelock_admin(signer.address())
+                .safe_exit_timelock_proposers(vec![signer.address()])
+                .safe_exit_timelock_executors(vec![signer.address()])
                 .build()
                 .unwrap();
 
@@ -2051,7 +2060,10 @@ mod test {
     use hotshot_contract_adapter::sol_types::{EspToken, StakeTableV2};
     use hotshot_example_types::node_types::EpochsTestVersions;
     use hotshot_query_service::{
-        availability::{BlockQueryData, BlockSummaryQueryData, LeafQueryData, VidCommonQueryData},
+        availability::{
+            BlockQueryData, BlockSummaryQueryData, LeafQueryData, TransactionQueryData,
+            VidCommonQueryData,
+        },
         data_source::{sql::Config, storage::SqlStorage, VersionedDataSource},
         explorer::TransactionSummariesResponse,
         types::HeightIndexed,
@@ -3313,7 +3325,7 @@ mod test {
         // Basically epoch 3 and epoch 4 as epoch height is 20
         // get all the validators
         let validators = client
-            .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/3")
+            .get::<ValidatorMap>("node/validators/3")
             .send()
             .await
             .expect("failed to get validator");
@@ -3328,7 +3340,7 @@ mod test {
         }
         // get all the validators
         let validators = client
-            .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/4")
+            .get::<ValidatorMap>("node/validators/4")
             .send()
             .await
             .expect("failed to get validator");
@@ -3447,8 +3459,7 @@ mod test {
                 None,
                 l1_block.number(),
             )
-            .await
-            .expect("failed to get stake table from contract");
+            .await;
             let sorted_events = events.sort_events().expect("failed to sort");
 
             let mut sorted_dedup_removed = sorted_events.clone();
@@ -3545,14 +3556,14 @@ mod test {
         // Verify that there are no validators for epoch # 1 and epoch # 2
         {
             client
-                .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/1")
+                .get::<ValidatorMap>("node/validators/1")
                 .send()
                 .await
                 .unwrap()
                 .is_empty();
 
             client
-                .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/2")
+                .get::<ValidatorMap>("node/validators/2")
                 .send()
                 .await
                 .unwrap()
@@ -3561,7 +3572,7 @@ mod test {
 
         // Get the epoch # 3 validators
         let validators = client
-            .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/3")
+            .get::<ValidatorMap>("node/validators/3")
             .send()
             .await
             .expect("validators");
@@ -3625,7 +3636,7 @@ mod test {
             drop(membership);
 
             let validators = client
-                .get::<IndexMap<Address, Validator<BLSPubKey>>>(&format!("node/validators/{epoch}"))
+                .get::<ValidatorMap>(&format!("node/validators/{epoch}"))
                 .send()
                 .await
                 .expect("validators");
@@ -4658,6 +4669,17 @@ mod test {
             .blocks_per_epoch(blocks_per_epoch)
             .epoch_start_block(1)
             .multisig_pauser(network_config.signer().address())
+            .token_name("Espresso".to_string())
+            .token_symbol("ESP".to_string())
+            .initial_token_supply(U256::from(3590000000u64))
+            .ops_timelock_delay(U256::from(0))
+            .ops_timelock_admin(network_config.signer().address())
+            .ops_timelock_proposers(vec![network_config.signer().address()])
+            .ops_timelock_executors(vec![network_config.signer().address()])
+            .safe_exit_timelock_delay(U256::from(0))
+            .safe_exit_timelock_admin(network_config.signer().address())
+            .safe_exit_timelock_proposers(vec![network_config.signer().address()])
+            .safe_exit_timelock_executors(vec![network_config.signer().address()])
             .build()
             .unwrap();
 
@@ -4889,7 +4911,7 @@ mod test {
 
         let duration = start.elapsed();
 
-        println!("Time elapsed to submit transactions: {:?}", duration);
+        println!("Time elapsed to submit transactions: {duration:?}");
 
         let last_tx_height = tx_heights.last().unwrap();
         for namespace in 1..=4 {
@@ -4900,7 +4922,8 @@ mod test {
                 .unwrap();
             assert_eq!(
                 count, namespace as u64,
-                "Incorrect transaction count for namespace {namespace}: expected {namespace}, got {count}"
+                "Incorrect transaction count for namespace {namespace}: expected {namespace}, got \
+                 {count}"
             );
 
             // check the range endpoint
@@ -4911,7 +4934,11 @@ mod test {
                 .send()
                 .await
                 .unwrap();
-            assert_eq!(to_endpoint_count, namespace as u64, "Incorrect transaction count for range endpoint (to only) for namespace {namespace}: expected {namespace}, got {to_endpoint_count}");
+            assert_eq!(
+                to_endpoint_count, namespace as u64,
+                "Incorrect transaction count for range endpoint (to only) for namespace \
+                 {namespace}: expected {namespace}, got {to_endpoint_count}"
+            );
 
             // check the range endpoint
             let from_to_endpoint_count = client
@@ -4921,7 +4948,11 @@ mod test {
                 .send()
                 .await
                 .unwrap();
-            assert_eq!(from_to_endpoint_count, namespace as u64, "Incorrect transaction count for range endpoint (from-to) for namespace {namespace}: expected {namespace}, got {from_to_endpoint_count}");
+            assert_eq!(
+                from_to_endpoint_count, namespace as u64,
+                "Incorrect transaction count for range endpoint (from-to) for namespace \
+                 {namespace}: expected {namespace}, got {from_to_endpoint_count}"
+            );
 
             let ns_size = client
                 .get::<usize>(&format!("node/payloads/size/namespace/{namespace}"))
@@ -4932,7 +4963,8 @@ mod test {
             let expected_ns_size = *sizes.get(&namespace).unwrap();
             assert_eq!(
                 ns_size, expected_ns_size,
-                "Incorrect payload size for namespace {namespace}: expected {expected_ns_size}, got {ns_size}"
+                "Incorrect payload size for namespace {namespace}: expected {expected_ns_size}, \
+                 got {ns_size}"
             );
 
             let ns_size_to = client
@@ -4944,7 +4976,8 @@ mod test {
                 .unwrap();
             assert_eq!(
                 ns_size_to, expected_ns_size,
-                "Incorrect payload size for namespace {namespace} up to height {last_tx_height}: expected {expected_ns_size}, got {ns_size_to}"
+                "Incorrect payload size for namespace {namespace} up to height {last_tx_height}: \
+                 expected {expected_ns_size}, got {ns_size_to}"
             );
 
             let ns_size_from_to = client
@@ -4956,7 +4989,8 @@ mod test {
                 .unwrap();
             assert_eq!(
                 ns_size_from_to, expected_ns_size,
-                "Incorrect payload size for namespace {namespace} from 0 to height {last_tx_height}: expected {expected_ns_size}, got {ns_size_from_to}"
+                "Incorrect payload size for namespace {namespace} from 0 to height \
+                 {last_tx_height}: expected {expected_ns_size}, got {ns_size_from_to}"
             );
         }
 
@@ -4967,7 +5001,8 @@ mod test {
             .unwrap();
         assert_eq!(
             total_tx_count, total_transactions,
-            "Incorrect total transaction count: expected {total_transactions}, got {total_tx_count}"
+            "Incorrect total transaction count: expected {total_transactions}, got \
+             {total_tx_count}"
         );
 
         let total_payload_size = client
@@ -4979,7 +5014,128 @@ mod test {
         let expected_total_size: usize = sizes.values().copied().sum();
         assert_eq!(
             total_payload_size, expected_total_size,
-            "Incorrect total payload size: expected {expected_total_size}, got {total_payload_size}"
+            "Incorrect total payload size: expected {expected_total_size}, got \
+             {total_payload_size}"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_stream_transactions_endpoint() {
+        // This test submits transactions to a sequencer for multiple namespaces,
+        // waits for them to be decided, and then verifies that:
+        // 1. All transactions appear in the transaction stream.
+        // 2. Each namespace-specific transaction stream only includes the transactions of that namespace.
+        setup_test();
+
+        let mut rng = thread_rng();
+
+        let port = pick_unused_port().expect("No ports free");
+
+        let url = format!("http://localhost:{port}").parse().unwrap();
+        tracing::info!("Sequencer URL = {url}");
+        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+
+        let options = Options::with_port(port).submit(Default::default());
+        const NUM_NODES: usize = 2;
+        // Initialize storage for each node
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+
+        let persistence_options: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let network_config = TestConfigBuilder::default().build();
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(SqlDataSource::options(&storage[0], options))
+            .network_config(network_config)
+            .persistences(persistence_options.clone())
+            .build();
+        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let mut events = network.server.event_stream().await;
+        let mut all_transactions = HashMap::new();
+        let mut namespace_tx: HashMap<_, HashSet<_>> = HashMap::new();
+
+        // Submit transactions to namespaces 1 through 4
+
+        for namespace in 1..=4 {
+            for _count in 0..namespace {
+                let payload_len = rng.gen_range(4..=10);
+                let payload: Vec<u8> = (0..payload_len).map(|_| rng.gen()).collect();
+
+                let txn = Transaction::new(NamespaceId::from(namespace as u32), payload);
+
+                client.connect(None).await;
+
+                let hash = client
+                    .post("submit/submit")
+                    .body_json(&txn)
+                    .unwrap()
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(txn.commit(), hash);
+
+                // Wait for a Decide event containing transaction matching the one we sent
+                wait_for_decide_on_handle(&mut events, &txn).await;
+                // Store transaction for later validation
+
+                all_transactions.insert(txn.commit(), txn.clone());
+                namespace_tx.entry(namespace).or_default().insert(txn);
+            }
+        }
+
+        let mut transactions = client
+            .socket("availability/stream/transactions/0")
+            .subscribe::<TransactionQueryData<SeqTypes>>()
+            .await
+            .expect("failed to subscribe to transactions endpoint");
+
+        let mut count = 0;
+        while let Some(tx) = transactions.next().await {
+            let tx = tx.unwrap();
+            let expected = all_transactions
+                .get(&tx.transaction().commit())
+                .expect("txn not found ");
+            assert_eq!(tx.transaction(), expected, "invalid transaction");
+            count += 1;
+
+            if count == all_transactions.len() {
+                break;
+            }
+        }
+
+        // Validate namespace-specific stream endpoint
+
+        for (namespace, expected_ns_txns) in &namespace_tx {
+            let mut api_namespace_txns = client
+                .socket(&format!(
+                    "availability/stream/transactions/0/namespace/{namespace}",
+                ))
+                .subscribe::<TransactionQueryData<SeqTypes>>()
+                .await
+                .unwrap_or_else(|_| {
+                    panic!("failed to subscribe to transactions namespace {namespace}")
+                });
+
+            let mut received = HashSet::new();
+
+            while let Some(res) = api_namespace_txns.next().await {
+                let tx = res.expect("stream error");
+                received.insert(tx.transaction().clone());
+
+                if received.len() == expected_ns_txns.len() {
+                    break;
+                }
+            }
+
+            assert_eq!(
+                received, *expected_ns_txns,
+                "Mismatched transactions for namespace {namespace}"
+            );
+        }
     }
 }

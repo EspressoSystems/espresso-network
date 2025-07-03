@@ -7,7 +7,7 @@ use alloy::{
     transports::http::reqwest::{self, Url},
 };
 use anyhow::{Context, Result};
-use espresso_types::{config::PublicNetworkConfig, SeqTypes};
+use espresso_types::SeqTypes;
 use hotshot_contract_adapter::{
     field_to_u256,
     sol_types::{LightClientStateSol, StakeTableStateSol},
@@ -109,24 +109,32 @@ pub fn light_client_genesis_from_stake_table(
 /// return (blocks_per_epoch, epoch_start_block)
 pub async fn fetch_epoch_config_from_sequencer(sequencer_url: &Url) -> anyhow::Result<(u64, u64)> {
     // Request the configuration until it is successful
-    let epoch_config = loop {
-        match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
-            sequencer_url.clone(),
-        )
-        .get::<PublicNetworkConfig>("config/hotshot")
-        .send()
-        .await
-        {
+    loop {
+        let url = sequencer_url.join("config/hotshot").unwrap();
+        match reqwest::get(url.clone()).await {
             Ok(resp) => {
-                let config = resp.hotshot_config();
-                break (config.blocks_per_epoch(), config.epoch_start_block());
+                let value: serde_json::Value = resp
+                    .json()
+                    .await
+                    .with_context(|| format!("Failed to parse the json object from url {url}"))?;
+                let blocks_per_epoch =
+                    value["config"]["epoch_height"]
+                        .as_u64()
+                        .ok_or(anyhow::anyhow!(
+                            "Failed to parse epoch_height from hotshot config"
+                        ))?;
+                let epoch_start_block =
+                    value["config"]["epoch_start_block"]
+                        .as_u64()
+                        .ok_or(anyhow::anyhow!(
+                            "Failed to parse epoch_start_block from hotshot config"
+                        ))?;
+                break Ok((blocks_per_epoch, epoch_start_block));
             },
             Err(e) => {
-                let url = sequencer_url.join("config/hotshot").unwrap();
                 tracing::error!(%url, "Failed to fetch the network config: {e}");
                 sleep(Duration::from_secs(5)).await;
             },
         }
-    };
-    Ok(epoch_config)
+    }
 }

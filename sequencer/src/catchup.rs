@@ -236,10 +236,14 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
             .retry(self, move |provider, retry| {
                 let my_own_validator_config = my_own_validator_config.clone();
                 async move {
-                    let cfg = provider
+                    let cfg: PublicNetworkConfig = provider
                         .fetch(retry, |client| {
-                            client.get::<PublicNetworkConfig>("config/hotshot").send()
+                            let url = client.url.join("config/hotshot").unwrap();
+
+                            reqwest::get(url.clone())
                         })
+                        .await?
+                        .json()
                         .await?;
                     cfg.into_network_config(my_own_validator_config)
                         .context("fetched config, but failed to convert to private config")
@@ -322,7 +326,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
     ) -> anyhow::Result<ChainConfig> {
         self.fetch(retry, |client| async move {
             let cf = client
-                .get::<ChainConfig>(&format!("catchup/chain-config/{}", commitment))
+                .get::<ChainConfig>(&format!("catchup/chain-config/{commitment}"))
                 .send()
                 .await?;
             ensure!(
@@ -346,7 +350,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         let leaf_chain = self
             .fetch(retry, |client| async move {
                 let leaf = client
-                    .get::<Vec<Leaf2>>(&format!("catchup/{}/leafchain", height))
+                    .get::<Vec<Leaf2>>(&format!("catchup/{height}/leafchain"))
                     .send()
                     .await?;
                 anyhow::Ok(leaf)
@@ -665,7 +669,8 @@ where
 
         if cf.commit() != commitment {
             panic!(
-                "Critical error: Mismatched chain config detected. Expected chain config: {:?}, but got: {:?}.
+                "Critical error: Mismatched chain config detected. Expected chain config: {:?}, \
+                 but got: {:?}.
                 This may indicate a compromised database",
                 commitment,
                 cf.commit()

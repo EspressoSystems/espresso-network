@@ -1,0 +1,14 @@
+{
+  "block_hash": "BLOCK~dh1KpdvvxSvnnPpOi2yI3DOg8h6ltr2Kv13iRzbQvtN2",
+  "common": {
+    "V0": {
+      "all_evals_digest": "FIELD~30m61pc8D0r9BU_AVv51gglt_TDQ6NNhZEnGoPnb4zZd",
+      "multiplicity": 1,
+      "num_storage_nodes": 10,
+      "payload_byte_len": 5212,
+      "poly_commits": "FIELD~FgAAAAAAAADJ88othSmhHEqOXgtEctVHNwvZDrM8ah7diCfORtvGLwmva3kX8QlJeFpu6s0aCQId2dFiz0LPcbizLMjl63coaT39qJuMehQA8HkUgoNWmo9-V4y9inuS0bhgvmz9768f2xjELITzNT8sVt2HUSC7m9sPAYj8NtHhRyNFHqtalNsH-0vaFnsAaCSt0jOlPcfj_xq-OA4Nm68eJO1Jm5ONFd58f8WkMkkKaK5yvTD1XrFAJCswrfMhjeQ-41SajBscMdNuyGzvK4tnAClEzR9QkSutNc0H8gZjkqYBnz0GgldQYeJg1TienQjOO0GrkpV0V4zDpTVzrvlN65cqhJkTO6-Yaeup06kLN4G5YLJn3bpNNuvuwEX49QkdpjQmeKXQVnpiLENAAxfcV5isd9x3u9i7rel8gyXKz_bH6fRTjzkl50-XqpRleoBJy4zI9scusKYZx0vPnOe6wjZDtqYE8L-4cJ9C228fBeY9uAuQ20IKnizC7Bbe1JheU7EtGItShy1P0Ueb2S8t5lMwm0ydYbOsPEBj5a0SY0BkYaL-gmP_wlFKgtMCnXN9NAjxZmgglGct45xZvDqUm_zADe2GJrWlNkiRqhNu4Ko02AcVRyAvALuopnJMWAH9mj-URq99-lhK__vqrnl28WiTTLqdbnACK87d7d9rv467XTLfCmmxJvmVVb1K65xBine87_ctxTF8OCLBDD_IByKktLSa0yoI_2-YzhHCJ7TBnhV1xFcyAEv9zs4vPGjKWthLeaU_sQakgmEJOncAyWCWtFcOC2erNl63E1PrAUgli2ecAA3B679IzB3ZMNxzTsm2P1oXp57BI1iXxj8FH9Ywabcu18dfQzxZGvJKxkByNFWOBrb2VUo2nB9G20EFfUrnx5-gsBhsNEoKFkaHWOSrPlwqtoj63YJmAqpe2Y1SmDhDg8g"
+    }
+  },
+  "height": 42,
+  "payload_hash": "HASH~u-mEo1mwByROUhnvO7pBFitcD0UEvruK-b8WONkKoCLQ"
+}

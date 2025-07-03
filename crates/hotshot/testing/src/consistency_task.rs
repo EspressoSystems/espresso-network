@@ -95,8 +95,9 @@ async fn validate_node_map<TYPES: NodeType, V: Versions>(
     // Check that the child leaf follows the parent, possibly with a gap.
     for (parent, child) in leaf_pairs {
         ensure!(
-              child.justify_qc().view_number >= parent.view_number(),
-              "The node has provided leaf:\n\n{child:?}\n\nbut its quorum certificate points to a view before the most recent leaf:\n\n{parent:?}"
+            child.justify_qc().view_number >= parent.view_number(),
+            "The node has provided leaf:\n\n{child:?}\n\nbut its quorum certificate points to a \
+             view before the most recent leaf:\n\n{parent:?}"
         );
 
         child
@@ -105,8 +106,9 @@ async fn validate_node_map<TYPES: NodeType, V: Versions>(
             .context(|e| error!("Leaf {child:?} does not extend its parent {parent:?}: {e}"))?;
 
         ensure!(
-          child.height() > parent.height(),
-          "The node has decided leaf\n\n{child:?}\n\nextending leaf\n\n{parent:?}but the block height did not increase."
+            child.height() > parent.height(),
+            "The node has decided leaf\n\n{child:?}\n\nextending leaf\n\n{parent:?}but the block \
+             height did not increase."
         );
 
         // We want to make sure the commitment matches,
@@ -114,7 +116,10 @@ async fn validate_node_map<TYPES: NodeType, V: Versions>(
         if child.justify_qc().view_number == parent.view_number()
             && child.justify_qc().data.leaf_commit != parent.commit()
         {
-            bail!("The node has provided leaf:\n\n{child:?}\n\nwhich points to:\n\n{parent:?}\n\nbut the commits do not match.");
+            bail!(
+                "The node has provided leaf:\n\n{child:?}\n\nwhich points \
+                 to:\n\n{parent:?}\n\nbut the commits do not match."
+            );
         }
 
         if child.view_number() == view_decided {
@@ -211,7 +216,10 @@ fn sanitize_view_map<TYPES: NodeType>(
     for (parent, child) in result.values().zip(result.values().skip(1)) {
         // We want to make sure the aggregated leafmap has not missed a decide event
         if child.justify_qc().data.leaf_commit != parent.commit() {
-            bail!("The network has decided:\n\n{child:?}\n\nwhich succeeds:\n\n{parent:?}\n\nbut the commits do not match. Did we miss an intermediate leaf?");
+            bail!(
+                "The network has decided:\n\n{child:?}\n\nwhich succeeds:\n\n{parent:?}\n\nbut \
+                 the commits do not match. Did we miss an intermediate leaf?"
+            );
         }
     }
 
@@ -278,8 +286,9 @@ impl<TYPES: NodeType<BlockHeader = TestBlockHeader>, V: Versions> ConsistencyTas
         (self.validate_transactions)(&transactions)?;
 
         ensure!(
-          expected_upgrade == actual_upgrade,
-          "Mismatch between expected and actual upgrade. Expected upgrade: {expected_upgrade}. Actual upgrade: {actual_upgrade}"
+            expected_upgrade == actual_upgrade,
+            "Mismatch between expected and actual upgrade. Expected upgrade: {expected_upgrade}. \
+             Actual upgrade: {actual_upgrade}"
         );
 
         Ok(())
@@ -324,11 +333,9 @@ impl<TYPES: NodeType<BlockHeader = TestBlockHeader>, V: Versions> ConsistencyTas
         for (node_id, node_map) in self.consensus_leaves.iter() {
             for (view, leaf) in node_map {
                 ensure!(
-                    !self
-                        .safety_properties
-                        .expected_view_failures
-                        .contains(view),
-                    "Expected a view failure, but got a decided leaf for view {view} from node {node_id}.\n\nLeaf:\n\n{leaf:?}"
+                    !self.safety_properties.expected_view_failures.contains(view),
+                    "Expected a view failure, but got a decided leaf for view {view} from node \
+                     {node_id}.\n\nLeaf:\n\n{leaf:?}"
                 );
             }
         }

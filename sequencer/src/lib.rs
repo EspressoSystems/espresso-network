@@ -317,12 +317,12 @@ where
         network_params.config_peers,
     ) {
         (Some(config), _) => {
-            tracing::info!("loaded network config from storage, rejoining existing network");
+            tracing::warn!("loaded network config from storage, rejoining existing network");
             (config, false)
         },
         // If we were told to fetch the config from an already-started peer, do so.
         (None, Some(peers)) => {
-            tracing::info!(?peers, "loading network config from peers");
+            tracing::warn!(?peers, "loading network config from peers");
             let peers = StatePeers::<SequencerApiVersion>::from_urls(
                 peers,
                 network_params.catchup_backoff,
@@ -330,7 +330,7 @@ where
             );
             let config = peers.fetch_config(validator_config.clone()).await?;
 
-            tracing::info!(
+            tracing::warn!(
                 node_id = config.node_index,
                 stake_table = ?config.config.known_nodes_with_stake,
                 "loaded config",
@@ -340,8 +340,8 @@ where
         },
         // Otherwise, this is a fresh network; load from the orchestrator.
         (None, None) => {
-            tracing::info!("loading network config from orchestrator");
-            tracing::error!(
+            tracing::warn!("loading network config from orchestrator");
+            tracing::warn!(
                 "waiting for other nodes to connect, DO NOT RESTART until fully connected"
             );
             let config = get_complete_config(
@@ -355,13 +355,13 @@ where
             .await?
             .0;
 
-            tracing::info!(
+            tracing::warn!(
                 node_id = config.node_index,
                 stake_table = ?config.config.known_nodes_with_stake,
                 "loaded config",
             );
             persistence.save_config(&config).await?;
-            tracing::error!("all nodes connected");
+            tracing::warn!("all nodes connected");
             (config, true)
         },
     };
@@ -377,10 +377,10 @@ where
         .stake_table_capacity
         .unwrap_or(hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY);
 
-    tracing::info!("setting epoch_height={epoch_height:?}");
-    tracing::info!("setting drb_difficulty={drb_difficulty:?}");
-    tracing::info!("setting epoch_start_block={epoch_start_block:?}");
-    tracing::info!("setting stake_table_capacity={stake_table_capacity:?}");
+    tracing::warn!("setting epoch_height={epoch_height:?}");
+    tracing::warn!("setting drb_difficulty={drb_difficulty:?}");
+    tracing::warn!("setting epoch_start_block={epoch_start_block:?}");
+    tracing::warn!("setting stake_table_capacity={stake_table_capacity:?}");
     network_config.config.epoch_height = epoch_height;
     network_config.config.drb_difficulty = drb_difficulty;
     network_config.config.epoch_start_block = epoch_start_block;
@@ -481,7 +481,7 @@ where
         ..Default::default()
     };
     for (address, amount) in genesis.accounts {
-        tracing::info!(%address, %amount, "Prefunding account for demo");
+        tracing::warn!(%address, %amount, "Prefunding account for demo");
         genesis_state.prefund_account(address, amount);
     }
 
@@ -909,6 +909,17 @@ pub mod testing {
                         .blocks_per_epoch(blocks_per_epoch)
                         .epoch_start_block(epoch_start_block)
                         .multisig_pauser(self.signer.address())
+                        .token_name("Espresso".to_string())
+                        .token_symbol("ESP".to_string())
+                        .initial_token_supply(U256::from(3590000000u64))
+                        .ops_timelock_delay(U256::from(0))
+                        .ops_timelock_admin(self.signer.address())
+                        .ops_timelock_proposers(vec![self.signer.address()])
+                        .ops_timelock_executors(vec![self.signer.address()])
+                        .safe_exit_timelock_delay(U256::from(10))
+                        .safe_exit_timelock_admin(self.signer.address())
+                        .safe_exit_timelock_proposers(vec![self.signer.address()])
+                        .safe_exit_timelock_executors(vec![self.signer.address()])
                         .build()
                         .unwrap();
                     args.deploy_all(&mut contracts)
@@ -1214,7 +1225,8 @@ pub mod testing {
                 },
                 Err(e) => {
                     tracing::warn!(
-                        "Failed to create local catchup provider: {e:#}. Only using remote catchup."
+                        "Failed to create local catchup provider: {e:#}. Only using remote \
+                         catchup."
                     );
                 },
             };

@@ -16,7 +16,8 @@ pub async fn stake_table_info(
 ) -> Result<Vec<Validator<BLSPubKey>>> {
     let l1 = L1Client::new(vec![l1_url])?;
     let validators =
-        Fetcher::fetch_all_validators(l1, stake_table_address, l1_block_number).await?;
+        Fetcher::fetch_all_validators_from_contract(l1, stake_table_address, l1_block_number)
+            .await?;
 
     Ok(validators
         .into_iter()
