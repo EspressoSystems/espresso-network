@@ -10,7 +10,7 @@ use alloy::{
     contract::RawCallBuilder,
     hex::{FromHex, ToHexExt},
     network::{Ethereum, EthereumWallet, TransactionBuilder},
-    primitives::{Address, Bytes, B256, U256},
+    primitives::{keccak256, Address, Bytes, B256, U256},
     providers::{
         fillers::{FillProvider, JoinFill, WalletFiller},
         utils::JoinedRecommendedFillers,
@@ -23,8 +23,9 @@ use alloy::{
     },
     transports::http::reqwest::Url,
 };
+use alloy_dyn_abi::{DynSolType, DynSolValue};
 use anyhow::{anyhow, Context, Result};
-use clap::{builder::OsStr, Parser};
+use clap::{builder::OsStr, Parser, ValueEnum};
 use derive_more::{derive::Deref, Display};
 use hotshot_contract_adapter::sol_types::*;
 
@@ -1488,6 +1489,468 @@ pub async fn deploy_safe_exit_timelock(
     Ok(timelock_addr)
 }
 
+#[derive(Debug, Clone)]
+pub struct TimelockOperationData {
+    /// The address of the contract to call
+    target: Address,
+    /// The value to send with the call
+    value: U256,
+    /// The data to send with the call e.g. the calldata of a function call
+    data: Bytes,
+    /// The predecessor operation id if you need to chain operations
+    predecessor: B256,
+    /// The salt for the operation
+    salt: B256,
+    /// The delay for the operation, must be >= the timelock's min delay
+    delay: U256,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum TimelockOperationType {
+    Schedule,
+    Execute,
+    Cancel,
+}
+
+#[derive(Debug)]
+pub enum TimelockContract {
+    OpsTimelock(Address),
+    SafeExitTimelock(Address),
+}
+
+impl TimelockContract {
+    pub async fn get_operation_id(
+        &self,
+        operation: &TimelockOperationData,
+        provider: &impl Provider,
+    ) -> Result<B256> {
+        match self {
+            TimelockContract::OpsTimelock(timelock_addr) => {
+                Ok(OpsTimelock::new(*timelock_addr, &provider)
+                    .hashOperation(
+                        operation.target,
+                        operation.value,
+                        operation.data.clone(),
+                        operation.predecessor,
+                        operation.salt,
+                    )
+                    .call()
+                    .await?
+                    ._0)
+            },
+            TimelockContract::SafeExitTimelock(timelock_addr) => {
+                Ok(SafeExitTimelock::new(*timelock_addr, &provider)
+                    .hashOperation(
+                        operation.target,
+                        operation.value,
+                        operation.data.clone(),
+                        operation.predecessor,
+                        operation.salt,
+                    )
+                    .call()
+                    .await?
+                    ._0)
+            },
+        }
+    }
+
+    pub async fn schedule(
+        &self,
+        operation: TimelockOperationData,
+        provider: &impl Provider,
+    ) -> Result<TransactionReceipt> {
+        match self {
+            TimelockContract::OpsTimelock(timelock_addr) => {
+                let pending_tx = OpsTimelock::new(*timelock_addr, &provider)
+                    .schedule(
+                        operation.target,
+                        operation.value,
+                        operation.data,
+                        operation.predecessor,
+                        operation.salt,
+                        operation.delay,
+                    )
+                    .send()
+                    .await?;
+                let tx_hash = *pending_tx.tx_hash();
+                tracing::info!(%tx_hash, "waiting for tx to be mined");
+                let receipt = pending_tx.get_receipt().await?;
+                Ok(receipt)
+            },
+            TimelockContract::SafeExitTimelock(timelock_addr) => {
+                let pending_tx = SafeExitTimelock::new(*timelock_addr, &provider)
+                    .schedule(
+                        operation.target,
+                        operation.value,
+                        operation.data,
+                        operation.predecessor,
+                        operation.salt,
+                        operation.delay,
+                    )
+                    .send()
+                    .await?;
+                let tx_hash = *pending_tx.tx_hash();
+                tracing::info!(%tx_hash, "waiting for tx to be mined");
+                let receipt = pending_tx.get_receipt().await?;
+                Ok(receipt)
+            },
+        }
+    }
+
+    pub async fn is_operation_pending(
+        &self,
+        operation_id: B256,
+        provider: &impl Provider,
+    ) -> Result<bool> {
+        match self {
+            TimelockContract::OpsTimelock(timelock_addr) => {
+                Ok(OpsTimelock::new(*timelock_addr, &provider)
+                    .isOperationPending(operation_id)
+                    .call()
+                    .await?
+                    ._0)
+            },
+            TimelockContract::SafeExitTimelock(timelock_addr) => {
+                Ok(SafeExitTimelock::new(*timelock_addr, &provider)
+                    .isOperationPending(operation_id)
+                    .call()
+                    .await?
+                    ._0)
+            },
+        }
+    }
+
+    pub async fn is_operation_ready(
+        &self,
+        operation_id: B256,
+        provider: &impl Provider,
+    ) -> Result<bool> {
+        match self {
+            TimelockContract::OpsTimelock(timelock_addr) => {
+                Ok(OpsTimelock::new(*timelock_addr, &provider)
+                    .isOperationReady(operation_id)
+                    .call()
+                    .await?
+                    ._0)
+            },
+            TimelockContract::SafeExitTimelock(timelock_addr) => {
+                Ok(SafeExitTimelock::new(*timelock_addr, &provider)
+                    .isOperationReady(operation_id)
+                    .call()
+                    .await?
+                    ._0)
+            },
+        }
+    }
+
+    pub async fn is_operation_done(
+        &self,
+        operation_id: B256,
+        provider: &impl Provider,
+    ) -> Result<bool> {
+        match self {
+            TimelockContract::OpsTimelock(timelock_addr) => {
+                Ok(OpsTimelock::new(*timelock_addr, &provider)
+                    .isOperationDone(operation_id)
+                    .call()
+                    .await?
+                    ._0)
+            },
+            TimelockContract::SafeExitTimelock(timelock_addr) => {
+                Ok(SafeExitTimelock::new(*timelock_addr, &provider)
+                    .isOperationDone(operation_id)
+                    .call()
+                    .await?
+                    ._0)
+            },
+        }
+    }
+
+    pub async fn execute(
+        &self,
+        operation: TimelockOperationData,
+        provider: &impl Provider,
+    ) -> Result<TransactionReceipt> {
+        match self {
+            TimelockContract::OpsTimelock(timelock_addr) => {
+                let pending_tx = OpsTimelock::new(*timelock_addr, &provider)
+                    .execute(
+                        operation.target,
+                        operation.value,
+                        operation.data,
+                        operation.predecessor,
+                        operation.salt,
+                    )
+                    .send()
+                    .await?;
+                let tx_hash = *pending_tx.tx_hash();
+                tracing::info!(%tx_hash, "waiting for tx to be mined");
+                let receipt = pending_tx.get_receipt().await?;
+                Ok(receipt)
+            },
+            TimelockContract::SafeExitTimelock(timelock_addr) => {
+                let pending_tx = SafeExitTimelock::new(*timelock_addr, &provider)
+                    .execute(
+                        operation.target,
+                        operation.value,
+                        operation.data,
+                        operation.predecessor,
+                        operation.salt,
+                    )
+                    .send()
+                    .await?;
+                let tx_hash = *pending_tx.tx_hash();
+                tracing::info!(%tx_hash, "waiting for tx to be mined");
+                let receipt = pending_tx.get_receipt().await?;
+                Ok(receipt)
+            },
+        }
+    }
+
+    pub async fn cancel(
+        &self,
+        operation_id: B256,
+        provider: &impl Provider,
+    ) -> Result<TransactionReceipt> {
+        match self {
+            TimelockContract::OpsTimelock(timelock_addr) => {
+                let pending_tx = OpsTimelock::new(*timelock_addr, &provider)
+                    .cancel(operation_id)
+                    .send()
+                    .await?;
+                let tx_hash = *pending_tx.tx_hash();
+                tracing::info!(%tx_hash, "waiting for tx to be mined");
+                let receipt = pending_tx.get_receipt().await?;
+                Ok(receipt)
+            },
+            TimelockContract::SafeExitTimelock(timelock_addr) => {
+                let pending_tx = SafeExitTimelock::new(*timelock_addr, &provider)
+                    .cancel(operation_id)
+                    .send()
+                    .await?;
+                let tx_hash = *pending_tx.tx_hash();
+                tracing::info!(%tx_hash, "waiting for tx to be mined");
+                let receipt = pending_tx.get_receipt().await?;
+                Ok(receipt)
+            },
+        }
+    }
+}
+
+/// Schedule a timelock operation
+///
+/// Parameters:
+/// - `provider`: the provider to use
+/// - `contract_type`: the type of contract to schedule the operation on
+/// - `operation`: the operation to schedule (see TimelockOperationData struct for more details)
+///
+/// Returns:
+/// - The operation id
+pub async fn schedule_timelock_operation(
+    provider: &impl Provider,
+    contract_type: Contract,
+    operation: TimelockOperationData,
+) -> Result<B256> {
+    let target_addr = operation.target;
+    let timelock = match contract_type {
+        Contract::FeeContractProxy => {
+            let proxy = FeeContract::new(target_addr, &provider);
+            let proxy_owner = proxy.owner().call().await?._0;
+            TimelockContract::OpsTimelock(proxy_owner)
+        },
+        Contract::EspTokenProxy => {
+            let proxy = EspToken::new(target_addr, &provider);
+            let proxy_owner = proxy.owner().call().await?._0;
+            TimelockContract::SafeExitTimelock(proxy_owner)
+        },
+        Contract::LightClientProxy => {
+            let proxy = LightClient::new(target_addr, &provider);
+            let proxy_owner = proxy.owner().call().await?._0;
+            TimelockContract::OpsTimelock(proxy_owner)
+        },
+        Contract::StakeTableProxy => {
+            let proxy = StakeTable::new(target_addr, &provider);
+            let proxy_owner = proxy.owner().call().await?._0;
+            TimelockContract::OpsTimelock(proxy_owner)
+        },
+        _ => anyhow::bail!(
+            "Invalid contract type for timelock schedule operation: {}",
+            contract_type
+        ),
+    };
+    let operation_id = timelock.get_operation_id(&operation, &provider).await?;
+
+    let receipt = timelock.schedule(operation, &provider).await?;
+    tracing::info!(%receipt.gas_used, %receipt.transaction_hash, "tx mined");
+    if !receipt.inner.is_success() {
+        anyhow::bail!("tx failed: {:?}", receipt);
+    }
+
+    // check that the tx is scheduled
+    if !(timelock
+        .is_operation_pending(operation_id, &provider)
+        .await?
+        || timelock.is_operation_ready(operation_id, &provider).await?)
+    {
+        anyhow::bail!("tx not correctly scheduled: {}", operation_id);
+    }
+    tracing::info!("tx scheduled with id: {}", operation_id);
+    Ok(operation_id)
+}
+
+/// Execute a timelock operation
+///
+/// Parameters:
+/// - `provider`: the provider to use
+/// - `contract_type`: the type of contract to execute the operation on
+/// - `operation`: the operation to execute (see TimelockOperationData struct for more details)
+///
+/// Returns:
+/// - The operation id
+pub async fn execute_timelock_operation(
+    provider: &impl Provider,
+    contract_type: Contract,
+    operation: TimelockOperationData,
+) -> Result<B256> {
+    let target_addr = operation.target;
+    let timelock = match contract_type {
+        Contract::FeeContractProxy => {
+            let proxy = FeeContract::new(target_addr, &provider);
+            let proxy_owner = proxy.owner().call().await?._0;
+            TimelockContract::OpsTimelock(proxy_owner)
+        },
+        Contract::EspTokenProxy => {
+            let proxy = EspToken::new(target_addr, &provider);
+            let proxy_owner = proxy.owner().call().await?._0;
+            TimelockContract::SafeExitTimelock(proxy_owner)
+        },
+        Contract::LightClientProxy => {
+            let proxy = LightClient::new(target_addr, &provider);
+            let proxy_owner = proxy.owner().call().await?._0;
+            TimelockContract::OpsTimelock(proxy_owner)
+        },
+        Contract::StakeTableProxy => {
+            let proxy = StakeTable::new(target_addr, &provider);
+            let proxy_owner = proxy.owner().call().await?._0;
+            TimelockContract::OpsTimelock(proxy_owner)
+        },
+        _ => anyhow::bail!(
+            "Invalid contract type for timelock execute operation: {}",
+            contract_type
+        ),
+    };
+    let operation_id = timelock.get_operation_id(&operation, &provider).await?;
+
+    // execute the tx
+    let receipt = timelock.execute(operation, &provider).await?;
+    tracing::info!(%receipt.gas_used, %receipt.transaction_hash, "tx mined");
+    if !receipt.inner.is_success() {
+        anyhow::bail!("tx failed: {:?}", receipt);
+    }
+
+    // check that the tx is executed
+    if !timelock.is_operation_done(operation_id, &provider).await? {
+        anyhow::bail!("tx not correctly executed: {}", operation_id);
+    }
+    tracing::info!("tx executed with id: {}", operation_id);
+    Ok(operation_id)
+}
+
+/// Cancel a timelock operation
+///
+/// Parameters:
+/// - `provider`: the provider to use
+/// - `contract_type`: the type of contract to cancel the operation on
+/// - `operation`: the operation to cancel (see TimelockOperationData struct for more details)
+///
+/// Returns:
+/// - The operation id
+pub async fn cancel_timelock_operation(
+    provider: &impl Provider,
+    contract_type: Contract,
+    operation: TimelockOperationData,
+) -> Result<B256> {
+    let target_addr = operation.target;
+    let timelock = match contract_type {
+        Contract::FeeContractProxy => {
+            let proxy = FeeContract::new(target_addr, &provider);
+            let proxy_owner = proxy.owner().call().await?._0;
+            TimelockContract::OpsTimelock(proxy_owner)
+        },
+        Contract::EspTokenProxy => {
+            let proxy = EspToken::new(target_addr, &provider);
+            let proxy_owner = proxy.owner().call().await?._0;
+            TimelockContract::SafeExitTimelock(proxy_owner)
+        },
+        Contract::LightClientProxy => {
+            let proxy = LightClient::new(target_addr, &provider);
+            let proxy_owner = proxy.owner().call().await?._0;
+            TimelockContract::OpsTimelock(proxy_owner)
+        },
+        Contract::StakeTableProxy => {
+            let proxy = StakeTable::new(target_addr, &provider);
+            let proxy_owner = proxy.owner().call().await?._0;
+            TimelockContract::OpsTimelock(proxy_owner)
+        },
+        _ => anyhow::bail!(
+            "Invalid contract type for timelock cancel operation: {}",
+            contract_type
+        ),
+    };
+    let operation_id = timelock.get_operation_id(&operation, &provider).await?;
+    let receipt = timelock.cancel(operation_id, &provider).await?;
+    tracing::info!(%receipt.gas_used, %receipt.transaction_hash, "tx mined");
+    if !receipt.inner.is_success() {
+        anyhow::bail!("tx failed: {:?}", receipt);
+    }
+    tracing::info!("tx cancelled with id: {}", operation_id);
+    Ok(operation_id)
+}
+
+/// Encode a function call with the given signature and arguments
+///
+/// Parameters:
+/// - `signature`: e.g. `"transfer(address,uint256)"`
+/// - `args`: Solidity typed arguments as `Vec<&str>`
+///
+/// Returns:
+/// - Full calldata: selector + encoded arguments
+pub fn encode_function_call(signature: &str, args: Vec<String>) -> Result<Bytes> {
+    let (_name, types_str) = signature
+        .split_once('(')
+        .ok_or_else(|| anyhow!("Invalid function signature: {}", signature))?;
+
+    let types_str = types_str.trim_end_matches(')');
+    let arg_type_strs = types_str.split(',').filter(|s| !s.trim().is_empty());
+
+    let dyn_types: Vec<DynSolType> = arg_type_strs
+        .map(|s| s.trim().parse::<DynSolType>())
+        .collect::<std::result::Result<_, _>>()
+        .map_err(|e| anyhow!("Failed to parse argument types: {e}"))?;
+
+    let dyn_values: Vec<DynSolValue> = dyn_types
+        .iter()
+        .zip(args.iter())
+        .map(|(ty, arg)| ty.coerce_str(arg))
+        .collect::<std::result::Result<_, _>>()
+        .map_err(|e| anyhow!("Failed to coerce argument: {e}"))?;
+
+    const FUNCTION_SELECTOR_SIZE: usize = 4;
+    let selector = &keccak256(signature.as_bytes())[..FUNCTION_SELECTOR_SIZE];
+
+    let encoded_args = if dyn_values.len() == 1 {
+        dyn_values[0].abi_encode()
+    } else {
+        DynSolValue::Tuple(dyn_values).abi_encode()
+    };
+
+    let mut calldata = Vec::with_capacity(4 + encoded_args.len());
+    calldata.extend_from_slice(selector);
+    calldata.extend_from_slice(&encoded_args);
+
+    Ok(calldata.into())
+}
+
 #[cfg(test)]
 mod tests {
     use alloy::{
@@ -2517,6 +2980,166 @@ mod tests {
         // v1 state persistence cannot be tested here because the upgrade proposal is not yet executed
         // One has to test that the upgrade proposal is available via the Safe UI
         // and then test that the v1 state is persisted
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_schedule_and_execute_timelock_operation() -> Result<()> {
+        setup_test();
+        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+        let delay = U256::from(0);
+
+        // Get the provider's wallet address (the one actually sending transactions)
+        let provider_wallet = provider.get_accounts().await?[0];
+
+        let proposers = vec![provider_wallet];
+        let executors = vec![provider_wallet];
+
+        let timelock_addr = deploy_ops_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            proposers,
+            executors,
+            provider_wallet, // Use provider wallet as admin too
+        )
+        .await?;
+
+        // deploy fee contract and set the timelock as the admin
+        let fee_contract_proxy_addr =
+            deploy_fee_contract_proxy(&provider, &mut contracts, timelock_addr).await?;
+
+        let proxy = FeeContract::new(fee_contract_proxy_addr, &provider);
+        let upgrade_data = proxy
+            .transferOwnership(provider_wallet)
+            .calldata()
+            .to_owned();
+
+        // propose a timelock operation
+        let mut operation = TimelockOperationData {
+            target: fee_contract_proxy_addr,
+            value: U256::ZERO,
+            data: upgrade_data.into(),
+            predecessor: B256::ZERO,
+            salt: B256::ZERO,
+            delay,
+        };
+        let operation_id =
+            schedule_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone())
+                .await?;
+
+        // check that the tx is scheduled
+        let timelock = OpsTimelock::new(timelock_addr, &provider);
+        assert!(timelock.isOperationPending(operation_id).call().await?._0);
+        assert!(timelock.isOperationReady(operation_id).call().await?._0);
+        assert!(!timelock.isOperationDone(operation_id).call().await?._0);
+        assert!(timelock.getTimestamp(operation_id).call().await?._0 > U256::ZERO);
+
+        // execute the tx since the delay is 0
+        execute_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone())
+            .await?;
+
+        // check that the tx is executed
+        assert!(timelock.isOperationDone(operation_id).call().await?._0);
+        assert!(!timelock.isOperationPending(operation_id).call().await?._0);
+        assert!(!timelock.isOperationReady(operation_id).call().await?._0);
+        // check that the new owner is the provider_wallet
+        let fee_contract = FeeContract::new(operation.target, &provider);
+        assert_eq!(fee_contract.owner().call().await?._0, provider_wallet);
+
+        operation.value = U256::from(1);
+        //transfer ownership back to the timelock
+        let _ = fee_contract.transferOwnership(timelock_addr).send().await?;
+
+        schedule_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone())
+            .await?;
+
+        cancel_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone()).await?;
+
+        // check that the tx is cancelled
+        let next_operation_id = timelock
+            .hashOperation(
+                operation.target,
+                operation.value,
+                operation.data.clone(),
+                operation.predecessor,
+                operation.salt,
+            )
+            .call()
+            .await?
+            ._0;
+        assert!(timelock.getTimestamp(next_operation_id).call().await?._0 == U256::ZERO);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_encode_function_call() -> Result<()> {
+        let function_signature = "transfer(address,uint256)".to_string();
+        let values = vec![
+            "0x000000000000000000000000000000000000dead".to_string(),
+            "1000".to_string(),
+        ];
+        let expected = "0xa9059cbb000000000000000000000000000000000000000000000000000000000000dead00000000000000000000000000000000000000000000000000000000000003e8".parse::<Bytes>()?;
+        let encoded = encode_function_call(&function_signature, values).expect("encoding failed");
+
+        assert_eq!(encoded, expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_encode_function_call_with_bytes32() -> Result<()> {
+        let function_signature = "setHash(bytes32)".to_string();
+        let values =
+            vec!["0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string()];
+        let expected = "0x0c4c42850123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            .parse::<Bytes>()?;
+        let encoded = encode_function_call(&function_signature, values).expect("encoding failed");
+
+        assert_eq!(encoded, expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_encode_function_call_with_bytes() -> Result<()> {
+        let function_signature = "emitData(bytes)";
+        let values = vec!["0xdeadbeef".to_string()];
+        let expected = "0xd836083e00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000004deadbeef00000000000000000000000000000000000000000000000000000000".parse::<Bytes>()?;
+        let encoded = encode_function_call(&function_signature, values).expect("encoding failed");
+
+        assert_eq!(encoded, expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_encode_function_call_with_bool() -> Result<()> {
+        let function_signature = "setFlag(bool)".to_string();
+        let mut values = vec!["true".to_string()];
+        let mut expected =
+            "0x3927f6af0000000000000000000000000000000000000000000000000000000000000001"
+                .parse::<Bytes>()?;
+        let mut encoded =
+            encode_function_call(&function_signature, values).expect("encoding failed");
+
+        assert_eq!(encoded, expected);
+
+        values = vec!["false".to_string()];
+        expected = "0x3927f6af0000000000000000000000000000000000000000000000000000000000000000"
+            .parse::<Bytes>()?;
+        encoded = encode_function_call(&function_signature, values).expect("encoding failed");
+
+        assert_eq!(encoded, expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_encode_function_call_with_string() -> Result<()> {
+        let function_signature = "logMessage(string)".to_string();
+        let values = vec!["Hello, world!".to_string()];
+        let expected = "0x7c9900520000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000d48656c6c6f2c20776f726c642100000000000000000000000000000000000000".parse::<Bytes>()?;
+        let encoded = encode_function_call(&function_signature, values).expect("encoding failed");
+
+        assert_eq!(encoded, expected);
         Ok(())
     }
 }

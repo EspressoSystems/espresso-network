@@ -4088,6 +4088,7 @@ name = "espresso-contract-deployer"
 version = "0.1.0"
 dependencies = [
  "alloy",
+ "alloy-dyn-abi",
  "anyhow",
  "clap 4.5.39",
  "derive_builder",
