@@ -172,7 +172,7 @@ pub(crate) trait CatchupDataSource: Sync {
                 .get_accounts(instance, height, view, &[account])
                 .await?;
             let (proof, balance) = FeeAccountProof::prove(&tree, account.into()).context(
-                format!("account {account} not available for height {height}, view {view:?}"),
+                format!("account {account} not available for height {height}, view {view}"),
             )?;
             Ok(AccountQueryData { balance, proof })
         }
@@ -232,10 +232,9 @@ pub(crate) trait CatchupDataSource: Sync {
             let tree = self
                 .get_reward_accounts(instance, height, view, &[account])
                 .await?;
-            let (proof, balance) =
-                RewardAccountProof::prove(&tree, account.into()).context(format!(
-                    "reward account {account} not available for height {height}, view {view:?}"
-                ))?;
+            let (proof, balance) = RewardAccountProof::prove(&tree, account.into()).context(
+                format!("reward account {account} not available for height {height}, view {view}"),
+            )?;
             Ok(RewardAccountQueryData { balance, proof })
         }
     }

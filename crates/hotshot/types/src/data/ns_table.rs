@@ -22,7 +22,10 @@ pub fn parse_ns_table(payload_byte_len: usize, bytes: &[u8]) -> Vec<Range<usize>
     if bytes.len() < NUM_NSS_BYTE_LEN
         || (bytes.len() - NUM_NSS_BYTE_LEN) % (NS_OFFSET_BYTE_LEN + NS_ID_BYTE_LEN) != 0
     {
-        tracing::warn!("Failed to parse the metadata as namespace table. Use a single namespace table instead.");
+        tracing::warn!(
+            "Failed to parse the metadata as namespace table. Use a single namespace table \
+             instead."
+        );
         return vec![(0..payload_byte_len)];
     }
     let num_entries = u32::from_le_bytes(bytes[..NUM_NSS_BYTE_LEN].try_into().unwrap()) as usize;
@@ -31,7 +34,10 @@ pub fn parse_ns_table(payload_byte_len: usize, bytes: &[u8]) -> Vec<Range<usize>
             / NS_ID_BYTE_LEN.saturating_add(NS_OFFSET_BYTE_LEN)
         || (num_entries == 0 && payload_byte_len != 0)
     {
-        tracing::warn!("Failed to parse the metadata as namespace table. Use a single namespace table instead.");
+        tracing::warn!(
+            "Failed to parse the metadata as namespace table. Use a single namespace table \
+             instead."
+        );
         return vec![(0..payload_byte_len)];
     }
     // Early breaks for empty payload and namespace table
@@ -47,14 +53,20 @@ pub fn parse_ns_table(payload_byte_len: usize, bytes: &[u8]) -> Vec<Range<usize>
                 .unwrap(),
         ) as usize;
         if r < l || r > payload_byte_len {
-            tracing::warn!("Failed to parse the metadata as namespace table. Use a single namespace table instead.");
+            tracing::warn!(
+                "Failed to parse the metadata as namespace table. Use a single namespace table \
+                 instead."
+            );
             return vec![(0..payload_byte_len)];
         }
         result.push(l..r);
         l = r;
     }
     if l != payload_byte_len {
-        tracing::warn!("Failed to parse the metadata as namespace table. Use a single namespace table instead.");
+        tracing::warn!(
+            "Failed to parse the metadata as namespace table. Use a single namespace table \
+             instead."
+        );
         return vec![(0..payload_byte_len)];
     }
     result

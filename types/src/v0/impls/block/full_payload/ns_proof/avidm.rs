@@ -135,7 +135,8 @@ impl AvidMNsProofV1 {
                 Ok(proof) => Some(AvidMNsProofV1::IncorrectEncoding(proof)),
                 Err(e) => {
                     tracing::error!(
-                        "error generating incorrect encoding proof for namespace index {ns_index}: {:?}",
+                        "error generating incorrect encoding proof for namespace index \
+                         {ns_index}: {:?}",
                         e
                     );
                     None
@@ -271,12 +272,12 @@ mod tests {
                 let txs = test
                     .nss
                     .remove(&ns_id)
-                    .unwrap_or_else(|| panic!("namespace {} missing from test", ns_id));
+                    .unwrap_or_else(|| panic!("namespace {ns_id} missing from test"));
 
                 // verify ns_proof
                 let (ns_proof_txs, ns_proof_ns_id) = ns_proof
                     .verify(block.ns_table(), vid_commit, &param)
-                    .unwrap_or_else(|| panic!("namespace {} proof verification failure", ns_id));
+                    .unwrap_or_else(|| panic!("namespace {ns_id} proof verification failure"));
 
                 assert_eq!(ns_proof_ns_id, ns_id);
                 assert_eq!(ns_proof_txs, txs);

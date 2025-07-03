@@ -60,10 +60,10 @@ async fn main() -> Result<()> {
 
     // Configure the broker
     let broker_config: BrokerConfig<TestingDef<SeqTypes>> = BrokerConfig {
-        public_advertise_endpoint: format!("127.0.0.1:{}", broker_public_port),
-        public_bind_endpoint: format!("127.0.0.1:{}", broker_public_port),
-        private_advertise_endpoint: format!("127.0.0.1:{}", broker_private_port),
-        private_bind_endpoint: format!("127.0.0.1:{}", broker_private_port),
+        public_advertise_endpoint: format!("127.0.0.1:{broker_public_port}"),
+        public_bind_endpoint: format!("127.0.0.1:{broker_public_port}"),
+        private_advertise_endpoint: format!("127.0.0.1:{broker_private_port}"),
+        private_bind_endpoint: format!("127.0.0.1:{broker_private_port}"),
 
         metrics_bind_endpoint: None,
         discovery_endpoint: discovery_endpoint.clone(),

@@ -95,7 +95,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
             HotShotEvent::DaProposalRecv(proposal, sender) => {
                 let sender = sender.clone();
                 tracing::debug!(
-                    "DA proposal received for view: {:?}",
+                    "DA proposal received for view: {}",
                     proposal.data.view_number()
                 );
                 // ED NOTE: Assuming that the next view leader is the one who sends DA proposal for this view
@@ -113,7 +113,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 if let Some(entry) = self.consensus.read().await.saved_payloads().get(&view) {
                     ensure!(
                         entry.payload.encode() == proposal.data.encoded_transactions,
-                        "Received DA proposal for view {view:?} but we already have a payload for that view and they are not identical.  Throwing it away",
+                        "Received DA proposal for view {view} but we already have a payload for \
+                         that view and they are not identical.  Throwing it away",
                     );
                 }
 
@@ -128,9 +129,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 ensure!(
                     view_leader_key == sender,
                     warn!(
-                      "DA proposal doesn't have expected leader key for view {} \n DA proposal is: {:?}",
-                      *view,
-                      proposal.data.clone()
+                        "DA proposal doesn't have expected leader key for view {} \n DA proposal \
+                         is: {:?}",
+                        *view,
+                        proposal.data.clone()
                     )
                 );
 
@@ -156,12 +158,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     .context(warn!("No stake table for epoch"))?;
 
                 ensure!(
-                  cur_view <= view_number + 1,
-                  debug!(
-                    "Validated DA proposal for prior view but it's too old now Current view {:?}, DA Proposal view {:?}", 
-                    cur_view,
-                    proposal.data.view_number()
-                  )
+                    cur_view <= view_number + 1,
+                    debug!(
+                        "Validated DA proposal for prior view but it's too old now Current view \
+                         {cur_view}, DA Proposal view {}",
+                        proposal.data.view_number()
+                    )
                 );
 
                 // Proposal is fresh and valid, notify the application layer
@@ -179,7 +181,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
 
                 ensure!(
                     membership.has_da_stake(&self.public_key).await,
-                    debug!("We were not chosen for consensus committee for view {view_number} in epoch {epoch_number:?}")
+                    debug!(
+                        "We were not chosen for consensus committee for view {view_number} in \
+                         epoch {epoch_number:?}"
+                    )
                 );
                 let total_weight =
                     vid_total_weight::<TYPES>(&membership.stake_table().await, epoch_number);
@@ -251,7 +256,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 )
                 .await?;
 
-                tracing::debug!("Sending vote to the DA leader {:?}", vote.view_number());
+                tracing::debug!("Sending vote to the DA leader {}", vote.view_number());
 
                 broadcast_event(Arc::new(HotShotEvent::DaVoteSend(vote)), &event_stream).await;
                 let mut consensus_writer = self.consensus.write().await;
@@ -304,7 +309,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                         target_epochs.push(next_epoch);
                     }
                     if target_epochs.is_empty() {
-                        bail!("Not calculating VID, the node doesn't belong to the current epoch or the next epoch.");
+                        bail!(
+                            "Not calculating VID, the node doesn't belong to the current epoch or \
+                             the next epoch."
+                        );
                     };
 
                     tracing::debug!(
@@ -331,9 +339,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                                 .and_then(|epoch_map| epoch_map.get(&target_epoch))
                             {
                                 tracing::debug!(
-                                    "Primary network is down. Calculated own VID share for epoch {:?}, my id {:?}",
-                                    target_epoch,
-                                    my_id
+                                    "Primary network is down. Calculated own VID share for epoch \
+                                     {target_epoch:?}, my id {my_id}"
                                 );
                                 broadcast_event(
                                     Arc::new(HotShotEvent::VidShareRecv(
@@ -349,7 +356,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 }
             },
             HotShotEvent::DaVoteRecv(ref vote) => {
-                tracing::debug!("DA vote recv, Main Task {:?}", vote.view_number());
+                tracing::debug!("DA vote recv, Main Task {}", vote.view_number());
                 // Check if we are the leader and the vote is from the sender.
                 let view = vote.view_number();
                 let epoch = vote.data.epoch;
@@ -362,9 +369,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 ensure!(
                     membership.leader(view).await? == self.public_key,
                     debug!(
-                      "We are not the DA committee leader for view {} are we leader for next view? {}",
-                      *view,
-                      membership.leader(view + 1).await? == self.public_key
+                        "We are not the DA committee leader for view {} are we leader for next \
+                         view? {}",
+                        *view,
+                        membership.leader(view + 1).await? == self.public_key
                     )
                 );
 
@@ -393,7 +401,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 );
 
                 if *view - *self.cur_view > 1 {
-                    tracing::info!("View changed by more than 1 going to view {view:?}");
+                    tracing::info!("View changed by more than 1 going to view {view}");
                 }
                 self.cur_view = view;
             },

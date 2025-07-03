@@ -263,6 +263,18 @@ Returns
 ```
 """
 
+[route.stream_transactions]
+PATH = ["stream/transactions/:height/namespace/:namespace", "stream/transactions/:height"]
+METHOD = "SOCKET"
+":namespace" = "Integer"
+":height" = "Integer"
+DOC = """
+Subscribe to a stream of transactions starting at the given `:height`.
+
+If a `:namespace` is specified, the stream includes only transactions belonging to that namespace.
+Otherwise, the stream includes all transactions in the block.
+"""
+
 [route.get_stake_table]
 PATH = ["stake-table/:height", "stake-table/view/:view_number"]
 ":height" = "Integer"

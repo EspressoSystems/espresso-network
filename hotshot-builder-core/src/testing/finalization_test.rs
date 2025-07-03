@@ -325,6 +325,7 @@ async fn progress_round_with_transactions(
             payload_commitment,
             builder_commitment,
             timestamp: round,
+            timestamp_millis: round * 1_000,
             metadata,
             random: 0,
         };
@@ -469,7 +470,8 @@ async fn test_eager_block_rate() {
 
         assert_eq!(
             attempts, TEST_NUM_CONSENSUS_RETRIES,
-            "Consensus should retry {TEST_NUM_CONSENSUS_RETRIES} times to get available blocks for round {round}"
+            "Consensus should retry {TEST_NUM_CONSENSUS_RETRIES} times to get available blocks \
+             for round {round}"
         );
 
         assert!(

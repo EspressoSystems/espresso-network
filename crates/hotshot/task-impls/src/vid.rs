@@ -96,7 +96,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     != self.public_key
                 {
                     tracing::debug!(
-                        "We are not the leader in the current epoch. Do not send the VID dispersal."
+                        "We are not the leader in the current epoch. Do not send the VID \
+                         dispersal."
                     );
                     return None;
                 }
@@ -186,7 +187,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 }
 
                 if *view - *self.cur_view > 1 {
-                    info!("View changed by more than 1 going to view {view:?}");
+                    info!("View changed by more than 1 going to view {view}");
                 }
                 self.cur_view = view;
 
@@ -215,8 +216,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 let Some(payload) = consensus_reader.saved_payloads().get(&proposal_view_number)
                 else {
                     tracing::warn!(
-                        "We need to calculate VID for the nodes in the next epoch \
-                         but we don't have the transactions"
+                        "We need to calculate VID for the nodes in the next epoch but we don't \
+                         have the transactions"
                     );
                     return None;
                 };
@@ -245,7 +246,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     return None;
                 };
                 debug!(
-                    "publishing VID disperse for view {proposal_view_number} and epoch {target_epoch:?}"
+                    "publishing VID disperse for view {proposal_view_number} and epoch \
+                     {target_epoch:?}"
                 );
                 broadcast_event(
                     Arc::new(HotShotEvent::VidDisperseSend(

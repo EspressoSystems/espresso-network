@@ -5,12 +5,10 @@ use anyhow::bail;
 #[cfg(any(test, feature = "testing"))]
 use async_lock::RwLock;
 use async_trait::async_trait;
-use hotshot::types::BLSPubKey;
 use hotshot_types::{
     data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::states::InstanceState,
     HotShotConfig,
 };
-use indexmap::IndexMap;
 #[cfg(any(test, feature = "testing"))]
 use vbs::version::StaticVersionType;
 use vbs::version::Version;
@@ -19,7 +17,7 @@ use super::{
     state::ValidatedState,
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0_1::NoStorage,
-    v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
+    v0_3::{EventKey, IndexedStake, StakeTableEvent},
     SeqTypes, UpgradeType, ViewBasedUpgrade,
 };
 #[cfg(any(test, feature = "testing"))]
@@ -30,6 +28,7 @@ use crate::{
         Upgrade, UpgradeMode,
     },
     v0_1::RewardAmount,
+    ValidatorMap,
 };
 
 /// Represents the immutable state of a node.
@@ -78,10 +77,7 @@ impl NodeState {
 
 #[async_trait]
 impl MembershipPersistence for NoStorage {
-    async fn load_stake(
-        &self,
-        _epoch: EpochNumber,
-    ) -> anyhow::Result<Option<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>>> {
+    async fn load_stake(&self, _epoch: EpochNumber) -> anyhow::Result<Option<ValidatorMap>> {
         Ok(None)
     }
 
@@ -89,11 +85,7 @@ impl MembershipPersistence for NoStorage {
         Ok(None)
     }
 
-    async fn store_stake(
-        &self,
-        _epoch: EpochNumber,
-        _stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
-    ) -> anyhow::Result<()> {
+    async fn store_stake(&self, _epoch: EpochNumber, _stake: ValidatorMap) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -431,7 +423,7 @@ pub mod mock {
             let src = &self.state[&view].fee_merkle_tree;
             assert_eq!(src.commitment(), fee_merkle_tree_root);
 
-            tracing::info!("catchup: fetching accounts {accounts:?} for view {view:?}");
+            tracing::info!("catchup: fetching accounts {accounts:?} for view {view}");
             let tree = retain_accounts(src, accounts.iter().copied())
                 .with_context(|| "failed to retain accounts")?;
 
@@ -457,7 +449,7 @@ pub mod mock {
             view: ViewNumber,
             mt: &mut BlockMerkleTree,
         ) -> anyhow::Result<()> {
-            tracing::info!("catchup: fetching frontier for view {view:?}");
+            tracing::info!("catchup: fetching frontier for view {view}");
             let src = &self.state[&view].block_merkle_tree;
 
             assert_eq!(src.commitment(), mt.commitment());

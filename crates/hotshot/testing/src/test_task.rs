@@ -163,7 +163,7 @@ impl<S: TestTaskState + Send + 'static> TestTask<S> {
                             .inspect_err(|e| tracing::error!("{e}"));
                     },
                     Ok((Err(e), _id, _)) => {
-                        error!("Error from one channel in test task {:?}", e);
+                        error!("Error from one channel in test task {e:?}");
                         sleep(Duration::from_millis(4000)).await;
                     },
                     _ => {},
@@ -205,7 +205,7 @@ pub async fn add_network_message_test_task<
             let message = match network.recv_message().await {
                 Ok(message) => message,
                 Err(e) => {
-                    error!("Failed to receive message: {:?}", e);
+                    error!("Failed to receive message: {e:?}");
                     continue;
                 },
             };
@@ -215,7 +215,7 @@ pub async fn add_network_message_test_task<
                 match upgrade_lock.deserialize(&message).await {
                     Ok(message) => message,
                     Err(e) => {
-                        tracing::error!("Failed to deserialize message: {:?}", e);
+                        tracing::error!("Failed to deserialize message: {e:?}");
                         continue;
                     },
                 };

@@ -170,16 +170,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     return Ok(());
                 };
                 let cert_epoch = epoch_from_block_number(cert_block_number, self.epoch_height);
-                tracing::error!(
-                    "Formed Extended QC for view {cert_view:?} and epoch {cert_epoch:?}."
-                );
+                tracing::error!("Formed Extended QC for view {cert_view} and epoch {cert_epoch}.");
                 // Transition to the new epoch by sending ViewChange
                 let next_epoch = TYPES::Epoch::new(cert_epoch + 1);
                 broadcast_view_change(&sender, cert_view + 1, Some(next_epoch), self.first_epoch)
                     .await;
-                tracing::info!("Entering new epoch: {:?}", next_epoch);
+                tracing::info!("Entering new epoch: {next_epoch}");
                 tracing::info!(
-                    "Stake table for epoch {:?}:\n\n{:?}",
+                    "Stake table for epoch {}:\n\n{:?}",
                     next_epoch,
                     self.membership_coordinator
                         .stake_table_for_epoch(Some(next_epoch))
@@ -188,7 +186,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                         .await
                 );
                 tracing::info!(
-                    "Stake table for epoch {:?}:\n\n{:?}",
+                    "Stake table for epoch {}:\n\n{:?}",
                     next_epoch + 1,
                     self.membership_coordinator
                         .stake_table_for_epoch(Some(next_epoch + 1))
@@ -227,9 +225,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                 let next_high_qc_updated = consensus_writer
                     .update_next_epoch_high_qc(next_epoch_high_qc.clone())
                     .is_ok();
-                consensus_writer.update_validator_participation_epoch(
-                    next_epoch.ok_or(warn!("No next epoch"))?,
-                );
+                if let Some(next_epoch) = next_epoch {
+                    consensus_writer.update_validator_participation_epoch(next_epoch);
+                }
                 drop(consensus_writer);
 
                 self.storage
@@ -242,13 +240,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     .map_err(|_| warn!("Failed to update next epoch high QC"))?;
 
                 tracing::debug!(
-                    "Received Extended QC for view {:?} and epoch {:?}.",
+                    "Received Extended QC for view {} and epoch {:?}.",
                     high_qc.view_number(),
                     high_qc.epoch()
                 );
                 if high_qc_updated || next_high_qc_updated {
                     // Send ViewChange indicating new view and new epoch.
-                    tracing::info!("Entering new epoch: {:?}", next_epoch);
+                    let next_epoch = high_qc.data.epoch().map(|x| x + 1);
+                    tracing::info!("Entering new epoch: {next_epoch:?}");
                     broadcast_view_change(
                         &sender,
                         high_qc.view_number() + 1,

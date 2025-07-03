@@ -334,8 +334,14 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
             .current_epoch_participation
             .get(&key)
             .unwrap_or(&(0, 0));
-        let current_epoch_participation_ratio =
-            current_epoch_participation.0 as f64 / current_epoch_participation.1 as f64;
+        let num_leader = current_epoch_participation.0;
+        let num_proposed = current_epoch_participation.1;
+
+        let current_epoch_participation_ratio = if num_leader == 0 {
+            0.0
+        } else {
+            num_proposed as f64 / num_leader as f64
+        };
         let last_epoch_participation = self.last_epoch_participation.get(&key);
         let last_epoch_participation_ratio =
             last_epoch_participation.map(|(leader, proposed)| *leader as f64 / *proposed as f64);
@@ -676,7 +682,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     ) {
         if next_epoch_qc.data.leaf_commit != qc.data().leaf_commit {
             tracing::error!(
-                "Next epoch QC for view {:?} has different leaf commit {:?} to {:?}",
+                "Next epoch QC for view {} has different leaf commit {:?} to {:?}",
                 qc.view_number(),
                 next_epoch_qc.data.leaf_commit,
                 qc.data().leaf_commit
@@ -996,11 +1002,17 @@ impl<TYPES: NodeType> Consensus<TYPES> {
                 } = new_view.view_inner
                 {
                     ensure!(
-                         new_delta.is_some() || existing_delta.is_none(),
-                         debug!("Skipping the state update to not override a `Leaf` view with `Some` state delta.")
-                     );
+                        new_delta.is_some() || existing_delta.is_none(),
+                        debug!(
+                            "Skipping the state update to not override a `Leaf` view with `Some` \
+                             state delta."
+                        )
+                    );
                 } else {
-                    bail!("Skipping the state update to not override a `Leaf` view with a non-`Leaf` view.");
+                    bail!(
+                        "Skipping the state update to not override a `Leaf` view with a \
+                         non-`Leaf` view."
+                    );
                 }
             }
         }
@@ -1170,12 +1182,12 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let mut next_leaf = if let Some(view) = self.validated_state_map.get(&start_from) {
             view.leaf_commitment().ok_or_else(|| {
                 HotShotError::InvalidState(format!(
-                    "Visited failed view {start_from:?} leaf. Expected successful leaf"
+                    "Visited failed view {start_from} leaf. Expected successful leaf"
                 ))
             })?
         } else {
             return Err(HotShotError::InvalidState(format!(
-                "View {start_from:?} leaf does not exist in state map "
+                "View {start_from} leaf does not exist in state map "
             )));
         };
 
@@ -1204,7 +1216,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
                 }
             } else {
                 return Err(HotShotError::InvalidState(format!(
-                    "View {view:?} state does not exist in state map"
+                    "View {view} state does not exist in state map"
                 )));
             }
         }

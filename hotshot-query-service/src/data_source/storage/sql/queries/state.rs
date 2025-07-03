@@ -238,8 +238,11 @@ where
 
         if commitment_from_path != merkle_commitment.digest() {
             return Err(QueryError::Error {
-                message:
-                    format!("Commitment calculated from merkle path ({commitment_from_path:?}) does not match the commitment in the header ({:?})", merkle_commitment.digest()),
+                message: format!(
+                    "Commitment calculated from merkle path ({commitment_from_path:?}) does not \
+                     match the commitment in the header ({:?})",
+                    merkle_commitment.digest()
+                ),
             });
         }
 
@@ -347,7 +350,8 @@ pub(crate) fn build_hash_batch_insert(
         .map(|hash| Ok(format!("({})", query.bind(hash)?)))
         .collect::<QueryResult<Vec<String>>>()?;
     let sql = format!(
-        "INSERT INTO hash(value) values {} ON CONFLICT (value) DO UPDATE SET value = EXCLUDED.value returning value, id",
+        "INSERT INTO hash(value) values {} ON CONFLICT (value) DO UPDATE SET value = \
+         EXCLUDED.value returning value, id",
         params.join(",")
     );
     Ok((query, sql))
@@ -462,7 +466,8 @@ fn build_get_path_query<'q>(
         let node_path = query.bind(path)?;
 
         let sub_query = format!(
-            "SELECT * FROM (SELECT * FROM {table} WHERE path = {node_path} AND created <= $1 ORDER BY created DESC LIMIT 1)",
+            "SELECT * FROM (SELECT * FROM {table} WHERE path = {node_path} AND created <= $1 \
+             ORDER BY created DESC LIMIT 1)",
         );
 
         sub_queries.push(sub_query);

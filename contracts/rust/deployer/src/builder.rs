@@ -21,6 +21,7 @@ use crate::{Contract, Contracts};
 /// - `epoch_start_block`: block height for the first *activated* epoch
 /// - `exit_escrow_period`: exit escrow period for stake table (in seconds)
 /// - `multisig`: new owner/multisig that owns all the proxy contracts
+/// - `multisig_pauser`: new multisig that owns the pauser role
 /// - `initial_token_supply`: initial token supply for the token contract
 /// - `token_name`: name of the token
 /// - `token_symbol`: symbol of the token
@@ -53,19 +54,29 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     #[builder(default)]
     multisig: Option<Address>,
     #[builder(default)]
+    multisig_pauser: Option<Address>,
+    #[builder(default)]
     initial_token_supply: Option<U256>,
     #[builder(default)]
     token_name: Option<String>,
     #[builder(default)]
     token_symbol: Option<String>,
     #[builder(default)]
-    timelock_admin: Option<Address>,
+    ops_timelock_admin: Option<Address>,
     #[builder(default)]
-    timelock_delay: Option<U256>,
+    ops_timelock_delay: Option<U256>,
     #[builder(default)]
-    timelock_executors: Option<Vec<Address>>,
+    ops_timelock_executors: Option<Vec<Address>>,
     #[builder(default)]
-    timelock_proposers: Option<Vec<Address>>,
+    ops_timelock_proposers: Option<Vec<Address>>,
+    #[builder(default)]
+    safe_exit_timelock_admin: Option<Address>,
+    #[builder(default)]
+    safe_exit_timelock_delay: Option<U256>,
+    #[builder(default)]
+    safe_exit_timelock_executors: Option<Vec<Address>>,
+    #[builder(default)]
+    safe_exit_timelock_proposers: Option<Vec<Address>>,
 }
 
 impl<P: Provider + WalletProvider> DeployerArgs<P> {
@@ -182,12 +193,12 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         provider,
                         contracts,
                         crate::LightClientV2UpgradeParams {
-                            is_mock: use_mock,
                             blocks_per_epoch,
                             epoch_start_block,
-                            rpc_url,
-                            dry_run: Some(dry_run),
                         },
+                        use_mock,
+                        rpc_url,
+                        Some(dry_run),
                     )
                     .await?;
                 } else {
@@ -235,34 +246,95 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 // NOTE: we don't transfer ownership to multisig, we only do so after V2 upgrade
             },
             Contract::StakeTableV2 => {
-                crate::upgrade_stake_table_v2(provider, contracts).await?;
-
-                if let Some(multisig) = self.multisig {
-                    let stake_table_proxy = contracts
-                        .address(Contract::StakeTableProxy)
-                        .expect("fail to get StakeTableProxy address");
-                    crate::transfer_ownership(
+                let use_multisig = self.use_multisig;
+                let dry_run = self.dry_run;
+                let multisig_pauser = self.multisig_pauser.context(
+                    "Multisig pauser address must be set for the upgrade to StakeTableV2",
+                )?;
+                tracing::info!(?dry_run, ?use_multisig, "Upgrading to StakeTableV2 with ");
+                if use_multisig {
+                    crate::upgrade_stake_table_v2_multisig_owner(
                         provider,
-                        Contract::StakeTableProxy,
-                        stake_table_proxy,
-                        multisig,
+                        contracts,
+                        self.rpc_url.clone(),
+                        self.multisig.context(
+                            "Multisig address must be set when upgrading to --use-multisig flag \
+                             is present",
+                        )?,
+                        multisig_pauser,
+                        Some(dry_run),
                     )
                     .await?;
+                } else {
+                    crate::upgrade_stake_table_v2(provider, contracts, multisig_pauser, admin)
+                        .await?;
+
+                    if let Some(multisig) = self.multisig {
+                        let stake_table_proxy = contracts
+                            .address(Contract::StakeTableProxy)
+                            .expect("fail to get StakeTableProxy address");
+                        crate::transfer_ownership(
+                            provider,
+                            Contract::StakeTableProxy,
+                            stake_table_proxy,
+                            multisig,
+                        )
+                        .await?;
+                    }
                 }
             },
-            Contract::Timelock => {
-                crate::deploy_timelock(
+            Contract::OpsTimelock => {
+                let ops_timelock_delay = self
+                    .ops_timelock_delay
+                    .context("Ops Timelock delay must be set when deploying Ops Timelock")?;
+                let ops_timelock_proposers = self
+                    .ops_timelock_proposers
+                    .clone()
+                    .context("Ops Timelock proposers must be set when deploying Ops Timelock")?;
+                let ops_timelock_executors = self
+                    .ops_timelock_executors
+                    .clone()
+                    .context("Ops Timelock executors must be set when deploying Ops Timelock")?;
+                let ops_timelock_admin = self
+                    .ops_timelock_admin
+                    .context("Ops Timelock admin must be set when deploying Ops Timelock")?;
+                crate::deploy_ops_timelock(
                     provider,
                     contracts,
-                    self.timelock_delay.unwrap(),
-                    self.timelock_proposers.clone().unwrap(),
-                    self.timelock_executors.clone().unwrap(),
-                    self.timelock_admin.unwrap(),
+                    ops_timelock_delay,
+                    ops_timelock_proposers,
+                    ops_timelock_executors,
+                    ops_timelock_admin,
+                )
+                .await?;
+            },
+            Contract::SafeExitTimelock => {
+                let safe_exit_timelock_delay = self.safe_exit_timelock_delay.context(
+                    "SafeExitTimelock delay must be set when deploying SafeExitTimelock",
+                )?;
+                let safe_exit_timelock_proposers =
+                    self.safe_exit_timelock_proposers.clone().context(
+                        "SafeExitTimelock proposers must be set when deploying SafeExitTimelock",
+                    )?;
+                let safe_exit_timelock_executors =
+                    self.safe_exit_timelock_executors.clone().context(
+                        "SafeExitTimelock executors must be set when deploying SafeExitTimelock",
+                    )?;
+                let safe_exit_timelock_admin = self.safe_exit_timelock_admin.context(
+                    "SafeExitTimelock admin must be set when deploying SafeExitTimelock",
+                )?;
+                crate::deploy_safe_exit_timelock(
+                    provider,
+                    contracts,
+                    safe_exit_timelock_delay,
+                    safe_exit_timelock_proposers,
+                    safe_exit_timelock_executors,
+                    safe_exit_timelock_admin,
                 )
                 .await?;
             },
             _ => {
-                panic!("Deploying {} not supported.", target);
+                panic!("Deploying {target} not supported.");
             },
         }
         Ok(())
@@ -275,6 +347,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         self.deploy(contracts, Contract::LightClientProxy).await?;
         self.deploy(contracts, Contract::LightClientV2).await?;
         self.deploy(contracts, Contract::StakeTableProxy).await?;
+        self.deploy(contracts, Contract::OpsTimelock).await?;
+        self.deploy(contracts, Contract::SafeExitTimelock).await?;
         Ok(())
     }
 

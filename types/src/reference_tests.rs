@@ -25,9 +25,18 @@ use std::{fmt::Debug, path::Path, str::FromStr};
 
 use alloy::primitives::U256;
 use committable::Committable;
-use hotshot_query_service::{testing::mocks::MockVersions, VidCommon};
+use hotshot_example_types::node_types::TestVersions;
+use hotshot_query_service::{
+    availability::{
+        BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, StateCertQueryData,
+        TransactionQueryData, VidCommonQueryData,
+    },
+    testing::mocks::MockVersions,
+    VidCommon,
+};
 use hotshot_types::{
     data::vid_commitment,
+    simple_certificate::LightClientStateUpdateCertificate,
     traits::{signature_key::BuilderSignatureKey, BlockPayload, EncodeBytes},
     vid::{advz::advz_scheme, avidm::init_avidm_param},
 };
@@ -47,12 +56,14 @@ use vbs::{
 use crate::{
     v0_1::{self, ADVZNsProof},
     v0_2, ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
-    NamespaceProofQueryData, NsProof, NsTable, Payload, Transaction, ValidatedState,
+    NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload, SeqTypes, Transaction,
+    ValidatedState,
 };
 
 type V1Serializer = vbs::Serializer<StaticVersion<0, 1>>;
 type V2Serializer = vbs::Serializer<StaticVersion<0, 2>>;
 type V3Serializer = vbs::Serializer<StaticVersion<0, 3>>;
+type V4Serializer = vbs::Serializer<StaticVersion<0, 4>>;
 
 const REFERENCE_NAMESPACE_ID: u32 = 12648430;
 
@@ -79,6 +90,12 @@ async fn reference_payload() -> Payload {
         .await
         .unwrap()
         .0
+}
+
+async fn reference_block() -> BlockQueryData<SeqTypes> {
+    let header = reference_header(Version { major: 0, minor: 1 }).await;
+    let payload = reference_payload().await;
+    BlockQueryData::new(header, payload)
 }
 
 async fn reference_ns_proof_legacy() -> ADVZNamespaceProofQueryData {
@@ -206,6 +223,7 @@ async fn reference_header(version: Version) -> Header {
         reference_chain_config(),
         42,
         789,
+        789_000_000_000,
         124,
         Some(reference_l1_block()),
         payload_commitment,
@@ -223,6 +241,7 @@ async fn reference_header(version: Version) -> Header {
 const REFERENCE_V1_HEADER_COMMITMENT: &str = "BLOCK~dh1KpdvvxSvnnPpOi2yI3DOg8h6ltr2Kv13iRzbQvtN2";
 const REFERENCE_V2_HEADER_COMMITMENT: &str = "BLOCK~V0GJjL19nCrlm9n1zZ6gaOKEekSMCT6uR5P-h7Gi6UJR";
 const REFERENCE_V3_HEADER_COMMITMENT: &str = "BLOCK~jcrvSlMuQnR2bK6QtraQ4RhlP_F3-v_vae5Zml0rtPbl";
+const REFERENCE_V4_HEADER_COMMITMENT: &str = "BLOCK~4AAMH8KXLniBkroEACIPb_QSXs0c4IWU1st6KDEq2sfT";
 
 fn reference_transaction<R>(ns_id: NamespaceId, rng: &mut R) -> Transaction
 where
@@ -283,9 +302,9 @@ change in the serialization of this data structure.
     // Check that we can deserialize from the reference JSON object.
     let parsed: T = serde_json::from_value(expected).unwrap();
     assert_eq!(
-        *reference,
-        parsed,
-        "Reference object commitment does not match commitment of parsed JSON. This is indicative of
+        *reference, parsed,
+        "Reference object commitment does not match commitment of parsed JSON. This is indicative \
+         of
         inconsistency or non-determinism in the commitment scheme.",
     );
 
@@ -298,6 +317,7 @@ change in the serialization of this data structure.
         "v1" => V1Serializer::serialize(&reference).unwrap(),
         "v2" => V2Serializer::serialize(&reference).unwrap(),
         "v3" => V3Serializer::serialize(&reference).unwrap(),
+        "v4" => V4Serializer::serialize(&reference).unwrap(),
         _ => panic!("invalid version"),
     };
     if actual != expected {
@@ -327,6 +347,7 @@ change in the serialization of this data structure.
         "v1" => V1Serializer::deserialize(&expected).unwrap(),
         "v2" => V2Serializer::deserialize(&expected).unwrap(),
         "v3" => V3Serializer::deserialize(&expected).unwrap(),
+        "v4" => V4Serializer::deserialize(&expected).unwrap(),
         _ => panic!("invalid version"),
     };
 
@@ -467,6 +488,16 @@ async fn test_reference_header_v3() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reference_header_v4() {
+    reference_test(
+        "v4",
+        "header",
+        reference_header(StaticVersion::<0, 4>::version()).await,
+        REFERENCE_V4_HEADER_COMMITMENT,
+    );
+}
+
 #[test]
 fn test_reference_transaction() {
     reference_test(
@@ -493,4 +524,94 @@ async fn test_reference_ns_proof_enum_advz() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_reference_ns_proof_enum_avidm() {
     reference_test_without_committable("v3", "ns_proof_V1", &reference_ns_proof_enum_avidm().await);
+}
+
+// Legacy leaf query data
+#[tokio::test(flavor = "multi_thread")]
+async fn test_leaf_query_data_legacy_v1() {
+    let validated_state = ValidatedState::default();
+    let instance_state = NodeState::default();
+    let leaf =
+        LeafQueryDataLegacy::<SeqTypes>::genesis::<TestVersions>(&validated_state, &instance_state)
+            .await;
+    reference_test_without_committable("v1", "leaf_query_data_legacy", &leaf);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_leaf_query_data_legacy_v2() {
+    let validated_state = ValidatedState::default();
+    let instance_state = NodeState::default();
+    let leaf =
+        LeafQueryDataLegacy::<SeqTypes>::genesis::<TestVersions>(&validated_state, &instance_state)
+            .await;
+    reference_test_without_committable("v2", "leaf_query_data_legacy", &leaf);
+}
+
+// new leaf2 query data
+#[tokio::test(flavor = "multi_thread")]
+async fn test_leaf_query_data_v3() {
+    let validated_state = ValidatedState::default();
+    let instance_state = NodeState::default();
+    let leaf =
+        LeafQueryData::<SeqTypes>::genesis::<TestVersions>(&validated_state, &instance_state).await;
+    reference_test_without_committable("v3", "leaf_query_data", &leaf);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_block_query_data() {
+    let block = reference_block().await;
+    reference_test_without_committable("v1", "block_query_data", &block);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_payload_query_data() {
+    let block = reference_block().await;
+    let payload = PayloadQueryData::from(block);
+    reference_test_without_committable("v1", "payload_query_data", &payload);
+}
+
+// v0 is the `VidCommon`` v0 variant
+#[tokio::test(flavor = "multi_thread")]
+async fn test_vid_common_v0_query_data() {
+    let header = reference_header(Version { major: 0, minor: 1 }).await;
+    let payload = reference_payload().await;
+    let encoded = payload.encode();
+
+    let mut scheme = advz_scheme(10);
+    let disperse = VidScheme::disperse(&mut scheme, &encoded).unwrap();
+    let vid = VidCommonQueryData::<SeqTypes>::new(header, VidCommon::V0(disperse.common));
+
+    reference_test_without_committable("v1", "vid_common_v0", &vid);
+}
+
+// v1 is the `VidCommon`` v1 variant
+#[tokio::test(flavor = "multi_thread")]
+async fn test_vid_common_v1_query_data() {
+    let header = reference_header(Version { major: 0, minor: 1 }).await;
+    let avid_m_param = init_avidm_param(10).unwrap();
+    let vid = VidCommonQueryData::<SeqTypes>::new(header, VidCommon::V1(avid_m_param));
+
+    reference_test_without_committable("v1", "vid_common_v1", &vid);
+}
+
+// Transaction query data
+#[tokio::test(flavor = "multi_thread")]
+async fn test_transaction_query_data() {
+    let block = reference_block().await;
+
+    let transactions = block
+        .enumerate()
+        .enumerate()
+        .map(|(i, (index, _))| TransactionQueryData::new(&block, index, i as u64).unwrap())
+        .collect::<Vec<_>>();
+
+    reference_test_without_committable("v1", "transaction_query_data", &transactions);
+}
+
+// State certificate
+#[tokio::test(flavor = "multi_thread")]
+async fn test_state_cert_query_data_v3() {
+    let light_client_cert = LightClientStateUpdateCertificate::<SeqTypes>::genesis();
+    let state_cert = StateCertQueryData(light_client_cert);
+    reference_test_without_committable("v3", "state_cert", &state_cert);
 }

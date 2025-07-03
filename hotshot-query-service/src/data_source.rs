@@ -932,7 +932,8 @@ pub mod node_tests {
         // share.
         let expected_missing = if ds.get_leaf(1).await.try_resolve().is_err() {
             tracing::warn!(
-                "data source does not support out-of-order filling, allowing one missing leaf and VID share"
+                "data source does not support out-of-order filling, allowing one missing leaf and \
+                 VID share"
             );
             1
         } else {
@@ -996,6 +997,7 @@ pub mod node_tests {
                 block_number: i,
                 payload_commitment,
                 timestamp: i,
+                timestamp_millis: i * 1_000,
                 builder_commitment:
                     <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(
                         &payload, &metadata,

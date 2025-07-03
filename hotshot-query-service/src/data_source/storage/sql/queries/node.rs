@@ -177,12 +177,14 @@ where
         // missing in that case _or_ if the row is present but share data is NULL. Thus, we also
         // need to select the total number of VID rows and the number of present VID rows with a
         // NULL share.
-        let sql = "SELECT l.max_height, l.total_leaves, p.null_payloads, v.total_vid, vn.null_vid, pruned_height FROM
+        let sql = "SELECT l.max_height, l.total_leaves, p.null_payloads, v.total_vid, \
+                   vn.null_vid, pruned_height FROM
                 (SELECT max(leaf2.height) AS max_height, count(*) AS total_leaves FROM leaf2) AS l,
                 (SELECT count(*) AS null_payloads FROM payload WHERE data IS NULL) AS p,
                 (SELECT count(*) AS total_vid FROM vid2) AS v,
                 (SELECT count(*) AS null_vid FROM vid2 WHERE share IS NULL) AS vn,
-                (SELECT(SELECT last_height FROM pruned_height ORDER BY id DESC LIMIT 1) as pruned_height)
+                (SELECT(SELECT last_height FROM pruned_height ORDER BY id DESC LIMIT 1) as \
+                   pruned_height)
             ";
         let row = query(sql)
             .fetch_optional(self.as_mut())

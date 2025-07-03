@@ -172,7 +172,7 @@ where
         let spinning_task_state = SpinningTask {
             epoch_height: launcher.metadata.test_config.epoch_height,
             epoch_start_block: launcher.metadata.test_config.epoch_start_block,
-            start_epoch_info: Vec::new(), // #2652 REVIEW NOTE: Same as other instances of start_epoch_info
+            start_epoch_info: Vec::new(),
             handles: Arc::clone(&handles),
             late_start,
             latest_view: None,
@@ -279,7 +279,7 @@ where
                     TestResult::Fail(e) => error_list.push(e),
                 },
                 Err(e) => {
-                    tracing::error!("Error Joining the test task {:?}", e);
+                    tracing::error!("Error Joining the test task {e:?}");
                 },
             }
         }
@@ -360,7 +360,7 @@ where
             }
             let node_id = self.next_node_id;
             self.next_node_id += 1;
-            tracing::debug!("launch node {}", i);
+            tracing::debug!("launch node {i}");
 
             config.builder_urls = builder_urls
                 .clone()
@@ -397,7 +397,14 @@ where
                     );
                 } else {
                     let initializer = HotShotInitializer::<TYPES>::from_genesis::<V>(
-                        TestInstanceState::new(self.launcher.metadata.async_delay_config.clone()),
+                        TestInstanceState::new(
+                            self.launcher
+                                .metadata
+                                .async_delay_config
+                                .get(&node_id)
+                                .cloned()
+                                .unwrap_or_default(),
+                        ),
                         config.epoch_height,
                         config.epoch_start_block,
                         vec![InitializerEpochInfo::<TYPES> {

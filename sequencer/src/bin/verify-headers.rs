@@ -111,7 +111,8 @@ async fn verify_header<ApiVer: StaticVersionType>(
             let l1_block = get_l1_block(l1, l1_finalized.number).await;
             if *l1_finalized != l1_block {
                 tracing::error!(
-                    "header {height} has wrong L1 finalized info: {l1_finalized:?}, expected {l1_block:?}"
+                    "header {height} has wrong L1 finalized info: {l1_finalized:?}, expected \
+                     {l1_block:?}"
                 );
                 ok = false;
             }

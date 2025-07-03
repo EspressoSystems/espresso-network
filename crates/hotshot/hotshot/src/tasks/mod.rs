@@ -460,7 +460,7 @@ where
                                 }
                             }
                             Some(Err(e)) => {
-                                tracing::error!("Relay Task, send_handle, Error receiving event: {:?}", e);
+                                tracing::error!("Relay Task, send_handle, Error receiving event: {e:?}");
                             }
                             None => {
                                 tracing::info!("Relay Task, send_handle, Event stream closed");
@@ -507,7 +507,7 @@ where
                                 }
                             }
                             Some(Err(e)) => {
-                                tracing::error!("Relay Task, recv_handle, Error receiving event from network: {:?}", e);
+                                tracing::error!("Relay Task, recv_handle, Error receiving event from network: {e:?}");
                             }
                             None => {
                                 tracing::info!("Relay Task, recv_handle, Network event stream closed");

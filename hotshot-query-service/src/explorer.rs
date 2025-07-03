@@ -488,7 +488,7 @@ mod test {
             let target_num = min(num_blocks as usize, 10);
             // Retrieve the 20 latest block summaries
             let block_summaries_response: BlockSummaryResponse<MockTypes> = client
-                .get(format!("blocks/latest/{}", target_num).as_str())
+                .get(format!("blocks/latest/{target_num}").as_str())
                 .send()
                 .await
                 .unwrap();
@@ -893,19 +893,17 @@ mod test {
 
         network.spawn(
             "server",
-            app.serve(format!("0.0.0.0:{}", port), MockBase::instance()),
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
         );
 
         // Start a client.
         let availability_client = Client::<Error, MockBase>::new(
-            format!("http://localhost:{}/availability", port)
+            format!("http://localhost:{port}/availability")
                 .parse()
                 .unwrap(),
         );
         let explorer_client = Client::<Error, MockBase>::new(
-            format!("http://localhost:{}/explorer", port)
-                .parse()
-                .unwrap(),
+            format!("http://localhost:{port}/explorer").parse().unwrap(),
         );
 
         assert!(

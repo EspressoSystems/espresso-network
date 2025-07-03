@@ -1,6 +1,5 @@
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
-use alloy::primitives::Address;
 use anyhow::{bail, Context};
 use async_lock::RwLock;
 use async_once_cell::Lazy;
@@ -16,15 +15,14 @@ use espresso_types::{
     retain_accounts,
     v0::traits::SequencerPersistence,
     v0_1::{RewardAccount, RewardAmount, RewardMerkleTree},
-    v0_3::{ChainConfig, Validator},
+    v0_3::ChainConfig,
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
-    Transaction,
+    Transaction, ValidatorMap,
 };
 use futures::{
     future::{BoxFuture, Future, FutureExt},
     stream::BoxStream,
 };
-use hotshot::types::BLSPubKey;
 use hotshot_events_service::events_source::{
     EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
 };
@@ -44,7 +42,6 @@ use hotshot_types::{
     vote::HasViewNumber,
     PeerConfig,
 };
-use indexmap::IndexMap;
 use itertools::Itertools;
 use jf_merkle_tree::MerkleTreeScheme;
 use rand::Rng;
@@ -224,15 +221,15 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     async fn get_validators(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
-    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+    ) -> anyhow::Result<ValidatorMap> {
         self.as_ref().get_validators(epoch).await
     }
 
     /// Get all the validator participation for the current epoch
-    async fn current_proposal_participation(&self) -> HashMap<BLSPubKey, f64> {
+    async fn current_proposal_participation(&self) -> HashMap<PubKey, f64> {
         self.as_ref().current_proposal_participation().await
     }
-    async fn previous_proposal_participation(&self) -> HashMap<BLSPubKey, f64> {
+    async fn previous_proposal_participation(&self) -> HashMap<PubKey, f64> {
         self.as_ref().previous_proposal_participation().await
     }
     async fn get_block_reward(&self) -> anyhow::Result<RewardAmount> {
@@ -258,9 +255,8 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             .map(|e| e + 1);
         if epoch > highest_epoch {
             return Err(anyhow::anyhow!(
-                "requested stake table for epoch {:?} is beyond the current epoch + 1 {:?}",
-                epoch,
-                highest_epoch
+                "requested stake table for epoch {epoch:?} is beyond the current epoch + 1 \
+                 {highest_epoch:?}"
             ));
         }
         let mem = self
@@ -303,7 +299,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     async fn get_validators(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
-    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+    ) -> anyhow::Result<ValidatorMap> {
         let mem = self
             .consensus()
             .await
@@ -319,7 +315,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     }
 
     /// Get the current proposal participation.
-    async fn current_proposal_participation(&self) -> HashMap<BLSPubKey, f64> {
+    async fn current_proposal_participation(&self) -> HashMap<PubKey, f64> {
         self.consensus()
             .await
             .read()
@@ -331,7 +327,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     }
 
     /// Get the previous proposal participation.
-    async fn previous_proposal_participation(&self) -> HashMap<BLSPubKey, f64> {
+    async fn previous_proposal_participation(&self) -> HashMap<PubKey, f64> {
         self.consensus()
             .await
             .read()
@@ -690,7 +686,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
             .state(view)
             .await
             .context(format!(
-                "state not available for height {height}, view {view:?}"
+                "state not available for height {height}, view {view}"
             ))?;
         retain_accounts(&state.fee_merkle_tree, accounts.iter().copied())
     }
@@ -710,7 +706,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
             .state(view)
             .await
             .context(format!(
-                "state not available for height {height}, view {view:?}"
+                "state not available for height {height}, view {view}"
             ))?;
         let tree = &state.block_merkle_tree;
         let frontier = tree.lookup(tree.num_leaves() - 1).expect_ok()?.1;
@@ -789,7 +785,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
             .state(view)
             .await
             .context(format!(
-                "state not available for height {height}, view {view:?}"
+                "state not available for height {height}, view {view}"
             ))?;
 
         retain_reward_accounts(&state.reward_merkle_tree, accounts.iter().copied())
@@ -1041,6 +1037,15 @@ pub mod test_helpers {
                 .genesis_st_state(genesis_stake)
                 .blocks_per_epoch(blocks_per_epoch)
                 .epoch_start_block(epoch_start_block)
+                .multisig_pauser(signer.address())
+                .ops_timelock_delay(U256::from(0))
+                .ops_timelock_admin(signer.address())
+                .ops_timelock_proposers(vec![signer.address()])
+                .ops_timelock_executors(vec![signer.address()])
+                .safe_exit_timelock_delay(U256::from(10))
+                .safe_exit_timelock_admin(signer.address())
+                .safe_exit_timelock_proposers(vec![signer.address()])
+                .safe_exit_timelock_executors(vec![signer.address()])
                 .build()
                 .unwrap();
 
@@ -1350,7 +1355,7 @@ pub mod test_helpers {
         }
         // we cannot verify the signature now, because we don't know the stake table
         client
-            .get::<StateSignatureRequestBody>(&format!("state-signature/block/{}", height))
+            .get::<StateSignatureRequestBody>(&format!("state-signature/block/{height}"))
             .send()
             .await
             .unwrap();
@@ -2038,7 +2043,7 @@ mod api_tests {
                 .await
                 .unwrap()
                 .0;
-            tracing::info!("state_cert: {:?}", state_cert);
+            tracing::info!("state_cert: {state_cert:?}");
             assert_eq!(state_cert.epoch.u64(), i);
             assert_eq!(
                 state_cert.light_client_state.block_height,
@@ -2083,7 +2088,10 @@ mod test {
     use hotshot_contract_adapter::sol_types::{EspToken, StakeTableV2};
     use hotshot_example_types::node_types::EpochsTestVersions;
     use hotshot_query_service::{
-        availability::{BlockQueryData, BlockSummaryQueryData, LeafQueryData, VidCommonQueryData},
+        availability::{
+            BlockQueryData, BlockSummaryQueryData, LeafQueryData, TransactionQueryData,
+            VidCommonQueryData,
+        },
         data_source::{sql::Config, storage::SqlStorage, VersionedDataSource},
         explorer::TransactionSummariesResponse,
         types::HeightIndexed,
@@ -2234,7 +2242,7 @@ mod test {
         // testing fee_balance api
         let account = TestConfig::<5>::builder_key().fee_account();
         let amount = client
-            .get::<Option<FeeAmount>>(&format!("fee-state/fee-balance/latest/{}", account))
+            .get::<Option<FeeAmount>>(&format!("fee-state/fee-balance/latest/{account}"))
             .send()
             .await
             .unwrap()
@@ -3063,10 +3071,7 @@ mod test {
         let mut receive_count = 0;
         loop {
             let event = subscribed_events.next().await.unwrap();
-            tracing::info!(
-                "Received event in hotshot event streaming Client 1: {:?}",
-                event
-            );
+            tracing::info!("Received event in hotshot event streaming Client 1: {event:?}");
             receive_count += 1;
             if receive_count > total_count {
                 tracing::info!("Client Received at least desired events, exiting loop");
@@ -3161,7 +3166,7 @@ mod test {
 
                 let expected_epoch =
                     epoch_from_block_number(qc.data.block_number.unwrap(), epoch_height);
-                tracing::debug!("expected epoch: {}, qc epoch: {}", expected_epoch, epoch);
+                tracing::debug!("expected epoch: {expected_epoch}, qc epoch: {epoch}");
 
                 assert_eq!(expected_epoch, epoch);
             }
@@ -3348,7 +3353,7 @@ mod test {
         // Basically epoch 3 and epoch 4 as epoch height is 20
         // get all the validators
         let validators = client
-            .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/3")
+            .get::<ValidatorMap>("node/validators/3")
             .send()
             .await
             .expect("failed to get validator");
@@ -3363,7 +3368,7 @@ mod test {
         }
         // get all the validators
         let validators = client
-            .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/4")
+            .get::<ValidatorMap>("node/validators/4")
             .send()
             .await
             .expect("failed to get validator");
@@ -3388,7 +3393,7 @@ mod test {
                     .flatten();
 
                 if let Some(amount) = amount {
-                    tracing::info!("address={address}, amount= {amount}");
+                    tracing::info!("address={address}, amount={amount}");
                     cumulative_amount += amount.0;
                 };
             }
@@ -3482,8 +3487,7 @@ mod test {
                 None,
                 l1_block.number(),
             )
-            .await
-            .expect("failed to get stake table from contract");
+            .await;
             let sorted_events = events.sort_events().expect("failed to sort");
 
             let mut sorted_dedup_removed = sorted_events.clone();
@@ -3570,7 +3574,7 @@ mod test {
         while let Some(event) = events.next().await {
             if let EventType::Decide { leaf_chain, .. } = event.event {
                 let height = leaf_chain[0].leaf.height();
-                tracing::info!("Node 0 decided at height: {}", height);
+                tracing::info!("Node 0 decided at height: {height}");
                 if height > EPOCH_HEIGHT * 3 {
                     break;
                 }
@@ -3580,14 +3584,14 @@ mod test {
         // Verify that there are no validators for epoch # 1 and epoch # 2
         {
             client
-                .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/1")
+                .get::<ValidatorMap>("node/validators/1")
                 .send()
                 .await
                 .unwrap()
                 .is_empty();
 
             client
-                .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/2")
+                .get::<ValidatorMap>("node/validators/2")
                 .send()
                 .await
                 .unwrap()
@@ -3596,7 +3600,7 @@ mod test {
 
         // Get the epoch # 3 validators
         let validators = client
-            .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/3")
+            .get::<ValidatorMap>("node/validators/3")
             .send()
             .await
             .expect("validators");
@@ -3660,7 +3664,7 @@ mod test {
             drop(membership);
 
             let validators = client
-                .get::<IndexMap<Address, Validator<BLSPubKey>>>(&format!("node/validators/{epoch}"))
+                .get::<ValidatorMap>(&format!("node/validators/{epoch}"))
                 .send()
                 .await
                 .expect("validators");
@@ -3862,7 +3866,7 @@ mod test {
         while let Some(event) = events.next().await {
             if let EventType::Decide { leaf_chain, .. } = event.event {
                 let height = leaf_chain[0].leaf.height();
-                tracing::info!("Node 0 decided at height: {}", height);
+                tracing::info!("Node 0 decided at height: {height}");
                 if height > EPOCH_HEIGHT * 3 {
                     break;
                 }
@@ -3878,7 +3882,7 @@ mod test {
         while let Some(event) = events.next().await {
             if let EventType::Decide { leaf_chain, .. } = event.event {
                 let height = leaf_chain[0].leaf.height();
-                tracing::info!("Server decided at height: {}", height);
+                tracing::info!("Server decided at height: {height}");
                 //  until 7 epochs
                 if height > EPOCH_HEIGHT * 7 {
                     break;
@@ -4001,7 +4005,7 @@ mod test {
         while let Some(event) = events.next().await {
             if let EventType::Decide { leaf_chain, .. } = event.event {
                 let height = leaf_chain[0].leaf.height();
-                tracing::info!("Node 0 decided at height: {}", height);
+                tracing::info!("Node 0 decided at height: {height}");
                 if height > EPOCH_HEIGHT * 3 {
                     break;
                 }
@@ -4017,7 +4021,7 @@ mod test {
         while let Some(event) = events.next().await {
             if let EventType::Decide { leaf_chain, .. } = event.event {
                 let height = leaf_chain[0].leaf.height();
-                tracing::info!("Server decided at height: {}", height);
+                tracing::info!("Server decided at height: {height}");
                 //  until 7 epochs
                 if height > EPOCH_HEIGHT * 7 {
                     break;
@@ -4692,6 +4696,15 @@ mod test {
             .genesis_st_state(genesis_stake)
             .blocks_per_epoch(blocks_per_epoch)
             .epoch_start_block(1)
+            .multisig_pauser(network_config.signer().address())
+            .ops_timelock_delay(U256::from(0))
+            .ops_timelock_admin(network_config.signer().address())
+            .ops_timelock_proposers(vec![network_config.signer().address()])
+            .ops_timelock_executors(vec![network_config.signer().address()])
+            .safe_exit_timelock_delay(U256::from(0))
+            .safe_exit_timelock_admin(network_config.signer().address())
+            .safe_exit_timelock_proposers(vec![network_config.signer().address()])
+            .safe_exit_timelock_executors(vec![network_config.signer().address()])
             .build()
             .unwrap();
 
@@ -4739,7 +4752,7 @@ mod test {
             ._0
             .to::<u64>();
 
-        tracing::info!("stake table init block ={stake_table_init_block}");
+        tracing::info!("stake table init block = {stake_table_init_block}");
 
         let token_address = stake_table
             .token()
@@ -4923,7 +4936,7 @@ mod test {
 
         let duration = start.elapsed();
 
-        println!("Time elapsed to submit transactions: {:?}", duration);
+        println!("Time elapsed to submit transactions: {duration:?}");
 
         let last_tx_height = tx_heights.last().unwrap();
         for namespace in 1..=4 {
@@ -4934,8 +4947,8 @@ mod test {
                 .unwrap();
             assert_eq!(
                 count, namespace as u64,
-                "Incorrect transaction count for namespace {}: expected {}, got {}",
-                namespace, namespace, count,
+                "Incorrect transaction count for namespace {namespace}: expected {namespace}, got \
+                 {count}"
             );
 
             // check the range endpoint
@@ -4946,8 +4959,11 @@ mod test {
                 .send()
                 .await
                 .unwrap();
-            assert_eq!(to_endpoint_count, namespace as u64, "Incorrect transaction count for range endpoint (to only) for namespace {}: expected {}, got {}",
-            namespace, namespace, to_endpoint_count,);
+            assert_eq!(
+                to_endpoint_count, namespace as u64,
+                "Incorrect transaction count for range endpoint (to only) for namespace \
+                 {namespace}: expected {namespace}, got {to_endpoint_count}"
+            );
 
             // check the range endpoint
             let from_to_endpoint_count = client
@@ -4957,8 +4973,11 @@ mod test {
                 .send()
                 .await
                 .unwrap();
-            assert_eq!(from_to_endpoint_count, namespace as u64, "Incorrect transaction count for range endpoint (from-to) for namespace {}: expected {}, got {}", 
-            namespace, namespace, from_to_endpoint_count,);
+            assert_eq!(
+                from_to_endpoint_count, namespace as u64,
+                "Incorrect transaction count for range endpoint (from-to) for namespace \
+                 {namespace}: expected {namespace}, got {from_to_endpoint_count}"
+            );
 
             let ns_size = client
                 .get::<usize>(&format!("node/payloads/size/namespace/{namespace}"))
@@ -4969,8 +4988,8 @@ mod test {
             let expected_ns_size = *sizes.get(&namespace).unwrap();
             assert_eq!(
                 ns_size, expected_ns_size,
-                "Incorrect payload size for namespace {}: expected {}, got {}",
-                namespace, expected_ns_size, ns_size,
+                "Incorrect payload size for namespace {namespace}: expected {expected_ns_size}, \
+                 got {ns_size}"
             );
 
             let ns_size_to = client
@@ -4982,8 +5001,8 @@ mod test {
                 .unwrap();
             assert_eq!(
                 ns_size_to, expected_ns_size,
-                "Incorrect payload size for namespace {} up to height {}: expected {}, got {}",
-                namespace, last_tx_height, expected_ns_size, ns_size_to,
+                "Incorrect payload size for namespace {namespace} up to height {last_tx_height}: \
+                 expected {expected_ns_size}, got {ns_size_to}"
             );
 
             let ns_size_from_to = client
@@ -4995,8 +5014,8 @@ mod test {
                 .unwrap();
             assert_eq!(
                 ns_size_from_to, expected_ns_size,
-                "Incorrect payload size for namespace {} from 0 to height {}: expected {}, got {}",
-                namespace, last_tx_height, expected_ns_size, ns_size_from_to,
+                "Incorrect payload size for namespace {namespace} from 0 to height \
+                 {last_tx_height}: expected {expected_ns_size}, got {ns_size_from_to}"
             );
         }
 
@@ -5007,8 +5026,8 @@ mod test {
             .unwrap();
         assert_eq!(
             total_tx_count, total_transactions,
-            "Incorrect total transaction count: expected {}, got {}",
-            total_transactions, total_tx_count,
+            "Incorrect total transaction count: expected {total_transactions}, got \
+             {total_tx_count}"
         );
 
         let total_payload_size = client
@@ -5020,8 +5039,128 @@ mod test {
         let expected_total_size: usize = sizes.values().copied().sum();
         assert_eq!(
             total_payload_size, expected_total_size,
-            "Incorrect total payload size: expected {}, got {}",
-            expected_total_size, total_payload_size,
+            "Incorrect total payload size: expected {expected_total_size}, got \
+             {total_payload_size}"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_stream_transactions_endpoint() {
+        // This test submits transactions to a sequencer for multiple namespaces,
+        // waits for them to be decided, and then verifies that:
+        // 1. All transactions appear in the transaction stream.
+        // 2. Each namespace-specific transaction stream only includes the transactions of that namespace.
+        setup_test();
+
+        let mut rng = thread_rng();
+
+        let port = pick_unused_port().expect("No ports free");
+
+        let url = format!("http://localhost:{port}").parse().unwrap();
+        tracing::info!("Sequencer URL = {url}");
+        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+
+        let options = Options::with_port(port).submit(Default::default());
+        const NUM_NODES: usize = 2;
+        // Initialize storage for each node
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+
+        let persistence_options: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let network_config = TestConfigBuilder::default().build();
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(SqlDataSource::options(&storage[0], options))
+            .network_config(network_config)
+            .persistences(persistence_options.clone())
+            .build();
+        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let mut events = network.server.event_stream().await;
+        let mut all_transactions = HashMap::new();
+        let mut namespace_tx: HashMap<_, HashSet<_>> = HashMap::new();
+
+        // Submit transactions to namespaces 1 through 4
+
+        for namespace in 1..=4 {
+            for _count in 0..namespace {
+                let payload_len = rng.gen_range(4..=10);
+                let payload: Vec<u8> = (0..payload_len).map(|_| rng.gen()).collect();
+
+                let txn = Transaction::new(NamespaceId::from(namespace as u32), payload);
+
+                client.connect(None).await;
+
+                let hash = client
+                    .post("submit/submit")
+                    .body_json(&txn)
+                    .unwrap()
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(txn.commit(), hash);
+
+                // Wait for a Decide event containing transaction matching the one we sent
+                wait_for_decide_on_handle(&mut events, &txn).await;
+                // Store transaction for later validation
+
+                all_transactions.insert(txn.commit(), txn.clone());
+                namespace_tx.entry(namespace).or_default().insert(txn);
+            }
+        }
+
+        let mut transactions = client
+            .socket("availability/stream/transactions/0")
+            .subscribe::<TransactionQueryData<SeqTypes>>()
+            .await
+            .expect("failed to subscribe to transactions endpoint");
+
+        let mut count = 0;
+        while let Some(tx) = transactions.next().await {
+            let tx = tx.unwrap();
+            let expected = all_transactions
+                .get(&tx.transaction().commit())
+                .expect("txn not found ");
+            assert_eq!(tx.transaction(), expected, "invalid transaction");
+            count += 1;
+
+            if count == all_transactions.len() {
+                break;
+            }
+        }
+
+        // Validate namespace-specific stream endpoint
+
+        for (namespace, expected_ns_txns) in &namespace_tx {
+            let mut api_namespace_txns = client
+                .socket(&format!(
+                    "availability/stream/transactions/0/namespace/{namespace}",
+                ))
+                .subscribe::<TransactionQueryData<SeqTypes>>()
+                .await
+                .unwrap_or_else(|_| {
+                    panic!("failed to subscribe to transactions namespace {namespace}")
+                });
+
+            let mut received = HashSet::new();
+
+            while let Some(res) = api_namespace_txns.next().await {
+                let tx = res.expect("stream error");
+                received.insert(tx.transaction().clone());
+
+                if received.len() == expected_ns_txns.len() {
+                    break;
+                }
+            }
+
+            assert_eq!(
+                received, *expected_ns_txns,
+                "Mismatched transactions for namespace {namespace}"
+            );
+        }
     }
 }

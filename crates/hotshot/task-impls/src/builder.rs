@@ -118,7 +118,8 @@ impl<TYPES: NodeType, Ver: StaticVersionType> BuilderClient<TYPES, Ver> {
         let encoded_signature: TaggedBase64 = signature.clone().into();
         self.client
             .get(&format!(
-                "{LEGACY_BUILDER_MODULE}/availableblocks/{parent}/{view_number}/{sender}/{encoded_signature}"
+                "{LEGACY_BUILDER_MODULE}/availableblocks/{parent}/{view_number}/{sender}/\
+                 {encoded_signature}"
             ))
             .send()
             .await
@@ -162,7 +163,8 @@ pub mod v0_1 {
             let encoded_signature: TaggedBase64 = signature.clone().into();
             self.client
                 .get(&format!(
-                    "{LEGACY_BUILDER_MODULE}/claimheaderinput/v2/{block_hash}/{view_number}/{sender}/{encoded_signature}"
+                    "{LEGACY_BUILDER_MODULE}/claimheaderinput/v2/{block_hash}/{view_number}/\
+                     {sender}/{encoded_signature}"
                 ))
                 .send()
                 .await
@@ -184,7 +186,8 @@ pub mod v0_1 {
             let encoded_signature: TaggedBase64 = signature.clone().into();
             self.client
                 .get(&format!(
-                    "{LEGACY_BUILDER_MODULE}/claimheaderinput/v2/{block_hash}/{view_number}/{sender}/{encoded_signature}"
+                    "{LEGACY_BUILDER_MODULE}/claimheaderinput/v2/{block_hash}/{view_number}/\
+                     {sender}/{encoded_signature}"
                 ))
                 .send()
                 .await
@@ -205,9 +208,11 @@ pub mod v0_1 {
             signature: &<<TYPES as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType,
         ) -> Result<AvailableBlockHeaderInputV2Either<TYPES>, BuilderClientError> {
             let encoded_signature: TaggedBase64 = signature.clone().into();
-            let result = self.client
+            let result = self
+                .client
                 .get::<Vec<u8>>(&format!(
-                    "{LEGACY_BUILDER_MODULE}/claimheaderinput/v2/{block_hash}/{view_number}/{sender}/{encoded_signature}"
+                    "{LEGACY_BUILDER_MODULE}/claimheaderinput/v2/{block_hash}/{view_number}/\
+                     {sender}/{encoded_signature}"
                 ))
                 .bytes()
                 .await
@@ -247,7 +252,8 @@ pub mod v0_1 {
             let encoded_signature: TaggedBase64 = signature.clone().into();
             self.client
                 .get(&format!(
-                    "{LEGACY_BUILDER_MODULE}/claimblock/{block_hash}/{view_number}/{sender}/{encoded_signature}"
+                    "{LEGACY_BUILDER_MODULE}/claimblock/{block_hash}/{view_number}/{sender}/\
+                     {encoded_signature}"
                 ))
                 .send()
                 .await
@@ -271,7 +277,8 @@ pub mod v0_1 {
             let encoded_signature: TaggedBase64 = signature.clone().into();
             self.client
                 .get(&format!(
-                    "{LEGACY_BUILDER_MODULE}/claimblockwithnumnodes/{block_hash}/{view_number}/{sender}/{encoded_signature}/{num_nodes}"
+                    "{LEGACY_BUILDER_MODULE}/claimblockwithnumnodes/{block_hash}/{view_number}/\
+                     {sender}/{encoded_signature}/{num_nodes}"
                 ))
                 .send()
                 .await

@@ -388,7 +388,11 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig, DaConfig: QuorumFilterConfig> 
 
             let res = leader_vec[index].clone();
 
-            tracing::debug!("RandomizedCommitteeMembers lookup_leader, view_number: {view_number}, epoch: {epoch}, leader: {}", res.0);
+            tracing::debug!(
+                "RandomizedCommitteeMembers lookup_leader, view_number: {view_number}, epoch: \
+                 {epoch}, leader: {}",
+                res.0
+            );
 
             Ok(TYPES::SignatureKey::public_key(&res.1.stake_table_entry))
         } else {

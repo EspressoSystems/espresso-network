@@ -56,7 +56,7 @@ pub(crate) async fn handle_quorum_vote_recv<
     ensure!(
         in_transition || we_are_leader,
         info!(
-            "We are not the leader for view {:?} and we are not in the epoch transition",
+            "We are not the leader for view {} and we are not in the epoch transition",
             vote.view_number() + 1
         )
     );
@@ -143,10 +143,7 @@ pub(crate) async fn handle_epoch_root_quorum_vote_recv<
         epoch_membership.leader(vote.view_number() + 1).await? == task_state.public_key;
     ensure!(
         we_are_leader,
-        info!(
-            "We are not the leader for view {:?}",
-            vote.view_number() + 1
-        )
+        info!("We are not the leader for view {}", vote.view_number() + 1)
     );
 
     handle_epoch_root_vote(
@@ -183,10 +180,7 @@ pub(crate) async fn handle_timeout_vote_recv<
     // Are we the leader for this view?
     ensure!(
         epoch_membership.leader(vote.view_number() + 1).await? == task_state.public_key,
-        info!(
-            "We are not the leader for view {:?}",
-            vote.view_number() + 1
-        )
+        info!("We are not the leader for view {}", vote.view_number() + 1)
     );
 
     handle_vote(
@@ -257,7 +251,7 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
         );
 
         tracing::debug!(
-            "Broadcasting Extended QC for view {:?} and epoch {:?}, my id {:?}.",
+            "Broadcasting Extended QC for view {} and epoch {:?}, my id {}.",
             high_qc.view_number(),
             high_qc.epoch(),
             task_state.id
@@ -301,7 +295,10 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
         if is_epoch_root {
             // For epoch root QC, we are sending high QC and state cert
             let Some(state_cert) = state_cert else {
-                bail!("We are sending an epoch root QC but we don't have the corresponding state cert.");
+                bail!(
+                    "We are sending an epoch root QC but we don't have the corresponding state \
+                     cert."
+                );
             };
             ensure!(
                 check_qc_state_cert_correspondence(&high_qc, &state_cert, task_state.epoch_height),
@@ -309,7 +306,7 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
             );
 
             tracing::trace!(
-                "Sending epoch root QC for view {:?}, height {:?}",
+                "Sending epoch root QC for view {}, height {:?}",
                 high_qc.view_number(),
                 high_qc.data.block_number
             );
@@ -327,7 +324,7 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
             .await;
         } else {
             tracing::trace!(
-                "Sending high QC for view {:?}, height {:?}",
+                "Sending high QC for view {}, height {:?}",
                 high_qc.view_number(),
                 high_qc.data.block_number
             );
@@ -372,7 +369,7 @@ pub(crate) async fn handle_view_change<
     );
 
     let old_view_number = task_state.cur_view;
-    tracing::debug!("Updating view from {old_view_number:?} to {new_view_number:?}");
+    tracing::debug!("Updating view from {old_view_number} to {new_view_number}");
 
     if *old_view_number / 100 != *new_view_number / 100 {
         tracing::info!("Progress: entered view {:>6}", *new_view_number);
@@ -499,7 +496,7 @@ pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>
             .context(warn!("No stake table for epoch"))?
             .has_stake(&task_state.public_key)
             .await,
-        debug!("We were not chosen for the consensus committee for view {view_number:?}",)
+        debug!("We were not chosen for the consensus committee for view {view_number}",)
     );
 
     let vote = TimeoutVote2::create_signed_vote(
@@ -526,7 +523,10 @@ pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>
     )
     .await;
 
-    tracing::error!("We did not receive evidence for view {view_number} in time, sending timeout vote for that view!");
+    tracing::error!(
+        "We did not receive evidence for view {view_number} in time, sending timeout vote for \
+         that view!"
+    );
 
     broadcast_event(
         Event {

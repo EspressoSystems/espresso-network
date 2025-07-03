@@ -8,7 +8,7 @@ use alloy::{
     providers::{Provider, ProviderBuilder},
     rpc::types::TransactionReceipt,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use futures::FutureExt;
 use hotshot_contract_adapter::{
     field_to_u256,
@@ -46,7 +46,8 @@ pub fn load_proving_key(stake_table_capacity: usize) -> ProvingKey {
 
         tracing::info!("Loading SRS from Aztec's ceremony...");
         let srs_timer = Instant::now();
-        let srs = ark_srs::kzg10::aztec20::setup(num_gates + 2).expect("Aztec SRS fail to load");
+        let srs = ark_srs::kzg10::aztec20::setup(num_gates + 2)
+            .expect("Error loading proving key: Aztec SRS fail to load.");
         let srs_elapsed = Instant::now().signed_duration_since(srs_timer);
         tracing::info!("Done in {srs_elapsed:.3}");
 
@@ -63,7 +64,7 @@ pub fn load_proving_key(stake_table_capacity: usize) -> ProvingKey {
     tracing::info!("Generating proving key and verification key.");
     let key_gen_timer = Instant::now();
     let (pk, _) = super::snark::preprocess(&srs, stake_table_capacity)
-        .expect("Fail to preprocess state prover circuit");
+        .expect("Error loading proving key: failed to preprocess state prover circuit.");
     let key_gen_elapsed = Instant::now().signed_duration_since(key_gen_timer);
     tracing::info!("Done in {key_gen_elapsed:.3}");
     pk
@@ -134,6 +135,7 @@ pub async fn submit_state_and_proof(
     // send the tx
     let (receipt, included_block) = sequencer_utils::contract_send(&tx)
         .await
+        .with_context(|| "Failed to send contract tx")
         .map_err(ProverError::ContractError)?;
 
     tracing::info!(
@@ -177,10 +179,14 @@ async fn generate_proof(
                 signatures[i] = sig.clone();
                 accumulated_weight += *stake;
             } else {
-                tracing::info!("Invalid signature for key: {:?}", key);
+                tracing::warn!("Invalid signature for key: {:?}", key);
             }
         }
     });
+    tracing::debug!(
+        "Collected signatures with accumulated weight: {}",
+        accumulated_weight
+    );
 
     if accumulated_weight < field_to_u256(current_stake_table_state.threshold) {
         return Err(ProverError::InvalidState(
@@ -205,7 +211,8 @@ async fn generate_proof(
         )
     })
     .await
-    .map_err(|e| ProverError::Internal(format!("failed to join task: {e}")))??;
+    .with_context(|| "Failed to join the proof generation task")
+    .map_err(ProverError::Internal)??;
 
     let proof_gen_elapsed = Instant::now().signed_duration_since(proof_gen_start);
     tracing::info!("Proof generation completed. Elapsed: {proof_gen_elapsed:.3}");
@@ -217,12 +224,13 @@ async fn generate_proof(
 /// Get the latest LightClientState and signature bundle from Sequencer network
 pub async fn fetch_latest_legacy_state<ApiVer: StaticVersionType>(
     client: &Client<ServerError, ApiVer>,
-) -> Result<StateSignaturesBundle, ServerError> {
+) -> Result<StateSignaturesBundle, ProverError> {
     tracing::info!("Fetching the latest state signatures bundle from relay server.");
     client
         .get::<StateSignaturesBundle>("/api/legacy-state")
         .send()
         .await
+        .map_err(ProverError::RelayServerError)
 }
 
 /// Sync the light client state from the relay server and submit the proof to the L1 LightClient contract
@@ -242,17 +250,13 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
         let cur_gas_price = provider
             .get_gas_price()
             .await
-            .map_err(|e| ProverError::NetworkError(anyhow!("{e}")))?;
+            .with_context(|| "Error checking gas price")
+            .map_err(ProverError::ContractError)?;
         if cur_gas_price > max_gas_price {
-            let cur_gwei = format_units(cur_gas_price, "gwei")
-                .map_err(|e| ProverError::Internal(format!("{e}")))?;
-            let max_gwei = format_units(max_gas_price, "gwei")
-                .map_err(|e| ProverError::Internal(format!("{e}")))?;
-            tracing::warn!(
-                "Current gas price too high: cur={} gwei, max={} gwei",
-                cur_gwei,
-                max_gwei,
-            );
+            let cur_gwei =
+                format_units(cur_gas_price, "gwei").map_err(|e| ProverError::Internal(e.into()))?;
+            let max_gwei =
+                format_units(max_gas_price, "gwei").map_err(|e| ProverError::Internal(e.into()))?;
             return Err(ProverError::GasPriceTooHigh(cur_gwei, max_gwei));
         }
     }
@@ -276,11 +280,11 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
         tracing::info!("No update needed.");
         return Ok(());
     }
-    tracing::debug!("Old state: {contract_state:?}");
-    tracing::debug!("New state: {:?}", bundle.state);
+    tracing::debug!("Old light client state: {contract_state}");
+    tracing::debug!("New light client state: {}", bundle.state);
 
-    tracing::debug!("Contract st state: {contract_st_state}");
-    tracing::debug!("Bundle st state: {}", bundle.next_stake);
+    tracing::debug!("Contract stake table state: {contract_st_state}");
+    tracing::debug!("Bundle stake table state: {}", bundle.next_stake);
 
     // If epoch hasn't been enabled, directly update the contract.
     let (proof, public_input) = generate_proof(
@@ -356,10 +360,14 @@ pub async fn run_prover_service<ApiVer: StaticVersionType + 'static>(
             if let ProverError::EpochAlreadyStarted(_) = err {
                 return Err(err.into());
             }
-            tracing::error!("Cannot sync the light client state, will retry: {}", err);
+            tracing::error!(
+                "Cannot sync the light client state, will retry in {:.1}s: {}",
+                retry_interval.as_secs_f32(),
+                err
+            );
             sleep(retry_interval).await;
         } else {
-            tracing::info!("Sleeping for {:?}", update_interval);
+            tracing::info!("Sleeping for {:.1}s", update_interval.as_secs_f32());
             sleep(update_interval).await;
         }
     }
@@ -380,18 +388,20 @@ pub async fn run_prover_once<ApiVer: StaticVersionType>(
     for _ in 0..state.config.max_retries {
         match sync_state(&mut state, &proving_key, &relay_server_client).await {
             Ok(_) => return Ok(()),
-            Err(ProverError::GasPriceTooHigh(..)) => {
-                // static ERROR message for easier observability and alert
-                tracing::error!("Gas price too high, sync later");
-            },
             Err(ProverError::EpochAlreadyStarted(block_height)) => {
                 tracing::error!(
                     "Epoch has already started on block {}, please upgrade the contract to V2.",
                     block_height
                 );
+                // epoch already started, no need to retry
+                break;
             },
             Err(err) => {
-                tracing::error!("Cannot sync the light client state, will retry: {}", err);
+                tracing::error!(
+                    "Cannot sync the light client state, will retry in {:.1}s: {}",
+                    state.config.retry_interval.as_secs_f32(),
+                    err
+                );
                 sleep(state.config.retry_interval).await;
             },
         }
@@ -457,7 +467,7 @@ mod test {
         let genesis_state = LightClientStateSol::dummy_genesis();
         let genesis_stake = StakeTableStateSol::dummy_genesis();
 
-        println!("genesis_state: {:?}", genesis_state);
+        println!("genesis_state: {genesis_state:?}");
         let lc_proxy_addr = deploy(
             &provider,
             &mut contracts,
@@ -475,7 +485,7 @@ mod test {
         // then manually set the `finalizedState` (via mocked methods)
         let lc = LightClientMock::new(lc_proxy_addr, &provider);
         let new_state = LightClientStateSol::rand(rng);
-        println!("new_state: {:?}", new_state);
+        println!("new_state: {new_state:?}");
         lc.setFinalizedState(new_state.clone().into())
             .send()
             .await?

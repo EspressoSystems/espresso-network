@@ -123,7 +123,7 @@ impl Display for EthKeyPair {
 
 impl std::fmt::Debug for EthKeyPair {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self)
+        std::fmt::Display::fmt(self, f)
     }
 }
 
@@ -215,8 +215,8 @@ mod tests {
     fn test_fmt() {
         let key = EthKeyPair::for_test();
         let expected = "EthKeyPair(address=0xb0cfa4e5893107e2995974ef032957752bb526e9)";
-        assert_eq!(format!("{}", key), expected);
-        assert_eq!(format!("{:?}", key), expected);
+        assert_eq!(format!("{key}"), expected);
+        assert_eq!(format!("{key:?}"), expected);
     }
 
     #[test]

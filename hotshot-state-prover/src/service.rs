@@ -122,7 +122,7 @@ impl ProverServiceState {
         if epoch != self.epoch {
             self.stake_table = fetch_stake_table_from_sequencer(&self.config.sequencer_url, epoch)
                 .await
-                .with_context(|| format!("Failed to update stake table for epoch: {:?}", epoch))?;
+                .with_context(|| format!("Failed to update stake table for epoch: {epoch:?}"))?;
             self.st_state = self
                 .stake_table
                 .commitment(self.config.stake_table_capacity)
@@ -134,17 +134,17 @@ impl ProverServiceState {
 }
 
 impl StateProverConfig {
-    pub async fn validate_light_client_contract(&self) -> anyhow::Result<()> {
+    pub async fn validate_light_client_contract(&self) -> Result<(), ProverError> {
         let provider = ProviderBuilder::new().on_client(self.l1_rpc_client.clone());
 
-        if !is_proxy_contract(&provider, self.light_client_address).await? {
-            anyhow::bail!(
-                "Light Client contract's address {:?} is not a proxy",
-                self.light_client_address
-            );
+        if let Err(e) = is_proxy_contract(&provider, self.light_client_address).await {
+            Err(ProverError::ContractError(anyhow::anyhow!(
+                "Light Client contract's address {:?} is not a proxy: {e}",
+                self.light_client_address,
+            )))
+        } else {
+            Ok(())
         }
-
-        Ok(())
     }
 }
 
@@ -160,7 +160,8 @@ pub fn load_proving_key(stake_table_capacity: usize) -> ProvingKey {
 
         tracing::info!("Loading SRS from Aztec's ceremony...");
         let srs_timer = Instant::now();
-        let srs = ark_srs::kzg10::aztec20::setup(num_gates + 2).expect("Aztec SRS fail to load");
+        let srs = ark_srs::kzg10::aztec20::setup(num_gates + 2)
+            .expect("Error loading proving key: Aztec SRS fail to load.");
         let srs_elapsed = Instant::now().signed_duration_since(srs_timer);
         tracing::info!("Done in {srs_elapsed:.3}");
 
@@ -176,8 +177,8 @@ pub fn load_proving_key(stake_table_capacity: usize) -> ProvingKey {
 
     tracing::info!("Generating proving key and verification key.");
     let key_gen_timer = Instant::now();
-    let (pk, _) = crate::snark::preprocess(&srs, stake_table_capacity)
-        .expect("Fail to preprocess state prover circuit");
+    let (pk, _) = super::snark::preprocess(&srs, stake_table_capacity)
+        .expect("Error loading proving key: failed to preprocess state prover circuit.");
     let key_gen_elapsed = Instant::now().signed_duration_since(key_gen_timer);
     tracing::info!("Done in {key_gen_elapsed:.3}");
     pk
@@ -187,12 +188,13 @@ pub fn load_proving_key(stake_table_capacity: usize) -> ProvingKey {
 /// Get the latest LightClientState and signature bundle from Sequencer network
 pub async fn fetch_latest_state<ApiVer: StaticVersionType>(
     client: &Client<ServerError, ApiVer>,
-) -> Result<StateSignaturesBundle, ServerError> {
+) -> Result<StateSignaturesBundle, ProverError> {
     tracing::info!("Fetching the latest state signatures bundle from relay server.");
     client
         .get::<StateSignaturesBundle>("/api/state")
         .send()
         .await
+        .map_err(ProverError::RelayServerError)
 }
 
 /// Read the following info from the LightClient contract storage on chain
@@ -241,7 +243,8 @@ pub async fn submit_state_and_proof(
 
     let tx = contract.newFinalizedState_1(new_state.into(), next_stake_table.into(), proof.into());
     tracing::debug!(
-        "Sending newFinalizedState tx: address={}, new_state={}, next_stake_table={}\n full tx={:?}",
+        "Sending newFinalizedState tx: address={}, new_state={}, next_stake_table={}\n full \
+         tx={:?}",
         address,
         public_input.lc_state,
         public_input.next_st_state,
@@ -250,6 +253,7 @@ pub async fn submit_state_and_proof(
     // send the tx
     let (receipt, included_block) = sequencer_utils::contract_send(&tx)
         .await
+        .with_context(|| "Failed to send contract tx")
         .map_err(ProverError::ContractError)?;
 
     tracing::info!(
@@ -272,9 +276,17 @@ async fn fetch_epoch_state_from_sequencer(
         surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
             sequencer_url.clone(),
         )
-        .get::<StateCertQueryData<SeqTypes>>(&format!("availability/state-cert/{}", epoch))
+        .get::<StateCertQueryData<SeqTypes>>(&format!("availability/state-cert/{epoch}"))
         .send()
-        .await?;
+        .await
+        .map_err(|err| {
+            ProverError::SequencerCommunicationError(
+                sequencer_url
+                    .join(&format!("availability/state-cert/{epoch}"))
+                    .unwrap(),
+                err,
+            )
+        })?;
     Ok(state_cert.0)
 }
 
@@ -308,10 +320,14 @@ async fn generate_proof(
                 signatures[i] = sig.clone();
                 accumulated_weight += *stake;
             } else {
-                tracing::info!("Invalid signature for key: {:?}", key);
+                tracing::warn!("Invalid signature from key: {}", key);
             }
         }
     });
+    tracing::debug!(
+        "Collected signatures with accumulated weight: {}",
+        accumulated_weight
+    );
 
     if accumulated_weight < field_to_u256(current_stake_table_state.threshold) {
         return Err(ProverError::InvalidState(
@@ -337,7 +353,8 @@ async fn generate_proof(
         )
     })
     .await
-    .map_err(|e| ProverError::Internal(format!("failed to join task: {e}")))??;
+    .with_context(|| "Failed to join the proof generation task")
+    .map_err(ProverError::Internal)??;
 
     let proof_gen_elapsed = Instant::now().signed_duration_since(proof_gen_start);
     tracing::info!("Proof generation completed. Elapsed: {proof_gen_elapsed:.3}");
@@ -360,16 +377,17 @@ async fn advance_epoch(
     target_epoch: Option<<SeqTypes as NodeType>::Epoch>,
 ) -> Result<StakeTableState, ProverError> {
     let Some(target_epoch) = target_epoch else {
-        return Err(ProverError::Internal(
-            "Shouldn't be called pre-epoch.".to_string(),
-        ));
+        return Err(ProverError::Internal(anyhow!(
+            "Epoch related function called without a target epoch"
+        )));
     };
     // First sync the local stake table if necessary.
     if state.epoch != contract_epoch {
         state
             .sync_with_epoch(contract_epoch)
             .await
-            .map_err(ProverError::NetworkError)?;
+            .with_context(|| format!("Failed to sync with epoch {contract_epoch:?}"))
+            .map_err(ProverError::Internal)?;
     }
     let base_epoch = contract_epoch
         .map(|en| en.u64())
@@ -404,7 +422,8 @@ async fn advance_epoch(
         state
             .sync_with_epoch(Some(EpochNumber::new(epoch + 1)))
             .await
-            .map_err(ProverError::NetworkError)?;
+            .with_context(|| format!("Failed to sync with epoch {}", epoch + 1))
+            .map_err(ProverError::Internal)?;
         cur_st_state = state_cert.next_stake_table_state;
     }
     Ok(cur_st_state)
@@ -427,17 +446,13 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
         let cur_gas_price = provider
             .get_gas_price()
             .await
-            .map_err(|e| ProverError::NetworkError(anyhow!("{e}")))?;
+            .with_context(|| "Error checking gas price")
+            .map_err(ProverError::ContractError)?;
         if cur_gas_price > max_gas_price {
-            let cur_gwei = format_units(cur_gas_price, "gwei")
-                .map_err(|e| ProverError::Internal(format!("{e}")))?;
-            let max_gwei = format_units(max_gas_price, "gwei")
-                .map_err(|e| ProverError::Internal(format!("{e}")))?;
-            tracing::warn!(
-                "Current gas price too high: cur={} gwei, max={} gwei",
-                cur_gwei,
-                max_gwei,
-            );
+            let cur_gwei =
+                format_units(cur_gas_price, "gwei").map_err(|e| ProverError::Internal(e.into()))?;
+            let max_gwei =
+                format_units(max_gas_price, "gwei").map_err(|e| ProverError::Internal(e.into()))?;
             return Err(ProverError::GasPriceTooHigh(cur_gwei, max_gwei));
         }
     }
@@ -460,11 +475,11 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
         tracing::info!("No update needed.");
         return Ok(());
     }
-    tracing::debug!("Old state: {contract_state:?}");
-    tracing::debug!("New state: {:?}", bundle.state);
+    tracing::debug!("Old light client state: {contract_state}");
+    tracing::debug!("New light client state: {}", bundle.state);
 
-    tracing::debug!("Contract st state: {contract_st_state}");
-    tracing::debug!("Bundle st state: {}", bundle.next_stake);
+    tracing::debug!("Contract stake table state: {contract_st_state}");
+    tracing::debug!("Bundle stake table state: {}", bundle.next_stake);
 
     let contract_state_epoch_enabled = contract_state.block_height >= epoch_start_block;
     let epoch_enabled = bundle.state.block_height >= epoch_start_block;
@@ -512,7 +527,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
             state
                 .sync_with_epoch(contract_epoch)
                 .await
-                .map_err(ProverError::NetworkError)?;
+                .map_err(ProverError::Internal)?;
         }
 
         // A catchup is needed if the contract epoch is behind.
@@ -623,10 +638,14 @@ pub async fn run_prover_service<ApiVer: StaticVersionType + 'static>(
     let retry_interval = state.config.retry_interval;
     loop {
         if let Err(err) = sync_state(&mut state, &proving_key, &relay_server_client).await {
-            tracing::error!("Cannot sync the light client state, will retry: {}", err);
+            tracing::error!(
+                "Cannot sync the light client state, will retry in {:.1}s: {}",
+                retry_interval.as_secs_f32(),
+                err
+            );
             sleep(retry_interval).await;
         } else {
-            tracing::info!("Sleeping for {:?}", update_interval);
+            tracing::info!("Sleeping for {:.1}s", update_interval.as_secs_f32());
             sleep(update_interval).await;
         }
     }
@@ -647,12 +666,12 @@ pub async fn run_prover_once<ApiVer: StaticVersionType>(
     for _ in 0..state.config.max_retries {
         match sync_state(&mut state, &proving_key, &relay_server_client).await {
             Ok(_) => return Ok(()),
-            Err(ProverError::GasPriceTooHigh(..)) => {
-                // static ERROR message for easier observability and alert
-                tracing::error!("Gas price too high, sync later");
-            },
             Err(err) => {
-                tracing::error!("Cannot sync the light client state, will retry: {}", err);
+                tracing::error!(
+                    "Cannot sync the light client state, will retry in {:.1}s: {}",
+                    state.config.retry_interval.as_secs_f32(),
+                    err
+                );
                 sleep(state.config.retry_interval).await;
             },
         }
@@ -668,22 +687,18 @@ pub enum ProverError {
     ContractError(anyhow::Error),
     /// Error when communicating with the state relay server: {0}
     RelayServerError(ServerError),
+    /// Error when communicating with the sequencer. Url: {0}, Error: {1}
+    SequencerCommunicationError(Url, ServerError),
     /// Internal error when generating the SNARK proof: {0}
     PlonkError(PlonkError),
     /// Internal error: {0}
-    Internal(String),
+    Internal(anyhow::Error),
     /// General network issue: {0}
     NetworkError(anyhow::Error),
-    /// Abort due to high gas price: current {0} gwei, max allowed: {1} gwei
+    /// Gas price too high: current {0} gwei, max allowed: {1} gwei
     GasPriceTooHigh(String, String),
     /// Epoch has already started on block {0}, please upgrade the contract to V2.
     EpochAlreadyStarted(u64),
-}
-
-impl From<ServerError> for ProverError {
-    fn from(err: ServerError) -> Self {
-        Self::RelayServerError(err)
-    }
 }
 
 impl From<PlonkError> for ProverError {

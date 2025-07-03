@@ -17,16 +17,20 @@ use alloy::{
         Provider, ProviderBuilder, RootProvider,
     },
     rpc::{client::RpcClient, types::TransactionReceipt},
-    signers::local::{coins_bip39::English, MnemonicBuilder, PrivateKeySigner},
+    signers::{
+        ledger::LedgerSigner,
+        local::{coins_bip39::English, MnemonicBuilder, PrivateKeySigner},
+    },
     transports::http::reqwest::Url,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::{builder::OsStr, Parser};
 use derive_more::{derive::Deref, Display};
 use hotshot_contract_adapter::sol_types::*;
 
 pub mod builder;
 pub mod network_config;
+pub mod provider;
 
 /// Type alias that connects to providers with recommended fillers and wallet
 /// use `<HttpProviderWithWallet as WalletProvider>::wallet()` to access internal wallet
@@ -46,6 +50,29 @@ pub fn build_provider(
     poll_interval: Option<Duration>,
 ) -> HttpProviderWithWallet {
     let signer = build_signer(mnemonic, account_index);
+    let wallet = EthereumWallet::from(signer);
+
+    // alloy sets the polling interval automatically. It tries to guess if an RPC is local, but this
+    // guess is wrong when the RPC is running inside docker. This results to 7 second polling
+    // intervals on a chain with 1s block time. Therefore, allow overriding the polling interval
+    // with a custom value.
+    if let Some(interval) = poll_interval {
+        tracing::info!("Using custom L1 poll interval: {interval:?}");
+        let client = RpcClient::new_http(url.clone()).with_poll_interval(interval);
+        ProviderBuilder::new().wallet(wallet).on_client(client)
+    } else {
+        tracing::info!("Using default L1 poll interval");
+        ProviderBuilder::new().wallet(wallet).on_http(url)
+    }
+}
+
+// TODO: tech-debt: provider creation logic should be refactored to handle mnemonic and
+// ledger signers and consolidated with similar code in staking-cli
+pub fn build_provider_ledger(
+    signer: LedgerSigner,
+    url: Url,
+    poll_interval: Option<Duration>,
+) -> HttpProviderWithWallet {
     let wallet = EthereumWallet::from(signer);
 
     // alloy sets the polling interval automatically. It tries to guess if an RPC is local, but this
@@ -91,9 +118,12 @@ pub struct DeployedContracts {
     /// Use an already-deployed PlonkVerifier.sol instead of deploying a new one.
     #[clap(long, env = Contract::PlonkVerifier)]
     plonk_verifier: Option<Address>,
-    /// Timelock.sol
-    #[clap(long, env = Contract::Timelock)]
-    timelock: Option<Address>,
+    /// OpsTimelock.sol
+    #[clap(long, env = Contract::OpsTimelock)]
+    ops_timelock: Option<Address>,
+    /// SafeExitTimelock.sol
+    #[clap(long, env = Contract::SafeExitTimelock)]
+    safe_exit_timelock: Option<Address>,
     /// PlonkVerifierV2.sol
     #[clap(long, env = Contract::PlonkVerifierV2)]
     plonk_verifier_v2: Option<Address>,
@@ -147,8 +177,10 @@ pub struct DeployedContracts {
 pub enum Contract {
     #[display("ESPRESSO_SEQUENCER_PLONK_VERIFIER_ADDRESS")]
     PlonkVerifier,
-    #[display("ESPRESSO_SEQUENCER_TIMELOCK_CONTROLLER_ADDRESS")]
-    Timelock,
+    #[display("ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS")]
+    OpsTimelock,
+    #[display("ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS")]
+    SafeExitTimelock,
     #[display("ESPRESSO_SEQUENCER_PLONK_VERIFIER_V2_ADDRESS")]
     PlonkVerifierV2,
     #[display("ESPRESSO_SEQUENCER_LIGHT_CLIENT_ADDRESS")]
@@ -194,8 +226,11 @@ impl From<DeployedContracts> for Contracts {
         if let Some(addr) = deployed.plonk_verifier_v2 {
             m.insert(Contract::PlonkVerifierV2, addr);
         }
-        if let Some(addr) = deployed.timelock {
-            m.insert(Contract::Timelock, addr);
+        if let Some(addr) = deployed.safe_exit_timelock {
+            m.insert(Contract::SafeExitTimelock, addr);
+        }
+        if let Some(addr) = deployed.ops_timelock {
+            m.insert(Contract::OpsTimelock, addr);
         }
         if let Some(addr) = deployed.light_client {
             m.insert(Contract::LightClient, addr);
@@ -260,7 +295,15 @@ impl Contracts {
             return Ok(*addr);
         }
         tracing::info!("deploying {name}");
-        let addr = tx.deploy().await?;
+        let pending_tx = tx.send().await?;
+        let tx_hash = *pending_tx.tx_hash();
+        tracing::info!(%tx_hash, "waiting for tx to be mined");
+        let receipt = pending_tx.get_receipt().await?;
+        tracing::info!(%receipt.gas_used, %tx_hash, "tx mined");
+        let addr = receipt
+            .contract_address
+            .ok_or(alloy::contract::Error::ContractNotDeployed)?;
+
         tracing::info!("deployed {name} at {addr:#x}");
 
         self.0.insert(name, addr);
@@ -289,6 +332,7 @@ pub async fn verify_node_js_files() -> Result<()> {
         Some(true),
     )
     .await?;
+    tracing::info!("Node.js files verified successfully");
     Ok(())
 }
 
@@ -508,6 +552,11 @@ pub async fn upgrade_light_client_v2(
                     .await?
             };
 
+            // get owner of proxy
+            let owner = proxy.owner().call().await?;
+            let owner_addr = owner._0;
+            tracing::info!("Proxy owner: {owner_addr:#x}");
+
             // prepare init calldata
             let lcv2 = LightClientV2::new(lcv2_addr, &provider);
             let init_data = lcv2
@@ -553,11 +602,8 @@ pub async fn upgrade_light_client_v2(
 }
 
 pub struct LightClientV2UpgradeParams {
-    pub is_mock: bool,
     pub blocks_per_epoch: u64,
     pub epoch_start_block: u64,
-    pub rpc_url: String,
-    pub dry_run: Option<bool>,
 }
 
 /// Upgrade the light client proxy to use LightClientV2.
@@ -574,9 +620,12 @@ pub async fn upgrade_light_client_v2_multisig_owner(
     provider: impl Provider,
     contracts: &mut Contracts,
     params: LightClientV2UpgradeParams,
+    is_mock: bool,
+    rpc_url: String,
+    dry_run: Option<bool>,
 ) -> Result<(String, bool)> {
     let expected_major_version: u8 = 2;
-    let dry_run = params.dry_run.unwrap_or_else(|| {
+    let dry_run = dry_run.unwrap_or_else(|| {
         tracing::warn!("Dry run not specified, defaulting to false");
         false
     });
@@ -588,12 +637,9 @@ pub async fn upgrade_light_client_v2_multisig_owner(
     let proxy = LightClient::new(proxy_addr, &provider);
     let owner_addr = proxy.owner().call().await?._0;
 
-    if !dry_run {
-        tracing::info!("Checking if owner is a contract");
-        assert!(
-            is_contract(&provider, owner_addr).await?,
-            "Owner is not a contract so not a multisig wallet"
-        );
+    if !dry_run && !is_contract(&provider, owner_addr).await? {
+        tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
+        anyhow::bail!("Proxy owner is not a contract");
     }
 
     // Prepare addresses
@@ -607,7 +653,7 @@ pub async fn upgrade_light_client_v2_multisig_owner(
             .await?;
 
         // then deploy LightClientV2.sol
-        let target_lcv2_bytecode = if params.is_mock {
+        let target_lcv2_bytecode = if is_mock {
             LightClientV2Mock::BYTECODE.encode_hex()
         } else {
             LightClientV2::BYTECODE.encode_hex()
@@ -630,7 +676,7 @@ pub async fn upgrade_light_client_v2_multisig_owner(
                 },
             }
         };
-        let lcv2_addr = if params.is_mock {
+        let lcv2_addr = if is_mock {
             let addr = LightClientV2Mock::deploy_builder(&provider)
                 .map(|req| req.with_deploy_code(lcv2_linked_bytecode))
                 .deploy()
@@ -652,17 +698,14 @@ pub async fn upgrade_light_client_v2_multisig_owner(
         (Address::random(), Address::random())
     };
 
-    // get initialized version number from proxy
-    let initialized = get_proxy_initialized_version(&provider, proxy_addr).await?;
-    tracing::info!("Initialized version: {}", initialized);
-
-    // get contract version from proxy
-    let lcv2_proxy = LightClientV2::new(proxy_addr, &provider);
-    let lcv2_version = lcv2_proxy.getVersion().call().await?;
-
-    // only set the init data if the proxy was not initialized (when initialized the version number is the same as the contract version number)
-    let init_data = if initialized == lcv2_version.majorVersion
-        && lcv2_version.majorVersion == expected_major_version
+    // Prepare init data
+    let init_data = if already_initialized(
+        &provider,
+        proxy_addr,
+        Contract::LightClientV2,
+        expected_major_version,
+    )
+    .await?
     {
         tracing::info!(
             "Proxy was already initialized for version {}",
@@ -670,8 +713,12 @@ pub async fn upgrade_light_client_v2_multisig_owner(
         );
         vec![].into()
     } else {
-        tracing::info!("Proxy was not initialized");
-        tracing::info!("Init Data to be signed.\n Function: initializeV2\n Arguments:\n blocks_per_epoch: {:?}\n epoch_start_block: {:?}", params.blocks_per_epoch, params.epoch_start_block);
+        tracing::info!(
+            "Init Data to be signed.\n Function: initializeV2\n Arguments:\n blocks_per_epoch: \
+             {:?}\n epoch_start_block: {:?}",
+            params.blocks_per_epoch,
+            params.epoch_start_block
+        );
         LightClientV2::new(lcv2_addr, &provider)
             .initializeV2(params.blocks_per_epoch, params.epoch_start_block)
             .calldata()
@@ -683,26 +730,54 @@ pub async fn upgrade_light_client_v2_multisig_owner(
         proxy_addr,
         lcv2_addr,
         init_data.to_string(),
-        params.rpc_url,
+        rpc_url,
         owner_addr,
         Some(dry_run),
     )
     .await?;
 
-    tracing::info!("LightClientProxy upgrade proposal sent");
     tracing::info!("Init data: {:?}", init_data);
     if init_data.to_string() != "0x" {
-        tracing::info!("Data to be signed:\n Function: initializeV2\n Arguments:\n blocks_per_epoch: {:?}\n epoch_start_block: {:?}", params.blocks_per_epoch, params.epoch_start_block);
+        tracing::info!(
+            "Data to be signed:\n Function: initializeV2\n Arguments:\n blocks_per_epoch: {:?}\n \
+             epoch_start_block: {:?}",
+            params.blocks_per_epoch,
+            params.epoch_start_block
+        );
     }
     if !dry_run {
         tracing::info!(
-            "Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
+            "LightClientProxy upgrade proposal sent. Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
             owner_addr
         );
     }
     // IDEA: add a function to wait for the proposal to be executed
 
     Ok(result)
+}
+
+async fn already_initialized(
+    provider: impl Provider,
+    proxy_addr: Address,
+    contract: Contract,
+    expected_major_version: u8,
+) -> Result<bool> {
+    let initialized = get_proxy_initialized_version(&provider, proxy_addr).await?;
+    tracing::info!("Initialized version: {}", initialized);
+
+    let contract_major_version = match contract {
+        Contract::LightClientV2 => {
+            let contract_proxy = LightClientV2::new(proxy_addr, &provider);
+            contract_proxy.getVersion().call().await?.majorVersion
+        },
+        Contract::StakeTableV2 => {
+            let contract_proxy = StakeTableV2::new(proxy_addr, &provider);
+            contract_proxy.getVersion().call().await?.majorVersion
+        },
+        _ => anyhow::bail!("Unsupported contract type for already_initialized"),
+    };
+
+    Ok(initialized == contract_major_version && contract_major_version == expected_major_version)
 }
 
 /// The primary logic for deploying and initializing an upgradable fee contract.
@@ -959,7 +1034,10 @@ pub async fn deploy_stake_table_proxy(
 async fn upgrade_stake_table_v2(
     provider: impl Provider,
     contracts: &mut Contracts,
+    pauser: Address,
+    admin: Address,
 ) -> Result<TransactionReceipt> {
+    tracing::info!("Upgrading StakeTableProxy to StakeTableV2 with EOA admin");
     let Some(proxy_addr) = contracts.address(Contract::StakeTableProxy) else {
         anyhow::bail!("StakeTableProxy not found, can't upgrade")
     };
@@ -975,9 +1053,37 @@ async fn upgrade_stake_table_v2(
 
     assert!(is_contract(&provider, v2_addr).await?);
 
+    // Prepare init data
+    let expected_major_version = 2;
+    let init_data = if already_initialized(
+        &provider,
+        proxy_addr,
+        Contract::StakeTableV2,
+        expected_major_version,
+    )
+    .await?
+    {
+        tracing::info!(
+            "Proxy was already initialized for version {}",
+            expected_major_version
+        );
+        vec![].into()
+    } else {
+        tracing::info!(
+            "Init Data to be signed.\n Function: initializeV2\n Arguments:\n pauser: {:?}\n \
+             admin: {:?}",
+            pauser,
+            admin
+        );
+        StakeTableV2::new(v2_addr, &provider)
+            .initializeV2(pauser, admin)
+            .calldata()
+            .to_owned()
+    };
+
     // invoke upgrade on proxy
     let receipt = proxy
-        .upgradeToAndCall(v2_addr, vec![].into() /* no new init data for V2 */)
+        .upgradeToAndCall(v2_addr, init_data)
         .send()
         .await?
         .get_receipt()
@@ -987,12 +1093,115 @@ async fn upgrade_stake_table_v2(
         // post deploy verification checks
         let proxy_as_v2 = StakeTableV2::new(proxy_addr, &provider);
         assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
+        // get pauser role
+        let pauser_role = proxy_as_v2.PAUSER_ROLE().call().await?._0;
+        assert!(proxy_as_v2.hasRole(pauser_role, pauser).call().await?._0,);
+        // get admin role
+        let admin_role = proxy_as_v2.DEFAULT_ADMIN_ROLE().call().await?._0;
+        assert!(proxy_as_v2.hasRole(admin_role, admin).call().await?._0,);
         tracing::info!(%v2_addr, "StakeTable successfully upgraded to")
     } else {
         anyhow::bail!("StakeTable upgrade failed: {:?}", receipt);
     }
 
     Ok(receipt)
+}
+
+/// Upgrade the stake table proxy to use StakeTableV2.
+/// Internally, first detect existence of proxy, then deploy StakeTableV2
+/// Assumes:
+/// - the proxy is already deployed.
+/// - the proxy is owned by a multisig.
+///
+/// Returns the url link to the upgrade proposal
+/// This function can only be called on a real network supported by the safeSDK
+pub async fn upgrade_stake_table_v2_multisig_owner(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+    rpc_url: String,
+    multisig_address: Address,
+    pauser: Address,
+    dry_run: Option<bool>,
+) -> Result<(String, bool)> {
+    tracing::info!("Upgrading StakeTableProxy to StakeTableV2 using multisig owner");
+    let dry_run = dry_run.unwrap_or(false);
+    match contracts.address(Contract::StakeTableProxy) {
+        // check if proxy already exists
+        None => Err(anyhow!("StakeTableProxy not found, can't upgrade")),
+        Some(proxy_addr) => {
+            let proxy = StakeTable::new(proxy_addr, &provider);
+            let owner = proxy.owner().call().await?;
+            let owner_addr = owner._0;
+            if owner_addr != multisig_address {
+                tracing::error!(
+                    "Proxy is not owned by the multisig. Expected: {multisig_address:#x}, Got: \
+                     {owner_addr:#x}"
+                );
+                anyhow::bail!("Proxy is not owned by the multisig");
+            }
+            if !dry_run && !is_contract(&provider, owner_addr).await? {
+                tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
+                anyhow::bail!("Proxy owner is not a contract");
+            }
+            // TODO: check if owner is a SAFE multisig
+
+            // first deploy StakeTableV2.sol implementation
+            let stake_table_v2_addr = contracts
+                .deploy(
+                    Contract::StakeTableV2,
+                    StakeTableV2::deploy_builder(&provider),
+                )
+                .await?;
+
+            // prepare init data
+            let expected_major_version = 2;
+            let init_data = if already_initialized(
+                &provider,
+                proxy_addr,
+                Contract::StakeTableV2,
+                expected_major_version,
+            )
+            .await?
+            {
+                tracing::info!(
+                    "Proxy was already initialized for version {}",
+                    expected_major_version
+                );
+                vec![].into()
+            } else {
+                tracing::info!(
+                    "Init Data to be signed.\n Function: initializeV2\n Arguments:\n pauser: \
+                     {:?}\n admin: {:?}",
+                    pauser,
+                    owner_addr
+                );
+                StakeTableV2::new(stake_table_v2_addr, &provider)
+                    .initializeV2(pauser, owner_addr)
+                    .calldata()
+                    .to_owned()
+            };
+
+            // invoke upgrade on proxy via the safeSDK
+            let result = call_upgrade_proxy_script(
+                proxy_addr,
+                stake_table_v2_addr,
+                init_data.to_string(),
+                rpc_url,
+                owner_addr,
+                Some(dry_run),
+            )
+            .await;
+
+            // Check the result directly
+            if let Err(ref err) = result {
+                tracing::error!("StakeTableProxy upgrade failed: {:?}", err);
+            } else {
+                tracing::info!("StakeTableProxy upgrade proposal sent");
+                // IDEA: add a function to wait for the proposal to be executed
+            }
+            Ok(result.context("Upgrade proposal failed")?)
+        },
+    }
 }
 
 /// Common logic for any Ownable contract to transfer ownership
@@ -1043,6 +1252,8 @@ pub async fn transfer_ownership(
         },
         _ => return Err(anyhow!("Not Ownable, can't transfer ownership!")),
     };
+    let tx_hash = receipt.transaction_hash;
+    tracing::info!(%receipt.gas_used, %tx_hash, "ownership transferred");
     Ok(receipt)
 }
 
@@ -1149,17 +1360,20 @@ fn find_script_path() -> Result<PathBuf> {
             return Ok(path);
         }
     }
-    anyhow::bail!("Upgrade entrypoint script, multisig-upgrade-entrypoint, not found in any of the possible locations");
+    anyhow::bail!(
+        "Upgrade entrypoint script, multisig-upgrade-entrypoint, not found in any of the possible \
+         locations"
+    );
 }
 
-/// Deploy and initialize a Timelock contract
+/// Deploy and initialize the Ops Timelock contract
 ///
 /// Parameters:
 /// - `min_delay`: The minimum delay for operations
 /// - `proposers`: The list of addresses that can propose
 /// - `executors`: The list of addresses that can execute
 /// - `admin`: The address that can perform admin actions
-pub async fn deploy_timelock(
+pub async fn deploy_ops_timelock(
     provider: impl Provider,
     contracts: &mut Contracts,
     min_delay: U256,
@@ -1169,8 +1383,8 @@ pub async fn deploy_timelock(
 ) -> Result<Address> {
     let timelock_addr = contracts
         .deploy(
-            Contract::Timelock,
-            Timelock::deploy_builder(
+            Contract::OpsTimelock,
+            OpsTimelock::deploy_builder(
                 &provider,
                 min_delay,
                 proposers.clone(),
@@ -1181,7 +1395,68 @@ pub async fn deploy_timelock(
         .await?;
 
     // Verify deployment
-    let timelock = Timelock::new(timelock_addr, &provider);
+    let timelock = OpsTimelock::new(timelock_addr, &provider);
+
+    // Verify initialization parameters
+    assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
+    assert!(
+        timelock
+            .hasRole(timelock.PROPOSER_ROLE().call().await?._0, proposers[0])
+            .call()
+            .await?
+            ._0
+    );
+    assert!(
+        timelock
+            .hasRole(timelock.EXECUTOR_ROLE().call().await?._0, executors[0])
+            .call()
+            .await?
+            ._0
+    );
+
+    // test that the admin is in the default admin role where DEFAULT_ADMIN_ROLE = 0x00
+    let default_admin_role = U256::ZERO;
+    assert!(
+        timelock
+            .hasRole(default_admin_role.into(), admin)
+            .call()
+            .await?
+            ._0
+    );
+
+    Ok(timelock_addr)
+}
+
+/// Deploy and initialize the Safe Exit Timelock contract
+///
+/// Parameters:
+/// - `min_delay`: The minimum delay for operations
+/// - `proposers`: The list of addresses that can propose
+/// - `executors`: The list of addresses that can execute
+/// - `admin`: The address that can perform admin actions
+pub async fn deploy_safe_exit_timelock(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+    min_delay: U256,
+    proposers: Vec<Address>,
+    executors: Vec<Address>,
+    admin: Address,
+) -> Result<Address> {
+    let timelock_addr = contracts
+        .deploy(
+            Contract::SafeExitTimelock,
+            SafeExitTimelock::deploy_builder(
+                &provider,
+                min_delay,
+                proposers.clone(),
+                executors.clone(),
+                admin,
+            ),
+        )
+        .await?;
+
+    // Verify deployment
+    let timelock = SafeExitTimelock::new(timelock_addr, &provider);
 
     // Verify initialization parameters
     assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
@@ -1532,10 +1807,6 @@ mod tests {
     async fn test_upgrade_light_client_to_v2_multisig_owner_helper(
         options: UpgradeTestOptions,
     ) -> Result<()> {
-        assert!(
-            std::path::Path::new("../../../scripts/multisig-upgrade-entrypoint").exists(),
-            "Script not found!"
-        );
         let mut sepolia_rpc_url = "http://localhost:8545".to_string();
         let mut multisig_admin = Address::random();
         let mut mnemonic =
@@ -1562,7 +1833,10 @@ mod tests {
             }
 
             if sepolia_rpc_url.is_empty() || multisig_admin.is_zero() {
-                panic!("ESPRESSO_SEQUENCER_L1_PROVIDER and ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS must be set in .env.deployer.rs.test");
+                panic!(
+                    "ESPRESSO_SEQUENCER_L1_PROVIDER and ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
+                     must be set in .env.deployer.rs.test"
+                );
             }
         }
 
@@ -1632,12 +1906,12 @@ mod tests {
             &provider,
             &mut contracts,
             LightClientV2UpgradeParams {
-                is_mock: options.is_mock,
                 blocks_per_epoch,
                 epoch_start_block,
-                rpc_url: sepolia_rpc_url.clone(),
-                dry_run: Some(dry_run),
             },
+            options.is_mock,
+            sepolia_rpc_url.clone(),
+            Some(dry_run),
         )
         .await?;
         tracing::info!(
@@ -1830,20 +2104,129 @@ mod tests {
             owner,
         )
         .await?;
-        let stake_table = StakeTable::new(stake_table_addr, &provider);
+        let stake_table_v1 = StakeTable::new(stake_table_addr, &provider);
+        assert_eq!(stake_table_v1.getVersion().call().await?, (1, 0, 0).into());
 
         // upgrade to v2
-        upgrade_stake_table_v2(&provider, &mut contracts).await?;
+        let pauser = Address::random();
+        upgrade_stake_table_v2(&provider, &mut contracts, pauser, owner).await?;
 
-        assert_eq!(stake_table.getVersion().call().await?, (2, 0, 0).into());
-        assert_eq!(stake_table.owner().call().await?._0, owner);
-        assert_eq!(stake_table.token().call().await?._0, token_addr);
-        assert_eq!(stake_table.lightClient().call().await?._0, lc_addr);
+        let stake_table_v2 = StakeTableV2::new(stake_table_addr, &provider);
+
+        assert_eq!(stake_table_v2.getVersion().call().await?, (2, 0, 0).into());
+        assert_eq!(stake_table_v2.owner().call().await?._0, owner);
+        assert_eq!(stake_table_v2.token().call().await?._0, token_addr);
+        assert_eq!(stake_table_v2.lightClient().call().await?._0, lc_addr);
+
+        // get pauser role
+        let pauser_role = stake_table_v2.PAUSER_ROLE().call().await?._0;
+        assert!(stake_table_v2.hasRole(pauser_role, pauser).call().await?._0,);
+
+        // get admin role
+        let admin_role = stake_table_v2.DEFAULT_ADMIN_ROLE().call().await?._0;
+        assert!(stake_table_v2.hasRole(admin_role, owner).call().await?._0,);
+        Ok(())
+    }
+
+    // This test is used to test the upgrade of the StakeTableProxy via the multisig wallet
+    // It only tests the upgrade proposal via the typescript script and thus requires the upgrade proposal to be sent to a real network
+    // However, the contracts are deployed on anvil, so the test will pass even if the upgrade proposal is not executed
+    // The test assumes that there is a file .env.deployer.rs.test in the root directory with the following variables:
+    // RPC_URL=
+    // SAFE_MULTISIG_ADDRESS=0x0000000000000000000000000000000000000000
+    // SAFE_ORCHESTRATOR_PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000000
+    // Ensure that the private key has proposal rights on the Safe Multisig Wallet and the SDK supports the network
+    async fn test_upgrade_stake_table_to_v2_multisig_owner_helper(dry_run: bool) -> Result<()> {
+        let mut sepolia_rpc_url = "http://localhost:8545".to_string();
+        let mut multisig_admin = Address::random();
+        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+        let init_recipient = provider.get_accounts().await?[0];
+        let token_owner = Address::random();
+        let initial_supply = U256::from(3590000000u64);
+
+        if !dry_run {
+            dotenvy::from_filename_override(".env.deployer.rs.test").ok();
+
+            for item in dotenvy::from_filename_iter(".env.deployer.rs.test")
+                .expect("Failed to read .env.deployer.rs.test")
+            {
+                let (key, val) = item?;
+                if key == "RPC_URL" {
+                    sepolia_rpc_url = val.to_string();
+                } else if key == "SAFE_MULTISIG_ADDRESS" {
+                    multisig_admin = val.parse::<Address>()?;
+                }
+            }
+
+            if sepolia_rpc_url.is_empty() || multisig_admin.is_zero() {
+                panic!("RPC_URL and SAFE_MULTISIG_ADDRESS must be set in .env.deployer.rs.test");
+            }
+        }
+
+        // deploy proxy and V1
+        let token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            token_owner,
+            init_recipient,
+            initial_supply,
+            "Espresso",
+            "ESP",
+        )
+        .await?;
+        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+        let exit_escrow_period = U256::from(1000);
+        let owner = init_recipient;
+        let stake_table_proxy_addr = deploy_stake_table_proxy(
+            &provider,
+            &mut contracts,
+            token_addr,
+            lc_addr,
+            exit_escrow_period,
+            owner,
+        )
+        .await?;
+        // transfer ownership to multisig
+        let _receipt = transfer_ownership(
+            &provider,
+            Contract::StakeTableProxy,
+            stake_table_proxy_addr,
+            multisig_admin,
+        )
+        .await?;
+        let stake_table = StakeTable::new(stake_table_proxy_addr, &provider);
+        assert_eq!(stake_table.owner().call().await?._0, multisig_admin);
+        // then send upgrade proposal to the multisig wallet
+        let pauser = Address::random();
+        let (result, success) = upgrade_stake_table_v2_multisig_owner(
+            &provider,
+            &mut contracts,
+            sepolia_rpc_url,
+            multisig_admin,
+            pauser,
+            Some(dry_run),
+        )
+        .await?;
+        tracing::info!(
+            "Result when trying to upgrade StakeTableProxy via the multisig wallet: {:?}",
+            result
+        );
+        assert!(success);
+
+        // v1 state persistence cannot be tested here because the upgrade proposal is not yet executed
+        // One has to test that the upgrade proposal is available via the Safe UI
+        // and then test that the v1 state is persisted
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_deploy_timelock() -> Result<()> {
+    async fn test_upgrade_stake_table_to_v2_multisig_owner_dry_run() -> Result<()> {
+        test_upgrade_stake_table_to_v2_multisig_owner_helper(true).await
+    }
+
+    #[tokio::test]
+    async fn test_deploy_ops_timelock() -> Result<()> {
         setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
@@ -1854,7 +2237,7 @@ mod tests {
         let proposers = vec![Address::random()];
         let executors = vec![Address::random()];
 
-        let timelock_addr = deploy_timelock(
+        let timelock_addr = deploy_ops_timelock(
             &provider,
             &mut contracts,
             min_delay,
@@ -1865,7 +2248,62 @@ mod tests {
         .await?;
 
         // Verify deployment
-        let timelock = Timelock::new(timelock_addr, &provider);
+        let timelock = OpsTimelock::new(timelock_addr, &provider);
+        assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
+
+        // Verify initialization parameters
+        assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
+        assert!(
+            timelock
+                .hasRole(timelock.PROPOSER_ROLE().call().await?._0, proposers[0])
+                .call()
+                .await?
+                ._0
+        );
+        assert!(
+            timelock
+                .hasRole(timelock.EXECUTOR_ROLE().call().await?._0, executors[0])
+                .call()
+                .await?
+                ._0
+        );
+
+        // test that the admin is in the default admin role where DEFAULT_ADMIN_ROLE = 0x00
+        let default_admin_role = U256::ZERO;
+        assert!(
+            timelock
+                .hasRole(default_admin_role.into(), admin)
+                .call()
+                .await?
+                ._0
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_deploy_safe_exit_timelock() -> Result<()> {
+        setup_test();
+        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+
+        // Setup test parameters
+        let min_delay = U256::from(86400); // 1 day in seconds
+        let admin = provider.get_accounts().await?[0];
+        let proposers = vec![Address::random()];
+        let executors = vec![Address::random()];
+
+        let timelock_addr = deploy_safe_exit_timelock(
+            &provider,
+            &mut contracts,
+            min_delay,
+            proposers.clone(),
+            executors.clone(),
+            admin,
+        )
+        .await?;
+
+        // Verify deployment
+        let timelock = SafeExitTimelock::new(timelock_addr, &provider);
         assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
 
         // Verify initialization parameters
@@ -1998,7 +2436,10 @@ mod tests {
             }
 
             if sepolia_rpc_url.is_empty() || multisig_admin.is_zero() {
-                panic!("ESPRESSO_SEQUENCER_L1_PROVIDER and ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS must be set in .env.deployer.rs.test");
+                panic!(
+                    "ESPRESSO_SEQUENCER_L1_PROVIDER and ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
+                     must be set in .env.deployer.rs.test"
+                );
             }
         }
 

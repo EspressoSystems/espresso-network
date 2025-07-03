@@ -261,7 +261,10 @@ impl<R: RecordStore, D: DhtPersistentStorage> PersistentStore<R, D> {
     fn try_save_to_persistent_storage(&mut self) -> bool {
         // Try to acquire the semaphore, warning if another save operation is already in progress
         let Ok(permit) = Arc::clone(&self.semaphore).try_acquire_owned() else {
-            warn!("Skipping DHT save to persistent storage - another save operation is already in progress");
+            warn!(
+                "Skipping DHT save to persistent storage - another save operation is already in \
+                 progress"
+            );
             return false;
         };
 
@@ -328,6 +331,11 @@ impl<R: RecordStore, D: DhtPersistentStorage> PersistentStore<R, D> {
             // Convert the serializable record back to a `libp2p::kad::Record`
             match libp2p::kad::Record::try_from(serializable_record) {
                 Ok(record) => {
+                    // If the record doesn't have an expiration time, or has expired, skip it
+                    if record.expires.is_none() || record.expires.unwrap() < Instant::now() {
+                        continue;
+                    }
+
                     // Put the record into the new store
                     if let Err(err) = self.underlying_record_store.put(record) {
                         warn!(
@@ -372,7 +380,7 @@ impl<R: RecordStore, D: DhtPersistentStorage> RecordStore for PersistentStore<R,
         }
     }
 
-    /// Overwrite the `put` method to potentially sync the DHT to the persistent store
+    /// Override the `put` method to potentially sync the DHT to the persistent store
     fn put(&mut self, record: libp2p::kad::Record) -> Result<()> {
         // Try to write to the underlying store
         let result = self.underlying_record_store.put(record);
@@ -439,10 +447,14 @@ mod tests {
         // The value is a random 16-byte array
         let random_value = rand::random::<[u8; 16]>();
 
+        // Create a new record
+        let mut record = libp2p::kad::Record::new(key.clone(), random_value.to_vec());
+
+        // Set the expiry time to 10 seconds in the future
+        record.expires = Some(Instant::now() + Duration::from_secs(10));
+
         // Put a record into the store
-        store
-            .put(libp2p::kad::Record::new(key.clone(), random_value.to_vec()))
-            .expect("Failed to put record into store");
+        store.put(record).expect("Failed to put record into store");
 
         // Try to save the store to a persistent storage
         assert!(store.try_save_to_persistent_storage());
@@ -494,9 +506,13 @@ mod tests {
             keys.push(key.clone());
             values.push(value);
 
-            store
-                .put(libp2p::kad::Record::new(key, value.to_vec()))
-                .expect("Failed to put record into store");
+            // Create a new record
+            let mut record = libp2p::kad::Record::new(key, value.to_vec());
+
+            // Set the expiry time to 10 seconds in the future
+            record.expires = Some(Instant::now() + Duration::from_secs(10));
+
+            store.put(record).expect("Failed to put record into store");
         }
 
         // Create a new store from the allegedly unpersisted DHT
@@ -512,13 +528,14 @@ mod tests {
             assert!(new_store.get(key).is_none());
         }
 
+        // Create a new record
+        let mut record = libp2p::kad::Record::new(keys[0].clone(), values[0].to_vec());
+
+        // Set the expiry time to 10 seconds in the future
+        record.expires = Some(Instant::now() + Duration::from_secs(10));
+
         // Store one more record into the new store
-        store
-            .put(libp2p::kad::Record::new(
-                keys[0].clone(),
-                values[0].to_vec(),
-            ))
-            .expect("Failed to put record into store");
+        store.put(record).expect("Failed to put record into store");
 
         // Wait a bit for the save to complete
         tokio::time::sleep(Duration::from_millis(100)).await;

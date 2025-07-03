@@ -1,0 +1,68 @@
+{
+  "leaf": {
+    "block_header": {
+      "block_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAQA",
+      "builder_commitment": "BUILDER_COMMITMENT~tEvs0rxqOiMCvfe2R0omNNaphSlUiEDrb2q0IZpRcgA_",
+      "builder_signature": null,
+      "chain_config": {
+        "chain_config": {
+          "Left": {
+            "base_fee": "0",
+            "chain_id": "35353",
+            "fee_contract": null,
+            "fee_recipient": "0x0000000000000000000000000000000000000000",
+            "max_block_size": "30720"
+          }
+        }
+      },
+      "fee_info": {
+        "account": "0x0000000000000000000000000000000000000000",
+        "amount": "0"
+      },
+      "fee_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAKA",
+      "height": 0,
+      "l1_finalized": null,
+      "l1_head": 0,
+      "ns_table": {
+        "bytes": "AAAAAA=="
+      },
+      "payload_commitment": "HASH~AazstQer_ho1SqgGT0r10_Gs0BnjfbPBHJdSO3HHbp29",
+      "timestamp": 0
+    },
+    "block_payload": {
+      "ns_table": {
+        "bytes": "AAAAAA=="
+      },
+      "raw_payload": ""
+    },
+    "justify_qc": {
+      "_pd": null,
+      "data": {
+        "block_number": null,
+        "epoch": null,
+        "leaf_commit": "COMMIT~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB"
+      },
+      "signatures": null,
+      "view_number": 0,
+      "vote_commitment": "COMMIT~u_V3iRAPFTMyDkPw5CZvLnWzDrnnl68rtJfYSaaM_2iY"
+    },
+    "next_drb_result": null,
+    "next_epoch_justify_qc": null,
+    "parent_commitment": "COMMIT~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB",
+    "upgrade_certificate": null,
+    "view_change_evidence": null,
+    "view_number": 0,
+    "with_epoch": false
+  },
+  "qc": {
+    "_pd": null,
+    "data": {
+      "block_number": null,
+      "epoch": null,
+      "leaf_commit": "COMMIT~tqpBNqqt63akxJWcfI46uDV8c_Sn_aZ777yCj4X_ukDG"
+    },
+    "signatures": null,
+    "view_number": 0,
+    "vote_commitment": "COMMIT~tzMwZg2x5QJTx7Di9eEvNC0P8CZ_iNX7LJ01DHA9XEdO"
+  }
+}

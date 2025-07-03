@@ -612,7 +612,8 @@ mod tests {
         assert_eq!(
             builder_states.len(),
             2,
-            "The coordinator should have 2 builder states: one bootstrap and one created from matching proposals."
+            "The coordinator should have 2 builder states: one bootstrap and one created from \
+             matching proposals."
         );
     }
 
@@ -691,7 +692,8 @@ mod tests {
         assert_eq!(
             coordinator.builder_states.read().await.len(),
             1,
-            "The coordinator should have 2 builder states: one bootstrap and one created from matching proposals."
+            "The coordinator should have 2 builder states: one bootstrap and one created from \
+             matching proposals."
         );
 
         // Complete both proposal sets
@@ -702,7 +704,8 @@ mod tests {
         assert_eq!(
             coordinator.builder_states.read().await.len(),
             3,
-            "The coordinator should have 2 builder states: one bootstrap and one created from matching proposals."
+            "The coordinator should have 2 builder states: one bootstrap and one created from \
+             matching proposals."
         );
     }
 
@@ -725,7 +728,8 @@ mod tests {
         assert_eq!(
             coordinator.builder_states.read().await.len() as u64,
             101,
-            "The coordinator should have 101 builder states: one bootstrap and one created from each pair of proposals"
+            "The coordinator should have 101 builder states: one bootstrap and one created from \
+             each pair of proposals"
         );
 
         coordinator

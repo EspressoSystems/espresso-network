@@ -120,7 +120,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
         let _version = match self.upgrade_lock.version(block_view).await {
             Ok(v) => v,
             Err(e) => {
-                tracing::error!("Failed to calculate version: {:?}", e);
+                tracing::error!("Failed to calculate version: {e:?}");
                 return None;
             },
         };
@@ -140,7 +140,10 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
         let version = match self.upgrade_lock.version(block_view).await {
             Ok(v) => v,
             Err(err) => {
-                tracing::error!("Upgrade certificate requires unsupported version, refusing to request blocks: {err}");
+                tracing::error!(
+                    "Upgrade certificate requires unsupported version, refusing to request \
+                     blocks: {err}"
+                );
                 return None;
             },
         };
@@ -193,7 +196,10 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
             {
                 // We are proposing a transition block it should be empty
                 if !is_last_block(high_qc_block_number, self.epoch_height) {
-                    tracing::info!("Sending empty block event. View number: {block_view}. Parent Block number: {high_qc_block_number}");
+                    tracing::info!(
+                        "Sending empty block event. View number: {block_view}. Parent Block \
+                         number: {high_qc_block_number}"
+                    );
                     self.send_empty_block(event_stream, block_view, block_epoch, version)
                         .await;
                     return None;
@@ -251,7 +257,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
         version: Version,
     ) {
         // If we couldn't get a block, send an empty block
-        tracing::info!("Failed to get a block for view {block_view:?}, proposing empty block");
+        tracing::info!("Failed to get a block for view {block_view}, proposing empty block");
 
         // Increment the metric for number of empty blocks proposed
         self.consensus
@@ -268,11 +274,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
         {
             Ok(epoch_stake_table) => epoch_stake_table.total_nodes().await,
             Err(e) => {
-                tracing::warn!(
-                    "Failed to get num_storage_nodes for epoch {:?}: {}",
-                    block_epoch,
-                    e
-                );
+                tracing::warn!("Failed to get num_storage_nodes for epoch {block_epoch:?}: {e}");
                 return;
             },
         };
@@ -349,9 +351,9 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                 ensure!(
                     *view > *self.cur_view && *epoch >= self.cur_epoch,
                     debug!(
-                      "Received a view change to an older view and epoch: tried to change view to {:?}\
-                      and epoch {:?} though we are at view {:?} and epoch {:?}",
-                        view, epoch, self.cur_view, self.cur_epoch
+                        "Received a view change to an older view and epoch: tried to change view \
+                         to {view}and epoch {epoch:?} though we are at view {} and epoch {:?}",
+                        self.cur_view, self.cur_epoch
                     )
                 );
                 self.cur_view = view;
@@ -424,14 +426,17 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                         .saved_leaves()
                         .get(leaf_commitment)
                         .context(info!(
-                            "Missing leaf with commitment {leaf_commitment} for view {target_view} in saved_leaves",
+                            "Missing leaf with commitment {leaf_commitment} for view \
+                             {target_view} in saved_leaves",
                         ))?;
                     return Ok((target_view, leaf.payload_commitment()));
                 },
                 ViewInner::Failed => {
                     // For failed views, backtrack
-                    target_view =
-                        TYPES::View::new(target_view.checked_sub(1).context(warn!("Reached genesis. Something is wrong -- have we not decided any blocks since genesis?"))?);
+                    target_view = TYPES::View::new(target_view.checked_sub(1).context(warn!(
+                        "Reached genesis. Something is wrong -- have we not decided any blocks \
+                         since genesis?"
+                    ))?);
                     continue;
                 },
             }
@@ -639,8 +644,9 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                     .validate_signature_and_get_input(block_info.offered_fee, &block_data.metadata)
                 else {
                     tracing::warn!(
-                        "Failed to verify available new or legacy block header input data response message signature"
-                      );
+                        "Failed to verify available new or legacy block header input data \
+                         response message signature"
+                    );
                     continue;
                 };
 
@@ -655,7 +661,8 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                 // verify the message signature and the fee_signature
                 if !header_input.validate_signature(block_info.offered_fee, &block_data.metadata) {
                     tracing::warn!(
-                        "Failed to verify available block header input data response message signature"
+                        "Failed to verify available block header input data response message \
+                         signature"
                     );
                     continue;
                 }

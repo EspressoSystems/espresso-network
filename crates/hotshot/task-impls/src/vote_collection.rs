@@ -117,7 +117,8 @@ impl<
         ensure!(
             vote.view_number() == self.view,
             error!(
-                "Vote view does not match! vote view is {} current view is {}. This vote should not have been passed to this accumulator.",
+                "Vote view does not match! vote view is {} current view is {}. This vote should \
+                 not have been passed to this accumulator.",
                 *vote.view_number(),
                 *self.view
             )
@@ -704,7 +705,8 @@ impl<TYPES: NodeType, V: Versions> EpochRootVoteCollectionTaskState<TYPES, V> {
         ensure!(
             vote.view_number() == self.view,
             error!(
-                "Vote view does not match! vote view is {} current view is {}. This vote should not have been passed to this accumulator.",
+                "Vote view does not match! vote view is {} current view is {}. This vote should \
+                 not have been passed to this accumulator.",
                 *vote.view_number(),
                 *self.view
             )
@@ -731,7 +733,7 @@ impl<TYPES: NodeType, V: Versions> EpochRootVoteCollectionTaskState<TYPES, V> {
                     state_cert,
                 };
 
-                tracing::debug!("Certificate Formed! {:?}", root_qc);
+                tracing::debug!("Certificate Formed! {root_qc:?}");
 
                 broadcast_event(
                     Arc::new(HotShotEvent::EpochRootQcFormed(root_qc.clone())),

@@ -67,7 +67,7 @@ impl TestSystem {
         let provider = ProviderBuilder::new().on_anvil_with_wallet_and_config(|anvil| {
             anvil.port(port).arg("--accounts").arg("20")
         })?;
-        let rpc_url = format!("http://localhost:{}", port).parse()?;
+        let rpc_url = format!("http://localhost:{port}").parse()?;
         let deployer_address = provider.default_signer_address();
         // I don't know how to get the signer out of the provider, by default anvil uses the dev
         // mnemonic and the default signer is the first account.
@@ -97,7 +97,16 @@ impl TestSystem {
             .genesis_st_state(genesis_stake)
             .blocks_per_epoch(blocks_per_epoch)
             .epoch_start_block(epoch_start_block)
+            .multisig_pauser(deployer_address)
             .exit_escrow_period(U256::from(exit_escrow_period.as_secs()))
+            .ops_timelock_delay(U256::from(0))
+            .ops_timelock_admin(signer.address())
+            .ops_timelock_proposers(vec![signer.address()])
+            .ops_timelock_executors(vec![signer.address()])
+            .safe_exit_timelock_delay(U256::from(10))
+            .safe_exit_timelock_admin(signer.address())
+            .safe_exit_timelock_proposers(vec![signer.address()])
+            .safe_exit_timelock_executors(vec![signer.address()])
             .build()
             .unwrap();
 

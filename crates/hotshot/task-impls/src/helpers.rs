@@ -82,7 +82,7 @@ pub(crate) async fn fetch_proposal<TYPES: NodeType, V: Versions>(
     .wrap()
     .context(error!("Failed to sign proposal. This should never happen."))?;
 
-    tracing::info!("Sending proposal request for view {}", view_number);
+    tracing::info!("Sending proposal request for view {view_number}");
 
     // First, broadcast that we need a proposal to the current leader
     broadcast_event(
@@ -697,13 +697,21 @@ pub(crate) async fn parent_leaf_and_state<TYPES: NodeType, V: Versions>(
     }
 
     let consensus_reader = consensus.read().await;
-    let parent_view = consensus_reader.validated_state_map().get(&parent_qc.view_number()).context(
-        debug!("Couldn't find parent view in state map, waiting for replica to see proposal; parent_view_number: {}", *parent_qc.view_number())
-    )?;
+    let parent_view = consensus_reader
+        .validated_state_map()
+        .get(&parent_qc.view_number())
+        .context(debug!(
+            "Couldn't find parent view in state map, waiting for replica to see proposal; \
+             parent_view_number: {}",
+            *parent_qc.view_number()
+        ))?;
 
-    let (leaf_commitment, state) = parent_view.leaf_and_state().context(
-        info!("Parent of high QC points to a view without a proposal; parent_view_number: {}, parent_view {:?}", *parent_qc.view_number(), parent_view)
-    )?;
+    let (leaf_commitment, state) = parent_view.leaf_and_state().context(info!(
+        "Parent of high QC points to a view without a proposal; parent_view_number: {}, \
+         parent_view {:?}",
+        *parent_qc.view_number(),
+        parent_view
+    ))?;
 
     if leaf_commitment != consensus_reader.high_qc().data().leaf_commit {
         // NOTE: This happens on the genesis block
@@ -764,7 +772,11 @@ pub(crate) async fn update_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>
                 .update_state_cert(state_cert.clone())
                 .await
             {
-                bail!("Failed to store the light client state update certificate, not voting; error = {:?}", e);
+                bail!(
+                    "Failed to store the light client state update certificate, not voting; error \
+                     = {:?}",
+                    e
+                );
             }
             validation_info
                 .consensus
@@ -843,10 +855,11 @@ pub(crate) async fn validate_epoch_transition_qc<
     if is_transition_block(qc_block_number, validation_info.epoch_height) {
         // Height is epoch height - 2
         ensure!(
-            transition_qc(validation_info).await.is_none_or(
-                |(qc, _)| qc.view_number() <= proposed_qc.view_number()
-            ),
-            "Proposed transition qc must have view number greater than or equal to previous transition QC"
+            transition_qc(validation_info)
+                .await
+                .is_none_or(|(qc, _)| qc.view_number() <= proposed_qc.view_number()),
+            "Proposed transition qc must have view number greater than or equal to previous \
+             transition QC"
         );
 
         validation_info
@@ -866,13 +879,17 @@ pub(crate) async fn validate_epoch_transition_qc<
         );
         ensure!(
             proposal.data.view_change_evidence().is_none(),
-            "Second to last block and last block of epoch must directly extend previous block, Qc Block number: {qc_block_number}, Proposal Block number: {}",
+            "Second to last block and last block of epoch must directly extend previous block, Qc \
+             Block number: {qc_block_number}, Proposal Block number: {}",
             proposal.data.block_header().block_number()
         );
         ensure!(
             proposed_qc.view_number() + 1 == proposal.data.view_number()
-            || transition_qc(validation_info).await.is_some_and(|(qc, _)| &qc == proposed_qc),
-            "Transition proposals must extend the previous view directly, or extend the previous transition block"
+                || transition_qc(validation_info)
+                    .await
+                    .is_some_and(|(qc, _)| &qc == proposed_qc),
+            "Transition proposals must extend the previous view directly, or extend the previous \
+             transition block"
         );
     }
     Ok(())
@@ -984,7 +1001,10 @@ pub async fn validate_proposal_safety_and_liveness<
             proposal_epoch == justify_qc_epoch
                 || consensus_reader.check_eqc(&proposed_leaf, &parent_leaf),
             {
-                error!("Failed epoch safety check \n Proposed leaf is {proposed_leaf:?} \n justify QC leaf is {parent_leaf:?}")
+                error!(
+                    "Failed epoch safety check \n Proposed leaf is {proposed_leaf:?} \n justify \
+                     QC leaf is {parent_leaf:?}"
+                )
             }
         );
 
@@ -995,8 +1015,11 @@ pub async fn validate_proposal_safety_and_liveness<
                 .epochs_enabled(view_number)
                 .await
         {
-            ensure!(proposal.data.next_epoch_justify_qc().is_some(),
-            "Epoch transition proposal does not include the next epoch justify QC. Do not vote!");
+            ensure!(
+                proposal.data.next_epoch_justify_qc().is_some(),
+                "Epoch transition proposal does not include the next epoch justify QC. Do not \
+                 vote!"
+            );
         }
 
         // Liveness check.
@@ -1029,7 +1052,13 @@ pub async fn validate_proposal_safety_and_liveness<
                 .await;
             }
 
-            error!("Failed safety and liveness check \n High QC is {:?}  Proposal QC is {:?}  Locked view is {:?}", consensus_reader.high_qc(), proposal.data.clone(), consensus_reader.locked_view())
+            error!(
+                "Failed safety and liveness check \n High QC is {:?}  Proposal QC is {:?}  Locked \
+                 view is {:?}",
+                consensus_reader.high_qc(),
+                proposal.data,
+                consensus_reader.locked_view()
+            )
         });
     }
 
@@ -1087,15 +1116,21 @@ pub(crate) async fn validate_proposal_view_and_certs<
     // Verify a timeout certificate OR a view sync certificate exists and is valid.
     if proposal.data.justify_qc().view_number() != view_number - 1 {
         let received_proposal_cert =
-            proposal.data.view_change_evidence().clone().context(debug!(
-                "Quorum proposal for view {view_number} needed a timeout or view sync certificate, but did not have one",
-        ))?;
+            proposal
+                .data
+                .view_change_evidence()
+                .clone()
+                .context(debug!(
+                    "Quorum proposal for view {view_number} needed a timeout or view sync \
+                     certificate, but did not have one",
+                ))?;
 
         match received_proposal_cert {
             ViewChangeEvidence2::Timeout(timeout_cert) => {
                 ensure!(
                     timeout_cert.data().view == view_number - 1,
-                    "Timeout certificate for view {view_number} was not for the immediately preceding view"
+                    "Timeout certificate for view {view_number} was not for the immediately \
+                     preceding view"
                 );
                 let timeout_cert_epoch = timeout_cert.data().epoch();
                 membership = membership.get_new_epoch(timeout_cert_epoch).await?;
@@ -1311,6 +1346,8 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
     da_cert: &DaCertificate2<TYPES>,
     consensus: &OuterConsensus<TYPES>,
     receiver: &Receiver<Arc<HotShotEvent<TYPES>>>,
+    cancel_receiver: Receiver<()>,
+    id: u64,
 ) -> Result<Proposal<TYPES, VidDisperseShare<TYPES>>> {
     tracing::debug!("getting the second VID share for epoch {:?}", target_epoch);
     let maybe_second_vid_share = consensus
@@ -1336,6 +1373,12 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
     let da_cert_clone = da_cert.clone();
     let Some(event) = EventDependency::new(
         receiver,
+        cancel_receiver,
+        format!(
+            "VoteDependency Second VID share for view {:?}, my id {:?}",
+            vid_share.data.view_number(),
+            id
+        ),
         Box::new(move |event| {
             let event = event.as_ref();
             if let HotShotEvent::VidShareValidated(second_vid_share) = event {
@@ -1358,7 +1401,10 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
     };
     let HotShotEvent::VidShareValidated(second_vid_share) = event.as_ref() else {
         // this shouldn't happen
-        return Err(warn!("Received event is not VidShareValidated but we checked it earlier. Shouldn't be possible."));
+        return Err(warn!(
+            "Received event is not VidShareValidated but we checked it earlier. Shouldn't be \
+             possible."
+        ));
     };
     Ok(second_vid_share.clone())
 }
@@ -1375,11 +1421,7 @@ pub async fn broadcast_view_change<TYPES: NodeType>(
             broadcast_epoch = Some(first_epoch);
         }
     }
-    tracing::trace!(
-        "Sending ViewChange for view {} and epoch {:?}",
-        new_view_number,
-        broadcast_epoch
-    );
+    tracing::trace!("Sending ViewChange for view {new_view_number} and epoch {broadcast_epoch:?}");
     broadcast_event(
         Arc::new(HotShotEvent::ViewChange(new_view_number, broadcast_epoch)),
         sender,
