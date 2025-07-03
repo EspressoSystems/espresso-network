@@ -8,9 +8,11 @@ use std::{
 
 use alloy::{
     contract::RawCallBuilder,
+    dyn_abi::{DynSolType, DynSolValue, JsonAbiExt},
     hex::{FromHex, ToHexExt},
+    json_abi::Function,
     network::{Ethereum, EthereumWallet, TransactionBuilder},
-    primitives::{keccak256, Address, Bytes, B256, U256},
+    primitives::{Address, Bytes, B256, U256},
     providers::{
         fillers::{FillProvider, JoinFill, WalletFiller},
         utils::JoinedRecommendedFillers,
@@ -23,7 +25,6 @@ use alloy::{
     },
     transports::http::reqwest::Url,
 };
-use alloy_dyn_abi::{DynSolType, DynSolValue};
 use anyhow::{anyhow, Context, Result};
 use clap::{builder::OsStr, Parser, ValueEnum};
 use derive_more::{derive::Deref, Display};
@@ -1904,27 +1905,25 @@ pub fn encode_function_call(signature: &str, args: Vec<String>) -> Result<Bytes>
         .collect::<std::result::Result<_, _>>()
         .map_err(|e| anyhow!("Failed to parse argument types: {e}"))?;
 
-    let dyn_values: Vec<DynSolValue> = dyn_types
+    if args.len() != dyn_types.len() {
+        anyhow::bail!(
+            "Mismatch between argument count ({}) and type count ({})",
+            args.len(),
+            dyn_types.len()
+        );
+    }
+
+    let dyn_values: Vec<DynSolValue> = args
         .iter()
-        .zip(args.iter())
-        .map(|(ty, arg)| ty.coerce_str(arg))
-        .collect::<std::result::Result<_, _>>()
+        .enumerate()
+        .map(|(i, arg)| dyn_types[i].coerce_str(arg))
+        .collect::<Result<_, _>>()
         .map_err(|e| anyhow!("Failed to coerce argument: {e}"))?;
 
-    const FUNCTION_SELECTOR_SIZE: usize = 4;
-    let selector = &keccak256(signature.as_bytes())[..FUNCTION_SELECTOR_SIZE];
-
-    let encoded_args = if dyn_values.len() == 1 {
-        dyn_values[0].abi_encode()
-    } else {
-        DynSolValue::Tuple(dyn_values).abi_encode()
-    };
-
-    let mut calldata = Vec::with_capacity(4 + encoded_args.len());
-    calldata.extend_from_slice(selector);
-    calldata.extend_from_slice(&encoded_args);
-
-    Ok(calldata.into())
+    let func = Function::parse(signature)?;
+    let encoded_input = func.abi_encode_input(&dyn_values)?;
+    let data = Bytes::from(encoded_input);
+    Ok(data)
 }
 
 #[cfg(test)]
@@ -3051,6 +3050,20 @@ mod tests {
             "1000".to_string(),
         ];
         let expected = "0xa9059cbb000000000000000000000000000000000000000000000000000000000000dead00000000000000000000000000000000000000000000000000000000000003e8".parse::<Bytes>()?;
+        let encoded = encode_function_call(&function_signature, values).expect("encoding failed");
+
+        assert_eq!(encoded, expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_encode_function_call_upgrade_to_and_call() -> Result<()> {
+        let function_signature = "upgradeToAndCall(address,bytes)".to_string();
+        let values = vec![
+            "0xe1f131b07550a689d6a11f21d9e9238a5c466996".to_string(),
+            "0x".to_string(),
+        ];
+        let expected = "0x4f1ef286000000000000000000000000e1f131b07550a689d6a11f21d9e9238a5c46699600000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000000".parse::<Bytes>()?;
         let encoded = encode_function_call(&function_signature, values).expect("encoding failed");
 
         assert_eq!(encoded, expected);

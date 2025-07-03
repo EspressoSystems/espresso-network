@@ -7,7 +7,6 @@ edition = { workspace = true }
 
 [dependencies]
 alloy = { workspace = true }
-alloy-dyn-abi = "0.8.25" 
 anyhow = { workspace = true }
 clap = { workspace = true }
 derive_builder = "0.20.2"
