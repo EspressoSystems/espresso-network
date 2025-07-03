@@ -7,22 +7,19 @@ use alloy::{
     primitives::{utils::format_ether, Address},
     providers::{Provider, ProviderBuilder},
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
 use clap_serde_derive::ClapSerde;
 use hotshot_contract_adapter::{
     evm::DecodeRevert as _,
-    sol_types::{
-        EspToken::{self, EspTokenErrors},
-        StakeTableV2,
-    },
+    sol_types::EspToken::{self, EspTokenErrors},
 };
 use hotshot_types::light_client::StateKeyPair;
 use staking_cli::{
     claim::{claim_validator_exit, claim_withdrawal},
     delegation::{approve, delegate, undelegate},
     demo::stake_for_demo,
-    info::{display_stake_table, stake_table_info},
+    info::{display_stake_table, fetch_token_address, stake_table_info},
     registration::{deregister_validator, register_validator, update_consensus_keys},
     Commands, Config, ValidSignerConfig,
 };
@@ -237,18 +234,7 @@ pub async fn main() -> Result<()> {
         .wallet(wallet)
         .on_http(config.rpc_url.clone());
     let stake_table_addr = config.stake_table_address;
-    let stake_table = StakeTableV2::new(stake_table_addr, provider.clone());
-    let token_addr = stake_table
-        .token()
-        .call()
-        .await
-        .with_context(|| {
-            format!(
-                "Unable to fetch stake table address from stake table contract at \
-                 {stake_table_addr}"
-            )
-        })?
-        ._0;
+    let token_addr = fetch_token_address(config.rpc_url.clone(), stake_table_addr).await?;
 
     // Commands that interact with the stake table
 
