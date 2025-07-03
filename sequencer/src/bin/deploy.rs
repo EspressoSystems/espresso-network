@@ -485,39 +485,39 @@ async fn main() -> anyhow::Result<()> {
     if opt.deploy_ops_timelock {
         let ops_timelock_admin = opt
             .ops_timelock_admin
-            .expect("Must provide --ops-timelock-admin when deploying ops timelock");
+            .ok_or_else(|| anyhow::anyhow!("Must provide --ops-timelock-admin or ESPRESSO_OPS_TIMELOCK_ADMIN env var when deploying ops timelock"))?;
         args_builder.ops_timelock_admin(ops_timelock_admin);
         let ops_timelock_delay = opt
             .ops_timelock_delay
-            .expect("Must provide --ops-timelock-delay when deploying ops timelock");
+            .ok_or_else(|| anyhow::anyhow!("Must provide --ops-timelock-delay or ESPRESSO_OPS_TIMELOCK_DELAY env var when deploying ops timelock"))?;
         args_builder.ops_timelock_delay(U256::from(ops_timelock_delay));
         let ops_timelock_executors = opt
             .ops_timelock_executors
-            .expect("Must provide --ops-timelock-executors when deploying ops timelock");
+            .ok_or_else(|| anyhow::anyhow!("Must provide --ops-timelock-executors or ESPRESSO_OPS_TIMELOCK_EXECUTORS env var when deploying ops timelock"))?;
         args_builder.ops_timelock_executors(ops_timelock_executors.into_iter().collect());
         let ops_timelock_proposers = opt
             .ops_timelock_proposers
-            .expect("Must provide --ops-timelock-proposers when deploying ops timelock");
+            .ok_or_else(|| anyhow::anyhow!("Must provide --ops-timelock-proposers or ESPRESSO_OPS_TIMELOCK_PROPOSERS env var when deploying ops timelock"))?;
         args_builder.ops_timelock_proposers(ops_timelock_proposers.into_iter().collect());
     }
 
     if opt.deploy_safe_exit_timelock {
         let safe_exit_timelock_admin = opt
             .safe_exit_timelock_admin
-            .expect("Must provide --safe-exit-timelock-admin when deploying token timelock");
+            .ok_or_else(|| anyhow::anyhow!("Must provide --safe-exit-timelock-admin or ESPRESSO_SAFE_EXIT_TIMELOCK_ADMIN env var when deploying safe exit timelock"))?;
         args_builder.safe_exit_timelock_admin(safe_exit_timelock_admin);
         let safe_exit_timelock_delay = opt
             .safe_exit_timelock_delay
-            .expect("Must provide --safe-exit-timelock-delay when deploying token timelock");
+            .ok_or_else(|| anyhow::anyhow!("Must provide --safe-exit-timelock-delay or ESPRESSO_SAFE_EXIT_TIMELOCK_DELAY env var when deploying safe exit timelock"))?;
         args_builder.safe_exit_timelock_delay(U256::from(safe_exit_timelock_delay));
         let safe_exit_timelock_executors = opt
             .safe_exit_timelock_executors
-            .expect("Must provide --safe-exit-timelock-executors when deploying token timelock");
+            .ok_or_else(|| anyhow::anyhow!("Must provide --safe-exit-timelock-executors or ESPRESSO_SAFE_EXIT_TIMELOCK_EXECUTORS env var when deploying safe exit timelock"))?;
         args_builder
             .safe_exit_timelock_executors(safe_exit_timelock_executors.into_iter().collect());
         let safe_exit_timelock_proposers = opt
             .safe_exit_timelock_proposers
-            .expect("Must provide --safe-exit-timelock-proposers when deploying token timelock");
+            .ok_or_else(|| anyhow::anyhow!("Must provide --safe-exit-timelock-proposers or ESPRESSO_SAFE_EXIT_TIMELOCK_PROPOSERS env var when deploying safe exit timelock"))?;
         args_builder
             .safe_exit_timelock_proposers(safe_exit_timelock_proposers.into_iter().collect());
     }
@@ -528,28 +528,28 @@ async fn main() -> anyhow::Result<()> {
     if opt.perform_timelock_operation {
         let timelock_operation_type = opt
             .timelock_operation_type
-            .expect("Must provide --timelock-operation-type when scheduling timelock operation");
+            .ok_or_else(|| anyhow::anyhow!("Must provide --timelock-operation-type or ESPRESSO_TIMELOCK_OPERATION_TYPE env var when scheduling timelock operation"))?;
         args_builder.timelock_operation_type(timelock_operation_type);
         let timelock_target_contract = opt
             .timelock_target_contract
             .clone()
-            .expect("Must provide --timelock-target-contract when scheduling timelock operation");
+            .ok_or_else(|| anyhow::anyhow!("Must provide --timelock-target-contract or ESPRESSO_TIMELOCK_OPERATION_TARGET_CONTRACT env var when scheduling timelock operation"))?;
         args_builder.timelock_target_contract(timelock_target_contract);
         let function_signature = opt
             .function_signature
-            .expect("Must provide --function-signature when performing timelock operation");
+            .ok_or_else(|| anyhow::anyhow!("Must provide --function-signature or ESPRESSO_TIMELOCK_OPERATION_FUNCTION_SIGNATURE env var when performing timelock operation"))?;
         args_builder.timelock_operation_function_signature(function_signature);
         let function_values = opt
             .function_values
-            .expect("Must provide --function-values when performing timelock operation");
+            .ok_or_else(|| anyhow::anyhow!("Must provide --function-values or ESPRESSO_TIMELOCK_OPERATION_FUNCTION_VALUES env var when performing timelock operation"))?;
         args_builder.timelock_operation_function_values(function_values);
         let timelock_operation_salt = opt
             .timelock_operation_salt
-            .expect("Must provide --timelock-operation-salt when scheduling timelock operation");
+            .ok_or_else(|| anyhow::anyhow!("Must provide --timelock-operation-salt or ESPRESSO_TIMELOCK_OPERATION_SALT env var when scheduling timelock operation"))?;
         args_builder.timelock_operation_salt(timelock_operation_salt);
         let timelock_operation_delay = opt
             .timelock_operation_delay
-            .expect("Must provide --timelock-operation-delay when scheduling timelock operation");
+            .ok_or_else(|| anyhow::anyhow!("Must provide --timelock-operation-delay or ESPRESSO_TIMELOCK_OPERATION_DELAY env var when scheduling timelock operation"))?;
         args_builder.timelock_operation_delay(U256::from(timelock_operation_delay));
         let timelock_operation_value = opt.timelock_operation_value.clone().unwrap_or_default();
         args_builder.timelock_operation_value(timelock_operation_value);
