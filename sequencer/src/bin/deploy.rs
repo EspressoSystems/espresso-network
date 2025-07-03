@@ -557,6 +557,17 @@ async fn main() -> anyhow::Result<()> {
 
     // then deploy specified contracts
     let args = args_builder.build()?;
+
+    // Deploy timelocks first so they can be used as owners for other contracts
+    if opt.deploy_ops_timelock {
+        args.deploy(&mut contracts, Contract::OpsTimelock).await?;
+    }
+    if opt.deploy_safe_exit_timelock {
+        args.deploy(&mut contracts, Contract::SafeExitTimelock)
+            .await?;
+    }
+
+    // Then deploy other contracts
     if opt.deploy_fee {
         args.deploy(&mut contracts, Contract::FeeContractProxy)
             .await?;
@@ -577,13 +588,6 @@ async fn main() -> anyhow::Result<()> {
     }
     if opt.upgrade_stake_table_v2 {
         args.deploy(&mut contracts, Contract::StakeTableV2).await?;
-    }
-    if opt.deploy_ops_timelock {
-        args.deploy(&mut contracts, Contract::OpsTimelock).await?;
-    }
-    if opt.deploy_safe_exit_timelock {
-        args.deploy(&mut contracts, Contract::SafeExitTimelock)
-            .await?;
     }
 
     // then perform the timelock operation if any

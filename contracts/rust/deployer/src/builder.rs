@@ -373,13 +373,16 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
 
     /// Deploy all contracts up to and including stake table v1
     pub async fn deploy_to_stake_table_v1(&self, contracts: &mut Contracts) -> Result<()> {
+        // Deploy timelocks first so they can be used as owners for other contracts
+        self.deploy(contracts, Contract::OpsTimelock).await?;
+        self.deploy(contracts, Contract::SafeExitTimelock).await?;
+
+        // Then deploy other contracts
         self.deploy(contracts, Contract::FeeContractProxy).await?;
         self.deploy(contracts, Contract::EspTokenProxy).await?;
         self.deploy(contracts, Contract::LightClientProxy).await?;
         self.deploy(contracts, Contract::LightClientV2).await?;
         self.deploy(contracts, Contract::StakeTableProxy).await?;
-        self.deploy(contracts, Contract::OpsTimelock).await?;
-        self.deploy(contracts, Contract::SafeExitTimelock).await?;
         Ok(())
     }
 
