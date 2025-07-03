@@ -273,8 +273,11 @@ impl TestSystem {
             .arg("0");
 
         match signer {
-            Signer::Mnemonic => cmd.arg("--mnemonic").arg(DEV_MNEMONIC),
             Signer::Ledger => cmd.arg("--ledger"),
+            Signer::Mnemonic => cmd.arg("--mnemonic").arg(DEV_MNEMONIC),
+            Signer::BrokeMnemonic => cmd
+                .arg("--mnemonic")
+                .arg("roast term reopen pave choose high rally trouble upon govern hollow stand"),
         };
     }
 }
@@ -283,6 +286,7 @@ impl TestSystem {
 pub enum Signer {
     Ledger,
     Mnemonic,
+    BrokeMnemonic,
 }
 
 #[cfg(test)]

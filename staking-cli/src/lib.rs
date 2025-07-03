@@ -37,6 +37,12 @@ pub struct Config {
     #[default(Url::parse("http://localhost:8545").unwrap())]
     pub rpc_url: Url,
 
+    /// [DEPRECATED] Deployed ESP token contract address.
+    ///
+    /// [DEPRECATED] This is fetched from the stake table contract now.
+    #[clap(long, env = "ESP_TOKEN_ADDRESS")]
+    pub token_address: Option<Address>,
+
     /// Deployed stake table contract address.
     #[clap(long, env = "STAKE_TABLE_ADDRESS")]
     pub stake_table_address: Address,

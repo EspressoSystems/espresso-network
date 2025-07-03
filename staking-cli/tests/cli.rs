@@ -185,12 +185,59 @@ async fn test_cli_contract_revert(#[case] version: StakeTableContractVersion) ->
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
-async fn test_cli_register_validator(#[case] version: StakeTableContractVersion) -> Result<()> {
+#[rstest::rstest]
+#[tokio::test]
+async fn test_cli_register_validator(
+    #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
+    version: StakeTableContractVersion,
+    #[values(Signer::Mnemonic, Signer::BrokeMnemonic)] signer: Signer,
+) -> Result<()> {
     setup_test();
     let system = TestSystem::deploy_version(version).await?;
     let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Mnemonic);
+    system.args(&mut cmd, signer);
+    let result = cmd
+        .arg("register-validator")
+        .arg("--consensus-private-key")
+        .arg(
+            system
+                .bls_key_pair
+                .sign_key_ref()
+                .to_tagged_base64()?
+                .to_string(),
+        )
+        .arg("--state-private-key")
+        .arg(
+            system
+                .state_key_pair
+                .sign_key()
+                .to_tagged_base64()?
+                .to_string(),
+        )
+        .arg("--commission")
+        .arg("12.34")
+        .output()?;
+    match signer {
+        Signer::Mnemonic => {
+            result.assert_success();
+        },
+        Signer::BrokeMnemonic => {
+            result.assert_failure();
+        },
+        Signer::Ledger => unreachable!(),
+    };
+
+    Ok(())
+}
+
+#[rstest_reuse::apply(stake_table_versions)]
+async fn test_cli_register_validator_fails_without_balance(
+    #[case] version: StakeTableContractVersion,
+) -> Result<()> {
+    setup_test();
+    let system = TestSystem::deploy_version(version).await?;
+    let mut cmd = base_cmd();
+    system.args(&mut cmd, Signer::BrokeMnemonic);
     cmd.arg("register-validator")
         .arg("--consensus-private-key")
         .arg(
@@ -211,7 +258,7 @@ async fn test_cli_register_validator(#[case] version: StakeTableContractVersion)
         .arg("--commission")
         .arg("12.34")
         .output()?
-        .assert_success();
+        .assert_failure();
     Ok(())
 }
 
@@ -408,6 +455,7 @@ async fn test_cli_balance(#[case] version: StakeTableContractVersion) -> Result<
     let mut cmd = base_cmd();
     system.args(&mut cmd, Signer::Mnemonic);
     let s = cmd.arg("token-balance").output()?.assert_success().utf8();
+    println!("token-balance output: {s}");
     let parts: Vec<&str> = s.split_whitespace().collect();
     let balance = parts[8].split(".").next().unwrap().parse::<U256>()?;
 
@@ -429,6 +477,20 @@ async fn test_cli_balance(#[case] version: StakeTableContractVersion) -> Result<
     assert!(s.contains(addr));
     assert!(s.contains(" 0.0"));
 
+    Ok(())
+}
+
+// This test can be remove when the deprecated argument is removed
+#[tokio::test]
+async fn test_deprecated_token_address_cli_arg() -> Result<()> {
+    setup_test();
+    let system = TestSystem::deploy().await?;
+
+    let mut cmd = base_cmd();
+    // Add the deprecated --token_address argument
+    cmd.arg("--token-address").arg(system.token.to_string());
+    system.args(&mut cmd, Signer::Mnemonic);
+    cmd.arg("token-balance").output()?.assert_success();
     Ok(())
 }
 

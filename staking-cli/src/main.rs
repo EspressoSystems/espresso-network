@@ -121,6 +121,10 @@ pub async fn main() -> Result<()> {
         Config::from(&mut cli.config)
     };
 
+    if config.token_address.is_some() {
+        tracing::warn!("The `--token_address` argument is no longer necessary , and ignored");
+    };
+
     // Run the init command first because config values required by other
     // commands are not present.
     match config.commands {
@@ -235,11 +239,42 @@ pub async fn main() -> Result<()> {
         .on_http(config.rpc_url.clone());
     let stake_table_addr = config.stake_table_address;
     let token_addr = fetch_token_address(config.rpc_url.clone(), stake_table_addr).await?;
-
-    // Commands that interact with the stake table
-
     let token = EspToken::new(token_addr, &provider);
 
+    // Command that just read from chain, do not require a balance
+    match config.commands {
+        Commands::TokenBalance { address } => {
+            let address = address.unwrap_or(account);
+            let balance = format_ether(token.balanceOf(address).call().await?._0);
+            tracing::info!("Token balance for {address}: {balance} ESP");
+            return Ok(());
+        },
+        Commands::TokenAllowance { owner } => {
+            let owner = owner.unwrap_or(account);
+            let allowance = format_ether(
+                token
+                    .allowance(owner, config.stake_table_address)
+                    .call()
+                    .await?
+                    ._0,
+            );
+            tracing::info!("Stake table token allowance for {owner}: {allowance} ESP");
+            return Ok(());
+        },
+        _ => {
+            // Continue with the rest of the commands that require a signer
+        },
+    };
+
+    // Check that our Ethereum balance isn't zero before proceeding.
+    let balance = provider.get_balance(account).await?;
+    if balance.is_zero() {
+        exit(format!(
+            "Ethereum balance of account {account} is zero, please fund account"
+        ));
+    }
+
+    // Commands that require a signer
     let result = match config.commands {
         Commands::RegisterValidator {
             consensus_private_key,
@@ -314,24 +349,6 @@ pub async fn main() -> Result<()> {
             stake_for_demo(&config, num_validators, delegation_config)
                 .await
                 .unwrap();
-            return Ok(());
-        },
-        Commands::TokenBalance { address } => {
-            let address = address.unwrap_or(account);
-            let balance = format_ether(token.balanceOf(address).call().await?._0);
-            tracing::info!("Token balance for {address}: {balance} ESP");
-            return Ok(());
-        },
-        Commands::TokenAllowance { owner } => {
-            let owner = owner.unwrap_or(account);
-            let allowance = format_ether(
-                token
-                    .allowance(owner, config.stake_table_address)
-                    .call()
-                    .await?
-                    ._0,
-            );
-            tracing::info!("Stake table token allowance for {owner}: {allowance} ESP");
             return Ok(());
         },
         Commands::Transfer { amount, to } => {
