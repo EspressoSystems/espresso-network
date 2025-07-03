@@ -270,7 +270,7 @@ pub async fn main() -> Result<()> {
     let balance = provider.get_balance(account).await?;
     if balance.is_zero() {
         exit(format!(
-            "Ethereum balance of account {account} is zero, please fund account"
+            "zero Ethereum balance for account {account}, please fund account"
         ));
     }
 

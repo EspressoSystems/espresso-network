@@ -223,6 +223,7 @@ async fn test_cli_register_validator(
         },
         Signer::BrokeMnemonic => {
             result.assert_failure();
+            assert!(result.utf8().contains("zero Ethereum balance"));
         },
         Signer::Ledger => unreachable!(),
     };
