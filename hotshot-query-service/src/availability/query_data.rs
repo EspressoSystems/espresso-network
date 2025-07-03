@@ -766,7 +766,7 @@ where
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
-    pub(crate) fn new(
+    pub fn new(
         block: &BlockQueryData<Types>,
         i: TransactionIndex<Types>,
         index: u64,
