@@ -45,13 +45,13 @@ build profile="dev" features="":
     cargo build --profile {{profile}} {{features}}
     cargo build --profile {{profile}} -p sequencer-sqlite {{features}}
 
-demo-native-pos *args: (build "test" "--features fee,pos")
+demo-native-pos *args: (build "test" "--no-default-features --features fee,pos")
     ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE=data/genesis/demo-pos.toml scripts/demo-native -f process-compose.yaml {{args}}
 
-demo-native-pos-base *args: (build "test" "--features pos")
+demo-native-pos-base *args: (build "test" "--no-default-features --features pos")
     ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE=data/genesis/demo-pos-base.toml scripts/demo-native -f process-compose.yaml {{args}}
 
-demo-native-drb-header-upgrade *args: (build "test" "--features pos,drb-and-header")
+demo-native-drb-header-upgrade *args: (build "test" "--no-default-features --features pos,drb-and-header")
     ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE=data/genesis/demo-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-benchmark:
