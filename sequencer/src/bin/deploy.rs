@@ -149,6 +149,9 @@ struct Options {
     /// Option to deploy safe exit timelock
     #[clap(long, default_value = "false")]
     deploy_safe_exit_timelock: bool,
+    /// Option to use timelock as the owner of the proxy
+    #[clap(long, default_value = "false")]
+    timelock_owner: bool,
 
     /// Write deployment results to OUT as a .env file.
     ///
@@ -517,6 +520,9 @@ async fn main() -> anyhow::Result<()> {
             .expect("Must provide --safe-exit-timelock-proposers when deploying token timelock");
         args_builder
             .safe_exit_timelock_proposers(safe_exit_timelock_proposers.into_iter().collect());
+    }
+    if opt.timelock_owner {
+        args_builder.timelock_owner(true);
     }
 
     if opt.perform_timelock_operation {

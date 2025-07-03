@@ -87,11 +87,15 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     #[builder(default)]
     timelock_operation_value: Option<U256>,
     #[builder(default)]
+    timelock_operation_delay: Option<U256>,
+    #[builder(default)]
     timelock_operation_function_signature: Option<String>,
     #[builder(default)]
     timelock_operation_function_values: Option<Vec<String>>,
     #[builder(default)]
     timelock_operation_salt: Option<String>,
+    #[builder(default)]
+    timelock_owner: Option<bool>,
 }
 
 impl<P: Provider + WalletProvider> DeployerArgs<P> {
@@ -103,7 +107,20 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             Contract::FeeContractProxy => {
                 let addr = crate::deploy_fee_contract_proxy(provider, contracts, admin).await?;
 
-                if let Some(multisig) = self.multisig {
+                if let Some(timelock_owner) = self.timelock_owner {
+                    tracing::info!(
+                        "Transferring ownership to OpsTimelock: {:?}",
+                        timelock_owner
+                    );
+                    // deployer is the timelock owner
+                    if timelock_owner {
+                        let timelock_addr = contracts
+                            .address(Contract::OpsTimelock)
+                            .expect("fail to get OpsTimelock address");
+                        crate::transfer_ownership(provider, target, addr, timelock_addr).await?;
+                    }
+                } else if let Some(multisig) = self.multisig {
+                    tracing::info!("Transferring ownership to multisig: {:?}", multisig);
                     crate::transfer_ownership(provider, target, addr, multisig).await?;
                 }
             },
@@ -462,13 +479,13 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
 
         match timelock_operation_type {
             TimelockOperationType::Schedule => {
-                let tx_id = crate::schedule_timelock_operation(
+                let operation_id = crate::schedule_timelock_operation(
                     &self.deployer,
                     contract_type,
                     timelock_operation_data,
                 )
                 .await?;
-                tracing::info!("Timelock operation scheduled with ID: {}", tx_id);
+                tracing::info!("Timelock operation scheduled with ID: {}", operation_id);
             },
             TimelockOperationType::Execute => {
                 let tx_id = crate::execute_timelock_operation(
