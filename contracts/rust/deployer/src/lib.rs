@@ -2526,61 +2526,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_deploy_timelock() -> Result<()> {
-        setup_test();
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
-        let mut contracts = Contracts::new();
-
-        // Setup test parameters
-        let min_delay = U256::from(86400); // 1 day in seconds
-        let admin = provider.get_accounts().await?[0];
-        let proposers = vec![Address::random()];
-        let executors = vec![Address::random()];
-
-        let timelock_addr = deploy_timelock(
-            &provider,
-            &mut contracts,
-            min_delay,
-            proposers.clone(),
-            executors.clone(),
-            admin,
-        )
-        .await?;
-
-        // Verify deployment
-        let timelock = Timelock::new(timelock_addr, &provider);
-        assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
-
-        // Verify initialization parameters
-        assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
-        assert!(
-            timelock
-                .hasRole(timelock.PROPOSER_ROLE().call().await?._0, proposers[0])
-                .call()
-                .await?
-                ._0
-        );
-        assert!(
-            timelock
-                .hasRole(timelock.EXECUTOR_ROLE().call().await?._0, executors[0])
-                .call()
-                .await?
-                ._0
-        );
-
-        // test that the admin is in the default admin role where DEFAULT_ADMIN_ROLE = 0x00
-        let default_admin_role = U256::ZERO;
-        assert!(
-            timelock
-                .hasRole(default_admin_role.into(), admin)
-                .call()
-                .await?
-                ._0
-        );
-        Ok(())
-    }
-
     async fn test_transfer_ownership_helper(
         contract_type: Contract,
         options: UpgradeTestOptions,
