@@ -594,7 +594,7 @@ async fn main() -> anyhow::Result<()> {
             )
         })?;
         args_builder.timelock_operation_delay(U256::from(timelock_operation_delay));
-        let timelock_operation_value = opt.timelock_operation_value.clone().unwrap_or_default();
+        let timelock_operation_value = opt.timelock_operation_value.unwrap_or_default();
         args_builder.timelock_operation_value(timelock_operation_value);
     }
 
