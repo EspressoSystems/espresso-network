@@ -205,7 +205,8 @@ pub trait StateCatchup: Send + Sync {
                         .await
                         .map_err(|err| {
                             err.context(format!(
-                                "fetching reward accounts {accounts:?}, height {height}, view {view}"
+                                "fetching reward accounts {accounts:?}, height {height}, view \
+                                 {view}"
                             ))
                         })
                 }

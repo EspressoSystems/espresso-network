@@ -260,9 +260,10 @@ mod tests {
 
         app_handle.abort();
 
-        timeout(TIMEOUT, stream.next())
-            .await
-            .expect_err("When mock event server is killed, stream should be in reconnecting state and never return");
+        timeout(TIMEOUT, stream.next()).await.expect_err(
+            "When mock event server is killed, stream should be in reconnecting state and never \
+             return",
+        );
 
         let app_handle = run_app("hotshot-events", url.clone());
 

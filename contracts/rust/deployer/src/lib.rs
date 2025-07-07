@@ -713,7 +713,12 @@ pub async fn upgrade_light_client_v2_multisig_owner(
         );
         vec![].into()
     } else {
-        tracing::info!("Init Data to be signed.\n Function: initializeV2\n Arguments:\n blocks_per_epoch: {:?}\n epoch_start_block: {:?}", params.blocks_per_epoch, params.epoch_start_block);
+        tracing::info!(
+            "Init Data to be signed.\n Function: initializeV2\n Arguments:\n blocks_per_epoch: \
+             {:?}\n epoch_start_block: {:?}",
+            params.blocks_per_epoch,
+            params.epoch_start_block
+        );
         LightClientV2::new(lcv2_addr, &provider)
             .initializeV2(params.blocks_per_epoch, params.epoch_start_block)
             .calldata()
@@ -733,7 +738,12 @@ pub async fn upgrade_light_client_v2_multisig_owner(
 
     tracing::info!("Init data: {:?}", init_data);
     if init_data.to_string() != "0x" {
-        tracing::info!("Data to be signed:\n Function: initializeV2\n Arguments:\n blocks_per_epoch: {:?}\n epoch_start_block: {:?}", params.blocks_per_epoch, params.epoch_start_block);
+        tracing::info!(
+            "Data to be signed:\n Function: initializeV2\n Arguments:\n blocks_per_epoch: {:?}\n \
+             epoch_start_block: {:?}",
+            params.blocks_per_epoch,
+            params.epoch_start_block
+        );
     }
     if !dry_run {
         tracing::info!(
@@ -1059,7 +1069,12 @@ async fn upgrade_stake_table_v2(
         );
         vec![].into()
     } else {
-        tracing::info!("Init Data to be signed.\n Function: initializeV2\n Arguments:\n pauser: {:?}\n admin: {:?}", pauser, admin);
+        tracing::info!(
+            "Init Data to be signed.\n Function: initializeV2\n Arguments:\n pauser: {:?}\n \
+             admin: {:?}",
+            pauser,
+            admin
+        );
         StakeTableV2::new(v2_addr, &provider)
             .initializeV2(pauser, admin)
             .calldata()
@@ -1118,7 +1133,10 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
             let owner = proxy.owner().call().await?;
             let owner_addr = owner._0;
             if owner_addr != multisig_address {
-                tracing::error!("Proxy is not owned by the multisig. Expected: {multisig_address:#x}, Got: {owner_addr:#x}");
+                tracing::error!(
+                    "Proxy is not owned by the multisig. Expected: {multisig_address:#x}, Got: \
+                     {owner_addr:#x}"
+                );
                 anyhow::bail!("Proxy is not owned by the multisig");
             }
             if !dry_run && !is_contract(&provider, owner_addr).await? {
@@ -1151,7 +1169,12 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
                 );
                 vec![].into()
             } else {
-                tracing::info!("Init Data to be signed.\n Function: initializeV2\n Arguments:\n pauser: {:?}\n admin: {:?}", pauser, owner_addr);
+                tracing::info!(
+                    "Init Data to be signed.\n Function: initializeV2\n Arguments:\n pauser: \
+                     {:?}\n admin: {:?}",
+                    pauser,
+                    owner_addr
+                );
                 StakeTableV2::new(stake_table_v2_addr, &provider)
                     .initializeV2(pauser, owner_addr)
                     .calldata()
@@ -1337,7 +1360,10 @@ fn find_script_path() -> Result<PathBuf> {
             return Ok(path);
         }
     }
-    anyhow::bail!("Upgrade entrypoint script, multisig-upgrade-entrypoint, not found in any of the possible locations");
+    anyhow::bail!(
+        "Upgrade entrypoint script, multisig-upgrade-entrypoint, not found in any of the possible \
+         locations"
+    );
 }
 
 /// Deploy and initialize the Ops Timelock contract
@@ -1807,7 +1833,10 @@ mod tests {
             }
 
             if sepolia_rpc_url.is_empty() || multisig_admin.is_zero() {
-                panic!("ESPRESSO_SEQUENCER_L1_PROVIDER and ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS must be set in .env.deployer.rs.test");
+                panic!(
+                    "ESPRESSO_SEQUENCER_L1_PROVIDER and ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
+                     must be set in .env.deployer.rs.test"
+                );
             }
         }
 
@@ -2407,7 +2436,10 @@ mod tests {
             }
 
             if sepolia_rpc_url.is_empty() || multisig_admin.is_zero() {
-                panic!("ESPRESSO_SEQUENCER_L1_PROVIDER and ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS must be set in .env.deployer.rs.test");
+                panic!(
+                    "ESPRESSO_SEQUENCER_L1_PROVIDER and ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
+                     must be set in .env.deployer.rs.test"
+                );
             }
         }
 

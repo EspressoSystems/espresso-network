@@ -151,14 +151,24 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
                     let proposed_leaf = Leaf2::from_quorum_proposal(&proposal.data);
 
                     if let Some(ref comm) = payload_commitment {
-                        ensure!(proposal_payload_comm == *comm,
-                            error!("Quorum proposal has inconsistent payload commitment with DAC or VID."));
+                        ensure!(
+                            proposal_payload_comm == *comm,
+                            error!(
+                                "Quorum proposal has inconsistent payload commitment with DAC or \
+                                 VID."
+                            )
+                        );
                     } else {
                         payload_commitment = Some(proposal_payload_comm);
                     }
 
-                    ensure!(proposed_leaf.parent_commitment() == parent_commitment,
-                        warn!("Proposed leaf parent commitment does not match parent leaf payload commitment. Aborting vote."));
+                    ensure!(
+                        proposed_leaf.parent_commitment() == parent_commitment,
+                        warn!(
+                            "Proposed leaf parent commitment does not match parent leaf payload \
+                             commitment. Aborting vote."
+                        )
+                    );
 
                     let now = Instant::now();
                     // Update our persistent storage of the proposal. If we cannot store the proposal return
@@ -180,7 +190,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
                     let cert_payload_comm = &cert.data().payload_commit;
                     let next_epoch_cert_payload_comm = cert.data().next_epoch_payload_commit;
                     if let Some(ref comm) = payload_commitment {
-                        ensure!(cert_payload_comm == comm, error!("DAC has inconsistent payload commitment with quorum proposal or VID."));
+                        ensure!(
+                            cert_payload_comm == comm,
+                            error!(
+                                "DAC has inconsistent payload commitment with quorum proposal or \
+                                 VID."
+                            )
+                        );
                     } else {
                         payload_commitment = Some(*cert_payload_comm);
                     }
@@ -211,7 +227,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
                             next_epoch_payload_commitment = Some(*vid_payload_commitment);
                         }
                     } else if let Some(ref comm) = payload_commitment {
-                        ensure!(vid_payload_commitment == comm, error!("VID has inconsistent payload commitment with quorum proposal or DAC."));
+                        ensure!(
+                            vid_payload_commitment == comm,
+                            error!(
+                                "VID has inconsistent payload commitment with quorum proposal or \
+                                 DAC."
+                            )
+                        );
                     } else {
                         payload_commitment = Some(*vid_payload_commitment);
                     }
@@ -222,21 +244,24 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
 
         let Some(vid_share) = vid_share else {
             bail!(error!(
-                "We don't have the VID share for this view {}, but we should, because the vote dependencies have completed.",
+                "We don't have the VID share for this view {}, but we should, because the vote \
+                 dependencies have completed.",
                 self.view_number
             ));
         };
 
         let Some(leaf) = leaf else {
             bail!(error!(
-                "We don't have the leaf for this view {}, but we should, because the vote dependencies have completed.",
+                "We don't have the leaf for this view {}, but we should, because the vote \
+                 dependencies have completed.",
                 self.view_number
             ));
         };
 
         let Some(da_cert) = da_cert else {
             bail!(error!(
-                "We don't have the DA cert for this view {}, but we should, because the vote dependencies have completed.",
+                "We don't have the DA cert for this view {}, but we should, because the vote \
+                 dependencies have completed.",
                 self.view_number
             ));
         };
@@ -306,14 +331,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
                                     .payload_commitment(),
                             error!(
                                 "We have both epochs vid shares but the leaf's vid commit doesn't \
-                                match the old epoch vid share's commit. It should never happen."
+                                 match the old epoch vid share's commit. It should never happen."
                             )
                         );
                     },
                     Err(e) => {
                         bail!(warn!(
-                            "This is an epoch transition block, we are in both epochs \
-                             but we received only one VID share. Do not vote! Error: {e:?}"
+                            "This is an epoch transition block, we are in both epochs but we \
+                             received only one VID share. Do not vote! Error: {e:?}"
                         ));
                     },
                 }
@@ -497,7 +522,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 };
                 if event_view == view_number {
                     tracing::debug!(
-                        "Vote dependency {dependency_type:?} completed for view {view_number}, my id is {id}");
+                        "Vote dependency {dependency_type:?} completed for view {view_number}, my \
+                         id is {id}"
+                    );
                     return true;
                 }
                 false
@@ -709,7 +736,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 // Check that the signature is valid
                 ensure!(
                     sender.validate(&share.signature, payload_commitment.as_ref()),
-                    "VID share signature is invalid, sender: {}, signature: {:?}, payload_commitment: {:?}",
+                    "VID share signature is invalid, sender: {}, signature: {:?}, \
+                     payload_commitment: {:?}",
                     sender,
                     share.signature,
                     payload_commitment

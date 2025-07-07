@@ -490,7 +490,8 @@ pub mod tests {
 
             for payload_byte_len in payload_byte_lens {
                 println!(
-                    "recovery_threshold:: {recovery_threshold} num_storage_nodes: {num_storage_nodes} payload_byte_len: {payload_byte_len}"
+                    "recovery_threshold:: {recovery_threshold} num_storage_nodes: \
+                     {num_storage_nodes} payload_byte_len: {payload_byte_len}"
                 );
                 println!("weights: {weights:?}");
 

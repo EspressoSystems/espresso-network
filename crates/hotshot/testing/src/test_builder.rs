@@ -189,9 +189,12 @@ pub fn nonempty_block_threshold(threshold: (u64, u64)) -> TransactionValidator {
         }
 
         ensure!(
-          // i.e. num_nonempty_blocks / num_blocks >= threshold.0 / threshold.1
-          num_nonempty_blocks * threshold.1 >= threshold.0 * num_blocks,
-          "Failed to meet nonempty block threshold of {}/{}; got {num_nonempty_blocks} nonempty blocks out of a total of {num_blocks}", threshold.0, threshold.1
+            // i.e. num_nonempty_blocks / num_blocks >= threshold.0 / threshold.1
+            num_nonempty_blocks * threshold.1 >= threshold.0 * num_blocks,
+            "Failed to meet nonempty block threshold of {}/{}; got {num_nonempty_blocks} nonempty \
+             blocks out of a total of {num_blocks}",
+            threshold.0,
+            threshold.1
         );
 
         Ok(())
@@ -218,9 +221,12 @@ pub fn nonempty_block_limit(limit: (u64, u64)) -> TransactionValidator {
         }
 
         ensure!(
-          // i.e. num_nonempty_blocks / num_blocks <= limit.0 / limit.1
-          num_nonempty_blocks * limit.1 <= limit.0 * num_blocks,
-          "Exceeded nonempty block limit of {}/{}; got {num_nonempty_blocks} nonempty blocks out of a total of {num_blocks}", limit.0, limit.1
+            // i.e. num_nonempty_blocks / num_blocks <= limit.0 / limit.1
+            num_nonempty_blocks * limit.1 <= limit.0 * num_blocks,
+            "Exceeded nonempty block limit of {}/{}; got {num_nonempty_blocks} nonempty blocks \
+             out of a total of {num_blocks}",
+            limit.0,
+            limit.1
         );
 
         Ok(())
@@ -467,7 +473,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
     }
 
     pub fn set_num_nodes(self, num_nodes: u64, num_da_nodes: u64) -> Self {
-        assert!(num_da_nodes <= num_nodes, "Cannot build test with fewer DA than total nodes. You may have mixed up the arguments to the function");
+        assert!(
+            num_da_nodes <= num_nodes,
+            "Cannot build test with fewer DA than total nodes. You may have mixed up the \
+             arguments to the function"
+        );
 
         let (staked_nodes, da_nodes) =
             gen_node_lists::<TYPES>(num_nodes, num_da_nodes, &self.node_stakes);

@@ -667,8 +667,18 @@ impl<T: Queryable> ResourceManager<T> {
             .await
         {
             Ok(range) => {
-                ensure!(to - from <= limit, "range endpoint succeeded and returned {} results for request over limit; limit: {limit} from: {from} to: {to}", range.len());
-                ensure!(range.len() == to - from, "range endpoint returned wrong number of results; from: {from} to: {to} results: {}", range.len());
+                ensure!(
+                    to - from <= limit,
+                    "range endpoint succeeded and returned {} results for request over limit; \
+                     limit: {limit} from: {from} to: {to}",
+                    range.len()
+                );
+                ensure!(
+                    range.len() == to - from,
+                    "range endpoint returned wrong number of results; from: {from} to: {to} \
+                     results: {}",
+                    range.len()
+                );
                 for (i, obj) in range.iter().enumerate() {
                     ensure!(
                         obj.height() == from + i,
@@ -919,7 +929,8 @@ impl ResourceManager<Header> {
                 ensure!(
                     prev.height() + 1 == header.height(),
                     format!(
-                        "headers in window from {start} to {end} are not consecutive (prev = {}, curr = {})",
+                        "headers in window from {start} to {end} are not consecutive (prev = {}, \
+                         curr = {})",
                         prev.height(),
                         header.height(),
                     ),
@@ -927,7 +938,8 @@ impl ResourceManager<Header> {
                 ensure!(
                     prev.timestamp() <= header.timestamp(),
                     format!(
-                        "headers in window from {start} to {end} have decreasing timestamps (prev = {}, curr = {})",
+                        "headers in window from {start} to {end} have decreasing timestamps (prev \
+                         = {}, curr = {})",
                         prev.timestamp(),
                         header.timestamp(),
                     ),

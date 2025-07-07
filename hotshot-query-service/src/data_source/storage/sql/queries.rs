@@ -234,8 +234,9 @@ where
     }
 }
 
-const PAYLOAD_METADATA_COLUMNS: &str =
-    "h.height AS height, h.hash AS hash, h.payload_hash AS payload_hash, p.size AS payload_size, p.num_transactions AS num_transactions";
+const PAYLOAD_METADATA_COLUMNS: &str = "h.height AS height, h.hash AS hash, h.payload_hash AS \
+                                        payload_hash, p.size AS payload_size, p.num_transactions \
+                                        AS num_transactions";
 
 impl<'r, Types> FromRow<'r, <Db as Database>::Row> for PayloadMetadata<Types>
 where
@@ -266,7 +267,8 @@ where
     }
 }
 
-const VID_COMMON_COLUMNS: &str = "h.height AS height, h.hash AS block_hash, h.payload_hash AS payload_hash, v.common AS common_data";
+const VID_COMMON_COLUMNS: &str = "h.height AS height, h.hash AS block_hash, h.payload_hash AS \
+                                  payload_hash, v.common AS common_data";
 
 impl<'r, Types> FromRow<'r, <Db as Database>::Row> for VidCommonQueryData<Types>
 where

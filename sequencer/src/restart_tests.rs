@@ -897,6 +897,9 @@ impl<V: Versions> TestNetwork<V> {
             .blocks_per_epoch(blocks_per_epoch.unwrap())
             .epoch_start_block(epoch_start_block.unwrap())
             .multisig_pauser(signer.address())
+            .token_name("Espresso".to_string())
+            .token_symbol("ESP".to_string())
+            .initial_token_supply(U256::from(3590000000u64))
             .ops_timelock_delay(U256::from(0))
             .ops_timelock_admin(signer.address())
             .ops_timelock_proposers(vec![signer.address()])
@@ -927,7 +930,6 @@ impl<V: Versions> TestNetwork<V> {
             l1_url.clone(),
             &deployer,
             stake_table_address,
-            token_addr,
             staking_priv_keys,
             delegation_config,
         )
@@ -1176,7 +1178,8 @@ impl<V: Versions> TestNetwork<V> {
         } else {
             assert!(
                 !assert_progress,
-                "test requested that progress continue after shutdown, but also requested that too many nodes be shut down: {}/{} DA, {}/{} regular",
+                "test requested that progress continue after shutdown, but also requested that \
+                 too many nodes be shut down: {}/{} DA, {}/{} regular",
                 da_nodes.len(),
                 self.da_nodes.len(),
                 regular_nodes.len(),
@@ -1339,7 +1342,11 @@ impl PortPicker {
             if self.allocated.insert(port) {
                 break port;
             }
-            tracing::warn!(port, "picked port which is already allocated, will try again. If this error persists, try reducing the number of ports being used.");
+            tracing::warn!(
+                port,
+                "picked port which is already allocated, will try again. If this error persists, \
+                 try reducing the number of ports being used."
+            );
         }
     }
 }
