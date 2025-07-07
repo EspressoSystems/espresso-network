@@ -859,7 +859,10 @@ impl ValidatedState {
                 find_validator_info(instance, &mut validated_state, parent_leaf, view_number)
                     .await?;
 
-            let block_reward = instance.block_reward().await;
+            let block_reward = instance
+                .block_reward()
+                .await
+                .context("block reward is none")?;
             let reward_distributor = RewardDistributor::new(validator, block_reward);
             // apply rewards
             reward_distributor

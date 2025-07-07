@@ -567,7 +567,7 @@ pub struct EpochCommittees {
     /// Randomized committees, filled when we receive the DrbResult
     randomized_committees: BTreeMap<Epoch, RandomizedCommittee<StakeTableEntry<PubKey>>>,
     first_epoch: Option<Epoch>,
-    block_reward: RewardAmount,
+    block_reward: Option<RewardAmount>,
     fetcher: Arc<Fetcher>,
 }
 
@@ -1380,7 +1380,7 @@ impl EpochCommittees {
             .cloned()
     }
 
-    pub fn block_reward(&self) -> RewardAmount {
+    pub fn block_reward(&self) -> Option<RewardAmount> {
         self.block_reward
     }
 
@@ -1390,7 +1390,7 @@ impl EpochCommittees {
         // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
         committee_members: Vec<PeerConfig<SeqTypes>>,
         da_members: Vec<PeerConfig<SeqTypes>>,
-        block_reward: RewardAmount,
+        block_reward: Option<RewardAmount>,
         fetcher: Fetcher,
     ) -> Self {
         // For each member, get the stake table entry
@@ -1467,7 +1467,7 @@ impl EpochCommittees {
         match self.fetcher.fetch_block_reward().await {
             Ok(block_reward) => {
                 tracing::info!("Fetched block reward: {block_reward}");
-                self.block_reward = block_reward;
+                self.block_reward = Some(block_reward);
             },
             Err(err) => {
                 tracing::warn!(
@@ -1749,7 +1749,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         // but it is updated on the first call to `add_epoch_root()`
         {
             let membership_reader = membership.upgradable_read().await;
-            if membership_reader.block_reward.0.is_zero() {
+            if membership_reader.block_reward.is_none() {
                 tracing::warn!(%epoch,
                     "Block reward is zero. attempting to fetch it from L1",
 
@@ -1758,7 +1758,7 @@ impl Membership<SeqTypes> for EpochCommittees {
                     tracing::error!(?epoch, ?err, "failed to fetch block_reward");
                 })?;
                 let mut writer = RwLockUpgradableReadGuard::upgrade(membership_reader).await;
-                writer.block_reward = block_reward;
+                writer.block_reward = Some(block_reward);
             };
         }
 

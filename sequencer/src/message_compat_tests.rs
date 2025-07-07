@@ -72,7 +72,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
         Arc::new(RwLock::new(EpochCommittees::new_stake(
             committee.clone(),
             committee,
-            RewardAmount(U256::ZERO),
+            None,
             Fetcher::mock(),
         ))),
         10,

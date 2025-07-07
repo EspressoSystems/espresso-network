@@ -225,7 +225,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
         self.as_ref().get_validators(epoch).await
     }
 
-    async fn get_block_reward(&self) -> anyhow::Result<RewardAmount> {
+    async fn get_block_reward(&self) -> anyhow::Result<Option<RewardAmount>> {
         self.as_ref().get_block_reward().await
     }
 }
@@ -273,7 +273,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         })
     }
 
-    async fn get_block_reward(&self) -> anyhow::Result<RewardAmount> {
+    async fn get_block_reward(&self) -> anyhow::Result<Option<RewardAmount>> {
         let coordinator = self
             .consensus()
             .await
@@ -3232,7 +3232,7 @@ mod test {
 
         let node_state = network.server.node_state();
         let membership = node_state.coordinator.membership().read().await;
-        let block_reward = membership.block_reward();
+        let block_reward = membership.block_reward().expect("block reward is none");
         drop(membership);
 
         // The validator gets all the block reward so we can calculate the expected amount
@@ -3293,7 +3293,7 @@ mod test {
         let network = TestNetwork::new(config, PosVersion::new()).await;
         let node_state = network.server.node_state();
         let membership = node_state.coordinator.membership().read().await;
-        let block_reward = membership.block_reward();
+        let block_reward = membership.block_reward().expect("block reward is none");
         drop(membership);
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
@@ -3604,7 +3604,7 @@ mod test {
         let coordinator = node_state.coordinator;
 
         let membership = coordinator.membership().read().await;
-        let block_reward = membership.block_reward();
+        let block_reward = membership.block_reward().expect("block reward is none");
 
         drop(membership);
 

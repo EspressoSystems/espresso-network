@@ -68,7 +68,7 @@ pub struct NodeState {
 }
 
 impl NodeState {
-    pub async fn block_reward(&self) -> RewardAmount {
+    pub async fn block_reward(&self) -> Option<RewardAmount> {
         let coordinator = self.coordinator.clone();
         let membership = coordinator.membership().read().await;
         membership.block_reward()
@@ -152,7 +152,7 @@ impl NodeState {
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
             vec![],
-            RewardAmount(U256::ZERO),
+            None,
             Fetcher::mock(),
         )));
 
@@ -184,7 +184,7 @@ impl NodeState {
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
             vec![],
-            RewardAmount(U256::ZERO),
+            None,
             Fetcher::mock(),
         )));
         let storage = TestStorage::default();
@@ -214,7 +214,7 @@ impl NodeState {
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
             vec![],
-            RewardAmount(U256::ZERO),
+            None,
             Fetcher::mock(),
         )));
 
@@ -299,7 +299,7 @@ impl Default for NodeState {
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
             vec![],
-            RewardAmount(U256::ZERO),
+            None,
             Fetcher::mock(),
         )));
         let storage = TestStorage::default();
