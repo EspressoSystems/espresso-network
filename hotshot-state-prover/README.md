@@ -1,5 +1,7 @@
 # HotShot Light Client and State Prover
 
+## [Runbook](RUNBOOK.md)
+
 ## Overview
 
 ### Light Client
