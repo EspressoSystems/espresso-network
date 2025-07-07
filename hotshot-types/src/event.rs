@@ -203,6 +203,31 @@ pub enum EventType<TYPES: NodeType> {
     },
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(bound(deserialize = "TYPES: NodeType"))]
+pub struct SimplifiedLeafInfo<TYPES: NodeType> {
+    pub block_payload: Option<TYPES::BlockPayload>,
+    pub block_header: TYPES::BlockHeader,
+}
+
+impl<TYPES: NodeType> SimplifiedLeafInfo<TYPES> {
+    /// Constructor.
+    pub fn from_leaf(leaf: &Leaf2<TYPES>) -> Self {
+        Self {
+            block_payload: leaf.block_payload().clone(),
+            block_header: leaf.block_header().clone(),
+        }
+    }
+
+    /// Convert a leaf chain into a simplified leaf chain.
+    pub fn from_leaf_chain(leaf_chain: &[LeafInfo<TYPES>]) -> Vec<Self> {
+        leaf_chain
+            .iter()
+            .map(|l| Self::from_leaf(&l.leaf))
+            .collect()
+    }
+}
+
 /// The type and contents of a status event emitted by a `HotShot` instance
 ///
 /// This enum does not include metadata shared among all variants, such as the stage and view
@@ -221,6 +246,7 @@ pub enum LegacyEventType<TYPES: NodeType> {
     /// A new decision event was issued
     Decide {
         latest_decide_view_number: TYPES::View,
+        leaf_chain: Vec<SimplifiedLeafInfo<TYPES>>,
     },
     /// A replica task was canceled by a timeout interrupt
     ReplicaViewTimeout {
@@ -283,6 +309,7 @@ impl<TYPES: NodeType> EventType<TYPES> {
             EventType::Error { error } => LegacyEventType::Error { error },
             EventType::Decide { leaf_chain, .. } => LegacyEventType::Decide {
                 latest_decide_view_number: leaf_chain[0].leaf.view_number(),
+                leaf_chain: SimplifiedLeafInfo::from_leaf_chain(leaf_chain.as_ref()),
             },
             EventType::ReplicaViewTimeout { view_number } => {
                 LegacyEventType::ReplicaViewTimeout { view_number }

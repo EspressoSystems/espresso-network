@@ -1245,6 +1245,7 @@ pub async fn run_non_permissioned_standalone_builder_service<
             // decide event
             LegacyEventType::Decide {
                 latest_decide_view_number,
+                ..
             } => {
                 handle_decide_event(&decide_sender, latest_decide_view_number).await;
             }

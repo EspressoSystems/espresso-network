@@ -13,7 +13,7 @@ use hotshot::traits::BlockPayload;
 use hotshot_builder_api::v0_1::builder::TransactionStatus;
 use hotshot_types::{
     data::{DaProposal2, QuorumProposalWrapper},
-    event::LeafInfo,
+    event::{LeafInfo, SimplifiedLeafInfo},
     traits::{
         block_contents::BlockHeader,
         node_implementation::{ConsensusTime, NodeType},
@@ -128,19 +128,20 @@ where
     #[tracing::instrument(skip_all)]
     pub async fn handle_decide(
         &self,
-        leaf_chain: Arc<Vec<LeafInfo<Types>>>,
+        //leaf_chain: Arc<Vec<LeafInfo<Types>>>,
+        latest_decide_view_number: Types::View,
+        leaf_chain: &[SimplifiedLeafInfo<Types>],
     ) -> BuilderStateMap<Types> {
-        let latest_decide_view_num = leaf_chain[0].leaf.view_number();
+        //let latest_decide_view_num = leaf_chain[0].leaf.view_number();
 
         for leaf_info in leaf_chain.iter() {
-            if let Some(payload) = leaf_info.leaf.block_payload() {
-                for commitment in
-                    payload.transaction_commitments(leaf_info.leaf.block_header().metadata())
+            if let Some(payload) = &leaf_info.block_payload {
+                for commitment in payload.transaction_commitments(leaf_info.block_header.metadata())
                 {
                     self.update_txn_status(
                         &commitment,
                         TransactionStatus::Sequenced {
-                            leaf: leaf_info.leaf.block_header().block_number(),
+                            leaf: leaf_info.block_header.block_number(),
                         },
                     );
                 }
@@ -152,7 +153,7 @@ where
             let highest_active_view_num = builder_states_write_guard
                 .highest_view()
                 .unwrap_or(Types::View::genesis());
-            let cutoff = Types::View::new(*latest_decide_view_num.min(highest_active_view_num));
+            let cutoff = Types::View::new(*latest_decide_view_number.min(highest_active_view_num));
             tracing::info!(
                 lowest_view = ?builder_states_write_guard.lowest_view(),
                 ?cutoff,

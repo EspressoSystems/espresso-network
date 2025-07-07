@@ -15,7 +15,7 @@ use futures::{
     stream::{FuturesOrdered, StreamExt},
     TryStreamExt,
 };
-use hotshot::types::Event;
+use hotshot::types::{Event, LegacyEvent};
 use hotshot_builder_api::{
     v0_2::builder::TransactionStatus,
     v0_99::{
@@ -26,7 +26,7 @@ use hotshot_builder_api::{
 use hotshot_types::bundle::Bundle;
 use hotshot_types::traits::block_contents::{BuilderFee, Transaction};
 use hotshot_types::{
-    event::EventType,
+    event::{EventType, LegacyEventType},
     traits::{
         node_implementation::{ConsensusTime, NodeType},
         signature_key::{BuilderSignatureKey, SignatureKey},
@@ -163,7 +163,7 @@ where
     /// Returns a handle for the spawned task.
     pub fn start_event_loop(
         &self,
-        event_stream: impl Stream<Item = Event<Types>> + Unpin + Send + 'static,
+        event_stream: impl Stream<Item = LegacyEvent<Types>> + Unpin + Send + 'static,
     ) -> JoinHandle<anyhow::Result<()>> {
         spawn(Self::event_loop(
             Arc::clone(&self.coordinator),
@@ -177,7 +177,7 @@ where
     async fn event_loop(
         coordinator: Arc<BuilderStateCoordinator<Types>>,
         hooks: Arc<Hooks>,
-        mut event_stream: impl Stream<Item = Event<Types>> + Unpin + Send + 'static,
+        mut event_stream: impl Stream<Item = LegacyEvent<Types>> + Unpin + Send + 'static,
     ) -> anyhow::Result<()> {
         loop {
             let Some(event) = event_stream.next().await else {
@@ -187,10 +187,10 @@ where
             hooks.handle_hotshot_event(&event).await;
 
             match event.event {
-                EventType::Error { error } => {
+                LegacyEventType::Error { error } => {
                     tracing::error!("Error event in HotShot: {:?}", error);
                 }
-                EventType::Transactions { transactions } => {
+                LegacyEventType::Transactions { transactions } => {
                     let hooks = Arc::clone(&hooks);
                     let coordinator = Arc::clone(&coordinator);
                     spawn(async move {
@@ -209,15 +209,22 @@ where
                             .await;
                     });
                 }
-                EventType::Decide { leaf_chain, .. } => {
+                LegacyEventType::Decide {
+                    latest_decide_view_number,
+                    leaf_chain,
+                } => {
                     let coordinator = Arc::clone(&coordinator);
-                    spawn(async move { coordinator.handle_decide(leaf_chain).await });
+                    spawn(async move {
+                        coordinator
+                            .handle_decide(latest_decide_view_number, &leaf_chain)
+                            .await
+                    });
                 }
-                EventType::DaProposal { proposal, .. } => {
+                LegacyEventType::DaProposal { proposal, .. } => {
                     let coordinator = Arc::clone(&coordinator);
                     spawn(async move { coordinator.handle_da_proposal(proposal.data).await });
                 }
-                EventType::QuorumProposal { proposal, .. } => {
+                LegacyEventType::QuorumProposal { proposal, .. } => {
                     let coordinator = Arc::clone(&coordinator);
                     spawn(async move { coordinator.handle_quorum_proposal(proposal.data).await });
                 }
