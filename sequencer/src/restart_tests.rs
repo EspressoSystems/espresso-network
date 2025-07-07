@@ -85,7 +85,13 @@ type MockSequencerVersions = SequencerVersions<EpochVersion, V0_0>;
 async fn test_restart_helper(network: (usize, usize), restart: (usize, usize), cdn: bool) {
     setup_test();
 
-    let mut network = TestNetwork::<MockSequencerVersions>::new(network.0, network.1, cdn).await;
+    let mut network = TestNetwork::<MockSequencerVersions>::new(
+        network.0,
+        network.1,
+        cdn,
+        "../data/genesis/restart-test.toml",
+    )
+    .await;
 
     // Let the network get going.
     network.check_progress().await;
@@ -100,8 +106,13 @@ async fn slow_test_restart_after_upgrade_before_first_epoch() {
     setup_test();
 
     let mut network =
-        TestNetwork::<SequencerVersions<FeeVersion, DrbAndHeaderUpgradeVersion>>::new(3, 5, true)
-            .await;
+        TestNetwork::<SequencerVersions<FeeVersion, DrbAndHeaderUpgradeVersion>>::new(
+            3,
+            5,
+            true,
+            "../data/genesis/restart-upgrade-test.toml",
+        )
+        .await;
 
     network.restart_helper(0..3, 0..5, Some(42), false).await;
 
@@ -219,7 +230,9 @@ async fn slow_test_restart_all_da_without_cdn() {
 async fn slow_test_restart_staggered() {
     setup_test();
 
-    let mut network = TestNetwork::<MockSequencerVersions>::new(4, 6, false).await;
+    let mut network =
+        TestNetwork::<MockSequencerVersions>::new(4, 6, false, "../data/genesis/restart-test.toml")
+            .await;
 
     // Check that the builder works at the beginning.
     network.check_builder().await;
@@ -689,7 +702,6 @@ type AnvilFillProvider = AnvilProvider<
 struct TestNetwork<V: Versions> {
     da_nodes: Vec<TestNode<api::sql::DataSource, V>>,
     regular_nodes: Vec<TestNode<api::sql::DataSource, V>>,
-    tmp: TempDir,
     builder_port: u16,
     orchestrator_task: Option<JoinHandle<()>>,
     broker_task: Option<JoinHandle<()>>,
@@ -713,35 +725,17 @@ impl<V: Versions> Drop for TestNetwork<V> {
 }
 
 impl<V: Versions> TestNetwork<V> {
-    async fn new(da_nodes: usize, regular_nodes: usize, cdn: bool) -> Self {
+    async fn new(
+        da_nodes: usize,
+        regular_nodes: usize,
+        cdn: bool,
+        genesis_file_path: &str,
+    ) -> Self {
         let mut ports = PortPicker::default();
 
-        let tmp = TempDir::new().unwrap();
-        let genesis_file_path = tmp.path().join("genesis.toml");
+        let genesis_file_path = std::path::Path::new(genesis_file_path);
 
-        let mut genesis = Genesis {
-            chain_config: Default::default(),
-            // TODO we apparently have two `capacity` configurations
-            stake_table: StakeTableConfig {
-                capacity: STAKE_TABLE_CAPACITY_FOR_TEST,
-            },
-            l1_finalized: L1Finalized::Number { number: 20 },
-            header: Default::default(),
-            upgrades: Default::default(),
-            base_version: Version { major: 0, minor: 3 },
-            upgrade_version: Version { major: 0, minor: 3 },
-            epoch_height: Some(15),
-            drb_difficulty: None,
-            epoch_start_block: Some(1),
-            // TODO we apparently have two `capacity` configurations
-            stake_table_capacity: Some(STAKE_TABLE_CAPACITY_FOR_TEST),
-            drb_upgrade_difficulty: None,
-            // Start with a funded account, so we can test catchup after restart.
-            accounts: [(builder_account(), 1000000000.into())]
-                .into_iter()
-                .collect(),
-            genesis_version: Version { major: 0, minor: 1 },
-        };
+        let mut genesis = Genesis::from_file(genesis_file_path).unwrap();
 
         let node_params = (0..da_nodes + regular_nodes)
             .map(|i| NodeParams::new(&mut ports, i as u64, i < da_nodes))
@@ -755,6 +749,7 @@ impl<V: Versions> TestNetwork<V> {
             builder_port,
         ));
 
+        let tmp = TempDir::new().unwrap();
         let cdn_dir = tmp.path().join("cdn");
         let cdn_port = ports.pick();
         let broker_task = if cdn {
@@ -806,25 +801,12 @@ impl<V: Versions> TestNetwork<V> {
                     .map(|i| TestNode::<_, V>::new(network_params, &node_params[i + da_nodes])),
             )
             .await,
-            tmp,
             builder_port,
             orchestrator_task,
             broker_task,
             marshal_task,
             anvil,
         };
-
-        // Deploy stake contracts and delegate.
-        let stake_table_address = network.deploy(&genesis).await.unwrap();
-
-        // Add contract address to `ChainConfig`.
-        let chain_config = ChainConfig {
-            base_fee: 1.into(),
-            stake_table_contract: Some(stake_table_address),
-            ..Default::default()
-        };
-        genesis.chain_config = chain_config;
-        genesis.to_file(&genesis_file_path).unwrap();
 
         let finalized = l1_client
             .get_block(alloy::eips::BlockId::finalized())
