@@ -658,48 +658,39 @@
 <a href=#658 id=658 data-nosnippet>658</a>                    <span class="kw">continue</span>;
 <a href=#659 id=659 data-nosnippet>659</a>                }
 <a href=#660 id=660 data-nosnippet>660</a>
-<a href=#661 id=661 data-nosnippet>661</a>                <span class="comment">// verify the message signature and the fee_signature
-<a href=#662 id=662 data-nosnippet>662</a>                </span><span class="kw">if </span>!header_input.validate_signature(block_info.offered_fee, <span class="kw-2">&amp;</span>block_data.metadata) {
-<a href=#663 id=663 data-nosnippet>663</a>                    <span class="macro">tracing::warn!</span>(
-<a href=#664 id=664 data-nosnippet>664</a>                        <span class="string">"Failed to verify available block header input data response message \
-<a href=#665 id=665 data-nosnippet>665</a>                         signature"
-<a href=#666 id=666 data-nosnippet>666</a>                    </span>);
-<a href=#667 id=667 data-nosnippet>667</a>                    <span class="kw">continue</span>;
-<a href=#668 id=668 data-nosnippet>668</a>                }
-<a href=#669 id=669 data-nosnippet>669</a>
-<a href=#670 id=670 data-nosnippet>670</a>                <span class="kw">let </span>fee = BuilderFee {
-<a href=#671 id=671 data-nosnippet>671</a>                    fee_amount: block_info.offered_fee,
-<a href=#672 id=672 data-nosnippet>672</a>                    fee_account: header_input.sender,
-<a href=#673 id=673 data-nosnippet>673</a>                    fee_signature: header_input.fee_signature,
-<a href=#674 id=674 data-nosnippet>674</a>                };
-<a href=#675 id=675 data-nosnippet>675</a>
-<a href=#676 id=676 data-nosnippet>676</a>                BuilderResponse {
-<a href=#677 id=677 data-nosnippet>677</a>                    fee,
-<a href=#678 id=678 data-nosnippet>678</a>                    block_payload: block_data.block_payload,
-<a href=#679 id=679 data-nosnippet>679</a>                    metadata: block_data.metadata,
-<a href=#680 id=680 data-nosnippet>680</a>                }
-<a href=#681 id=681 data-nosnippet>681</a>            };
-<a href=#682 id=682 data-nosnippet>682</a>
-<a href=#683 id=683 data-nosnippet>683</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(response);
-<a href=#684 id=684 data-nosnippet>684</a>        }
+<a href=#661 id=661 data-nosnippet>661</a>                <span class="kw">let </span>fee = BuilderFee {
+<a href=#662 id=662 data-nosnippet>662</a>                    fee_amount: block_info.offered_fee,
+<a href=#663 id=663 data-nosnippet>663</a>                    fee_account: header_input.sender,
+<a href=#664 id=664 data-nosnippet>664</a>                    fee_signature: header_input.fee_signature,
+<a href=#665 id=665 data-nosnippet>665</a>                };
+<a href=#666 id=666 data-nosnippet>666</a>
+<a href=#667 id=667 data-nosnippet>667</a>                BuilderResponse {
+<a href=#668 id=668 data-nosnippet>668</a>                    fee,
+<a href=#669 id=669 data-nosnippet>669</a>                    block_payload: block_data.block_payload,
+<a href=#670 id=670 data-nosnippet>670</a>                    metadata: block_data.metadata,
+<a href=#671 id=671 data-nosnippet>671</a>                }
+<a href=#672 id=672 data-nosnippet>672</a>            };
+<a href=#673 id=673 data-nosnippet>673</a>
+<a href=#674 id=674 data-nosnippet>674</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(response);
+<a href=#675 id=675 data-nosnippet>675</a>        }
+<a href=#676 id=676 data-nosnippet>676</a>
+<a href=#677 id=677 data-nosnippet>677</a>        <span class="macro">bail!</span>(<span class="string">"Couldn't claim a block from any of the builders"</span>);
+<a href=#678 id=678 data-nosnippet>678</a>    }
+<a href=#679 id=679 data-nosnippet>679</a>}
+<a href=#680 id=680 data-nosnippet>680</a>
+<a href=#681 id=681 data-nosnippet>681</a><span class="attr">#[async_trait]
+<a href=#682 id=682 data-nosnippet>682</a></span><span class="doccomment">/// task state implementation for Transactions Task
+<a href=#683 id=683 data-nosnippet>683</a></span><span class="kw">impl</span>&lt;TYPES: NodeType, V: Versions&gt; TaskState <span class="kw">for </span>TransactionTaskState&lt;TYPES, V&gt; {
+<a href=#684 id=684 data-nosnippet>684</a>    <span class="kw">type </span>Event = HotShotEvent&lt;TYPES&gt;;
 <a href=#685 id=685 data-nosnippet>685</a>
-<a href=#686 id=686 data-nosnippet>686</a>        <span class="macro">bail!</span>(<span class="string">"Couldn't claim a block from any of the builders"</span>);
-<a href=#687 id=687 data-nosnippet>687</a>    }
-<a href=#688 id=688 data-nosnippet>688</a>}
-<a href=#689 id=689 data-nosnippet>689</a>
-<a href=#690 id=690 data-nosnippet>690</a><span class="attr">#[async_trait]
-<a href=#691 id=691 data-nosnippet>691</a></span><span class="doccomment">/// task state implementation for Transactions Task
-<a href=#692 id=692 data-nosnippet>692</a></span><span class="kw">impl</span>&lt;TYPES: NodeType, V: Versions&gt; TaskState <span class="kw">for </span>TransactionTaskState&lt;TYPES, V&gt; {
-<a href=#693 id=693 data-nosnippet>693</a>    <span class="kw">type </span>Event = HotShotEvent&lt;TYPES&gt;;
+<a href=#686 id=686 data-nosnippet>686</a>    <span class="kw">async fn </span>handle_event(
+<a href=#687 id=687 data-nosnippet>687</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#688 id=688 data-nosnippet>688</a>        event: Arc&lt;<span class="self">Self</span>::Event&gt;,
+<a href=#689 id=689 data-nosnippet>689</a>        sender: <span class="kw-2">&amp;</span>Sender&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
+<a href=#690 id=690 data-nosnippet>690</a>        _receiver: <span class="kw-2">&amp;</span>Receiver&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
+<a href=#691 id=691 data-nosnippet>691</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#692 id=692 data-nosnippet>692</a>        <span class="self">self</span>.handle(event, sender.clone()).<span class="kw">await
+<a href=#693 id=693 data-nosnippet>693</a>    </span>}
 <a href=#694 id=694 data-nosnippet>694</a>
-<a href=#695 id=695 data-nosnippet>695</a>    <span class="kw">async fn </span>handle_event(
-<a href=#696 id=696 data-nosnippet>696</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#697 id=697 data-nosnippet>697</a>        event: Arc&lt;<span class="self">Self</span>::Event&gt;,
-<a href=#698 id=698 data-nosnippet>698</a>        sender: <span class="kw-2">&amp;</span>Sender&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
-<a href=#699 id=699 data-nosnippet>699</a>        _receiver: <span class="kw-2">&amp;</span>Receiver&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
-<a href=#700 id=700 data-nosnippet>700</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#701 id=701 data-nosnippet>701</a>        <span class="self">self</span>.handle(event, sender.clone()).<span class="kw">await
-<a href=#702 id=702 data-nosnippet>702</a>    </span>}
-<a href=#703 id=703 data-nosnippet>703</a>
-<a href=#704 id=704 data-nosnippet>704</a>    <span class="kw">fn </span>cancel_subtasks(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {}
-<a href=#705 id=705 data-nosnippet>705</a>}</code></pre></div></section></main></body></html>
+<a href=#695 id=695 data-nosnippet>695</a>    <span class="kw">fn </span>cancel_subtasks(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {}
+<a href=#696 id=696 data-nosnippet>696</a>}</code></pre></div></section></main></body></html>
