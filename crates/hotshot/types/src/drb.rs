@@ -66,7 +66,7 @@ pub fn drb_difficulty_selector<TYPES: NodeType, V: Versions>(
 pub const DIFFICULTY_LEVEL: u64 = 10;
 
 /// Interval at which to store the results
-pub const DRB_CHECKPOINT_INTERVAL: u64 = 1000000;
+pub const DRB_CHECKPOINT_INTERVAL: u64 = 1_000_000_000;
 
 /// DRB seed input for epoch 1 and 2.
 pub const INITIAL_DRB_SEED_INPUT: [u8; 32] = [0; 32];
