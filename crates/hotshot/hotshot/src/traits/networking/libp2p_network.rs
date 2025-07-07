@@ -367,7 +367,8 @@ pub fn derive_libp2p_multiaddr(addr: &String) -> anyhow::Result<Multiaddr> {
             // If it did, warn the user
             if failed {
                 warn!(
-                    "Failed to resolve domain name {host}, assuming it has not yet been provisioned"
+                    "Failed to resolve domain name {host}, assuming it has not yet been \
+                     provisioned"
                 );
             }
 
@@ -703,7 +704,10 @@ impl<T: NodeType> Libp2pNetwork<T> {
             },
             DirectResponse(_msg, _) => {},
             NetworkEvent::IsBootstrapped => {
-                error!("handle_recvd_events received `NetworkEvent::IsBootstrapped`, which should be impossible.");
+                error!(
+                    "handle_recvd_events received `NetworkEvent::IsBootstrapped`, which should be \
+                     impossible."
+                );
             },
             NetworkEvent::ConnectedPeersUpdate(_) => {},
         }

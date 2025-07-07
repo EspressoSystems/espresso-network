@@ -86,11 +86,6 @@ Options:
 
             [env: L1_PROVIDER=]
 
-        --token-address <TOKEN_ADDRESS>
-            Deployed ESP token contract address
-
-            [env: ESP_TOKEN_ADDRESS=]
-
         --stake-table-address <STAKE_TABLE_ADDRESS>
             Deployed stake table contract address
 

@@ -159,9 +159,6 @@ gen-bindings:
       --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:0xffffffffffffffffffffffffffffffffffffffff \
       --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:0xffffffffffffffffffffffffffffffffffffffff
 
-    cargo fmt --all
-    cargo sort -g -w
-
     just export-contract-abis
     just gen-go-bindings
 

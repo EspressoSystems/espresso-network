@@ -111,7 +111,10 @@ impl<TYPES: NodeType> OrchestratorState<TYPES> {
         let mut fixed_stake_table = false;
 
         if network_config.config.known_nodes_with_stake.is_empty() {
-            println!("No nodes were loaded from the config file. Nodes will be allowed to register dynamically.");
+            println!(
+                "No nodes were loaded from the config file. Nodes will be allowed to register \
+                 dynamically."
+            );
         } else {
             println!("Initializing orchestrator with fixed stake table.");
             peer_pub_ready = true;
@@ -259,9 +262,9 @@ where
         if !self.accepting_new_keys {
             return Err(ServerError {
                 status: tide_disco::StatusCode::FORBIDDEN,
-                message:
-                    "Network has been started manually, and is no longer registering new keys."
-                        .to_string(),
+                message: "Network has been started manually, and is no longer registering new \
+                          keys."
+                    .to_string(),
             });
         }
 
@@ -355,8 +358,12 @@ where
         if node_config.da != da_requested {
             return Err(ServerError {
                 status: tide_disco::StatusCode::BAD_REQUEST,
-                message: format!("Mismatch in DA status in registration for node {}. DA requested: {}, expected: {}", node_index, da_requested, node_config.da),
-          });
+                message: format!(
+                    "Mismatch in DA status in registration for node {}. DA requested: {}, \
+                     expected: {}",
+                    node_index, da_requested, node_config.da
+                ),
+            });
         }
 
         let added_to_da = node_config.da;
@@ -536,9 +543,11 @@ where
     fn post_manual_start(&mut self, password_bytes: Vec<u8>) -> Result<(), ServerError> {
         if !self.manual_start_allowed {
             return Err(ServerError {
-            status: tide_disco::StatusCode::FORBIDDEN,
-            message: "Configs have already been distributed to nodes, and the network can no longer be started manually.".to_string(),
-          });
+                status: tide_disco::StatusCode::FORBIDDEN,
+                message: "Configs have already been distributed to nodes, and the network can no \
+                          longer be started manually."
+                    .to_string(),
+            });
         }
 
         let password = String::from_utf8(password_bytes)
@@ -564,7 +573,11 @@ where
         } else {
             return Err(ServerError {
                 status: tide_disco::StatusCode::FORBIDDEN,
-                message: format!("We cannot manually start the network, because we only have {registered_nodes_with_stake} nodes with stake registered, with {registered_da_nodes} DA nodes.")
+                message: format!(
+                    "We cannot manually start the network, because we only have \
+                     {registered_nodes_with_stake} nodes with stake registered, with \
+                     {registered_da_nodes} DA nodes."
+                ),
             });
         }
 
@@ -832,7 +845,11 @@ where
     let env_password = std::env::var("ORCHESTRATOR_MANUAL_START_PASSWORD");
 
     if env_password.is_ok() {
-        tracing::warn!("Took orchestrator manual start password from the environment variable: ORCHESTRATOR_MANUAL_START_PASSWORD={:?}", env_password);
+        tracing::warn!(
+            "Took orchestrator manual start password from the environment variable: \
+             ORCHESTRATOR_MANUAL_START_PASSWORD={:?}",
+            env_password
+        );
         network_config.manual_start_password = env_password.ok();
     }
 

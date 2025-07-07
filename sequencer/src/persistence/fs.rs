@@ -526,7 +526,10 @@ impl Inner {
             return Ok(anchor);
         }
 
-        tracing::warn!("Failed to find an anchor leaf in `Leaf2` storage. Checking legacy `Leaf` storage. This is very likely to fail.");
+        tracing::warn!(
+            "Failed to find an anchor leaf in `Leaf2` storage. Checking legacy `Leaf` storage. \
+             This is very likely to fail."
+        );
         if self.legacy_anchor_leaf_path().is_file() {
             // We may have an old version of storage, where there is just a single file for the
             // anchor leaf. Read it and return the contents.

@@ -115,7 +115,13 @@ async fn verify_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
                 .await
                 .context(warn!("DRB result not found"))?;
 
-            ensure!(proposal_result == computed_result, warn!("Our calculated DRB result is {computed_result:?}, which does not match the proposed DRB result of {proposal_result:?}"));
+            ensure!(
+                proposal_result == computed_result,
+                warn!(
+                    "Our calculated DRB result is {computed_result:?}, which does not match the \
+                     proposed DRB result of {proposal_result:?}"
+                )
+            );
         }
 
         Ok(())

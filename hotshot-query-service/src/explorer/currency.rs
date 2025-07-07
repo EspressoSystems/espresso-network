@@ -286,7 +286,8 @@ mod test {
                 let want = *json;
                 assert_eq!(
                     have, want,
-                    "encoded json for {expected} does not match expectation: have: {have}, want: {want}"
+                    "encoded json for {expected} does not match expectation: have: {have}, want: \
+                     {want}"
                 );
             }
         }

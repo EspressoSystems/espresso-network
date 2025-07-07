@@ -56,7 +56,10 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
 
         // Timeout if tests take too long.
         if start.elapsed() > requirements.global_timeout {
-            panic!("Timeout waiting for block height, transaction count, and light client updates to increase.");
+            panic!(
+                "Timeout waiting for block height, transaction count, and light client updates to \
+                 increase."
+            );
         }
 
         // test that we progress EXPECTED_BLOCK_HEIGHT blocks from where we started

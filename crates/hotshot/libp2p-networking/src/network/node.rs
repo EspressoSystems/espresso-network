@@ -545,11 +545,13 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             } => {
                 if num_established > ESTABLISHED_LIMIT {
                     error!(
-                        "Num concurrent connections to a single peer exceeding {ESTABLISHED_LIMIT:?} at {num_established:?}!"
+                        "Num concurrent connections to a single peer exceeding \
+                         {ESTABLISHED_LIMIT:?} at {num_established:?}!"
                     );
                 } else {
                     debug!(
-                        "Connection established with {peer_id:?} at {endpoint:?} with {concurrent_dial_errors:?} concurrent dial errors"
+                        "Connection established with {peer_id:?} at {endpoint:?} with \
+                         {concurrent_dial_errors:?} concurrent dial errors"
                     );
                 }
 
@@ -567,7 +569,8 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             } => {
                 if num_established > ESTABLISHED_LIMIT_UNWR {
                     error!(
-                        "Num concurrent connections to a single peer exceeding {ESTABLISHED_LIMIT:?} at {num_established:?}!"
+                        "Num concurrent connections to a single peer exceeding \
+                         {ESTABLISHED_LIMIT:?} at {num_established:?}!"
                     );
                 } else {
                     debug!("Connection closed with {peer_id:?} at {endpoint:?} due to {cause:?}");
@@ -675,7 +678,8 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                                     error,
                                 } => {
                                     warn!(
-                                        "AutoNAT Probe failed to peer {peer:?} with error: {error:?}"
+                                        "AutoNAT Probe failed to peer {peer:?} with error: \
+                                         {error:?}"
                                     );
                                 },
                             },

@@ -32,6 +32,7 @@ hotshot-example-types = { workspace = true }
 hotshot-libp2p-networking = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
+humantime = "2"
 indexmap = { workspace = true }
 itertools = { workspace = true }
 jf-merkle-tree = { workspace = true }
