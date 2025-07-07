@@ -263,20 +263,9 @@ impl<TYPES: NodeType> EventType<TYPES> {
     pub fn to_legacy(self) -> LegacyEventType<TYPES> {
         match self {
             EventType::Error { error } => LegacyEventType::Error { error },
-            EventType::Decide {
-                leaf_chain,
-                qc,
-                block_size,
-            } => LegacyEventType::Decide {
-                leaf_chain: Arc::new(
-                    leaf_chain
-                        .iter()
-                        .cloned()
-                        .map(LeafInfo::to_legacy)
-                        .collect(),
-                ),
-                qc: Arc::new(qc.as_ref().clone().to_legacy()),
-                block_size,
+            EventType::Decide { leaf_chain, .. } => LegacyEventType::Decide {
+                latest_decide_view_number: leaf_chain[0].leaf.view_number(),
+                leaf_chain: SimplifiedLeafInfo::from_leaf_chain(leaf_chain.as_ref()),
             },
             EventType::ReplicaViewTimeout { view_number } => {
                 LegacyEventType::ReplicaViewTimeout { view_number }
@@ -306,6 +295,31 @@ impl<TYPES: NodeType> EventType<TYPES> {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(bound(deserialize = "TYPES: NodeType"))]
+pub struct SimplifiedLeafInfo<TYPES: NodeType> {
+    pub block_payload: Option<TYPES::BlockPayload>,
+    pub block_header: TYPES::BlockHeader,
+}
+
+impl<TYPES: NodeType> SimplifiedLeafInfo<TYPES> {
+    /// Constructor.
+    pub fn from_leaf(leaf: &Leaf2<TYPES>) -> Self {
+        Self {
+            block_payload: leaf.block_payload().clone(),
+            block_header: leaf.block_header().clone(),
+        }
+    }
+
+    /// Convert a leaf chain into a simplified leaf chain.
+    pub fn from_leaf_chain(leaf_chain: &[LeafInfo<TYPES>]) -> Vec<Self> {
+        leaf_chain
+            .iter()
+            .map(|l| Self::from_leaf(&l.leaf))
+            .collect()
+    }
+}
+
 /// Pre-epoch version of the `EventType` enum.
 #[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -320,21 +334,8 @@ pub enum LegacyEventType<TYPES: NodeType> {
     },
     /// A new decision event was issued
     Decide {
-        /// The chain of Leaves that were committed by this decision
-        ///
-        /// This list is sorted in reverse view number order, with the newest (highest view number)
-        /// block first in the list.
-        ///
-        /// This list may be incomplete if the node is currently performing catchup.
-        /// Vid Info for a decided view may be missing if this node never saw it's share.
-        leaf_chain: Arc<LegacyLeafChain<TYPES>>,
-        /// The QC signing the most recent leaf in `leaf_chain`.
-        ///
-        /// Note that the QC for each additional leaf in the chain can be obtained from the leaf
-        /// before it using
-        qc: Arc<LegacyQuorumCertificate2<TYPES>>,
-        /// Optional information of the number of transactions in the block, for logging purposes.
-        block_size: Option<u64>,
+        latest_decide_view_number: TYPES::View,
+        leaf_chain: Vec<SimplifiedLeafInfo<TYPES>>,
     },
     /// A replica task was canceled by a timeout interrupt
     ReplicaViewTimeout {
