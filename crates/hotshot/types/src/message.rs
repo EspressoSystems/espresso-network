@@ -691,7 +691,10 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
             v if v == V::Base::VERSION => Serializer::<V::Base>::serialize(&message),
             v if v == V::Upgrade::VERSION => Serializer::<V::Upgrade>::serialize(&message),
             v => {
-                bail!("Attempted to serialize with version {v}, which is incompatible. This should be impossible.");
+                bail!(
+                    "Attempted to serialize with version {v}, which is incompatible. This should \
+                     be impossible."
+                );
             },
         };
 
@@ -729,7 +732,10 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
         let expected_version = self.version(view).await?;
 
         if actual_version != expected_version {
-            return Err(error!(format!("Message has invalid version number for its view. Expected: {expected_version}, Actual: {actual_version}, View: {view:?}")));
+            return Err(error!(format!(
+                "Message has invalid version number for its view. Expected: {expected_version}, \
+                 Actual: {actual_version}, View: {view:?}"
+            )));
         };
 
         Ok(deserialized_message)

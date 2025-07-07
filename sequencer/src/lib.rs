@@ -909,6 +909,9 @@ pub mod testing {
                         .blocks_per_epoch(blocks_per_epoch)
                         .epoch_start_block(epoch_start_block)
                         .multisig_pauser(self.signer.address())
+                        .token_name("Espresso".to_string())
+                        .token_symbol("ESP".to_string())
+                        .initial_token_supply(U256::from(3590000000u64))
                         .ops_timelock_delay(U256::from(0))
                         .ops_timelock_admin(self.signer.address())
                         .ops_timelock_proposers(vec![self.signer.address()])
@@ -926,14 +929,10 @@ pub mod testing {
                     let st_addr = contracts
                         .address(Contract::StakeTableProxy)
                         .expect("StakeTableProxy address not found");
-                    let token_addr = contracts
-                        .address(Contract::EspTokenProxy)
-                        .expect("EspTokenProxy address not found");
                     setup_stake_table_contract_for_test(
                         self.l1_url.clone(),
                         &deployer,
                         st_addr,
-                        token_addr,
                         validators,
                         DelegationConfig::default(),
                     )
@@ -1222,7 +1221,8 @@ pub mod testing {
                 },
                 Err(e) => {
                     tracing::warn!(
-                        "Failed to create local catchup provider: {e:#}. Only using remote catchup."
+                        "Failed to create local catchup provider: {e:#}. Only using remote \
+                         catchup."
                     );
                 },
             };

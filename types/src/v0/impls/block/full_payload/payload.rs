@@ -90,7 +90,8 @@ impl Payload {
             if tx_size > max_block_byte_len {
                 // skip this transaction since it exceeds the block size limit
                 tracing::warn!(
-                    "skip the transaction to fit in maximum block byte length {max_block_byte_len}, transaction size {tx_size}"
+                    "skip the transaction to fit in maximum block byte length \
+                     {max_block_byte_len}, transaction size {tx_size}"
                 );
                 continue;
             }
@@ -98,7 +99,10 @@ impl Payload {
             // accounting for block byte length limit
             block_byte_len += tx_size;
             if block_byte_len > max_block_byte_len {
-                tracing::warn!("transactions truncated to fit in maximum block byte length {max_block_byte_len}");
+                tracing::warn!(
+                    "transactions truncated to fit in maximum block byte length \
+                     {max_block_byte_len}"
+                );
                 break;
             }
 

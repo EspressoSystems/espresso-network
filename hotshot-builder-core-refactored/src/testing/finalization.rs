@@ -134,7 +134,8 @@ async fn test_eager_block_rate() {
             assert_eq!(
                 available_blocks.first().unwrap().block_size,
                 0,
-                "Builder should be building empty blocks: we've had a transaction included this round"
+                "Builder should be building empty blocks: we've had a transaction included this \
+                 round"
             );
         }
     }
@@ -154,7 +155,8 @@ async fn test_eager_block_rate() {
             assert_eq!(
                 available_blocks.first().unwrap().block_size,
                 0,
-                "Builder should be building empty blocks: we've had a transaction included recently"
+                "Builder should be building empty blocks: we've had a transaction included \
+                 recently"
             );
         }
     }

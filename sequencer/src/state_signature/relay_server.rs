@@ -432,7 +432,9 @@ impl StateRelayServerDataSource for StateRelayServerState {
                 // A signature is already posted for this key with this state
                 return Err(ServerError::catch_all(
                     StatusCode::BAD_REQUEST,
-                    "A signature of this light client state is already posted at this block height for this key.".to_owned(),
+                    "A signature of this light client state is already posted at this block \
+                     height for this key."
+                        .to_owned(),
                 ));
             },
             Entry::Vacant(entry) => {
@@ -516,7 +518,9 @@ impl StateRelayServerDataSource for StateRelayServerState {
                 // A signature is already posted for this key with this state
                 return Err(ServerError::catch_all(
                     StatusCode::BAD_REQUEST,
-                    "A legacy signature of this light client state is already posted at this block height for this key.".to_owned(),
+                    "A legacy signature of this light client state is already posted at this \
+                     block height for this key."
+                        .to_owned(),
                 ));
             },
             Entry::Vacant(entry) => {

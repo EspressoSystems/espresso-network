@@ -185,12 +185,13 @@ impl BuilderConfig {
             qc_receiver,
             req_receiver,
             tx_receiver,
-            VecDeque::new() /* tx_queue */,
+            VecDeque::new(), /* tx_queue */
             global_state_clone,
             maximize_txns_count_timeout_duration,
-            base_fee
-                .as_u64()
-                .context("the base fee exceeds the maximum amount that a builder can pay (defined by u64::MAX)")?,
+            base_fee.as_u64().context(
+                "the base fee exceeds the maximum amount that a builder can pay (defined by \
+                 u64::MAX)",
+            )?,
             Arc::new(instance_state),
             Duration::from_secs(60),
             Arc::new(validated_state),

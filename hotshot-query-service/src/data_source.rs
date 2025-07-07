@@ -932,7 +932,8 @@ pub mod node_tests {
         // share.
         let expected_missing = if ds.get_leaf(1).await.try_resolve().is_err() {
             tracing::warn!(
-                "data source does not support out-of-order filling, allowing one missing leaf and VID share"
+                "data source does not support out-of-order filling, allowing one missing leaf and \
+                 VID share"
             );
             1
         } else {

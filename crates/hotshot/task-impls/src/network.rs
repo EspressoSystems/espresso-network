@@ -94,7 +94,11 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 .epochs_enabled(proposal.data.view_number())
                                 .await
                             {
-                                tracing::warn!("received GeneralConsensusMessage::Proposal for view {} but epochs are enabled for that view", proposal.data.view_number());
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::Proposal for view {} but \
+                                     epochs are enabled for that view",
+                                    proposal.data.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::QuorumProposalRecv(convert_proposal(proposal), sender)
@@ -105,7 +109,11 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 .epochs_enabled(proposal.data.view_number())
                                 .await
                             {
-                                tracing::warn!("received GeneralConsensusMessage::Proposal2 for view {} but epochs are not enabled for that view", proposal.data.view_number());
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::Proposal2 for view {} but \
+                                     epochs are not enabled for that view",
+                                    proposal.data.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::QuorumProposalRecv(convert_proposal(proposal), sender)
@@ -119,7 +127,11 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 .epochs_enabled(proposal.data.view_number())
                                 .await
                             {
-                                tracing::warn!("received GeneralConsensusMessage::ProposalResponse for view {} but epochs are enabled for that view", proposal.data.view_number());
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::ProposalResponse for view \
+                                     {} but epochs are enabled for that view",
+                                    proposal.data.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::QuorumProposalResponseRecv(convert_proposal(proposal))
@@ -130,21 +142,33 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 .epochs_enabled(proposal.data.view_number())
                                 .await
                             {
-                                tracing::warn!("received GeneralConsensusMessage::ProposalResponse2 for view {} but epochs are not enabled for that view", proposal.data.view_number());
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::ProposalResponse2 for view \
+                                     {} but epochs are not enabled for that view",
+                                    proposal.data.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::QuorumProposalResponseRecv(convert_proposal(proposal))
                         },
                         GeneralConsensusMessage::Vote(vote) => {
                             if self.upgrade_lock.epochs_enabled(vote.view_number()).await {
-                                tracing::warn!("received GeneralConsensusMessage::Vote for view {} but epochs are enabled for that view", vote.view_number());
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::Vote for view {} but \
+                                     epochs are enabled for that view",
+                                    vote.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::QuorumVoteRecv(vote.to_vote2())
                         },
                         GeneralConsensusMessage::Vote2(vote) => {
                             if !self.upgrade_lock.epochs_enabled(vote.view_number()).await {
-                                tracing::warn!("received GeneralConsensusMessage::Vote2 for view {} but epochs are not enabled for that view", vote.view_number());
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::Vote2 for view {} but \
+                                     epochs are not enabled for that view",
+                                    vote.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::QuorumVoteRecv(vote)
@@ -155,7 +179,11 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 .epochs_enabled(view_sync_message.view_number())
                                 .await
                             {
-                                tracing::warn!("received GeneralConsensusMessage::ViewSyncPreCommitVote for view {} but epochs are enabled for that view", view_sync_message.view_number());
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::ViewSyncPreCommitVote for \
+                                     view {} but epochs are enabled for that view",
+                                    view_sync_message.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::ViewSyncPreCommitVoteRecv(view_sync_message.to_vote2())
@@ -166,7 +194,11 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 .epochs_enabled(view_sync_message.view_number())
                                 .await
                             {
-                                tracing::warn!("received GeneralConsensusMessage::ViewSyncPreCommitVote2 for view {} but epochs are not enabled for that view", view_sync_message.view_number());
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::ViewSyncPreCommitVote2 for \
+                                     view {} but epochs are not enabled for that view",
+                                    view_sync_message.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::ViewSyncPreCommitVoteRecv(view_sync_message)
@@ -205,7 +237,11 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 .epochs_enabled(view_sync_message.view_number())
                                 .await
                             {
-                                tracing::warn!("received GeneralConsensusMessage::ViewSyncCommitVote for view {} but epochs are enabled for that view", view_sync_message.view_number());
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::ViewSyncCommitVote for \
+                                     view {} but epochs are enabled for that view",
+                                    view_sync_message.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::ViewSyncCommitVoteRecv(view_sync_message.to_vote2())
@@ -216,7 +252,11 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 .epochs_enabled(view_sync_message.view_number())
                                 .await
                             {
-                                tracing::warn!("received GeneralConsensusMessage::ViewSyncCommitVote2 for view {} but epochs are not enabled for that view", view_sync_message.view_number());
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::ViewSyncCommitVote2 for \
+                                     view {} but epochs are not enabled for that view",
+                                    view_sync_message.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::ViewSyncCommitVoteRecv(view_sync_message)
@@ -227,7 +267,11 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 .epochs_enabled(view_sync_message.view_number())
                                 .await
                             {
-                                tracing::warn!("received GeneralConsensusMessage::ViewSyncCommitCertificate for view {} but epochs are enabled for that view", view_sync_message.view_number());
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::ViewSyncCommitCertificate \
+                                     for view {} but epochs are enabled for that view",
+                                    view_sync_message.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::ViewSyncCommitCertificateRecv(view_sync_message.to_vsc2())
@@ -238,7 +282,11 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 .epochs_enabled(view_sync_message.view_number())
                                 .await
                             {
-                                tracing::warn!("received GeneralConsensusMessage::ViewSyncCommitCertificate2 for view {} but epochs are not enabled for that view", view_sync_message.view_number());
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::ViewSyncCommitCertificate2 \
+                                     for view {} but epochs are not enabled for that view",
+                                    view_sync_message.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::ViewSyncCommitCertificateRecv(view_sync_message)
@@ -249,7 +297,11 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 .epochs_enabled(view_sync_message.view_number())
                                 .await
                             {
-                                tracing::warn!("received GeneralConsensusMessage::ViewSyncFinalizeVote for view {} but epochs are enabled for that view", view_sync_message.view_number());
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::ViewSyncFinalizeVote for \
+                                     view {} but epochs are enabled for that view",
+                                    view_sync_message.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::ViewSyncFinalizeVoteRecv(view_sync_message.to_vote2())
@@ -260,7 +312,11 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 .epochs_enabled(view_sync_message.view_number())
                                 .await
                             {
-                                tracing::warn!("received GeneralConsensusMessage::ViewSyncFinalizeVote2 for view {} but epochs are not enabled for that view", view_sync_message.view_number());
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::ViewSyncFinalizeVote2 for \
+                                     view {} but epochs are not enabled for that view",
+                                    view_sync_message.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::ViewSyncFinalizeVoteRecv(view_sync_message)
@@ -297,7 +353,11 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 .epochs_enabled(message.view_number())
                                 .await
                             {
-                                tracing::warn!("received GeneralConsensusMessage::TimeoutVote for view {} but epochs are enabled for that view", message.view_number());
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::TimeoutVote for view {} \
+                                     but epochs are enabled for that view",
+                                    message.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::TimeoutVoteRecv(message.to_vote2())
@@ -308,7 +368,11 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 .epochs_enabled(message.view_number())
                                 .await
                             {
-                                tracing::warn!("received GeneralConsensusMessage::TimeoutVote2 for view {} but epochs are not enabled for that view", message.view_number());
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::TimeoutVote2 for view {} \
+                                     but epochs are not enabled for that view",
+                                    message.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::TimeoutVoteRecv(message)
@@ -328,7 +392,11 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                         },
                         GeneralConsensusMessage::EpochRootQuorumVote(vote) => {
                             if !self.upgrade_lock.epochs_enabled(vote.view_number()).await {
-                                tracing::warn!("received GeneralConsensusMessage::EpochRootVote for view {} but epochs are not enabled for that view", vote.view_number());
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::EpochRootVote for view {} \
+                                     but epochs are not enabled for that view",
+                                    vote.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::EpochRootQuorumVoteRecv(vote)
@@ -339,7 +407,11 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 .epochs_enabled(root_qc.view_number())
                                 .await
                             {
-                                tracing::warn!("received GeneralConsensusMessage::EpochRootQc for view {} but epochs are not enabled for that view", root_qc.view_number());
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::EpochRootQc for view {} \
+                                     but epochs are not enabled for that view",
+                                    root_qc.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::EpochRootQcRecv(root_qc, sender)
@@ -352,7 +424,11 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 .epochs_enabled(proposal.data.view_number())
                                 .await
                             {
-                                tracing::warn!("received DaConsensusMessage::DaProposal for view {} but epochs are enabled for that view", proposal.data.view_number());
+                                tracing::warn!(
+                                    "received DaConsensusMessage::DaProposal for view {} but \
+                                     epochs are enabled for that view",
+                                    proposal.data.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::DaProposalRecv(convert_proposal(proposal), sender)
@@ -363,35 +439,55 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 .epochs_enabled(proposal.data.view_number())
                                 .await
                             {
-                                tracing::warn!("received DaConsensusMessage::DaProposal2 for view {} but epochs are not enabled for that view", proposal.data.view_number());
+                                tracing::warn!(
+                                    "received DaConsensusMessage::DaProposal2 for view {} but \
+                                     epochs are not enabled for that view",
+                                    proposal.data.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::DaProposalRecv(proposal, sender)
                         },
                         DaConsensusMessage::DaVote(vote) => {
                             if self.upgrade_lock.epochs_enabled(vote.view_number()).await {
-                                tracing::warn!("received DaConsensusMessage::DaVote for view {} but epochs are enabled for that view", vote.view_number());
+                                tracing::warn!(
+                                    "received DaConsensusMessage::DaVote for view {} but epochs \
+                                     are enabled for that view",
+                                    vote.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::DaVoteRecv(vote.clone().to_vote2())
                         },
                         DaConsensusMessage::DaVote2(vote) => {
                             if !self.upgrade_lock.epochs_enabled(vote.view_number()).await {
-                                tracing::warn!("received DaConsensusMessage::DaVote2 for view {} but epochs are not enabled for that view", vote.view_number());
+                                tracing::warn!(
+                                    "received DaConsensusMessage::DaVote2 for view {} but epochs \
+                                     are not enabled for that view",
+                                    vote.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::DaVoteRecv(vote.clone())
                         },
                         DaConsensusMessage::DaCertificate(cert) => {
                             if self.upgrade_lock.epochs_enabled(cert.view_number()).await {
-                                tracing::warn!("received DaConsensusMessage::DaCertificate for view {} but epochs are enabled for that view", cert.view_number());
+                                tracing::warn!(
+                                    "received DaConsensusMessage::DaCertificate for view {} but \
+                                     epochs are enabled for that view",
+                                    cert.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::DaCertificateRecv(cert.to_dac2())
                         },
                         DaConsensusMessage::DaCertificate2(cert) => {
                             if !self.upgrade_lock.epochs_enabled(cert.view_number()).await {
-                                tracing::warn!("received DaConsensusMessage::DaCertificate2 for view {} but epochs are not enabled for that view", cert.view_number());
+                                tracing::warn!(
+                                    "received DaConsensusMessage::DaCertificate2 for view {} but \
+                                     epochs are not enabled for that view",
+                                    cert.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::DaCertificateRecv(cert)
@@ -402,7 +498,11 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 .epochs_enabled(proposal.data.view_number())
                                 .await
                             {
-                                tracing::warn!("received DaConsensusMessage::VidDisperseMsg for view {} but epochs are enabled for that view", proposal.data.view_number());
+                                tracing::warn!(
+                                    "received DaConsensusMessage::VidDisperseMsg for view {} but \
+                                     epochs are enabled for that view",
+                                    proposal.data.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::VidShareRecv(sender, convert_proposal(proposal))
@@ -413,7 +513,11 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 .epochs_enabled(proposal.data.view_number())
                                 .await
                             {
-                                tracing::warn!("received DaConsensusMessage::VidDisperseMsg2 for view {} but epochs are not enabled for that view", proposal.data.view_number());
+                                tracing::warn!(
+                                    "received DaConsensusMessage::VidDisperseMsg2 for view {} but \
+                                     epochs are not enabled for that view",
+                                    proposal.data.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::VidShareRecv(sender, convert_proposal(proposal))
@@ -768,7 +872,10 @@ impl<
                 {
                     Ok(l) => l,
                     Err(e) => {
-                        tracing::warn!("Failed to calculate leader for view number {view_number}. Error: {e:?}");
+                        tracing::warn!(
+                            "Failed to calculate leader for view number {view_number}. Error: \
+                             {e:?}"
+                        );
                         return None;
                     },
                 };
@@ -901,7 +1008,10 @@ impl<
                 {
                     Ok(l) => l,
                     Err(e) => {
-                        tracing::warn!("Failed to calculate leader for view number {view_number}. Error: {e:?}");
+                        tracing::warn!(
+                            "Failed to calculate leader for view number {view_number}. Error: \
+                             {e:?}"
+                        );
                         return None;
                     },
                 };
@@ -948,7 +1058,10 @@ impl<
                 {
                     Ok(l) => l,
                     Err(e) => {
-                        tracing::warn!("Failed to calculate leader for view number {view_number}. Error: {e:?}");
+                        tracing::warn!(
+                            "Failed to calculate leader for view number {view_number}. Error: \
+                             {e:?}"
+                        );
                         return None;
                     },
                 };
@@ -977,7 +1090,10 @@ impl<
                 {
                     Ok(l) => l,
                     Err(e) => {
-                        tracing::warn!("Failed to calculate leader for view number {view_number}. Error: {e:?}");
+                        tracing::warn!(
+                            "Failed to calculate leader for view number {view_number}. Error: \
+                             {e:?}"
+                        );
                         return None;
                     },
                 };
@@ -1006,7 +1122,10 @@ impl<
                 {
                     Ok(l) => l,
                     Err(e) => {
-                        tracing::warn!("Failed to calculate leader for view number {view_number:?}. Error: {e:?}");
+                        tracing::warn!(
+                            "Failed to calculate leader for view number {view_number:?}. Error: \
+                             {e:?}"
+                        );
                         return None;
                     },
                 };
@@ -1077,7 +1196,10 @@ impl<
                 {
                     Ok(l) => l,
                     Err(e) => {
-                        tracing::warn!("Failed to calculate leader for view number {view_number}. Error: {e:?}");
+                        tracing::warn!(
+                            "Failed to calculate leader for view number {view_number}. Error: \
+                             {e:?}"
+                        );
                         return None;
                     },
                 };
@@ -1113,7 +1235,10 @@ impl<
                 {
                     Ok(l) => l,
                     Err(e) => {
-                        tracing::warn!("Failed to calculate leader for view number {view_number}. Error: {e:?}");
+                        tracing::warn!(
+                            "Failed to calculate leader for view number {view_number}. Error: \
+                             {e:?}"
+                        );
                         return None;
                     },
                 };
@@ -1155,9 +1280,10 @@ impl<
                     VidDisperseShare::V0(data) => {
                         if epochs_enabled {
                             tracing::warn!(
-                        "Epochs are enabled for view {} but didn't receive VidDisperseShare2",
-                        data.view_number()
-                    );
+                                "Epochs are enabled for view {} but didn't receive \
+                                 VidDisperseShare2",
+                                data.view_number()
+                            );
                             return None;
                         }
                         let vid_share_proposal = Proposal {
@@ -1174,7 +1300,8 @@ impl<
                     VidDisperseShare::V1(data) => {
                         if !epochs_enabled {
                             tracing::warn!(
-                                "Epochs are enabled for view {} but didn't receive ADVZDisperseShare",
+                                "Epochs are enabled for view {} but didn't receive \
+                                 ADVZDisperseShare",
                                 data.view_number()
                             );
                             return None;
