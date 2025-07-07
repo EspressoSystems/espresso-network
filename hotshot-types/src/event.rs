@@ -24,6 +24,19 @@ use crate::{
 /// as well as an inner [`EventType`] describing the event proper.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound(deserialize = "TYPES: NodeType"))]
+pub struct LegacyEvent<TYPES: NodeType> {
+    /// The view number that this event originates from
+    pub view_number: TYPES::View,
+    /// The underlying event
+    pub event: LegacyEventType<TYPES>,
+}
+
+/// A status event emitted by a `HotShot` instance
+///
+/// This includes some metadata, such as the stage and view number that the event was generated in,
+/// as well as an inner [`EventType`] describing the event proper.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(bound(deserialize = "TYPES: NodeType"))]
 pub struct Event<TYPES: NodeType> {
     /// The view number that this event originates from
     pub view_number: TYPES::View,
@@ -31,6 +44,14 @@ pub struct Event<TYPES: NodeType> {
     pub event: EventType<TYPES>,
 }
 
+impl<TYPES: NodeType> Event<TYPES> {
+    pub fn to_legacy(self) -> LegacyEvent<TYPES> {
+        LegacyEvent {
+            view_number: self.view_number,
+            event: self.event.to_legacy(),
+        }
+    }
+}
 /// Decided leaf with the corresponding state and VID info.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound(deserialize = "TYPES: NodeType"))]
@@ -181,6 +202,114 @@ pub enum EventType<TYPES: NodeType> {
         data: Vec<u8>,
     },
 }
+
+/// The type and contents of a status event emitted by a `HotShot` instance
+///
+/// This enum does not include metadata shared among all variants, such as the stage and view
+/// number, and is thus always returned wrapped in an [`Event`].
+#[non_exhaustive]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(bound(deserialize = "TYPES: NodeType"))]
+#[allow(clippy::large_enum_variant)]
+pub enum LegacyEventType<TYPES: NodeType> {
+    /// A view encountered an error and was interrupted
+    Error {
+        /// The underlying error
+        #[serde(with = "error_adaptor")]
+        error: Arc<HotShotError<TYPES>>,
+    },
+    /// A new decision event was issued
+    Decide {
+        latest_decide_view_number: TYPES::View,
+    },
+    /// A replica task was canceled by a timeout interrupt
+    ReplicaViewTimeout {
+        /// The view that timed out
+        view_number: TYPES::View,
+    },
+    /// The view has finished.  If values were decided on, a `Decide` event will also be emitted.
+    ViewFinished {
+        /// The view number that has just finished
+        view_number: TYPES::View,
+    },
+    /// The view timed out
+    ViewTimeout {
+        /// The view that timed out
+        view_number: TYPES::View,
+    },
+    /// New transactions were received from the network
+    /// or submitted to the network by us
+    Transactions {
+        /// The list of transactions
+        transactions: Vec<TYPES::Transaction>,
+    },
+    /// DA proposal was received from the network
+    /// or submitted to the network by us
+    DaProposal {
+        /// Contents of the proposal
+        proposal: Proposal<TYPES, DaProposal2<TYPES>>,
+        /// Public key of the leader submitting the proposal
+        sender: TYPES::SignatureKey,
+    },
+    /// Quorum proposal was received from the network
+    /// or submitted to the network by us
+    QuorumProposal {
+        /// Contents of the proposal
+        proposal: Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
+        /// Public key of the leader submitting the proposal
+        sender: TYPES::SignatureKey,
+    },
+    /// Upgrade proposal was received from the network
+    /// or submitted to the network by us
+    UpgradeProposal {
+        /// Contents of the proposal
+        proposal: Proposal<TYPES, UpgradeProposal<TYPES>>,
+        /// Public key of the leader submitting the proposal
+        sender: TYPES::SignatureKey,
+    },
+
+    /// A message destined for external listeners was received
+    ExternalMessageReceived {
+        /// Public Key of the message sender
+        sender: TYPES::SignatureKey,
+        /// Serialized data of the message
+        data: Vec<u8>,
+    },
+}
+
+impl<TYPES: NodeType> EventType<TYPES> {
+    pub fn to_legacy(self) -> LegacyEventType<TYPES> {
+        match self {
+            EventType::Error { error } => LegacyEventType::Error { error },
+            EventType::Decide { leaf_chain, .. } => LegacyEventType::Decide {
+                latest_decide_view_number: leaf_chain[0].leaf.view_number(),
+            },
+            EventType::ReplicaViewTimeout { view_number } => {
+                LegacyEventType::ReplicaViewTimeout { view_number }
+            }
+            EventType::ViewFinished { view_number } => {
+                LegacyEventType::ViewFinished { view_number }
+            }
+            EventType::ViewTimeout { view_number } => LegacyEventType::ViewTimeout { view_number },
+            EventType::Transactions { transactions } => {
+                LegacyEventType::Transactions { transactions }
+            }
+            EventType::DaProposal { proposal, sender } => {
+                LegacyEventType::DaProposal { proposal, sender }
+            }
+            EventType::QuorumProposal { proposal, sender } => {
+                LegacyEventType::QuorumProposal { proposal, sender }
+            }
+            EventType::UpgradeProposal { proposal, sender } => {
+                LegacyEventType::UpgradeProposal { proposal, sender }
+            }
+            EventType::ExternalMessageReceived { sender, data } => {
+                LegacyEventType::ExternalMessageReceived { sender, data }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 /// A list of actions that we track for nodes
 pub enum HotShotAction {

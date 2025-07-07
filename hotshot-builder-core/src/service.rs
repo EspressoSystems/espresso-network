@@ -1,4 +1,4 @@
-use hotshot::types::Event;
+use hotshot::types::LegacyEvent;
 use hotshot_builder_api::{
     v0_1::{
         block_info::{AvailableBlockData, AvailableBlockHeaderInputV1, AvailableBlockInfo},
@@ -9,7 +9,7 @@ use hotshot_builder_api::{
 };
 use hotshot_types::{
     data::{DaProposal2, Leaf2, QuorumProposalWrapper},
-    event::EventType,
+    event::LegacyEventType,
     message::Proposal,
     traits::{
         block_contents::{BlockPayload, Transaction},
@@ -1168,7 +1168,7 @@ Running Non-Permissioned Builder Service
 pub async fn run_non_permissioned_standalone_builder_service<
     Types: NodeType,
     Ver: StaticVersionType,
-    S: Stream<Item = Event<Types>> + Unpin,
+    S: Stream<Item = LegacyEvent<Types>> + Unpin,
 >(
     // sending a DA proposal from the hotshot to the builder states
     da_sender: BroadcastSender<MessageType<Types>>,
@@ -1199,11 +1199,11 @@ pub async fn run_non_permissioned_standalone_builder_service<
         };
 
         match event.event {
-            EventType::Error { error } => {
+            LegacyEventType::Error { error } => {
                 tracing::error!("Error event in HotShot: {:?}", error);
             }
             // tx event
-            EventType::Transactions { transactions } => {
+            LegacyEventType::Transactions { transactions } => {
                 let max_block_size = {
                     // This closure is likely unnecessary, but we want
                     // to play it safe with our RWLocks.
@@ -1243,20 +1243,17 @@ pub async fn run_non_permissioned_standalone_builder_service<
                 }
             }
             // decide event
-            EventType::Decide {
-                block_size: _,
-                leaf_chain,
-                qc: _,
+            LegacyEventType::Decide {
+                latest_decide_view_number,
             } => {
-                let latest_decide_view_num = leaf_chain[0].leaf.view_number();
-                handle_decide_event(&decide_sender, latest_decide_view_num).await;
+                handle_decide_event(&decide_sender, latest_decide_view_number).await;
             }
             // DA proposal event
-            EventType::DaProposal { proposal, sender } => {
+            LegacyEventType::DaProposal { proposal, sender } => {
                 handle_da_event(&da_sender, Arc::new(proposal), sender).await;
             }
             // QC proposal event
-            EventType::QuorumProposal { proposal, sender } => {
+            LegacyEventType::QuorumProposal { proposal, sender } => {
                 // get the leader for current view
                 handle_quorum_event(&quorum_sender, Arc::new(proposal), sender).await;
             }

@@ -191,8 +191,10 @@ impl BuilderConfig {
         let global_state_clone = global_state.clone();
         tracing::info!("Running permissionless builder against hotshot events API at {events_url}",);
 
+        // TODO: Figure out when to replace ::connect with ::connect_legacy
         let event_stream =
-            EventServiceStream::<SeqTypes, SequencerApiVersion>::connect(events_url).await?;
+            //EventServiceStream::<SeqTypes, SequencerApiVersion>::connect(events_url).await?;
+            EventServiceStream::<SeqTypes, SequencerApiVersion>::connect_legacy(events_url).await?;
 
         spawn(async move {
             let res = run_non_permissioned_standalone_builder_service::<_, SequencerApiVersion, _>(

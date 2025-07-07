@@ -6,7 +6,7 @@ use anyhow::Context;
 use either::Either::{self, Left, Right};
 use futures::stream::unfold;
 use futures::{Stream, StreamExt};
-use hotshot::types::Event;
+use hotshot::types::{Event, LegacyEvent};
 use hotshot_events_service::events::Error as EventStreamError;
 use hotshot_types::traits::node_implementation::NodeType;
 use surf_disco::client::HealthStatus;
@@ -33,12 +33,79 @@ pub struct EventServiceStream<Types: NodeType, V: StaticVersionType> {
     connection: Either<EventServiceConnection<Types, V>, EventServiceReconnect<Types, V>>,
 }
 
+type LegacyEventServiceConnection<Types, ApiVer> = surf_disco::socket::Connection<
+    LegacyEvent<Types>,
+    surf_disco::socket::Unsupported,
+    EventStreamError,
+    ApiVer,
+>;
+
+type LegacyEventServiceReconnect<Types, ApiVer> = Pin<
+    Box<
+        dyn Future<Output = anyhow::Result<LegacyEventServiceConnection<Types, ApiVer>>>
+            + Send
+            + Sync,
+    >,
+>;
+/// A wrapper around event streaming API that provides auto-reconnection capability
+pub struct LegacyEventServiceStream<Types: NodeType, V: StaticVersionType> {
+    api_url: Url,
+    connection:
+        Either<LegacyEventServiceConnection<Types, V>, LegacyEventServiceReconnect<Types, V>>,
+}
+
 impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Types, ApiVer> {
     /// Maximum period between events, once it elapsed we assume
     /// udnerlying connection silently went down and attempt to reconnect
     const MAX_WAIT_PERIOD: Duration = Duration::from_secs(10);
     const RETRY_PERIOD: Duration = Duration::from_secs(1);
     const CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
+
+    async fn connect_inner_legacy(
+        url: Url,
+    ) -> anyhow::Result<
+        surf_disco::socket::Connection<
+            LegacyEvent<Types>,
+            surf_disco::socket::Unsupported,
+            EventStreamError,
+            ApiVer,
+        >,
+    > {
+        tracing::info!(%url, "Connecting to hotshot events API");
+
+        let client = Client::<hotshot_events_service::events::Error, ApiVer>::new(url.clone());
+
+        timeout(Self::CONNECTION_TIMEOUT, async {
+            // TODO if we have a /v0 /v1 API postfix the healthcheck doesn't work, remove the version postfix
+            let url = url
+                .to_string()
+                .trim_end_matches("/")
+                .trim_end_matches("v1")
+                .trim_end_matches("v0")
+                .parse()
+                .expect("Failed to parse URL for healthcheck");
+            tracing::info!(%url, "Connecting to hotshot events API for healthcheck");
+            let client = Client::<hotshot_events_service::events::Error, ApiVer>::new(url);
+            loop {
+                match client.healthcheck::<HealthStatus>().await {
+                    Ok(_) => break,
+                    Err(err) => {
+                        tracing::debug!(?err, "Healthcheck failed, retrying");
+                    }
+                }
+                sleep(Self::RETRY_PERIOD).await;
+            }
+        })
+        .await
+        .context("Couldn't connect to hotshot events API")?;
+
+        tracing::info!("Builder client connected to the hotshot events API");
+
+        Ok(client
+            .socket("hotshot-events/events")
+            .subscribe::<LegacyEvent<Types>>()
+            .await?)
+    }
 
     async fn connect_inner(
         url: Url,
@@ -87,7 +154,71 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
     }
 
     /// Establish initial connection to the events service at `api_url`
-    pub async fn connect(api_url: Url) -> anyhow::Result<impl Stream<Item = Event<Types>> + Unpin> {
+    /// This converts LegacyEvents to Events.
+    pub async fn connect_legacy(
+        api_url: Url,
+    ) -> anyhow::Result<impl Stream<Item = LegacyEvent<Types>> + Unpin> {
+        let connection = Self::connect_inner_legacy(api_url.clone()).await?;
+        warn!(?api_url, "Connected to hotshot events API");
+
+        let this = LegacyEventServiceStream::<Types, ApiVer> {
+            api_url,
+            connection: Left(connection),
+        };
+
+        let stream = unfold(this, |mut this| async move {
+            loop {
+                match &mut this.connection {
+                    Left(connection) => {
+                        match tokio::time::timeout(Self::MAX_WAIT_PERIOD, connection.next()).await {
+                            Ok(Some(Ok(event))) => {
+                                return Some((event, this));
+                            }
+                            Ok(Some(Err(err))) => {
+                                warn!(?err, "Error in event stream");
+                                continue;
+                            }
+                            Ok(None) => {
+                                warn!("Event stream ended, attempting reconnection");
+                                let fut = Self::connect_inner_legacy(this.api_url.clone());
+                                let _ =
+                                    std::mem::replace(&mut this.connection, Right(Box::pin(fut)));
+                                continue;
+                            }
+                            Err(_) => {
+                                // Timeout occurred, reconnect
+                                warn!("Timeout waiting for next event; reconnecting");
+                                let fut = Self::connect_inner_legacy(this.api_url.clone());
+                                let _ =
+                                    std::mem::replace(&mut this.connection, Right(Box::pin(fut)));
+                                continue;
+                            }
+                        }
+                    }
+                    Right(reconnection) => match reconnection.await {
+                        Ok(connection) => {
+                            let _ = std::mem::replace(&mut this.connection, Left(connection));
+                            continue;
+                        }
+                        Err(err) => {
+                            error!(?err, "Error while reconnecting, will retry in a while");
+                            sleep(Self::RETRY_PERIOD).await;
+                            let fut = Self::connect_inner_legacy(this.api_url.clone());
+                            let _ = std::mem::replace(&mut this.connection, Right(Box::pin(fut)));
+                            continue;
+                        }
+                    },
+                }
+            }
+        });
+
+        Ok(Box::pin(stream))
+    }
+
+    /// Establish initial connection to the events service at `api_url`
+    pub async fn connect(
+        api_url: Url,
+    ) -> anyhow::Result<impl Stream<Item = LegacyEvent<Types>> + Unpin> {
         let connection = Self::connect_inner(api_url.clone()).await?;
         warn!(?api_url, "Connected to hotshot events API");
 
@@ -102,7 +233,7 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
                     Left(connection) => {
                         match tokio::time::timeout(Self::MAX_WAIT_PERIOD, connection.next()).await {
                             Ok(Some(Ok(event))) => {
-                                return Some((event, this));
+                                return Some((event.to_legacy(), this));
                             }
                             Ok(Some(Err(err))) => {
                                 warn!(?err, "Error in event stream");
