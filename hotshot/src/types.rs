@@ -7,7 +7,7 @@
 mod event;
 mod handle;
 
-pub use event::{Event, EventType};
+pub use event::{Event, EventType, LegacyEvent, LegacyEventType};
 pub use handle::SystemContextHandle;
 pub use hotshot_types::{
     message::Message,

@@ -11,9 +11,9 @@ use espresso_types::v0_99::RollupRegistration;
 
 use espresso_types::MarketplaceVersion;
 use espresso_types::SeqTypes;
-use hotshot::types::EventType;
+use hotshot::types::LegacyEventType;
 
-use hotshot::types::Event;
+use hotshot::types::LegacyEvent;
 
 use hotshot_types::traits::node_implementation::Versions;
 use marketplace_builder_core::hooks::BuilderHooks;
@@ -103,8 +103,8 @@ impl BuilderHooks<SeqTypes> for EspressoReserveHooks {
     }
 
     #[inline(always)]
-    async fn handle_hotshot_event(&self, event: &Event<SeqTypes>) {
-        let EventType::ViewFinished { view_number } = event.event else {
+    async fn handle_hotshot_event(&self, event: &LegacyEvent<SeqTypes>) {
+        let LegacyEventType::ViewFinished { view_number } = event.event else {
             return;
         };
 
@@ -182,8 +182,8 @@ impl BuilderHooks<SeqTypes> for EspressoFallbackHooks {
     }
 
     #[inline(always)]
-    async fn handle_hotshot_event(&self, event: &Event<SeqTypes>) {
-        let EventType::ViewFinished { view_number } = event.event else {
+    async fn handle_hotshot_event(&self, event: &LegacyEvent<SeqTypes>) {
+        let LegacyEventType::ViewFinished { view_number } = event.event else {
             return;
         };
 

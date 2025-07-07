@@ -14,11 +14,19 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_types::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2}, DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2, QuorumProposalWrapper
-    }, event::HotShotAction, message::Proposal, simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate}, traits::{
+        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
+        DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
+        QuorumProposalWrapper,
+    },
+    event::HotShotAction,
+    message::Proposal,
+    simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
+    traits::{
         node_implementation::{ConsensusTime, NodeType},
         storage::Storage,
-    }, vid::VidSchemeType, vote::HasViewNumber
+    },
+    vid::VidSchemeType,
+    vote::HasViewNumber,
 };
 use jf_vid::VidScheme;
 

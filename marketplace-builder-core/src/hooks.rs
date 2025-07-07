@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
 use async_trait::async_trait;
-use hotshot::types::Event;
+use hotshot::types::LegacyEvent;
 use hotshot_types::traits::node_implementation::NodeType;
 
 /// A trait for hooks into the builder service. Used to further customize
@@ -43,7 +43,7 @@ pub trait BuilderHooks<Types: NodeType>: Sync + Send + 'static {
     /// it is advisable to spawn a task doing the actual work and return,
     /// so that builder's event loop isn't blocked for too long.
     #[inline(always)]
-    async fn handle_hotshot_event(&self, _event: &Event<Types>) {}
+    async fn handle_hotshot_event(&self, _event: &LegacyEvent<Types>) {}
 }
 
 #[async_trait]
@@ -61,7 +61,7 @@ where
     }
 
     #[inline(always)]
-    async fn handle_hotshot_event(&self, event: &Event<Types>) {
+    async fn handle_hotshot_event(&self, event: &LegacyEvent<Types>) {
         (**self).handle_hotshot_event(event).await
     }
 }

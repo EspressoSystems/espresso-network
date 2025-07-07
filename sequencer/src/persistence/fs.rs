@@ -10,12 +10,18 @@ use hotshot_types::{
     data::{
         vid_disperse::ADVZDisperseShare, DaProposal, EpochNumber, QuorumProposal, QuorumProposal2,
         QuorumProposalWrapper,
-    }, event::{Event, EventType, HotShotAction, LeafInfo}, message::{convert_proposal, Proposal}, simple_certificate::{
+    },
+    event::{Event, EventType, HotShotAction, LeafInfo},
+    message::{convert_proposal, Proposal},
+    simple_certificate::{
         NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
-    }, traits::{
+    },
+    traits::{
         block_contents::{BlockHeader, BlockPayload},
         node_implementation::ConsensusTime,
-    }, vid::VidSchemeType, vote::HasViewNumber
+    },
+    vid::VidSchemeType,
+    vote::HasViewNumber,
 };
 use jf_vid::VidScheme;
 use std::sync::Arc;
