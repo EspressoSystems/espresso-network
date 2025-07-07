@@ -641,18 +641,6 @@ impl ProcessLeafAndBlockPairStreamTask {
                              validator sink is closed, validators will stagnate: {err}"
                         )
                     },
-                    ProcessLeafError::StakeTableSendError(err) => {
-                        panic!(
-                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying \
-                             stake table is closed, stake table will stagnate: {err}"
-                        )
-                    },
-                    ProcessLeafError::ValidatorSendError(err) => {
-                        panic!(
-                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying \
-                             validator sink is closed, validators will stagnate: {err}"
-                        )
-                    },
                     ProcessLeafError::FailedToGetNewStakeTable => {
                         panic!(
                             "ProcessLeafStreamTask: process_incoming_leaf failed, underlying \
