@@ -3,7 +3,7 @@ pub mod create_node_validator_api;
 use std::{fmt, future::Future, io::BufRead, pin::Pin, str::FromStr, time::Duration};
 
 use alloy::primitives::Address;
-use espresso_types::{config::PublicHotShotConfig, v0_3::Validator, BackoffParams, SeqTypes};
+use espresso_types::{v0_3::Validator, BackoffParams, SeqTypes};
 use futures::{
     channel::mpsc::{self, SendError, Sender},
     future::{BoxFuture, Either},
@@ -58,11 +58,11 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::UnhandledSurfDisco(status, msg) => {
-                write!(f, "Unhandled Surf Disco Error: {} - {}", status, msg)
+                write!(f, "Unhandled Surf Disco Error: {status} - {msg}")
             },
 
             Self::UnhandledTideDisco(status, msg) => {
-                write!(f, "Unhandled Tide Disco Error: {} - {}", status, msg)
+                write!(f, "Unhandled Tide Disco Error: {status} - {msg}")
             },
         }
     }
@@ -291,11 +291,6 @@ where
     Ok(api)
 }
 
-#[derive(Debug, Deserialize)]
-pub struct SequencerConfig {
-    pub config: PublicHotShotConfig,
-}
-
 /// [get_config_stake_table_from_sequencer] retrieves the stake table from the
 /// Sequencer.  It expects a [surf_disco::Client] to be provided so that it can
 /// make the request to the Hotshot Query Service.  It will return a
@@ -312,7 +307,7 @@ pub async fn get_config_stake_table_from_sequencer(
         .header("Accept", "application/json");
     let stake_table_result = request.send().await;
 
-    let sequencer_config: SequencerConfig = match stake_table_result {
+    let sequencer_config: PublicNetworkConfig = match stake_table_result {
         Ok(public_hot_shot_config) => public_hot_shot_config,
         Err(err) => {
             tracing::info!("retrieve stake table request failed: {}", err);
@@ -386,9 +381,9 @@ pub enum GetNodeIdentityFromUrlError {
 impl std::fmt::Display for GetNodeIdentityFromUrlError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            GetNodeIdentityFromUrlError::Url(err) => write!(f, "url: {}", err),
-            GetNodeIdentityFromUrlError::Reqwest(err) => write!(f, "reqwest error: {}", err),
-            GetNodeIdentityFromUrlError::Io(err) => write!(f, "io error: {}", err),
+            GetNodeIdentityFromUrlError::Url(err) => write!(f, "url: {err}"),
+            GetNodeIdentityFromUrlError::Reqwest(err) => write!(f, "reqwest error: {err}"),
+            GetNodeIdentityFromUrlError::Io(err) => write!(f, "io error: {err}"),
             GetNodeIdentityFromUrlError::NoNodeIdentity => write!(f, "no node identity"),
         }
     }
@@ -489,7 +484,7 @@ impl SurfDiscoAvailabilityAPIPathResolver
     for SurfDiscoAvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>>
 {
     fn resolve_path_for_height(&self, height: u64) -> String {
-        format!("availability/stream/leaves/{}", height)
+        format!("availability/stream/leaves/{height}")
     }
 }
 
@@ -497,7 +492,7 @@ impl SurfDiscoAvailabilityAPIPathResolver
     for SurfDiscoAvailabilityAPIStream<'_, BlockQueryData<SeqTypes>>
 {
     fn resolve_path_for_height(&self, height: u64) -> String {
-        format!("availability/stream/blocks/{}", height)
+        format!("availability/stream/blocks/{height}")
     }
 }
 
@@ -605,7 +600,11 @@ where
                 std::task::Poll::Ready(Some(Ok(entry))) => {
                     let block_height = self_mut.block_height_for_entry(&entry);
                     if block_height <= self_mut.last_received_block {
-                        tracing::debug!("we received an entry for a height prior to the last we've seen: {block_height} <= {}", self_mut.last_received_block);
+                        tracing::debug!(
+                            "we received an entry for a height prior to the last we've seen: \
+                             {block_height} <= {}",
+                            self_mut.last_received_block
+                        );
                         // We've received a block that we've already received
                         // before.  We should skip this block and try again.
                         // We need to reschedule ourselves in order to make progress
@@ -707,8 +706,7 @@ where
                     MAX_STREAM_RECONNECT_ATTEMPTS
                 );
                 panic!(
-                    "unable to retrieve connection after {} attempts",
-                    MAX_STREAM_RECONNECT_ATTEMPTS
+                    "unable to retrieve connection after {MAX_STREAM_RECONNECT_ATTEMPTS} attempts"
                 );
             }
             .boxed(),
@@ -937,7 +935,10 @@ pub fn populate_node_identity_from_scrape(node_identity: &mut NodeIdentity, scra
         } else {
             // We were unable to find the key for the public key on the metrics
             // scrape result.
-            tracing::warn!("scrape result doesn't seem to contain 'node' key, preventing us from verifying the public key");
+            tracing::warn!(
+                "scrape result doesn't seem to contain 'node' key, preventing us from verifying \
+                 the public key"
+            );
             return;
         };
 
@@ -951,7 +952,11 @@ pub fn populate_node_identity_from_scrape(node_identity: &mut NodeIdentity, scra
         } else {
             // We were unable to find the sample for the public key on the metrics
             // scrape result.
-            tracing::warn!("scrape result doesn't seem to contain 'node' sample, preventing us from verifying the public key. This is especially odd considering that we found the 'node' key already.");
+            tracing::warn!(
+                "scrape result doesn't seem to contain 'node' sample, preventing us from \
+                 verifying the public key. This is especially odd considering that we found the \
+                 'node' key already."
+            );
             return;
         };
 
@@ -968,7 +973,11 @@ pub fn populate_node_identity_from_scrape(node_identity: &mut NodeIdentity, scra
             }
         } else {
             // We were unable to find the public key in the scrape result.
-            tracing::warn!("scrape result doesn't seem to contain 'key' label in the 'node' sample, preventing us from verifying the public key. This is especially odd considering that we found the 'node' key and sample already.");
+            tracing::warn!(
+                "scrape result doesn't seem to contain 'key' label in the 'node' sample, \
+                 preventing us from verifying the public key. This is especially odd considering \
+                 that we found the 'node' key and sample already."
+            );
             return;
         };
 
@@ -976,7 +985,10 @@ pub fn populate_node_identity_from_scrape(node_identity: &mut NodeIdentity, scra
         let node_identity_public_key_string = node_identity.public_key().to_string();
 
         if public_key_from_scrape_string != node_identity_public_key_string {
-            tracing::warn!("node identity public key doesn't match public key in scrape, are we hitting the wrong URL, or is it behind a load balancer between multiple nodes?");
+            tracing::warn!(
+                "node identity public key doesn't match public key in scrape, are we hitting the \
+                 wrong URL, or is it behind a load balancer between multiple nodes?"
+            );
             return;
         }
 
@@ -1134,7 +1146,10 @@ impl ProcessNodeIdentityUrlStreamTask {
 
                 // We will be unable to provide any additional node identity
                 // updates. This is considered a critical error.
-                panic!("ProcessNodeIdentityUrlStreamTask node_identity_sender closed, future node identity information will stagnate: {}", err);
+                panic!(
+                    "ProcessNodeIdentityUrlStreamTask node_identity_sender closed, future node \
+                     identity information will stagnate: {err}"
+                );
             }
         }
     }
@@ -1148,6 +1163,42 @@ impl Drop for ProcessNodeIdentityUrlStreamTask {
             task_handle.abort();
         }
     }
+}
+
+/// [PublicNetworkConfig] is a struct that represents the configuration of the
+/// Sequencer.  It contains a single field, `config`, which is of type
+/// [PublicHotShotConfig].
+///
+/// We utilize this struct to deserialize a minimal representation of the
+/// configuration that is a subset of the full structure we will be receiving.
+/// This is done in an effort to make us as backwards compatible as possible
+/// with the Sequencer, as we do not want to break existing clients that may
+/// be relying on the old structure.
+///
+/// Note that this type corresponds to the [espresso_types::config::PublicNetworkConfig]
+/// type, which is the full configuration that we will be receiving from the
+/// Sequencer.
+#[derive(Debug, Deserialize)]
+pub struct PublicNetworkConfig {
+    pub config: PublicHotShotConfig,
+}
+
+/// PublicHotShotConfig is a minimal configuration structure that is meant to
+/// mirror the PublicHotShotConfig that is defined in
+/// [espresso_types::config::PublicHotShotConfig].
+///
+/// However, it is designed to be backwards-compatible across all deployed
+/// environments.  This may lead to the potential for there to be a mismatch
+/// between the types listed here.  That is a potential risk, but it is
+/// important for us to support backwards compatibility with older environments
+/// that may not have the same types defined. To mitigate this risk, we
+/// have this tests:
+/// [tests::test_public_hotshot_config_backwards_compatibility]
+#[derive(Debug, Deserialize)]
+pub struct PublicHotShotConfig {
+    pub known_nodes_with_stake: Vec<PeerConfig<SeqTypes>>,
+    pub epoch_height: Option<u64>,
+    pub epoch_start_block: Option<u64>,
 }
 
 #[cfg(test)]
@@ -1240,7 +1291,7 @@ mod tests {
             Some("-74.0060")
         );
 
-        print!("{:?}", scrape);
+        print!("{scrape:?}");
     }
 
     #[test]
@@ -1280,5 +1331,48 @@ mod tests {
 
         assert_eq!(node_identity_location.country(), &Some("US".to_string()));
         assert_eq!(node_identity_location.coords, Some((-40.7128, -74.0060)));
+    }
+
+    /// [test_public_hotshot_config_deserialization] tests the
+    /// deserialization of the [super::PublicHotShotConfig] from a
+    /// [espresso_types::config::PublicNetworkConfig]. This is to ensure that
+    /// the [PublicHotShotConfig] can be serialized and deserialized correctly,
+    /// and that it matches the expected structure.
+    #[test]
+    fn test_public_hotshot_config_deserialization() {
+        use super::PublicNetworkConfig;
+
+        let network_config = espresso_types::NetworkConfig::default();
+        let server_config = espresso_types::config::PublicNetworkConfig::from(network_config);
+
+        let serialized =
+            serde_json::to_string(&server_config).expect("failed to serialize PublicNetworkConfig");
+
+        let deserialized: PublicNetworkConfig =
+            serde_json::from_str(&serialized).expect("failed to deserialize PublicHotShotConfig");
+
+        let deserialized_config = deserialized.config;
+
+        // Check that the deserialized config matches the expected values.
+        assert_eq!(
+            deserialized_config.known_nodes_with_stake.len(),
+            server_config
+                .hotshot_config()
+                .known_nodes_with_stake()
+                .len()
+        );
+        assert_eq!(
+            deserialized_config.epoch_height,
+            Some(server_config.hotshot_config().blocks_per_epoch())
+        );
+        assert_eq!(
+            deserialized_config.epoch_start_block,
+            Some(server_config.hotshot_config().epoch_start_block())
+        );
+
+        assert_eq!(
+            deserialized_config.known_nodes_with_stake.clone(),
+            server_config.hotshot_config().known_nodes_with_stake()
+        )
     }
 }

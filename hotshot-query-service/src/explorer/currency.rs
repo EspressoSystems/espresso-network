@@ -57,7 +57,7 @@ impl Serialize for CurrencyMismatchError {
         st.serialize_field("code", &self.code())?;
         st.serialize_field("currency1", &self.currency1)?;
         st.serialize_field("currency2", &self.currency2)?;
-        st.serialize_field("message", &format!("{}", self))?;
+        st.serialize_field("message", &format!("{self}"))?;
         st.end()
     }
 }
@@ -95,7 +95,7 @@ impl Serialize for InvalidCurrencyCodeError {
         let mut st = serializer.serialize_struct("InvalidCurrencyCodeError", 3)?;
         st.serialize_field("code", &self.code())?;
         st.serialize_field("currency", &self.currency)?;
-        st.serialize_field("message", &format!("{}", self))?;
+        st.serialize_field("message", &format!("{self}"))?;
         st.end()
     }
 }
@@ -286,8 +286,8 @@ mod test {
                 let want = *json;
                 assert_eq!(
                     have, want,
-                    "encoded json for {} does not match expectation: have: {have}, want: {want}",
-                    expected
+                    "encoded json for {expected} does not match expectation: have: {have}, want: \
+                     {want}"
                 );
             }
         }

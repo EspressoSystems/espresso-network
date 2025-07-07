@@ -247,7 +247,7 @@ mod tests {
                 let txs = test
                     .nss
                     .remove(&ns_id)
-                    .unwrap_or_else(|| panic!("namespace {} missing from test", ns_id));
+                    .unwrap_or_else(|| panic!("namespace {ns_id} missing from test"));
 
                 // verify ns_proof
                 let (ns_proof_txs, ns_proof_ns_id) = ns_proof
@@ -256,7 +256,7 @@ mod tests {
                         &VidCommitment::V0(vid.commit),
                         &vid.common,
                     )
-                    .unwrap_or_else(|| panic!("namespace {} proof verification failure", ns_id));
+                    .unwrap_or_else(|| panic!("namespace {ns_id} proof verification failure"));
 
                 assert_eq!(ns_proof_ns_id, ns_id);
                 assert_eq!(ns_proof_txs, txs);

@@ -343,7 +343,16 @@ pub fn vid_commitment<V: Versions>(
 ) -> VidCommitment {
     if version < V::Epochs::VERSION {
         let encoded_tx_len = encoded_transactions.len();
-        advz_scheme(total_weight).commit_only(encoded_transactions).map(VidCommitment::V0).unwrap_or_else(|err| panic!("VidScheme::commit_only failure:(total_weight,payload_byte_len)=({total_weight},{encoded_tx_len}) error: {err}"))
+        advz_scheme(total_weight)
+            .commit_only(encoded_transactions)
+            .map(VidCommitment::V0)
+            .unwrap_or_else(|err| {
+                panic!(
+                    "VidScheme::commit_only \
+                     failure:(total_weight,payload_byte_len)=({total_weight},{encoded_tx_len}) \
+                     error: {err}"
+                )
+            })
     } else {
         let param = init_avidm_param(total_weight).unwrap();
         let encoded_tx_len = encoded_transactions.len();
@@ -1273,16 +1282,23 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
             //    - no longer care because we have passed `decide_by` without deciding the certificate.
             (None, Some(parent_cert)) => {
                 let decided_upgrade_certificate_read = decided_upgrade_certificate.read().await;
-                ensure!(self.view_number() > parent_cert.data.new_version_first_view
-                    || (self.view_number() > parent_cert.data.decide_by && decided_upgrade_certificate_read.is_none()),
-                       "The new leaf is missing an upgrade certificate that was present in its parent, and should still be live."
+                ensure!(
+                    self.view_number() > parent_cert.data.new_version_first_view
+                        || (self.view_number() > parent_cert.data.decide_by
+                            && decided_upgrade_certificate_read.is_none()),
+                    "The new leaf is missing an upgrade certificate that was present in its \
+                     parent, and should still be live."
                 );
             },
             // If we both have a certificate, they should be identical.
             // Technically, this prevents us from initiating a new upgrade in the view immediately following an upgrade.
             // I think this is a fairly lax restriction.
             (Some(cert), Some(parent_cert)) => {
-                ensure!(cert == parent_cert, "The new leaf does not extend the parent leaf, because it has attached a different upgrade certificate.");
+                ensure!(
+                    cert == parent_cert,
+                    "The new leaf does not extend the parent leaf, because it has attached a \
+                     different upgrade certificate."
+                );
             },
         }
 
@@ -1653,16 +1669,23 @@ impl<TYPES: NodeType> Leaf<TYPES> {
             //    - no longer care because we have passed `decide_by` without deciding the certificate.
             (None, Some(parent_cert)) => {
                 let decided_upgrade_certificate_read = decided_upgrade_certificate.read().await;
-                ensure!(self.view_number() > parent_cert.data.new_version_first_view
-                    || (self.view_number() > parent_cert.data.decide_by && decided_upgrade_certificate_read.is_none()),
-                       "The new leaf is missing an upgrade certificate that was present in its parent, and should still be live."
+                ensure!(
+                    self.view_number() > parent_cert.data.new_version_first_view
+                        || (self.view_number() > parent_cert.data.decide_by
+                            && decided_upgrade_certificate_read.is_none()),
+                    "The new leaf is missing an upgrade certificate that was present in its \
+                     parent, and should still be live."
                 );
             },
             // If we both have a certificate, they should be identical.
             // Technically, this prevents us from initiating a new upgrade in the view immediately following an upgrade.
             // I think this is a fairly lax restriction.
             (Some(cert), Some(parent_cert)) => {
-                ensure!(cert == parent_cert, "The new leaf does not extend the parent leaf, because it has attached a different upgrade certificate.");
+                ensure!(
+                    cert == parent_cert,
+                    "The new leaf does not extend the parent leaf, because it has attached a \
+                     different upgrade certificate."
+                );
             },
         }
 

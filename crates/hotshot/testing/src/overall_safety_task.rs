@@ -47,7 +47,10 @@ pub enum OverallSafetyTaskErr<TYPES: NodeType> {
     #[error("Too many view failures: {0:?}")]
     TooManyFailures(HashSet<TYPES::View>),
 
-    #[error("Inconsistent failed views: expected: {expected_failed_views:?}, actual: {actual_failed_views:?}")]
+    #[error(
+        "Inconsistent failed views: expected: {expected_failed_views:?}, actual: \
+         {actual_failed_views:?}"
+    )]
     InconsistentFailedViews {
         expected_failed_views: Vec<TYPES::View>,
         actual_failed_views: HashSet<TYPES::View>,

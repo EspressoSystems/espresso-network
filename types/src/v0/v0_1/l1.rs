@@ -172,6 +172,21 @@ pub struct L1ClientOptions {
     )]
     pub stake_table_update_interval: Duration,
 
+    /// Maximum duration to retry fetching L1 events before panicking.
+    ///
+    /// This prevents infinite retries by panicking if the total number of retries exceed the maximum duration.
+    /// This is helpful in cases where the RPC block range limit or the event return limit is hit,
+    /// or if there is an outage. In such cases, panicking ensures that the node operator can take
+    /// action instead of the node getting stuck indefinitely. This is necessary because the stake table is constructed
+    /// from the fetched events, and is required for node to participate in consensus.
+    #[clap(
+        long,
+        env = "ESPRESSO_SEQUENCER_L1_EVENTS_MAX_RETRY_DURATION",
+        default_value = "20m",
+        value_parser = parse_duration,
+    )]
+    pub l1_events_max_retry_duration: Duration,
+
     /// A block range which is expected to contain the finalized heads of all L1 provider chains.
     ///
     /// If specified, it is assumed that if a block `n` is known to be finalized according to a

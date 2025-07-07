@@ -7,10 +7,7 @@ use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
 use committable::Commitment;
 use futures::{FutureExt, TryFutureExt};
-use hotshot::{
-    types::{BLSPubKey, EventType},
-    HotShotInitializer, InitializerEpochInfo,
-};
+use hotshot::{types::EventType, HotShotInitializer, InitializerEpochInfo};
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
 use hotshot_types::{
     data::{
@@ -34,18 +31,17 @@ use hotshot_types::{
     },
     utils::genesis_epoch_from_version,
 };
-use indexmap::IndexMap;
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::{
     impls::NodeState,
     utils::BackoffParams,
     v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment},
-    v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
+    v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
 use crate::{
     v0::impls::ValidatedState, v0_3::ChainConfig, BlockMerkleTree, Event, FeeAccount,
-    FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig, SeqTypes,
+    FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig, SeqTypes, ValidatorMap,
 };
 
 #[async_trait]
@@ -209,7 +205,8 @@ pub trait StateCatchup: Send + Sync {
                         .await
                         .map_err(|err| {
                             err.context(format!(
-                                "fetching reward accounts {accounts:?}, height {height}, view {view}"
+                                "fetching reward accounts {accounts:?}, height {height}, view \
+                                 {view}"
                             ))
                         })
                 }
@@ -394,20 +391,13 @@ pub enum EventsPersistenceRead {
 /// Trait used by `Memberships` implementations to interact with persistence layer.
 pub trait MembershipPersistence: Send + Sync + 'static {
     /// Load stake table for epoch from storage
-    async fn load_stake(
-        &self,
-        epoch: EpochNumber,
-    ) -> anyhow::Result<Option<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>>>;
+    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<ValidatorMap>>;
 
     /// Load stake tables for storage for latest `n` known epochs
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
 
     /// Store stake table at `epoch` in the persistence layer
-    async fn store_stake(
-        &self,
-        epoch: EpochNumber,
-        stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
-    ) -> anyhow::Result<()>;
+    async fn store_stake(&self, epoch: EpochNumber, stake: ValidatorMap) -> anyhow::Result<()>;
 
     async fn store_events(
         &self,

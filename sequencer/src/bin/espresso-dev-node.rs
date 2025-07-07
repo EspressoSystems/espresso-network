@@ -298,7 +298,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let relay_server_port = pick_unused_port().unwrap();
-    let relay_server_url: Url = format!("http://localhost:{}", relay_server_port)
+    let relay_server_url: Url = format!("http://localhost:{relay_server_port}")
         .parse()
         .unwrap();
 
@@ -517,9 +517,6 @@ async fn main() -> anyhow::Result<()> {
                 l1_contracts
                     .address(Contract::StakeTableProxy)
                     .expect("stake table deployed"),
-                l1_contracts
-                    .address(Contract::EspTokenProxy)
-                    .expect("ESP token deployed"),
                 staking_priv_keys,
                 DelegationConfig::default(),
             )
@@ -667,7 +664,7 @@ async fn main() -> anyhow::Result<()> {
 
         // manually fill up the relay server state
         let state = StateRelayServerState::new(
-            Url::parse(&format!("http://localhost:{}", sequencer_api_port)).unwrap(),
+            Url::parse(&format!("http://localhost:{sequencer_api_port}")).unwrap(),
         )
         .with_blocks_per_epoch(blocks_per_epoch)
         .with_epoch_start_block(epoch_start_block)
@@ -1047,8 +1044,7 @@ mod tests {
 
             tx_result = api_client
                 .get::<TransactionQueryData<SeqTypes>>(&format!(
-                    "availability/transaction/hash/{}",
-                    tx_hash
+                    "availability/transaction/hash/{tx_hash}"
                 ))
                 .send()
                 .await;
@@ -1078,8 +1074,7 @@ mod tests {
 
             tx_result = api_client
                 .get::<TransactionQueryData<SeqTypes>>(&format!(
-                    "availability/transaction/hash/{}",
-                    tx_hash
+                    "availability/transaction/hash/{tx_hash}"
                 ))
                 .send()
                 .await;
@@ -1117,8 +1112,7 @@ mod tests {
 
                 result = api_client
                     .get::<TransactionQueryData<SeqTypes>>(&format!(
-                        "availability/transaction/hash/{}",
-                        tx_hash
+                        "availability/transaction/hash/{tx_hash}"
                     ))
                     .send()
                     .await;

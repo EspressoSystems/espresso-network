@@ -19,7 +19,8 @@ pub async fn connect_ledger(account_index: usize) -> Result<LedgerSigner> {
                     },
                     LedgerError::UnexpectedNullResponse => {
                         eprintln!(
-                            "Failed to access ledger {attempt}/{max_attempts}: {err:#}, please unlock ledger and open the Ethereum app"
+                            "Failed to access ledger {attempt}/{max_attempts}: {err:#}, please \
+                             unlock ledger and open the Ethereum app"
                         );
                     },
                     _ => {

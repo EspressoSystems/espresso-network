@@ -331,7 +331,8 @@ mod tests {
                     let metadata = claimed_block.metadata;
 
                     tracing::debug!(
-                        "Encoded transactions: {encoded_transactions:?} Num nodes:{NUM_NODES_IN_VID_COMPUTATION}"
+                        "Encoded transactions: {encoded_transactions:?} Num \
+                         nodes:{NUM_NODES_IN_VID_COMPUTATION}"
                     );
 
                     let block_payload_commitment = vid_commitment::<TestVersions>(

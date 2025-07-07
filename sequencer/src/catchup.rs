@@ -326,7 +326,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
     ) -> anyhow::Result<ChainConfig> {
         self.fetch(retry, |client| async move {
             let cf = client
-                .get::<ChainConfig>(&format!("catchup/chain-config/{}", commitment))
+                .get::<ChainConfig>(&format!("catchup/chain-config/{commitment}"))
                 .send()
                 .await?;
             ensure!(
@@ -350,7 +350,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         let leaf_chain = self
             .fetch(retry, |client| async move {
                 let leaf = client
-                    .get::<Vec<Leaf2>>(&format!("catchup/{}/leafchain", height))
+                    .get::<Vec<Leaf2>>(&format!("catchup/{height}/leafchain"))
                     .send()
                     .await?;
                 anyhow::Ok(leaf)
@@ -669,7 +669,8 @@ where
 
         if cf.commit() != commitment {
             panic!(
-                "Critical error: Mismatched chain config detected. Expected chain config: {:?}, but got: {:?}.
+                "Critical error: Mismatched chain config detected. Expected chain config: {:?}, \
+                 but got: {:?}.
                 This may indicate a compromised database",
                 commitment,
                 cf.commit()

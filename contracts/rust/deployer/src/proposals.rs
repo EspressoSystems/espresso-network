@@ -81,7 +81,10 @@ pub async fn transfer_ownership_from_multisig_to_timelock(
 
     if !params.dry_run && !super::is_contract(provider, owner_addr).await? {
         tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
-        anyhow::bail!("Proxy owner is not a contract. Expected: {owner_addr:#x}. Use --dry-run to skip this check.");
+        anyhow::bail!(
+            "Proxy owner is not a contract. Expected: {owner_addr:#x}. Use --dry-run to skip this \
+             check."
+        );
     }
 
     // invoke upgrade on proxy via the safeSDK

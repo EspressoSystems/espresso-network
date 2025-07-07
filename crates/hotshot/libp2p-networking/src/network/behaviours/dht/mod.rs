@@ -323,7 +323,10 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                         // Send the record to all channels that are still open
                         for n in notify {
                             if n.send(record.value.clone()).is_err() {
-                                warn!("Get DHT: channel closed before get record request result could be sent");
+                                warn!(
+                                    "Get DHT: channel closed before get record request result \
+                                     could be sent"
+                                );
                             }
                         }
                     } else {
@@ -336,7 +339,10 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                     // Initiate new query that hits more replicas
                     if retry_count > 0 {
                         let new_retry_count = retry_count - 1;
-                        warn!("Get DHT: Internal disagreement for get dht request {progress:?}! requerying with more nodes. {new_retry_count:?} retries left");
+                        warn!(
+                            "Get DHT: Internal disagreement for get dht request {progress:?}! \
+                             requerying with more nodes. {new_retry_count:?} retries left"
+                        );
                         self.retry_get(KadGetQuery {
                             backoff,
                             progress: DHTProgress::NotStarted,
@@ -346,7 +352,10 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                             records: Vec::new(),
                         });
                     }
-                    warn!("Get DHT: Internal disagreement for get dht request {progress:?}! Giving up because out of retries. ");
+                    warn!(
+                        "Get DHT: Internal disagreement for get dht request {progress:?}! Giving \
+                         up because out of retries. "
+                    );
                 }
             }
         }
@@ -363,7 +372,10 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
             match record_results {
                 Ok(_) => {
                     if query.notify.send(()).is_err() {
-                        warn!("Put DHT: client channel closed before put record request could be sent");
+                        warn!(
+                            "Put DHT: client channel closed before put record request could be \
+                             sent"
+                        );
                     }
                 },
                 Err(e) => {

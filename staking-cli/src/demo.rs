@@ -24,6 +24,7 @@ use url::Url;
 
 use crate::{
     delegation::delegate,
+    info::fetch_token_address,
     parse::{parse_bls_priv_key, parse_state_priv_key, Commission},
     registration::register_validator,
     Config,
@@ -45,7 +46,7 @@ impl fmt::Display for DelegationConfig {
             DelegationConfig::VariableAmounts => "variable-amounts",
             DelegationConfig::MultipleDelegators => "multiple-delegators",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -54,13 +55,13 @@ pub async fn setup_stake_table_contract_for_test(
     rpc_url: Url,
     token_holder: &(impl Provider + WalletProvider),
     stake_table_address: Address,
-    token_address: Address,
     validators: Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)>,
     config: DelegationConfig,
 ) -> Result<()> {
     tracing::info!(%stake_table_address, "staking to stake table contract for demo");
 
     let token_holder_addr = token_holder.default_signer_address();
+    let token_address = fetch_token_address(rpc_url.clone(), stake_table_address).await?;
 
     tracing::info!("ESP token address: {token_address}");
     let token = EspToken::new(token_address, token_holder);
@@ -284,7 +285,8 @@ pub async fn stake_for_demo(
         grant_recipient.default_signer_address()
     );
 
-    let token_address = config.token_address;
+    let token_address =
+        fetch_token_address(config.rpc_url.clone(), config.stake_table_address).await?;
     tracing::info!("ESP token address: {}", token_address);
     let stake_table_address = config.stake_table_address;
     tracing::info!("stake table address: {}", stake_table_address);
@@ -314,7 +316,6 @@ pub async fn stake_for_demo(
         config.rpc_url.clone(),
         &grant_recipient,
         config.stake_table_address,
-        config.token_address,
         validator_keys,
         delegation_config,
     )
@@ -350,7 +351,6 @@ mod test {
             system.rpc_url.clone(),
             &system.provider,
             system.stake_table,
-            system.token,
             keys,
             config,
         )

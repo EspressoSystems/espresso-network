@@ -35,7 +35,10 @@ use hotshot_utils::anytrace::*;
 use tracing::instrument;
 
 use self::handlers::{ProposalDependency, ProposalDependencyHandle};
-use crate::{events::HotShotEvent, quorum_proposal::handlers::handle_eqc_formed};
+use crate::{
+    events::HotShotEvent, helpers::broadcast_view_change,
+    quorum_proposal::handlers::handle_eqc_formed,
+};
 
 mod handlers;
 
@@ -97,6 +100,9 @@ pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>
 
     /// Formed light client state update certificates
     pub formed_state_cert: BTreeMap<TYPES::Epoch, LightClientStateUpdateCertificate<TYPES>>,
+
+    /// First view in which epoch version takes effect
+    pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
@@ -179,7 +185,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 let valid = event_view == view_number;
                 if valid {
                     tracing::debug!(
-                        "Dependency {dependency_type:?} is complete for view {event_view:?}, my id is {id:?}!",
+                        "Dependency {dependency_type:?} is complete for view {event_view:?}, my \
+                         id is {id:?}!",
                     );
                 }
                 valid
@@ -525,6 +532,19 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     .await;
 
                     let view_number = qc.view_number() + 1;
+                    if !qc
+                        .data
+                        .block_number
+                        .is_some_and(|bn| is_last_block(bn, self.epoch_height))
+                    {
+                        broadcast_view_change(
+                            &event_sender,
+                            view_number,
+                            qc.data.epoch,
+                            self.first_epoch,
+                        )
+                        .await;
+                    }
                     self.create_dependency_task_if_new(
                         view_number,
                         epoch_number,
@@ -559,6 +579,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     ))?;
 
                 let view_number = qc.view_number() + 1;
+                broadcast_view_change(&event_sender, view_number, qc.data.epoch, self.first_epoch)
+                    .await;
                 self.create_dependency_task_if_new(
                     view_number,
                     epoch_number,
@@ -678,9 +700,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 // Only update if the qc is from a newer view
                 let current_next_epoch_qc =
                     self.consensus.read().await.next_epoch_high_qc().cloned();
-                ensure!(current_next_epoch_qc.is_none() ||
-                    next_epoch_qc.view_number > current_next_epoch_qc.unwrap().view_number,
-                    debug!("Received a next epoch QC for a view that was not > than our current next epoch high QC")
+                ensure!(
+                    current_next_epoch_qc.is_none()
+                        || next_epoch_qc.view_number > current_next_epoch_qc.unwrap().view_number,
+                    debug!(
+                        "Received a next epoch QC for a view that was not > than our current next \
+                         epoch high QC"
+                    )
                 );
 
                 self.formed_next_epoch_quorum_certificates
@@ -705,6 +731,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     epoch_transition_indicator,
                 )
                 .await?;
+            },
+            HotShotEvent::SetFirstEpoch(view, epoch) => {
+                self.first_epoch = Some((*view, *epoch));
             },
             _ => {},
         }

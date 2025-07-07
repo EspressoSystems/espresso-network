@@ -15,10 +15,10 @@ use clap::Parser;
 use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
-    Leaf, Leaf2, NetworkConfig, Payload, SeqTypes,
+    v0_3::{EventKey, IndexedStake, StakeTableEvent},
+    Leaf, Leaf2, NetworkConfig, Payload, SeqTypes, ValidatorMap,
 };
-use hotshot::{types::BLSPubKey, InitializerEpochInfo};
+use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
     DhtPersistentStorage, SerializableRecord,
 };
@@ -42,7 +42,6 @@ use hotshot_types::{
     },
     vote::HasViewNumber,
 };
-use indexmap::IndexMap;
 use itertools::Itertools;
 
 use crate::{
@@ -527,7 +526,10 @@ impl Inner {
             return Ok(anchor);
         }
 
-        tracing::warn!("Failed to find an anchor leaf in `Leaf2` storage. Checking legacy `Leaf` storage. This is very likely to fail.");
+        tracing::warn!(
+            "Failed to find an anchor leaf in `Leaf2` storage. Checking legacy `Leaf` storage. \
+             This is very likely to fail."
+        );
         if self.legacy_anchor_leaf_path().is_file() {
             // We may have an old version of storage, where there is just a single file for the
             // anchor leaf. Read it and return the contents.
@@ -1351,10 +1353,8 @@ impl SequencerPersistence for Persistence {
         let path = &inner.drb_dir_path();
         let file_path = path.join(epoch.to_string()).with_extension("bin");
         let bytes = fs::read(&file_path).context("read")?;
-        Ok(bincode::deserialize(&bytes).context(format!(
-            "failed to deserialize DrbInput for epoch {}",
-            epoch
-        ))?)
+        Ok(bincode::deserialize(&bytes)
+            .context(format!("failed to deserialize DrbInput for epoch {epoch}"))?)
     }
 
     async fn store_drb_result(
@@ -1511,10 +1511,7 @@ impl SequencerPersistence for Persistence {
 
 #[async_trait]
 impl MembershipPersistence for Persistence {
-    async fn load_stake(
-        &self,
-        epoch: EpochNumber,
-    ) -> anyhow::Result<Option<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>>> {
+    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<ValidatorMap>> {
         let inner = self.inner.read().await;
         let path = &inner.stake_table_dir_path();
         let file_path = path.join(epoch.to_string()).with_extension("txt");
@@ -1542,11 +1539,7 @@ impl MembershipPersistence for Persistence {
             .collect()
     }
 
-    async fn store_stake(
-        &self,
-        epoch: EpochNumber,
-        stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
-    ) -> anyhow::Result<()> {
+    async fn store_stake(&self, epoch: EpochNumber, stake: ValidatorMap) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
         let dir_path = &inner.stake_table_dir_path();
 
@@ -1612,7 +1605,7 @@ impl MembershipPersistence for Persistence {
         for (event_key, event) in events {
             let (block_number, event_index) = event_key;
             // file name is like block_index.json
-            let filename = format!("{}_{}", block_number, event_index);
+            let filename = format!("{block_number}_{event_index}");
             let file_path = events_dir.join(filename).with_extension("json");
 
             if file_path.exists() {

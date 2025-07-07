@@ -147,7 +147,7 @@ build-docker-images:
     scripts/build-docker-images-native
 
 # generate rust bindings for contracts
-REGEXP := "^LightClient(V\\d+)?$|^LightClientArbitrum(V\\d+)?$|^FeeContract$|PlonkVerifier(V\\d+)?$|^ERC1967Proxy$|^LightClient(V\\d+)?Mock$|^StakeTable$|^StakeTableV2$|^EspToken$|^EspTokenV2$|^Timelock$|^OwnableUpgradeable$"
+REGEXP := "^LightClient(V\\d+)?$|^LightClientArbitrum(V\\d+)?$|^FeeContract$|PlonkVerifier(V\\d+)?$|^ERC1967Proxy$|^LightClient(V\\d+)?Mock$|^StakeTable$|^StakeTableV2$|^EspToken$|^EspTokenV2$|^OpsTimelock$|^SafeExitTimelock$|^OwnableUpgradeable$"
 gen-bindings:
     # Update the git submodules
     git submodule update --init --recursive
@@ -158,9 +158,6 @@ gen-bindings:
       --module --bindings-path contracts/rust/adapter/src/bindings --select "{{REGEXP}}" --overwrite --force \
       --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:0xffffffffffffffffffffffffffffffffffffffff \
       --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:0xffffffffffffffffffffffffffffffffffffffff
-
-    cargo fmt --all
-    cargo sort -g -w
 
     just export-contract-abis
     just gen-go-bindings

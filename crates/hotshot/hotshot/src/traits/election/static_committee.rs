@@ -48,9 +48,16 @@ impl<TYPES: NodeType> StaticCommittee<TYPES> {
     fn check_first_epoch(&self, epoch: Option<<TYPES as NodeType>::Epoch>) {
         if let Some(epoch) = epoch {
             if let Some(first_epoch) = self.first_epoch {
-                assert!(first_epoch <= epoch, "Called a method in StaticCommittee where first_epoch={first_epoch:} but epoch={epoch}");
+                assert!(
+                    first_epoch <= epoch,
+                    "Called a method in StaticCommittee where first_epoch={first_epoch:} but \
+                     epoch={epoch}"
+                );
             } else {
-                panic!("Called a method in StaticCommittee with non-None epoch={epoch}, but set_first_epoch was not yet called");
+                panic!(
+                    "Called a method in StaticCommittee with non-None epoch={epoch}, but \
+                     set_first_epoch was not yet called"
+                );
             }
         }
     }

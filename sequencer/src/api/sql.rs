@@ -185,7 +185,11 @@ impl CatchupStorage for SqlStorage {
             match state.block_merkle_tree.lookup(height - 1) {
                 LookupResult::Ok(_, proof) => Ok(proof),
                 _ => {
-                    bail!("state snapshot {view:?},{height} was found but does not contain frontier at height {}; this should not be possible", height - 1);
+                    bail!(
+                        "state snapshot {view:?},{height} was found but does not contain frontier \
+                         at height {}; this should not be possible",
+                        height - 1
+                    );
                 },
             }
         }

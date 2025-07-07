@@ -33,7 +33,7 @@ impl AssertSuccess for Output {
         if !self.status.success() {
             let stderr = String::from_utf8(self.stderr.clone()).expect("stderr is utf8");
             let stdout = String::from_utf8(self.stdout.clone()).expect("stdout is utf8");
-            panic!("Command failed:\nstderr: {}\nstdout: {}", stderr, stdout);
+            panic!("Command failed:\nstderr: {stderr}\nstdout: {stdout}");
         }
         self
     }
@@ -48,10 +48,7 @@ impl AssertFailure for Output {
         if self.status.success() {
             let stderr = String::from_utf8(self.stderr.clone()).expect("stderr is utf8");
             let stdout = String::from_utf8(self.stdout.clone()).expect("stdout is utf8");
-            panic!(
-                "Command succeeded but should have failed:\nstderr: {}\nstdout: {}",
-                stderr, stdout
-            );
+            panic!("Command succeeded but should have failed:\nstderr: {stderr}\nstdout: {stdout}");
         }
         self
     }
@@ -188,13 +185,19 @@ async fn test_cli_contract_revert(#[case] version: StakeTableContractVersion) ->
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
-async fn test_cli_register_validator(#[case] version: StakeTableContractVersion) -> Result<()> {
+#[rstest::rstest]
+#[tokio::test]
+async fn test_cli_register_validator(
+    #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
+    version: StakeTableContractVersion,
+    #[values(Signer::Mnemonic, Signer::BrokeMnemonic)] signer: Signer,
+) -> Result<()> {
     setup_test();
     let system = TestSystem::deploy_version(version).await?;
     let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Mnemonic);
-    cmd.arg("register-validator")
+    system.args(&mut cmd, signer);
+    let result = cmd
+        .arg("register-validator")
         .arg("--consensus-private-key")
         .arg(
             system
@@ -213,8 +216,18 @@ async fn test_cli_register_validator(#[case] version: StakeTableContractVersion)
         )
         .arg("--commission")
         .arg("12.34")
-        .output()?
-        .assert_success();
+        .output()?;
+    match signer {
+        Signer::Mnemonic => {
+            result.assert_success();
+        },
+        Signer::BrokeMnemonic => {
+            result.assert_failure();
+            assert!(result.utf8().contains("zero Ethereum balance"));
+        },
+        Signer::Ledger => unreachable!(),
+    };
+
     Ok(())
 }
 
@@ -411,6 +424,7 @@ async fn test_cli_balance(#[case] version: StakeTableContractVersion) -> Result<
     let mut cmd = base_cmd();
     system.args(&mut cmd, Signer::Mnemonic);
     let s = cmd.arg("token-balance").output()?.assert_success().utf8();
+    println!("token-balance output: {s}");
     let parts: Vec<&str> = s.split_whitespace().collect();
     let balance = parts[8].split(".").next().unwrap().parse::<U256>()?;
 
@@ -432,6 +446,20 @@ async fn test_cli_balance(#[case] version: StakeTableContractVersion) -> Result<
     assert!(s.contains(addr));
     assert!(s.contains(" 0.0"));
 
+    Ok(())
+}
+
+// This test can be remove when the deprecated argument is removed
+#[tokio::test]
+async fn test_deprecated_token_address_cli_arg() -> Result<()> {
+    setup_test();
+    let system = TestSystem::deploy().await?;
+
+    let mut cmd = base_cmd();
+    // Add the deprecated --token_address argument
+    cmd.arg("--token-address").arg(system.token.to_string());
+    system.args(&mut cmd, Signer::Mnemonic);
+    cmd.arg("token-balance").output()?.assert_success();
     Ok(())
 }
 
@@ -501,7 +529,7 @@ async fn test_cli_stake_table_full(#[case] version: StakeTableContractVersion) -
     let out = cmd.arg("stake-table").output()?.assert_success().utf8();
 
     // Print output to fix test more easily.
-    println!("{}", out);
+    println!("{out}");
     out.contains("Validator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: BLS_VER_KEY~ksjrqSN9jEvKOeCNNySv9Gcg7UjZvROpOm99zHov8SgxfzhLyno8IUfE1nxOBhGnajBmeTbchVI94ZUg5VLgAT2DBKXBnIC6bY9y2FBaK1wPpIQVgx99-fAzWqbweMsiXKFYwiT-0yQjJBXkWyhtCuTHT4l3CRok68mkobI09q0c comm=12.34 % stake=0.123000000000000000 ESP");
     out.contains(
         " - Delegator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: stake=0.123000000000000000 ESP",
@@ -529,8 +557,11 @@ async fn test_cli_stake_table_compact(#[case] version: StakeTableContractVersion
         .utf8();
 
     // Print output to fix test more easily.
-    println!("{}", out);
-    out.contains("Validator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: BLS_VER_KEY~ksjrqSN9jEvKOeCNNySv9Gcg7UjZ.. comm=12.34 % stake=0.123000000000000000 ESP");
+    println!("{out}");
+    out.contains(
+        "Validator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: \
+         BLS_VER_KEY~ksjrqSN9jEvKOeCNNySv9Gcg7UjZ.. comm=12.34 % stake=0.123000000000000000 ESP",
+    );
     out.contains(
         " - Delegator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: stake=0.123000000000000000 ESP",
     );

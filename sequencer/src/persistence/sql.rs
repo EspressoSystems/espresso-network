@@ -16,11 +16,12 @@ use espresso_types::{
     parse_duration, parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
-    v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
+    v0_3::{EventKey, IndexedStake, StakeTableEvent},
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
+    ValidatorMap,
 };
 use futures::stream::StreamExt;
-use hotshot::{types::BLSPubKey, InitializerEpochInfo};
+use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
     DhtPersistentStorage, SerializableRecord,
 };
@@ -63,7 +64,6 @@ use hotshot_types::{
     },
     vote::HasViewNumber,
 };
-use indexmap::IndexMap;
 use itertools::Itertools;
 use sqlx::{query, Executor, Row};
 
@@ -128,7 +128,7 @@ pub fn build_sqlite_path(path: &str) -> anyhow::Result<PathBuf> {
     // if `sqlite` sub dir does not exist then create it
     if !sub_dir.exists() {
         std::fs::create_dir_all(&sub_dir)
-            .with_context(|| format!("failed to create directory: {:?}", sub_dir))?;
+            .with_context(|| format!("failed to create directory: {sub_dir:?}"))?;
     }
 
     Ok(sub_dir.join("database"))
@@ -1539,7 +1539,8 @@ impl SequencerPersistence for Persistence {
         loop {
             let mut tx = self.db.read().await?;
             let rows = query(
-                "SELECT payload_hash, data FROM da_proposal WHERE view >= $1 ORDER BY view LIMIT $2",
+                "SELECT payload_hash, data FROM da_proposal WHERE view >= $1 ORDER BY view LIMIT \
+                 $2",
             )
             .bind(offset)
             .bind(batch_size)
@@ -1719,7 +1720,8 @@ impl SequencerPersistence for Persistence {
         let mut tx = self.db.read().await?;
 
         let (is_completed, mut offset) = query_as::<(bool, i64)>(
-            "SELECT completed, migrated_rows from epoch_migration WHERE table_name = 'quorum_proposals'",
+            "SELECT completed, migrated_rows from epoch_migration WHERE table_name = \
+             'quorum_proposals'",
         )
         .fetch_one(tx.as_mut())
         .await?;
@@ -1733,12 +1735,14 @@ impl SequencerPersistence for Persistence {
 
         loop {
             let mut tx = self.db.read().await?;
-            let rows =
-                query("SELECT view, leaf_hash, data FROM quorum_proposals WHERE view >= $1 ORDER BY view LIMIT $2")
-                .bind(offset)
-                    .bind(batch_size)
-                    .fetch_all(tx.as_mut())
-                    .await?;
+            let rows = query(
+                "SELECT view, leaf_hash, data FROM quorum_proposals WHERE view >= $1 ORDER BY \
+                 view LIMIT $2",
+            )
+            .bind(offset)
+            .bind(batch_size)
+            .fetch_all(tx.as_mut())
+            .await?;
 
             drop(tx);
 
@@ -1820,7 +1824,8 @@ impl SequencerPersistence for Persistence {
         let mut tx = self.db.read().await?;
 
         let (is_completed, mut offset) = query_as::<(bool, i64)>(
-            "SELECT completed, migrated_rows from epoch_migration WHERE table_name = 'quorum_certificate'",
+            "SELECT completed, migrated_rows from epoch_migration WHERE table_name = \
+             'quorum_certificate'",
         )
         .fetch_one(tx.as_mut())
         .await?;
@@ -1833,12 +1838,14 @@ impl SequencerPersistence for Persistence {
         tracing::warn!("migrating quorum certificates..");
         loop {
             let mut tx = self.db.read().await?;
-            let rows =
-                query("SELECT view, leaf_hash, data FROM quorum_certificate WHERE view >= $1 ORDER BY view LIMIT $2")
-                .bind(offset)
-                    .bind(batch_size)
-                    .fetch_all(tx.as_mut())
-                    .await?;
+            let rows = query(
+                "SELECT view, leaf_hash, data FROM quorum_certificate WHERE view >= $1 ORDER BY \
+                 view LIMIT $2",
+            )
+            .bind(offset)
+            .bind(batch_size)
+            .fetch_all(tx.as_mut())
+            .await?;
 
             drop(tx);
             if rows.is_empty() {
@@ -2143,10 +2150,7 @@ impl SequencerPersistence for Persistence {
 
 #[async_trait]
 impl MembershipPersistence for Persistence {
-    async fn load_stake(
-        &self,
-        epoch: EpochNumber,
-    ) -> anyhow::Result<Option<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>>> {
+    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<ValidatorMap>> {
         let result = self
             .db
             .read()
@@ -2190,11 +2194,7 @@ impl MembershipPersistence for Persistence {
             .collect()
     }
 
-    async fn store_stake(
-        &self,
-        epoch: EpochNumber,
-        stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
-    ) -> anyhow::Result<()> {
+    async fn store_stake(&self, epoch: EpochNumber, stake: ValidatorMap) -> anyhow::Result<()> {
         let mut tx = self.db.write().await?;
 
         let stake_table_bytes = bincode::serialize(&stake).context("serializing stake table")?;
@@ -2319,10 +2319,13 @@ impl MembershipPersistence for Persistence {
             last_processed_l1_block
         };
 
-        let rows = query("SELECT l1_block, log_index, event FROM stake_table_events WHERE l1_block <= $1 ORDER BY l1_block ASC, log_index ASC")
-            .bind(query_l1_block)
-            .fetch_all(tx.as_mut())
-            .await?;
+        let rows = query(
+            "SELECT l1_block, log_index, event FROM stake_table_events WHERE l1_block <= $1 ORDER \
+             BY l1_block ASC, log_index ASC",
+        )
+        .bind(query_l1_block)
+        .fetch_all(tx.as_mut())
+        .await?;
 
         let events = rows
             .into_iter()
@@ -2364,7 +2367,8 @@ impl DhtPersistentStorage for Persistence {
             bincode::serialize(&records).with_context(|| "failed to serialize records")?;
 
         // Prepare the statement
-        let stmt = "INSERT INTO libp2p_dht (id, serialized_records) VALUES (0, $1) ON CONFLICT (id) DO UPDATE SET serialized_records = $1";
+        let stmt = "INSERT INTO libp2p_dht (id, serialized_records) VALUES (0, $1) ON CONFLICT \
+                    (id) DO UPDATE SET serialized_records = $1";
 
         // Execute the query
         let mut tx = self

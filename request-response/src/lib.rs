@@ -456,7 +456,8 @@ impl<
                                 // Spawn the task that sends the request to the participant
                                 let individual_sending_task = spawn(async move {
                                     trace!(
-                                        "Sending request {request_message_clone:?} to {recipient_clone:?}"
+                                        "Sending request {request_message_clone:?} to \
+                                         {recipient_clone:?}"
                                     );
 
                                     let _ = self_clone
@@ -565,14 +566,16 @@ impl<
             Ok(ref permit) => permit,
             Err(NamedSemaphoreError::PerKeyLimitReached) => {
                 warn!(
-                    "Failed to process request from {}: too many requests from the same key are already being processed",
+                    "Failed to process request from {}: too many requests from the same key are \
+                     already being processed",
                     request_message.public_key
                 );
                 return;
             },
             Err(NamedSemaphoreError::GlobalLimitReached) => {
                 warn!(
-                    "Failed to process request from {}: too many requests are already being processed",
+                    "Failed to process request from {}: too many requests are already being \
+                     processed",
                     request_message.public_key
                 );
                 return;
