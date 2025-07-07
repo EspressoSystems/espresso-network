@@ -3035,7 +3035,7 @@ mod tests {
         let mut operation = TimelockOperationData {
             target: fee_contract_proxy_addr,
             value: U256::ZERO,
-            data: upgrade_data.into(),
+            data: upgrade_data,
             predecessor: B256::ZERO,
             salt: B256::ZERO,
             delay,
@@ -3131,7 +3131,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_encode_function_call_with_bytes() -> Result<()> {
-        let function_signature = "emitData(bytes)";
+        let function_signature = "emitData(bytes)".to_string();
         let values = vec!["0xdeadbeef".to_string()];
         let expected = "0xd836083e00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000004deadbeef00000000000000000000000000000000000000000000000000000000".parse::<Bytes>()?;
         let encoded = encode_function_call(&function_signature, values).expect("encoding failed");

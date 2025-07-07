@@ -477,7 +477,6 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
     ) -> Result<()> {
         let timelock_operation_type = self
             .timelock_operation_type
-            .clone()
             .context("Timelock operation type not found")?;
         let target_contract = self
             .timelock_target_contract
@@ -485,7 +484,6 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             .context("Timelock target not found")?;
         let value = self
             .timelock_operation_value
-            .clone()
             .context("Timelock operation value not found")?;
         let function_signature = self
             .timelock_operation_function_signature
@@ -501,7 +499,6 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             .context("Timelock operation salt not found")?;
         let delay = self
             .timelock_operation_delay
-            .clone()
             .context("Timelock operation delay not found")?;
 
         let (target_addr, contract_type) = match target_contract.as_str() {
@@ -532,14 +529,14 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             _ => anyhow::bail!("Invalid target contract: {}", target_contract),
         };
 
-        let function_calldata = encode_function_call(&function_signature, function_values.clone())
+        let function_calldata = encode_function_call(function_signature, function_values.clone())
             .context("Failed to encode function data")?;
 
         // Parse salt from string to B256
         let salt_bytes = if salt == "0x" || salt.is_empty() {
             B256::ZERO // Use zero salt if empty
-        } else if salt.starts_with("0x") {
-            B256::from_hex(&salt[2..]).context("Invalid salt hex format")?
+        } else if let Some(stripped) = salt.strip_prefix("0x") {
+            B256::from_hex(stripped).context("Invalid salt hex format")?
         } else {
             B256::from_hex(&salt).context("Invalid salt hex format")?
         };
