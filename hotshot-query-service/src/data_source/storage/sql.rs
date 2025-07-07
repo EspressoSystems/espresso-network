@@ -572,7 +572,8 @@ impl SqlStorage {
             let last_expected = migrations.last();
             if last_applied.as_ref() != last_expected {
                 return Err(Error::msg(format!(
-                    "DB is out of date: last applied migration is {last_applied:?}, but expected {last_expected:?}"
+                    "DB is out of date: last applied migration is {last_applied:?}, but expected \
+                     {last_expected:?}"
                 )));
             }
         } else {
@@ -722,7 +723,8 @@ impl PruneStorage for SqlStorage {
 
         #[cfg(feature = "embedded-db")]
         let query = "
-            SELECT( (SELECT page_count FROM pragma_page_count) * (SELECT * FROM pragma_page_size)) AS total_bytes";
+            SELECT( (SELECT page_count FROM pragma_page_count) * (SELECT * FROM pragma_page_size)) \
+                     AS total_bytes";
 
         let row = tx.fetch_one(query).await?;
         let size: i64 = row.get(0);
@@ -1283,7 +1285,8 @@ pub mod testing {
             .await
             {
                 panic!(
-                    "failed to connect to TmpDb within configured timeout {timeout_duration:?}: {err:#}\n{}",
+                    "failed to connect to TmpDb within configured timeout {timeout_duration:?}: \
+                     {err:#}\n{}",
                     "Consider increasing the timeout by setting SQL_TMP_DB_CONNECT_TIMEOUT"
                 );
             }
@@ -1631,7 +1634,8 @@ mod test {
         // checking if the data is inserted correctly
         // there should be multiple nodes with same index but different created time
         let (count,) = query_as::<(i64,)>(
-            " SELECT count(*) FROM (SELECT count(*) as count FROM test_tree GROUP BY path having count(*) > 1)",
+            " SELECT count(*) FROM (SELECT count(*) as count FROM test_tree GROUP BY path having \
+             count(*) > 1)",
         )
         .fetch_one(tx.as_mut())
         .await
@@ -1649,7 +1653,8 @@ mod test {
         tx.commit().await.unwrap();
         let mut tx = storage.read().await.unwrap();
         let (count,) = query_as::<(i64,)>(
-            "SELECT count(*) FROM (SELECT count(*) as count FROM test_tree GROUP BY path having count(*) > 1)",
+            "SELECT count(*) FROM (SELECT count(*) as count FROM test_tree GROUP BY path having \
+             count(*) > 1)",
         )
         .fetch_one(tx.as_mut())
         .await

@@ -99,6 +99,9 @@ impl TestSystem {
             .epoch_start_block(epoch_start_block)
             .multisig_pauser(deployer_address)
             .exit_escrow_period(U256::from(exit_escrow_period.as_secs()))
+            .token_name("Espresso".to_string())
+            .token_symbol("ESP".to_string())
+            .initial_token_supply(U256::from(3590000000u64))
             .ops_timelock_delay(U256::from(0))
             .ops_timelock_admin(signer.address())
             .ops_timelock_proposers(vec![signer.address()])
@@ -268,16 +271,17 @@ impl TestSystem {
     pub fn args(&self, cmd: &mut Command, signer: Signer) {
         cmd.arg("--rpc-url")
             .arg(self.rpc_url.to_string())
-            .arg("--token-address")
-            .arg(self.token.to_string())
             .arg("--stake-table-address")
             .arg(self.stake_table.to_string())
             .arg("--account-index")
             .arg("0");
 
         match signer {
-            Signer::Mnemonic => cmd.arg("--mnemonic").arg(DEV_MNEMONIC),
             Signer::Ledger => cmd.arg("--ledger"),
+            Signer::Mnemonic => cmd.arg("--mnemonic").arg(DEV_MNEMONIC),
+            Signer::BrokeMnemonic => cmd
+                .arg("--mnemonic")
+                .arg("roast term reopen pave choose high rally trouble upon govern hollow stand"),
         };
     }
 }
@@ -286,6 +290,7 @@ impl TestSystem {
 pub enum Signer {
     Ledger,
     Mnemonic,
+    BrokeMnemonic,
 }
 
 #[cfg(test)]

@@ -780,7 +780,10 @@ mod test {
                 .to_string()
                 .contains("Fee contract cannot use the zero address"));
         } else {
-            panic!("Expected the fee contract to complain about the zero address but the validation succeeded");
+            panic!(
+                "Expected the fee contract to complain about the zero address but the validation \
+                 succeeded"
+            );
         }
     }
 

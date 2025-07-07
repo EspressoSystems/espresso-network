@@ -298,7 +298,10 @@ impl serde::de::Visitor<'_> for MonetaryValueVisitor {
     type Value = MonetaryValue;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        formatter.write_str("a string in a ticker format, with the required number of significant digits.  For example: `USD 100.00` or `ETH 0.000000000000000001`")
+        formatter.write_str(
+            "a string in a ticker format, with the required number of significant digits.  For \
+             example: `USD 100.00` or `ETH 0.000000000000000001`",
+        )
     }
 
     /// We're wanting to deserialize a [MonetaryValue] from a string that can
@@ -522,7 +525,8 @@ mod test {
                 let deserialized = serde_json::from_str::<MonetaryValue>(&serialized).unwrap();
                 assert_eq!(
                     value, deserialized,
-                    "{currency} {i} encoded result: {serialized}: have {deserialized}, want {value}"
+                    "{currency} {i} encoded result: {serialized}: have {deserialized}, want \
+                     {value}"
                 );
             }
         }

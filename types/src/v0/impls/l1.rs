@@ -866,7 +866,10 @@ impl L1Client {
                             break block;
                         },
                         Ok(None) => {
-                            tracing::warn!("no finalized block even though finalized snapshot is Some; this can be caused by an L1 client failover");
+                            tracing::warn!(
+                                "no finalized block even though finalized snapshot is Some; this \
+                                 can be caused by an L1 client failover"
+                            );
                             self.retry_delay().await;
                         },
                         Err(err) => {
@@ -1079,7 +1082,8 @@ impl L1State {
                 tracing::error!(
                     ?old_block,
                     ?block,
-                    "got different info for the same finalized height; something has gone very wrong with the L1",
+                    "got different info for the same finalized height; something has gone very \
+                     wrong with the L1",
                 );
             }
         }
@@ -1327,9 +1331,10 @@ mod test {
             .wait_for_finalized_block_with_timestamp(timestamp)
             .await;
         assert!(
-                block.timestamp >= timestamp,
-                "wait_for_finalized_block_with_timestamp({timestamp}) returned too early a block: {block:?}",
-            );
+            block.timestamp >= timestamp,
+            "wait_for_finalized_block_with_timestamp({timestamp}) returned too early a block: \
+             {block:?}",
+        );
         let parent = provider
             .get_block(BlockId::Number(BlockNumberOrTag::Number(block.number - 1)))
             .full()
@@ -1337,9 +1342,11 @@ mod test {
             .unwrap()
             .unwrap();
         assert!(
-                parent.header.inner.timestamp < timestamp.to::<u64>(),
-                "wait_for_finalized_block_with_timestamp({timestamp}) did not return the earliest possible block: returned {block:?}, but earlier block {parent:?} has an acceptable timestamp too",
-            );
+            parent.header.inner.timestamp < timestamp.to::<u64>(),
+            "wait_for_finalized_block_with_timestamp({timestamp}) did not return the earliest \
+             possible block: returned {block:?}, but earlier block {parent:?} has an acceptable \
+             timestamp too",
+        );
 
         // Compare against underlying provider.
         let true_block = provider
@@ -1407,9 +1414,10 @@ mod test {
 
         let new_block_height = provider.get_block_number().await.unwrap();
         assert!(
-                new_block_height >= block_height + 10,
-                "wait_for_block returned too early; initial height = {block_height}, new height = {new_block_height}",
-            );
+            new_block_height >= block_height + 10,
+            "wait_for_block returned too early; initial height = {block_height}, new height = \
+             {new_block_height}",
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

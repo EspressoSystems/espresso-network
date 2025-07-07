@@ -115,15 +115,16 @@ pub async fn compute_drb_result(
 
     let mut hash = drb_input.value.to_vec();
     let mut iteration = drb_input.iteration;
-    let remaining_iterations = drb_input.difficulty_level
-      .checked_sub(iteration)
-      .unwrap_or_else(||
-        panic!(
-          "DRB difficulty level {} exceeds the iteration {} of the input we were given. This is a fatal error", 
-          drb_input.difficulty_level,
-          iteration
-        )
-      );
+    let remaining_iterations = drb_input
+        .difficulty_level
+        .checked_sub(iteration)
+        .unwrap_or_else(|| {
+            panic!(
+                "DRB difficulty level {} exceeds the iteration {} of the input we were given. \
+                 This is a fatal error",
+                drb_input.difficulty_level, iteration
+            )
+        });
 
     let final_checkpoint = remaining_iterations / DRB_CHECKPOINT_INTERVAL;
 

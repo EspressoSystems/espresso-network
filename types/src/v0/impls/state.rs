@@ -78,7 +78,10 @@ pub enum ProposalValidationError {
         max_block_size: BlockSize,
         block_size: BlockSize,
     },
-    #[error("Insufficient Fee: block_size={max_block_size}, base_fee={base_fee}, proposed_fee={proposed_fee}")]
+    #[error(
+        "Insufficient Fee: block_size={max_block_size}, base_fee={base_fee}, \
+         proposed_fee={proposed_fee}"
+    )]
     InsufficientFee {
         max_block_size: BlockSize,
         base_fee: FeeAmount,
@@ -119,7 +122,10 @@ pub enum ProposalValidationError {
         system: u64,
         diff: u64,
     },
-    #[error("Inconsistent timestamps on header: timestamp:={timestamp}, timestamp_millis={timestamp_millis}")]
+    #[error(
+        "Inconsistent timestamps on header: timestamp:={timestamp}, \
+         timestamp_millis={timestamp_millis}"
+    )]
     InconsistentTimestamps {
         timestamp: u64,
         timestamp_millis: u64,

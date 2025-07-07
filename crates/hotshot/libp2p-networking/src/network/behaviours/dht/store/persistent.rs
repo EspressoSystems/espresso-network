@@ -261,7 +261,10 @@ impl<R: RecordStore, D: DhtPersistentStorage> PersistentStore<R, D> {
     fn try_save_to_persistent_storage(&mut self) -> bool {
         // Try to acquire the semaphore, warning if another save operation is already in progress
         let Ok(permit) = Arc::clone(&self.semaphore).try_acquire_owned() else {
-            warn!("Skipping DHT save to persistent storage - another save operation is already in progress");
+            warn!(
+                "Skipping DHT save to persistent storage - another save operation is already in \
+                 progress"
+            );
             return false;
         };
 

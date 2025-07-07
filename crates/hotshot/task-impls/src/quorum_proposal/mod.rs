@@ -185,7 +185,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 let valid = event_view == view_number;
                 if valid {
                     tracing::debug!(
-                        "Dependency {dependency_type:?} is complete for view {event_view:?}, my id is {id:?}!",
+                        "Dependency {dependency_type:?} is complete for view {event_view:?}, my \
+                         id is {id:?}!",
                     );
                 }
                 valid
@@ -699,9 +700,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 // Only update if the qc is from a newer view
                 let current_next_epoch_qc =
                     self.consensus.read().await.next_epoch_high_qc().cloned();
-                ensure!(current_next_epoch_qc.is_none() ||
-                    next_epoch_qc.view_number > current_next_epoch_qc.unwrap().view_number,
-                    debug!("Received a next epoch QC for a view that was not > than our current next epoch high QC")
+                ensure!(
+                    current_next_epoch_qc.is_none()
+                        || next_epoch_qc.view_number > current_next_epoch_qc.unwrap().view_number,
+                    debug!(
+                        "Received a next epoch QC for a view that was not > than our current next \
+                         epoch high QC"
+                    )
                 );
 
                 self.formed_next_epoch_quorum_certificates

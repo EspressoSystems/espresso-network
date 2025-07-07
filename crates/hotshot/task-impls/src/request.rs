@@ -132,8 +132,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for NetworkRequest
 
                 ensure!(
                     !target_epochs.is_empty(),
-                    "We don't belong to the current epoch and \
-                we don't belong to the next epoch. Do not request VID share."
+                    "We don't belong to the current epoch and we don't belong to the next epoch. \
+                     Do not request VID share."
                 );
 
                 let consensus_reader = self.consensus.read().await;
@@ -346,7 +346,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
                     sleep(REQUEST_TIMEOUT).await;
                 } else {
                     // This shouldn't be possible `recipients_it.next()` should clone original and start over if `None`
-                    tracing::warn!("Sent VID request to all available DA members and got no response for view: {view:?}, my id: {my_id:?}");
+                    tracing::warn!(
+                        "Sent VID request to all available DA members and got no response for \
+                         view: {view:?}, my id: {my_id:?}"
+                    );
                     return;
                 }
             }

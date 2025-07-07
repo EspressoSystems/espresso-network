@@ -274,7 +274,8 @@ impl<Types: NodeType> GlobalState<Types> {
 
         if let Some(previous_value) = previous_value {
             tracing::warn!(
-                "builder {parent_id} overwrote previous spawned_builder_state entry: {previous_value:?}"
+                "builder {parent_id} overwrote previous spawned_builder_state entry: \
+                 {previous_value:?}"
             );
         }
 
@@ -335,7 +336,8 @@ impl<Types: NodeType> GlobalState<Types> {
 
         if let Some(previous_builder_state_entry) = previous_builder_state_entry {
             tracing::warn!(
-                "block {id} overwrote previous block: {previous_builder_state_entry:?}. previous cache entry: {previous_cache_entry:?}"
+                "block {id} overwrote previous block: {previous_builder_state_entry:?}. previous \
+                 cache entry: {previous_cache_entry:?}"
             );
         }
     }
@@ -405,16 +407,23 @@ impl<Types: NodeType> GlobalState<Types> {
             let old_status = write_guard.get(&txn_hash);
             match old_status {
                 Some(TransactionStatus::Rejected { reason }) => {
-                    tracing::debug!("Changing the status of a rejected transaction to status {txn_status:?}! The reason it is previously rejected is {reason:?}");
+                    tracing::debug!(
+                        "Changing the status of a rejected transaction to status {txn_status:?}! \
+                         The reason it is previously rejected is {reason:?}"
+                    );
                 },
                 Some(TransactionStatus::Sequenced { leaf }) => {
-                    let e = format!("Changing the status of a sequenced transaction to status {txn_status:?} is not allowed! The transaction is sequenced in leaf {leaf:?}");
+                    let e = format!(
+                        "Changing the status of a sequenced transaction to status {txn_status:?} \
+                         is not allowed! The transaction is sequenced in leaf {leaf:?}"
+                    );
                     tracing::error!(e);
                     return Err(BuildError::Error(e));
                 },
                 _ => {
                     tracing::debug!(
-                        "change status of transaction {txn_hash} from {old_status:?} to {txn_status:?}"
+                        "change status of transaction {txn_hash} from {old_status:?} to \
+                         {txn_status:?}"
                     );
                 },
             }
@@ -647,7 +656,8 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
                     != global_state.last_garbage_collected_view_num
             {
                 tracing::warn!(
-                    "Requesting for view {}, last decide-triggered cleanup on view {}, highest view num is {}",
+                    "Requesting for view {}, last decide-triggered cleanup on view {}, highest \
+                     view num is {}",
                     view_num,
                     global_state.last_garbage_collected_view_num,
                     global_state.highest_view_num_builder_id.parent_view
@@ -680,7 +690,8 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
 
             if let Some(id_and_sender) = found_builder_state {
                 tracing::info!(
-                    "Got matching BlockBuilder for {state_id}, sending get_available_blocks request"
+                    "Got matching BlockBuilder for {state_id}, sending get_available_blocks \
+                     request"
                 );
 
                 if let Err(e) = id_and_sender
@@ -1298,7 +1309,8 @@ async fn handle_quorum_event_implementation<Types: NodeType>(
 
     if !sender.validate(&quorum_proposal.signature, leaf.commit().as_ref()) {
         tracing::error!(
-            "Validation Failure on QuorumProposal for view {}: Leader for the current view: {sender}",
+            "Validation Failure on QuorumProposal for view {}: Leader for the current view: \
+             {sender}",
             quorum_proposal.data.view_number()
         );
         return Err(HandleQuorumEventError::SignatureValidationFailed);
@@ -1337,7 +1349,8 @@ async fn handle_decide_event<Types: NodeType>(
         .await
     {
         tracing::warn!(
-            "Error {e}, failed to send Decide event to builder states for view {latest_decide_view_number}"
+            "Error {e}, failed to send Decide event to builder states for view \
+             {latest_decide_view_number}"
         );
     }
 }
@@ -1360,9 +1373,16 @@ impl<Types: NodeType> From<HandleReceivedTxnsError<Types>> for BuildError {
             HandleReceivedTxnsError::TransactionTooBig {
                 estimated_length,
                 max_txn_len,
-            } => BuildError::Error(format!("Transaction too big (estimated length {estimated_length}, currently accepting <= {max_txn_len})")),
-            HandleReceivedTxnsError::TooManyTransactions => BuildError::Error("Too many transactions".to_owned()),
-            HandleReceivedTxnsError::Internal(err) => BuildError::Error(format!("Internal error when submitting transaction: {err}")),
+            } => BuildError::Error(format!(
+                "Transaction too big (estimated length {estimated_length}, currently accepting <= \
+                 {max_txn_len})"
+            )),
+            HandleReceivedTxnsError::TooManyTransactions => {
+                BuildError::Error("Too many transactions".to_owned())
+            },
+            HandleReceivedTxnsError::Internal(err) => {
+                BuildError::Error(format!("Internal error when submitting transaction: {err}"))
+            },
         }
     }
 }
@@ -1615,9 +1635,20 @@ mod test {
             "There should be a single entry in the spawned builder states hashmap"
         );
 
-        assert!(state.spawned_builder_states.contains_key(&builder_state_id), "The spawned builder states should contain an entry with the bootstrapped parameters passed into new");
+        assert!(
+            state.spawned_builder_states.contains_key(&builder_state_id),
+            "The spawned builder states should contain an entry with the bootstrapped parameters \
+             passed into new"
+        );
 
-        assert!(!state.spawned_builder_states.contains_key(&BuilderStateId { parent_commitment: parent_commit, parent_view: ViewNumber::new(0) }), "The spawned builder states should not contain any other entry, as such it should not contain any entry with a higher view number, but the same parent commit");
+        assert!(
+            !state.spawned_builder_states.contains_key(&BuilderStateId {
+                parent_commitment: parent_commit,
+                parent_view: ViewNumber::new(0)
+            }),
+            "The spawned builder states should not contain any other entry, as such it should not \
+             contain any entry with a higher view number, but the same parent commit"
+        );
 
         // We can't compare the Senders directly
 
@@ -1842,7 +1873,11 @@ mod test {
                 2,
                 "The spawned_builder_states should still have 2 elements in it"
             );
-            assert_eq!(state.highest_view_num_builder_id, builder_state_id, "The highest view number builder id should still be the one that was just registered");
+            assert_eq!(
+                state.highest_view_num_builder_id, builder_state_id,
+                "The highest view number builder id should still be the one that was just \
+                 registered"
+            );
 
             req_receiver
         };
@@ -2118,7 +2153,10 @@ mod test {
                     // This is expected
                 },
                 _ => {
-                    panic!("did not receive TriggerStatus::Start from vid_trigger_receiver as expected");
+                    panic!(
+                        "did not receive TriggerStatus::Start from vid_trigger_receiver as \
+                         expected"
+                    );
                 },
             }
         }
@@ -2343,7 +2381,10 @@ mod test {
                     // This is expected
                 },
                 _ => {
-                    panic!("did not receive TriggerStatus::Start from vid_trigger_receiver as expected");
+                    panic!(
+                        "did not receive TriggerStatus::Start from vid_trigger_receiver as \
+                         expected"
+                    );
                 },
             }
 
@@ -2851,7 +2892,8 @@ mod test {
             };
             assert!(
                 !state.spawned_builder_states.contains_key(&builder_state_id),
-                "the spawned builder states should contain the builder state id, {builder_state_id}"
+                "the spawned builder states should contain the builder state id, \
+                 {builder_state_id}"
             );
         }
 
@@ -2867,7 +2909,8 @@ mod test {
             };
             assert!(
                 state.spawned_builder_states.contains_key(&builder_state_id),
-                "The spawned builder states should contain the builder state id: {builder_state_id}"
+                "The spawned builder states should contain the builder state id: \
+                 {builder_state_id}"
             );
         }
     }
@@ -3267,7 +3310,8 @@ mod test {
             },
             Some(message) => {
                 panic!(
-                    "Expected a request for available blocks, but got a different message: {message:?}"
+                    "Expected a request for available blocks, but got a different message: \
+                     {message:?}"
                 );
             },
         };
@@ -3412,7 +3456,8 @@ mod test {
             },
             Some(message) => {
                 panic!(
-                    "Expected a request for available blocks, but got a different message: {message:?}"
+                    "Expected a request for available blocks, but got a different message: \
+                     {message:?}"
                 );
             },
         };

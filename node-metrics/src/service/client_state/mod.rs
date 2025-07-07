@@ -1232,7 +1232,10 @@ impl InternalClientMessageProcessingTask {
                 message
             } else {
                 tracing::error!("internal client message handler closed.");
-                panic!("InternalClientMessageProcessingTask stream closed, unable to process new requests from clients.");
+                panic!(
+                    "InternalClientMessageProcessingTask stream closed, unable to process new \
+                     requests from clients."
+                );
             };
 
             if let Err(err) =

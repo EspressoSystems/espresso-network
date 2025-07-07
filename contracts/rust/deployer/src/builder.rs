@@ -142,11 +142,17 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             },
             Contract::EspTokenProxy => {
                 let token_recipient = self.token_recipient.unwrap_or(admin);
-                let token_name = self.token_name.clone().unwrap_or("Espresso".to_string());
-                let token_symbol = self.token_symbol.clone().unwrap_or("ESP".to_string());
+                let token_name = self
+                    .token_name
+                    .clone()
+                    .context("Token name must be set when deploying esp token")?;
+                let token_symbol = self
+                    .token_symbol
+                    .clone()
+                    .context("Token symbol must be set when deploying esp token")?;
                 let initial_supply = self
                     .initial_token_supply
-                    .unwrap_or(U256::from(3590000000u64));
+                    .context("Initial token supply must be set when deploying esp token")?;
                 let addr = crate::deploy_token_proxy(
                     provider,
                     contracts,
@@ -342,7 +348,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         contracts,
                         self.rpc_url.clone(),
                         self.multisig.context(
-                            "Multisig address must be set when upgrading to --use-multisig flag is present",
+                            "Multisig address must be set when upgrading to --use-multisig flag \
+                             is present",
                         )?,
                         multisig_pauser,
                         Some(dry_run),
