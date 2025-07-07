@@ -289,7 +289,8 @@ impl Parse for CrossTestData {
                 description.ignore(ignore);
             } else {
                 panic!(
-                    "Unexpected token. Expected one of: Metadata, Ignore, Impls, BuilderImpls, Versions, Types, Testname"
+                    "Unexpected token. Expected one of: Metadata, Ignore, Impls, BuilderImpls, \
+                     Versions, Types, Testname"
                 );
             }
             if input.peek(Token![,]) {

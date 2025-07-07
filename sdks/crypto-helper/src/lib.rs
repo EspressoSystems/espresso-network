@@ -124,7 +124,8 @@ pub extern "C" fn verify_merkle_proof_helper(
 
     if local_block_comm_u256 != circuit_block_comm_u256 {
         return VerificationResult::err(&format!(
-            "circuit commitment mismatch: proven {local_block_comm_u256} != expected {circuit_block_comm_u256}"
+            "circuit commitment mismatch: proven {local_block_comm_u256} != expected \
+             {circuit_block_comm_u256}"
         ));
     }
     VerificationResult::success()

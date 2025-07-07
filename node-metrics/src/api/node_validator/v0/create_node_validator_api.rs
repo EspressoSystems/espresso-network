@@ -94,7 +94,10 @@ impl SubmitPublicUrlsToScrapeTask {
                 let send_result = url_sender.send(url.clone()).await;
                 if let Err(err) = send_result {
                     tracing::error!("url sender closed: {}", err);
-                    panic!("SubmitPublicUrlsToScrapeTask url sender is closed, unrecoverable, the node state will stagnate.");
+                    panic!(
+                        "SubmitPublicUrlsToScrapeTask url sender is closed, unrecoverable, the \
+                         node state will stagnate."
+                    );
                 }
             }
 

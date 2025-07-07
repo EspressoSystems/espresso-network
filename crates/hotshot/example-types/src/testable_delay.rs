@@ -122,7 +122,11 @@ impl Iterator for SupportedTraitTypesForAsyncDelayIterator {
             1 => Some(SupportedTraitTypesForAsyncDelay::ValidatedState),
             2 => Some(SupportedTraitTypesForAsyncDelay::BlockHeader),
             _ => {
-                assert_eq!(self.index, 3, "Need to ensure that newly added or removed `SupportedTraitTypesForAsyncDelay` enum is handled in iterator");
+                assert_eq!(
+                    self.index, 3,
+                    "Need to ensure that newly added or removed \
+                     `SupportedTraitTypesForAsyncDelay` enum is handled in iterator"
+                );
                 return None;
             },
         };

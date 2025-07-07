@@ -97,7 +97,14 @@ pub async fn build_system_handle_from_launcher<
     let hotshot_config = (launcher.resource_generators.hotshot_config)(node_id);
 
     let initializer = HotShotInitializer::<TYPES>::from_genesis::<V>(
-        TestInstanceState::new(launcher.metadata.async_delay_config.clone()),
+        TestInstanceState::new(
+            launcher
+                .metadata
+                .async_delay_config
+                .get(&node_id)
+                .cloned()
+                .unwrap_or_default(),
+        ),
         launcher.metadata.test_config.epoch_height,
         launcher.metadata.test_config.epoch_start_block,
         vec![],

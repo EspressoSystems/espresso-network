@@ -344,18 +344,17 @@ where
                 block_height,
             );
             // We're in a new epoch, so we'll need to update our stake table
-            let next_stake_table = match get_node_stake_table_from_sequencer(
-                client.clone(),
-                upcoming_epoch,
-            )
-            .await
-            {
-                Ok(stake_table) => stake_table,
-                Err(err) => {
-                    tracing::error!("process_incoming_leaf_and_block: error getting stake table from sequencer: {err}");
-                    return Err(ProcessLeafError::FailedToGetNewStakeTable);
-                },
-            };
+            let next_stake_table =
+                match get_node_stake_table_from_sequencer(client.clone(), upcoming_epoch).await {
+                    Ok(stake_table) => stake_table,
+                    Err(err) => {
+                        tracing::error!(
+                            "process_incoming_leaf_and_block: error getting stake table from \
+                             sequencer: {err}"
+                        );
+                        return Err(ProcessLeafError::FailedToGetNewStakeTable);
+                    },
+                };
 
             {
                 tracing::debug!(
@@ -376,7 +375,12 @@ where
             {
                 Ok(validators) => validators,
                 Err(err) => {
-                    tracing::error!("process_incoming_leaf_and_block: error getting validators for epoch {}: {}", upcoming_epoch, err);
+                    tracing::error!(
+                        "process_incoming_leaf_and_block: error getting validators for epoch {}: \
+                         {}",
+                        upcoming_epoch,
+                        err
+                    );
                     return Err(ProcessLeafError::FailedToGetNewStakeTable);
                 },
             };
@@ -614,19 +618,46 @@ impl ProcessLeafAndBlockPairStreamTask {
                 // will fail, and be fruitless.
                 match err {
                     ProcessLeafError::BlockSendError(err) => {
-                        panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying sink is closed, blocks will stagnate: {err}")
+                        panic!(
+                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying sink \
+                             is closed, blocks will stagnate: {err}"
+                        )
                     },
                     ProcessLeafError::VotersSendError(err) => {
-                        panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying sink is closed, voters will stagnate: {err}")
+                        panic!(
+                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying sink \
+                             is closed, voters will stagnate: {err}"
+                        )
                     },
                     ProcessLeafError::StakeTableSendError(err) => {
-                        panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying stake table is closed, stake table will stagnate: {err}")
+                        panic!(
+                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying \
+                             stake table is closed, stake table will stagnate: {err}"
+                        )
                     },
                     ProcessLeafError::ValidatorSendError(err) => {
-                        panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying validator sink is closed, validators will stagnate: {err}")
+                        panic!(
+                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying \
+                             validator sink is closed, validators will stagnate: {err}"
+                        )
+                    },
+                    ProcessLeafError::StakeTableSendError(err) => {
+                        panic!(
+                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying \
+                             stake table is closed, stake table will stagnate: {err}"
+                        )
+                    },
+                    ProcessLeafError::ValidatorSendError(err) => {
+                        panic!(
+                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying \
+                             validator sink is closed, validators will stagnate: {err}"
+                        )
                     },
                     ProcessLeafError::FailedToGetNewStakeTable => {
-                        panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying stake table is closed, blocks will stagnate")
+                        panic!(
+                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying \
+                             stake table is closed, blocks will stagnate"
+                        )
                     },
                 }
             }
@@ -771,7 +802,10 @@ impl ProcessNodeIdentityStreamTask {
                 // `process_incoming_node_identity` are due to `SendError` which
                 // will ultimately mean that further processing attempts will fail
                 // and be fruitless.
-                panic!("ProcessNodeIdentityStreamTask: process_incoming_node_identity failed, underlying sink is closed, node identities will stagnate: {err}");
+                panic!(
+                    "ProcessNodeIdentityStreamTask: process_incoming_node_identity failed, \
+                     underlying sink is closed, node identities will stagnate: {err}"
+                );
             }
         }
     }

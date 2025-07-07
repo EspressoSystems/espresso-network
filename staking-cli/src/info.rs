@@ -1,9 +1,13 @@
-use alloy::primitives::{utils::format_ether, Address};
-use anyhow::Result;
+use alloy::{
+    primitives::{utils::format_ether, Address},
+    providers::ProviderBuilder,
+};
+use anyhow::{Context as _, Result};
 use espresso_types::{
     v0_3::{Fetcher, Validator},
     L1Client,
 };
+use hotshot_contract_adapter::sol_types::StakeTableV2;
 use hotshot_types::signature_key::BLSPubKey;
 use url::Url;
 
@@ -60,4 +64,18 @@ pub fn display_stake_table(stake_table: Vec<Validator<BLSPubKey>>, compact: bool
         }
     }
     Ok(())
+}
+
+pub async fn fetch_token_address(rpc_url: Url, stake_table_address: Address) -> Result<Address> {
+    let provider = ProviderBuilder::new().on_http(rpc_url);
+    Ok(StakeTableV2::new(stake_table_address, provider)
+        .token()
+        .call()
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to fetch token address from stake table contract at {stake_table_address}"
+            )
+        })?
+        ._0)
 }

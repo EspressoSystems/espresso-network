@@ -669,7 +669,8 @@ where
 
         if cf.commit() != commitment {
             panic!(
-                "Critical error: Mismatched chain config detected. Expected chain config: {:?}, but got: {:?}.
+                "Critical error: Mismatched chain config detected. Expected chain config: {:?}, \
+                 but got: {:?}.
                 This may indicate a compromised database",
                 commitment,
                 cf.commit()

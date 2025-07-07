@@ -243,7 +243,8 @@ pub async fn submit_state_and_proof(
 
     let tx = contract.newFinalizedState_1(new_state.into(), next_stake_table.into(), proof.into());
     tracing::debug!(
-        "Sending newFinalizedState tx: address={}, new_state={}, next_stake_table={}\n full tx={:?}",
+        "Sending newFinalizedState tx: address={}, new_state={}, next_stake_table={}\n full \
+         tx={:?}",
         address,
         public_input.lc_state,
         public_input.next_st_state,

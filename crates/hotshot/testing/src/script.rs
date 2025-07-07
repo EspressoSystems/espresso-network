@@ -71,7 +71,8 @@ where
     S: std::fmt::Debug,
 {
     let extra_output_error = format!(
-        "Stage {stage_number} | Received unexpected additional output in {script_name}:\n\n{output:?}"
+        "Stage {stage_number} | Received unexpected additional output in \
+         {script_name}:\n\n{output:?}"
     );
 
     panic!("{}", extra_output_error);
@@ -82,7 +83,8 @@ where
     S: std::fmt::Debug,
 {
     let output_missing_error = format!(
-        "Stage {stage_number} | Failed to receive output for predicate in {script_name}: {predicate:?}"
+        "Stage {stage_number} | Failed to receive output for predicate in {script_name}: \
+         {predicate:?}"
     );
 
     panic!("{}", output_missing_error);
@@ -113,7 +115,8 @@ pub async fn validate_output_or_panic_in_script<S: std::fmt::Debug>(
         PredicateResult::Incomplete => result,
         PredicateResult::Fail => {
             panic!(
-                "Stage {stage_number} | Output in {script_name} failed to satisfy: {assert:?}.\n\nReceived:\n\n{output:?}"
+                "Stage {stage_number} | Output in {script_name} failed to satisfy: \
+                 {assert:?}.\n\nReceived:\n\n{output:?}"
             )
         },
     }
