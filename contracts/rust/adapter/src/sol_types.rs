@@ -39,6 +39,7 @@ pub use crate::bindings::{
     lightclientv2::{self, LightClientV2},
     lightclientv2mock::{self, LightClientV2Mock},
     opstimelock::OpsTimelock,
+    ownableupgradeable::OwnableUpgradeable,
     plonkverifier::PlonkVerifier,
     plonkverifierv2::PlonkVerifierV2,
     safeexittimelock::SafeExitTimelock,

@@ -149,6 +149,9 @@ struct Options {
     /// Option to deploy safe exit timelock
     #[clap(long, default_value = "false")]
     deploy_safe_exit_timelock: bool,
+    /// Option to transfer ownership from multisig
+    #[clap(long, default_value = "false")]
+    propose_transfer_ownership_to_timelock_fee_contract: bool,
 
     /// Write deployment results to OUT as a .env file.
     ///
@@ -257,6 +260,10 @@ struct Options {
     /// The proposer(s) of the safe exit timelock
     #[clap(long, env = "ESPRESSO_SAFE_EXIT_TIMELOCK_PROPOSERS")]
     safe_exit_timelock_proposers: Option<Vec<Address>>,
+
+    /// The address of the timelock controller
+    #[clap(long, env = "ESPRESSO_SEQUENCER_TIMELOCK_CONTROLLER_ADDRESS")]
+    timelock_controller: Option<Address>,
 
     #[clap(flatten)]
     logging: logging::Config,
@@ -502,6 +509,21 @@ async fn main() -> anyhow::Result<()> {
     if opt.deploy_safe_exit_timelock {
         args.deploy(&mut contracts, Contract::SafeExitTimelock)
             .await?;
+    }
+
+    // Execute ownership transfer proposal if requested
+    if opt.propose_transfer_ownership_to_timelock_fee_contract {
+        let timelock_controller = opt.timelock_controller.expect(
+            "Must provide --timelock-controller when transferring ownership from multisig to \
+             timelock",
+        );
+
+        args.propose_transfer_ownership_from_multisig_to_timelock(
+            &mut contracts,
+            timelock_controller,
+            Contract::FeeContractProxy,
+        )
+        .await?;
     }
 
     // finally print out or persist deployed addresses
