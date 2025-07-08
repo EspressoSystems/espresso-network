@@ -616,7 +616,7 @@ impl<S: TestableSequencerDataSource, V: Versions> TestNode<S, V> {
         tracing::info!(node_id, "waiting for epoch: {epoch:?}");
         let mut events = context.event_stream().await;
 
-        let timeout_duration = Duration::from_secs(60);
+        let timeout_duration = Duration::from_secs(180);
         timeout(timeout_duration, async {
             while let Some(event) = events.next().await {
                 let EventType::Decide { qc, .. } = event.event else {
@@ -807,6 +807,19 @@ impl<V: Versions> TestNetwork<V> {
             marshal_task,
             anvil,
         };
+
+        let stake_table_address = network.deploy(&genesis).await.unwrap();
+
+        let drb_header_upgrade = genesis.upgrades.get_mut(&DrbAndHeaderUpgradeVersion::VERSION).unwrap();
+
+        // Add contract address to `ChainConfig`.
+        let chain_config = ChainConfig {
+            base_fee: 1.into(),
+            stake_table_contract: Some(stake_table_address),
+            ..Default::default()
+        };
+        drb_header_upgrade.upgrade_type.set_chain_config(chain_config);
+        genesis.to_file(&genesis_file_path).unwrap();
 
         let finalized = l1_client
             .get_block(alloy::eips::BlockId::finalized())

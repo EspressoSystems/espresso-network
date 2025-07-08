@@ -22,6 +22,15 @@ impl UpgradeType {
             UpgradeType::DrbAndHeader { chain_config } => Some(*chain_config),
         }
     }
+    /// Get the upgrade data from `UpgradeType`. As of this writing,
+    /// we are only concerned w/ `ChainConfig`.
+    pub fn set_chain_config(&mut self, config: ChainConfig) -> Self {
+        match self {
+            UpgradeType::Fee { chain_config } => UpgradeType::Fee { chain_config: config },
+            UpgradeType::Epoch { chain_config } => UpgradeType::Epoch { chain_config: config },
+            UpgradeType::DrbAndHeader { chain_config } => UpgradeType::DrbAndHeader { chain_config: config },
+        }
+    }
 }
 
 /// Represents an upgrade based on time (unix timestamp).
