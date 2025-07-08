@@ -1482,6 +1482,9 @@ mod tests {
             .blocks_per_epoch(blocks_per_epoch)
             .epoch_start_block(1)
             .multisig_pauser(network_config.signer().address())
+            .token_name("Espresso".to_string())
+            .token_symbol("ESP".to_string())
+            .initial_token_supply(U256::from(3590000000u64))
             .ops_timelock_delay(U256::from(0))
             .ops_timelock_admin(network_config.signer().address())
             .ops_timelock_proposers(vec![network_config.signer().address()])
@@ -1502,9 +1505,6 @@ mod tests {
         let st_addr = contracts
             .address(Contract::StakeTableProxy)
             .expect("StakeTableProxy deployed");
-        let token_addr = contracts
-            .address(Contract::EspTokenProxy)
-            .expect("EspTokenProxy deployed");
         let l1_url = network_config.l1_url().clone();
 
         // new block every 1s
@@ -1524,7 +1524,6 @@ mod tests {
                         l1_url,
                         &deployer,
                         st_addr,
-                        token_addr,
                         validators,
                         DelegationConfig::MultipleDelegators,
                     )

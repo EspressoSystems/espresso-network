@@ -517,9 +517,6 @@ async fn main() -> anyhow::Result<()> {
                 l1_contracts
                     .address(Contract::StakeTableProxy)
                     .expect("stake table deployed"),
-                l1_contracts
-                    .address(Contract::EspTokenProxy)
-                    .expect("ESP token deployed"),
                 staking_priv_keys,
                 DelegationConfig::default(),
             )

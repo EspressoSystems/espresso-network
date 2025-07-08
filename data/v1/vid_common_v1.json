@@ -1,0 +1,11 @@
+{
+  "block_hash": "BLOCK~dh1KpdvvxSvnnPpOi2yI3DOg8h6ltr2Kv13iRzbQvtN2",
+  "common": {
+    "V1": {
+      "recovery_threshold": 4,
+      "total_weights": 10
+    }
+  },
+  "height": 42,
+  "payload_hash": "HASH~u-mEo1mwByROUhnvO7pBFitcD0UEvruK-b8WONkKoCLQ"
+}

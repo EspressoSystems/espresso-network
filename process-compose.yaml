@@ -82,6 +82,8 @@ processes:
     depends_on:
       deploy-sequencer-contracts:
         condition: process_completed
+      deploy-prover-contracts:
+        condition: process_completed
       sequencer1:
         condition: process_healthy
     availability: *exit-ok
@@ -97,6 +99,8 @@ processes:
       - STAKE_TABLE_ADDRESS=$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS
     depends_on:
       deploy-sequencer-contracts:
+        condition: process_completed
+      deploy-prover-contracts:
         condition: process_completed
       sequencer1:
         condition: process_healthy

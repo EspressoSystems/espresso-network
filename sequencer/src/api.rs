@@ -1007,6 +1007,9 @@ pub mod test_helpers {
                 .blocks_per_epoch(blocks_per_epoch)
                 .epoch_start_block(epoch_start_block)
                 .multisig_pauser(signer.address())
+                .token_name("Espresso".to_string())
+                .token_symbol("ESP".to_string())
+                .initial_token_supply(U256::from(3590000000u64))
                 .ops_timelock_delay(U256::from(0))
                 .ops_timelock_admin(signer.address())
                 .ops_timelock_proposers(vec![signer.address()])
@@ -1029,14 +1032,10 @@ pub mod test_helpers {
             let stake_table_address = contracts
                 .address(Contract::StakeTableProxy)
                 .expect("StakeTableProxy address not found");
-            let token_addr = contracts
-                .address(Contract::EspTokenProxy)
-                .expect("EspTokenProxy address not found");
             setup_stake_table_contract_for_test(
                 l1_url.clone(),
                 &deployer,
                 stake_table_address,
-                token_addr,
                 network_config.staking_priv_keys(),
                 delegation_config,
             )
@@ -4666,6 +4665,9 @@ mod test {
             .blocks_per_epoch(blocks_per_epoch)
             .epoch_start_block(1)
             .multisig_pauser(network_config.signer().address())
+            .token_name("Espresso".to_string())
+            .token_symbol("ESP".to_string())
+            .initial_token_supply(U256::from(3590000000u64))
             .ops_timelock_delay(U256::from(0))
             .ops_timelock_admin(network_config.signer().address())
             .ops_timelock_proposers(vec![network_config.signer().address()])
