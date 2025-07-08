@@ -11,7 +11,17 @@ use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSo
 
 use crate::{
     encode_function_call,
-    proposals::timelock_proposals::{TimelockOperationData, TimelockOperationType},
+    proposals::{
+        multisig_proposals::{
+            transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
+            upgrade_light_client_v2_multisig_owner, upgrade_stake_table_v2_multisig_owner,
+            LightClientV2UpgradeParams, TransferOwnershipParams,
+        },
+        timelock_proposals::{
+            cancel_timelock_operation, execute_timelock_operation, schedule_timelock_operation,
+            TimelockOperationData, TimelockOperationType,
+        },
+    },
     Contract, Contracts,
 };
 
@@ -183,7 +193,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 let use_multisig = self.use_multisig;
 
                 if use_multisig {
-                    crate::upgrade_esp_token_v2_multisig_owner(
+                    upgrade_esp_token_v2_multisig_owner(
                         provider,
                         contracts,
                         self.rpc_url.clone(),
@@ -267,10 +277,10 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 }
                 tracing::info!(%blocks_per_epoch, ?dry_run, ?use_multisig, "Upgrading LightClientV2 with ");
                 if use_multisig {
-                    crate::upgrade_light_client_v2_multisig_owner(
+                    upgrade_light_client_v2_multisig_owner(
                         provider,
                         contracts,
-                        crate::LightClientV2UpgradeParams {
+                        LightClientV2UpgradeParams {
                             blocks_per_epoch,
                             epoch_start_block,
                         },
@@ -345,7 +355,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 )?;
                 tracing::info!(?dry_run, ?use_multisig, "Upgrading to StakeTableV2 with ");
                 if use_multisig {
-                    crate::upgrade_stake_table_v2_multisig_owner(
+                    upgrade_stake_table_v2_multisig_owner(
                         provider,
                         contracts,
                         self.rpc_url.clone(),
@@ -554,17 +564,16 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
 
         match timelock_operation_type {
             TimelockOperationType::Schedule => {
-                let operation_id =
-                    crate::proposals::timelock_proposals::schedule_timelock_operation(
-                        &self.deployer,
-                        contract_type,
-                        timelock_operation_data,
-                    )
-                    .await?;
+                let operation_id = schedule_timelock_operation(
+                    &self.deployer,
+                    contract_type,
+                    timelock_operation_data,
+                )
+                .await?;
                 tracing::info!("Timelock operation scheduled with ID: {}", operation_id);
             },
             TimelockOperationType::Execute => {
-                let tx_id = crate::proposals::timelock_proposals::execute_timelock_operation(
+                let tx_id = execute_timelock_operation(
                     &self.deployer,
                     contract_type,
                     timelock_operation_data,
@@ -573,7 +582,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 tracing::info!("Timelock operation executed with ID: {}", tx_id);
             },
             TimelockOperationType::Cancel => {
-                let tx_id = crate::proposals::timelock_proposals::cancel_timelock_operation(
+                let tx_id = cancel_timelock_operation(
                     &self.deployer,
                     contract_type,
                     timelock_operation_data,
@@ -599,20 +608,19 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         let rpc_url = self.rpc_url.clone();
         let dry_run = self.dry_run;
         let use_hardware_wallet = false;
-        let result =
-            crate::proposals::multisig_proposals::transfer_ownership_from_multisig_to_timelock(
-                &self.deployer,
-                contracts,
-                contract,
-                crate::proposals::multisig_proposals::TransferOwnershipParams {
-                    new_owner: timelock_controller,
-                    rpc_url,
-                    safe_addr: multisig,
-                    use_hardware_wallet,
-                    dry_run,
-                },
-            )
-            .await?;
+        let result = transfer_ownership_from_multisig_to_timelock(
+            &self.deployer,
+            contracts,
+            contract,
+            TransferOwnershipParams {
+                new_owner: timelock_controller,
+                rpc_url,
+                safe_addr: multisig,
+                use_hardware_wallet,
+                dry_run,
+            },
+        )
+        .await?;
         if !result.status.success() {
             let stderr = String::from_utf8_lossy(&result.stderr);
             let stdout = String::from_utf8_lossy(&result.stdout);
