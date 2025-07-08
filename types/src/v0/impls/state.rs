@@ -862,7 +862,7 @@ impl ValidatedState {
             let block_reward = instance
                 .block_reward()
                 .await
-                .context("block reward is none")?;
+                .context("block reward is None")?;
             let reward_distributor = RewardDistributor::new(validator, block_reward);
             // apply rewards
             reward_distributor

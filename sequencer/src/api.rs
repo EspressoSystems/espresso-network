@@ -3232,7 +3232,7 @@ mod test {
 
         let node_state = network.server.node_state();
         let membership = node_state.coordinator.membership().read().await;
-        let block_reward = membership.block_reward().expect("block reward is none");
+        let block_reward = membership.block_reward().expect("block reward is None");
         drop(membership);
 
         // The validator gets all the block reward so we can calculate the expected amount
@@ -3293,7 +3293,7 @@ mod test {
         let network = TestNetwork::new(config, PosVersion::new()).await;
         let node_state = network.server.node_state();
         let membership = node_state.coordinator.membership().read().await;
-        let block_reward = membership.block_reward().expect("block reward is none");
+        let block_reward = membership.block_reward().expect("block reward is None");
         drop(membership);
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
@@ -3604,7 +3604,7 @@ mod test {
         let coordinator = node_state.coordinator;
 
         let membership = coordinator.membership().read().await;
-        let block_reward = membership.block_reward().expect("block reward is none");
+        let block_reward = membership.block_reward().expect("block reward is None");
 
         drop(membership);
 
@@ -4615,10 +4615,11 @@ mod test {
             .unwrap();
 
         let block_reward = client
-            .get::<RewardAmount>("node/block-reward")
+            .get::<Option<RewardAmount>>("node/block-reward")
             .send()
             .await
-            .expect("failed to get block reward");
+            .expect("failed to get block reward")
+            .expect("block reward is None");
         tracing::info!("block_reward={block_reward:?}");
 
         assert!(block_reward.0 > U256::ZERO);
