@@ -362,4 +362,46 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         self.deploy(contracts, Contract::StakeTableV2).await?;
         Ok(())
     }
+
+    /// Propose ownership transfer from multisig to timelock
+    pub async fn propose_transfer_ownership_from_multisig_to_timelock(
+        &self,
+        contracts: &mut Contracts,
+        timelock_controller: Address,
+        contract: Contract,
+    ) -> Result<()> {
+        let multisig = self.multisig.expect(
+            "Multisig address must be set when proposing ownership transfer. Use \
+             --multisig-address or ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS",
+        );
+        let rpc_url = self.rpc_url.clone();
+        let dry_run = self.dry_run;
+        let use_hardware_wallet = false;
+        let result = crate::proposals::transfer_ownership_from_multisig_to_timelock(
+            &self.deployer,
+            contracts,
+            contract,
+            crate::proposals::TransferOwnershipParams {
+                new_owner: timelock_controller,
+                rpc_url,
+                safe_addr: multisig,
+                use_hardware_wallet,
+                dry_run,
+            },
+        )
+        .await?;
+        if !result.status.success() {
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            let stdout = String::from_utf8_lossy(&result.stdout);
+            anyhow::bail!(
+                "Failed to propose ownership transfer for {}: {}\nStdout: {}\nStderr: {}",
+                contract,
+                result.status,
+                stdout,
+                stderr
+            );
+        }
+        tracing::info!("Successfully proposed ownership transfer for {}", contract);
+        Ok(())
+    }
 }
