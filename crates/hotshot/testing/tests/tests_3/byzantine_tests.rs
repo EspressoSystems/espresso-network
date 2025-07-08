@@ -10,11 +10,12 @@ use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,
     byzantine::byzantine_behaviour::{
         BadProposalViewDos, DishonestDa, DishonestLeader, DishonestVoter, DishonestVoting,
-        DoubleProposeVote,
+        DoubleProposeVote, DishonestViewSyncRelay,
     },
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
     test_builder::{Behaviour, TestDescription},
 };
+use hotshot_testing::view_sync_task::ViewSyncTaskDescription;
 use hotshot_types::{
     message::{GeneralConsensusMessage, MessageKind, SequencingMessage},
     traits::{election::Membership, network::TransmitType, node_implementation::NodeType},
@@ -237,6 +238,46 @@ cross_tests!(
         metadata.test_config.epoch_height = 0;
         metadata.overall_safety_properties.expected_view_failures = vec![13, 14];
         metadata.overall_safety_properties.decide_timeout = Duration::from_secs(12);
+        metadata
+    },
+);
+
+cross_tests!(
+    TestName: view_sync_split,
+    Impls: [PushCdnImpl],
+    Types: [TestTypes],
+    Versions: [TestVersions],
+    Ignore: false,
+    Metadata: {
+        let behaviour = Rc::new(move |node_id| {
+            match node_id {
+                7 | 8 | 11 | 12 => Behaviour::Byzantine(Box::new(DishonestViewSyncRelay {
+                    dishonest_proposal_view_numbers: vec![7, 8, 11],
+                    dishonest_vote_view_numbers: vec![8, 9, 11],
+                    first_f_honest_nodes: vec![0, 1, 2, 3],
+                    second_f_honest_nodes: vec![4, 5, 6, 9],
+                    one_honest_node: 10,
+                    f_dishonest_nodes: vec![7, 8, 11, 12],
+                })),
+                _ => Behaviour::Standard,
+            }
+        });
+
+        let mut metadata = TestDescription {
+            // allow more time to pass in CI
+            completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
+                TimeBasedCompletionTaskDescription {
+                    duration: Duration::from_secs(60),
+                },
+            ),
+            view_sync_properties: ViewSyncTaskDescription::Threshold(0, 13),
+            behaviour,
+            ..TestDescription::default()
+        }.set_num_nodes(13,13);
+
+        metadata.test_config.epoch_height = 0;
+        metadata.overall_safety_properties.possible_view_failures = Vec::from([0; 50]);
+        metadata.overall_safety_properties.decide_timeout = Duration::from_secs(60);
         metadata
     },
 );
