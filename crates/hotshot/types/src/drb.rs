@@ -157,6 +157,7 @@ pub async fn compute_drb_result(
 
         let store_drb_progress = store_drb_progress.clone();
         tokio::spawn(async move {
+            tracing::warn!("Storing partial DRB progress: {:?}", updated_drb_input);
             if let Err(e) = store_drb_progress(updated_drb_input).await {
                 tracing::warn!("Failed to store DRB progress during calculation: {}", e);
             }
@@ -181,6 +182,15 @@ pub async fn compute_drb_result(
     // Convert the hash to the DRB result.
     let mut drb_result = [0u8; 32];
     drb_result.copy_from_slice(&hash);
+
+    let finished_drb_input = DrbInput {
+        epoch: drb_input.epoch,
+        iteration: drb_input.difficulty_level,
+        value: drb_result.clone(),
+        difficulty_level: drb_input.difficulty_level,
+    };
+    tracing::warn!("DRB calculation completed: {:?}", finished_drb_input);
+
     drb_result
 }
 
