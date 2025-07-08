@@ -43,11 +43,8 @@ use vbs::{
 async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
     use std::sync::Arc;
 
-    use alloy::primitives::U256;
     use async_lock::RwLock;
-    use espresso_types::{
-        v0_1::RewardAmount, v0_3::Fetcher, EpochCommittees, Leaf, Payload, SeqTypes, Transaction,
-    };
+    use espresso_types::{v0_3::Fetcher, EpochCommittees, Leaf, Payload, SeqTypes, Transaction};
     use hotshot_example_types::{node_types::TestVersions, storage_types::TestStorage};
     use hotshot_types::{
         data::vid_disperse::{ADVZDisperse, ADVZDisperseShare},

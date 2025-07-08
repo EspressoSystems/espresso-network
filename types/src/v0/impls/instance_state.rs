@@ -139,11 +139,10 @@ impl NodeState {
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock() -> Self {
-        use alloy::primitives::U256;
         use hotshot_example_types::storage_types::TestStorage;
         use vbs::version::StaticVersion;
 
-        use crate::{v0_1::RewardAmount, v0_3::Fetcher};
+        use crate::v0_3::Fetcher;
 
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
@@ -171,11 +170,10 @@ impl NodeState {
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v2() -> Self {
-        use alloy::primitives::U256;
         use hotshot_example_types::storage_types::TestStorage;
         use vbs::version::StaticVersion;
 
-        use crate::{v0_1::RewardAmount, v0_3::Fetcher};
+        use crate::v0_3::Fetcher;
 
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
@@ -203,11 +201,10 @@ impl NodeState {
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v3() -> Self {
-        use alloy::primitives::U256;
         use hotshot_example_types::storage_types::TestStorage;
         use vbs::version::StaticVersion;
 
-        use crate::{v0_1::RewardAmount, v0_3::Fetcher};
+        use crate::v0_3::Fetcher;
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
 
@@ -286,11 +283,10 @@ impl From<BTreeMap<Version, Upgrade>> for UpgradeMap {
 #[cfg(any(test, feature = "testing"))]
 impl Default for NodeState {
     fn default() -> Self {
-        use alloy::primitives::U256;
         use hotshot_example_types::storage_types::TestStorage;
         use vbs::version::StaticVersion;
 
-        use crate::{v0_1::RewardAmount, v0_3::Fetcher};
+        use crate::v0_3::Fetcher;
 
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
