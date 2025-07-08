@@ -10,7 +10,9 @@ use derive_builder::Builder;
 use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
 
 use crate::{
-    encode_function_call, Contract, Contracts, TimelockOperationData, TimelockOperationType,
+    encode_function_call,
+    proposals::timelock_proposals::{TimelockOperationData, TimelockOperationType},
+    Contract, Contracts,
 };
 
 /// Convenient handler that builds all the input arguments ready to be deployed.
@@ -552,16 +554,17 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
 
         match timelock_operation_type {
             TimelockOperationType::Schedule => {
-                let operation_id = crate::schedule_timelock_operation(
-                    &self.deployer,
-                    contract_type,
-                    timelock_operation_data,
-                )
-                .await?;
+                let operation_id =
+                    crate::proposals::timelock_proposals::schedule_timelock_operation(
+                        &self.deployer,
+                        contract_type,
+                        timelock_operation_data,
+                    )
+                    .await?;
                 tracing::info!("Timelock operation scheduled with ID: {}", operation_id);
             },
             TimelockOperationType::Execute => {
-                let tx_id = crate::execute_timelock_operation(
+                let tx_id = crate::proposals::timelock_proposals::execute_timelock_operation(
                     &self.deployer,
                     contract_type,
                     timelock_operation_data,
@@ -570,7 +573,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 tracing::info!("Timelock operation executed with ID: {}", tx_id);
             },
             TimelockOperationType::Cancel => {
-                let tx_id = crate::cancel_timelock_operation(
+                let tx_id = crate::proposals::timelock_proposals::cancel_timelock_operation(
                     &self.deployer,
                     contract_type,
                     timelock_operation_data,
