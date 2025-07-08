@@ -599,19 +599,20 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         let rpc_url = self.rpc_url.clone();
         let dry_run = self.dry_run;
         let use_hardware_wallet = false;
-        let result = crate::proposals::transfer_ownership_from_multisig_to_timelock(
-            &self.deployer,
-            contracts,
-            contract,
-            crate::proposals::TransferOwnershipParams {
-                new_owner: timelock_controller,
-                rpc_url,
-                safe_addr: multisig,
-                use_hardware_wallet,
-                dry_run,
-            },
-        )
-        .await?;
+        let result =
+            crate::proposals::multisig_proposals::transfer_ownership_from_multisig_to_timelock(
+                &self.deployer,
+                contracts,
+                contract,
+                crate::proposals::multisig_proposals::TransferOwnershipParams {
+                    new_owner: timelock_controller,
+                    rpc_url,
+                    safe_addr: multisig,
+                    use_hardware_wallet,
+                    dry_run,
+                },
+            )
+            .await?;
         if !result.status.success() {
             let stderr = String::from_utf8_lossy(&result.stderr);
             let stdout = String::from_utf8_lossy(&result.stdout);

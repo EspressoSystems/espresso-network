@@ -2829,11 +2829,11 @@ mod tests {
         );
 
         // then send transfer ownership proposal to the multisig wallet
-        let result = proposals::transfer_ownership_from_multisig_to_timelock(
+        let result = proposals::multisig_proposals::transfer_ownership_from_multisig_to_timelock(
             &provider,
             &mut contracts,
             contract_type,
-            proposals::TransferOwnershipParams {
+            proposals::multisig_proposals::TransferOwnershipParams {
                 new_owner: timelock,
                 rpc_url: sepolia_rpc_url.clone(),
                 safe_addr: multisig_admin,
