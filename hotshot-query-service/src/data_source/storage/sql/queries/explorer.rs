@@ -347,14 +347,17 @@ where
         // returned results based on.
         let transaction_target_query = match target {
             TransactionIdentifier::Latest => query(
-                "SELECT block_height AS height, ns_id, position FROM transactions ORDER BY block_height DESC, ns_id DESC, position DESC LIMIT 1",
+                "SELECT block_height AS height, ns_id, position FROM transactions ORDER BY \
+                 block_height DESC, ns_id DESC, position DESC LIMIT 1",
             ),
             TransactionIdentifier::HeightAndOffset(height, _) => query(
-                "SELECT block_height AS height, ns_id, position FROM transactions WHERE block_height = $1 ORDER BY ns_id DESC, position DESC LIMIT 1",
+                "SELECT block_height AS height, ns_id, position FROM transactions WHERE \
+                 block_height = $1 ORDER BY ns_id DESC, position DESC LIMIT 1",
             )
             .bind(*height as i64),
             TransactionIdentifier::Hash(hash) => query(
-                "SELECT block_height AS height, ns_id, position FROM transactions WHERE hash = $1 ORDER BY block_height DESC, ns_id DESC, position DESC LIMIT 1",
+                "SELECT block_height AS height, ns_id, position FROM transactions WHERE hash = $1 \
+                 ORDER BY block_height DESC, ns_id DESC, position DESC LIMIT 1",
             )
             .bind(hash.to_string()),
         };

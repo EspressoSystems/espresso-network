@@ -880,11 +880,17 @@ impl<TYPES: NodeType> Consensus<TYPES> {
                 } = new_view.view_inner
                 {
                     ensure!(
-                         new_delta.is_some() || existing_delta.is_none(),
-                         debug!("Skipping the state update to not override a `Leaf` view with `Some` state delta.")
-                     );
+                        new_delta.is_some() || existing_delta.is_none(),
+                        debug!(
+                            "Skipping the state update to not override a `Leaf` view with `Some` \
+                             state delta."
+                        )
+                    );
                 } else {
-                    bail!("Skipping the state update to not override a `Leaf` view with a non-`Leaf` view.");
+                    bail!(
+                        "Skipping the state update to not override a `Leaf` view with a \
+                         non-`Leaf` view."
+                    );
                 }
             }
         }

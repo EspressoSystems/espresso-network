@@ -79,7 +79,7 @@ pub struct SpinningTask<
     /// Next epoch highest qc seen in the test for restarting nodes
     pub(crate) next_epoch_high_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
     /// Add specified delay to async calls
-    pub(crate) async_delay_config: DelayConfig,
+    pub(crate) async_delay_config: HashMap<u64, DelayConfig>,
     /// Context stored for nodes to be restarted with
     pub(crate) restart_contexts: HashMap<usize, RestartContext<TYPES, N, I, V>>,
     /// Generate network channel for restart nodes
@@ -165,7 +165,12 @@ where
                                         } = late_context_params;
 
                                         let initializer = HotShotInitializer::<TYPES>::load(
-                                            TestInstanceState::new(self.async_delay_config.clone()),
+                                            TestInstanceState::new(
+                                                self.async_delay_config
+                                                    .get(&node_id)
+                                                    .cloned()
+                                                    .unwrap_or_default(),
+                                            ),
                                             self.epoch_height,
                                             self.epoch_start_block,
                                             self.start_epoch_info.clone(),
@@ -279,7 +284,12 @@ where
                                     storage.decided_upgrade_certificate().await;
 
                                 let initializer = HotShotInitializer::<TYPES>::load(
-                                    TestInstanceState::new(self.async_delay_config.clone()),
+                                    TestInstanceState::new(
+                                        self.async_delay_config
+                                            .get(&node_id)
+                                            .cloned()
+                                            .unwrap_or_default(),
+                                    ),
                                     self.epoch_height,
                                     self.epoch_start_block,
                                     self.start_epoch_info.clone(),

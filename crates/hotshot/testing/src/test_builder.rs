@@ -158,7 +158,7 @@ pub struct TestDescription<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
     /// nodes with byzantine behaviour
     pub behaviour: Rc<dyn Fn(u64) -> Behaviour<TYPES, I, V>>,
     /// Delay config if any to add delays to asynchronous calls
-    pub async_delay_config: DelayConfig,
+    pub async_delay_config: HashMap<u64, DelayConfig>,
     /// view in which to propose an upgrade
     pub upgrade_view: Option<u64>,
     /// whether to initialize the solver on startup
@@ -189,9 +189,12 @@ pub fn nonempty_block_threshold(threshold: (u64, u64)) -> TransactionValidator {
         }
 
         ensure!(
-          // i.e. num_nonempty_blocks / num_blocks >= threshold.0 / threshold.1
-          num_nonempty_blocks * threshold.1 >= threshold.0 * num_blocks,
-          "Failed to meet nonempty block threshold of {}/{}; got {num_nonempty_blocks} nonempty blocks out of a total of {num_blocks}", threshold.0, threshold.1
+            // i.e. num_nonempty_blocks / num_blocks >= threshold.0 / threshold.1
+            num_nonempty_blocks * threshold.1 >= threshold.0 * num_blocks,
+            "Failed to meet nonempty block threshold of {}/{}; got {num_nonempty_blocks} nonempty \
+             blocks out of a total of {num_blocks}",
+            threshold.0,
+            threshold.1
         );
 
         Ok(())
@@ -218,9 +221,12 @@ pub fn nonempty_block_limit(limit: (u64, u64)) -> TransactionValidator {
         }
 
         ensure!(
-          // i.e. num_nonempty_blocks / num_blocks <= limit.0 / limit.1
-          num_nonempty_blocks * limit.1 <= limit.0 * num_blocks,
-          "Exceeded nonempty block limit of {}/{}; got {num_nonempty_blocks} nonempty blocks out of a total of {num_blocks}", limit.0, limit.1
+            // i.e. num_nonempty_blocks / num_blocks <= limit.0 / limit.1
+            num_nonempty_blocks * limit.1 <= limit.0 * num_blocks,
+            "Exceeded nonempty block limit of {}/{}; got {num_nonempty_blocks} nonempty blocks \
+             out of a total of {num_blocks}",
+            limit.0,
+            limit.1
         );
 
         Ok(())
@@ -247,7 +253,13 @@ pub async fn create_test_handle<
     storage: I::Storage,
 ) -> SystemContextHandle<TYPES, I, V> {
     let initializer = HotShotInitializer::<TYPES>::from_genesis::<V>(
-        TestInstanceState::new(metadata.async_delay_config),
+        TestInstanceState::new(
+            metadata
+                .async_delay_config
+                .get(&node_id)
+                .cloned()
+                .unwrap_or_default(),
+        ),
         metadata.test_config.epoch_height,
         metadata.test_config.epoch_start_block,
         vec![],
@@ -461,7 +473,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
     }
 
     pub fn set_num_nodes(self, num_nodes: u64, num_da_nodes: u64) -> Self {
-        assert!(num_da_nodes <= num_nodes, "Cannot build test with fewer DA than total nodes. You may have mixed up the arguments to the function");
+        assert!(
+            num_da_nodes <= num_nodes,
+            "Cannot build test with fewer DA than total nodes. You may have mixed up the \
+             arguments to the function"
+        );
 
         let (staked_nodes, da_nodes) =
             gen_node_lists::<TYPES>(num_nodes, num_da_nodes, &self.node_stakes);
@@ -532,7 +548,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
                 error_pct: 0.1,
             },
             behaviour: Rc::new(|_| Behaviour::Standard),
-            async_delay_config: DelayConfig::default(),
+            async_delay_config: HashMap::new(),
             upgrade_view: None,
             start_solver: true,
             validate_transactions: Arc::new(|_| Ok(())),
@@ -625,10 +641,14 @@ where
                     unreliable_network,
                     secondary_network_delay,
                 ),
-                storage: Rc::new(move |_| {
+                storage: Rc::new(move |node_id| {
                     let mut storage = TestStorage::<TYPES>::default();
                     // update storage impl to use settings delay option
-                    storage.delay_config = metadata.async_delay_config.clone();
+                    storage.delay_config = metadata
+                        .async_delay_config
+                        .get(&node_id)
+                        .cloned()
+                        .unwrap_or_default();
                     storage
                 }),
                 hotshot_config,

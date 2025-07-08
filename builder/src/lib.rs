@@ -466,11 +466,13 @@ pub mod testing {
                 )
                 .expect("Claim block signing failed");
                 let available_blocks = builder_client
-                        .get::<Vec<AvailableBlockInfo<SeqTypes>>>(&format!(
-                            "block_info/availableblocks/{parent_commitment}/{parent_view_number}/{hotshot_client_pub_key}/{encoded_signature}"
-                        ))
-                        .send()
-                        .await.expect("Error getting available blocks");
+                    .get::<Vec<AvailableBlockInfo<SeqTypes>>>(&format!(
+                        "block_info/availableblocks/{parent_commitment}/{parent_view_number}/\
+                         {hotshot_client_pub_key}/{encoded_signature}"
+                    ))
+                    .send()
+                    .await
+                    .expect("Error getting available blocks");
                 assert!(!available_blocks.is_empty());
                 break (available_blocks, parent_view_number);
             }
@@ -487,20 +489,21 @@ pub mod testing {
 
         // Test claiming blocks
         let available_block_data = match builder_client
-                .get::<AvailableBlockData<SeqTypes>>(&format!(
-                    "block_info/claimblock/{builder_commitment}/{view_num}/{hotshot_client_pub_key}/{encoded_signature}"
-                ))
-                .send()
-                .await
-            {
-                Ok(response) => {
-                    tracing::info!("Received Block Data: {:?}", response);
-                    response
-                }
-                Err(e) => {
-                    panic!("Error while claiming block {e:?}");
-                }
-            };
+            .get::<AvailableBlockData<SeqTypes>>(&format!(
+                "block_info/claimblock/{builder_commitment}/{view_num}/{hotshot_client_pub_key}/\
+                 {encoded_signature}"
+            ))
+            .send()
+            .await
+        {
+            Ok(response) => {
+                tracing::info!("Received Block Data: {:?}", response);
+                response
+            },
+            Err(e) => {
+                panic!("Error while claiming block {e:?}");
+            },
+        };
 
         assert_eq!(
             available_block_data
@@ -512,20 +515,21 @@ pub mod testing {
 
         // Test claiming block header input
         let _available_block_header = match builder_client
-                .get::<AvailableBlockHeaderInputV1<SeqTypes>>(&format!(
-                    "block_info/claimheaderinput/{builder_commitment}/{view_num}/{hotshot_client_pub_key}/{encoded_signature}"
-                ))
-                .send()
-                .await
-            {
-                Ok(response) => {
-                    tracing::info!("Received Block Header : {:?}", response);
-                    response
-                }
-                Err(e) => {
-                    panic!("Error getting claiming block header {e:?}");
-                }
-            };
+            .get::<AvailableBlockHeaderInputV1<SeqTypes>>(&format!(
+                "block_info/claimheaderinput/{builder_commitment}/{view_num}/\
+                 {hotshot_client_pub_key}/{encoded_signature}"
+            ))
+            .send()
+            .await
+        {
+            Ok(response) => {
+                tracing::info!("Received Block Header : {:?}", response);
+                response
+            },
+            Err(e) => {
+                panic!("Error getting claiming block header {e:?}");
+            },
+        };
 
         // test getting builder key
         match builder_client

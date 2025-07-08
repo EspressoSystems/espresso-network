@@ -221,11 +221,12 @@ async fn test_upgrade_task_with_proposal() {
         timeout: TIMEOUT,
         state: proposal_state,
         expectations: vec![
-            Expectations::from_outputs(vec![]),
-            Expectations::from_outputs(vec![]),
+            Expectations::from_outputs(vec![view_change()]),
+            Expectations::from_outputs(vec![view_change()]),
             Expectations::from_outputs(vec![]),
             Expectations::from_outputs(all_predicates![
-                quorum_proposal_send_with_upgrade_certificate::<TestTypes>()
+                quorum_proposal_send_with_upgrade_certificate::<TestTypes>(),
+                view_change(),
             ]),
         ],
     };

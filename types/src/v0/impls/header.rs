@@ -451,14 +451,20 @@ impl Header {
         if let Some(l1_block) = &l1.finalized {
             let l1_timestamp = l1_block.timestamp.to::<u64>();
             if timestamp < l1_timestamp {
-                tracing::warn!("Espresso timestamp {timestamp} behind L1 timestamp {l1_timestamp}, local clock may be out of sync");
+                tracing::warn!(
+                    "Espresso timestamp {timestamp} behind L1 timestamp {l1_timestamp}, local \
+                     clock may be out of sync"
+                );
                 timestamp = l1_timestamp;
             }
 
             let l1_timestamp_millis = l1_timestamp * 1_000;
 
             if timestamp_millis < l1_timestamp_millis {
-                tracing::warn!("Espresso timestamp_millis {timestamp_millis} behind L1 timestamp {l1_timestamp_millis}, local clock may be out of sync");
+                tracing::warn!(
+                    "Espresso timestamp_millis {timestamp_millis} behind L1 timestamp \
+                     {l1_timestamp_millis}, local clock may be out of sync"
+                );
                 timestamp_millis = l1_timestamp_millis;
             }
         }

@@ -372,6 +372,7 @@ where
 
     let epoch_height = genesis.epoch_height.unwrap_or_default();
     let drb_difficulty = genesis.drb_difficulty.unwrap_or_default();
+    let drb_upgrade_difficulty = genesis.drb_upgrade_difficulty.unwrap_or_default();
     let epoch_start_block = genesis.epoch_start_block.unwrap_or_default();
     let stake_table_capacity = genesis
         .stake_table_capacity
@@ -379,10 +380,12 @@ where
 
     tracing::warn!("setting epoch_height={epoch_height:?}");
     tracing::warn!("setting drb_difficulty={drb_difficulty:?}");
+    tracing::warn!("setting drb_upgrade_difficulty={drb_upgrade_difficulty:?}");
     tracing::warn!("setting epoch_start_block={epoch_start_block:?}");
     tracing::warn!("setting stake_table_capacity={stake_table_capacity:?}");
     network_config.config.epoch_height = epoch_height;
     network_config.config.drb_difficulty = drb_difficulty;
+    network_config.config.drb_upgrade_difficulty = drb_upgrade_difficulty;
     network_config.config.epoch_start_block = epoch_start_block;
     network_config.config.stake_table_capacity = stake_table_capacity;
 
@@ -909,6 +912,17 @@ pub mod testing {
                         .blocks_per_epoch(blocks_per_epoch)
                         .epoch_start_block(epoch_start_block)
                         .multisig_pauser(self.signer.address())
+                        .token_name("Espresso".to_string())
+                        .token_symbol("ESP".to_string())
+                        .initial_token_supply(U256::from(3590000000u64))
+                        .ops_timelock_delay(U256::from(0))
+                        .ops_timelock_admin(self.signer.address())
+                        .ops_timelock_proposers(vec![self.signer.address()])
+                        .ops_timelock_executors(vec![self.signer.address()])
+                        .safe_exit_timelock_delay(U256::from(10))
+                        .safe_exit_timelock_admin(self.signer.address())
+                        .safe_exit_timelock_proposers(vec![self.signer.address()])
+                        .safe_exit_timelock_executors(vec![self.signer.address()])
                         .build()
                         .unwrap();
                     args.deploy_all(&mut contracts)
@@ -918,14 +932,10 @@ pub mod testing {
                     let st_addr = contracts
                         .address(Contract::StakeTableProxy)
                         .expect("StakeTableProxy address not found");
-                    let token_addr = contracts
-                        .address(Contract::EspTokenProxy)
-                        .expect("EspTokenProxy address not found");
                     setup_stake_table_contract_for_test(
                         self.l1_url.clone(),
                         &deployer,
                         st_addr,
-                        token_addr,
                         validators,
                         DelegationConfig::default(),
                     )
@@ -1214,7 +1224,8 @@ pub mod testing {
                 },
                 Err(e) => {
                     tracing::warn!(
-                        "Failed to create local catchup provider: {e:#}. Only using remote catchup."
+                        "Failed to create local catchup provider: {e:#}. Only using remote \
+                         catchup."
                     );
                 },
             };

@@ -219,7 +219,11 @@ where
                             }),
                             None => {
                                 // if we fail to generate the correct encoding proof, we try to generate the incorrect encoding proof
-                                tracing::debug!("Failed to generate namespace proof for block {height} and namespace {ns_id}, trying to generate incorrect encoding proof");
+                                tracing::debug!(
+                                    "Failed to generate namespace proof for block {height} and \
+                                     namespace {ns_id}, trying to generate incorrect encoding \
+                                     proof"
+                                );
                                 let mut vid_shares = state
                                     .request_vid_shares(
                                         height as u64,
@@ -266,9 +270,9 @@ where
                                     None => {
                                         warn!("Failed to generate proof of incorrect encoding");
                                         Err(availability::Error::Custom {
-                                            message:
-                                                "Failed to generate proof of incorrect encoding"
-                                                    .to_string(),
+                                            message: "Failed to generate proof of incorrect \
+                                                      encoding"
+                                                .to_string(),
                                             status: StatusCode::INTERNAL_SERVER_ERROR,
                                         })
                                     },

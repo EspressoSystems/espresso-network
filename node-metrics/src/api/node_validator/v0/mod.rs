@@ -600,7 +600,11 @@ where
                 std::task::Poll::Ready(Some(Ok(entry))) => {
                     let block_height = self_mut.block_height_for_entry(&entry);
                     if block_height <= self_mut.last_received_block {
-                        tracing::debug!("we received an entry for a height prior to the last we've seen: {block_height} <= {}", self_mut.last_received_block);
+                        tracing::debug!(
+                            "we received an entry for a height prior to the last we've seen: \
+                             {block_height} <= {}",
+                            self_mut.last_received_block
+                        );
                         // We've received a block that we've already received
                         // before.  We should skip this block and try again.
                         // We need to reschedule ourselves in order to make progress
@@ -931,7 +935,10 @@ pub fn populate_node_identity_from_scrape(node_identity: &mut NodeIdentity, scra
         } else {
             // We were unable to find the key for the public key on the metrics
             // scrape result.
-            tracing::warn!("scrape result doesn't seem to contain 'node' key, preventing us from verifying the public key");
+            tracing::warn!(
+                "scrape result doesn't seem to contain 'node' key, preventing us from verifying \
+                 the public key"
+            );
             return;
         };
 
@@ -945,7 +952,11 @@ pub fn populate_node_identity_from_scrape(node_identity: &mut NodeIdentity, scra
         } else {
             // We were unable to find the sample for the public key on the metrics
             // scrape result.
-            tracing::warn!("scrape result doesn't seem to contain 'node' sample, preventing us from verifying the public key. This is especially odd considering that we found the 'node' key already.");
+            tracing::warn!(
+                "scrape result doesn't seem to contain 'node' sample, preventing us from \
+                 verifying the public key. This is especially odd considering that we found the \
+                 'node' key already."
+            );
             return;
         };
 
@@ -962,7 +973,11 @@ pub fn populate_node_identity_from_scrape(node_identity: &mut NodeIdentity, scra
             }
         } else {
             // We were unable to find the public key in the scrape result.
-            tracing::warn!("scrape result doesn't seem to contain 'key' label in the 'node' sample, preventing us from verifying the public key. This is especially odd considering that we found the 'node' key and sample already.");
+            tracing::warn!(
+                "scrape result doesn't seem to contain 'key' label in the 'node' sample, \
+                 preventing us from verifying the public key. This is especially odd considering \
+                 that we found the 'node' key and sample already."
+            );
             return;
         };
 
@@ -970,7 +985,10 @@ pub fn populate_node_identity_from_scrape(node_identity: &mut NodeIdentity, scra
         let node_identity_public_key_string = node_identity.public_key().to_string();
 
         if public_key_from_scrape_string != node_identity_public_key_string {
-            tracing::warn!("node identity public key doesn't match public key in scrape, are we hitting the wrong URL, or is it behind a load balancer between multiple nodes?");
+            tracing::warn!(
+                "node identity public key doesn't match public key in scrape, are we hitting the \
+                 wrong URL, or is it behind a load balancer between multiple nodes?"
+            );
             return;
         }
 
@@ -1128,7 +1146,10 @@ impl ProcessNodeIdentityUrlStreamTask {
 
                 // We will be unable to provide any additional node identity
                 // updates. This is considered a critical error.
-                panic!("ProcessNodeIdentityUrlStreamTask node_identity_sender closed, future node identity information will stagnate: {err}");
+                panic!(
+                    "ProcessNodeIdentityUrlStreamTask node_identity_sender closed, future node \
+                     identity information will stagnate: {err}"
+                );
             }
         }
     }
