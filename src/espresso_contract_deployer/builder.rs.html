@@ -362,4 +362,46 @@
 <a href=#362 id=362 data-nosnippet>362</a>        <span class="self">self</span>.deploy(contracts, Contract::StakeTableV2).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#363 id=363 data-nosnippet>363</a>        <span class="prelude-val">Ok</span>(())
 <a href=#364 id=364 data-nosnippet>364</a>    }
-<a href=#365 id=365 data-nosnippet>365</a>}</code></pre></div></section></main></body></html>
+<a href=#365 id=365 data-nosnippet>365</a>
+<a href=#366 id=366 data-nosnippet>366</a>    <span class="doccomment">/// Propose ownership transfer from multisig to timelock
+<a href=#367 id=367 data-nosnippet>367</a>    </span><span class="kw">pub async fn </span>propose_transfer_ownership_from_multisig_to_timelock(
+<a href=#368 id=368 data-nosnippet>368</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#369 id=369 data-nosnippet>369</a>        contracts: <span class="kw-2">&amp;mut </span>Contracts,
+<a href=#370 id=370 data-nosnippet>370</a>        timelock_controller: Address,
+<a href=#371 id=371 data-nosnippet>371</a>        contract: Contract,
+<a href=#372 id=372 data-nosnippet>372</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#373 id=373 data-nosnippet>373</a>        <span class="kw">let </span>multisig = <span class="self">self</span>.multisig.expect(
+<a href=#374 id=374 data-nosnippet>374</a>            <span class="string">"Multisig address must be set when proposing ownership transfer. Use \
+<a href=#375 id=375 data-nosnippet>375</a>             --multisig-address or ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS"</span>,
+<a href=#376 id=376 data-nosnippet>376</a>        );
+<a href=#377 id=377 data-nosnippet>377</a>        <span class="kw">let </span>rpc_url = <span class="self">self</span>.rpc_url.clone();
+<a href=#378 id=378 data-nosnippet>378</a>        <span class="kw">let </span>dry_run = <span class="self">self</span>.dry_run;
+<a href=#379 id=379 data-nosnippet>379</a>        <span class="kw">let </span>use_hardware_wallet = <span class="bool-val">false</span>;
+<a href=#380 id=380 data-nosnippet>380</a>        <span class="kw">let </span>result = <span class="kw">crate</span>::proposals::transfer_ownership_from_multisig_to_timelock(
+<a href=#381 id=381 data-nosnippet>381</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.deployer,
+<a href=#382 id=382 data-nosnippet>382</a>            contracts,
+<a href=#383 id=383 data-nosnippet>383</a>            contract,
+<a href=#384 id=384 data-nosnippet>384</a>            <span class="kw">crate</span>::proposals::TransferOwnershipParams {
+<a href=#385 id=385 data-nosnippet>385</a>                new_owner: timelock_controller,
+<a href=#386 id=386 data-nosnippet>386</a>                rpc_url,
+<a href=#387 id=387 data-nosnippet>387</a>                safe_addr: multisig,
+<a href=#388 id=388 data-nosnippet>388</a>                use_hardware_wallet,
+<a href=#389 id=389 data-nosnippet>389</a>                dry_run,
+<a href=#390 id=390 data-nosnippet>390</a>            },
+<a href=#391 id=391 data-nosnippet>391</a>        )
+<a href=#392 id=392 data-nosnippet>392</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#393 id=393 data-nosnippet>393</a>        <span class="kw">if </span>!result.status.success() {
+<a href=#394 id=394 data-nosnippet>394</a>            <span class="kw">let </span>stderr = String::from_utf8_lossy(<span class="kw-2">&amp;</span>result.stderr);
+<a href=#395 id=395 data-nosnippet>395</a>            <span class="kw">let </span>stdout = String::from_utf8_lossy(<span class="kw-2">&amp;</span>result.stdout);
+<a href=#396 id=396 data-nosnippet>396</a>            <span class="macro">anyhow::bail!</span>(
+<a href=#397 id=397 data-nosnippet>397</a>                <span class="string">"Failed to propose ownership transfer for {}: {}\nStdout: {}\nStderr: {}"</span>,
+<a href=#398 id=398 data-nosnippet>398</a>                contract,
+<a href=#399 id=399 data-nosnippet>399</a>                result.status,
+<a href=#400 id=400 data-nosnippet>400</a>                stdout,
+<a href=#401 id=401 data-nosnippet>401</a>                stderr
+<a href=#402 id=402 data-nosnippet>402</a>            );
+<a href=#403 id=403 data-nosnippet>403</a>        }
+<a href=#404 id=404 data-nosnippet>404</a>        <span class="macro">tracing::info!</span>(<span class="string">"Successfully proposed ownership transfer for {}"</span>, contract);
+<a href=#405 id=405 data-nosnippet>405</a>        <span class="prelude-val">Ok</span>(())
+<a href=#406 id=406 data-nosnippet>406</a>    }
+<a href=#407 id=407 data-nosnippet>407</a>}</code></pre></div></section></main></body></html>
