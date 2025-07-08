@@ -154,7 +154,7 @@ struct Options {
     deploy_safe_exit_timelock: bool,
     /// Option to use timelock as the owner of the proxy
     #[clap(long, default_value = "false")]
-    timelock_owner: bool,
+    use_timelock_owner: bool,
 
     /// Write deployment results to OUT as a .env file.
     ///
@@ -545,8 +545,8 @@ async fn main() -> anyhow::Result<()> {
         args_builder
             .safe_exit_timelock_proposers(safe_exit_timelock_proposers.into_iter().collect());
     }
-    if opt.timelock_owner {
-        args_builder.timelock_owner(true);
+    if opt.use_timelock_owner {
+        args_builder.use_timelock_owner(true);
     }
 
     if opt.perform_timelock_operation {

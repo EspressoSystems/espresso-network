@@ -43,7 +43,7 @@ use crate::{
 /// - `timelock_operation_function_signature`: function signature for the timelock operation
 /// - `timelock_operation_function_values`: function values for the timelock operation
 /// - `timelock_operation_salt`: salt for the timelock operation
-/// - `timelock_owner`: flag to indicate whether to transfer ownership to the timelock owner
+/// - `use_timelock_owner`: flag to indicate whether to transfer ownership to the timelock owner
 #[derive(Builder, Clone)]
 #[builder(setter(strip_option))]
 pub struct DeployerArgs<P: Provider + WalletProvider> {
@@ -111,7 +111,7 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     #[builder(default)]
     timelock_operation_salt: Option<String>,
     #[builder(default)]
-    timelock_owner: Option<bool>,
+    use_timelock_owner: Option<bool>,
 }
 
 impl<P: Provider + WalletProvider> DeployerArgs<P> {
@@ -123,13 +123,13 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             Contract::FeeContractProxy => {
                 let addr = crate::deploy_fee_contract_proxy(provider, contracts, admin).await?;
 
-                if let Some(timelock_owner) = self.timelock_owner {
+                if let Some(use_timelock_owner) = self.use_timelock_owner {
                     tracing::info!(
                         "Transferring ownership to OpsTimelock: {:?}",
-                        timelock_owner
+                        use_timelock_owner
                     );
                     // deployer is the timelock owner
-                    if timelock_owner {
+                    if use_timelock_owner {
                         let timelock_addr = contracts
                             .address(Contract::OpsTimelock)
                             .expect("fail to get OpsTimelock address");
@@ -164,10 +164,10 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 )
                 .await?;
 
-                if let Some(timelock_owner) = self.timelock_owner {
+                if let Some(use_timelock_owner) = self.use_timelock_owner {
                     tracing::info!("Transferring ownership to SafeExitTimelock");
                     // deployer is the timelock owner
-                    if timelock_owner {
+                    if use_timelock_owner {
                         let timelock_addr = contracts
                             .address(Contract::SafeExitTimelock)
                             .expect("fail to get SafeExitTimelock address");
@@ -194,10 +194,10 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         .address(Contract::EspTokenProxy)
                         .expect("fail to get EspTokenProxy address");
 
-                    if let Some(timelock_owner) = self.timelock_owner {
+                    if let Some(use_timelock_owner) = self.use_timelock_owner {
                         tracing::info!("Transferring ownership to SafeExitTimelock");
                         // deployer is the timelock owner
-                        if timelock_owner {
+                        if use_timelock_owner {
                             let timelock_addr = contracts
                                 .address(Contract::SafeExitTimelock)
                                 .expect("fail to get SafeExitTimelock address");
@@ -291,10 +291,10 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         .address(Contract::LightClientProxy)
                         .expect("fail to get LightClientProxy address");
 
-                    if let Some(timelock_owner) = self.timelock_owner {
+                    if let Some(use_timelock_owner) = self.use_timelock_owner {
                         tracing::info!("Transferring ownership to OpsTimelock");
                         // deployer is the timelock owner
-                        if timelock_owner {
+                        if use_timelock_owner {
                             let timelock_addr = contracts
                                 .address(Contract::OpsTimelock)
                                 .expect("fail to get OpsTimelock address");
@@ -363,10 +363,10 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         .address(Contract::StakeTableProxy)
                         .expect("fail to get StakeTableProxy address");
 
-                    if let Some(timelock_owner) = self.timelock_owner {
+                    if let Some(use_timelock_owner) = self.use_timelock_owner {
                         tracing::info!("Transferring ownership to OpsTimelock");
                         // deployer is the timelock owner
-                        if timelock_owner {
+                        if use_timelock_owner {
                             let timelock_addr = contracts
                                 .address(Contract::OpsTimelock)
                                 .expect("fail to get OpsTimelock address");
