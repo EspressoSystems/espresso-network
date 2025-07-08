@@ -7,6 +7,7 @@
 - [Fee Contract](#fee-contract)
 - [Token](#token)
 - [Timelock Proposals](#timelock-proposals)
+- [Safe Multisig Proposals](#safe-multisig-proposals)
 - [Troubleshooting](#troubleshooting)
 
 ## Prerequisites
@@ -480,6 +481,76 @@ echo $ESPRESSO_OPS_TIMELOCK_ADMIN
 export ESPRESSO_SEQUENCER_ETH_MNEMONIC="your mnemonic here"
 export RPC_URL="http://host.docker.internal:8545"
 ```
+
+# Safe Multisig Proposals
+
+## Upgrading ESP Token to V2 (For demo purposes)
+
+### Prerequisites
+
+Before upgrading to ESP Token V2, ensure you have:
+
+- Deployed ESP Token V1
+- The token proxy is owned by the appropriate timelock
+- set the multisig as a real multisig address or add `--dry-run` to the commands below if not doing a real run.
+
+```bash
+export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS=YOUR_MULTISIG_ADDRESS
+```
+
+### Upgrading with Cargo
+
+```bash
+set -a
+source .env
+set +a
+unset ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
+# If doing a real run then, export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS=YOUR_MULTISIG_ADDRESS
+RUST_LOG=info cargo run --bin deploy -- \
+  --deploy-esp-token \
+  --upgrade-esp-token-v2 \
+  --rpc-url=$RPC_URL \
+  --use-multisig
+  # if doing a real run then add --dry-run
+```
+
+### Upgrading with Docker Compose
+
+```bash
+# If doing a real run then, export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS=YOUR_MULTISIG_ADDRESS
+docker compose run --rm \
+  -e RPC_URL \
+  -e ESPRESSO_SEQUENCER_ETH_MNEMONIC \
+  -v $(pwd)/.env.mydemo:/app/.env.mydemo \
+  deploy-sequencer-contracts \
+  deploy --deploy-esp-token --upgrade-esp-token-v2 --rpc-url=$RPC_URL --use-multisig
+  # if doing a real run then add --dry-run
+```
+
+You should see the output which says something like:
+`EspTokenProxy upgrade proposal sent. Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe=YOUR_MULTISIG_ADDRESS`
+
+### Verifying the Upgrade
+
+If the transaction was signed and executed on chain, you can use the following command to check the implementation
+address and version number.
+
+```bash
+# Check the implementation address
+cast storage $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc --rpc-url http://127.0.0.1:8545
+
+# Check V2 specific functions (if available)
+cast call $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS "version()(string)" --rpc-url http://127.0.0.1:8545
+```
+
+## Upgrade Verification Checklist
+
+After each upgrade, verify:
+
+1. **Implementation Address**: Check that the proxy points to the new implementation
+2. **Functionality**: Test V2-specific functions
+3. **Ownership**: Verify ownership hasn't changed unexpectedly
+4. **State**: Ensure contract state is preserved correctly
 
 ### RPC Connection Issues
 
