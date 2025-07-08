@@ -155,6 +155,9 @@ struct Options {
     /// Option to use timelock as the owner of the proxy
     #[clap(long, default_value = "false")]
     use_timelock_owner: bool,
+    /// Option to transfer ownership from multisig
+    #[clap(long, default_value = "false")]
+    propose_transfer_ownership_to_timelock_fee_contract: bool,
 
     /// Write deployment results to OUT as a .env file.
     ///
@@ -327,6 +330,9 @@ struct Options {
         requires = "perform_timelock_operation"
     )]
     timelock_operation_delay: Option<u64>,
+    /// The address of the timelock controller
+    #[clap(long, env = "ESPRESSO_SEQUENCER_TIMELOCK_CONTROLLER_ADDRESS")]
+    timelock_controller: Option<Address>,
 
     #[clap(flatten)]
     logging: logging::Config,
@@ -659,6 +665,21 @@ async fn main() -> anyhow::Result<()> {
     if opt.perform_timelock_operation {
         args.perform_timelock_operation_on_contract(&mut contracts)
             .await?;
+    }
+
+    // Execute ownership transfer proposal if requested
+    if opt.propose_transfer_ownership_to_timelock_fee_contract {
+        let timelock_controller = opt.timelock_controller.expect(
+            "Must provide --timelock-controller when transferring ownership from multisig to \
+             timelock",
+        );
+
+        args.propose_transfer_ownership_from_multisig_to_timelock(
+            &mut contracts,
+            timelock_controller,
+            Contract::FeeContractProxy,
+        )
+        .await?;
     }
 
     // finally print out or persist deployed addresses
