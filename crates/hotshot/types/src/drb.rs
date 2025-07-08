@@ -66,7 +66,13 @@ pub fn drb_difficulty_selector<TYPES: NodeType, V: Versions>(
 pub const DIFFICULTY_LEVEL: u64 = 10;
 
 /// Interval at which to store the results
-pub const DRB_CHECKPOINT_INTERVAL: u64 = 1_000_000_000;
+pub const DRB_CHECKPOINT_INTERVAL: u64 = DRB_YIELD_INTERVAL * DRB_YIELDS_PER_CHECKPOINT;
+
+/// Interval at which to yield execution in the DRB calculation
+pub const DRB_YIELD_INTERVAL: u64 = 1_000_000;
+
+/// How many times we yield before storing the DRB checkpoint
+pub const DRB_YIELDS_PER_CHECKPOINT: u64 = 1_000;
 
 /// DRB seed input for epoch 1 and 2.
 pub const INITIAL_DRB_SEED_INPUT: [u8; 32] = [0; 32];
@@ -130,10 +136,14 @@ pub async fn compute_drb_result(
 
     // loop up to, but not including, the `final_checkpoint`
     for _ in 0..final_checkpoint {
-        for _ in 0..DRB_CHECKPOINT_INTERVAL {
-            // TODO: This may be optimized to avoid memcopies after we bench the hash time.
-            // <https://github.com/EspressoSystems/HotShot/issues/3880>
-            hash = Sha256::digest(hash).to_vec();
+        for _ in 0..DRB_YIELDS_PER_CHECKPOINT {
+            for _ in 0..DRB_YIELD_INTERVAL {
+                // TODO: This may be optimized to avoid memcopies after we bench the hash time.
+                // <https://github.com/EspressoSystems/HotShot/issues/3880>
+                hash = Sha256::digest(hash).to_vec();
+            }
+
+            tokio::task::yield_now().await;
         }
 
         let mut partial_drb_result = [0u8; 32];
