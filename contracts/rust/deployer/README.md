@@ -76,7 +76,7 @@ set -a
 source .env
 set +a
 unset ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
-RUST_LOG=info cargo run --bin deploy -- --deploy-ops-timelock --deploy-fee --timelock-owner --rpc-url=$RPC_URL
+RUST_LOG=info cargo run --bin deploy -- --deploy-ops-timelock --deploy-fee --use-timelock-owner --rpc-url=$RPC_URL
 ```
 
 ### Deploying Fee Contract with Docker compose
@@ -101,7 +101,7 @@ docker compose run --rm \
   -e RPC_URL \
   -v $(pwd)/.env.mydemo:/app/.env.mydemo \
   deploy-sequencer-contracts \
-  deploy --deploy-ops-timelock --deploy-fee --timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
+  deploy --deploy-ops-timelock --deploy-fee --use-timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
 ```
 
 # Token
@@ -158,7 +158,7 @@ set -a
 source .env
 set +a
 unset ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
-RUST_LOG=info cargo run --bin deploy -- --deploy-safe-exit-timelock --deploy-esp-token --timelock-owner --rpc-url=$RPC_URL
+RUST_LOG=info cargo run --bin deploy -- --deploy-safe-exit-timelock --deploy-esp-token --use-timelock-owner --rpc-url=$RPC_URL
 ```
 
 ### Deploying Token with Docker compose
@@ -183,7 +183,7 @@ docker compose run --rm \
   -e RPC_URL \
   -v $(pwd)/.env.mydemo:/app/.env.mydemo \
   deploy-sequencer-contracts \
-  deploy --deploy-safe-exit-timelock --deploy-esp-token --timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
+  deploy --deploy-safe-exit-timelock --deploy-esp-token --use-timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
 ```
 
 Example output file (.env.mydemo) contents after a successful run
@@ -214,7 +214,7 @@ export ESPRESSO_OPS_TIMELOCK_ADMIN=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
 export ESPRESSO_OPS_TIMELOCK_PROPOSERS=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
 export ESPRESSO_OPS_TIMELOCK_EXECUTORS=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
 export ESPORESS_OPS_TIMELOCK_DELAY=0
-RUST_LOG=info cargo run --bin deploy -- --deploy-ops-timelock --deploy-fee --timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
+RUST_LOG=info cargo run --bin deploy -- --deploy-ops-timelock --deploy-fee --use-timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
 ```
 
 The deployed contracts will be written to `.env.mydemo`
@@ -329,7 +329,7 @@ export ESPRESSO_OPS_TIMELOCK_ADMIN=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
 export ESPRESSO_OPS_TIMELOCK_PROPOSERS=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
 export ESPRESSO_OPS_TIMELOCK_EXECUTORS=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
 export ESPORESS_OPS_TIMELOCK_DELAY=0
-RUST_LOG=info cargo run --bin deploy -- --deploy-ops-timelock --deploy-fee --timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
+RUST_LOG=info cargo run --bin deploy -- --deploy-ops-timelock --deploy-fee --use-timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
 ```
 
 The deployed contracts will be written to `.env.mydemo`
