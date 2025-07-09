@@ -32,7 +32,7 @@ use hotshot_task_impls::{
     view_sync::ViewSyncTaskState,
 };
 use hotshot_types::{
-    consensus::{Consensus, OuterConsensus},
+    consensus::OuterConsensus,
     constants::EVENT_CHANNEL_SIZE,
     message::{Message, UpgradeLock},
     storage_metrics::StorageMetricsValue,
@@ -299,6 +299,7 @@ pub fn create_shutdown_event_monitor<TYPES: NodeType, I: NodeImplementation<TYPE
     .boxed()
 }
 
+#[allow(clippy::too_many_arguments)]
 #[async_trait]
 /// Trait for intercepting and modifying messages between the network and consensus layers.
 ///

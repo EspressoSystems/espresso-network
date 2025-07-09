@@ -7,7 +7,6 @@ use std::{
 use anyhow::Context;
 use async_lock::RwLock;
 use async_trait::async_trait;
-use futures::AsyncReadExt;
 use hotshot::{
     tasks::EventTransformerState,
     types::{SignatureKey, SystemContextHandle},
@@ -20,7 +19,7 @@ use hotshot_task_impls::{
     },
 };
 use hotshot_types::{
-    consensus::{Consensus, OuterConsensus},
+    consensus::OuterConsensus,
     data::QuorumProposalWrapper,
     epoch_membership::EpochMembershipCoordinator,
     message::{
@@ -474,10 +473,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
     async fn send_handler(
         &mut self,
         event: &HotShotEvent<TYPES>,
-        public_key: &TYPES::SignatureKey,
-        private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
+        _public_key: &TYPES::SignatureKey,
+        _private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
         upgrade_lock: &UpgradeLock<TYPES, V>,
-        consensus: OuterConsensus<TYPES>,
+        _consensus: OuterConsensus<TYPES>,
         membership_coordinator: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
     ) -> Vec<HotShotEvent<TYPES>> {
