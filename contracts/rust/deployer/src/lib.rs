@@ -2257,7 +2257,13 @@ mod tests {
 
         operation.value = U256::from(1);
         //transfer ownership back to the timelock
-        let _ = fee_contract.transferOwnership(timelock_addr).send().await?;
+        let tx_receipt = fee_contract
+            .transferOwnership(timelock_addr)
+            .send()
+            .await?
+            .get_receipt()
+            .await?;
+        assert!(tx_receipt.inner.is_success());
 
         schedule_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone())
             .await?;
