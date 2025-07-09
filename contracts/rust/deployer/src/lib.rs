@@ -4,7 +4,7 @@ use alloy::{
     contract::RawCallBuilder,
     dyn_abi::{DynSolType, DynSolValue, JsonAbiExt},
     hex::{FromHex, ToHexExt},
-    json_abi::{Function, Param},
+    json_abi::Function,
     network::{Ethereum, EthereumWallet, TransactionBuilder},
     primitives::{Address, Bytes, B256, U256},
     providers::{
