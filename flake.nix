@@ -260,9 +260,6 @@
 
             # Add rust binaries to PATH for native demo
             export PATH="$PWD/$CARGO_TARGET_DIR/debug:$PATH"
-
-            # Needed to compile with the sqlite-unbundled feature
-            export LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib";
           '' + self.checks.${system}.pre-commit-check.shellHook;
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
           FOUNDRY_SOLC = "${solc}/bin/solc";
