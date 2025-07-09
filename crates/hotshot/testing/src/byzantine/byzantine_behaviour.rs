@@ -463,12 +463,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
 /// at least 13.
 ///
 /// Scenario:
-/// 1. The first ishonest leader sends a proposal to only f + 1 honest nodes and f dishonest nodes
+/// 1. The first dishonest leader sends a proposal to only f + 1 honest nodes and f dishonest nodes
 /// 2. The second dishonest leader sends a proposal to only f + 1 honest nodes.
-/// 3. The first dishonest relay sends a correctly formed precommit certificate to f + 1 honest nodes
+/// 3. All dishonest nodes do not send timeout votes.
+/// 4. The first dishonest relay sends a correctly formed precommit certificate to f + 1 honest nodes
 ///    and f dishonest nodes.
-/// 4. The first dishonest relay sends a correctly formed commit certificate to only one honest node.
-/// 5. The second dishonest relay behaves in the same way as the first dishonest relay.
+/// 5. The first dishonest relay sends a correctly formed commit certificate to only one honest node.
+/// 6. The second dishonest relay behaves in the same way as the first dishonest relay.
 #[derive(Debug)]
 pub struct DishonestViewSyncRelay {
     pub dishonest_proposal_view_numbers: Vec<u64>,
