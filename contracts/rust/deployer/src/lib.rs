@@ -30,18 +30,6 @@ use clap::{builder::OsStr, Parser};
 use derive_more::{derive::Deref, Display};
 use hotshot_contract_adapter::sol_types::*;
 
-use crate::proposals::{
-    multisig_proposals::{
-        transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
-        upgrade_light_client_v2_multisig_owner, upgrade_stake_table_v2_multisig_owner,
-        LightClientV2UpgradeParams, TransferOwnershipParams,
-    },
-    timelock_proposals::{
-        cancel_timelock_operation, execute_timelock_operation, schedule_timelock_operation,
-        TimelockOperationData,
-    },
-};
-
 pub mod builder;
 pub mod network_config;
 pub mod proposals;
@@ -1168,6 +1156,17 @@ mod tests {
     use sequencer_utils::test_utils::setup_test;
 
     use super::*;
+    use crate::proposals::{
+        multisig_proposals::{
+            transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
+            upgrade_light_client_v2_multisig_owner, upgrade_stake_table_v2_multisig_owner,
+            LightClientV2UpgradeParams, TransferOwnershipParams,
+        },
+        timelock_proposals::{
+            cancel_timelock_operation, execute_timelock_operation, schedule_timelock_operation,
+            TimelockOperationData,
+        },
+    };
 
     #[tokio::test]
     async fn test_is_contract() -> Result<(), anyhow::Error> {
