@@ -456,6 +456,19 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
     }
 }
 
+/// Implements a byzantine behaviour which aims at splitting the honest nodes during view sync protocol
+/// so that the honest nodes cannot view sync on their own.
+///
+/// Requirement: The scenario requires at least 4 dishonest nodes so total number of nodes need to be
+/// at least 13.
+///
+/// Scenario:
+/// 1. The first ishonest leader sends a proposal to only f + 1 honest nodes and f dishonest nodes
+/// 2. The second dishonest leader sends a proposal to only f + 1 honest nodes.
+/// 3. The first dishonest relay sends a correctly formed precommit certificate to f + 1 honest nodes
+///    and f dishonest nodes.
+/// 4. The first dishonest relay sends a correctly formed commit certificate to only one honest node.
+/// 5. The second dishonest relay behaves in the same way as the first dishonest relay.
 #[derive(Debug)]
 pub struct DishonestViewSyncRelay {
     pub dishonest_proposal_view_numbers: Vec<u64>,
@@ -510,8 +523,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
                 let one_honest_it = once(&self.one_honest_node);
                 let chained_it: Box<dyn Iterator<Item = &u64> + Send> =
                     if &*view_number == self.dishonest_proposal_view_numbers.first().unwrap() {
+                        // The first dishonest proposal is sent to f + 1 honest nodes and f dishonest nodes
                         Box::new(second_f_honest_it.chain(one_honest_it.chain(f_dishonest_it)))
                     } else {
+                        // All other dishonest proposals are sent to f + 1 honest nodes
                         Box::new(second_f_honest_it.chain(one_honest_it))
                     };
                 for node_id in chained_it {
@@ -589,6 +604,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
                 let second_f_honest_it = self.second_f_honest_nodes.iter();
                 let f_dishonest_it = self.f_dishonest_nodes.iter();
                 let one_honest_it = once(&self.one_honest_node);
+                // The pre-commit certificate is sent to f + 1 honest nodes and f dishonest nodes
                 let chained_it: Box<dyn Iterator<Item = &u64> + Send> =
                     Box::new(second_f_honest_it.chain(one_honest_it.chain(f_dishonest_it)));
                 for node_id in chained_it {
@@ -646,6 +662,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
                     },
                 };
                 let one_honest_it = once(&self.one_honest_node);
+                // The commit certificate is sent to 1 honest node
                 let chained_it: Box<dyn Iterator<Item = &u64> + Send> = Box::new(one_honest_it);
                 for node_id in chained_it {
                     let dummy_view = TYPES::View::new(*node_id);
