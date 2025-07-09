@@ -372,6 +372,7 @@ where
 
     let epoch_height = genesis.epoch_height.unwrap_or_default();
     let drb_difficulty = genesis.drb_difficulty.unwrap_or_default();
+    let drb_upgrade_difficulty = genesis.drb_upgrade_difficulty.unwrap_or_default();
     let epoch_start_block = genesis.epoch_start_block.unwrap_or_default();
     let stake_table_capacity = genesis
         .stake_table_capacity
@@ -379,10 +380,12 @@ where
 
     tracing::warn!("setting epoch_height={epoch_height:?}");
     tracing::warn!("setting drb_difficulty={drb_difficulty:?}");
+    tracing::warn!("setting drb_upgrade_difficulty={drb_upgrade_difficulty:?}");
     tracing::warn!("setting epoch_start_block={epoch_start_block:?}");
     tracing::warn!("setting stake_table_capacity={stake_table_capacity:?}");
     network_config.config.epoch_height = epoch_height;
     network_config.config.drb_difficulty = drb_difficulty;
+    network_config.config.drb_upgrade_difficulty = drb_upgrade_difficulty;
     network_config.config.epoch_start_block = epoch_start_block;
     network_config.config.stake_table_capacity = stake_table_capacity;
 
