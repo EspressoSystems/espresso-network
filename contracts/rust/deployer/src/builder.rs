@@ -136,6 +136,10 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 let addr = crate::deploy_fee_contract_proxy(provider, contracts, admin).await?;
 
                 if let Some(use_timelock_owner) = self.use_timelock_owner {
+                    // FeeContract uses OpsTimelock because:
+                    // - It handles critical fee collection and distribution logic
+                    // - May require emergency updates for security or functionality
+                    // - OpsTimelock provides a shorter delay for critical operations
                     tracing::info!(
                         "Transferring ownership to OpsTimelock: {:?}",
                         use_timelock_owner
@@ -177,6 +181,10 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 .await?;
 
                 if let Some(use_timelock_owner) = self.use_timelock_owner {
+                    // EspToken uses SafeExitTimelock (not OpsTimelock) because:
+                    // - It's a simple ERC20 token with minimal upgrade complexity
+                    // - No emergency updates are expected for token functionality
+                    // - SafeExitTimelock provides sufficient security for token operations
                     tracing::info!("Transferring ownership to SafeExitTimelock");
                     // deployer is the timelock owner
                     if use_timelock_owner {
@@ -304,6 +312,10 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         .expect("fail to get LightClientProxy address");
 
                     if let Some(use_timelock_owner) = self.use_timelock_owner {
+                        // LightClient uses OpsTimelock because:
+                        // - It's a critical security component for the network
+                        // - May require emergency updates for security vulnerabilities
+                        // - OpsTimelock provides a shorter delay for critical operations
                         tracing::info!("Transferring ownership to OpsTimelock");
                         // deployer is the timelock owner
                         if use_timelock_owner {
@@ -376,6 +388,10 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         .expect("fail to get StakeTableProxy address");
 
                     if let Some(use_timelock_owner) = self.use_timelock_owner {
+                        // StakeTable uses OpsTimelock because:
+                        // - It manages critical staking and validator operations
+                        // - May require emergency updates for security or functionality
+                        // - OpsTimelock provides a shorter delay for critical operations
                         tracing::info!("Transferring ownership to OpsTimelock");
                         // deployer is the timelock owner
                         if use_timelock_owner {
