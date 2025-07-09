@@ -13,9 +13,7 @@ use espresso_contract_deployer::{
     build_provider, build_provider_ledger,
     builder::DeployerArgsBuilder,
     network_config::{light_client_genesis, light_client_genesis_from_stake_table},
-    proposals::{
-        multisig_proposals::verify_node_js_files, timelock_proposals::TimelockOperationType,
-    },
+    proposals::{multisig::verify_node_js_files, timelock::TimelockOperationType},
     provider::connect_ledger,
     Contract, Contracts, DeployedContracts,
 };
