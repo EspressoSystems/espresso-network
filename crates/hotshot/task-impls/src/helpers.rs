@@ -169,6 +169,83 @@ pub async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     membership.write().await.add_drb_result(epoch, drb_result)
 }
 
+/// Verify the DRB result from the proposal for the next epoch if this is the last block of the
+/// current epoch.
+///
+/// Uses the result from `start_drb_task`.
+///
+/// Returns an error if we should not vote.
+pub(crate) async fn verify_drb_result<
+    TYPES: NodeType,
+    I: NodeImplementation<TYPES>,
+    V: Versions,
+>(
+    proposal: &QuorumProposalWrapper<TYPES>,
+    validation_info: &ValidationInfo<TYPES, I, V>,
+) -> Result<()> {
+    // Skip if this is not the expected block.
+    if validation_info.epoch_height == 0
+        || !is_epoch_transition(
+            proposal.block_header().block_number(),
+            validation_info.epoch_height,
+        )
+    {
+        tracing::debug!("Skipping DRB result verification");
+        return Ok(());
+    }
+
+    // #3967 REVIEW NOTE: Check if this is the right way to decide if we're doing epochs
+    // Alternatively, should we just return Err() if epochs aren't happening here? Or can we assume
+    // that epochs are definitely happening by virtue of getting here?
+    let epoch = option_epoch_from_block_number::<TYPES>(
+        validation_info
+            .upgrade_lock
+            .epochs_enabled(proposal.view_number())
+            .await,
+        proposal.block_header().block_number(),
+        validation_info.epoch_height,
+    );
+
+    let proposal_result = proposal
+        .next_drb_result()
+        .context(info!("Proposal is missing the DRB result."))?;
+
+    if let Some(epoch_val) = epoch {
+        let has_stake_current_epoch = validation_info
+            .membership
+            .coordinator
+            .stake_table_for_epoch(epoch)
+            .await
+            .context(warn!("No stake table for epoch {epoch_val}"))?
+            .has_stake(&validation_info.public_key)
+            .await;
+
+        if has_stake_current_epoch {
+            let computed_result = validation_info
+                .consensus
+                .read()
+                .await
+                .drb_results
+                .results
+                .get(&(epoch_val + 1))
+                .cloned()
+                .context(warn!("DRB result not found"))?;
+
+            ensure!(
+                proposal_result == computed_result,
+                warn!(
+                    "Our calculated DRB result is {computed_result:?}, which does not match the \
+                     proposed DRB result of {proposal_result:?}"
+                )
+            );
+        }
+
+        Ok(())
+    } else {
+        Err(error!("Epochs are not available"))
+    }
+}
+
 /// Handles calling add_epoch_root and sync_l1 on Membership if necessary.
 async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
     decided_leaf: &Leaf2<TYPES>,
