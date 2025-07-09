@@ -155,7 +155,7 @@ func waitForEspressoNode(ctx context.Context) error {
 func TestExplorerFetchTransactionByHash(t *testing.T) {
 
 	ctx := context.Background()
-	client := NewClient("https://query-0.main.net.espresso.network/v0")
+	client := NewClient("https://query-0.main.net.espresso.network")
 
 	txHash, err := tagged_base64.Parse("TX~onVqqws4O51Phy0QLzXaQkVpV_8VyVbYtSvmRAlF6p-K")
 	if err != nil {
