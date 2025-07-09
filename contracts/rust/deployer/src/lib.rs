@@ -1,10 +1,4 @@
-use std::{
-    collections::HashMap,
-    io::Write,
-    path::PathBuf,
-    process::{Command, Stdio},
-    time::Duration,
-};
+use std::{collections::HashMap, io::Write, time::Duration};
 
 use alloy::{
     contract::RawCallBuilder,
@@ -25,7 +19,7 @@ use alloy::{
     },
     transports::http::reqwest::Url,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use clap::{builder::OsStr, Parser};
 use derive_more::{derive::Deref, Display};
 use hotshot_contract_adapter::sol_types::*;
@@ -1157,12 +1151,12 @@ mod tests {
 
     use super::*;
     use crate::proposals::{
-        multisig_proposals::{
+        multisig::{
             transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
             upgrade_light_client_v2_multisig_owner, upgrade_stake_table_v2_multisig_owner,
             LightClientV2UpgradeParams, TransferOwnershipParams,
         },
-        timelock_proposals::{
+        timelock::{
             cancel_timelock_operation, execute_timelock_operation, schedule_timelock_operation,
             TimelockOperationData,
         },

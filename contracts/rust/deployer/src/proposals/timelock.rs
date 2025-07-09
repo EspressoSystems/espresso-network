@@ -1,6 +1,15 @@
+use alloy::{
+    primitives::{Address, Bytes, B256, U256},
+    providers::Provider,
+    rpc::types::TransactionReceipt,
+};
+use anyhow::Result;
 use clap::ValueEnum;
+use hotshot_contract_adapter::sol_types::{
+    EspToken, FeeContract, LightClient, OpsTimelock, SafeExitTimelock, StakeTable,
+};
 
-use super::*;
+use crate::Contract;
 
 /// Data structure for timelock operations
 #[derive(Debug, Clone)]

@@ -1,6 +1,21 @@
-use std::process::Output;
+use std::{
+    path::PathBuf,
+    process::{Command, Output, Stdio},
+};
 
-use super::*;
+use alloy::{
+    hex::{FromHex, ToHexExt},
+    network::TransactionBuilder,
+    primitives::{Address, Bytes},
+    providers::Provider,
+};
+use anyhow::{anyhow, Context, Result};
+use hotshot_contract_adapter::sol_types::{
+    EspToken, EspTokenV2, LightClient, LightClientV2, LightClientV2Mock, OwnableUpgradeable,
+    PlonkVerifierV2, StakeTable, StakeTableV2,
+};
+
+use crate::{Contract, Contracts, LIBRARY_PLACEHOLDER_ADDRESS};
 
 #[derive(Clone)]
 pub struct TransferOwnershipParams {
@@ -79,7 +94,7 @@ pub async fn transfer_ownership_from_multisig_to_timelock(
 
     let owner_addr = proxy_instance.owner().call().await?._0;
 
-    if !params.dry_run && !super::super::is_contract(provider, owner_addr).await? {
+    if !params.dry_run && !crate::is_contract(provider, owner_addr).await? {
         tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
         anyhow::bail!(
             "Proxy owner is not a contract. Expected: {owner_addr:#x}. Use --dry-run to skip this \
@@ -240,7 +255,7 @@ pub async fn upgrade_light_client_v2_multisig_owner(
     let proxy = LightClient::new(proxy_addr, &provider);
     let owner_addr = proxy.owner().call().await?._0;
 
-    if !dry_run && !super::super::is_contract(&provider, owner_addr).await? {
+    if !dry_run && !crate::is_contract(&provider, owner_addr).await? {
         tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
         anyhow::bail!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
     }
@@ -302,7 +317,7 @@ pub async fn upgrade_light_client_v2_multisig_owner(
     };
 
     // Prepare init data
-    let init_data = if super::super::already_initialized(
+    let init_data = if crate::already_initialized(
         &provider,
         proxy_addr,
         Contract::LightClientV2,
@@ -388,7 +403,7 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
     if !dry_run {
         tracing::info!("Checking if owner is a contract");
         assert!(
-            super::super::is_contract(&provider, owner_addr).await?,
+            crate::is_contract(&provider, owner_addr).await?,
             "Owner is not a contract so not a multisig wallet"
         );
     }
@@ -460,7 +475,7 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
                 );
                 anyhow::bail!("Proxy is not owned by the multisig");
             }
-            if !dry_run && !super::super::is_contract(&provider, owner_addr).await? {
+            if !dry_run && !crate::is_contract(&provider, owner_addr).await? {
                 tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
                 anyhow::bail!("Proxy owner is not a contract");
             }
@@ -476,7 +491,7 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
 
             // prepare init data
             let expected_major_version = 2;
-            let init_data = if super::super::already_initialized(
+            let init_data = if crate::already_initialized(
                 &provider,
                 proxy_addr,
                 Contract::StakeTableV2,

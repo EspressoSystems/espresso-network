@@ -12,12 +12,12 @@ use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSo
 use crate::{
     encode_function_call,
     proposals::{
-        multisig_proposals::{
+        multisig::{
             transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
             upgrade_light_client_v2_multisig_owner, upgrade_stake_table_v2_multisig_owner,
             LightClientV2UpgradeParams, TransferOwnershipParams,
         },
-        timelock_proposals::{
+        timelock::{
             cancel_timelock_operation, execute_timelock_operation, schedule_timelock_operation,
             TimelockOperationData, TimelockOperationType,
         },
