@@ -98,7 +98,7 @@ local-ip-address = "0.6"
 portpicker = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
-sequencer = { path = "../../../sequencer" }
+sequencer = { path = "../../../sequencer", default-features = false }
 serde = { workspace = true, features = ["rc"] }
 sha2 = { workspace = true }
 surf-disco = { workspace = true }
