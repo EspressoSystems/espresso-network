@@ -4,7 +4,7 @@ use alloy::{
     contract::RawCallBuilder,
     dyn_abi::{DynSolType, DynSolValue, JsonAbiExt},
     hex::{FromHex, ToHexExt},
-    json_abi::Function,
+    json_abi::{Function, Param},
     network::{Ethereum, EthereumWallet, TransactionBuilder},
     primitives::{Address, Bytes, B256, U256},
     providers::{
@@ -1108,35 +1108,40 @@ pub async fn deploy_safe_exit_timelock(
 /// Returns:
 /// - Full calldata: selector + encoded arguments
 pub fn encode_function_call(signature: &str, args: Vec<String>) -> Result<Bytes> {
-    let (_name, types_str) = signature
-        .split_once('(')
-        .ok_or_else(|| anyhow!("Invalid function signature: {}", signature))?;
+    let func = Function::parse(signature)?;
 
-    let types_str = types_str.trim_end_matches(')');
-    let arg_type_strs = types_str.split(',').filter(|s| !s.trim().is_empty());
-
-    let dyn_types: Vec<DynSolType> = arg_type_strs
-        .map(|s| s.trim().parse::<DynSolType>())
-        .collect::<std::result::Result<_, _>>()
-        .map_err(|e| anyhow!("Failed to parse argument types: {e}"))?;
-
-    if args.len() != dyn_types.len() {
+    // Check if argument count matches the function signature
+    if args.len() != func.inputs.len() {
         anyhow::bail!(
-            "Mismatch between argument count ({}) and type count ({})",
+            "Mismatch between argument count ({}) and parameter count ({})",
             args.len(),
-            dyn_types.len()
+            func.inputs.len()
         );
     }
 
-    let dyn_values: Vec<DynSolValue> = args
-        .iter()
-        .enumerate()
-        .map(|(i, arg)| dyn_types[i].coerce_str(arg))
-        .collect::<Result<_, _>>()
-        .map_err(|e| anyhow!("Failed to coerce argument: {e}"))?;
+    // Parse argument values using the function's parameter types directly
+    let arg_values: Vec<DynSolValue> =
+        func.inputs
+            .iter()
+            .enumerate()
+            .map(|(i, param)| {
+                let arg_str = &args[i];
+                let dyn_type: DynSolType =
+                    param.ty.to_string().parse().map_err(|e| {
+                        anyhow!("Failed to parse parameter type '{}': {}", param.ty, e)
+                    })?;
+                dyn_type.coerce_str(arg_str).map_err(|e| {
+                    anyhow!(
+                        "Failed to coerce argument '{}' to type '{}': {}",
+                        arg_str,
+                        param.ty,
+                        e
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
 
-    let func = Function::parse(signature)?;
-    let encoded_input = func.abi_encode_input(&dyn_values)?;
+    let encoded_input = func.abi_encode_input(&arg_values)?;
     let data = Bytes::from(encoded_input);
     Ok(data)
 }
