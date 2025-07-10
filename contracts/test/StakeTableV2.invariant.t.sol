@@ -11,10 +11,6 @@ import { BN254 } from "bn254/BN254.sol";
 import { EdOnBN254 } from "../src/libraries/EdOnBn254.sol";
 
 contract StakeTableV2Handler is Test, StakeTableV2PropTestBase {
-    // Ghost variables for tracking
-    uint256 public ghost_totalDelegated;
-    uint256 public ghost_totalUndelegated;
-
     constructor(MockStakeTableV2 _stakeTable, MockERC20 _token) {
         stakeTable = _stakeTable;
         token = _token;
@@ -42,22 +38,15 @@ contract StakeTableV2Handler is Test, StakeTableV2PropTestBase {
         ) = _generateValidatorKeys(validator);
 
         vm.prank(validator);
-        try stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000) { } catch { }
+        stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000);
     }
 
     function delegate_Any(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount) public {
         address delegator = delegators[delegatorIndex % 2];
         address validator = validators[validatorIndex % 2];
 
-        uint256 balanceBefore = token.balanceOf(delegator);
-
         vm.prank(delegator);
-        try stakeTable.delegate(validator, amount) {
-            // Track successful delegation
-            uint256 balanceAfter = token.balanceOf(delegator);
-            uint256 actualAmount = balanceBefore - balanceAfter;
-            ghost_totalDelegated += actualAmount;
-        } catch { }
+        stakeTable.delegate(validator, amount);
     }
 
     function delegate_Ok(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount) public {
@@ -69,15 +58,8 @@ contract StakeTableV2Handler is Test, StakeTableV2PropTestBase {
 
         amount = bound(amount, 1, balance);
 
-        uint256 balanceBefore = token.balanceOf(delegator);
-
         vm.prank(delegator);
-        try stakeTable.delegate(validator, amount) {
-            // Track successful delegation
-            uint256 balanceAfter = token.balanceOf(delegator);
-            uint256 actualAmount = balanceBefore - balanceAfter;
-            ghost_totalDelegated += actualAmount;
-        } catch { }
+        stakeTable.delegate(validator, amount);
     }
 
     function undelegate_Any(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount)
@@ -87,9 +69,7 @@ contract StakeTableV2Handler is Test, StakeTableV2PropTestBase {
         address validator = validators[validatorIndex % 2];
 
         vm.prank(delegator);
-        try stakeTable.undelegate(validator, amount) {
-            ghost_totalUndelegated += amount;
-        } catch { }
+        stakeTable.undelegate(validator, amount);
     }
 
     function undelegate_Ok(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount) public {
@@ -102,9 +82,7 @@ contract StakeTableV2Handler is Test, StakeTableV2PropTestBase {
         amount = bound(amount, 1, delegatedAmount);
 
         vm.prank(delegator);
-        try stakeTable.undelegate(validator, amount) {
-            ghost_totalUndelegated += amount;
-        } catch { }
+        stakeTable.undelegate(validator, amount);
     }
 
     function claimWithdrawal(uint256 delegatorIndex, uint256 validatorIndex) public {
@@ -112,14 +90,14 @@ contract StakeTableV2Handler is Test, StakeTableV2PropTestBase {
         address validator = validators[validatorIndex % 2];
 
         vm.prank(delegator);
-        try stakeTable.claimWithdrawal(validator) { } catch { }
+        stakeTable.claimWithdrawal(validator);
     }
 
     function deregisterValidator(uint256 validatorIndex) public {
         address validator = validators[validatorIndex % 2];
 
         vm.prank(validator);
-        try stakeTable.deregisterValidator() { } catch { }
+        stakeTable.deregisterValidator();
     }
 
     function claimValidatorExit(uint256 delegatorIndex, uint256 validatorIndex) public {
@@ -127,7 +105,7 @@ contract StakeTableV2Handler is Test, StakeTableV2PropTestBase {
         address validator = validators[validatorIndex % 2];
 
         vm.prank(delegator);
-        try stakeTable.claimValidatorExit(validator) { } catch { }
+        stakeTable.claimValidatorExit(validator);
     }
 }
 
