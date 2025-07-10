@@ -1616,10 +1616,10 @@ mod tests {
         st.insert(validator.account, validator);
         let validators_set1 = ValidatorsSet::new(st.clone(), st);
         storage
-            .store_stake(EpochNumber::new(10), validators_set1.clone())
+            .store_stake(EpochNumber::new(10), validators_set1.clone(), None)
             .await?;
 
-        let table = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
+        let (table, _) = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
         assert_eq!(validators_set1, table);
 
         let val2 = Validator::mock();
@@ -1627,43 +1627,49 @@ mod tests {
         st2.insert(val2.account, val2);
         let validators_set2 = ValidatorsSet::new(st2.clone(), st2);
         storage
-            .store_stake(EpochNumber::new(11), validators_set2.clone())
+            .store_stake(EpochNumber::new(11), validators_set2.clone(), None)
             .await?;
 
         let tables = storage.load_latest_stake(4).await?.unwrap();
         let mut iter = tables.iter();
         assert_eq!(
-            Some(&(EpochNumber::new(11), validators_set2.clone())),
+            Some(&(EpochNumber::new(11), (validators_set2.clone(), None))),
             iter.next()
         );
-        assert_eq!(Some(&(EpochNumber::new(10), validators_set1)), iter.next());
+        assert_eq!(
+            Some(&(EpochNumber::new(10), (validators_set1, None))),
+            iter.next()
+        );
         assert_eq!(None, iter.next());
 
         for i in 0..=20 {
             storage
-                .store_stake(EpochNumber::new(i), validators_set2.clone())
+                .store_stake(EpochNumber::new(i), validators_set2.clone(), None)
                 .await?;
         }
 
         let tables = storage.load_latest_stake(5).await?.unwrap();
         let mut iter = tables.iter();
         assert_eq!(
-            Some(&(EpochNumber::new(20), validators_set2.clone())),
+            Some(&(EpochNumber::new(20), (validators_set2.clone(), None))),
             iter.next()
         );
         assert_eq!(
-            Some(&(EpochNumber::new(19), validators_set2.clone())),
+            Some(&(EpochNumber::new(19), (validators_set2.clone(), None))),
             iter.next()
         );
         assert_eq!(
-            Some(&(EpochNumber::new(18), validators_set2.clone())),
+            Some(&(EpochNumber::new(18), (validators_set2.clone(), None))),
             iter.next()
         );
         assert_eq!(
-            Some(&(EpochNumber::new(17), validators_set2.clone())),
+            Some(&(EpochNumber::new(17), (validators_set2.clone(), None))),
             iter.next()
         );
-        assert_eq!(Some(&(EpochNumber::new(16), validators_set2)), iter.next());
+        assert_eq!(
+            Some(&(EpochNumber::new(16), (validators_set2, None))),
+            iter.next()
+        );
         assert_eq!(None, iter.next());
 
         Ok(())

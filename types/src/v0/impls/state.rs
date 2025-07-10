@@ -5,11 +5,12 @@ use anyhow::{bail, Context};
 use committable::{Commitment, Committable};
 use hotshot_query_service::merklized_state::MerklizedState;
 use hotshot_types::{
-    data::{BlockError, ViewNumber},
+    data::{BlockError, EpochNumber, ViewNumber},
     traits::{
         block_contents::BlockHeader, node_implementation::ConsensusTime,
         signature_key::BuilderSignatureKey, states::StateDelta, ValidatedState as HotShotState,
     },
+    utils::epoch_from_block_number,
 };
 use itertools::Itertools;
 use jf_merkle_tree::{
@@ -865,8 +866,11 @@ impl ValidatedState {
                 find_validator_info(instance, &mut validated_state, parent_leaf, view_number)
                     .await?;
 
+            let epoch_height = instance.epoch_height.context("epoch height not found")?;
+            let epoch = epoch_from_block_number(parent_leaf.height() + 1, epoch_height);
+
             let block_reward = instance
-                .block_reward()
+                .block_reward(Some(EpochNumber::new(epoch)))
                 .await
                 .context("block reward is None")?;
             let reward_distributor = RewardDistributor::new(validator, block_reward);

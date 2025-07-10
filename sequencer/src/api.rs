@@ -285,7 +285,8 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
 
         let membership = coordinator.membership().read().await;
 
-        Ok(membership.block_reward())
+        // TODO:
+        Ok(membership.block_reward(None))
     }
 
     /// Get the whole validators map
@@ -3240,7 +3241,7 @@ mod test {
 
         let node_state = network.server.node_state();
         let membership = node_state.coordinator.membership().read().await;
-        let block_reward = membership.block_reward().expect("block reward is None");
+        let block_reward = membership.block_reward(None).expect("block reward is None");
         drop(membership);
 
         // The validator gets all the block reward so we can calculate the expected amount
@@ -3301,7 +3302,7 @@ mod test {
         let network = TestNetwork::new(config, PosVersion::new()).await;
         let node_state = network.server.node_state();
         let membership = node_state.coordinator.membership().read().await;
-        let block_reward = membership.block_reward().expect("block reward is None");
+        let block_reward = membership.block_reward(None).expect("block reward is None");
         drop(membership);
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
@@ -3612,7 +3613,7 @@ mod test {
         let coordinator = node_state.coordinator;
 
         let membership = coordinator.membership().read().await;
-        let block_reward = membership.block_reward().expect("block reward is None");
+        let block_reward = membership.block_reward(None).expect("block reward is None");
 
         drop(membership);
 

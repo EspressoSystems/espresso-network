@@ -50,7 +50,6 @@ use num_traits::{FromPrimitive, ToPrimitive};
 use thiserror::Error;
 use tokio::{spawn, time::sleep};
 use tracing::Instrument;
-use vbs::version::Version;
 
 #[cfg(any(test, feature = "testing"))]
 use super::v0_3::DAMembers;
@@ -63,7 +62,7 @@ use crate::{
     traits::EventsPersistenceRead,
     v0_1::{
         L1Provider, RewardAmount, BLOCKS_PER_YEAR, COMMISSION_BASIS_POINTS, INFLATION_RATE,
-        MILLISECONDS_PER_YEAR, SECONDS_PER_YEAR,
+        MILLISECONDS_PER_YEAR,
     },
     v0_3::{EventSortingError, ExpectedStakeTableError, FetchRewardError, StakeTableError},
     ValidatorsSet,
@@ -1082,7 +1081,10 @@ impl Fetcher {
     /// contract address. We use the stake table contract initialization block as a safe upper bound when scanning
     ///  backwards for the token contract initialization event
     pub async fn fetch_block_reward(&self) -> Result<RewardAmount, FetchRewardError> {
-        let initial_supply = self.fetch_initial_supply().await?;
+        let initial_supply = match self.initial_supply.read().await.clone() {
+            Some(supply) => supply,
+            None => self.fetch_initial_supply().await?,
+        };
 
         let reward = ((initial_supply * U256::from(INFLATION_RATE)) / U256::from(BLOCKS_PER_YEAR))
             .checked_div(U256::from(COMMISSION_BASIS_POINTS))
@@ -1092,6 +1094,7 @@ impl Fetcher {
     }
 
     pub async fn fetch_initial_supply(&self) -> Result<U256, FetchRewardError> {
+        tracing::info!("Fetching token initial supply");
         let chain_config = *self.chain_config.lock().await;
 
         let stake_table_contract = chain_config
@@ -1394,7 +1397,7 @@ pub struct EpochCommittee {
     stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>>,
     validators: ValidatorsSet,
     address_mapping: HashMap<BLSPubKey, Address>,
-    block_reward: RewardAmount,
+    block_reward: Option<RewardAmount>,
 }
 
 impl EpochCommittees {
@@ -1406,12 +1409,146 @@ impl EpochCommittees {
         &self.fetcher
     }
 
+    /// Fetch the block reward and update it if its None.
+    /// We used a fixed block reward for version v3
+    /// Version v4 uses the dynamic block reward based
+    /// Assumes the stake table contract proxy address does not change
+    /// In the future, if we want to support updates to the stake table contract address via chain config,
+    /// or allow the contract to handle additional block reward calculation parameters (e.g., inflation, block time),
+    /// the `fetch_block_reward` logic can be updated to support per-epoch rewards.
+    /// Initially, the block reward is zero if the node starts on pre-epoch version
+    /// but it is updated on the first call to `add_epoch_root()`
+    async fn update_fixed_block_reward(
+        membership: Arc<RwLock<Self>>,
+        epoch: EpochNumber,
+    ) -> anyhow::Result<()> {
+        let membership_reader = membership.upgradable_read().await;
+        let fetcher = membership_reader.fetcher.clone();
+        if membership_reader.block_reward.is_none() {
+            tracing::warn!(%epoch,
+                "Block reward is None. attempting to fetch it from L1",
+
+            );
+            let block_reward = fetcher.fetch_block_reward().await.inspect_err(|err| {
+                tracing::error!(?epoch, ?err, "failed to fetch block_reward");
+            })?;
+            let mut writer = RwLockUpgradableReadGuard::upgrade(membership_reader).await;
+            writer.block_reward = Some(block_reward);
+        };
+
+        Ok(())
+    }
+
+    /// Calculates the dynamic block reward for a given block header within an epoch.
+    ///
+    /// The reward is based on a dynamic inflation rate computed from the current stake ratio (p),
+    /// where `p = total_stake / total_supply`. The inflation function R(p) is defined piecewise:
+    /// - If `p <= 0.01`: R(p) = 0.03 / sqrt(2 * 0.01)
+    /// - Else: R(p) = 0.03 / sqrt(2 * p)
+    async fn calculate_dynamic_block_reward(
+        &self,
+        epoch: &Epoch,
+        header: Header,
+        validators: &ValidatorsSet,
+    ) -> anyhow::Result<RewardAmount> {
+        let fetcher = self.fetcher.clone();
+        let epoch_height = self.epoch_height;
+        let rewards_distributed = header
+            .rewards_distributed()
+            .context("Invalid block header: missing rewards_distributed field")?;
+
+        // Calculate total stake across all active validators
+        let total_stake: U256 = validators.active_validators.values().map(|v| v.stake).sum();
+        let initial_supply = match fetcher.initial_supply.read().await.clone() {
+            Some(supply) => supply,
+            None => fetcher.fetch_initial_supply().await?,
+        };
+        let total_supply = initial_supply + rewards_distributed;
+
+        // Convert to BigDecimal for precision
+        let total_stake = BigDecimal::from_str(&total_stake.to_string())?;
+        let rewards_bd = BigDecimal::from_str(&rewards_distributed.to_string())?;
+        let initial_supply_bd = BigDecimal::from_str(&initial_supply.to_string())?;
+        let total_supply_bd = &initial_supply_bd + &rewards_bd;
+
+        // calculate p
+        let p = &total_stake / &total_supply_bd;
+
+        // Sanity check: p must be in the range [0, 1]
+        if p < BigDecimal::from(0) || p > BigDecimal::from(1) {
+            return Err(anyhow::anyhow!("Stake ratio p must be in the range [0, 1]"));
+        }
+
+        let threshold = BigDecimal::from_str("0.01")?;
+        let const_03 = BigDecimal::from_str("0.03")?;
+        let two = BigDecimal::from_u32(2).unwrap();
+
+        // Compute R(p)
+        let rp = {
+            let inner = &two * if &p <= &threshold { &threshold } else { &p };
+            let sqrt_inner = inner.sqrt().context("Failed to compute sqrt")?;
+            &const_03 / sqrt_inner
+        };
+
+        let inflation_rate = &p * &rp;
+        // Convert inflation rate to basis points
+        let inflation_rate_bp = (inflation_rate * COMMISSION_BASIS_POINTS)
+            .to_u64()
+            .context("Failed to convert inflation rate to basis points")?;
+
+        // Calculate average block time over the last epoch
+        let curr_ts = header.timestamp_millis_internal();
+
+        let current_epoch = epoch_from_block_number(header.height(), epoch_height);
+        let previous_epoch = current_epoch
+            .checked_sub(1)
+            .context("underflow: cannot get previous epoch when current_epoch is 0")?;
+        let prev_stake_table = self
+            .get_stake_table(&Some(EpochNumber::new(previous_epoch)))
+            .context("Stake table not found")?
+            .into();
+
+        let success_threshold = self.success_threshold(Some(*epoch));
+
+        let root_height = header.height().checked_sub(epoch_height).context(
+            "Epoch height is greater than block height. cannot compute previous epoch root height",
+        )?;
+
+        let prev_root = fetcher
+            .peers
+            .fetch_leaf(root_height, prev_stake_table, success_threshold)
+            .await
+            .context("Epoch root leaf not found")?;
+
+        let prev_ts = prev_root.block_header().timestamp_millis_internal();
+        let time_diff = curr_ts.checked_sub(prev_ts).context(
+            "Current timestamp is earlier than previous. underflow in block time calculation",
+        )?;
+
+        let avg_block_time = time_diff
+            .checked_div(epoch_height)
+            .context("Epoch height is zero. cannot compute average block time")?;
+
+        let blocks_per_year = MILLISECONDS_PER_YEAR / avg_block_time as u128;
+
+        let block_reward = ((total_supply * U256::from(inflation_rate_bp))
+            / U256::from(blocks_per_year))
+        .checked_div(U256::from(COMMISSION_BASIS_POINTS))
+        .ok_or(FetchRewardError::DivisionByZero)?;
+        Ok(block_reward.into())
+    }
+
     /// Updates `Self.stake_table` with stake_table for
     /// `Self.contract_address` at `l1_block_height`. This is intended
     /// to be called before calling `self.stake()` so that
     /// `Self.stake_table` only needs to be updated once in a given
     /// life-cycle but may be read from many times.
-    fn insert_committee(&mut self, epoch: EpochNumber, validators: ValidatorsSet) {
+    fn insert_committee(
+        &mut self,
+        epoch: EpochNumber,
+        validators: ValidatorsSet,
+        block_reward: Option<RewardAmount>,
+    ) {
         let mut address_mapping = HashMap::new();
         let stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>> = validators
             .active_validators
@@ -1441,7 +1578,7 @@ impl EpochCommittees {
                 stake_table,
                 validators,
                 address_mapping,
-                block_reward: Default::default(),
+                block_reward,
             },
         );
     }
@@ -1482,8 +1619,15 @@ impl EpochCommittees {
             .cloned()
     }
 
-    pub fn block_reward(&self) -> Option<RewardAmount> {
-        self.block_reward
+    pub fn block_reward(&self, epoch: Option<EpochNumber>) -> Option<RewardAmount> {
+        match epoch {
+            None => self.block_reward,
+            Some(e) => self
+                .state
+                .get(&e)
+                .map(|committee| committee.block_reward)
+                .flatten(),
+        }
     }
 
     // We need a constructor to match our concrete type.
@@ -1602,8 +1746,8 @@ impl EpochCommittees {
             },
         };
 
-        for (epoch, stake_table) in loaded_stake {
-            self.insert_committee(epoch, stake_table);
+        for (epoch, (stake_table, block_reward)) in loaded_stake {
+            self.insert_committee(epoch, stake_table, block_reward);
         }
     }
 
@@ -1841,135 +1985,55 @@ impl Membership<SeqTypes> for EpochCommittees {
         block_header: Header,
     ) -> anyhow::Result<()> {
         let fetcher = { membership.read().await.fetcher.clone() };
-        let epoch_height = membership.read().await.epoch_height;
+        let version = block_header.version();
         // Update the chain config if the block header contains a newer one.
         fetcher.update_chain_config(&block_header).await?;
 
-        // Fetch the block reward and update it if its zero.
-        // Assumes the stake table contract proxy address does not change
-        // In the future, if we want to support updates to the stake table contract address via chain config,
-        // or allow the contract to handle additional block reward calculation parameters (e.g., inflation, block time),
-        // the `fetch_block_reward` logic can be updated to support per-epoch rewards.
-        // Initially, the block reward is zero if the node starts on pre-epoch version
-        // but it is updated on the first call to `add_epoch_root()`
-        {
-            let membership_reader = membership.upgradable_read().await;
-            if membership_reader.block_reward.is_none() {
-                tracing::warn!(%epoch,
-                    "Block reward is zero. attempting to fetch it from L1",
-
-                );
-                let block_reward = fetcher.fetch_block_reward().await.inspect_err(|err| {
-                    tracing::error!(?epoch, ?err, "failed to fetch block_reward");
-                })?;
-                let mut writer = RwLockUpgradableReadGuard::upgrade(membership_reader).await;
-                writer.block_reward = Some(block_reward);
-            };
+        // TODO: add comments
+        if (version.major, version.minor) == (0, 3) {
+            Self::update_fixed_block_reward(membership.clone(), epoch).await?;
         }
 
-        {
+        let epoch_committee = {
             let membership_reader = membership.read().await;
-            if membership_reader.state.contains_key(&epoch) {
+            membership_reader.state.get(&epoch).cloned()
+        };
+
+        if let Some(ref committee) = epoch_committee {
+            tracing::info!("Stake table for epoch {epoch} already exists. Skipping L1 fetch.");
+
+            if (version.major, version.minor) <= (0, 3) {
+                return Ok(());
+            }
+
+            if committee.block_reward.is_some() {
                 tracing::info!(
-                    "We already have the stake table for epoch {epoch}. Skipping L1 fetching.",
+                    "Block reward for epoch {epoch} already exists. Skipping block reward fetch."
                 );
                 return Ok(());
             }
         }
+         
 
-        let validators = fetcher.fetch(epoch, &block_header).await?;
+        let validators = match epoch_committee {
+            Some(v) => v.validators.clone(),
+            None => fetcher.fetch(epoch, &block_header).await?,
+        };
 
-        // if block_header.version().minor == 3 {
-        //     // use default initial blockreward
-        // }
-
-        if block_header.version().minor == 4 {
-            let rewards_distributed = block_header.rewards_distributed().unwrap();
-
-            // total staked =
-            let total_stake: U256 = validators
-                .active_validators
-                .values()
-                .map(|validator| validator.stake)
-                .fold(U256::ZERO, |acc, stake| acc + stake);
-            let initial_supply = fetcher.initial_supply.read().await.clone().unwrap();
-            let total_supply = initial_supply + rewards_distributed;
-            let total_stake = BigDecimal::from_str(&total_stake.to_string()).unwrap();
-            let rewards_bd = BigDecimal::from_str(&rewards_distributed.to_string()).unwrap();
-            let supply_bd = BigDecimal::from_str(&initial_supply.to_string()).unwrap();
-
-            let total_supply_bd = &supply_bd + &rewards_bd;
-            let p = &total_stake / total_supply_bd;
-
-            let threshold = BigDecimal::from_str("0.01").unwrap();
-            let const_03 = BigDecimal::from_str("0.03").unwrap();
-            let const_2 = BigDecimal::from_u32(2).unwrap();
-
-            let rp = if &p <= &threshold {
-                // R(p) = 0.03 / sqrt(2 * 0.01)
-                let inner = &const_2 * &threshold;
-                let sqrt_inner = inner.sqrt().unwrap();
-                &const_03 / sqrt_inner
-            } else {
-                // R(p) = 0.03 / sqrt(2 * p)
-                let inner = &const_2 * &p;
-                let sqrt_inner = inner.sqrt().unwrap();
-                &const_03 / sqrt_inner
-            };
-
-            let inflation_rate = &p * &rp;
-            // convert to basis points
-            let inflation_rate_bp = (inflation_rate * COMMISSION_BASIS_POINTS).to_u64().unwrap();
-
-            let curr_block_ts = block_header.timestamp_millis_internal();
-
-            let (last_epoch_stake_table, success_threshold) = {
-                let current_epoch = epoch_from_block_number(block_header.height(), epoch_height);
-                let previous_epoch = current_epoch - 1;
-                let membership_reader = membership.read().await;
-                let st = membership_reader
-                    .get_stake_table(&Some(EpochNumber::new(previous_epoch)))
-                    .context("stake table not found")?
-                    .into();
-
-                let success_threshold = membership_reader.success_threshold(Some(epoch));
-
-                (st, success_threshold)
-            };
-            let last_epoch_root = block_header.height() - epoch_height;
-            let prev_epoch_root = fetcher
-                .peers
-                .fetch_leaf(last_epoch_root, last_epoch_stake_table, success_threshold)
-                .await
-                .context("epoch root leaf not found")?;
-
-            let prev_root_header_ts = prev_epoch_root.block_header().timestamp_millis_internal();
-            let avg_block_time_millis = (curr_block_ts - prev_root_header_ts) / epoch_height;
-            let block_per_year = MILLISECONDS_PER_YEAR / avg_block_time_millis as u128;
-
-            let block_reward = ((total_supply * U256::from(inflation_rate_bp))
-                / U256::from(BLOCKS_PER_YEAR))
-            .checked_div(U256::from(COMMISSION_BASIS_POINTS))
-            .ok_or(FetchRewardError::DivisionByZero)?;
+        let mut block_reward = None;
+        if (version.major, version.minor) >= (0, 4) {
+            let reader = membership.read().await;
+            let calculated_block_reward = reader
+                .calculate_dynamic_block_reward(&epoch, block_header, &validators)
+                .await?;
+            block_reward = Some(calculated_block_reward);
         }
-
-        {
-            let membership_reader = membership.read().await;
-            if membership_reader.state.contains_key(&epoch) {
-                tracing::info!(
-                    "We already have the stake table for epoch {epoch}. Skipping L1 fetching.",
-                );
-                return Ok(());
-            }
-        }
-
-        let stake_tables = fetcher.fetch(epoch, &block_header).await?;
 
         // Store stake table in persistence
         {
             let persistence_lock = fetcher.persistence.lock().await;
             if let Err(e) = persistence_lock
-                .store_stake(epoch, validators.clone())
+                .store_stake(epoch, validators.clone(), block_reward)
                 .await
             {
                 tracing::error!(?e, "`add_epoch_root`, error storing stake table");
@@ -1977,7 +2041,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         }
 
         let mut membership_writer = membership.write().await;
-        membership_writer.insert_committee(epoch, validators);
+        membership_writer.insert_committee(epoch, validators, block_reward);
         Ok(())
     }
 

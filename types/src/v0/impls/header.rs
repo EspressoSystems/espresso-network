@@ -6,7 +6,7 @@ use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
 use hotshot_types::{
-    data::{vid_commitment, VidCommitment, ViewNumber},
+    data::{vid_commitment, EpochNumber, VidCommitment, ViewNumber},
     light_client::LightClientState,
     traits::{
         block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
@@ -14,7 +14,7 @@ use hotshot_types::{
         signature_key::BuilderSignatureKey,
         BlockPayload, EncodeBytes, ValidatedState as _,
     },
-    utils::BuilderCommitment,
+    utils::{epoch_from_block_number, BuilderCommitment},
 };
 use jf_merkle_tree::{AppendableMerkleTreeScheme, MerkleTreeScheme};
 use serde::{
@@ -961,7 +961,7 @@ impl BlockHeader<SeqTypes> for Header {
                 .context("remembering block proof")?;
         }
 
-        let mut compute_reward = None;
+        let mut reward_distributor = None;
         // Rewards are distributed only if the current epoch is not the first or second epoch
         // this is because we don't have stake table from the contract for the first two epochs
         let proposed_header_height = parent_leaf.height() + 1;
@@ -975,11 +975,16 @@ impl BlockHeader<SeqTypes> for Header {
                 ViewNumber::new(view_number),
             )
             .await?;
+
+            let epoch_height = instance_state
+                .epoch_height
+                .context("epoch height not found")?;
+            let epoch = epoch_from_block_number(proposed_header_height, epoch_height);
             let block_reward = instance_state
-                .block_reward()
+                .block_reward(Some(EpochNumber::new(epoch)))
                 .await
                 .context("block reward is None")?;
-            compute_reward = Some(RewardDistributor::new(leader, block_reward));
+            reward_distributor = Some(RewardDistributor::new(leader, block_reward));
         };
 
         let now = OffsetDateTime::now_utc();
@@ -1000,7 +1005,7 @@ impl BlockHeader<SeqTypes> for Header {
             validated_state,
             chain_config,
             version,
-            compute_reward,
+            reward_distributor,
         )?)
     }
 

@@ -16,6 +16,7 @@ use espresso_types::{
     parse_duration, parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
+    v0_1::RewardAmount,
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
     ValidatorsSet,
@@ -2150,7 +2151,10 @@ impl SequencerPersistence for Persistence {
 
 #[async_trait]
 impl MembershipPersistence for Persistence {
-    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<ValidatorsSet>> {
+    async fn load_stake(
+        &self,
+        epoch: EpochNumber,
+    ) -> anyhow::Result<Option<(ValidatorsSet, Option<RewardAmount>)>> {
         let result = self
             .db
             .read()
@@ -2194,10 +2198,16 @@ impl MembershipPersistence for Persistence {
             .collect()
     }
 
-    async fn store_stake(&self, epoch: EpochNumber, stake: ValidatorsSet) -> anyhow::Result<()> {
+    async fn store_stake(
+        &self,
+        epoch: EpochNumber,
+        stake: ValidatorsSet,
+        block_reward: Option<RewardAmount>,
+    ) -> anyhow::Result<()> {
         let mut tx = self.db.write().await?;
 
-        let stake_table_bytes = bincode::serialize(&stake).context("serializing stake table")?;
+        let stake_table_bytes =
+            bincode::serialize(&(stake, block_reward)).context("serializing stake table")?;
 
         tx.upsert(
             "epoch_drb_and_root",

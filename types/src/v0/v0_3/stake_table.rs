@@ -17,9 +17,7 @@ use tokio::task::JoinHandle;
 
 use super::L1Client;
 use crate::{
-    traits::{MembershipPersistence, StateCatchup},
-    v0::{ ChainConfig},
-    SeqTypes, ValidatorMap,
+    traits::{MembershipPersistence, StateCatchup}, v0::ChainConfig, v0_1::RewardAmount, SeqTypes, ValidatorMap
 };
 
 /// Stake table holding all staking information (DA and non-DA stakers)
@@ -61,7 +59,7 @@ pub struct Delegator {
 /// Type for holding result sets matching epochs to stake tables.
 pub type IndexedStake = (
     EpochNumber,
-    ValidatorsSet,
+    (ValidatorsSet, Option<RewardAmount>),
 );
 
 #[derive(Clone, derive_more::derive::Debug)]

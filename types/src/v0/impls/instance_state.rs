@@ -67,16 +67,19 @@ pub struct NodeState {
 }
 
 impl NodeState {
-    pub async fn block_reward(&self) -> Option<RewardAmount> {
+    pub async fn block_reward(&self, epoch: Option<EpochNumber>) -> Option<RewardAmount> {
         let coordinator = self.coordinator.clone();
         let membership = coordinator.membership().read().await;
-        membership.block_reward()
+        membership.block_reward(epoch)
     }
 }
 
 #[async_trait]
 impl MembershipPersistence for NoStorage {
-    async fn load_stake(&self, _epoch: EpochNumber) -> anyhow::Result<Option<ValidatorsSet>> {
+    async fn load_stake(
+        &self,
+        _epoch: EpochNumber,
+    ) -> anyhow::Result<Option<(ValidatorsSet, Option<RewardAmount>)>> {
         Ok(None)
     }
 
@@ -84,7 +87,12 @@ impl MembershipPersistence for NoStorage {
         Ok(None)
     }
 
-    async fn store_stake(&self, _epoch: EpochNumber, _stake: ValidatorsSet) -> anyhow::Result<()> {
+    async fn store_stake(
+        &self,
+        _epoch: EpochNumber,
+        _stake: ValidatorsSet,
+        _block_reward: Option<RewardAmount>,
+    ) -> anyhow::Result<()> {
         Ok(())
     }
 
