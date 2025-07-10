@@ -47,6 +47,10 @@ contract StakeTableV2EchidnaTest {
 
     mapping(address => uint256) public initialBalances;
 
+    // Arrays for efficient address lookup
+    address[2] public validators = [VALIDATOR1, VALIDATOR2];
+    address[2] public delegators = [DELEGATOR1, DELEGATOR2];
+
     constructor() {
         address admin = address(this);
 
@@ -103,8 +107,8 @@ contract StakeTableV2EchidnaTest {
         token.approve(address(stakeTable), type(uint256).max);
     }
 
-    function registerValidator(address validator) public {
-        require(validator == VALIDATOR1 || validator == VALIDATOR2, "Invalid validator");
+    function registerValidator(uint256 validatorIndex) public {
+        address validator = validators[validatorIndex % 2];
 
         (uint256 delegatedAmount, StakeTable.ValidatorStatus status) =
             stakeTable.validators(validator);
@@ -132,18 +136,18 @@ contract StakeTableV2EchidnaTest {
         try stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000) { } catch { }
     }
 
-    function delegate_Any(address delegator, address validator, uint256 amount) public {
-        require(delegator == DELEGATOR1 || delegator == DELEGATOR2, "Invalid delegator");
-        require(validator == VALIDATOR1 || validator == VALIDATOR2, "Invalid validator");
+    function delegate_Any(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount) public {
+        address delegator = delegators[delegatorIndex % 2];
+        address validator = validators[validatorIndex % 2];
 
         vm.prank(delegator);
         try stakeTable.delegate(validator, amount) { } catch { }
     }
 
     // Functions ensures we are doing a reasonable amount of successful delegations
-    function delegate_Ok(address delegator, address validator, uint256 amount) public {
-        require(delegator == DELEGATOR1 || delegator == DELEGATOR2, "Invalid delegator");
-        require(validator == VALIDATOR1 || validator == VALIDATOR2, "Invalid validator");
+    function delegate_Ok(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount) public {
+        address delegator = delegators[delegatorIndex % 2];
+        address validator = validators[validatorIndex % 2];
 
         amount = amount % (token.balanceOf(delegator) + 1);
 
@@ -151,42 +155,44 @@ contract StakeTableV2EchidnaTest {
         try stakeTable.delegate(validator, amount) { } catch { }
     }
 
-    function undelegate_Any(address delegator, address validator, uint256 amount) public {
-        require(delegator == DELEGATOR1 || delegator == DELEGATOR2, "Invalid delegator");
-        require(validator == VALIDATOR1 || validator == VALIDATOR2, "Invalid validator");
+    function undelegate_Any(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount)
+        public
+    {
+        address delegator = delegators[delegatorIndex % 2];
+        address validator = validators[validatorIndex % 2];
 
         vm.prank(delegator);
         try stakeTable.undelegate(validator, amount) { } catch { }
     }
 
     // Functions ensures we are doing a reasonable amount of successful undelegations
-    function undelegate_Ok(address delegator, address validator, uint256 amount) public {
-        require(delegator == DELEGATOR1 || delegator == DELEGATOR2, "Invalid delegator");
-        require(validator == VALIDATOR1 || validator == VALIDATOR2, "Invalid validator");
+    function undelegate_Ok(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount) public {
+        address delegator = delegators[delegatorIndex % 2];
+        address validator = validators[validatorIndex % 2];
 
         amount = amount % (stakeTable.delegations(validator, delegator) + 1);
         vm.prank(delegator);
         try stakeTable.undelegate(validator, amount) { } catch { }
     }
 
-    function claimWithdrawal(address delegator, address validator) public {
-        require(delegator == DELEGATOR1 || delegator == DELEGATOR2, "Invalid delegator");
-        require(validator == VALIDATOR1 || validator == VALIDATOR2, "Invalid validator");
+    function claimWithdrawal(uint256 delegatorIndex, uint256 validatorIndex) public {
+        address delegator = delegators[delegatorIndex % 2];
+        address validator = validators[validatorIndex % 2];
 
         vm.prank(delegator);
         try stakeTable.claimWithdrawal(validator) { } catch { }
     }
 
-    function deregisterValidator(address validator) public {
-        require(validator == VALIDATOR1 || validator == VALIDATOR2, "Invalid validator");
+    function deregisterValidator(uint256 validatorIndex) public {
+        address validator = validators[validatorIndex % 2];
 
         vm.prank(validator);
         try stakeTable.deregisterValidator() { } catch { }
     }
 
-    function claimValidatorExit(address delegator, address validator) public {
-        require(delegator == DELEGATOR1 || delegator == DELEGATOR2, "Invalid delegator");
-        require(validator == VALIDATOR1 || validator == VALIDATOR2, "Invalid validator");
+    function claimValidatorExit(uint256 delegatorIndex, uint256 validatorIndex) public {
+        address delegator = delegators[delegatorIndex % 2];
+        address validator = validators[validatorIndex % 2];
 
         vm.prank(delegator);
         try stakeTable.claimValidatorExit(validator) { } catch { }
@@ -233,5 +239,37 @@ contract StakeTableV2EchidnaTest {
         uint256 expectedSupply = INITIAL_BALANCE * 4;
 
         return totalSupply == expectedSupply;
+    }
+
+    function echidna_contract_balance_matches_delegations() public view returns (bool) {
+        uint256 contractBalance = token.balanceOf(address(stakeTable));
+        uint256 totalDelegated = 0;
+        
+        // Sum all active delegations
+        totalDelegated += stakeTable.delegations(VALIDATOR1, VALIDATOR1);
+        totalDelegated += stakeTable.delegations(VALIDATOR1, VALIDATOR2);
+        totalDelegated += stakeTable.delegations(VALIDATOR1, DELEGATOR1);
+        totalDelegated += stakeTable.delegations(VALIDATOR1, DELEGATOR2);
+        
+        totalDelegated += stakeTable.delegations(VALIDATOR2, VALIDATOR1);
+        totalDelegated += stakeTable.delegations(VALIDATOR2, VALIDATOR2);
+        totalDelegated += stakeTable.delegations(VALIDATOR2, DELEGATOR1);
+        totalDelegated += stakeTable.delegations(VALIDATOR2, DELEGATOR2);
+        
+        // Sum all pending undelegations
+        (uint256 v1v1Amount,) = stakeTable.undelegations(VALIDATOR1, VALIDATOR1);
+        (uint256 v1v2Amount,) = stakeTable.undelegations(VALIDATOR1, VALIDATOR2);
+        (uint256 v1d1Amount,) = stakeTable.undelegations(VALIDATOR1, DELEGATOR1);
+        (uint256 v1d2Amount,) = stakeTable.undelegations(VALIDATOR1, DELEGATOR2);
+        
+        (uint256 v2v1Amount,) = stakeTable.undelegations(VALIDATOR2, VALIDATOR1);
+        (uint256 v2v2Amount,) = stakeTable.undelegations(VALIDATOR2, VALIDATOR2);
+        (uint256 v2d1Amount,) = stakeTable.undelegations(VALIDATOR2, DELEGATOR1);
+        (uint256 v2d2Amount,) = stakeTable.undelegations(VALIDATOR2, DELEGATOR2);
+        
+        uint256 totalPendingUndelegations = v1v1Amount + v1v2Amount + v1d1Amount + v1d2Amount +
+                                           v2v1Amount + v2v2Amount + v2d1Amount + v2d2Amount;
+        
+        return contractBalance == (totalDelegated + totalPendingUndelegations);
     }
 }
