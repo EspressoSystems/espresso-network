@@ -144,12 +144,7 @@ contract StakeTableV2PropTestBase {
         return totalInContract + totalInWallets;
     }
 
-    function _getContractBalanceVsDelegations()
-        internal
-        view
-        returns (uint256 contractBalance, uint256 totalTracked)
-    {
-        contractBalance = token.balanceOf(address(stakeTable));
+    function _getTotalTrackedFunds() internal view returns (uint256) {
         uint256 totalDelegated = 0;
 
         // Sum all active delegations
@@ -177,6 +172,6 @@ contract StakeTableV2PropTestBase {
         uint256 totalPendingUndelegations = v1v1Amount + v1v2Amount + v1d1Amount + v1d2Amount
             + v2v1Amount + v2v2Amount + v2d1Amount + v2d2Amount;
 
-        totalTracked = totalDelegated + totalPendingUndelegations;
+        return totalDelegated + totalPendingUndelegations;
     }
 }

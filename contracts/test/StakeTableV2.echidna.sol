@@ -134,7 +134,8 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
     }
 
     function echidna_contract_balance_matches_delegations() public view returns (bool) {
-        (uint256 contractBalance, uint256 totalTracked) = _getContractBalanceVsDelegations();
+        uint256 contractBalance = token.balanceOf(address(stakeTable));
+        uint256 totalTracked = _getTotalTrackedFunds();
         return contractBalance == totalTracked;
     }
 }
