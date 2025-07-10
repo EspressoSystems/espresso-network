@@ -9,7 +9,6 @@ on:
       # YYYYMMDD
       - "20[0-9][0-9][0-1][0-9][0-3][0-9]*"
   pull_request:
-    branches:
   workflow_dispatch:
 
 concurrency:
@@ -88,23 +87,24 @@ jobs:
           nix develop --accept-flake-config -c forge test --mt testCorrectUpdateBench
 
   echidna-tests:
+    runs-on: ubuntu-latest
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
-      with:
-        submodules: recursive
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
 
-    - name: Install Foundry
-      uses: foundry-rs/foundry-toolchain@v1
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
 
-    - name: Compile contracts
-      run: |
-        forge build --build-info
+      - name: Compile contracts
+        run: |
+          forge build --build-info
 
-    - name: Run Echidna
-      uses: crytic/echidna-action@v2
-      with:
-        files: contracts/test/StakeTableV2.echidna.sol
-        contract: StakeTableV2EchidnaTest
-        crytic-args: --ignore-compile
-        config: contracts/echidna.yaml
+      - name: Run Echidna
+        uses: crytic/echidna-action@v2
+        with:
+          files: contracts/test/StakeTableV2.echidna.sol
+          contract: StakeTableV2EchidnaTest
+          crytic-args: --ignore-compile
+          config: contracts/echidna.yaml
