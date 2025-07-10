@@ -41,7 +41,7 @@ contract StakeTableV2Handler is Test, StakeTableV2PropTestBase {
         stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000);
     }
 
-    function delegate_Any(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount) public {
+    function delegateAny(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount) public {
         address delegator = delegators[delegatorIndex % 2];
         address validator = validators[validatorIndex % 2];
 
@@ -49,7 +49,7 @@ contract StakeTableV2Handler is Test, StakeTableV2PropTestBase {
         stakeTable.delegate(validator, amount);
     }
 
-    function delegate_Ok(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount) public {
+    function delegateOk(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount) public {
         address delegator = delegators[delegatorIndex % 2];
         address validator = validators[validatorIndex % 2];
 
@@ -62,7 +62,7 @@ contract StakeTableV2Handler is Test, StakeTableV2PropTestBase {
         stakeTable.delegate(validator, amount);
     }
 
-    function undelegate_Any(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount)
+    function undelegateAny(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount)
         public
     {
         address delegator = delegators[delegatorIndex % 2];
@@ -72,7 +72,7 @@ contract StakeTableV2Handler is Test, StakeTableV2PropTestBase {
         stakeTable.undelegate(validator, amount);
     }
 
-    function undelegate_Ok(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount) public {
+    function undelegateOk(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount) public {
         address delegator = delegators[delegatorIndex % 2];
         address validator = validators[validatorIndex % 2];
 
@@ -140,7 +140,7 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
     }
 
     /// @dev Balance invariant: wallet + staked + pending withdrawals should equal initial balance
-    function invariant_balanceInvariantValidator1() public view {
+    function invariantBalanceInvariantValidator1() public view {
         assertEq(
             getTotalBalance(VALIDATOR1),
             initialBalances[VALIDATOR1],
@@ -148,7 +148,7 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
         );
     }
 
-    function invariant_balanceInvariantValidator2() public view {
+    function invariantBalanceInvariantValidator2() public view {
         assertEq(
             getTotalBalance(VALIDATOR2),
             initialBalances[VALIDATOR2],
@@ -156,7 +156,7 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
         );
     }
 
-    function invariant_balanceInvariantDelegator1() public view {
+    function invariantBalanceInvariantDelegator1() public view {
         assertEq(
             getTotalBalance(DELEGATOR1),
             initialBalances[DELEGATOR1],
@@ -164,7 +164,7 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
         );
     }
 
-    function invariant_balanceInvariantDelegator2() public view {
+    function invariantBalanceInvariantDelegator2() public view {
         assertEq(
             getTotalBalance(DELEGATOR2),
             initialBalances[DELEGATOR2],
@@ -173,12 +173,12 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
     }
 
     /// @dev Total supply should remain constant
-    function invariant_totalSupplyInvariant() public view {
+    function invariantTotalSupplyInvariant() public view {
         assertEq(_getTotalSupply(), INITIAL_BALANCE * 4, "Total supply invariant violated");
     }
 
     /// @dev Contract balance should equal sum of all delegated amounts
-    function invariant_contractBalanceMatchesDelegations() public view {
+    function invariantContractBalanceMatchesDelegations() public view {
         uint256 contractBalance = token.balanceOf(address(stakeTable));
         uint256 totalTracked = _getTotalTrackedFunds();
         assertEq(

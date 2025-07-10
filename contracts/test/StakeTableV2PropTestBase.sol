@@ -36,7 +36,7 @@ contract StakeTableV2PropTestBase {
     uint256 public constant INITIAL_BALANCE = 1000000000e18;
     uint256 public constant EXIT_ESCROW_PERIOD = 7 days;
 
-    mapping(address => uint256) public initialBalances;
+    mapping(address account => uint256 balance) public initialBalances;
 
     // Arrays for efficient address lookup
     address[2] public validators = [VALIDATOR1, VALIDATOR2];
