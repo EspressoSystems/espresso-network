@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["call_transfer_ownership_script","call_upgrade_proxy_script","find_script_path","transfer_ownership_from_multisig_to_timelock","upgrade_esp_token_v2_multisig_owner","upgrade_light_client_v2_multisig_owner","upgrade_stake_table_v2_multisig_owner","verify_node_js_files"],"struct":["LightClientV2UpgradeParams","TransferOwnershipParams"]};

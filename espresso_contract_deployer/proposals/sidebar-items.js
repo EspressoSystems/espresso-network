@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["call_transfer_ownership_script","transfer_ownership_from_multisig_to_timelock"],"struct":["TransferOwnershipParams"]};
+window.SIDEBAR_ITEMS = {"mod":["multisig","timelock"]};
