@@ -24,11 +24,10 @@ use super::{
 use crate::EpochCommittees;
 use crate::{
     v0::{
-        traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
-        Upgrade, UpgradeMode,
+        impls::ValidatorsSet, traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo,
+        L1Client, Timestamp, Upgrade, UpgradeMode,
     },
     v0_1::RewardAmount,
-    ValidatorMap,
 };
 
 /// Represents the immutable state of a node.
@@ -71,13 +70,13 @@ impl NodeState {
     pub async fn block_reward(&self) -> RewardAmount {
         let coordinator = self.coordinator.clone();
         let membership = coordinator.membership().read().await;
-        membership.block_reward()
+        membership.block_reward(None)
     }
 }
 
 #[async_trait]
 impl MembershipPersistence for NoStorage {
-    async fn load_stake(&self, _epoch: EpochNumber) -> anyhow::Result<Option<ValidatorMap>> {
+    async fn load_stake(&self, _epoch: EpochNumber) -> anyhow::Result<Option<ValidatorsSet>> {
         Ok(None)
     }
 
@@ -85,7 +84,7 @@ impl MembershipPersistence for NoStorage {
         Ok(None)
     }
 
-    async fn store_stake(&self, _epoch: EpochNumber, _stake: ValidatorMap) -> anyhow::Result<()> {
+    async fn store_stake(&self, _epoch: EpochNumber, _stake: ValidatorsSet) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -154,6 +153,7 @@ impl NodeState {
             vec![],
             RewardAmount(U256::ZERO),
             Fetcher::mock(),
+            0,
         )));
 
         let storage = TestStorage::default();
@@ -186,6 +186,7 @@ impl NodeState {
             vec![],
             RewardAmount(U256::ZERO),
             Fetcher::mock(),
+            0,
         )));
         let storage = TestStorage::default();
         let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
@@ -216,6 +217,7 @@ impl NodeState {
             vec![],
             RewardAmount(U256::ZERO),
             Fetcher::mock(),
+            0,
         )));
 
         let storage = TestStorage::default();
@@ -301,6 +303,7 @@ impl Default for NodeState {
             vec![],
             RewardAmount(U256::ZERO),
             Fetcher::mock(),
+            0,
         )));
         let storage = TestStorage::default();
         let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);

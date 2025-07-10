@@ -2,6 +2,7 @@ use std::{
     cmp::{max, min},
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     future::Future,
+    str::FromStr,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -14,6 +15,7 @@ use alloy::{
 };
 use anyhow::{bail, ensure, Context};
 use async_lock::{Mutex, RwLock};
+use bigdecimal::BigDecimal;
 use committable::Committable;
 use futures::{
     future::BoxFuture,
@@ -39,13 +41,16 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeType},
         signature_key::StakeTableEntryType,
     },
+    utils::epoch_from_block_number,
     PeerConfig,
 };
 use humantime::format_duration;
 use indexmap::IndexMap;
+use num_traits::{FromPrimitive, ToPrimitive};
 use thiserror::Error;
 use tokio::{spawn, time::sleep};
 use tracing::Instrument;
+use vbs::version::Version;
 
 #[cfg(any(test, feature = "testing"))]
 use super::v0_3::DAMembers;
@@ -56,12 +61,17 @@ use super::{
 };
 use crate::{
     traits::EventsPersistenceRead,
-    v0_1::{L1Provider, RewardAmount, BLOCKS_PER_YEAR, COMMISSION_BASIS_POINTS, INFLATION_RATE},
+    v0_1::{
+        L1Provider, RewardAmount, BLOCKS_PER_YEAR, COMMISSION_BASIS_POINTS, INFLATION_RATE,
+        MILLISECONDS_PER_YEAR, SECONDS_PER_YEAR,
+    },
     v0_3::{EventSortingError, ExpectedStakeTableError, FetchRewardError, StakeTableError},
+    ValidatorsSet,
 };
 
 type Epoch = <SeqTypes as NodeType>::Epoch;
 pub type ValidatorMap = IndexMap<Address, Validator<BLSPubKey>>;
+
 /// The result of applying a stake table event:
 /// - `Ok(Ok(()))`: success
 /// - `Ok(Err(...))`: expected error
@@ -540,12 +550,13 @@ pub(crate) fn select_active_validator_set(
 }
 
 /// Extract the active validator set from the L1 stake table events.
-pub(crate) fn active_validator_set_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
+pub(crate) fn validator_set_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
     events: I,
-) -> Result<ValidatorMap, StakeTableError> {
+) -> Result<ValidatorsSet, StakeTableError> {
     let mut validators = validators_from_l1_events(events)?;
+    let all_validators = validators.clone();
     select_active_validator_set(&mut validators)?;
-    Ok(validators)
+    Ok(ValidatorsSet::new(all_validators, validators))
 }
 
 impl std::fmt::Debug for StakeTableEvent {
@@ -574,6 +585,7 @@ pub struct EpochCommittees {
     first_epoch: Option<Epoch>,
     block_reward: RewardAmount,
     fetcher: Arc<Fetcher>,
+    epoch_height: u64,
 }
 
 impl Fetcher {
@@ -589,6 +601,7 @@ impl Fetcher {
             l1_client,
             chain_config: Arc::new(Mutex::new(chain_config)),
             update_task: StakeTableUpdateTask(Mutex::new(None)).into(),
+            initial_supply: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -1069,6 +1082,16 @@ impl Fetcher {
     /// contract address. We use the stake table contract initialization block as a safe upper bound when scanning
     ///  backwards for the token contract initialization event
     pub async fn fetch_block_reward(&self) -> Result<RewardAmount, FetchRewardError> {
+        let initial_supply = self.fetch_initial_supply().await?;
+
+        let reward = ((initial_supply * U256::from(INFLATION_RATE)) / U256::from(BLOCKS_PER_YEAR))
+            .checked_div(U256::from(COMMISSION_BASIS_POINTS))
+            .ok_or(FetchRewardError::DivisionByZero)?;
+
+        Ok(RewardAmount(reward))
+    }
+
+    pub async fn fetch_initial_supply(&self) -> Result<U256, FetchRewardError> {
         let chain_config = *self.chain_config.lock().await;
 
         let stake_table_contract = chain_config
@@ -1170,11 +1193,10 @@ impl Fetcher {
 
         tracing::info!("Initial token amount: {} ESP", format_ether(initial_supply));
 
-        let reward = ((initial_supply * U256::from(INFLATION_RATE)) / U256::from(BLOCKS_PER_YEAR))
-            .checked_div(U256::from(COMMISSION_BASIS_POINTS))
-            .ok_or(FetchRewardError::DivisionByZero)?;
+        let mut writer = self.initial_supply.write().await;
+        *writer = Some(initial_supply);
 
-        Ok(RewardAmount(reward))
+        Ok(initial_supply)
     }
 
     pub async fn scan_token_contract_initialized_event_log(
@@ -1222,7 +1244,7 @@ impl Fetcher {
         }
     }
 
-    pub async fn fetch(&self, epoch: Epoch, header: Header) -> anyhow::Result<ValidatorMap> {
+    pub async fn fetch(&self, epoch: Epoch, header: Header) -> anyhow::Result<ValidatorsSet> {
         let chain_config = self.get_chain_config(&header).await?;
         // update chain config
         *self.chain_config.lock().await = chain_config;
@@ -1249,8 +1271,8 @@ impl Fetcher {
             },
         };
 
-        match active_validator_set_from_l1_events(events.into_iter().map(|(_, e)| e)) {
-            Ok(validators) => Ok(validators),
+        match validator_set_from_l1_events(events.into_iter().map(|(_, e)| e)) {
+            Ok(res) => Ok(res),
             Err(e) => {
                 bail!("failed to construct stake table {e:?}");
             },
@@ -1366,8 +1388,9 @@ pub struct EpochCommittee {
     eligible_leaders: Vec<PeerConfig<SeqTypes>>,
     /// Keys for nodes participating in the network
     stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>>,
-    validators: ValidatorMap,
+    validators: ValidatorsSet,
     address_mapping: HashMap<BLSPubKey, Address>,
+    block_reward: RewardAmount,
 }
 
 impl EpochCommittees {
@@ -1387,11 +1410,12 @@ impl EpochCommittees {
     fn update(
         &mut self,
         epoch: EpochNumber,
-        validators: ValidatorMap,
+        validators: ValidatorsSet,
         block_reward: Option<RewardAmount>,
     ) {
         let mut address_mapping = HashMap::new();
         let stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>> = validators
+            .active_validators
             .values()
             .map(|v| {
                 address_mapping.insert(v.stake_table_key, v.account);
@@ -1418,6 +1442,7 @@ impl EpochCommittees {
                 stake_table,
                 validators,
                 address_mapping,
+                block_reward: Default::default(),
             },
         );
 
@@ -1426,12 +1451,13 @@ impl EpochCommittees {
         }
     }
 
-    pub fn validators(&self, epoch: &Epoch) -> anyhow::Result<ValidatorMap> {
+    pub fn active_validators(&self, epoch: &Epoch) -> anyhow::Result<ValidatorMap> {
         Ok(self
             .state
             .get(epoch)
             .context("state for found")?
             .validators
+            .active_validators
             .clone())
     }
 
@@ -1454,15 +1480,22 @@ impl EpochCommittees {
         key: BLSPubKey,
     ) -> anyhow::Result<Validator<BLSPubKey>> {
         let address = self.address(epoch, key)?;
-        let validators = self.validators(epoch)?;
+        let validators = self.active_validators(epoch)?;
         validators
             .get(&address)
             .context("validator not found")
             .cloned()
     }
 
-    pub fn block_reward(&self) -> RewardAmount {
-        self.block_reward
+    pub fn block_reward(&self, epoch: Option<EpochNumber>) -> RewardAmount {
+        match epoch {
+            Some(e) => self
+                .state
+                .get(&e)
+                .map(|committee| committee.block_reward)
+                .unwrap(),
+            None => self.block_reward,
+        }
     }
 
     // We need a constructor to match our concrete type.
@@ -1473,6 +1506,7 @@ impl EpochCommittees {
         da_members: Vec<PeerConfig<SeqTypes>>,
         block_reward: RewardAmount,
         fetcher: Fetcher,
+        epoch_height: u64,
     ) -> Self {
         // For each member, get the stake table entry
         let stake_table: Vec<_> = committee_members
@@ -1529,6 +1563,7 @@ impl EpochCommittees {
                 .collect(),
             validators: Default::default(),
             address_mapping: HashMap::new(),
+            block_reward: Default::default(),
         };
         map.insert(Epoch::genesis(), epoch_committee.clone());
         // TODO: remove this, workaround for hotshot asking for stake tables from epoch 1
@@ -1541,6 +1576,7 @@ impl EpochCommittees {
             first_epoch: None,
             block_reward,
             fetcher: Arc::new(fetcher),
+            epoch_height,
         }
     }
 
@@ -1566,8 +1602,8 @@ impl EpochCommittees {
             },
         };
 
-        for (epoch, stake_table) in loaded_stake {
-            self.update(epoch, stake_table, None);
+        for (epoch, validators) in loaded_stake {
+            self.update(epoch, validators, None);
         }
     }
 
@@ -1805,6 +1841,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         block_header: Header,
     ) -> anyhow::Result<()> {
         let membership_reader = membership.read().await;
+        let epoch_height = membership_reader.epoch_height;
         if membership_reader.state.contains_key(&epoch) {
             tracing::info!(
                 "We already have the stake table for epoch {}. Skipping L1 fetching.",
@@ -1815,7 +1852,81 @@ impl Membership<SeqTypes> for EpochCommittees {
         let fetcher = Arc::clone(&membership_reader.fetcher);
         drop(membership_reader);
 
-        let stake_tables = fetcher.fetch(epoch, block_header).await?;
+        // if block_header.version().minor == 3 {
+        //     // use default initial blockreward
+        // }
+
+        let validators = fetcher.fetch(epoch, block_header.clone()).await?;
+
+        if block_header.version().minor == 4 {
+            let rewards_distributed = block_header.rewards_distributed().unwrap();
+
+            // total staked =
+            let total_stake: U256 = validators
+                .active_validators
+                .values()
+                .map(|validator| validator.stake)
+                .fold(U256::ZERO, |acc, stake| acc + stake);
+            let initial_supply = fetcher.initial_supply.read().await.clone().unwrap();
+            let total_supply = initial_supply + rewards_distributed;
+            let total_stake = BigDecimal::from_str(&total_stake.to_string()).unwrap();
+            let rewards_bd = BigDecimal::from_str(&rewards_distributed.to_string()).unwrap();
+            let supply_bd = BigDecimal::from_str(&initial_supply.to_string()).unwrap();
+
+            let total_supply_bd = &supply_bd + &rewards_bd;
+            let p = &total_stake / total_supply_bd;
+
+            let threshold = BigDecimal::from_str("0.01").unwrap();
+            let const_03 = BigDecimal::from_str("0.03").unwrap();
+            let const_2 = BigDecimal::from_u32(2).unwrap();
+
+            let rp = if &p <= &threshold {
+                // R(p) = 0.03 / sqrt(2 * 0.01)
+                let inner = &const_2 * &threshold;
+                let sqrt_inner = inner.sqrt().unwrap();
+                &const_03 / sqrt_inner
+            } else {
+                // R(p) = 0.03 / sqrt(2 * p)
+                let inner = &const_2 * &p;
+                let sqrt_inner = inner.sqrt().unwrap();
+                &const_03 / sqrt_inner
+            };
+
+            let inflation_rate = &p * &rp;
+            // convert to basis points
+            let inflation_rate_bp = (inflation_rate * COMMISSION_BASIS_POINTS).to_u64().unwrap();
+
+            let curr_block_ts = block_header.timestamp_millis_internal();
+
+            let (last_epoch_stake_table, success_threshold) = {
+                let current_epoch = epoch_from_block_number(block_header.height(), epoch_height);
+                let previous_epoch = current_epoch - 1;
+                let membership_reader = membership.read().await;
+                let st = membership_reader
+                    .get_stake_table(&Some(EpochNumber::new(previous_epoch)))
+                    .context("stake table not found")?
+                    .into();
+
+                let success_threshold = membership_reader.success_threshold(Some(epoch));
+
+                (st, success_threshold)
+            };
+            let last_epoch_root = block_header.height() - epoch_height;
+            let prev_epoch_root = fetcher
+                .peers
+                .fetch_leaf(last_epoch_root, last_epoch_stake_table, success_threshold)
+                .await
+                .context("epoch root leaf not found")?;
+
+            let prev_root_header_ts = prev_epoch_root.block_header().timestamp_millis_internal();
+            let avg_block_time_millis = (curr_block_ts - prev_root_header_ts) / epoch_height;
+            let block_per_year = MILLISECONDS_PER_YEAR / avg_block_time_millis as u128;
+
+            let block_reward = ((total_supply * U256::from(inflation_rate_bp))
+                / U256::from(BLOCKS_PER_YEAR))
+            .checked_div(U256::from(COMMISSION_BASIS_POINTS))
+            .ok_or(FetchRewardError::DivisionByZero)?;
+        }
 
         let mut block_reward = None;
 
@@ -1836,7 +1947,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         {
             let persistence_lock = fetcher.persistence.lock().await;
             if let Err(e) = persistence_lock
-                .store_stake(epoch, stake_tables.clone())
+                .store_stake(epoch, validators.clone())
                 .await
             {
                 tracing::error!(?e, "`add_epoch_root`, error storing stake table");
@@ -1844,7 +1955,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         }
 
         let mut membership_writer = membership.write().await;
-        membership_writer.update(epoch, stake_tables, block_reward);
+        membership_writer.update(epoch, validators, block_reward);
         Ok(())
     }
 
@@ -2183,7 +2294,7 @@ mod tests {
         ]
         .to_vec();
 
-        let st = active_validator_set_from_l1_events(events.iter().cloned())?;
+        let st = validator_set_from_l1_events(events.iter().cloned())?.active_validators;
         let st_val_1 = st.get(&val_1.account).unwrap();
         // final staked amount should be 10 (delegated) - 7 (undelegated) + 5 (Delegated)
         assert_eq!(st_val_1.stake, U256::from(8));
@@ -2199,7 +2310,7 @@ mod tests {
 
         events.push(ValidatorExit::from(&val_1).into());
 
-        let st = active_validator_set_from_l1_events(events.iter().cloned())?;
+        let st = validator_set_from_l1_events(events.iter().cloned())?.active_validators;
         // The first validator should have been removed
         assert_eq!(st.get(&val_1.account), None);
 
@@ -2213,7 +2324,7 @@ mod tests {
         events.push(ValidatorExit::from(&val_2).into());
 
         // This should fail because the validator has exited and no longer exists in the stake table.
-        assert!(active_validator_set_from_l1_events(events.iter().cloned()).is_err());
+        assert!(validator_set_from_l1_events(events.iter().cloned()).is_err());
 
         Ok(())
     }
@@ -2333,16 +2444,15 @@ mod tests {
         .into();
 
         // first ensure that wan build a valid stake table
-        assert!(active_validator_set_from_l1_events(
-            vec![register.clone(), delegate.clone()].into_iter()
-        )
-        .is_ok());
+        assert!(
+            validator_set_from_l1_events(vec![register.clone(), delegate.clone()].into_iter())
+                .is_ok()
+        );
 
         // add the invalid key update (re-using the same consensus keys)
         let key_update = ConsensusKeysUpdated::from(&val).into();
-        let err =
-            active_validator_set_from_l1_events(vec![register, delegate, key_update].into_iter())
-                .unwrap_err();
+        let err = validator_set_from_l1_events(vec![register, delegate, key_update].into_iter())
+            .unwrap_err();
 
         let bls: BLSPubKey = val.bls_vk.into();
         assert!(matches!(err, StakeTableError::BlsKeyAlreadyUsed(addr) if addr == bls.to_string()));
@@ -2666,7 +2776,9 @@ mod tests {
 
         // Reconstruct stake table from events
         let reconstructed_stake_table =
-            active_validator_set_from_l1_events(events.into_iter().map(|(_, e)| e)).unwrap();
+            validator_set_from_l1_events(events.into_iter().map(|(_, e)| e))
+                .unwrap()
+                .active_validators;
 
         let stake_table_json =
             std::fs::read_to_string("../data/v3/decaf_stake_table.json").unwrap();
@@ -2707,5 +2819,70 @@ mod tests {
             latest_block,
         )
         .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sanity_check_block_reward_v3() {
+        setup_test();
+
+        // 10b tokens
+        let initial_supply = U256::from_str("10000000000000000000000000000").unwrap();
+
+        let reward = ((initial_supply * U256::from(INFLATION_RATE)) / U256::from(BLOCKS_PER_YEAR))
+            .checked_div(U256::from(COMMISSION_BASIS_POINTS))
+            .unwrap();
+
+        println!("Calculated reward: {}", reward);
+    }
+
+    #[test]
+    fn sanity_check_block_reward_v4() {
+        // Example values
+        let initial_supply = U256::from_str("10000000000000000000000000000").unwrap(); // 10B * 1e18
+        let rewards_distributed = U256::from_str("100000000000000000000000000").unwrap(); // 100M * 1e18
+        let total_stake = U256::from_str("2000000000000000000000000000").unwrap(); // 2B * 1e18
+
+        let total_supply = initial_supply + rewards_distributed;
+
+        let total_stake_bd = BigDecimal::from_str(&total_stake.to_string()).unwrap();
+        let rewards_bd = BigDecimal::from_str(&rewards_distributed.to_string()).unwrap();
+        let supply_bd = BigDecimal::from_str(&initial_supply.to_string()).unwrap();
+
+        let total_supply_bd = &supply_bd + &rewards_bd;
+        let p = &total_stake_bd / &total_supply_bd;
+
+        println!("p: {}", p);
+        let threshold = BigDecimal::from_str("0.01").unwrap();
+        let const_03 = BigDecimal::from_str("0.03").unwrap();
+        let const_2 = BigDecimal::from_u32(2).unwrap();
+
+        let rp = if &p <= &threshold {
+            let inner = &const_2 * &threshold;
+            let sqrt_inner = inner.sqrt().unwrap();
+            &const_03 / sqrt_inner
+        } else {
+            let inner = &const_2 * &p;
+            let sqrt_inner = inner.sqrt().unwrap();
+            &const_03 / sqrt_inner
+        };
+
+        let inflation_rate = &p * &rp;
+        let inflation_rate_bp = (inflation_rate
+            * BigDecimal::from_u16(COMMISSION_BASIS_POINTS).unwrap())
+        .to_u64()
+        .unwrap();
+
+        let block_reward = ((total_supply * U256::from(inflation_rate_bp))
+            / U256::from(BLOCKS_PER_YEAR))
+        .checked_div(U256::from(COMMISSION_BASIS_POINTS))
+        .ok_or(FetchRewardError::DivisionByZero)
+        .unwrap();
+
+        println!("Inflation rate (bp): {}", inflation_rate_bp);
+        println!("Block reward: {}", block_reward);
+
+        // Sanity checks
+        assert!(inflation_rate_bp > 0);
+        assert!(block_reward > U256::ZERO);
     }
 }

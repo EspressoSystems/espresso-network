@@ -285,7 +285,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
 
         let membership = coordinator.membership().read().await;
 
-        Ok(membership.block_reward())
+        Ok(membership.block_reward(None))
     }
 
     /// Get the whole validators map
@@ -304,7 +304,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             .context("membership not found")?;
 
         let r = mem.coordinator.membership().read().await;
-        r.validators(&epoch)
+        r.active_validators(&epoch)
     }
 }
 
@@ -3240,7 +3240,7 @@ mod test {
 
         let node_state = network.server.node_state();
         let membership = node_state.coordinator.membership().read().await;
-        let block_reward = membership.block_reward();
+        let block_reward = membership.block_reward(None);
         drop(membership);
 
         // The validator gets all the block reward so we can calculate the expected amount
@@ -3301,7 +3301,7 @@ mod test {
         let network = TestNetwork::new(config, PosVersion::new()).await;
         let node_state = network.server.node_state();
         let membership = node_state.coordinator.membership().read().await;
-        let block_reward = membership.block_reward();
+        let block_reward = membership.block_reward(None);
         drop(membership);
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
@@ -3612,7 +3612,7 @@ mod test {
         let coordinator = node_state.coordinator;
 
         let membership = coordinator.membership().read().await;
-        let block_reward = membership.block_reward();
+        let block_reward = membership.block_reward(None);
 
         drop(membership);
 

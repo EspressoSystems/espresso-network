@@ -74,6 +74,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
             committee,
             RewardAmount(U256::ZERO),
             Fetcher::mock(),
+            10,
         ))),
         10,
         &storage,

@@ -234,6 +234,7 @@ async fn reference_header(version: Version) -> Header {
         state.reward_merkle_tree.commitment(),
         vec![fee_info],
         vec![builder_signature],
+        None,
         version,
     )
 }

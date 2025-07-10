@@ -527,6 +527,7 @@ where
         network_config.config.known_da_nodes.clone(),
         block_reward,
         fetcher,
+        epoch_height,
     );
     membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
 
@@ -1248,6 +1249,7 @@ pub mod testing {
                 config.known_da_nodes.clone(),
                 block_reward,
                 fetcher,
+                config.epoch_height,
             );
             membership.reload_stake(50).await;
 

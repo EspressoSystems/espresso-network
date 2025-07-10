@@ -1,5 +1,6 @@
 use std::fmt;
 
+use alloy::primitives::U256;
 use anyhow::{ensure, Context};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
@@ -281,6 +282,7 @@ impl Header {
         reward_merkle_tree_root: RewardMerkleCommitment,
         fee_info: Vec<FeeInfo>,
         builder_signature: Vec<BuilderSignature>,
+        rewards_distributed: Option<U256>,
         version: Version,
     ) -> Self {
         // Ensure FeeInfo contains at least 1 element
@@ -349,6 +351,7 @@ impl Header {
                 fee_info: fee_info[0], // NOTE this is asserted to exist above
                 builder_signature: builder_signature.first().copied(),
                 reward_merkle_tree_root,
+                rewards_distributed: rewards_distributed.unwrap(),
             }),
             // This case should never occur
             // but if it does, we must panic
@@ -582,6 +585,7 @@ impl Header {
                 reward_merkle_tree_root: state.reward_merkle_tree.commitment(),
                 fee_info: fee_info[0],
                 builder_signature: builder_signature.first().copied(),
+                rewards_distributed: Default::default(),
             }),
             // This case should never occur
             // but if it does, we must panic
@@ -803,6 +807,13 @@ impl Header {
             Self::V2(fields) => fields.builder_signature.as_slice().to_vec(),
             Self::V3(fields) => fields.builder_signature.as_slice().to_vec(),
             Self::V4(fields) => fields.builder_signature.as_slice().to_vec(),
+        }
+    }
+
+    pub fn rewards_distributed(&self) -> Option<U256> {
+        match self {
+            Self::V1(_) | Self::V2(_) | Self::V3(_) => None,
+            Self::V4(fields) => Some(fields.rewards_distributed),
         }
     }
 }
@@ -1042,6 +1053,7 @@ impl BlockHeader<SeqTypes> for Header {
             reward_merkle_tree_root,
             vec![FeeInfo::genesis()],
             vec![],
+            None,
             instance_state.current_version,
         )
     }
@@ -1617,6 +1629,7 @@ mod test_headers {
                 account: fee_account,
             }],
             Default::default(),
+            None,
             Version { major: 0, minor: 1 },
         );
 
@@ -1642,6 +1655,7 @@ mod test_headers {
                 account: fee_account,
             }],
             Default::default(),
+            None,
             Version { major: 0, minor: 2 },
         );
 
@@ -1667,6 +1681,7 @@ mod test_headers {
                 account: fee_account,
             }],
             Default::default(),
+            None,
             Version { major: 0, minor: 3 },
         );
 

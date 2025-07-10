@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use alloy::{primitives::{Address, Log, U256}, transports::{RpcError, TransportErrorKind}};
-use async_lock::Mutex;
+use async_lock::{Mutex, RwLock};
 use derive_more::derive::{From, Into};
 use hotshot::types::{SignatureKey};
 use hotshot_contract_adapter::sol_types::StakeTableV2::{
@@ -18,7 +18,7 @@ use tokio::task::JoinHandle;
 use super::L1Client;
 use crate::{
     traits::{MembershipPersistence, StateCatchup},
-    v0::ChainConfig,
+    v0::{ ChainConfig},
     SeqTypes, ValidatorMap,
 };
 
@@ -61,7 +61,7 @@ pub struct Delegator {
 /// Type for holding result sets matching epochs to stake tables.
 pub type IndexedStake = (
     EpochNumber,
-    ValidatorMap,
+    ValidatorsSet,
 );
 
 #[derive(Clone, derive_more::derive::Debug)]
@@ -77,7 +77,24 @@ pub struct Fetcher {
     /// Verifiable `ChainConfig` holding contract address
     pub(crate) chain_config: Arc<Mutex<ChainConfig>>,
     pub(crate) update_task: Arc<StakeTableUpdateTask>,
+    pub initial_supply: Arc<RwLock<Option<U256>>>,
 }
+
+#[derive( Serialize,  Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct ValidatorsSet {
+    pub all_validators: ValidatorMap,
+    pub active_validators: ValidatorMap,
+}
+
+impl ValidatorsSet {
+    pub fn new(all_validators: ValidatorMap, active_validators: ValidatorMap) -> Self {
+        Self {
+            all_validators,
+            active_validators,
+        }
+    }
+}
+
 
 #[derive(Debug, Default)]
 pub(crate) struct StakeTableUpdateTask(pub(crate) Mutex<Option<JoinHandle<()>>>);

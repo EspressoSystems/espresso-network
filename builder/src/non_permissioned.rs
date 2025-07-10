@@ -72,8 +72,9 @@ pub fn build_instance_state<V: Versions>(
             vec![],
             RewardAmount(U256::ZERO),
             fetcher,
+            genesis.epoch_height.unwrap_or_default(),
         ))),
-        100,
+        genesis.epoch_height.unwrap_or_default(),
         &Arc::new(sequencer::persistence::no_storage::NoStorage),
     );
 
