@@ -113,6 +113,6 @@ jobs:
       - name: Run Echidna
         run: |
           echo "## Echidna results" >> $GITHUB_STEP_SUMMARY
-          echo "```" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           nix develop .#echidna --accept-flake-config -c just contracts-test-echidna --format text 2>&1 | tee -a $GITHUB_STEP_SUMMARY
-          echo "```" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
