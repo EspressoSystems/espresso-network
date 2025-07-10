@@ -975,7 +975,10 @@ impl BlockHeader<SeqTypes> for Header {
                 ViewNumber::new(view_number),
             )
             .await?;
-            let block_reward = instance_state.block_reward().await;
+            let block_reward = instance_state
+                .block_reward()
+                .await
+                .context("block reward is None")?;
             compute_reward = Some(RewardDistributor::new(leader, block_reward));
         };
 
