@@ -62,9 +62,7 @@ contract StakeTableV2Handler is Test, StakeTableV2PropTestBase {
         stakeTable.delegate(validator, amount);
     }
 
-    function undelegateAny(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount)
-        public
-    {
+    function undelegateAny(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount) public {
         address delegator = delegators[delegatorIndex % 2];
         address validator = validators[validatorIndex % 2];
 
