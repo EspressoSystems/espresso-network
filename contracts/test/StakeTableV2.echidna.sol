@@ -48,7 +48,7 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
         ) = _generateValidatorKeys(validator);
 
         vm.prank(validator);
-        try stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000) { } catch { }
+        stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000);
     }
 
     function delegate_Any(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount) public {
@@ -56,7 +56,7 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
         address validator = validators[validatorIndex % 2];
 
         vm.prank(delegator);
-        try stakeTable.delegate(validator, amount) { } catch { }
+        stakeTable.delegate(validator, amount);
     }
 
     // Functions ensures we are doing a reasonable amount of successful delegations
@@ -67,7 +67,7 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
         amount = amount % (token.balanceOf(delegator) + 1);
 
         vm.prank(delegator);
-        try stakeTable.delegate(validator, amount) { } catch { }
+        stakeTable.delegate(validator, amount);
     }
 
     function undelegate_Any(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount)
@@ -77,7 +77,7 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
         address validator = validators[validatorIndex % 2];
 
         vm.prank(delegator);
-        try stakeTable.undelegate(validator, amount) { } catch { }
+        stakeTable.undelegate(validator, amount);
     }
 
     // Functions ensures we are doing a reasonable amount of successful undelegations
@@ -87,7 +87,7 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
 
         amount = amount % (stakeTable.delegations(validator, delegator) + 1);
         vm.prank(delegator);
-        try stakeTable.undelegate(validator, amount) { } catch { }
+        stakeTable.undelegate(validator, amount);
     }
 
     function claimWithdrawal(uint256 delegatorIndex, uint256 validatorIndex) public {
@@ -95,14 +95,14 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
         address validator = validators[validatorIndex % 2];
 
         vm.prank(delegator);
-        try stakeTable.claimWithdrawal(validator) { } catch { }
+        stakeTable.claimWithdrawal(validator);
     }
 
     function deregisterValidator(uint256 validatorIndex) public {
         address validator = validators[validatorIndex % 2];
 
         vm.prank(validator);
-        try stakeTable.deregisterValidator() { } catch { }
+        stakeTable.deregisterValidator();
     }
 
     function claimValidatorExit(uint256 delegatorIndex, uint256 validatorIndex) public {
@@ -110,7 +110,7 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
         address validator = validators[validatorIndex % 2];
 
         vm.prank(delegator);
-        try stakeTable.claimValidatorExit(validator) { } catch { }
+        stakeTable.claimValidatorExit(validator);
     }
 
     function echidna_balance_invariant_validator1() public view returns (bool) {

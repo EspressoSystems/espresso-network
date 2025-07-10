@@ -94,17 +94,13 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
+      - name: Check toolchain versions
+        run: nix develop .#echidna --accept-flake-config -c ./scripts/show-toolchain-versions
 
-      - name: Compile contracts
-        run: |
-          forge build --build-info
 
       - name: Run Echidna
-        uses: crytic/echidna-action@v2
-        with:
-          files: contracts/test/StakeTableV2.echidna.sol
-          contract: StakeTableV2EchidnaTest
-          crytic-args: --ignore-compile
-          config: contracts/echidna.yaml
+        run: |
+          echo "## Echidna results" >> $GITHUB_STEP_SUMMARY
+          echo "```" >> $GITHUB_STEP_SUMMARY
+          nix develop .#echidna --accept-flake-config -c just contracts-test-echidna --format text 2>&1 | tee -a $GITHUB_STEP_SUMMARY
+          echo "```" >> $GITHUB_STEP_SUMMARY
