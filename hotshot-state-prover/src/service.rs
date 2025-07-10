@@ -693,8 +693,6 @@ pub enum ProverError {
     PlonkError(PlonkError),
     /// Internal error: {0}
     Internal(anyhow::Error),
-    /// General network issue: {0}
-    NetworkError(anyhow::Error),
     /// Gas price too high: current {0} gwei, max allowed: {1} gwei
     GasPriceTooHigh(String, String),
     /// Epoch has already started on block {0}, please upgrade the contract to V2.

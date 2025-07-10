@@ -7,9 +7,9 @@ edition = { workspace = true }
 
 [features]
 default = ["fee", "pos", "drb-and-header"]
-fee = []
-pos = []
-drb-and-header = []
+fee = ["sequencer/fee"]
+pos = ["sequencer/pos"]
+drb-and-header = ["sequencer/drb-and-header"]
 
 [dependencies]
 alloy = { workspace = true }
@@ -30,7 +30,7 @@ hotshot-types = { workspace = true }
 marketplace-builder-shared = { workspace = true }
 portpicker = { workspace = true }
 rand = "0.8.5"
-sequencer = { path = "../sequencer" }
+sequencer = { path = "../sequencer", default-features = false }
 sequencer-utils = { path = "../utils" }
 surf-disco = { workspace = true }
 tide-disco = { workspace = true }

@@ -15,10 +15,6 @@ testing = [
 ]
 benchmarking = []
 embedded-db = ["hotshot-query-service/embedded-db", "sqlx/sqlite"]
-sqlite-unbundled = [
-    "hotshot-query-service/sqlite-unbundled",
-    "sqlx/sqlite-unbundled",
-]
 fee = []
 pos = []
 drb-and-header = []
