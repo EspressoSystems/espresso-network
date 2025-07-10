@@ -86,3 +86,25 @@ jobs:
       - name: Print light contract gas benchmark
         run: |
           nix develop --accept-flake-config -c forge test --mt testCorrectUpdateBench
+
+  echidna-tests:
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      with:
+        submodules: recursive
+
+    - name: Install Foundry
+      uses: foundry-rs/foundry-toolchain@v1
+
+    - name: Compile contracts
+      run: |
+        forge build --build-info
+
+    - name: Run Echidna
+      uses: crytic/echidna-action@v2
+      with:
+        files: contracts/test/StakeTableV2.echidna.sol
+        contract: StakeTableV2EchidnaTest
+        crytic-args: --ignore-compile
+        config: contracts/echidna.yaml
