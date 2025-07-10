@@ -1815,7 +1815,7 @@ interface StakeTableV2 {
       {
         "name": "",
         "type": "address",
-        "internalType": "contract LightClientV2"
+        "internalType": "contract ILightClient"
       }
     ],
     "stateMutability": "view"
