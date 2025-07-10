@@ -244,32 +244,32 @@ contract StakeTableV2EchidnaTest {
     function echidna_contract_balance_matches_delegations() public view returns (bool) {
         uint256 contractBalance = token.balanceOf(address(stakeTable));
         uint256 totalDelegated = 0;
-        
+
         // Sum all active delegations
         totalDelegated += stakeTable.delegations(VALIDATOR1, VALIDATOR1);
         totalDelegated += stakeTable.delegations(VALIDATOR1, VALIDATOR2);
         totalDelegated += stakeTable.delegations(VALIDATOR1, DELEGATOR1);
         totalDelegated += stakeTable.delegations(VALIDATOR1, DELEGATOR2);
-        
+
         totalDelegated += stakeTable.delegations(VALIDATOR2, VALIDATOR1);
         totalDelegated += stakeTable.delegations(VALIDATOR2, VALIDATOR2);
         totalDelegated += stakeTable.delegations(VALIDATOR2, DELEGATOR1);
         totalDelegated += stakeTable.delegations(VALIDATOR2, DELEGATOR2);
-        
+
         // Sum all pending undelegations
         (uint256 v1v1Amount,) = stakeTable.undelegations(VALIDATOR1, VALIDATOR1);
         (uint256 v1v2Amount,) = stakeTable.undelegations(VALIDATOR1, VALIDATOR2);
         (uint256 v1d1Amount,) = stakeTable.undelegations(VALIDATOR1, DELEGATOR1);
         (uint256 v1d2Amount,) = stakeTable.undelegations(VALIDATOR1, DELEGATOR2);
-        
+
         (uint256 v2v1Amount,) = stakeTable.undelegations(VALIDATOR2, VALIDATOR1);
         (uint256 v2v2Amount,) = stakeTable.undelegations(VALIDATOR2, VALIDATOR2);
         (uint256 v2d1Amount,) = stakeTable.undelegations(VALIDATOR2, DELEGATOR1);
         (uint256 v2d2Amount,) = stakeTable.undelegations(VALIDATOR2, DELEGATOR2);
-        
-        uint256 totalPendingUndelegations = v1v1Amount + v1v2Amount + v1d1Amount + v1d2Amount +
-                                           v2v1Amount + v2v2Amount + v2d1Amount + v2d2Amount;
-        
+
+        uint256 totalPendingUndelegations = v1v1Amount + v1v2Amount + v1d1Amount + v1d2Amount
+            + v2v1Amount + v2v2Amount + v2d1Amount + v2d2Amount;
+
         return contractBalance == (totalDelegated + totalPendingUndelegations);
     }
 }
