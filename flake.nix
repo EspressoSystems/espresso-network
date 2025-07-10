@@ -337,7 +337,7 @@
           ];
         });
 
-      # A seperate dev-shell due to large size of dependencies (incl. ghc)
+      # A separate dev-shell due to large size of dependencies (incl. ghc)
       devShells.echidna =
         let
           solc = pkgs.solc-bin."0.8.28";
