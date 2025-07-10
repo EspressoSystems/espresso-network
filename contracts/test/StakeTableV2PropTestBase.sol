@@ -23,7 +23,7 @@ contract MockLightClient is ILightClient {
     }
 }
 
-contract StakeTableV2TestBase {
+contract StakeTableV2PropTestBase {
     MockStakeTableV2 public stakeTable;
     MockERC20 public token;
     MockLightClient public lightClient;

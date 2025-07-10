@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import { StakeTableV2TestBase } from "./StakeTableV2TestBase.sol";
+import { StakeTableV2PropTestBase } from "./StakeTableV2PropTestBase.sol";
 import { StakeTable } from "../src/StakeTable.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { EdOnBN254 } from "../src/libraries/EdOnBn254.sol";
@@ -12,7 +12,7 @@ interface IHevm {
     function stopPrank() external;
 }
 
-contract StakeTableV2EchidnaTest is StakeTableV2TestBase {
+contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
     IHevm public constant vm = IHevm(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
 
     constructor() {

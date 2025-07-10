@@ -3,12 +3,14 @@ pragma solidity ^0.8.0;
 
 import "forge-std/Test.sol";
 import "forge-std/StdInvariant.sol";
-import { StakeTableV2TestBase, MockStakeTableV2, MockERC20 } from "./StakeTableV2TestBase.sol";
+import {
+    StakeTableV2PropTestBase, MockStakeTableV2, MockERC20
+} from "./StakeTableV2PropTestBase.sol";
 import { StakeTable } from "../src/StakeTable.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { EdOnBN254 } from "../src/libraries/EdOnBn254.sol";
 
-contract StakeTableV2Handler is Test, StakeTableV2TestBase {
+contract StakeTableV2Handler is Test, StakeTableV2PropTestBase {
     // Ghost variables for tracking
     uint256 public ghost_totalDelegated;
     uint256 public ghost_totalUndelegated;
@@ -129,7 +131,7 @@ contract StakeTableV2Handler is Test, StakeTableV2TestBase {
     }
 }
 
-contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2TestBase {
+contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBase {
     StakeTableV2Handler public handler;
 
     function setUp() public {
