@@ -42,7 +42,7 @@ contract StakeTableV2EchidnaTest {
     address public constant DELEGATOR1 = address(0x3000);
     address public constant DELEGATOR2 = address(0x4000);
 
-    uint256 public constant INITIAL_BALANCE = 1000000e18;
+    uint256 public constant INITIAL_BALANCE = 1000000000e18;
     uint256 public constant EXIT_ESCROW_PERIOD = 7 days;
 
     mapping(address => uint256) public initialBalances;
@@ -108,9 +108,6 @@ contract StakeTableV2EchidnaTest {
 
         (uint256 delegatedAmount, StakeTable.ValidatorStatus status) =
             stakeTable.validators(validator);
-        if (status != StakeTable.ValidatorStatus.Unknown) {
-            return;
-        }
 
         BN254.G2Point memory blsVK = BN254.G2Point({
             x0: BN254.BaseField.wrap(uint256(keccak256(abi.encode(validator, "x0")))),
@@ -135,26 +132,39 @@ contract StakeTableV2EchidnaTest {
         try stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000) { } catch { }
     }
 
-    function delegate(address delegator, address validator, uint256 amount) public {
+    function delegate_Any(address delegator, address validator, uint256 amount) public {
         require(delegator == DELEGATOR1 || delegator == DELEGATOR2, "Invalid delegator");
         require(validator == VALIDATOR1 || validator == VALIDATOR2, "Invalid validator");
-
-        if (amount == 0 || amount > token.balanceOf(delegator)) {
-            return;
-        }
 
         vm.prank(delegator);
         try stakeTable.delegate(validator, amount) { } catch { }
     }
 
-    function undelegate(address delegator, address validator, uint256 amount) public {
+    // Functions ensures we are doing a reasonable amount of successful delegations
+    function delegate_Ok(address delegator, address validator, uint256 amount) public {
         require(delegator == DELEGATOR1 || delegator == DELEGATOR2, "Invalid delegator");
         require(validator == VALIDATOR1 || validator == VALIDATOR2, "Invalid validator");
 
-        if (amount == 0 || amount > stakeTable.delegations(validator, delegator)) {
-            return;
-        }
+        amount = amount % (token.balanceOf(delegator) + 1);
 
+        vm.prank(delegator);
+        try stakeTable.delegate(validator, amount) { } catch { }
+    }
+
+    function undelegate_Any(address delegator, address validator, uint256 amount) public {
+        require(delegator == DELEGATOR1 || delegator == DELEGATOR2, "Invalid delegator");
+        require(validator == VALIDATOR1 || validator == VALIDATOR2, "Invalid validator");
+
+        vm.prank(delegator);
+        try stakeTable.undelegate(validator, amount) { } catch { }
+    }
+
+    // Functions ensures we are doing a reasonable amount of successful undelegations
+    function undelegate_Ok(address delegator, address validator, uint256 amount) public {
+        require(delegator == DELEGATOR1 || delegator == DELEGATOR2, "Invalid delegator");
+        require(validator == VALIDATOR1 || validator == VALIDATOR2, "Invalid validator");
+
+        amount = amount % (stakeTable.delegations(validator, delegator) + 1);
         vm.prank(delegator);
         try stakeTable.undelegate(validator, amount) { } catch { }
     }
