@@ -345,7 +345,7 @@ where
                     break;
                 },
                 Err(err) => {
-                    tracing::error!(height = leaf.height(), "failed to updated state: {err:#}");
+                    tracing::error!(height = leaf.height(), "failed to update state: {err:#}");
                     // If we fail, delay for a second and retry.
                     sleep(Duration::from_secs(1)).await;
                 },
