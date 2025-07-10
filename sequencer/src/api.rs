@@ -1,4 +1,4 @@
-use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
+use std::{pin::Pin, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use async_lock::RwLock;
@@ -225,13 +225,6 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
         self.as_ref().get_validators(epoch).await
     }
 
-    /// Get all the validator participation for the current epoch
-    async fn current_proposal_participation(&self) -> HashMap<PubKey, f64> {
-        self.as_ref().current_proposal_participation().await
-    }
-    async fn previous_proposal_participation(&self) -> HashMap<PubKey, f64> {
-        self.as_ref().previous_proposal_participation().await
-    }
     async fn get_block_reward(&self) -> anyhow::Result<RewardAmount> {
         self.as_ref().get_block_reward().await
     }
@@ -312,30 +305,6 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
 
         let r = mem.coordinator.membership().read().await;
         r.validators(&epoch)
-    }
-
-    /// Get the current proposal participation.
-    async fn current_proposal_participation(&self) -> HashMap<PubKey, f64> {
-        self.consensus()
-            .await
-            .read()
-            .await
-            .consensus()
-            .read()
-            .await
-            .current_proposal_participation()
-    }
-
-    /// Get the previous proposal participation.
-    async fn previous_proposal_participation(&self) -> HashMap<PubKey, f64> {
-        self.consensus()
-            .await
-            .read()
-            .await
-            .consensus()
-            .read()
-            .await
-            .previous_proposal_participation()
     }
 }
 

@@ -25,8 +25,6 @@ type QueryService interface {
 	FetchTransactionByHash(ctx context.Context, hash *types.TaggedBase64) (types.TransactionQueryData, error)
 	// Get the VidCommon for the given block height.
 	FetchVidCommonByHeight(ctx context.Context, blockHeight uint64) (types.VidCommon, error)
-	// Get the transaction by its hash from the explorer.
-	FetchExplorerTransactionByHash(ctx context.Context, hash *types.TaggedBase64) (types.ExplorerTransactionQueryData, error)
 }
 
 // Response to `FetchTransactionsInBlock`

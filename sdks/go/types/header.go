@@ -39,7 +39,6 @@ type Version = common_types.Version
 type VidCommon = common_types.VidCommon
 
 type TransactionQueryData = common_types.TransactionQueryData
-type ExplorerTransactionQueryData = common_types.ExplorerTransactionQueryData
 type VidCommonQueryData = common_types.VidCommonQueryData
 
 type U256 = common_types.U256

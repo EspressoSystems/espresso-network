@@ -110,7 +110,6 @@ impl TestSystem {
             .safe_exit_timelock_admin(signer.address())
             .safe_exit_timelock_proposers(vec![signer.address()])
             .safe_exit_timelock_executors(vec![signer.address()])
-            .use_timelock_owner(false)
             .build()
             .unwrap();
 

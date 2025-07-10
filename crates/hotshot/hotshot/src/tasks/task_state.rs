@@ -5,7 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     sync::{atomic::AtomicBool, Arc},
     time::Instant,
 };
@@ -174,16 +174,15 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             public_key: handle.public_key().clone(),
             private_key: handle.private_key().clone(),
             num_timeouts_tracked: 0,
-            replica_task_map: BTreeMap::default().into(),
-            pre_commit_relay_map: BTreeMap::default().into(),
-            commit_relay_map: BTreeMap::default().into(),
-            finalize_relay_map: BTreeMap::default().into(),
+            replica_task_map: HashMap::default().into(),
+            pre_commit_relay_map: HashMap::default().into(),
+            commit_relay_map: HashMap::default().into(),
+            finalize_relay_map: HashMap::default().into(),
             view_sync_timeout: handle.hotshot.config.view_sync_timeout,
             id: handle.hotshot.id,
             last_garbage_collected_view: TYPES::View::new(0),
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             first_epoch: None,
-            highest_finalized_epoch_view: (None, TYPES::View::new(0)),
         }
     }
 }

@@ -276,7 +276,7 @@ cross_tests!(
         }.set_num_nodes(13,13);
 
         metadata.test_config.epoch_height = 0;
-        metadata.overall_safety_properties.possible_view_failures = (0..50).collect();
+        metadata.overall_safety_properties.possible_view_failures = Vec::from([0; 50]);
         metadata.overall_safety_properties.decide_timeout = Duration::from_secs(60);
         metadata
     },

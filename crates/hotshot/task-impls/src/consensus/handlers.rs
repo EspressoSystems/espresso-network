@@ -547,19 +547,9 @@ pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>
 
     let consensus_reader = task_state.consensus.read().await;
     consensus_reader.metrics.number_of_timeouts.add(1);
-    if leader.as_ref().is_ok_and(|l| *l == task_state.public_key) {
+    if leader? == task_state.public_key {
         consensus_reader.metrics.number_of_timeouts_as_leader.add(1);
     }
-    drop(consensus_reader);
-    task_state
-        .consensus
-        .write()
-        .await
-        .update_validator_participation(
-            leader?,
-            task_state.cur_epoch.ok_or(debug!("No epoch"))?,
-            false,
-        );
 
     Ok(())
 }

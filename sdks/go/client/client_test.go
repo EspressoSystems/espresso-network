@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	tagged_base64 "github.com/EspressoSystems/espresso-network/sdks/go/tagged-base64"
 	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
 	"github.com/ethereum/go-ethereum/log"
 )
@@ -150,19 +149,4 @@ func waitForEspressoNode(ctx context.Context) error {
 	// Wait a bit for dev node to be ready totally
 	time.Sleep(30 * time.Second)
 	return nil
-}
-
-func TestExplorerFetchTransactionByHash(t *testing.T) {
-
-	ctx := context.Background()
-	client := NewClient("https://query-0.main.net.espresso.network")
-
-	txHash, err := tagged_base64.Parse("TX~onVqqws4O51Phy0QLzXaQkVpV_8VyVbYtSvmRAlF6p-K")
-	if err != nil {
-		t.Fatal("failed to parse tx hash", err)
-	}
-	_, err = client.FetchExplorerTransactionByHash(ctx, txHash)
-	if err != nil {
-		t.Fatal("failed to fetch block height", err)
-	}
 }
