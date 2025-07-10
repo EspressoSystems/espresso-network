@@ -316,6 +316,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             ))
         });
 
+        let _ = membership_coordinator
+            .stake_table_for_epoch(epoch.map(|e| e + 1))
+            .await;
+
         // Insert the validated state to state map.
         let mut validated_state_map = BTreeMap::default();
         validated_state_map.insert(
