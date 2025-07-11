@@ -33,7 +33,7 @@ contract StakeTableV2PropTestBase {
     MockStakeTableV2 public stakeTable;
     MockERC20 public token;
     MockLightClient public lightClient;
-    IVM public constant ivm = IVM(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
+    IVM public ivm = IVM(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
 
     address public constant ACTOR1 = address(0x1000);
     address public constant ACTOR2 = address(0x2000);
