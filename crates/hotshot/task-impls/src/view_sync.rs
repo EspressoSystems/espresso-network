@@ -571,28 +571,36 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
         Ok(())
     }
 
+    /// Garbage collect tasks for epochs older than the highest finalized epoch
+    /// or older than the previous epoch, whichever is greater.
+    /// Garbage collect views older than the highest finalized view including the highest finalized view.
     async fn garbage_collect_tasks(&self) {
+        let previous_epoch = self
+            .cur_epoch
+            .map(|e| e.saturating_sub(1))
+            .map(TYPES::Epoch::new);
+        let gc_epoch = self.highest_finalized_epoch_view.0.max(previous_epoch);
         Self::garbage_collect_tasks_helper(
             &self.replica_task_map,
-            &self.highest_finalized_epoch_view.0,
+            &gc_epoch,
             &self.highest_finalized_epoch_view.1,
         )
         .await;
         Self::garbage_collect_tasks_helper(
             &self.pre_commit_relay_map,
-            &self.highest_finalized_epoch_view.0,
+            &gc_epoch,
             &self.highest_finalized_epoch_view.1,
         )
         .await;
         Self::garbage_collect_tasks_helper(
             &self.commit_relay_map,
-            &self.highest_finalized_epoch_view.0,
+            &gc_epoch,
             &self.highest_finalized_epoch_view.1,
         )
         .await;
         Self::garbage_collect_tasks_helper(
             &self.finalize_relay_map,
-            &self.highest_finalized_epoch_view.0,
+            &gc_epoch,
             &self.highest_finalized_epoch_view.1,
         )
         .await;
@@ -600,13 +608,13 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
 
     async fn garbage_collect_tasks_helper<VAL>(
         map: &RwLock<TaskMap<TYPES, VAL>>,
-        highest_finalized_epoch: &Option<TYPES::Epoch>,
-        highest_finalized_view: &TYPES::View,
+        gc_epoch: &Option<TYPES::Epoch>,
+        gc_view: &TYPES::View,
     ) {
         let mut task_map = map.write().await;
-        task_map.retain(|e, _| e >= highest_finalized_epoch);
-        if let Some(view_map) = task_map.get_mut(highest_finalized_epoch) {
-            view_map.retain(|v, _| v > highest_finalized_view)
+        task_map.retain(|e, _| e >= gc_epoch);
+        if let Some(view_map) = task_map.get_mut(gc_epoch) {
+            view_map.retain(|v, _| v > gc_view)
         };
         task_map.retain(|_, view_map| !view_map.is_empty());
     }
