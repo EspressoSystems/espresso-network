@@ -73,6 +73,17 @@ func (c *Client) FetchHeadersByRange(ctx context.Context, from uint64, until uin
 	return res, nil
 }
 
+func (c *Client) FetchExplorerTransactionByHash(ctx context.Context, hash *types.TaggedBase64) (types.ExplorerTransactionQueryData, error) {
+	if hash == nil {
+		return types.ExplorerTransactionQueryData{}, fmt.Errorf("hash is nil")
+	}
+	var res types.ExplorerTransactionQueryData
+	if err := c.get(ctx, &res, "explorer/transaction/hash/%s", hash.String()); err != nil {
+		return types.ExplorerTransactionQueryData{}, err
+	}
+	return res, nil
+}
+
 func (c *Client) FetchTransactionByHash(ctx context.Context, hash *types.TaggedBase64) (types.TransactionQueryData, error) {
 	if hash == nil {
 		return types.TransactionQueryData{}, fmt.Errorf("hash is nil")
