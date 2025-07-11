@@ -17,11 +17,11 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     simple_certificate::LightClientStateUpdateCertificate,
-    traits::{
+    traits::{ storage::Storage,
         block_contents::BlockHeader, election::Membership, network::BroadcastDelay,
         node_implementation::Versions, signature_key::StateSignatureKey,
     },
-    utils::epoch_from_block_number,
+    utils::{epoch_from_block_number, transition_block_for_epoch},
 };
 use rand::Rng;
 use vbs::version::StaticVersionType;
@@ -369,6 +369,19 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         );
 
         let consensus = Arc::new(RwLock::new(consensus));
+
+            if let Some(epoch) = epoch {
+                if let Ok(drb_result) = storage.load_drb_result(epoch + 1).await
+                {
+                    tracing::error!("Writing DRB result for epoch {}", epoch + 1);
+                    consensus
+                        .write()
+                        .await
+                        .drb_results
+                        .results
+                        .insert(epoch + 1, drb_result);
+                }
+            }
 
         // This makes it so we won't block on broadcasting if there is not a receiver
         // Our own copy of the receiver is inactive so it doesn't count.

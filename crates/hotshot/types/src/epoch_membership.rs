@@ -258,7 +258,7 @@ where
         // Iterate through the epochs we need to fetch in reverse, i.e. from the oldest to the newest
         while let Some((current_fetch_epoch, tx)) = fetch_epochs.pop() {
             let root_leaf = match self.fetch_stake_table(current_fetch_epoch).await {
-                Ok(roof_leaf) => roof_leaf,
+                Ok(root_leaf) => root_leaf,
                 Err(err) => {
                     fetch_epochs.push((current_fetch_epoch, tx));
                     self.catchup_cleanup(epoch, fetch_epochs, err).await;
@@ -563,7 +563,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Wraps the same named Membership trait fn
-    async fn get_epoch_drb(&self, block_height: u64) -> Result<DrbResult> {
+    pub async fn get_epoch_drb(&self, block_height: u64) -> Result<DrbResult> {
         let Some(epoch) = self.epoch else {
             return Err(anytrace::warn!("Cannot get drb for None epoch"));
         };
