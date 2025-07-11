@@ -9,6 +9,11 @@ import { EdOnBN254 } from "../src/libraries/EdOnBn254.sol";
 import { ILightClient } from "../src/interfaces/ILightClient.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
+// Minimal VM interface that works with foundry and echidna
+interface IVM {
+    function prank(address) external;
+}
+
 contract MockERC20 is ERC20 {
     constructor() ERC20("MockToken", "MTK", 18) { }
 
@@ -27,6 +32,7 @@ contract StakeTableV2PropTestBase {
     MockStakeTableV2 public stakeTable;
     MockERC20 public token;
     MockLightClient public lightClient;
+    IVM public constant ivm = IVM(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
 
     address public constant VALIDATOR1 = address(0x1000);
     address public constant VALIDATOR2 = address(0x2000);
@@ -78,10 +84,13 @@ contract StakeTableV2PropTestBase {
     }
 
     function _mintAndApprove() internal {
-        // Mint tokens to accounts
+        // Mint tokens to accounts and approve stake table
         for (uint256 i = 0; i < actors.length; i++) {
             token.mint(actors[i], INITIAL_BALANCE);
             initialBalances[actors[i]] = INITIAL_BALANCE;
+
+            ivm.prank(actors[i]);
+            token.approve(address(stakeTable), type(uint256).max);
         }
     }
 
@@ -115,7 +124,7 @@ contract StakeTableV2PropTestBase {
         schnorrSig = abi.encode(keccak256(abi.encode(validator, "schnorr_sig")));
     }
 
-    function getTotalBalance(address account) public view returns (uint256) {
+    function totalOwnedAmount(address account) public view returns (uint256) {
         uint256 walletBalance = token.balanceOf(account);
         uint256 stakedBalance = 0;
         uint256 pendingWithdrawal = 0;

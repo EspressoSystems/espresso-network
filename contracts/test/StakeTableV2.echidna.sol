@@ -19,18 +19,6 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
     constructor() {
         _deployStakeTable();
         _mintAndApprove();
-
-        VM.prank(VALIDATOR1);
-        token.approve(address(stakeTable), type(uint256).max);
-
-        VM.prank(VALIDATOR2);
-        token.approve(address(stakeTable), type(uint256).max);
-
-        VM.prank(DELEGATOR1);
-        token.approve(address(stakeTable), type(uint256).max);
-
-        VM.prank(DELEGATOR2);
-        token.approve(address(stakeTable), type(uint256).max);
     }
 
     function registerValidator(uint256 validatorIndex) public {
@@ -113,19 +101,19 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
     }
 
     function echidna_BalanceInvariantValidator1() public view returns (bool) {
-        return getTotalBalance(VALIDATOR1) == initialBalances[VALIDATOR1];
+        return totalOwnedAmount(VALIDATOR1) == initialBalances[VALIDATOR1];
     }
 
     function echidna_BalanceInvariantValidator2() public view returns (bool) {
-        return getTotalBalance(VALIDATOR2) == initialBalances[VALIDATOR2];
+        return totalOwnedAmount(VALIDATOR2) == initialBalances[VALIDATOR2];
     }
 
     function echidna_BalanceInvariantDelegator1() public view returns (bool) {
-        return getTotalBalance(DELEGATOR1) == initialBalances[DELEGATOR1];
+        return totalOwnedAmount(DELEGATOR1) == initialBalances[DELEGATOR1];
     }
 
     function echidna_BalanceInvariantDelegator2() public view returns (bool) {
-        return getTotalBalance(DELEGATOR2) == initialBalances[DELEGATOR2];
+        return totalOwnedAmount(DELEGATOR2) == initialBalances[DELEGATOR2];
     }
 
     function echidna_TotalSupplyInvariant() public view returns (bool) {

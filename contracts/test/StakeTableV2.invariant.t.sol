@@ -114,19 +114,6 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
         _deployStakeTable();
         _mintAndApprove();
 
-        // Set up approvals
-        vm.prank(VALIDATOR1);
-        token.approve(address(stakeTable), type(uint256).max);
-
-        vm.prank(VALIDATOR2);
-        token.approve(address(stakeTable), type(uint256).max);
-
-        vm.prank(DELEGATOR1);
-        token.approve(address(stakeTable), type(uint256).max);
-
-        vm.prank(DELEGATOR2);
-        token.approve(address(stakeTable), type(uint256).max);
-
         // Create handler
         handler = new StakeTableV2Handler(stakeTable, token);
 
@@ -140,7 +127,7 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
     /// @dev Balance invariant: wallet + staked + pending withdrawals should equal initial balance
     function invariantBalanceInvariantValidator1() public view {
         assertEq(
-            getTotalBalance(VALIDATOR1),
+            totalOwnedAmount(VALIDATOR1),
             initialBalances[VALIDATOR1],
             "Validator1 balance invariant violated"
         );
@@ -148,7 +135,7 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
 
     function invariantBalanceInvariantValidator2() public view {
         assertEq(
-            getTotalBalance(VALIDATOR2),
+            totalOwnedAmount(VALIDATOR2),
             initialBalances[VALIDATOR2],
             "Validator2 balance invariant violated"
         );
@@ -156,7 +143,7 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
 
     function invariantBalanceInvariantDelegator1() public view {
         assertEq(
-            getTotalBalance(DELEGATOR1),
+            totalOwnedAmount(DELEGATOR1),
             initialBalances[DELEGATOR1],
             "Delegator1 balance invariant violated"
         );
@@ -164,7 +151,7 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
 
     function invariantBalanceInvariantDelegator2() public view {
         assertEq(
-            getTotalBalance(DELEGATOR2),
+            totalOwnedAmount(DELEGATOR2),
             initialBalances[DELEGATOR2],
             "Delegator2 balance invariant violated"
         );
