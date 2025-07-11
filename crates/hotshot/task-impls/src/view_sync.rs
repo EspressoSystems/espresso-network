@@ -237,6 +237,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                 }
                 task_map.get_mut(&epoch).and_then(|x| x.remove(&view));
                 task_map.retain(|_, x| !x.is_empty());
+                drop(task_map);
 
                 // Garbage collect old tasks
                 self.garbage_collect_tasks().await;
