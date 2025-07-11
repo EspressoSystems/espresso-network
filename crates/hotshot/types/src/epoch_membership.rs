@@ -563,7 +563,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Wraps the same named Membership trait fn
-    async fn get_epoch_drb(&self, block_height: u64) -> Result<DrbResult> {
+    pub async fn get_epoch_drb(&self, block_height: u64) -> Result<DrbResult> {
         let Some(epoch) = self.epoch else {
             return Err(anytrace::warn!("Cannot get drb for None epoch"));
         };

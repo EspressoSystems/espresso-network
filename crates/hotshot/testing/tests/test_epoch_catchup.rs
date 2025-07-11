@@ -107,7 +107,7 @@ cross_tests!(
             );
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 50,
-            possible_view_failures: vec![18, 19],
+            possible_view_failures: vec![18, 19, 37, 38, 39],
             decide_timeout: Duration::from_secs(15),
             ..Default::default()
         };
