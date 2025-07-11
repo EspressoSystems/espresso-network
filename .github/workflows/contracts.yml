@@ -89,6 +89,8 @@ jobs:
   echidna-tests:
     runs-on: ubuntu-latest
     steps:
+      - uses: taiki-e/install-action@just
+
       - name: Install Nix
         uses: cachix/install-nix-action@v31
 
@@ -112,7 +114,8 @@ jobs:
 
       - name: Run Echidna
         run: |
+          set -euo pipefail
           echo "## Echidna results" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          nix develop .#echidna --accept-flake-config -c just contracts-test-echidna --format text 2>&1 | tee -a $GITHUB_STEP_SUMMARY
+          just contracts-test-echidna --format text 2>&1 | tee -a $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
