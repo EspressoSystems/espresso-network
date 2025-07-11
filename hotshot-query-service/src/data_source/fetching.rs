@@ -120,8 +120,8 @@ use crate::{
     availability::{
         AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch, FetchStream,
         HeaderQueryData, LeafId, LeafQueryData, NamespaceId, PayloadMetadata, PayloadQueryData,
-        QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
-        TransactionQueryData, UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
+        QueryableHeader, QueryablePayload, StateCertQueryData, TransactionFromBlock,
+        TransactionHash, UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
     explorer::{self, ExplorerDataSource},
     fetching::{
@@ -150,7 +150,7 @@ mod vid;
 use self::{
     block::PayloadFetcher,
     leaf::LeafFetcher,
-    transaction::TransactionRequest,
+    transaction::{FetchableTransaction, TransactionRequest},
     vid::{VidCommonFetcher, VidCommonRequest},
 };
 
@@ -805,11 +805,14 @@ where
         self.fetcher.clone().get_range_rev(start, end)
     }
 
-    async fn get_transaction(
+    async fn get_transaction<T: TransactionFromBlock<Types>>(
         &self,
         hash: TransactionHash<Types>,
-    ) -> Fetch<TransactionQueryData<Types>> {
-        self.fetcher.get(TransactionRequest::from(hash)).await
+    ) -> Fetch<T> {
+        self.fetcher
+            .get::<FetchableTransaction<T>>(TransactionRequest::from(hash))
+            .await
+            .map(|tx: FetchableTransaction<T>| tx.0)
     }
 
     async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryData<Types>> {
