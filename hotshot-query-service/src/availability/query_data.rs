@@ -754,6 +754,29 @@ where
     transaction: Transaction<Types>,
     hash: TransactionHash<Types>,
     index: u64,
+    block_hash: BlockHash<Types>,
+    block_height: u64,
+    namespace: NamespaceId<Types>,
+    pos_in_namespace: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(bound = "")]
+pub struct TransactionWithProofQueryData<Types: NodeType>
+where
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+{
+    // Ideally we should just have a nested `TransactionQueryData` here, with `#[serde(flatten)]`
+    // (for backwards compatibility, the serialization has to keep the fields at the top level of
+    // the response struct). Unfortunately, `#[serde(flatten)]` causes panics when serializing with
+    // bincode, so we have to manually copy in the fields from `TransactionQueryData`.
+    //
+    // Also, for backwards compatibility, the `proof` field has to be in the middle of all the other
+    // fields, which is similarly incompatible with nesting all the other fields.
+    transaction: Transaction<Types>,
+    hash: TransactionHash<Types>,
+    index: u64,
     proof: TransactionInclusionProof<Types>,
     block_hash: BlockHash<Types>,
     block_height: u64,
@@ -767,40 +790,20 @@ where
     Payload<Types>: QueryablePayload<Types>,
 {
     pub fn new(
+        transaction: Transaction<Types>,
         block: &BlockQueryData<Types>,
         i: TransactionIndex<Types>,
         index: u64,
     ) -> Option<Self> {
-        let (transaction, proof) = block
-            .payload()
-            .transaction_with_proof(block.metadata(), &i)?;
         Some(Self {
             hash: transaction.commit(),
             transaction,
             index,
-            proof,
             block_hash: block.hash(),
             block_height: block.height(),
             namespace: block.header().namespace_id(&i.ns_index)?,
             pos_in_namespace: i.position,
         })
-    }
-
-    pub(crate) fn with_hash(
-        block: &BlockQueryData<Types>,
-        hash: TransactionHash<Types>,
-    ) -> Option<Self> {
-        block
-            .enumerate()
-            .enumerate()
-            .find_map(|(i, (index, tx))| {
-                if tx.commit() == hash {
-                    Some(Self::new(block, index, i as u64))
-                } else {
-                    None
-                }
-            })
-            .flatten()
     }
 
     /// The underlying transaction data.
@@ -818,9 +821,53 @@ where
         self.index
     }
 
+    /// The height of the block containing this transaction.
+    pub fn block_height(&self) -> u64 {
+        self.block_height
+    }
+
+    /// The hash of the block containing this transaction.
+    pub fn block_hash(&self) -> BlockHash<Types> {
+        self.block_hash
+    }
+}
+
+impl<Types: NodeType> TransactionWithProofQueryData<Types>
+where
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+{
+    pub fn new(data: TransactionQueryData<Types>, proof: TransactionInclusionProof<Types>) -> Self {
+        Self {
+            proof,
+            transaction: data.transaction,
+            hash: data.hash,
+            index: data.index,
+            block_hash: data.block_hash,
+            block_height: data.block_height,
+            namespace: data.namespace,
+            pos_in_namespace: data.pos_in_namespace,
+        }
+    }
+
     /// A proof of inclusion of this transaction in its block.
     pub fn proof(&self) -> &TransactionInclusionProof<Types> {
         &self.proof
+    }
+
+    /// The underlying transaction data.
+    pub fn transaction(&self) -> &Transaction<Types> {
+        &self.transaction
+    }
+
+    /// The hash of this transaction.
+    pub fn hash(&self) -> TransactionHash<Types> {
+        self.hash
+    }
+
+    /// The (0-based) position of this transaction within its block.
+    pub fn index(&self) -> u64 {
+        self.index
     }
 
     /// The height of the block containing this transaction.

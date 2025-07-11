@@ -22,7 +22,7 @@ use crate::{
     availability::{
         AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch, FetchStream, LeafId,
         LeafQueryData, NamespaceId, PayloadMetadata, PayloadQueryData, QueryableHeader,
-        QueryablePayload, StateCertQueryData, TransactionHash, TransactionQueryData,
+        QueryablePayload, StateCertQueryData, TransactionFromBlock, TransactionHash,
         UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
     data_source::storage::pruning::PrunedHeightDataSource,
@@ -298,10 +298,10 @@ where
             .get_vid_common_metadata_range_rev(start, end)
             .await
     }
-    async fn get_transaction(
+    async fn get_transaction<T: TransactionFromBlock<Types>>(
         &self,
         hash: TransactionHash<Types>,
-    ) -> Fetch<TransactionQueryData<Types>> {
+    ) -> Fetch<T> {
         self.data_source.get_transaction(hash).await
     }
     async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryData<Types>> {

@@ -524,7 +524,7 @@ mod test {
         api::load_api,
         availability::{
             define_api, AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch,
-            TransactionQueryData, UpdateAvailabilityData,
+            TransactionFromBlock, TransactionWithProofQueryData, UpdateAvailabilityData,
         },
         data_source::{
             sql::{self, SqlDataSource},
@@ -679,7 +679,9 @@ mod test {
         // * An unknown transaction.
         fetches.push(
             data_source
-                .get_transaction(mock_transaction(vec![]).commit())
+                .get_transaction::<TransactionWithProofQueryData<MockTypes>>(
+                    mock_transaction(vec![]).commit(),
+                )
                 .await
                 .map(ignore),
         );
@@ -914,7 +916,9 @@ mod test {
         // * An unknown transaction.
         fetches.push(
             data_source
-                .get_transaction(mock_transaction(vec![]).commit())
+                .get_transaction::<TransactionWithProofQueryData<MockTypes>>(
+                    mock_transaction(vec![]).commit(),
+                )
                 .await
                 .map(ignore),
         );
@@ -1334,7 +1338,9 @@ mod test {
         // and works without a fetcher; we don't trigger fetches for transactions that we don't know
         // exist.
         let tx = mock_transaction(vec![1, 2, 3]);
-        let fut = data_source.get_transaction(tx.commit()).await;
+        let fut = data_source
+            .get_transaction::<TransactionWithProofQueryData<MockTypes>>(tx.commit())
+            .await;
 
         // Sequence the transaction.
         network.submit_transaction(tx.clone()).await;
@@ -1359,7 +1365,7 @@ mod test {
         let fetched_tx = fut.await;
         assert_eq!(
             fetched_tx,
-            TransactionQueryData::with_hash(&block, tx.commit()).unwrap()
+            TransactionWithProofQueryData::with_hash(&block, tx.commit()).unwrap()
         );
 
         // Future queries for this transaction resolve immediately.
@@ -2154,7 +2160,7 @@ mod test {
         network.submit_transaction(tx.clone()).await;
         let tx = network
             .data_source()
-            .get_transaction(tx.commit())
+            .get_transaction::<TransactionWithProofQueryData<MockTypes>>(tx.commit())
             .await
             .await;
 

@@ -29,7 +29,7 @@ use hotshot_example_types::node_types::TestVersions;
 use hotshot_query_service::{
     availability::{
         BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, StateCertQueryData,
-        TransactionQueryData, VidCommonQueryData,
+        TransactionFromBlock, TransactionWithProofQueryData, VidCommonQueryData,
     },
     testing::mocks::MockVersions,
     VidCommon,
@@ -602,7 +602,9 @@ async fn test_transaction_query_data() {
     let transactions = block
         .enumerate()
         .enumerate()
-        .map(|(i, (index, _))| TransactionQueryData::new(&block, index, i as u64).unwrap())
+        .map(|(i, (index, _))| {
+            TransactionWithProofQueryData::from_block(&block, index, i as u64).unwrap()
+        })
         .collect::<Vec<_>>();
 
     reference_test_without_committable("v1", "transaction_query_data", &transactions);

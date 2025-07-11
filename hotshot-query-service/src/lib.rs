@@ -260,7 +260,7 @@
 //! # use hotshot_query_service::{Header, QueryResult, VidShare};
 //! # use hotshot_query_service::availability::{
 //! #   AvailabilityDataSource, BlockId, BlockQueryData, Fetch, FetchStream, LeafId, LeafQueryData,
-//! #   PayloadMetadata, PayloadQueryData, TransactionHash, TransactionQueryData,
+//! #   PayloadMetadata, PayloadQueryData, TransactionFromBlock, TransactionHash,
 //! #   VidCommonMetadata, VidCommonQueryData,
 //! # };
 //! # use hotshot_query_service::metrics::PrometheusMetrics;
@@ -306,7 +306,7 @@
 //! #   async fn get_vid_common_metadata<ID>(&self, id: ID) -> Fetch<VidCommonMetadata<AppTypes>>
 //! #   where
 //! #       ID: Into<BlockId<AppTypes>> + Send + Sync { todo!() }
-//! #   async fn get_transaction(&self, hash: TransactionHash<AppTypes>) -> Fetch<TransactionQueryData<AppTypes>> { todo!() }
+//! #   async fn get_transaction<T: TransactionFromBlock<AppTypes>>(&self, hash: TransactionHash<AppTypes>) -> Fetch<T> { todo!() }
 //! #   async fn get_leaf_range<R>(&self, range: R) -> FetchStream<LeafQueryData<AppTypes>>
 //! #   where
 //! #       R: RangeBounds<usize> + Send { todo!() }
@@ -616,7 +616,7 @@ mod test {
         availability::{
             AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch, FetchStream, LeafId,
             LeafQueryData, NamespaceId, PayloadMetadata, PayloadQueryData, StateCertQueryData,
-            TransactionHash, TransactionQueryData, UpdateAvailabilityData, VidCommonMetadata,
+            TransactionFromBlock, TransactionHash, UpdateAvailabilityData, VidCommonMetadata,
             VidCommonQueryData,
         },
         metrics::PrometheusMetrics,
@@ -777,10 +777,10 @@ mod test {
                 .get_vid_common_metadata_range_rev(start, end)
                 .await
         }
-        async fn get_transaction(
+        async fn get_transaction<T: TransactionFromBlock<MockTypes>>(
             &self,
             hash: TransactionHash<MockTypes>,
-        ) -> Fetch<TransactionQueryData<MockTypes>> {
+        ) -> Fetch<T> {
             self.hotshot_qs.get_transaction(hash).await
         }
         async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryData<MockTypes>> {
