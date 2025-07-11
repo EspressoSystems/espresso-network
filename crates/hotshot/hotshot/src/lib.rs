@@ -17,7 +17,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     simple_certificate::LightClientStateUpdateCertificate,
-    traits::{
+    traits::{ storage::Storage,
         block_contents::BlockHeader, election::Membership, network::BroadcastDelay,
         node_implementation::Versions, signature_key::StateSignatureKey,
     },
@@ -370,14 +370,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
 
         let consensus = Arc::new(RwLock::new(consensus));
 
-        if let Ok(membership) = membership_coordinator
-            .stake_table_for_epoch(epoch.map(|e| e + 1))
-            .await
-        {
             if let Some(epoch) = epoch {
-                if let Ok(drb_result) = membership
-                    .get_epoch_drb(transition_block_for_epoch(*(epoch + 1), config.epoch_height)).await
+                if let Ok(drb_result) = storage.load_drb_result(epoch + 1).await
                 {
+                    tracing::error!("Writing DRB result for epoch {}", epoch + 1);
                     consensus
                         .write()
                         .await
@@ -386,7 +382,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                         .insert(epoch + 1, drb_result);
                 }
             }
-        }
 
         // This makes it so we won't block on broadcasting if there is not a receiver
         // Our own copy of the receiver is inactive so it doesn't count.

@@ -208,7 +208,7 @@ pub(crate) async fn verify_drb_result<
 
     let proposal_result = proposal
         .next_drb_result()
-        .context(info!("Proposal is missing the DRB result."))?;
+        .context(info!("Proposal is missing the next epoch's DRB result."))?;
 
     if let Some(epoch_val) = epoch {
         let has_stake_current_epoch = validation_info
