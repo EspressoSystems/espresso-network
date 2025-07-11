@@ -29,6 +29,6 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
 
     /// @dev Total supply must remain constant
     function echidna_TotalSupply() public view returns (bool) {
-        return _getTotalSupply() == INITIAL_BALANCE * 4;
+        return _getTotalSupply() == INITIAL_TOTAL_SUPPLY;
     }
 }

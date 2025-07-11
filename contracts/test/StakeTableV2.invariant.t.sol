@@ -44,6 +44,6 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
 
     /// @dev Total supply must remain constant
     function invariant_TotalSupply() public view {
-        assertEq(_getTotalSupply(), INITIAL_TOTAL_BALANCE, "Total supply invariant violated");
+        assertEq(_getTotalSupply(), INITIAL_TOTAL_SUPPLY, "Total supply invariant violated");
     }
 }

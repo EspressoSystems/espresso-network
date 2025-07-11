@@ -44,7 +44,7 @@ contract StakeTableV2PropTestBase {
     // address public constant ACTOR4 = address(0x4000);
 
     uint256 public constant INITIAL_BALANCE = 1000000000e18;
-    uint256 public immutable INITIAL_TOTAL_BALANCE;
+    uint256 public immutable INITIAL_TOTAL_SUPPLY;
     uint256 public constant EXIT_ESCROW_PERIOD = 7 days;
 
     mapping(address account => uint256 balance) public initialBalances;
@@ -71,7 +71,7 @@ contract StakeTableV2PropTestBase {
     constructor() {
         _deployStakeTable();
         _mintAndApprove();
-        INITIAL_TOTAL_BALANCE = token.totalSupply();
+        INITIAL_TOTAL_SUPPLY = token.totalSupply();
     }
 
     function _deployStakeTable() internal {
