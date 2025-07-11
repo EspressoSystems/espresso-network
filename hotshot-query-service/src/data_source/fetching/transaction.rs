@@ -15,13 +15,13 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use derive_more::From;
+use derive_more::{Deref, From, Into};
 use futures::future::{BoxFuture, FutureExt};
 use hotshot_types::traits::node_implementation::NodeType;
 
 use super::{AvailabilityProvider, FetchRequest, Fetchable, Fetcher, Notifiers};
 use crate::{
-    availability::{QueryableHeader, QueryablePayload, TransactionHash, TransactionQueryData},
+    availability::{QueryableHeader, QueryablePayload, TransactionFromBlock, TransactionHash},
     data_source::{
         storage::{
             pruning::PrunedHeightStorage, AvailabilityStorage, NodeStorage,
@@ -29,7 +29,8 @@ use crate::{
         },
         update::VersionedDataSource,
     },
-    Header, Payload, QueryResult,
+    types::HeightIndexed,
+    Header, Payload, QueryError, QueryResult,
 };
 
 #[derive(Clone, Copy, Debug, From)]
@@ -37,12 +38,16 @@ pub(super) struct TransactionRequest<Types: NodeType>(TransactionHash<Types>);
 
 impl<Types: NodeType> FetchRequest for TransactionRequest<Types> {}
 
+#[derive(Clone, Debug, From, Deref)]
+pub(super) struct FetchableTransaction<T>(pub(super) T);
+
 #[async_trait]
-impl<Types> Fetchable<Types> for TransactionQueryData<Types>
+impl<Types, T> Fetchable<Types> for FetchableTransaction<T>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
+    T: TransactionFromBlock<Types>,
 {
     type Request = TransactionRequest<Types>;
 
@@ -63,7 +68,7 @@ where
 
         async move {
             let block = wait_block.await?;
-            Self::with_hash(&block, req.0)
+            Some(T::with_hash(&block, req.0)?.into())
         }
         .boxed()
     }
@@ -91,6 +96,15 @@ where
     where
         S: AvailabilityStorage<Types>,
     {
-        storage.get_transaction(req.0).await
+        let hash = req.0;
+        let block = storage.get_block_with_transaction(hash).await?;
+        T::with_hash(&block, hash)
+            .ok_or(QueryError::Error {
+                message: format!(
+                    "transaction index inconsistent: block {} contains no transaction {hash}",
+                    block.height()
+                ),
+            })
+            .map(Self::from)
     }
 }

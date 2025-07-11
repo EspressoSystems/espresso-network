@@ -29,13 +29,13 @@ use crate::{
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceInfo, NamespaceMap,
         PayloadQueryData, QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
-        TransactionQueryData, VidCommonQueryData,
+        VidCommonQueryData,
     },
     data_source::storage::{
         sql::sqlx::Row, AvailabilityStorage, PayloadMetadata, VidCommonMetadata,
     },
     types::HeightIndexed,
-    ErrorSnafu, Header, MissingSnafu, Payload, QueryError, QueryResult,
+    Header, MissingSnafu, Payload, QueryError, QueryResult,
 };
 
 #[async_trait]
@@ -352,10 +352,10 @@ where
             .await)
     }
 
-    async fn get_transaction(
+    async fn get_block_with_transaction(
         &mut self,
         hash: TransactionHash<Types>,
-    ) -> QueryResult<TransactionQueryData<Types>> {
+    ) -> QueryResult<BlockQueryData<Types>> {
         let mut query = QueryBuilder::default();
         let hash_param = query.bind(hash.to_string())?;
 
@@ -371,16 +371,7 @@ where
                 LIMIT 1"
         );
         let row = query.query(&sql).fetch_one(self.as_mut()).await?;
-
-        // Extract the block.
-        let block = BlockQueryData::from_row(&row)?;
-
-        TransactionQueryData::with_hash(&block, hash).context(ErrorSnafu {
-            message: format!(
-                "transaction index inconsistent: block {} contains no transaction {hash}",
-                block.height()
-            ),
-        })
+        Ok(BlockQueryData::from_row(&row)?)
     }
 
     async fn first_available_leaf(&mut self, from: u64) -> QueryResult<LeafQueryData<Types>> {
