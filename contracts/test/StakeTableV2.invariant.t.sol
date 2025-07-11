@@ -12,15 +12,13 @@ import { BN254 } from "bn254/BN254.sol";
 import { EdOnBN254 } from "../src/libraries/EdOnBn254.sol";
 
 contract StakeTableV2Handler is Test, StakeTableV2PropTestBase {
-    address internal validator;
-    address internal actor;
-
-    modifier useValidator(uint256 validatorIndex) {
+    // Override the modifiers to use foundry's vm and bound function
+    modifier useValidator(uint256 validatorIndex) override {
         validator = actors[bound(validatorIndex, 0, actors.length - 1)];
         _;
     }
 
-    modifier useActor(uint256 actorIndex) {
+    modifier useActor(uint256 actorIndex) override {
         actor = actors[bound(actorIndex, 0, actors.length - 1)];
         vm.startPrank(actor);
         _;
@@ -33,77 +31,6 @@ contract StakeTableV2Handler is Test, StakeTableV2PropTestBase {
         for (uint256 i = 0; i < actors.length; i++) {
             initialBalances[actors[i]] = INITIAL_BALANCE;
         }
-    }
-
-    function registerValidator(uint256 validatorIndex) public useActor(validatorIndex) {
-        (
-            BN254.G2Point memory blsVK,
-            EdOnBN254.EdOnBN254Point memory schnorrVK,
-            BN254.G1Point memory blsSig,
-            bytes memory schnorrSig
-        ) = _genDummyValidatorKeys(actor);
-
-        stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000);
-    }
-
-    function deregisterValidator(uint256 validatorIndex) public useActor(validatorIndex) {
-        stakeTable.deregisterValidator();
-    }
-
-    function delegateAny(uint256 actorIndex, uint256 validatorIndex, uint256 amount)
-        public
-        useActor(actorIndex)
-        useValidator(validatorIndex)
-    {
-        stakeTable.delegate(validator, amount);
-    }
-
-    function delegateOk(uint256 actorIndex, uint256 validatorIndex, uint256 amount)
-        public
-        useActor(actorIndex)
-        useValidator(validatorIndex)
-    {
-        uint256 balance = token.balanceOf(actor);
-        if (balance == 0) return;
-
-        amount = bound(amount, 1, balance);
-        stakeTable.delegate(validator, amount);
-    }
-
-    function undelegateAny(uint256 actorIndex, uint256 validatorIndex, uint256 amount)
-        public
-        useActor(actorIndex)
-        useValidator(validatorIndex)
-    {
-        stakeTable.undelegate(validator, amount);
-    }
-
-    function undelegateOk(uint256 actorIndex, uint256 validatorIndex, uint256 amount)
-        public
-        useActor(actorIndex)
-        useValidator(validatorIndex)
-    {
-        uint256 delegatedAmount = stakeTable.delegations(validator, actor);
-        if (delegatedAmount == 0) return;
-
-        amount = bound(amount, 1, delegatedAmount);
-        stakeTable.undelegate(validator, amount);
-    }
-
-    function claimWithdrawal(uint256 actorIndex, uint256 validatorIndex)
-        public
-        useActor(actorIndex)
-        useValidator(validatorIndex)
-    {
-        stakeTable.claimWithdrawal(validator);
-    }
-
-    function claimValidatorExit(uint256 actorIndex, uint256 validatorIndex)
-        public
-        useActor(actorIndex)
-        useValidator(validatorIndex)
-    {
-        stakeTable.claimValidatorExit(validator);
     }
 }
 

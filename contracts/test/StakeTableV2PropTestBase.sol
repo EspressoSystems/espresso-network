@@ -13,6 +13,8 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 // Minimal VM interface that works with foundry and echidna
 interface IVM {
     function prank(address) external;
+    function startPrank(address) external;
+    function stopPrank() external;
 }
 
 contract MockERC20 is ERC20 {
@@ -47,6 +49,21 @@ contract StakeTableV2PropTestBase {
 
     // All actors can be both validators and delegators
     address[4] public actors = [ACTOR1, ACTOR2, ACTOR3, ACTOR4];
+
+    address internal validator;
+    address internal actor;
+
+    modifier useValidator(uint256 validatorIndex) virtual {
+        validator = actors[validatorIndex % actors.length];
+        _;
+    }
+
+    modifier useActor(uint256 actorIndex) virtual {
+        actor = actors[actorIndex % actors.length];
+        ivm.startPrank(actor);
+        _;
+        ivm.stopPrank();
+    }
 
     function _deployStakeTable() internal {
         address admin = address(this);
@@ -155,5 +172,88 @@ contract StakeTableV2PropTestBase {
                 total += amount;
             }
         }
+    }
+
+    // Test functions that can be shared between echidna and invariant tests
+    function registerValidator(uint256 validatorIndex) public useActor(validatorIndex) {
+        (, StakeTable.ValidatorStatus status) = stakeTable.validators(actor);
+        if (status != StakeTable.ValidatorStatus.Unknown) {
+            return;
+        }
+
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory blsSig,
+            bytes memory schnorrSig
+        ) = _genDummyValidatorKeys(actor);
+
+        stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000);
+    }
+
+    function deregisterValidator(uint256 validatorIndex) public useActor(validatorIndex) {
+        stakeTable.deregisterValidator();
+    }
+
+    function delegateAny(uint256 actorIndex, uint256 validatorIndex, uint256 amount)
+        public
+        useActor(actorIndex)
+        useValidator(validatorIndex)
+    {
+        stakeTable.delegate(validator, amount);
+    }
+
+    function delegateOk(uint256 actorIndex, uint256 validatorIndex, uint256 amount)
+        public
+        virtual
+        useActor(actorIndex)
+        useValidator(validatorIndex)
+    {
+        uint256 balance = token.balanceOf(actor);
+        if (balance == 0) return;
+
+        amount = amount % (balance + 1);
+        if (amount == 0) return;
+
+        stakeTable.delegate(validator, amount);
+    }
+
+    function undelegateAny(uint256 actorIndex, uint256 validatorIndex, uint256 amount)
+        public
+        useActor(actorIndex)
+        useValidator(validatorIndex)
+    {
+        stakeTable.undelegate(validator, amount);
+    }
+
+    function undelegateOk(uint256 actorIndex, uint256 validatorIndex, uint256 amount)
+        public
+        virtual
+        useActor(actorIndex)
+        useValidator(validatorIndex)
+    {
+        uint256 delegatedAmount = stakeTable.delegations(validator, actor);
+        if (delegatedAmount == 0) return;
+
+        amount = amount % (delegatedAmount + 1);
+        if (amount == 0) return;
+
+        stakeTable.undelegate(validator, amount);
+    }
+
+    function claimWithdrawal(uint256 actorIndex, uint256 validatorIndex)
+        public
+        useActor(actorIndex)
+        useValidator(validatorIndex)
+    {
+        stakeTable.claimWithdrawal(validator);
+    }
+
+    function claimValidatorExit(uint256 actorIndex, uint256 validatorIndex)
+        public
+        useActor(actorIndex)
+        useValidator(validatorIndex)
+    {
+        stakeTable.claimValidatorExit(validator);
     }
 }
