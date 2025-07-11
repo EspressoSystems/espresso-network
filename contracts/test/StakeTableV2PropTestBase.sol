@@ -41,6 +41,7 @@ contract StakeTableV2PropTestBase {
     // Arrays for efficient address lookup
     address[2] public validators = [VALIDATOR1, VALIDATOR2];
     address[2] public delegators = [DELEGATOR1, DELEGATOR2];
+    address[4] public actors = [VALIDATOR1, VALIDATOR2, DELEGATOR1, DELEGATOR2];
 
     function _deployStakeTable() internal {
         address admin = address(this);
@@ -78,19 +79,13 @@ contract StakeTableV2PropTestBase {
 
     function _mintAndApprove() internal {
         // Mint tokens to accounts
-        token.mint(VALIDATOR1, INITIAL_BALANCE);
-        token.mint(VALIDATOR2, INITIAL_BALANCE);
-        token.mint(DELEGATOR1, INITIAL_BALANCE);
-        token.mint(DELEGATOR2, INITIAL_BALANCE);
-
-        // Store initial balances
-        initialBalances[VALIDATOR1] = INITIAL_BALANCE;
-        initialBalances[VALIDATOR2] = INITIAL_BALANCE;
-        initialBalances[DELEGATOR1] = INITIAL_BALANCE;
-        initialBalances[DELEGATOR2] = INITIAL_BALANCE;
+        for (uint256 i = 0; i < actors.length; i++) {
+            token.mint(actors[i], INITIAL_BALANCE);
+            initialBalances[actors[i]] = INITIAL_BALANCE;
+        }
     }
 
-    function _generateValidatorKeys(address validator)
+    function _genDummyValidatorKeys(address validator)
         internal
         pure
         returns (
@@ -137,41 +132,20 @@ contract StakeTableV2PropTestBase {
         return walletBalance + stakedBalance + pendingWithdrawal;
     }
 
-    function _getTotalSupply() internal view returns (uint256) {
-        uint256 totalInContract = token.balanceOf(address(stakeTable));
-        uint256 totalInWallets = token.balanceOf(VALIDATOR1) + token.balanceOf(VALIDATOR2)
-            + token.balanceOf(DELEGATOR1) + token.balanceOf(DELEGATOR2);
-        return totalInContract + totalInWallets;
+    function _getTotalSupply() internal view returns (uint256 total) {
+        total += token.balanceOf(address(stakeTable));
+        for (uint256 i = 0; i < actors.length; i++) {
+            total += token.balanceOf(actors[i]);
+        }
     }
 
-    function _getTotalTrackedFunds() internal view returns (uint256) {
-        uint256 totalDelegated = 0;
-
-        // Sum all active delegations
-        totalDelegated += stakeTable.delegations(VALIDATOR1, VALIDATOR1);
-        totalDelegated += stakeTable.delegations(VALIDATOR1, VALIDATOR2);
-        totalDelegated += stakeTable.delegations(VALIDATOR1, DELEGATOR1);
-        totalDelegated += stakeTable.delegations(VALIDATOR1, DELEGATOR2);
-
-        totalDelegated += stakeTable.delegations(VALIDATOR2, VALIDATOR1);
-        totalDelegated += stakeTable.delegations(VALIDATOR2, VALIDATOR2);
-        totalDelegated += stakeTable.delegations(VALIDATOR2, DELEGATOR1);
-        totalDelegated += stakeTable.delegations(VALIDATOR2, DELEGATOR2);
-
-        // Sum all pending undelegations
-        (uint256 v1v1Amount,) = stakeTable.undelegations(VALIDATOR1, VALIDATOR1);
-        (uint256 v1v2Amount,) = stakeTable.undelegations(VALIDATOR1, VALIDATOR2);
-        (uint256 v1d1Amount,) = stakeTable.undelegations(VALIDATOR1, DELEGATOR1);
-        (uint256 v1d2Amount,) = stakeTable.undelegations(VALIDATOR1, DELEGATOR2);
-
-        (uint256 v2v1Amount,) = stakeTable.undelegations(VALIDATOR2, VALIDATOR1);
-        (uint256 v2v2Amount,) = stakeTable.undelegations(VALIDATOR2, VALIDATOR2);
-        (uint256 v2d1Amount,) = stakeTable.undelegations(VALIDATOR2, DELEGATOR1);
-        (uint256 v2d2Amount,) = stakeTable.undelegations(VALIDATOR2, DELEGATOR2);
-
-        uint256 totalPendingUndelegations = v1v1Amount + v1v2Amount + v1d1Amount + v1d2Amount
-            + v2v1Amount + v2v2Amount + v2d1Amount + v2d2Amount;
-
-        return totalDelegated + totalPendingUndelegations;
+    function _getTotalTrackedFunds() internal view returns (uint256 total) {
+        for (uint256 val = 0; val < validators.length; val++) {
+            for (uint256 del = 0; del < actors.length; del++) {
+                total += stakeTable.delegations(validators[val], actors[del]);
+                (uint256 amount,) = stakeTable.undelegations(validators[val], actors[del]);
+                total += amount;
+            }
+        }
     }
 }

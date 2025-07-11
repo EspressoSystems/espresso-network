@@ -35,7 +35,7 @@ contract StakeTableV2Handler is Test, StakeTableV2PropTestBase {
             EdOnBN254.EdOnBN254Point memory schnorrVK,
             BN254.G1Point memory blsSig,
             bytes memory schnorrSig
-        ) = _generateValidatorKeys(validator);
+        ) = _genDummyValidatorKeys(validator);
 
         vm.prank(validator);
         stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000);
