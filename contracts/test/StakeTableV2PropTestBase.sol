@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+/* solhint-disable func-name-mixedcase, one-contract-per-file */
 pragma solidity ^0.8.0;
 
 import { MockStakeTableV2 } from "./MockStakeTableV2.sol";
@@ -34,20 +35,18 @@ contract StakeTableV2PropTestBase {
     MockLightClient public lightClient;
     IVM public constant ivm = IVM(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
 
-    address public constant VALIDATOR1 = address(0x1000);
-    address public constant VALIDATOR2 = address(0x2000);
-    address public constant DELEGATOR1 = address(0x3000);
-    address public constant DELEGATOR2 = address(0x4000);
+    address public constant ACTOR1 = address(0x1000);
+    address public constant ACTOR2 = address(0x2000);
+    address public constant ACTOR3 = address(0x3000);
+    address public constant ACTOR4 = address(0x4000);
 
     uint256 public constant INITIAL_BALANCE = 1000000000e18;
     uint256 public constant EXIT_ESCROW_PERIOD = 7 days;
 
     mapping(address account => uint256 balance) public initialBalances;
 
-    // Arrays for efficient address lookup
-    address[2] public validators = [VALIDATOR1, VALIDATOR2];
-    address[2] public delegators = [DELEGATOR1, DELEGATOR2];
-    address[4] public actors = [VALIDATOR1, VALIDATOR2, DELEGATOR1, DELEGATOR2];
+    // All actors can be both validators and delegators
+    address[4] public actors = [ACTOR1, ACTOR2, ACTOR3, ACTOR4];
 
     function _deployStakeTable() internal {
         address admin = address(this);
@@ -129,14 +128,13 @@ contract StakeTableV2PropTestBase {
         uint256 stakedBalance = 0;
         uint256 pendingWithdrawal = 0;
 
-        stakedBalance += stakeTable.delegations(VALIDATOR1, account);
-        stakedBalance += stakeTable.delegations(VALIDATOR2, account);
+        // Check delegations from all actors
+        for (uint256 i = 0; i < actors.length; i++) {
+            stakedBalance += stakeTable.delegations(actors[i], account);
 
-        (uint256 undelegation1Amount,) = stakeTable.undelegations(VALIDATOR1, account);
-        (uint256 undelegation2Amount,) = stakeTable.undelegations(VALIDATOR2, account);
-
-        pendingWithdrawal += undelegation1Amount;
-        pendingWithdrawal += undelegation2Amount;
+            (uint256 undelegationAmount,) = stakeTable.undelegations(actors[i], account);
+            pendingWithdrawal += undelegationAmount;
+        }
 
         return walletBalance + stakedBalance + pendingWithdrawal;
     }
@@ -149,10 +147,11 @@ contract StakeTableV2PropTestBase {
     }
 
     function _getTotalTrackedFunds() internal view returns (uint256 total) {
-        for (uint256 val = 0; val < validators.length; val++) {
+        // Sum all active delegations and pending undelegations between all actors
+        for (uint256 val = 0; val < actors.length; val++) {
             for (uint256 del = 0; del < actors.length; del++) {
-                total += stakeTable.delegations(validators[val], actors[del]);
-                (uint256 amount,) = stakeTable.undelegations(validators[val], actors[del]);
+                total += stakeTable.delegations(actors[val], actors[del]);
+                (uint256 amount,) = stakeTable.undelegations(actors[val], actors[del]);
                 total += amount;
             }
         }

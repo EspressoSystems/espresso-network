@@ -21,8 +21,8 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
         _mintAndApprove();
     }
 
-    function registerValidator(uint256 validatorIndex) public {
-        address validator = validators[validatorIndex % 2];
+    function registerValidator(uint256 actorIndex) public {
+        address validator = actors[actorIndex % 4];
 
         (, StakeTable.ValidatorStatus status) = stakeTable.validators(validator);
         if (status != StakeTable.ValidatorStatus.Unknown) {
@@ -41,8 +41,8 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
     }
 
     function delegateAny(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount) public {
-        address delegator = delegators[delegatorIndex % 2];
-        address validator = validators[validatorIndex % 2];
+        address delegator = actors[delegatorIndex % 4];
+        address validator = actors[validatorIndex % 4];
 
         VM.prank(delegator);
         stakeTable.delegate(validator, amount);
@@ -50,8 +50,8 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
 
     // Functions ensures we are doing a reasonable amount of successful delegations
     function delegateOk(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount) public {
-        address delegator = delegators[delegatorIndex % 2];
-        address validator = validators[validatorIndex % 2];
+        address delegator = actors[delegatorIndex % 4];
+        address validator = actors[validatorIndex % 4];
 
         amount = amount % (token.balanceOf(delegator) + 1);
 
@@ -60,8 +60,8 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
     }
 
     function undelegateAny(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount) public {
-        address delegator = delegators[delegatorIndex % 2];
-        address validator = validators[validatorIndex % 2];
+        address delegator = actors[delegatorIndex % 4];
+        address validator = actors[validatorIndex % 4];
 
         VM.prank(delegator);
         stakeTable.undelegate(validator, amount);
@@ -69,8 +69,8 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
 
     // Functions ensures we are doing a reasonable amount of successful undelegations
     function undelegateOk(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount) public {
-        address delegator = delegators[delegatorIndex % 2];
-        address validator = validators[validatorIndex % 2];
+        address delegator = actors[delegatorIndex % 4];
+        address validator = actors[validatorIndex % 4];
 
         amount = amount % (stakeTable.delegations(validator, delegator) + 1);
         VM.prank(delegator);
@@ -78,42 +78,35 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
     }
 
     function claimWithdrawal(uint256 delegatorIndex, uint256 validatorIndex) public {
-        address delegator = delegators[delegatorIndex % 2];
-        address validator = validators[validatorIndex % 2];
+        address delegator = actors[delegatorIndex % 4];
+        address validator = actors[validatorIndex % 4];
 
         VM.prank(delegator);
         stakeTable.claimWithdrawal(validator);
     }
 
     function deregisterValidator(uint256 validatorIndex) public {
-        address validator = validators[validatorIndex % 2];
+        address validator = actors[validatorIndex % 4];
 
         VM.prank(validator);
         stakeTable.deregisterValidator();
     }
 
     function claimValidatorExit(uint256 delegatorIndex, uint256 validatorIndex) public {
-        address delegator = delegators[delegatorIndex % 2];
-        address validator = validators[validatorIndex % 2];
+        address delegator = actors[delegatorIndex % 4];
+        address validator = actors[validatorIndex % 4];
 
         VM.prank(delegator);
         stakeTable.claimValidatorExit(validator);
     }
 
-    function echidna_BalanceInvariantValidator1() public view returns (bool) {
-        return totalOwnedAmount(VALIDATOR1) == initialBalances[VALIDATOR1];
-    }
-
-    function echidna_BalanceInvariantValidator2() public view returns (bool) {
-        return totalOwnedAmount(VALIDATOR2) == initialBalances[VALIDATOR2];
-    }
-
-    function echidna_BalanceInvariantDelegator1() public view returns (bool) {
-        return totalOwnedAmount(DELEGATOR1) == initialBalances[DELEGATOR1];
-    }
-
-    function echidna_BalanceInvariantDelegator2() public view returns (bool) {
-        return totalOwnedAmount(DELEGATOR2) == initialBalances[DELEGATOR2];
+    function echidna_BalanceInvariant() public view returns (bool) {
+        for (uint256 i = 0; i < actors.length; i++) {
+            if (totalOwnedAmount(actors[i]) != initialBalances[actors[i]]) {
+                return false;
+            }
+        }
+        return true;
     }
 
     function echidna_TotalSupplyInvariant() public view returns (bool) {

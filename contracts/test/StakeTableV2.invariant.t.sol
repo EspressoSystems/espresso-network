@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+/* solhint-disable func-name-mixedcase, one-contract-per-file */
 pragma solidity ^0.8.0;
 
 import "forge-std/Test.sol";
@@ -15,15 +16,14 @@ contract StakeTableV2Handler is Test, StakeTableV2PropTestBase {
         stakeTable = _stakeTable;
         token = _token;
 
-        // Set initial balances
-        initialBalances[VALIDATOR1] = INITIAL_BALANCE;
-        initialBalances[VALIDATOR2] = INITIAL_BALANCE;
-        initialBalances[DELEGATOR1] = INITIAL_BALANCE;
-        initialBalances[DELEGATOR2] = INITIAL_BALANCE;
+        // Set initial balances for all actors
+        for (uint256 i = 0; i < actors.length; i++) {
+            initialBalances[actors[i]] = INITIAL_BALANCE;
+        }
     }
 
-    function registerValidator(uint256 validatorIndex) public {
-        address validator = validators[validatorIndex % 2];
+    function registerValidator(uint256 actorIndex) public {
+        address validator = actors[actorIndex % 4];
 
         (, StakeTable.ValidatorStatus status) = stakeTable.validators(validator);
         if (status != StakeTable.ValidatorStatus.Unknown) {
@@ -42,16 +42,16 @@ contract StakeTableV2Handler is Test, StakeTableV2PropTestBase {
     }
 
     function delegateAny(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount) public {
-        address delegator = delegators[delegatorIndex % 2];
-        address validator = validators[validatorIndex % 2];
+        address delegator = actors[delegatorIndex % 4];
+        address validator = actors[validatorIndex % 4];
 
         vm.prank(delegator);
         stakeTable.delegate(validator, amount);
     }
 
     function delegateOk(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount) public {
-        address delegator = delegators[delegatorIndex % 2];
-        address validator = validators[validatorIndex % 2];
+        address delegator = actors[delegatorIndex % 4];
+        address validator = actors[validatorIndex % 4];
 
         uint256 balance = token.balanceOf(delegator);
         if (balance == 0) return;
@@ -63,16 +63,16 @@ contract StakeTableV2Handler is Test, StakeTableV2PropTestBase {
     }
 
     function undelegateAny(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount) public {
-        address delegator = delegators[delegatorIndex % 2];
-        address validator = validators[validatorIndex % 2];
+        address delegator = actors[delegatorIndex % 4];
+        address validator = actors[validatorIndex % 4];
 
         vm.prank(delegator);
         stakeTable.undelegate(validator, amount);
     }
 
     function undelegateOk(uint256 delegatorIndex, uint256 validatorIndex, uint256 amount) public {
-        address delegator = delegators[delegatorIndex % 2];
-        address validator = validators[validatorIndex % 2];
+        address delegator = actors[delegatorIndex % 4];
+        address validator = actors[validatorIndex % 4];
 
         uint256 delegatedAmount = stakeTable.delegations(validator, delegator);
         if (delegatedAmount == 0) return;
@@ -84,23 +84,23 @@ contract StakeTableV2Handler is Test, StakeTableV2PropTestBase {
     }
 
     function claimWithdrawal(uint256 delegatorIndex, uint256 validatorIndex) public {
-        address delegator = delegators[delegatorIndex % 2];
-        address validator = validators[validatorIndex % 2];
+        address delegator = actors[delegatorIndex % 4];
+        address validator = actors[validatorIndex % 4];
 
         vm.prank(delegator);
         stakeTable.claimWithdrawal(validator);
     }
 
     function deregisterValidator(uint256 validatorIndex) public {
-        address validator = validators[validatorIndex % 2];
+        address validator = actors[validatorIndex % 4];
 
         vm.prank(validator);
         stakeTable.deregisterValidator();
     }
 
     function claimValidatorExit(uint256 delegatorIndex, uint256 validatorIndex) public {
-        address delegator = delegators[delegatorIndex % 2];
-        address validator = validators[validatorIndex % 2];
+        address delegator = actors[delegatorIndex % 4];
+        address validator = actors[validatorIndex % 4];
 
         vm.prank(delegator);
         stakeTable.claimValidatorExit(validator);
@@ -114,56 +114,24 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
         _deployStakeTable();
         _mintAndApprove();
 
-        // Create handler
+        // Configure contract under test
         handler = new StakeTableV2Handler(stakeTable, token);
-
-        // Target the handler for invariant testing
         targetContract(address(handler));
-
-        // Configure the number of runs for invariant testing
-        vm.deal(address(handler), 100 ether);
     }
 
-    /// @dev Balance invariant: wallet + staked + pending withdrawals should equal initial balance
-    function invariantBalanceInvariantValidator1() public view {
-        assertEq(
-            totalOwnedAmount(VALIDATOR1),
-            initialBalances[VALIDATOR1],
-            "Validator1 balance invariant violated"
-        );
-    }
-
-    function invariantBalanceInvariantValidator2() public view {
-        assertEq(
-            totalOwnedAmount(VALIDATOR2),
-            initialBalances[VALIDATOR2],
-            "Validator2 balance invariant violated"
-        );
-    }
-
-    function invariantBalanceInvariantDelegator1() public view {
-        assertEq(
-            totalOwnedAmount(DELEGATOR1),
-            initialBalances[DELEGATOR1],
-            "Delegator1 balance invariant violated"
-        );
-    }
-
-    function invariantBalanceInvariantDelegator2() public view {
-        assertEq(
-            totalOwnedAmount(DELEGATOR2),
-            initialBalances[DELEGATOR2],
-            "Delegator2 balance invariant violated"
-        );
-    }
-
-    /// @dev Total supply should remain constant
-    function invariantTotalSupplyInvariant() public view {
-        assertEq(_getTotalSupply(), INITIAL_BALANCE * 4, "Total supply invariant violated");
+    /// @dev The total amount of tokens owned by an actor does not change
+    function invariant_actorOwnedAmounts() public view {
+        for (uint256 i = 0; i < actors.length; i++) {
+            assertEq(
+                totalOwnedAmount(actors[i]),
+                initialBalances[actors[i]],
+                "Actor balance invariant violated"
+            );
+        }
     }
 
     /// @dev Contract balance should equal sum of all delegated amounts
-    function invariantContractBalanceMatchesDelegations() public view {
+    function invariant_ContractBalanceMatchesTrackedDelegations() public view {
         uint256 contractBalance = token.balanceOf(address(stakeTable));
         uint256 totalTracked = _getTotalTrackedFunds();
         assertEq(
@@ -171,5 +139,10 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
             totalTracked,
             "Contract balance should equal active delegations + pending undelegations"
         );
+    }
+
+    /// @dev Total supply must remain constant
+    function invariant_TotalSupply() public view {
+        assertEq(_getTotalSupply(), INITIAL_BALANCE * 4, "Total supply invariant violated");
     }
 }
