@@ -40,18 +40,13 @@ contract StakeTableV2PropTestBase {
 
     address public constant ACTOR1 = address(0x1000);
     address public constant ACTOR2 = address(0x2000);
-    // address public constant ACTOR3 = address(0x3000);
-    // address public constant ACTOR4 = address(0x4000);
+    address[2] public actors = [ACTOR1, ACTOR2];
 
     uint256 public constant INITIAL_BALANCE = 1000000000e18;
     uint256 public immutable INITIAL_TOTAL_SUPPLY;
     uint256 public constant EXIT_ESCROW_PERIOD = 7 days;
 
     mapping(address account => uint256 balance) public initialBalances;
-
-    // All actors can be both validators and delegators
-    // address[4] public actors = [ACTOR1, ACTOR2, ACTOR3, ACTOR4];
-    address[2] public actors = [ACTOR1, ACTOR2];
 
     address internal validator;
     address internal actor;
