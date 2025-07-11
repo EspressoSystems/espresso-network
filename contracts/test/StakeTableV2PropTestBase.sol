@@ -15,6 +15,7 @@ interface IVM {
     function prank(address) external;
     function startPrank(address) external;
     function stopPrank() external;
+    function warp(uint256) external;
 }
 
 contract MockERC20 is ERC20 {
@@ -39,16 +40,18 @@ contract StakeTableV2PropTestBase {
 
     address public constant ACTOR1 = address(0x1000);
     address public constant ACTOR2 = address(0x2000);
-    address public constant ACTOR3 = address(0x3000);
-    address public constant ACTOR4 = address(0x4000);
+    // address public constant ACTOR3 = address(0x3000);
+    // address public constant ACTOR4 = address(0x4000);
 
     uint256 public constant INITIAL_BALANCE = 1000000000e18;
+    uint256 public immutable INITIAL_TOTAL_BALANCE;
     uint256 public constant EXIT_ESCROW_PERIOD = 7 days;
 
     mapping(address account => uint256 balance) public initialBalances;
 
     // All actors can be both validators and delegators
-    address[4] public actors = [ACTOR1, ACTOR2, ACTOR3, ACTOR4];
+    // address[4] public actors = [ACTOR1, ACTOR2, ACTOR3, ACTOR4];
+    address[2] public actors = [ACTOR1, ACTOR2];
 
     address internal validator;
     address internal actor;
@@ -63,6 +66,12 @@ contract StakeTableV2PropTestBase {
         ivm.startPrank(actor);
         _;
         ivm.stopPrank();
+    }
+
+    constructor() {
+        _deployStakeTable();
+        _mintAndApprove();
+        INITIAL_TOTAL_BALANCE = token.totalSupply();
     }
 
     function _deployStakeTable() internal {
@@ -110,7 +119,7 @@ contract StakeTableV2PropTestBase {
         }
     }
 
-    function _genDummyValidatorKeys(address validator)
+    function _genDummyValidatorKeys(address _validator)
         internal
         pure
         returns (
@@ -121,23 +130,23 @@ contract StakeTableV2PropTestBase {
         )
     {
         blsVK = BN254.G2Point({
-            x0: BN254.BaseField.wrap(uint256(keccak256(abi.encode(validator, "x0")))),
-            x1: BN254.BaseField.wrap(uint256(keccak256(abi.encode(validator, "x1")))),
-            y0: BN254.BaseField.wrap(uint256(keccak256(abi.encode(validator, "y0")))),
-            y1: BN254.BaseField.wrap(uint256(keccak256(abi.encode(validator, "y1"))))
+            x0: BN254.BaseField.wrap(uint256(keccak256(abi.encode(_validator, "x0")))),
+            x1: BN254.BaseField.wrap(uint256(keccak256(abi.encode(_validator, "x1")))),
+            y0: BN254.BaseField.wrap(uint256(keccak256(abi.encode(_validator, "y0")))),
+            y1: BN254.BaseField.wrap(uint256(keccak256(abi.encode(_validator, "y1"))))
         });
 
         schnorrVK = EdOnBN254.EdOnBN254Point({
-            x: uint256(keccak256(abi.encode(validator, "schnorr_x"))),
-            y: uint256(keccak256(abi.encode(validator, "schnorr_y")))
+            x: uint256(keccak256(abi.encode(_validator, "schnorr_x"))),
+            y: uint256(keccak256(abi.encode(_validator, "schnorr_y")))
         });
 
         blsSig = BN254.G1Point({
-            x: BN254.BaseField.wrap(uint256(keccak256(abi.encode(validator, "sig_x")))),
-            y: BN254.BaseField.wrap(uint256(keccak256(abi.encode(validator, "sig_y"))))
+            x: BN254.BaseField.wrap(uint256(keccak256(abi.encode(_validator, "sig_x")))),
+            y: BN254.BaseField.wrap(uint256(keccak256(abi.encode(_validator, "sig_y"))))
         });
 
-        schnorrSig = abi.encode(keccak256(abi.encode(validator, "schnorr_sig")));
+        schnorrSig = abi.encode(keccak256(abi.encode(_validator, "schnorr_sig")));
     }
 
     function totalOwnedAmount(address account) public view returns (uint256) {
@@ -176,11 +185,6 @@ contract StakeTableV2PropTestBase {
 
     // Test functions that can be shared between echidna and invariant tests
     function registerValidator(uint256 validatorIndex) public useActor(validatorIndex) {
-        (, StakeTable.ValidatorStatus status) = stakeTable.validators(actor);
-        if (status != StakeTable.ValidatorStatus.Unknown) {
-            return;
-        }
-
         (
             BN254.G2Point memory blsVK,
             EdOnBN254.EdOnBN254Point memory schnorrVK,
@@ -210,10 +214,7 @@ contract StakeTableV2PropTestBase {
         useValidator(validatorIndex)
     {
         uint256 balance = token.balanceOf(actor);
-        if (balance == 0) return;
-
         amount = amount % (balance + 1);
-        if (amount == 0) return;
 
         stakeTable.delegate(validator, amount);
     }
@@ -233,12 +234,13 @@ contract StakeTableV2PropTestBase {
         useValidator(validatorIndex)
     {
         uint256 delegatedAmount = stakeTable.delegations(validator, actor);
-        if (delegatedAmount == 0) return;
-
         amount = amount % (delegatedAmount + 1);
-        if (amount == 0) return;
-
         stakeTable.undelegate(validator, amount);
+    }
+
+    function advanceTime(uint256 secs) public {
+        secs = secs % (2 * EXIT_ESCROW_PERIOD);
+        ivm.warp(secs);
     }
 
     function claimWithdrawal(uint256 actorIndex, uint256 validatorIndex)
