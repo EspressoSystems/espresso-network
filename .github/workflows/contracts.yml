@@ -9,7 +9,6 @@ on:
       # YYYYMMDD
       - "20[0-9][0-9][0-1][0-9][0-3][0-9]*"
   pull_request:
-    branches:
   workflow_dispatch:
 
 concurrency:
@@ -86,3 +85,37 @@ jobs:
       - name: Print light contract gas benchmark
         run: |
           nix develop --accept-flake-config -c forge test --mt testCorrectUpdateBench
+
+  echidna-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: taiki-e/install-action@just
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Enable Cachix
+        uses: cachix/cachix-action@v16
+        # If PR is from a non-collaborator (e. g. dependabot) the secrets are missing and the login to cachix fails.
+        continue-on-error: true
+        with:
+          name: espresso-systems-private
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+          extraPullNames: nix-community
+          skipPush: ${{ github.actor == 'dependabot[bot]' }}
+
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Check toolchain versions
+        run: nix develop .#echidna --accept-flake-config -c ./scripts/show-toolchain-versions
+
+      - name: Run Echidna
+        run: |
+          set -euo pipefail
+          echo "## Echidna results" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          just contracts-test-echidna --format text 2>&1 | tee -a $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
