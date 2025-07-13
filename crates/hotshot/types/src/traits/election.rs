@@ -156,7 +156,6 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// Gets the DRB result for the given epoch
     fn get_epoch_drb(
         _membership: Arc<RwLock<Self>>,
-        _block_height: u64,
         _epoch: TYPES::Epoch,
     ) -> impl std::future::Future<Output = anyhow::Result<DrbResult>> + Send {
         async move { anyhow::bail!("Not implemented") }

@@ -345,6 +345,12 @@ pub mod election {
         /// DRB result
         drb: [u8; 32],
     }
+
+    impl<Entry> RandomizedCommittee<Entry> {
+        pub fn drb_result(&self) -> [u8; 32] {
+            self.drb
+        }
+    }
 }
 
 #[cfg(test)]

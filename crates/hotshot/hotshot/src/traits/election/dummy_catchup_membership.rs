@@ -250,7 +250,6 @@ where
 
     async fn get_epoch_drb(
         _membership: Arc<RwLock<Self>>,
-        _block_height: u64,
         _epoch: TYPES::Epoch,
     ) -> anyhow::Result<DrbResult> {
         tokio::time::sleep(Duration::from_millis(10)).await;

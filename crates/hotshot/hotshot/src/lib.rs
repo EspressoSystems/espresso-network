@@ -17,11 +17,11 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     simple_certificate::LightClientStateUpdateCertificate,
-    traits::{ storage::Storage,
+    traits::{
         block_contents::BlockHeader, election::Membership, network::BroadcastDelay,
-        node_implementation::Versions, signature_key::StateSignatureKey,
+        node_implementation::Versions, signature_key::StateSignatureKey, storage::Storage,
     },
-    utils::{epoch_from_block_number, transition_block_for_epoch},
+    utils::epoch_from_block_number,
 };
 use rand::Rng;
 use vbs::version::StaticVersionType;
@@ -370,18 +370,19 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
 
         let consensus = Arc::new(RwLock::new(consensus));
 
-            if let Some(epoch) = epoch {
-                if let Ok(drb_result) = storage.load_drb_result(epoch + 1).await
-                {
-                    tracing::error!("Writing DRB result for epoch {}", epoch + 1);
-                    consensus
-                        .write()
-                        .await
-                        .drb_results
-                        .results
-                        .insert(epoch + 1, drb_result);
-                }
+        tracing::error!("LOADING EPOCH");
+        if let Some(epoch) = epoch {
+            tracing::error!("LOADING DRB RESULT");
+            if let Ok(drb_result) = storage.load_drb_result(epoch + 1).await {
+                tracing::error!("Writing DRB result for epoch {}", epoch + 1);
+                consensus
+                    .write()
+                    .await
+                    .drb_results
+                    .results
+                    .insert(epoch + 1, drb_result);
             }
+        }
 
         // This makes it so we won't block on broadcasting if there is not a receiver
         // Our own copy of the receiver is inactive so it doesn't count.
@@ -1243,6 +1244,11 @@ async fn load_start_epoch_info<TYPES: NodeType>(
     epoch_height: u64,
     epoch_start_block: u64,
 ) {
+    tracing::error!("HERE");
+    tracing::error!("HERE");
+    tracing::error!("HERE");
+    tracing::error!("HERE");
+    tracing::error!("{:?}", start_epoch_info);
     let first_epoch_number =
         TYPES::Epoch::new(epoch_from_block_number(epoch_start_block, epoch_height));
 

@@ -39,6 +39,7 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeType},
         signature_key::StakeTableEntryType,
     },
+    utils::transition_block_for_epoch,
     PeerConfig,
 };
 use humantime::format_duration;
@@ -572,6 +573,7 @@ pub struct EpochCommittees {
     /// Randomized committees, filled when we receive the DrbResult
     randomized_committees: BTreeMap<Epoch, RandomizedCommittee<StakeTableEntry<PubKey>>>,
     first_epoch: Option<Epoch>,
+    epoch_height: u64,
     block_reward: RewardAmount,
     fetcher: Arc<Fetcher>,
 }
@@ -1473,6 +1475,7 @@ impl EpochCommittees {
         da_members: Vec<PeerConfig<SeqTypes>>,
         block_reward: RewardAmount,
         fetcher: Fetcher,
+        epoch_height: u64,
     ) -> Self {
         // For each member, get the stake table entry
         let stake_table: Vec<_> = committee_members
@@ -1541,6 +1544,7 @@ impl EpochCommittees {
             first_epoch: None,
             block_reward,
             fetcher: Arc::new(fetcher),
+            epoch_height,
         }
     }
 
@@ -1900,13 +1904,34 @@ impl Membership<SeqTypes> for EpochCommittees {
 
     async fn get_epoch_drb(
         membership: Arc<RwLock<Self>>,
-        block_height: u64,
         epoch: Epoch,
     ) -> anyhow::Result<DrbResult> {
         let membership_reader = membership.read().await;
         let peers = membership_reader.fetcher.peers.clone();
+
+        // Try to retrieve the DRB result from an existing committee
+        if let Some(randomized_committee) = membership_reader.randomized_committees.get(&epoch) {
+            return Ok(randomized_committee.drb_result());
+        }
+
+        // Otherwise, we try to fetch the epoch root leaf
+        let previous_epoch = match epoch.checked_sub(1) {
+            Some(epoch) => epoch,
+            None => {
+                return membership_reader
+                    .randomized_committees
+                    .get(&epoch)
+                    .map(|committee| committee.drb_result())
+                    .context(format!("Missing randomized committee for epoch {}", epoch))
+            },
+        };
+
         let stake_table = membership_reader.stake_table(Some(epoch)).clone();
         let success_threshold = membership_reader.success_threshold(Some(epoch));
+
+        let block_height =
+            transition_block_for_epoch(previous_epoch, membership_reader.epoch_height);
+
         drop(membership_reader);
 
         tracing::debug!(

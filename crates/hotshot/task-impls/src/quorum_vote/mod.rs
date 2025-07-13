@@ -132,7 +132,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
 {
     fn print_vote_events(&self, res: &[Arc<HotShotEvent<TYPES>>]) {
         let events: Vec<_> = res.iter().map(Arc::as_ref).collect();
-        tracing::warn!("Failed to vote, events: {:#?}", events);
+        tracing::warn!("Failed to vote, events: {:?}", events);
     }
 
     async fn handle_vote_deps(&self, res: &[Arc<HotShotEvent<TYPES>>]) -> Result<()> {
