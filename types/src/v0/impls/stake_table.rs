@@ -1081,7 +1081,8 @@ impl Fetcher {
     /// contract address. We use the stake table contract initialization block as a safe upper bound when scanning
     ///  backwards for the token contract initialization event
     pub async fn fetch_block_reward(&self) -> Result<RewardAmount, FetchRewardError> {
-        let initial_supply = match self.initial_supply.read().await.clone() {
+        let initial_supply_read = { self.initial_supply.read().await.clone() };
+        let initial_supply = match initial_supply_read {
             Some(supply) => supply,
             None => self.fetch_initial_supply().await?,
         };

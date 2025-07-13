@@ -579,7 +579,10 @@ impl Header {
                 reward_merkle_tree_root: state.reward_merkle_tree.commitment(),
                 fee_info: fee_info[0],
                 builder_signature: builder_signature.first().copied(),
-                rewards_distributed: rewards_distributed.unwrap().total_distributed().into(),
+                rewards_distributed: rewards_distributed
+                    .map(|r| r.total_distributed())
+                    .unwrap_or_default()
+                    .into(),
             }),
             // This case should never occur
             // but if it does, we must panic
