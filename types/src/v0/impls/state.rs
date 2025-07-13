@@ -5,12 +5,11 @@ use anyhow::{bail, Context};
 use committable::{Commitment, Committable};
 use hotshot_query_service::merklized_state::MerklizedState;
 use hotshot_types::{
-    data::{BlockError, EpochNumber, ViewNumber},
+    data::{BlockError, ViewNumber},
     traits::{
         block_contents::BlockHeader, node_implementation::ConsensusTime,
         signature_key::BuilderSignatureKey, states::StateDelta, ValidatedState as HotShotState,
     },
-    utils::epoch_from_block_number,
 };
 use itertools::Itertools;
 use jf_merkle_tree::{
@@ -28,7 +27,6 @@ use vbs::version::{StaticVersionType, Version};
 use super::{
     fee_info::FeeError,
     instance_state::NodeState,
-    reward::{find_validator_info, first_two_epochs},
     v0_1::{
         IterableFeeInfo, RewardAccount, RewardAmount, RewardMerkleCommitment, RewardMerkleTree,
         REWARD_MERKLE_TREE_HEIGHT,
@@ -37,7 +35,7 @@ use super::{
 };
 use crate::{
     traits::StateCatchup,
-    v0::impls::reward::RewardDistributor,
+    v0::impls::distribute_block_reward,
     v0_3::{ChainConfig, ResolvableChainConfig},
     BlockMerkleTree, Delta, FeeAccount, FeeAmount, FeeInfo, FeeMerkleTree, Header, Leaf2,
     NsTableValidationError, PayloadByteLen, SeqTypes, UpgradeType, BLOCK_MERKLE_TREE_HEIGHT,
@@ -859,25 +857,20 @@ impl ValidatedState {
             chain_config.fee_recipient,
         )?;
 
-        if version >= EpochVersion::version()
-            && !first_two_epochs(parent_leaf.height() + 1, instance).await?
-        {
-            let validator =
-                find_validator_info(instance, &mut validated_state, parent_leaf, view_number)
-                    .await?;
-
-            let epoch_height = instance.epoch_height.context("epoch height not found")?;
-            let epoch = epoch_from_block_number(parent_leaf.height() + 1, epoch_height);
-
-            let block_reward = instance
-                .block_reward(Some(EpochNumber::new(epoch)))
-                .await
-                .context("block reward is None")?;
-            let reward_distributor = RewardDistributor::new(validator, block_reward);
-            // apply rewards
-            reward_distributor
-                .distribute(&mut validated_state, &mut delta)
-                .context("failed to distribute rewards")?;
+        if version >= EpochVersion::version() {
+            let reward_distributor = distribute_block_reward(
+                instance,
+                &mut validated_state,
+                parent_leaf,
+                view_number,
+                version,
+            )
+            .await?;
+            if let Some(reward_distributor) = reward_distributor {
+                reward_distributor
+                    .update_rewards_delta(&mut delta)
+                    .context("failed to update rewards delta")?;
+            }
         }
 
         Ok((validated_state, delta))

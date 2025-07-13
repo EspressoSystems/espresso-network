@@ -24,6 +24,7 @@ use num_traits::CheckedSub;
 use sequencer_utils::{
     impl_serde_from_string_or_integer, impl_to_fixed_bytes, ser::FromStringOrInteger,
 };
+use vbs::version::StaticVersionType;
 
 use super::{
     v0_1::{
@@ -33,7 +34,9 @@ use super::{
     v0_3::Validator,
     Leaf2, NodeState, ValidatedState,
 };
-use crate::{eth_signature_key::EthKeyPair, Delta, FeeAccount};
+use crate::{
+    eth_signature_key::EthKeyPair, Delta, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount,
+};
 
 impl Committable for RewardInfo {
     fn commit(&self) -> Commitment<Self> {
@@ -355,13 +358,19 @@ impl ComputedRewards {
 pub struct RewardDistributor {
     validator: Validator<BLSPubKey>,
     block_reward: RewardAmount,
+    total_distributed: RewardAmount,
 }
 
 impl RewardDistributor {
-    pub fn new(validator: Validator<BLSPubKey>, block_reward: RewardAmount) -> Self {
+    pub fn new(
+        validator: Validator<BLSPubKey>,
+        block_reward: RewardAmount,
+        total_distributed: RewardAmount,
+    ) -> Self {
         Self {
             validator,
             block_reward,
+            total_distributed,
         }
     }
 
@@ -373,10 +382,11 @@ impl RewardDistributor {
         self.block_reward
     }
 
-    pub fn distribute(&self, state: &mut ValidatedState, delta: &mut Delta) -> anyhow::Result<()> {
-        let reward_state = self.apply_rewards(state.reward_merkle_tree.clone())?;
-        state.reward_merkle_tree = reward_state;
+    pub fn total_distributed(&self) -> RewardAmount {
+        self.total_distributed
+    }
 
+    pub fn update_rewards_delta(&self, delta: &mut Delta) -> anyhow::Result<()> {
         // Update delta rewards
         delta
             .rewards_delta
@@ -478,29 +488,97 @@ impl RewardDistributor {
         ))
     }
 }
-/// Checks whether the given height belongs to the first or second epoch. or
-/// the Genesis epoch (EpochNumber::new(0))
+
+/// Distributes the block reward for a given block height
 ///
-/// Rewards are not distributed for these epochs because the stake table
-/// is built from the contract only when `add_epoch_root()` is called
-/// by HotShot, which happens starting from the third epoch.
-pub async fn first_two_epochs(height: u64, instance_state: &NodeState) -> anyhow::Result<bool> {
+/// Rewards are only distributed if the block belongs to an epoch beyond the second epoch.
+/// The function also calculates the appropriate reward (fixed or dynamic) based on the protocol version.
+pub async fn distribute_block_reward(
+    instance_state: &NodeState,
+    validated_state: &mut ValidatedState,
+    parent_leaf: &Leaf2,
+    view_number: ViewNumber,
+    version: vbs::version::Version,
+) -> anyhow::Result<Option<RewardDistributor>> {
+    let height = parent_leaf.height() + 1;
+
     let epoch_height = instance_state
         .epoch_height
         .context("epoch height not found")?;
     let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
     let coordinator = instance_state.coordinator.clone();
-    let first_epoch = coordinator
-        .membership()
-        .read()
-        .await
-        .first_epoch()
-        .context("The first epoch was not set.")?;
+    let first_epoch = {
+        coordinator
+            .membership()
+            .read()
+            .await
+            .first_epoch()
+            .context("The first epoch was not set.")?
+    };
 
-    Ok(epoch <= first_epoch + 1)
+    // Rewards are distributed only if the current epoch is not the first or second epoch
+    // this is because we don't have stake table from the contract for the first two epochs
+    if epoch <= first_epoch + 1 {
+        return Ok(None);
+    }
+
+    let leader = get_leader_and_fetch_missing_rewards(
+        instance_state,
+        validated_state,
+        parent_leaf,
+        view_number,
+    )
+    .await?;
+
+    let parent_header = parent_leaf.block_header();
+    let mut total_distributed = parent_header.rewards_distributed().unwrap_or_default();
+
+    let block_reward = if version >= DrbAndHeaderUpgradeVersion::version() {
+        let dyanmic_block_reward = instance_state
+            .dynamic_block_reward(EpochNumber::new(*epoch))
+            .await
+            .context("dynamic block reward is None")?;
+
+        if parent_header.version() == EpochVersion::version() {
+            ensure!(
+                instance_state.epoch_start_block != 0,
+                "epoch_start_block is zero"
+            );
+
+            let fixed_block_reward = instance_state
+                .fixed_block_reward()
+                .await
+                .context("fixed block reward is None")?;
+
+            let blocks = height
+                .checked_sub(instance_state.epoch_start_block)
+                .context("height - epoch_start_block underflowed")?;
+
+            total_distributed = U256::from(blocks)
+                .checked_mul(fixed_block_reward.0)
+                .context("overflow during total_distributed calculation")?;
+        }
+
+        dyanmic_block_reward
+    } else {
+        instance_state
+            .fixed_block_reward()
+            .await
+            .context("fixed block reward is None")?
+    };
+
+    total_distributed += block_reward.0;
+
+    let reward_distributor = RewardDistributor::new(leader, block_reward, total_distributed.into());
+
+    let reward_state =
+        reward_distributor.apply_rewards(validated_state.reward_merkle_tree.clone())?;
+    validated_state.reward_merkle_tree = reward_state;
+
+    Ok(Some(reward_distributor))
 }
 
-pub async fn find_validator_info(
+pub async fn get_leader_and_fetch_missing_rewards(
     instance_state: &NodeState,
     validated_state: &mut ValidatedState,
     parent_leaf: &Leaf2,
@@ -589,6 +667,7 @@ pub mod tests {
         let mut distributor = RewardDistributor::new(
             validator,
             RewardAmount(U256::from(1902000000000000000_u128)),
+            U256::ZERO.into(),
         );
         let rewards = distributor.compute_rewards().unwrap();
         let total = |rewards: ComputedRewards| {
@@ -624,6 +703,7 @@ pub mod tests {
         let mut distributor = RewardDistributor::new(
             validator.clone(),
             RewardAmount(U256::from(1902000000000000000_u128)),
+            U256::ZERO.into(),
         );
         distributor.validator.commission = 0;
 

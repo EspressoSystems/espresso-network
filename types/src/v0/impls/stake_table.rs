@@ -46,7 +46,7 @@ use hotshot_types::{
 };
 use humantime::format_duration;
 use indexmap::IndexMap;
-use num_traits::{FromPrimitive, ToPrimitive};
+use num_traits::{FromPrimitive, ToPrimitive, Zero};
 use thiserror::Error;
 use tokio::{spawn, time::sleep};
 use tracing::Instrument;
@@ -1471,25 +1471,7 @@ impl EpochCommittees {
         let initial_supply_bd = BigDecimal::from_str(&initial_supply.to_string())?;
         let total_supply_bd = &initial_supply_bd + &rewards_bd;
 
-        // calculate p
-        let p = &total_stake / &total_supply_bd;
-
-        // Sanity check: p must be in the range [0, 1]
-        if p < BigDecimal::from(0) || p > BigDecimal::from(1) {
-            return Err(anyhow::anyhow!("Stake ratio p must be in the range [0, 1]"));
-        }
-
-        let threshold = BigDecimal::from_str("0.01")?;
-        let const_03 = BigDecimal::from_str("0.03")?;
-        let two = BigDecimal::from_u32(2).unwrap();
-
-        // Compute R(p)
-        let rp = {
-            let inner = &two * if &p <= &threshold { &threshold } else { &p };
-            let sqrt_inner = inner.sqrt().context("Failed to compute sqrt")?;
-            &const_03 / sqrt_inner
-        };
-
+        let (p, rp) = calculate_p_and_rp(&total_stake, &total_supply_bd)?;
         let inflation_rate = &p * &rp;
         // Convert inflation rate to basis points
         let inflation_rate_bp = (inflation_rate * COMMISSION_BASIS_POINTS)
@@ -1762,6 +1744,33 @@ impl EpochCommittees {
     }
 }
 
+fn calculate_p_and_rp(
+    total_stake: &BigDecimal,
+    total_supply: &BigDecimal,
+) -> anyhow::Result<(BigDecimal, BigDecimal)> {
+    if total_supply.is_zero() {
+        return Err(anyhow::anyhow!("Total supply cannot be zero"));
+    }
+
+    let p = total_stake / total_supply;
+
+    if p < BigDecimal::from(0) || p > BigDecimal::from(1) {
+        return Err(anyhow::anyhow!("Stake ratio p must be in the range [0, 1]"));
+    }
+
+    let threshold = BigDecimal::from_str("0.01")?;
+    let const_03 = BigDecimal::from_str("0.03")?;
+    let two = BigDecimal::from_u32(2).unwrap();
+
+    let effective_p = if &p <= &threshold { &threshold } else { &p };
+    let inner = &two * effective_p;
+
+    let sqrt_inner = inner.sqrt().context("Failed to compute sqrt in R(p)")?;
+    let rp = &const_03 / sqrt_inner;
+
+    Ok((p, rp))
+}
+
 #[derive(Error, Debug)]
 /// Error representing fail cases for retrieving the stake table.
 enum GetStakeTablesError {
@@ -2013,7 +2022,6 @@ impl Membership<SeqTypes> for EpochCommittees {
                 return Ok(());
             }
         }
-         
 
         let validators = match epoch_committee {
             Some(v) => v.validators.clone(),
@@ -2919,56 +2927,71 @@ mod tests {
             .unwrap();
 
         println!("Calculated reward: {}", reward);
+        assert!(reward > U256::ZERO);
     }
 
     #[test]
-    fn sanity_check_block_reward_v4() {
-        // Example values
-        let initial_supply = U256::from_str("10000000000000000000000000000").unwrap(); // 10B * 1e18
-        let rewards_distributed = U256::from_str("100000000000000000000000000").unwrap(); // 100M * 1e18
-        let total_stake = U256::from_str("2000000000000000000000000000").unwrap(); // 2B * 1e18
+    fn sanity_check_p_and_rp() {
+        let total_stake = BigDecimal::from_str("1000").unwrap();
+        let total_supply = BigDecimal::from_str("10000").unwrap(); // p = 0.1
 
-        let total_supply = initial_supply + rewards_distributed;
+        let (p, rp) = calculate_p_and_rp(&total_stake, &total_supply).unwrap();
 
-        let total_stake_bd = BigDecimal::from_str(&total_stake.to_string()).unwrap();
-        let rewards_bd = BigDecimal::from_str(&rewards_distributed.to_string()).unwrap();
-        let supply_bd = BigDecimal::from_str(&initial_supply.to_string()).unwrap();
+        assert!(p > BigDecimal::from(0));
+        assert!(p < BigDecimal::from(1));
+        assert!(rp > BigDecimal::from(0));
+    }
 
-        let total_supply_bd = &supply_bd + &rewards_bd;
-        let p = &total_stake_bd / &total_supply_bd;
+    #[test]
+    fn test_p_out_of_range() {
+        let total_stake = BigDecimal::from_str("1000").unwrap();
+        let total_supply = BigDecimal::from_str("500").unwrap(); // p = 2.0
 
-        println!("p: {}", p);
-        let threshold = BigDecimal::from_str("0.01").unwrap();
-        let const_03 = BigDecimal::from_str("0.03").unwrap();
-        let const_2 = BigDecimal::from_u32(2).unwrap();
+        let result = calculate_p_and_rp(&total_stake, &total_supply);
+        assert!(result.is_err());
+    }
 
-        let rp = if &p <= &threshold {
-            let inner = &const_2 * &threshold;
-            let sqrt_inner = inner.sqrt().unwrap();
-            &const_03 / sqrt_inner
-        } else {
-            let inner = &const_2 * &p;
-            let sqrt_inner = inner.sqrt().unwrap();
-            &const_03 / sqrt_inner
-        };
+    #[test]
+    fn test_zero_total_supply() {
+        let total_stake = BigDecimal::from_str("1000").unwrap();
+        let total_supply = BigDecimal::from(0);
 
-        let inflation_rate = &p * &rp;
-        let inflation_rate_bp = (inflation_rate
-            * BigDecimal::from_u16(COMMISSION_BASIS_POINTS).unwrap())
-        .to_u64()
-        .unwrap();
+        let result = calculate_p_and_rp(&total_stake, &total_supply);
+        assert!(result.is_err());
+    }
 
-        let block_reward = ((total_supply * U256::from(inflation_rate_bp))
-            / U256::from(BLOCKS_PER_YEAR))
-        .checked_div(U256::from(COMMISSION_BASIS_POINTS))
-        .ok_or(FetchRewardError::DivisionByZero)
-        .unwrap();
+    #[test]
+    fn test_valid_p_and_rp() {
+        let total_stake = BigDecimal::from_str("5000").unwrap();
+        let total_supply = BigDecimal::from_str("10000").unwrap();
 
-        println!("Inflation rate (bp): {}", inflation_rate_bp);
-        println!("Block reward: {}", block_reward);
+        let (p, rp) = calculate_p_and_rp(&total_stake, &total_supply).unwrap();
 
-        // Sanity checks
-        assert!(inflation_rate_bp > 0);
-        assert!(block_reward > U256::ZERO);
+        assert_eq!(p, BigDecimal::from_str("0.5").unwrap());
+        assert!(rp > BigDecimal::from_str("0.0").unwrap());
+    }
+
+    #[test]
+    fn test_very_small_p() {
+        let total_stake = BigDecimal::from_str("1").unwrap(); // 1 wei
+        let total_supply = BigDecimal::from_str("10000000000000000000000000000").unwrap(); // 10B * 1e18
+
+        let (p, rp) = calculate_p_and_rp(&total_stake, &total_supply).unwrap();
+
+        assert!(p > BigDecimal::from_str("0").unwrap());
+        assert!(p < BigDecimal::from_str("1e-18").unwrap()); // p should be extremely small
+        assert!(rp > BigDecimal::from(0));
+    }
+
+    #[test]
+    fn test_p_very_close_to_one() {
+        let total_stake = BigDecimal::from_str("9999999999999999999999999999").unwrap();
+        let total_supply = BigDecimal::from_str("10000000000000000000000000000").unwrap();
+
+        let (p, rp) = calculate_p_and_rp(&total_stake, &total_supply).unwrap();
+
+        assert!(p < BigDecimal::from(1));
+        assert!(p > BigDecimal::from_str("0.999999999999999999999999999").unwrap());
+        assert!(rp > BigDecimal::from(0));
     }
 }

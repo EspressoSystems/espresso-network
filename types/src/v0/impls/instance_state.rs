@@ -47,6 +47,7 @@ pub struct NodeState {
     pub coordinator: EpochMembershipCoordinator<SeqTypes>,
     pub epoch_height: Option<u64>,
     pub genesis_version: Version,
+    pub epoch_start_block: u64,
 
     /// Map containing all planned and executed upgrades.
     ///
@@ -71,6 +72,18 @@ impl NodeState {
         let coordinator = self.coordinator.clone();
         let membership = coordinator.membership().read().await;
         membership.block_reward(epoch)
+    }
+
+    pub async fn fixed_block_reward(&self) -> Option<RewardAmount> {
+        let coordinator = self.coordinator.clone();
+        let membership = coordinator.membership().read().await;
+        membership.block_reward(None)
+    }
+
+    pub async fn dynamic_block_reward(&self, epoch: EpochNumber) -> Option<RewardAmount> {
+        let coordinator = self.coordinator.clone();
+        let membership = coordinator.membership().read().await;
+        membership.block_reward(Some(epoch))
     }
 }
 
@@ -141,6 +154,7 @@ impl NodeState {
             epoch_height: None,
             coordinator,
             genesis_version,
+            epoch_start_block: 0,
         }
     }
 
@@ -265,6 +279,11 @@ impl NodeState {
 
     pub fn with_epoch_height(mut self, epoch_height: u64) -> Self {
         self.epoch_height = Some(epoch_height);
+        self
+    }
+
+    pub fn with_epoch_start_block(mut self, epoch_start_block: u64) -> Self {
+        self.epoch_start_block = epoch_start_block;
         self
     }
 }

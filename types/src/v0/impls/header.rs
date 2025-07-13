@@ -6,7 +6,7 @@ use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
 use hotshot_types::{
-    data::{vid_commitment, EpochNumber, VidCommitment, ViewNumber},
+    data::{vid_commitment, VidCommitment, ViewNumber},
     light_client::LightClientState,
     traits::{
         block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
@@ -14,7 +14,7 @@ use hotshot_types::{
         signature_key::BuilderSignatureKey,
         BlockPayload, EncodeBytes, ValidatedState as _,
     },
-    utils::{epoch_from_block_number, BuilderCommitment},
+    utils::BuilderCommitment,
 };
 use jf_merkle_tree::{AppendableMerkleTreeScheme, MerkleTreeScheme};
 use serde::{
@@ -36,7 +36,7 @@ use crate::{
     eth_signature_key::BuilderSignature,
     v0::{
         header::{EitherOrVersion, VersionedHeader},
-        impls::reward::{find_validator_info, first_two_epochs, RewardDistributor},
+        impls::{distribute_block_reward, reward::RewardDistributor},
     },
     v0_1, v0_2, v0_3, v0_4, BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
     FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable,
@@ -399,7 +399,7 @@ impl Header {
         mut state: ValidatedState,
         chain_config: ChainConfig,
         version: Version,
-        reward_distributor: Option<RewardDistributor>,
+        rewards_distributed: Option<RewardDistributor>,
     ) -> anyhow::Result<Self> {
         ensure!(
             version.major == 0,
@@ -516,12 +516,6 @@ impl Header {
 
         let fee_merkle_tree_root = state.fee_merkle_tree.commitment();
 
-        if let Some(reward_distributor) = reward_distributor {
-            let reward_state =
-                reward_distributor.apply_rewards(state.reward_merkle_tree.clone())?;
-            state.reward_merkle_tree = reward_state;
-        }
-
         let header = match (version.major, version.minor) {
             (0, 1) => Self::V1(v0_1::Header {
                 chain_config: v0_1::ResolvableChainConfig::from(v0_1::ChainConfig::from(
@@ -585,7 +579,7 @@ impl Header {
                 reward_merkle_tree_root: state.reward_merkle_tree.commitment(),
                 fee_info: fee_info[0],
                 builder_signature: builder_signature.first().copied(),
-                rewards_distributed: Default::default(),
+                rewards_distributed: rewards_distributed.unwrap().total_distributed().into(),
             }),
             // This case should never occur
             // but if it does, we must panic
@@ -961,30 +955,16 @@ impl BlockHeader<SeqTypes> for Header {
                 .context("remembering block proof")?;
         }
 
-        let mut reward_distributor = None;
-        // Rewards are distributed only if the current epoch is not the first or second epoch
-        // this is because we don't have stake table from the contract for the first two epochs
-        let proposed_header_height = parent_leaf.height() + 1;
-        if version >= EpochVersion::version()
-            && !first_two_epochs(proposed_header_height, instance_state).await?
-        {
-            let leader = find_validator_info(
+        let mut rewards = None;
+        if version >= EpochVersion::version() {
+            rewards = distribute_block_reward(
                 instance_state,
                 &mut validated_state,
                 parent_leaf,
                 ViewNumber::new(view_number),
+                version,
             )
             .await?;
-
-            let epoch_height = instance_state
-                .epoch_height
-                .context("epoch height not found")?;
-            let epoch = epoch_from_block_number(proposed_header_height, epoch_height);
-            let block_reward = instance_state
-                .block_reward(Some(EpochNumber::new(epoch)))
-                .await
-                .context("block reward is None")?;
-            reward_distributor = Some(RewardDistributor::new(leader, block_reward));
         };
 
         let now = OffsetDateTime::now_utc();
@@ -1005,7 +985,7 @@ impl BlockHeader<SeqTypes> for Header {
             validated_state,
             chain_config,
             version,
-            reward_distributor,
+            rewards,
         )?)
     }
 
