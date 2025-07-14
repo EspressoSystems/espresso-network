@@ -9,6 +9,9 @@ use std::{
     collections::{BTreeMap, BTreeSet},
 };
 
+use crate::{Arc, RwLock};
+use anyhow::Context;
+
 use alloy::primitives::U256;
 use hotshot_types::{
     drb::DrbResult,
@@ -53,6 +56,9 @@ pub struct TwoStaticCommittees<T: NodeType> {
 
     /// The nodes on the committee and their stake, indexed by public key
     indexed_da_stake_table: IndexedStakeTables<T>,
+
+    /// `DrbResult`s indexed by epoch
+    drb_results: BTreeMap<T::Epoch, DrbResult>,
 
     /// The first epoch which will be encountered. For testing, will panic if an epoch-carrying function is called
     /// when first_epoch is None or is Some greater than that epoch.
@@ -172,6 +178,7 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
             indexed_stake_table: (indexed_stake_table1, indexed_stake_table2),
             indexed_da_stake_table: (indexed_da_stake_table1, indexed_da_stake_table2),
             first_epoch: None,
+            drb_results: BTreeMap::new(),
         }
     }
 
@@ -215,6 +222,15 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
                 .map(|sc| TYPES::SignatureKey::public_key(&sc.stake_table_entry))
                 .collect()
         }
+    }
+
+    async fn get_epoch_drb(
+        membership: Arc<RwLock<Self>>,
+        epoch: TYPES::Epoch,
+    ) -> anyhow::Result<DrbResult> {
+      let membership_reader = membership.read().await;
+
+      membership_reader.drb_results.get(&epoch).context("DRB result missing").copied()
     }
 
     /// Get all members of the committee for the current view
@@ -400,10 +416,15 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
         Ok(true)
     }
 
-    fn add_drb_result(&mut self, _epoch: <TYPES as NodeType>::Epoch, _drb_result: DrbResult) {}
+    fn add_drb_result(&mut self, epoch: <TYPES as NodeType>::Epoch, drb_result: DrbResult) {
+      self.drb_results.insert(epoch, drb_result);
+      }
 
-    fn set_first_epoch(&mut self, epoch: TYPES::Epoch, _initial_drb_result: DrbResult) {
+    fn set_first_epoch(&mut self, epoch: TYPES::Epoch, initial_drb_result: DrbResult) {
         self.first_epoch = Some(epoch);
+
+        self.add_drb_result(epoch, initial_drb_result);
+        self.add_drb_result(epoch + 1, initial_drb_result);
     }
 
     fn first_epoch(&self) -> Option<TYPES::Epoch> {

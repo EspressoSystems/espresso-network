@@ -534,7 +534,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
 
     /// Create and store an [`AndDependency`] combining [`EventDependency`]s associated with the
     /// given view number if it doesn't exist.
-    #[instrument(skip_all, fields(id = self.id, latest_voted_view = *self.latest_voted_view), name = "Quorum vote crete dependency task if new", level = "error")]
+    #[instrument(skip_all, fields(id = self.id, latest_voted_view = *self.latest_voted_view), name = "Quorum vote create dependency task if new", level = "error")]
     fn create_dependency_task_if_new(
         &mut self,
         view_number: TYPES::View,
