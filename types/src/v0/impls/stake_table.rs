@@ -62,8 +62,8 @@ use super::{
 use crate::{
     traits::EventsPersistenceRead,
     v0_1::{
-        L1Provider, RewardAmount, BLOCKS_PER_YEAR, COMMISSION_BASIS_POINTS, INFLATION_RATE,
-        MILLISECONDS_PER_YEAR,
+        L1Provider, RewardAmount, ASSUMED_BLOCK_TIME_SECONDS, BLOCKS_PER_YEAR,
+        COMMISSION_BASIS_POINTS, INFLATION_RATE, MILLISECONDS_PER_YEAR,
     },
     v0_3::{EventSortingError, ExpectedStakeTableError, FetchRewardError, StakeTableError},
     DrbAndHeaderUpgradeVersion, EpochVersion,
@@ -1473,49 +1473,57 @@ impl EpochCommittees {
         let rewards_bd = BigDecimal::from_str(&rewards_distributed.to_string())?;
         let initial_supply_bd = BigDecimal::from_str(&initial_supply.to_string())?;
         let total_supply_bd = &initial_supply_bd + &rewards_bd;
-
+        tracing::debug!(?epoch, "total_stake={total_stake}");
+        tracing::debug!(?epoch, "total_supply_bd={total_supply_bd}");
         let (p, rp) = calculate_p_and_rp(&total_stake, &total_supply_bd)?;
         let inflation_rate = &p * &rp;
         // Convert inflation rate to basis points
         let inflation_rate_bp = (inflation_rate * COMMISSION_BASIS_POINTS)
             .to_u64()
             .context("Failed to convert inflation rate to basis points")?;
-
+        tracing::debug!(?epoch,"inflation_rate_bp={inflation_rate_bp:?}");
         // Calculate average block time over the last epoch
         let curr_ts = header.timestamp_millis_internal();
-
+        tracing::debug!(?epoch,"curr_ts={curr_ts:?}");
         let current_epoch = epoch_from_block_number(header.height(), epoch_height);
         let previous_epoch = current_epoch
             .checked_sub(1)
             .context("underflow: cannot get previous epoch when current_epoch is 0")?;
-        let prev_stake_table = self
-            .get_stake_table(&Some(EpochNumber::new(previous_epoch)))
-            .context("Stake table not found")?
-            .into();
+        tracing::debug!(?epoch,"previous_epoch={previous_epoch:?}");
+        let first_epoch = *self.first_epoch().context("first epoch is None")?;
+        let avg_block_time = if previous_epoch <= first_epoch + 1 {
+            ASSUMED_BLOCK_TIME_SECONDS as u64 * 1000 // 2 seconds in milliseconds
+        } else {
+            let prev_stake_table = self
+                .get_stake_table(&Some(EpochNumber::new(previous_epoch)))
+                .context("Stake table not found")?
+                .into();
 
-        let success_threshold = self.success_threshold(Some(*epoch));
+            let success_threshold = self.success_threshold(Some(*epoch));
 
-        let root_height = header.height().checked_sub(epoch_height).context(
-            "Epoch height is greater than block height. cannot compute previous epoch root height",
-        )?;
+            let root_height = header.height().checked_sub(epoch_height).context(
+                "Epoch height is greater than block height. cannot compute previous epoch root \
+                 height",
+            )?;
 
-        let prev_root = fetcher
-            .peers
-            .fetch_leaf(root_height, prev_stake_table, success_threshold)
-            .await
-            .context("Epoch root leaf not found")?;
+            let prev_root = fetcher
+                .peers
+                .fetch_leaf(root_height, prev_stake_table, success_threshold)
+                .await
+                .context("Epoch root leaf not found")?;
 
-        let prev_ts = prev_root.block_header().timestamp_millis_internal();
-        let time_diff = curr_ts.checked_sub(prev_ts).context(
-            "Current timestamp is earlier than previous. underflow in block time calculation",
-        )?;
+            let prev_ts = prev_root.block_header().timestamp_millis_internal();
+            let time_diff = curr_ts.checked_sub(prev_ts).context(
+                "Current timestamp is earlier than previous. underflow in block time calculation",
+            )?;
 
-        let avg_block_time = time_diff
-            .checked_div(epoch_height)
-            .context("Epoch height is zero. cannot compute average block time")?;
-
+            time_diff
+                .checked_div(epoch_height)
+                .context("Epoch height is zero. cannot compute average block time")?
+        };
+        tracing::debug!(?epoch,"avg_block_time={avg_block_time:?}");
         let blocks_per_year = MILLISECONDS_PER_YEAR / avg_block_time as u128;
-
+        tracing::debug!(?epoch,"blocks_per_year={blocks_per_year:?}");
         let block_reward = ((total_supply * U256::from(inflation_rate_bp))
             / U256::from(blocks_per_year))
         .checked_div(U256::from(COMMISSION_BASIS_POINTS))
@@ -1768,6 +1776,8 @@ fn calculate_p_and_rp(
 
     let sqrt_inner = inner.sqrt().context("Failed to compute sqrt in R(p)")?;
     let rp = &const_03 / sqrt_inner;
+
+    tracing::debug!("rp={rp}");
 
     Ok((p, rp))
 }
@@ -2050,6 +2060,8 @@ impl Membership<SeqTypes> for EpochCommittees {
             let reward = reader
                 .calculate_dynamic_block_reward(&epoch, block_header, &validators)
                 .await?;
+
+            tracing::info!(?epoch, "calculated dynamic block reward = {reward:?}");
             block_reward = Some(reward);
         }
 
@@ -2060,6 +2072,8 @@ impl Membership<SeqTypes> for EpochCommittees {
         {
             tracing::error!(?e, "`add_epoch_root`, error storing stake table");
         }
+
+        drop(persistence_lock);
 
         let mut membership_writer = membership.write().await;
         membership_writer.insert_committee(epoch, validators, block_reward);

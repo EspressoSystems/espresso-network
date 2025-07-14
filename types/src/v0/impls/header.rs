@@ -351,7 +351,7 @@ impl Header {
                 fee_info: fee_info[0], // NOTE this is asserted to exist above
                 builder_signature: builder_signature.first().copied(),
                 reward_merkle_tree_root,
-                rewards_distributed: rewards_distributed.unwrap(),
+                rewards_distributed: rewards_distributed.unwrap_or_default(),
             }),
             // This case should never occur
             // but if it does, we must panic
