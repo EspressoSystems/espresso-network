@@ -62,6 +62,16 @@ contract StakeTableV2PropTestBase {
 
     mapping(address actor => ActorFunds funds) public trackedActorFunds;
 
+    // Track pending withdrawals for efficient claiming
+    struct PendingWithdrawal {
+        address actor;
+        address validator;
+    }
+
+    PendingWithdrawal[] public pendingWithdrawals;
+    mapping(bytes32 withdrawalKey => uint256 index) public pendingWithdrawalIndex;
+    mapping(bytes32 withdrawalKey => bool exists) public pendingWithdrawalMap;
+
     address internal validator;
     address internal actor;
 
@@ -356,6 +366,7 @@ contract StakeTableV2PropTestBase {
         totalActiveUndelegations += amount;
         trackedActorFunds[actor].delegations -= amount;
         trackedActorFunds[actor].undelegations += amount;
+        _addPendingWithdrawal(actor, validator);
     }
 
     function undelegateAny(uint256 actorIndex, uint256 validatorIndex, uint256 amount)
@@ -369,8 +380,65 @@ contract StakeTableV2PropTestBase {
             totalActiveUndelegations += amount;
             trackedActorFunds[actor].delegations -= amount;
             trackedActorFunds[actor].undelegations += amount;
+            _addPendingWithdrawal(actor, validator);
         } catch {
             // Undelegation failed - this is acceptable for the Any function
         }
+    }
+
+    function _getWithdrawalKey(address actor, address validator) internal pure returns (bytes32) {
+        return keccak256(abi.encodePacked(actor, validator));
+    }
+
+    function _addPendingWithdrawal(address actor, address validator) internal {
+        bytes32 key = _getWithdrawalKey(actor, validator);
+        if (pendingWithdrawalMap[key]) return; // Already exists
+
+        uint256 newIndex = pendingWithdrawals.length;
+        pendingWithdrawals.push(PendingWithdrawal(actor, validator));
+        pendingWithdrawalIndex[key] = newIndex;
+        pendingWithdrawalMap[key] = true;
+    }
+
+    function _removePendingWithdrawal(address actor, address validator) internal {
+        bytes32 key = _getWithdrawalKey(actor, validator);
+        if (!pendingWithdrawalMap[key]) return; // Doesn't exist
+
+        uint256 indexToRemove = pendingWithdrawalIndex[key];
+        uint256 lastIndex = pendingWithdrawals.length - 1;
+
+        if (indexToRemove != lastIndex) {
+            // Move last element to the position being removed
+            PendingWithdrawal memory lastWithdrawal = pendingWithdrawals[lastIndex];
+            pendingWithdrawals[indexToRemove] = lastWithdrawal;
+            bytes32 lastKey = _getWithdrawalKey(lastWithdrawal.actor, lastWithdrawal.validator);
+            pendingWithdrawalIndex[lastKey] = indexToRemove;
+        }
+
+        // Remove the last element
+        pendingWithdrawals.pop();
+        delete pendingWithdrawalIndex[key];
+        pendingWithdrawalMap[key] = false;
+    }
+
+    function claimWithdrawalOk(uint256 withdrawalIndex) public {
+        if (pendingWithdrawals.length == 0) return;
+
+        PendingWithdrawal memory withdrawal =
+            pendingWithdrawals[withdrawalIndex % pendingWithdrawals.length];
+
+        (uint256 undelegationAmount, uint256 unlocksAt) =
+            stakeTable.undelegations(withdrawal.validator, withdrawal.actor);
+
+        if (undelegationAmount == 0) return;
+        if (block.timestamp < unlocksAt) return;
+
+        ivm.prank(withdrawal.actor);
+        stakeTable.claimWithdrawal(withdrawal.validator);
+
+        // Update tracking
+        totalActiveUndelegations -= undelegationAmount;
+        trackedActorFunds[withdrawal.actor].undelegations -= undelegationAmount;
+        _removePendingWithdrawal(withdrawal.actor, withdrawal.validator);
     }
 }
