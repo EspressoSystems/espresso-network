@@ -38,25 +38,53 @@ contract StakeTableV2PropTestBase {
     MockLightClient public lightClient;
     IVM public ivm = IVM(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
 
-    address public constant ACTOR1 = address(0x1000);
-    address public constant ACTOR2 = address(0x2000);
-    address[2] public actors = [ACTOR1, ACTOR2];
+    address[] public actors;
+    address[] public allValidators;
+    address[] public activeValidators;
+
+    mapping(address validator => uint256 index) public activeValidatorIndex;
+    mapping(address validator => bool exists) public activeValidatorMap;
 
     uint256 public constant INITIAL_BALANCE = 1000000000e18;
-    uint256 public immutable INITIAL_TOTAL_SUPPLY;
+    uint256 public trackedTotalSupply;
     uint256 public constant EXIT_ESCROW_PERIOD = 7 days;
 
     mapping(address account => uint256 balance) public initialBalances;
+    mapping(address account => bool exists) public actorMap;
+
+    uint256 public activeDelegations;
+    uint256 public activeUndelegations;
+
+    struct ActorFunds {
+        uint256 delegations;
+        uint256 undelegations;
+    }
+
+    mapping(address actor => ActorFunds funds) public trackedActorFunds;
 
     address internal validator;
     address internal actor;
 
     modifier useValidator(uint256 validatorIndex) virtual {
-        validator = actors[validatorIndex % actors.length];
+        if (allValidators.length == 0) {
+            createValidator(validatorIndex);
+        }
+        validator = allValidators[validatorIndex % allValidators.length];
+        _;
+    }
+
+    modifier useActiveValidator(uint256 validatorIndex) virtual {
+        if (activeValidators.length == 0) {
+            createValidator(validatorIndex);
+        }
+        validator = activeValidators[validatorIndex % activeValidators.length];
         _;
     }
 
     modifier useActor(uint256 actorIndex) virtual {
+        if (actors.length == 0) {
+            createActor(actorIndex);
+        }
         actor = actors[actorIndex % actors.length];
         ivm.startPrank(actor);
         _;
@@ -65,8 +93,7 @@ contract StakeTableV2PropTestBase {
 
     constructor() {
         _deployStakeTable();
-        _mintAndApprove();
-        INITIAL_TOTAL_SUPPLY = token.totalSupply();
+        trackedTotalSupply = token.totalSupply();
     }
 
     function _deployStakeTable() internal {
@@ -103,17 +130,6 @@ contract StakeTableV2PropTestBase {
         stakeTable = MockStakeTableV2(payable(address(proxy)));
     }
 
-    function _mintAndApprove() internal {
-        // Mint tokens to accounts and approve stake table
-        for (uint256 i = 0; i < actors.length; i++) {
-            token.mint(actors[i], INITIAL_BALANCE);
-            initialBalances[actors[i]] = INITIAL_BALANCE;
-
-            ivm.prank(actors[i]);
-            token.approve(address(stakeTable), type(uint256).max);
-        }
-    }
-
     function _genDummyValidatorKeys(address _validator)
         internal
         pure
@@ -146,18 +162,8 @@ contract StakeTableV2PropTestBase {
 
     function totalOwnedAmount(address account) public view returns (uint256) {
         uint256 walletBalance = token.balanceOf(account);
-        uint256 stakedBalance = 0;
-        uint256 pendingWithdrawal = 0;
-
-        // Check delegations from all actors
-        for (uint256 i = 0; i < actors.length; i++) {
-            stakedBalance += stakeTable.delegations(actors[i], account);
-
-            (uint256 undelegationAmount,) = stakeTable.undelegations(actors[i], account);
-            pendingWithdrawal += undelegationAmount;
-        }
-
-        return walletBalance + stakedBalance + pendingWithdrawal;
+        ActorFunds memory funds = trackedActorFunds[account];
+        return walletBalance + funds.delegations + funds.undelegations;
     }
 
     function _getTotalSupply() internal view returns (uint256 total) {
@@ -168,31 +174,10 @@ contract StakeTableV2PropTestBase {
     }
 
     function _getTotalTrackedFunds() internal view returns (uint256 total) {
-        // Sum all active delegations and pending undelegations between all actors
-        for (uint256 val = 0; val < actors.length; val++) {
-            for (uint256 del = 0; del < actors.length; del++) {
-                total += stakeTable.delegations(actors[val], actors[del]);
-                (uint256 amount,) = stakeTable.undelegations(actors[val], actors[del]);
-                total += amount;
-            }
-        }
+        return activeDelegations + activeUndelegations;
     }
 
-    // Test functions focused on validator registration
-    function registerValidatorOk(uint256 seed) public {
-        address validatorAddress = _generateAvailableAddress(seed);
-        ivm.startPrank(validatorAddress);
-
-        (
-            BN254.G2Point memory blsVK,
-            EdOnBN254.EdOnBN254Point memory schnorrVK,
-            BN254.G1Point memory blsSig,
-            bytes memory schnorrSig
-        ) = _genDummyValidatorKeys(validatorAddress);
-
-        stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000);
-        ivm.stopPrank();
-    }
+    // NOTE: The create validator function is used to generate a new validators successfully.
 
     function registerValidatorAny(uint256 actorIndex) public useActor(actorIndex) {
         (
@@ -203,25 +188,119 @@ contract StakeTableV2PropTestBase {
         ) = _genDummyValidatorKeys(actor);
 
         try stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000) {
-            // Registration succeeded
+            _addValidator(actor);
         } catch {
             // Registration failed - this is acceptable for the Any function
         }
     }
 
-    function _generateAvailableAddress(uint256 seed) internal view returns (address) {
+    function _newAddress(uint256 seed) internal view returns (address) {
         address candidate = address(uint160(uint256(keccak256(abi.encode(seed)))));
 
-        // If address is already a validator, increment until we find an available one
-        while (_isValidator(candidate)) {
+        // If address is already an actor, increment until we find an available one
+        while (_isActor(candidate)) {
             candidate = address(uint160(candidate) + 1);
         }
 
         return candidate;
     }
 
+    function _isActor(address candidate) internal view returns (bool) {
+        return actorMap[candidate];
+    }
+
     function _isValidator(address candidate) internal view returns (bool) {
         (, StakeTable.ValidatorStatus status) = stakeTable.validators(candidate);
         return status == StakeTable.ValidatorStatus.Active;
+    }
+
+    function _addValidator(address validatorAddress) internal {
+        allValidators.push(validatorAddress);
+
+        uint256 newIndex = activeValidators.length;
+        activeValidators.push(validatorAddress);
+        activeValidatorIndex[validatorAddress] = newIndex;
+        activeValidatorMap[validatorAddress] = true;
+    }
+
+    function _removeActiveValidator(address validatorAddress) internal {
+        if (!activeValidatorMap[validatorAddress]) {
+            return; // Validator not active
+        }
+
+        uint256 indexToRemove = activeValidatorIndex[validatorAddress];
+        uint256 lastIndex = activeValidators.length - 1;
+
+        if (indexToRemove != lastIndex) {
+            // Move last element to the position being removed
+            address lastValidator = activeValidators[lastIndex];
+            activeValidators[indexToRemove] = lastValidator;
+            activeValidatorIndex[lastValidator] = indexToRemove;
+        }
+
+        // Remove the last element
+        activeValidators.pop();
+        delete activeValidatorIndex[validatorAddress];
+        activeValidatorMap[validatorAddress] = false;
+    }
+
+    function deregisterValidatorOk(uint256 validatorIndex) public {
+        if (activeValidators.length == 0) {
+            return;
+        }
+        address validatorAddress = activeValidators[validatorIndex % activeValidators.length];
+
+        ivm.prank(validatorAddress);
+        stakeTable.deregisterValidator();
+        _removeActiveValidator(validatorAddress);
+    }
+
+    function deregisterValidatorAny(uint256 validatorIndex) public {
+        if (allValidators.length == 0) {
+            return;
+        }
+        address validatorAddress = allValidators[validatorIndex % allValidators.length];
+
+        ivm.prank(validatorAddress);
+        try stakeTable.deregisterValidator() {
+            _removeActiveValidator(validatorAddress);
+        } catch { }
+    }
+
+    function createActor(uint256 seed) public returns (address) {
+        address actorAddress = _newAddress(seed);
+
+        // Fund the actor with tokens
+        token.mint(actorAddress, INITIAL_BALANCE);
+        initialBalances[actorAddress] = INITIAL_BALANCE;
+        trackedTotalSupply += INITIAL_BALANCE;
+
+        // Approve stake table to spend tokens
+        ivm.prank(actorAddress);
+        token.approve(address(stakeTable), type(uint256).max);
+
+        // Add to actors array and map
+        actors.push(actorAddress);
+        actorMap[actorAddress] = true;
+
+        return actorAddress;
+    }
+
+    function createValidator(uint256 seed) public returns (address) {
+        address validatorAddress = createActor(seed);
+
+        // Register as validator in stake table
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory blsSig,
+            bytes memory schnorrSig
+        ) = _genDummyValidatorKeys(validatorAddress);
+
+        ivm.prank(validatorAddress);
+        stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000);
+        _addValidator(validatorAddress);
+
+        return validatorAddress;
     }
 }
