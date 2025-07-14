@@ -111,6 +111,18 @@ contract StakeTableV2PropTestBase {
     address internal validator;
     address internal actor;
 
+    function boundRange(uint256 x, uint256 min, uint256 max) public pure returns (uint256 result) {
+        require(min <= max, "boundRange: min > max");
+        if (max == min) return min;
+
+        // If x is already in bounds, return it
+        if (x >= min && x <= max) return x;
+
+        // Otherwise, bound it within the range
+        uint256 range = max - min + 1;
+        return min + (x % range);
+    }
+
     modifier withValidator(uint256 validatorIndex) virtual {
         if (allValidators.length == 0) {
             createValidator(validatorIndex);
@@ -365,9 +377,9 @@ contract StakeTableV2PropTestBase {
         useActor(actorIndex)
     {
         uint256 balance = token.balanceOf(actor);
-        amount = amount % (balance + 1);
+        if (balance == 0) return;
 
-        if (amount == 0) return;
+        amount = boundRange(amount, 1, balance);
 
         stakeTable.delegate(validator, amount);
 
@@ -413,11 +425,8 @@ contract StakeTableV2PropTestBase {
         if (existingUndelegation > 0) return;
 
         uint256 delegatedAmount = stakeTable.delegations(validator, actor);
-        if (delegatedAmount == 0) return;
 
-        amount = amount % (delegatedAmount + 1);
-
-        if (amount == 0) return;
+        amount = boundRange(amount, 1, delegatedAmount);
 
         ivm.prank(actor);
         stakeTable.undelegate(validator, amount);
@@ -651,11 +660,9 @@ contract StakeTableV2PropTestBase {
 
     function advanceTime(uint256 seed) public {
         // Advance time by a random amount up to the escrow period
-        uint256 timeAdvance = seed % (EXIT_ESCROW_PERIOD + 1);
-        if (timeAdvance > 0) {
-            ivm.warp(block.timestamp + timeAdvance);
-            countOk_advanceTime++;
-        }
+        uint256 timeAdvance = boundRange(seed, 1, EXIT_ESCROW_PERIOD);
+        ivm.warp(block.timestamp + timeAdvance);
+        countOk_advanceTime++;
     }
 
     function claimValidatorExitOk(uint256 validatorIndex, uint256 delegatorIndex) public {
