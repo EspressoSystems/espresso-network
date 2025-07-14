@@ -30,12 +30,14 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
         console2.log("countOk_delegate:", handler.countOk_delegate());
         console2.log("countOk_undelegate:", handler.countOk_undelegate());
         console2.log("countOk_claimWithdrawal:", handler.countOk_claimWithdrawal());
+        console2.log("countOk_claimValidatorExit:", handler.countOk_claimValidatorExit());
         console2.log("countOk_advanceTime:", handler.countOk_advanceTime());
 
         uint256 totalSuccessful = handler.countOk_createActor() + handler.countOk_createValidator()
             + handler.countOk_registerValidator() + handler.countOk_deregisterValidator()
             + handler.countOk_delegate() + handler.countOk_undelegate()
-            + handler.countOk_claimWithdrawal() + handler.countOk_advanceTime();
+            + handler.countOk_claimWithdrawal() + handler.countOk_claimValidatorExit()
+            + handler.countOk_advanceTime();
         console2.log("Total successful transactions:", totalSuccessful);
 
         console2.log("\n=== Current State ===");
@@ -52,6 +54,16 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
             totalValidatorDelegatorPairs += handler.getNumValidatorDelegators(validator);
         }
         console2.log("Total validator-delegator pairs:", totalValidatorDelegatorPairs);
+
+        console2.log("Num exited validators:", handler.getNumExitedValidators());
+
+        // Count total exited validator-delegator pairs
+        uint256 totalExitedValidatorDelegatorPairs = 0;
+        for (uint256 i = 0; i < handler.getNumExitedValidators(); i++) {
+            address validator = handler.exitedValidators(i);
+            totalExitedValidatorDelegatorPairs += handler.getNumExitedValidatorDelegators(validator);
+        }
+        console2.log("Total exited validator-delegator pairs:", totalExitedValidatorDelegatorPairs);
 
         console2.log("Total active delegations:", handler.totalActiveDelegations());
         console2.log("Total active undelegations:", handler.totalActiveUndelegations());

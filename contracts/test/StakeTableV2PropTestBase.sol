@@ -85,6 +85,18 @@ contract StakeTableV2PropTestBase {
     mapping(address validator => mapping(address delegator => bool exists)) public
         validatorDelegatorMap;
 
+    // Track validators that have exited for claim processing
+    address[] public exitedValidators;
+    mapping(address validator => uint256 index) public exitedValidatorIndex;
+    mapping(address validator => bool exists) public exitedValidatorMap;
+
+    // Track delegators for each exited validator
+    mapping(address validator => address[] delegators) public exitedValidatorDelegators;
+    mapping(address validator => mapping(address delegator => uint256 index)) public
+        exitedValidatorDelegatorIndex;
+    mapping(address validator => mapping(address delegator => bool exists)) public
+        exitedValidatorDelegatorMap;
+
     // Transaction success counters
     uint256 public countOk_registerValidator;
     uint256 public countOk_deregisterValidator;
@@ -94,6 +106,7 @@ contract StakeTableV2PropTestBase {
     uint256 public countOk_createActor;
     uint256 public countOk_createValidator;
     uint256 public countOk_advanceTime;
+    uint256 public countOk_claimValidatorExit;
 
     address internal validator;
     address internal actor;
@@ -287,6 +300,7 @@ contract StakeTableV2PropTestBase {
         ivm.prank(validatorAddress);
         stakeTable.deregisterValidator();
         _removeActiveValidator(validatorAddress);
+        _addExitedValidator(validatorAddress);
         _removeValidatorFromDelegations(validatorAddress);
         countOk_deregisterValidator++;
     }
@@ -300,6 +314,7 @@ contract StakeTableV2PropTestBase {
         ivm.prank(validatorAddress);
         try stakeTable.deregisterValidator() {
             _removeActiveValidator(validatorAddress);
+            _addExitedValidator(validatorAddress);
             _removeValidatorFromDelegations(validatorAddress);
             countOk_deregisterValidator++;
         } catch { }
@@ -505,6 +520,47 @@ contract StakeTableV2PropTestBase {
         validatorDelegatorMap[validator][delegator] = false;
     }
 
+    function _addExitedValidator(address validator) internal {
+        if (exitedValidatorMap[validator]) return; // Already exists
+
+        // Copy current delegators to exit tracking before clearing
+        address[] memory delegators = validatorDelegators[validator];
+        for (uint256 i = 0; i < delegators.length; i++) {
+            _addExitedValidatorDelegator(validator, delegators[i]);
+        }
+
+        uint256 newIndex = exitedValidators.length;
+        exitedValidators.push(validator);
+        exitedValidatorIndex[validator] = newIndex;
+        exitedValidatorMap[validator] = true;
+    }
+
+    function _addExitedValidatorDelegator(address validator, address delegator) internal {
+        if (exitedValidatorDelegatorMap[validator][delegator]) return; // Already exists
+
+        uint256 newIndex = exitedValidatorDelegators[validator].length;
+        exitedValidatorDelegators[validator].push(delegator);
+        exitedValidatorDelegatorIndex[validator][delegator] = newIndex;
+        exitedValidatorDelegatorMap[validator][delegator] = true;
+    }
+
+    function _removeExitedValidatorDelegator(address validator, address delegator) internal {
+        if (!exitedValidatorDelegatorMap[validator][delegator]) return; // Doesn't exist
+
+        uint256 indexToRemove = exitedValidatorDelegatorIndex[validator][delegator];
+        uint256 lastIndex = exitedValidatorDelegators[validator].length - 1;
+
+        if (indexToRemove != lastIndex) {
+            address lastDelegator = exitedValidatorDelegators[validator][lastIndex];
+            exitedValidatorDelegators[validator][indexToRemove] = lastDelegator;
+            exitedValidatorDelegatorIndex[validator][lastDelegator] = indexToRemove;
+        }
+
+        exitedValidatorDelegators[validator].pop();
+        delete exitedValidatorDelegatorIndex[validator][delegator];
+        exitedValidatorDelegatorMap[validator][delegator] = false;
+    }
+
     function _addPendingWithdrawal(address actor, address validator) internal {
         bytes32 key = _getWithdrawalKey(actor, validator);
         if (pendingWithdrawalMap[key]) return; // Already exists
@@ -585,12 +641,80 @@ contract StakeTableV2PropTestBase {
         return validatorDelegators[validator].length;
     }
 
+    function getNumExitedValidators() external view returns (uint256) {
+        return exitedValidators.length;
+    }
+
+    function getNumExitedValidatorDelegators(address validator) external view returns (uint256) {
+        return exitedValidatorDelegators[validator].length;
+    }
+
     function advanceTime(uint256 seed) public {
         // Advance time by a random amount up to the escrow period
         uint256 timeAdvance = seed % (EXIT_ESCROW_PERIOD + 1);
         if (timeAdvance > 0) {
             ivm.warp(block.timestamp + timeAdvance);
             countOk_advanceTime++;
+        }
+    }
+
+    function claimValidatorExitOk(uint256 validatorIndex, uint256 delegatorIndex) public {
+        if (exitedValidators.length == 0) return;
+
+        validator = exitedValidators[validatorIndex % exitedValidators.length];
+
+        // Pick a delegator from this exited validator's delegators
+        address[] memory delegators = exitedValidatorDelegators[validator];
+        if (delegators.length == 0) return;
+
+        actor = delegators[delegatorIndex % delegators.length];
+
+        // Check if there's actually a delegation to claim
+        uint256 delegatedAmount = stakeTable.delegations(validator, actor);
+        if (delegatedAmount == 0) return;
+
+        // Check if validator has actually exited
+        uint256 unlocksAt = stakeTable.validatorExits(validator);
+        if (unlocksAt == 0) return;
+
+        // Advance time if needed
+        if (block.timestamp < unlocksAt) {
+            ivm.warp(block.timestamp + EXIT_ESCROW_PERIOD);
+        }
+
+        ivm.prank(actor);
+        stakeTable.claimValidatorExit(validator);
+
+        // Update tracking
+        totalActiveDelegations -= delegatedAmount;
+        trackedActorFunds[actor].delegations -= delegatedAmount;
+        _removeExitedValidatorDelegator(validator, actor);
+        countOk_claimValidatorExit++;
+    }
+
+    function claimValidatorExitAny(uint256 validatorIndex, uint256 delegatorIndex) public {
+        if (exitedValidators.length == 0) return;
+
+        validator = exitedValidators[validatorIndex % exitedValidators.length];
+
+        // Pick a delegator from this exited validator's delegators
+        address[] memory delegators = exitedValidatorDelegators[validator];
+        if (delegators.length == 0) return;
+
+        actor = delegators[delegatorIndex % delegators.length];
+
+        // Read delegation amount BEFORE claiming (claimValidatorExit clears it)
+        uint256 delegatedAmount = stakeTable.delegations(validator, actor);
+
+        ivm.prank(actor);
+        try stakeTable.claimValidatorExit(validator) {
+            // Update tracking on success using pre-read amount
+            totalActiveDelegations -= delegatedAmount;
+            trackedActorFunds[actor].delegations -= delegatedAmount;
+            _removeExitedValidatorDelegator(validator, actor);
+            countOk_claimValidatorExit++;
+        } catch {
+            // Claim failed - this is acceptable for the Any function
         }
     }
 }
