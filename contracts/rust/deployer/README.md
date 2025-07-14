@@ -807,6 +807,8 @@ docker compose run --rm \
 - Deploy LightClientV2 implementation
 - Create a multisig proposal to upgrade the proxy
 - Initialize the V2 contract with the provided epoch configuration
+- The timelock address is owned by a multisig currently so we have to send through a multisig proposal to handle the
+  upgrade
 
 5. Verify the upgrade proposal was created
 
@@ -1166,3 +1168,253 @@ After the deployment and upgrade are completed, verify:
 2. **Implementation**: Verify the proxy points to the StakeTableV2 implementation
 3. **Pauser Role**: Confirm the EspressoSys multisig has the PAUSER_ROLE
 4. **EspToken Integration**: Verify the EspToken address is correctly set in StakeTableV2
+
+## Arbitrum Mainnet
+
+### Step 1: Deploy the `OpsTimelock`
+
+Follow the same steps as in [Step 2: Deploy OpsTimelock](#step-2-deploy-opstimelock) from the Ethereum Mainnet section
+above, but use Arbitrum mainnet RPC URL:
+
+```bash
+export RPC_URL=https://arb-mainnet.g.alchemy.com/v2/YOUR_API_KEY
+export OUTPUT_FILE=.env.arb.mainnet.opstimelock
+touch $OUTPUT_FILE
+```
+
+Then proceed with the same deployment steps as outlined in the Ethereum Mainnet section.
+
+### Step 2: Upgrade LightClientV2
+
+Follow the same steps as in [Step 3: Upgrade LightClientV2](#step-3-upgrade-lightclientv2) from the Ethereum Mainnet
+section above, but use Arbitrum mainnet RPC URL:
+
+```bash
+export RPC_URL=https://arb-mainnet.g.alchemy.com/v2/YOUR_API_KEY
+export OUTPUT_FILE=.env.arb.mainnet.lightclientv2
+touch $OUTPUT_FILE
+```
+
+Then proceed with the same deployment steps as outlined in the Ethereum Mainnet section.
+
+### Step 3: Multisig Proposal to change admin of LightClientProxy from EspressoSys multisig to OpsTimelock
+
+Follow the same steps as in
+[Step 4: Multisig Proposal to change admin of LightClientProxy from EspressoSys multisig to OpsTimelock](#step-4-multisig-proposal-to-change-admin-of-lightclientproxy-from-espressosys-multisig-to-opstimelock)
+from the Ethereum Mainnet section above, but use Arbitrum mainnet RPC URL:
+
+```bash
+export RPC_URL=https://arb-mainnet.g.alchemy.com/v2/YOUR_API_KEY
+export OUTPUT_FILE=.env.arb.mainnet.lightclient.admin.transfer
+touch $OUTPUT_FILE
+```
+
+Then proceed with the same deployment steps as outlined in the Ethereum Mainnet section.
+
+## Ethereum Sepolia
+
+### Step 1: Deploy `SafeExitTimelock`, set `Foundation Multisig` as the admin, Espresso Devs as proposers and the `Foundation Multisig` as the executor.
+
+Follow the same steps as in [Step 1: Deploy SafeExitTimelock](#step-1-deploy-safeexittimelock) from the Ethereum Mainnet
+section above, but use Ethereum Sepolia RPC URL:
+
+```bash
+export RPC_URL=https://eth-sepolia.g.alchemy.com/v2/YOUR_API_KEY
+export OUTPUT_FILE=.env.eth.sepolia.safeexittimelock
+touch $OUTPUT_FILE
+```
+
+Then proceed with the same deployment steps as outlined in the Ethereum Mainnet section.
+
+### Step 2: Deploy `OpsTimelock`, set `Foundation Multisig` as the admin, Espresso Devs as proposers and the `Foundation Multisig` as the executor.
+
+Follow the same steps as in [Step 2: Deploy OpsTimelock](#step-2-deploy-opstimelock) from the Ethereum Mainnet section
+above, but use Ethereum Sepolia RPC URL:
+
+```bash
+export RPC_URL=https://eth-sepolia.g.alchemy.com/v2/YOUR_API_KEY
+export OUTPUT_FILE=.env.eth.sepolia.opstimelock
+touch $OUTPUT_FILE
+```
+
+Then proceed with the same deployment steps as outlined in the Ethereum Mainnet section.
+
+### Step 3: Upgrade `LightClientV2`
+
+Follow the same steps as in [Step 3: Upgrade LightClientV2](#step-3-upgrade-lightclientv2) from the Ethereum Mainnet
+section above, but use Ethereum Sepolia RPC URL:
+
+```bash
+export RPC_URL=https://eth-sepolia.g.alchemy.com/v2/YOUR_API_KEY
+export OUTPUT_FILE=.env.eth.sepolia.lightclientv2
+touch $OUTPUT_FILE
+```
+
+Then proceed with the same deployment steps as outlined in the Ethereum Mainnet section.
+
+### Step 4: Multisig Proposal to change admin of `LightClientProxy` from `EspressoSys multisig` to `OpsTimelock`
+
+Follow the same steps as in
+[Step 4: Multisig Proposal to change admin of LightClientProxy from EspressoSys multisig to OpsTimelock](#step-4-multisig-proposal-to-change-admin-of-lightclientproxy-from-espressosys-multisig-to-opstimelock)
+from the Ethereum Mainnet section above, but use Ethereum Sepolia RPC URL:
+
+```bash
+export RPC_URL=https://eth-sepolia.g.alchemy.com/v2/YOUR_API_KEY
+export OUTPUT_FILE=.env.eth.sepolia.lightclient.admin.transfer
+touch $OUTPUT_FILE
+```
+
+Then proceed with the same deployment steps as outlined in the Ethereum Mainnet section.
+
+### Step 5: Create a multisig proposal to transfer the owner of the `EspToken`, set `SafeExitTimelock` as the admin
+
+**TODO** this needs to be implemented Follow the same pattern as in
+[Step 4: Multisig Proposal to change admin of LightClientProxy from EspressoSys multisig to OpsTimelock](#step-4-multisig-proposal-to-change-admin-of-lightclientproxy-from-espressosys-multisig-to-opstimelock)
+from the Ethereum Mainnet section above, but target the EspToken proxy instead:
+
+```bash
+export RPC_URL=https://eth-sepolia.g.alchemy.com/v2/YOUR_API_KEY
+export OUTPUT_FILE=.env.eth.sepolia.esptoken.admin.transfer
+touch $OUTPUT_FILE
+```
+
+**Prerequisites:**
+
+- EspToken proxy must be deployed and owned by a multisig
+- SafeExitTimelock must be deployed (from Step 1)
+- The signers on the multisig must be available for signing the proposal
+
+1. **Set the environment variables for the admin transfer configuration:**
+
+```bash
+# Set the multisig address (current admin of EspToken proxy)
+export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS=0xMULTISIG_ADDRESS
+
+# Set the SafeExitTimelock address (new admin)
+export ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS=0xSAFE_EXIT_TIMELOCK_ADDRESS
+
+# Set the EspToken proxy address
+export ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS=0xESP_TOKEN_PROXY_ADDRESS
+```
+
+2. **Run the docker-compose command to create the multisig proposal for admin transfer:**
+
+```bash
+docker compose run --rm \
+  -e RPC_URL \
+  -e ESPRESSO_SEQUENCER_ETH_MNEMONIC \
+  -e ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
+  -e ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS \
+  -e ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS \
+  -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
+  \
+  deploy-sequencer-contracts \
+  deploy --transfer-esp-token-admin --rpc-url=$RPC_URL --use-multisig --out $OUTPUT_FILE
+  # if doing a real run then add --dry-run
+```
+
+**TODO**: The `--transfer-esp-token-admin` flag would need to be implemented in the deployer binary to expose this
+functionality. Currently, the underlying code exists but the command-line interface needs to be added.
+
+3. **Verify the admin transfer proposal was created:**
+
+You should see output similar to:
+`EspTokenProxy admin transfer proposal sent. Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe=0xMULTISIG_ADDRESS`
+
+4. **After the signer threshold signs the proposal and one executes the proposal, verify the admin transfer on-chain:**
+
+```bash
+# First, source the output file to load the deployed contract addresses
+source $OUTPUT_FILE
+
+# Verify the variables are loaded correctly
+echo "SafeExitTimelock Address: $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS"
+
+# Verify the SafeExitTimelock is now the owner
+cast call $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS
+```
+
+### Step 6: Upgrade to `StakeTableV2`, setting the `EspressoSys Multisig` as the pauser
+
+Follow the same steps as in
+[Step 6: Deploy StakeTableProxy & immediately Upgrade to StakeTableV2, setting the EspressoSys Multisig as the pauser](#step-6-deploy-staketableproxy--immediately-upgrade-to-staketablev2-setting-the-espressosys-multisig-as-the-pauser)
+from the Ethereum Mainnet section above, but use Ethereum Sepolia RPC URL:
+
+```bash
+export RPC_URL=https://eth-sepolia.g.alchemy.com/v2/YOUR_API_KEY
+export OUTPUT_FILE=.env.eth.sepolia.staketable
+touch $OUTPUT_FILE
+```
+
+Then proceed with the same deployment steps as outlined in the Ethereum Mainnet section.
+
+### Step 7: Multisig Proposal to change admin of `StakeTableProxy` from multisig to `OpsTimelock`
+
+**Note**: This step is not explicitly covered in the Ethereum Mainnet section above, but follows the same pattern as the
+LightClient admin transfer. You would need to create a multisig proposal to call `transferOwnership(address)` on the
+StakeTableProxy, setting the OpsTimelock as the new admin/owner.
+
+Use the same approach as in
+[Step 4: Multisig Proposal to change admin of LightClientProxy from EspressoSys multisig to OpsTimelock](#step-4-multisig-proposal-to-change-admin-of-lightclientproxy-from-espressosys-multisig-to-opstimelock)
+but target the StakeTableProxy instead:
+
+```bash
+export RPC_URL=https://eth-sepolia.g.alchemy.com/v2/YOUR_API_KEY
+export OUTPUT_FILE=.env.eth.sepolia.staketable.admin.transfer
+touch $OUTPUT_FILE
+```
+
+Then create a multisig proposal to transfer ownership of the StakeTableProxy to the OpsTimelock.
+
+## Arbitrum Sepolia
+
+### Step 1: Deploy `OpsTimelock`, set `Espresso admin EOA` as the admin, Espresso Devs as proposers and the `Espresso admin EOA` as the executor.
+
+Follow the same steps as in [Step 2: Deploy OpsTimelock](#step-2-deploy-opstimelock) from the Ethereum Mainnet section
+above, but use Arbitrum Sepolia RPC URL:
+
+```bash
+export RPC_URL=https://arb-sepolia.g.alchemy.com/v2/YOUR_API_KEY
+export OUTPUT_FILE=.env.arb.sepolia.opstimelock
+touch $OUTPUT_FILE
+```
+
+Then proceed with the same deployment steps as outlined in the Ethereum Mainnet section.
+
+### Step 2: Upgrade `LightClientV2`
+
+Follow the same steps as in [Step 3: Upgrade LightClientV2](#step-3-upgrade-lightclientv2) from the Ethereum Mainnet
+section above, but use Arbitrum Sepolia RPC URL:
+
+```bash
+export RPC_URL=https://arb-sepolia.g.alchemy.com/v2/YOUR_API_KEY
+export OUTPUT_FILE=.env.arb.sepolia.lightclientv2
+touch $OUTPUT_FILE
+```
+
+Then proceed with the same deployment steps as outlined in the Ethereum Mainnet section.
+
+### Step 3: Change admin of `LightClientProxy` from `EspressoSys admin EOA` to `OpsTimelock`
+
+**TODO**: This step requires a direct ownership transfer from an EOA to the OpsTimelock. The current deployer binary
+does not support direct ownership transfer for LightClient contracts. This functionality needs to be implemented or the
+transfer needs to be performed manually using the EOA's private key.
+
+**Prerequisites:**
+
+- LightClientProxy must be deployed and owned by the EspressoSys admin EOA
+- OpsTimelock must be deployed (from Step 1)
+- You must have access to the EspressoSys admin EOA private key/mnemonic
+
+**Verification:** After the transfer is completed, verify the admin transfer on-chain:
+
+```bash
+# First, source the output file to load the deployed contract addresses
+source $OUTPUT_FILE
+
+# Verify the variables are loaded correctly
+echo "OpsTimelock Address: $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS"
+
+# Verify the OpsTimelock is now the owner
+cast call $ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS
+```
