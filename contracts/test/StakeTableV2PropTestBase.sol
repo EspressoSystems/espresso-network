@@ -52,8 +52,8 @@ contract StakeTableV2PropTestBase {
     mapping(address account => uint256 balance) public initialBalances;
     mapping(address account => bool exists) public actorMap;
 
-    uint256 public activeDelegations;
-    uint256 public activeUndelegations;
+    uint256 public totalActiveDelegations;
+    uint256 public totalActiveUndelegations;
 
     struct ActorFunds {
         uint256 delegations;
@@ -174,7 +174,7 @@ contract StakeTableV2PropTestBase {
     }
 
     function _getTotalTrackedFunds() internal view returns (uint256 total) {
-        return activeDelegations + activeUndelegations;
+        return totalActiveDelegations + totalActiveUndelegations;
     }
 
     // NOTE: The create validator function is used to generate a new validators successfully.
