@@ -373,15 +373,16 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         tracing::error!("LOADING EPOCH");
         if let Some(epoch) = epoch {
             tracing::error!("LOADING DRB RESULT");
-            if let Ok(drb_result) = storage.load_drb_result(epoch + 1).await {
-                tracing::error!("Writing DRB result for epoch {}", epoch + 1);
-                consensus
-                    .write()
-                    .await
-                    .drb_results
-                    .results
-                    .insert(epoch + 1, drb_result);
-            }
+            membership_coordinator.membership_for_epoch(Some(epoch + 1)).await;
+//            if let Ok(drb_result) = storage.load_drb_result(epoch + 1).await {
+//                tracing::error!("Writing DRB result for epoch {}", epoch + 1);
+//                consensus
+//                    .write()
+//                    .await
+//                    .drb_results
+//                    .results
+//                    .insert(epoch + 1, drb_result);
+//            }
         }
 
         // This makes it so we won't block on broadcasting if there is not a receiver

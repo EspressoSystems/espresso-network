@@ -158,9 +158,6 @@ pub async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     consensus: &OuterConsensus<TYPES>,
     drb_result: DrbResult,
 ) {
-    let mut consensus_writer = consensus.write().await;
-    consensus_writer.drb_results.store_result(epoch, drb_result);
-    drop(consensus_writer);
     tracing::debug!("Calling store_drb_result for epoch {epoch}");
     if let Err(e) = storage.store_drb_result(epoch, drb_result).await {
         tracing::error!("Failed to store drb result for epoch {epoch}: {e}");
@@ -211,24 +208,26 @@ pub(crate) async fn verify_drb_result<
         .context(info!("Proposal is missing the next epoch's DRB result."))?;
 
     if let Some(epoch_val) = epoch {
-        let has_stake_current_epoch = validation_info
+        let current_epoch_membership = validation_info
             .membership
             .coordinator
             .stake_table_for_epoch(epoch)
             .await
-            .context(warn!("No stake table for epoch {epoch_val}"))?
+            .context(warn!("No stake table for epoch {}", epoch_val))?
+            ;
+
+        let has_stake_current_epoch = current_epoch_membership
             .has_stake(&validation_info.public_key)
             .await;
 
         if has_stake_current_epoch {
-            let computed_result = validation_info
-                .consensus
-                .read()
+            let computed_result = current_epoch_membership
+                .next_epoch()
                 .await
-                .drb_results
-                .results
-                .get(&(epoch_val + 1))
-                .cloned()
+                .context(warn!("No stake table for epoch {}", epoch_val + 1))?
+                .get_epoch_drb()
+                .await
+                .clone()
                 .context(warn!("DRB result not found"))?;
 
             ensure!(
@@ -309,12 +308,6 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
                 }
                 tracing::info!("Time taken to add epoch root: {:?}", start.elapsed());
             });
-
-            let mut consensus_writer = consensus.write().await;
-            consensus_writer
-                .drb_results
-                .garbage_collect(next_epoch_number);
-            drop(consensus_writer);
 
             let drb_result_future = tokio::spawn(async move {
                 let start = Instant::now();

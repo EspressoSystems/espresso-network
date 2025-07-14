@@ -596,13 +596,12 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         let next_drb_result = if is_epoch_transition(block_header.block_number(), self.epoch_height)
         {
             if let Some(epoch_val) = &epoch {
-                self.consensus
-                    .read()
-                    .await
-                    .drb_results
-                    .results
-                    .get(&(*epoch_val + 1))
-                    .copied()
+                epoch_membership.next_epoch().await
+                .context(warn!("No stake table for epoch {}", *epoch_val + 1))?
+                .get_epoch_drb()
+                .await
+                .clone()
+                .ok()
             } else {
                 None
             }
