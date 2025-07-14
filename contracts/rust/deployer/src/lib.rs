@@ -903,7 +903,7 @@ pub async fn transfer_ownership(
                 .get_receipt()
                 .await?
         },
-        Contract::StakeTable | Contract::StakeTableProxy => {
+        Contract::StakeTable | Contract::StakeTableProxy | Contract::StakeTableV2 => {
             tracing::info!(%addr, %new_owner, "Transfer StakeTable ownership");
             let stake_table = StakeTable::new(addr, &provider);
             stake_table
