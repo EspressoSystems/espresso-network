@@ -334,4 +334,43 @@ contract StakeTableV2PropTestBase {
             // Delegation failed - this is acceptable for the Any function
         }
     }
+
+    function undelegateOk(uint256 actorIndex, uint256 validatorIndex, uint256 amount)
+        public
+        withActiveValidator(validatorIndex)
+        useActor(actorIndex)
+    {
+        // Only one undelegation is allowed at a time
+        (uint256 existingUndelegation,) = stakeTable.undelegations(validator, actor);
+        if (existingUndelegation > 0) return;
+
+        uint256 delegatedAmount = stakeTable.delegations(validator, actor);
+        amount = amount % (delegatedAmount + 1);
+
+        if (amount == 0) return;
+
+        stakeTable.undelegate(validator, amount);
+
+        // Update tracking
+        totalActiveDelegations -= amount;
+        totalActiveUndelegations += amount;
+        trackedActorFunds[actor].delegations -= amount;
+        trackedActorFunds[actor].undelegations += amount;
+    }
+
+    function undelegateAny(uint256 actorIndex, uint256 validatorIndex, uint256 amount)
+        public
+        withActiveValidator(validatorIndex)
+        useActor(actorIndex)
+    {
+        try stakeTable.undelegate(validator, amount) {
+            // Update tracking on success
+            totalActiveDelegations -= amount;
+            totalActiveUndelegations += amount;
+            trackedActorFunds[actor].delegations -= amount;
+            trackedActorFunds[actor].undelegations += amount;
+        } catch {
+            // Undelegation failed - this is acceptable for the Any function
+        }
+    }
 }
