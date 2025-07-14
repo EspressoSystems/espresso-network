@@ -30,7 +30,7 @@ use hotshot_query_service::{
     availability::VidCommonQueryData, data_source::ExtensibleDataSource, VidCommon,
 };
 use hotshot_types::{
-    data::{VidCommitment, VidShare, ViewNumber},
+    data::{EpochNumber, VidCommitment, VidShare, ViewNumber},
     event::{Event, LegacyEvent},
     light_client::StateSignatureRequestBody,
     network::NetworkConfig,
@@ -225,8 +225,11 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
         self.as_ref().get_validators(epoch).await
     }
 
-    async fn get_block_reward(&self) -> anyhow::Result<Option<RewardAmount>> {
-        self.as_ref().get_block_reward().await
+    async fn get_block_reward(
+        &self,
+        epoch: Option<EpochNumber>,
+    ) -> anyhow::Result<Option<RewardAmount>> {
+        self.as_ref().get_block_reward(epoch).await
     }
 }
 
@@ -274,7 +277,10 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         })
     }
 
-    async fn get_block_reward(&self) -> anyhow::Result<Option<RewardAmount>> {
+    async fn get_block_reward(
+        &self,
+        epoch: Option<EpochNumber>,
+    ) -> anyhow::Result<Option<RewardAmount>> {
         let coordinator = self
             .consensus()
             .await
@@ -286,7 +292,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         let membership = coordinator.membership().read().await;
 
         // TODO:
-        Ok(membership.block_reward(None))
+        Ok(membership.block_reward(epoch))
     }
 
     /// Get the whole validators map

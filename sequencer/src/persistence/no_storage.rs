@@ -8,7 +8,7 @@ use espresso_types::{
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_1::RewardAmount,
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
-    Leaf2, NetworkConfig, ValidatorsSet,
+    Leaf2, NetworkConfig, ValidatorMap,
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
@@ -266,7 +266,7 @@ impl MembershipPersistence for NoStorage {
     async fn load_stake(
         &self,
         _epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorsSet, Option<RewardAmount>)>> {
+    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>)>> {
         Ok(None)
     }
 
@@ -277,7 +277,7 @@ impl MembershipPersistence for NoStorage {
     async fn store_stake(
         &self,
         _epoch: EpochNumber,
-        _stake: ValidatorsSet,
+        _stake: ValidatorMap,
         _block_reward: Option<RewardAmount>,
     ) -> anyhow::Result<()> {
         Ok(())

@@ -587,10 +587,14 @@ where
         }
         .boxed()
     })?
-    .at("get_block_reward", |_, state| {
+    .at("get_block_reward", |req, state| {
         async move {
+            let epoch = req
+                .opt_integer_param::<_, u64>("epoch")?
+                .map(|e| EpochNumber::new(e));
+
             state
-                .read(|state| state.get_block_reward().boxed())
+                .read(|state| state.get_block_reward(epoch).boxed())
                 .await
                 .map_err(|err| node::Error::Custom {
                     message: format!("failed to get block reward. err={err:#}"),

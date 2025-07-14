@@ -141,8 +141,10 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
         epoch: <T as NodeType>::Epoch,
     ) -> impl Send + Future<Output = anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>>>;
 
-    fn get_block_reward(&self)
-        -> impl Send + Future<Output = anyhow::Result<Option<RewardAmount>>>;
+    fn get_block_reward(
+        &self,
+        epoch: Option<EpochNumber>,
+    ) -> impl Send + Future<Output = anyhow::Result<Option<RewardAmount>>>;
 }
 
 pub(crate) trait CatchupDataSource: Sync {

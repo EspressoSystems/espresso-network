@@ -24,10 +24,11 @@ use super::{
 use crate::EpochCommittees;
 use crate::{
     v0::{
-        impls::ValidatorsSet, traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo,
-        L1Client, Timestamp, Upgrade, UpgradeMode,
+        traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
+        Upgrade, UpgradeMode,
     },
     v0_1::RewardAmount,
+    ValidatorMap,
 };
 
 /// Represents the immutable state of a node.
@@ -73,18 +74,6 @@ impl NodeState {
         let membership = coordinator.membership().read().await;
         membership.block_reward(epoch)
     }
-
-    pub async fn fixed_block_reward(&self) -> Option<RewardAmount> {
-        let coordinator = self.coordinator.clone();
-        let membership = coordinator.membership().read().await;
-        membership.block_reward(None)
-    }
-
-    pub async fn dynamic_block_reward(&self, epoch: EpochNumber) -> Option<RewardAmount> {
-        let coordinator = self.coordinator.clone();
-        let membership = coordinator.membership().read().await;
-        membership.block_reward(Some(epoch))
-    }
 }
 
 #[async_trait]
@@ -92,7 +81,7 @@ impl MembershipPersistence for NoStorage {
     async fn load_stake(
         &self,
         _epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorsSet, Option<RewardAmount>)>> {
+    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>)>> {
         Ok(None)
     }
 
@@ -103,7 +92,7 @@ impl MembershipPersistence for NoStorage {
     async fn store_stake(
         &self,
         _epoch: EpochNumber,
-        _stake: ValidatorsSet,
+        _stake: ValidatorMap,
         _block_reward: Option<RewardAmount>,
     ) -> anyhow::Result<()> {
         Ok(())

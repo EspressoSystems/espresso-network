@@ -41,8 +41,7 @@ use super::{
 };
 use crate::{
     v0::impls::ValidatedState, v0_1::RewardAmount, v0_3::ChainConfig, BlockMerkleTree, Event,
-    FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig, SeqTypes,
-    ValidatorsSet,
+    FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig, SeqTypes, ValidatorMap,
 };
 
 #[async_trait]
@@ -395,7 +394,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     async fn load_stake(
         &self,
         epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorsSet, Option<RewardAmount>)>>;
+    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>)>>;
 
     /// Load stake tables for storage for latest `n` known epochs
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
@@ -404,7 +403,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     async fn store_stake(
         &self,
         epoch: EpochNumber,
-        stake: ValidatorsSet,
+        stake: ValidatorMap,
         block_reward: Option<RewardAmount>,
     ) -> anyhow::Result<()>;
 

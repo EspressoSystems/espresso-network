@@ -59,7 +59,7 @@ pub struct Delegator {
 /// Type for holding result sets matching epochs to stake tables.
 pub type IndexedStake = (
     EpochNumber,
-    (ValidatorsSet, Option<RewardAmount>),
+    (ValidatorMap, Option<RewardAmount>),
 );
 
 #[derive(Clone, derive_more::derive::Debug)]
@@ -78,20 +78,6 @@ pub struct Fetcher {
     pub initial_supply: Arc<RwLock<Option<U256>>>,
 }
 
-#[derive( Serialize,  Deserialize, Clone, Debug, Default, PartialEq)]
-pub struct ValidatorsSet {
-    pub all_validators: ValidatorMap,
-    pub active_validators: ValidatorMap,
-}
-
-impl ValidatorsSet {
-    pub fn new(all_validators: ValidatorMap, active_validators: ValidatorMap) -> Self {
-        Self {
-            all_validators,
-            active_validators,
-        }
-    }
-}
 
 
 #[derive(Debug, Default)]

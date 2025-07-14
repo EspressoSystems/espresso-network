@@ -522,6 +522,8 @@ pub async fn distribute_block_reward(
         return Ok(None);
     }
 
+    // Determine who the block leader is for this view and ensure missing block rewards are fetched from peers if needed.
+
     let leader = get_leader_and_fetch_missing_rewards(
         instance_state,
         validated_state,
@@ -531,14 +533,19 @@ pub async fn distribute_block_reward(
     .await?;
 
     let parent_header = parent_leaf.block_header();
+    // Initialize the total rewards distributed so far in this block.
+
     let mut total_distributed = parent_header.rewards_distributed().unwrap_or_default();
 
+    // Decide whether to use a fixed or dynamic block reward.
     let block_reward = if version >= DrbAndHeaderUpgradeVersion::version() {
-        let dyanmic_block_reward = instance_state
-            .dynamic_block_reward(EpochNumber::new(*epoch))
+        let block_reward = instance_state
+            .block_reward(Some(EpochNumber::new(*epoch)))
             .await
-            .context("dynamic block reward is None")?;
+            .with_context(|| format!("block reward is None for epoch {epoch}"))?;
 
+        // If the current block is the start block of the new v4 version,
+        // we use *fixed block reward* for calculating the total rewards distributed so far.
         if parent_header.version() == EpochVersion::version() {
             ensure!(
                 instance_state.epoch_start_block != 0,
@@ -546,9 +553,9 @@ pub async fn distribute_block_reward(
             );
 
             let fixed_block_reward = instance_state
-                .fixed_block_reward()
+                .block_reward(None)
                 .await
-                .context("fixed block reward is None")?;
+                .with_context(|| format!("block reward is None for epoch {epoch}"))?;
 
             let blocks = height
                 .checked_sub(instance_state.epoch_start_block)
@@ -559,12 +566,12 @@ pub async fn distribute_block_reward(
                 .context("overflow during total_distributed calculation")?;
         }
 
-        dyanmic_block_reward
+        block_reward
     } else {
         instance_state
-            .fixed_block_reward()
+            .block_reward(None)
             .await
-            .context("fixed block reward is None")?
+            .with_context(|| format!("fixed block reward is None for epoch {epoch}"))?
     };
 
     total_distributed += block_reward.0;

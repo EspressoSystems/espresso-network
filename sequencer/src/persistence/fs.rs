@@ -17,7 +17,7 @@ use espresso_types::{
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_1::RewardAmount,
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
-    Leaf, Leaf2, NetworkConfig, Payload, SeqTypes, ValidatorsSet,
+    Leaf, Leaf2, NetworkConfig, Payload, SeqTypes, ValidatorMap,
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
@@ -1515,7 +1515,7 @@ impl MembershipPersistence for Persistence {
     async fn load_stake(
         &self,
         epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorsSet, Option<RewardAmount>)>> {
+    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>)>> {
         let inner = self.inner.read().await;
         let path = &inner.stake_table_dir_path();
         let file_path = path.join(epoch.to_string()).with_extension("bin");
@@ -1551,7 +1551,7 @@ impl MembershipPersistence for Persistence {
     async fn store_stake(
         &self,
         epoch: EpochNumber,
-        stake: ValidatorsSet,
+        stake: ValidatorMap,
         block_reward: Option<RewardAmount>,
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
