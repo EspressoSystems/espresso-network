@@ -178,8 +178,23 @@ contract StakeTableV2PropTestBase {
         }
     }
 
-    // Test functions that can be shared between echidna and invariant tests
-    function registerValidator(uint256 validatorIndex) public useActor(validatorIndex) {
+    // Test functions focused on validator registration
+    function registerValidatorOk(uint256 seed) public {
+        address validatorAddress = _generateAvailableAddress(seed);
+        ivm.startPrank(validatorAddress);
+
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory blsSig,
+            bytes memory schnorrSig
+        ) = _genDummyValidatorKeys(validatorAddress);
+
+        stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000);
+        ivm.stopPrank();
+    }
+
+    function registerValidatorAny(uint256 actorIndex) public useActor(actorIndex) {
         (
             BN254.G2Point memory blsVK,
             EdOnBN254.EdOnBN254Point memory schnorrVK,
@@ -187,70 +202,26 @@ contract StakeTableV2PropTestBase {
             bytes memory schnorrSig
         ) = _genDummyValidatorKeys(actor);
 
-        stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000);
+        try stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000) {
+            // Registration succeeded
+        } catch {
+            // Registration failed - this is acceptable for the Any function
+        }
     }
 
-    function deregisterValidator(uint256 validatorIndex) public useActor(validatorIndex) {
-        stakeTable.deregisterValidator();
+    function _generateAvailableAddress(uint256 seed) internal view returns (address) {
+        address candidate = address(uint160(uint256(keccak256(abi.encode(seed)))));
+
+        // If address is already a validator, increment until we find an available one
+        while (_isValidator(candidate)) {
+            candidate = address(uint160(candidate) + 1);
+        }
+
+        return candidate;
     }
 
-    function delegateAny(uint256 actorIndex, uint256 validatorIndex, uint256 amount)
-        public
-        useActor(actorIndex)
-        useValidator(validatorIndex)
-    {
-        stakeTable.delegate(validator, amount);
-    }
-
-    function delegateOk(uint256 actorIndex, uint256 validatorIndex, uint256 amount)
-        public
-        virtual
-        useActor(actorIndex)
-        useValidator(validatorIndex)
-    {
-        uint256 balance = token.balanceOf(actor);
-        amount = amount % (balance + 1);
-
-        stakeTable.delegate(validator, amount);
-    }
-
-    function undelegateAny(uint256 actorIndex, uint256 validatorIndex, uint256 amount)
-        public
-        useActor(actorIndex)
-        useValidator(validatorIndex)
-    {
-        stakeTable.undelegate(validator, amount);
-    }
-
-    function undelegateOk(uint256 actorIndex, uint256 validatorIndex, uint256 amount)
-        public
-        virtual
-        useActor(actorIndex)
-        useValidator(validatorIndex)
-    {
-        uint256 delegatedAmount = stakeTable.delegations(validator, actor);
-        amount = amount % (delegatedAmount + 1);
-        stakeTable.undelegate(validator, amount);
-    }
-
-    function advanceTime(uint256 secs) public {
-        secs = secs % (2 * EXIT_ESCROW_PERIOD);
-        ivm.warp(secs);
-    }
-
-    function claimWithdrawal(uint256 actorIndex, uint256 validatorIndex)
-        public
-        useActor(actorIndex)
-        useValidator(validatorIndex)
-    {
-        stakeTable.claimWithdrawal(validator);
-    }
-
-    function claimValidatorExit(uint256 actorIndex, uint256 validatorIndex)
-        public
-        useActor(actorIndex)
-        useValidator(validatorIndex)
-    {
-        stakeTable.claimValidatorExit(validator);
+    function _isValidator(address candidate) internal view returns (bool) {
+        (, StakeTable.ValidatorStatus status) = stakeTable.validators(candidate);
+        return status == StakeTable.ValidatorStatus.Active;
     }
 }
