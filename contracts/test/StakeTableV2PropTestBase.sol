@@ -129,6 +129,7 @@ contract StakeTableV2PropTestBase {
     address internal validator;
     address internal actor;
 
+    // Like foundry's `bound`, but usable from echidna and forge
     function boundRange(uint256 x, uint256 min, uint256 max) public pure returns (uint256 result) {
         require(min <= max, "boundRange: min > max");
         if (max == min) return min;

@@ -67,124 +67,75 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
         return string(buffer);
     }
 
+    function _logStat(string memory name, StakeTableV2PropTestBase.FunctionStats memory stat)
+        internal
+        view
+    {
+        console2.log(
+            string.concat(
+                _formatString(name, 29),
+                _formatNumber(stat.successes, 9),
+                " ",
+                _formatNumber(stat.reverts, 7)
+            )
+        );
+    }
+
+    function _formatString(string memory str, uint256 width)
+        internal
+        pure
+        returns (string memory)
+    {
+        bytes memory strBytes = bytes(str);
+
+        if (strBytes.length >= width) {
+            return str;
+        }
+
+        bytes memory result = new bytes(width);
+
+        // Copy string
+        for (uint256 i = 0; i < strBytes.length; i++) {
+            result[i] = strBytes[i];
+        }
+
+        // Pad with spaces
+        for (uint256 i = strBytes.length; i < width; i++) {
+            result[i] = " ";
+        }
+
+        return string(result);
+    }
+
     function _logFunctionStats() internal view {
         console2.log("\n=== Function Call Statistics ===");
         console2.log("Function                     Successes  Reverts");
-        console2.log("---------------------------------------------");
+        console2.log("-----------------------------------------------");
 
         // Ok functions - access via getter function
         StakeTableV2PropTestBase.OkFunctionStats memory okStats = handler.getOkStats();
 
-        console2.log(
-            string.concat(
-                "advanceTime                  ",
-                _formatNumber(okStats.advanceTime.successes, 9),
-                " ",
-                _formatNumber(okStats.advanceTime.reverts, 7)
-            )
-        );
-        console2.log(
-            string.concat(
-                "claimValidatorExitOk         ",
-                _formatNumber(okStats.claimValidatorExitOk.successes, 9),
-                " ",
-                _formatNumber(okStats.claimValidatorExitOk.reverts, 7)
-            )
-        );
-        console2.log(
-            string.concat(
-                "claimWithdrawalOk            ",
-                _formatNumber(okStats.claimWithdrawalOk.successes, 9),
-                " ",
-                _formatNumber(okStats.claimWithdrawalOk.reverts, 7)
-            )
-        );
-        console2.log(
-            string.concat(
-                "createActor                  ",
-                _formatNumber(okStats.createActor.successes, 9),
-                " ",
-                _formatNumber(okStats.createActor.reverts, 7)
-            )
-        );
-        console2.log(
-            string.concat(
-                "createValidator              ",
-                _formatNumber(okStats.createValidator.successes, 9),
-                " ",
-                _formatNumber(okStats.createValidator.reverts, 7)
-            )
-        );
-        console2.log(
-            string.concat(
-                "delegateOk                   ",
-                _formatNumber(okStats.delegateOk.successes, 9),
-                " ",
-                _formatNumber(okStats.delegateOk.reverts, 7)
-            )
-        );
-        console2.log(
-            string.concat(
-                "deregisterValidatorOk        ",
-                _formatNumber(okStats.deregisterValidatorOk.successes, 9),
-                " ",
-                _formatNumber(okStats.deregisterValidatorOk.reverts, 7)
-            )
-        );
-        console2.log(
-            string.concat(
-                "undelegateOk                 ",
-                _formatNumber(okStats.undelegateOk.successes, 9),
-                " ",
-                _formatNumber(okStats.undelegateOk.reverts, 7)
-            )
-        );
+        _logStat("advanceTime", okStats.advanceTime);
+        _logStat("claimValidatorExitOk", okStats.claimValidatorExitOk);
+        _logStat("claimWithdrawalOk", okStats.claimWithdrawalOk);
+        _logStat("createActor", okStats.createActor);
+        _logStat("createValidator", okStats.createValidator);
+        _logStat("delegateOk", okStats.delegateOk);
+        _logStat("deregisterValidatorOk", okStats.deregisterValidatorOk);
+        _logStat("undelegateOk", okStats.undelegateOk);
+
+        console2.log("-----------------------------------------------");
 
         // Any functions - access via getter function
         StakeTableV2PropTestBase.AnyFunctionStats memory anyStats = handler.getAnyStats();
 
-        console2.log(
-            string.concat(
-                "claimValidatorExitAny        ",
-                _formatNumber(anyStats.claimValidatorExitAny.successes, 9),
-                " ",
-                _formatNumber(anyStats.claimValidatorExitAny.reverts, 7)
-            )
-        );
-        console2.log(
-            string.concat(
-                "delegateAny                  ",
-                _formatNumber(anyStats.delegateAny.successes, 9),
-                " ",
-                _formatNumber(anyStats.delegateAny.reverts, 7)
-            )
-        );
-        console2.log(
-            string.concat(
-                "deregisterValidatorAny       ",
-                _formatNumber(anyStats.deregisterValidatorAny.successes, 9),
-                " ",
-                _formatNumber(anyStats.deregisterValidatorAny.reverts, 7)
-            )
-        );
-        console2.log(
-            string.concat(
-                "registerValidatorAny         ",
-                _formatNumber(anyStats.registerValidatorAny.successes, 9),
-                " ",
-                _formatNumber(anyStats.registerValidatorAny.reverts, 7)
-            )
-        );
-        console2.log(
-            string.concat(
-                "undelegateAny                ",
-                _formatNumber(anyStats.undelegateAny.successes, 9),
-                " ",
-                _formatNumber(anyStats.undelegateAny.reverts, 7)
-            )
-        );
+        _logStat("claimValidatorExitAny", anyStats.claimValidatorExitAny);
+        _logStat("delegateAny", anyStats.delegateAny);
+        _logStat("deregisterValidatorAny", anyStats.deregisterValidatorAny);
+        _logStat("registerValidatorAny", anyStats.registerValidatorAny);
+        _logStat("undelegateAny", anyStats.undelegateAny);
 
-        console2.log("---------------------------------------------");
+        console2.log("-----------------------------------------------");
         console2.log(
             string.concat(
                 "Total                        ",
