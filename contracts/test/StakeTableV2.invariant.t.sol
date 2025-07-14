@@ -21,25 +21,181 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
         targetContract(address(handler));
     }
 
-    function afterInvariant() external view {
-        console2.log("\n=== Transaction Success Counters ===");
-        console2.log("countOk_createActor:", handler.countOk_createActor());
-        console2.log("countOk_createValidator:", handler.countOk_createValidator());
-        console2.log("countOk_registerValidator:", handler.countOk_registerValidator());
-        console2.log("countOk_deregisterValidator:", handler.countOk_deregisterValidator());
-        console2.log("countOk_delegate:", handler.countOk_delegate());
-        console2.log("countOk_undelegate:", handler.countOk_undelegate());
-        console2.log("countOk_claimWithdrawal:", handler.countOk_claimWithdrawal());
-        console2.log("countOk_claimValidatorExit:", handler.countOk_claimValidatorExit());
-        console2.log("countOk_advanceTime:", handler.countOk_advanceTime());
+    function _formatNumber(uint256 num, uint256 width) internal pure returns (string memory) {
+        string memory numStr = _uintToString(num);
+        bytes memory numBytes = bytes(numStr);
 
-        uint256 totalSuccessful = handler.countOk_createActor() + handler.countOk_createValidator()
-            + handler.countOk_registerValidator() + handler.countOk_deregisterValidator()
-            + handler.countOk_delegate() + handler.countOk_undelegate()
-            + handler.countOk_claimWithdrawal() + handler.countOk_claimValidatorExit()
-            + handler.countOk_advanceTime();
-        console2.log("Total successful transactions:", totalSuccessful);
+        if (numBytes.length >= width) {
+            return numStr;
+        }
 
+        bytes memory result = new bytes(width);
+        uint256 padding = width - numBytes.length;
+
+        // Add leading spaces for right alignment
+        for (uint256 i = 0; i < padding; i++) {
+            result[i] = " ";
+        }
+
+        // Copy number string
+        for (uint256 i = 0; i < numBytes.length; i++) {
+            result[padding + i] = numBytes[i];
+        }
+
+        return string(result);
+    }
+
+    function _uintToString(uint256 value) internal pure returns (string memory) {
+        if (value == 0) {
+            return "0";
+        }
+
+        uint256 temp = value;
+        uint256 digits;
+        while (temp != 0) {
+            digits++;
+            temp /= 10;
+        }
+
+        bytes memory buffer = new bytes(digits);
+        while (value != 0) {
+            digits -= 1;
+            buffer[digits] = bytes1(uint8(48 + uint256(value % 10)));
+            value /= 10;
+        }
+
+        return string(buffer);
+    }
+
+    function _logFunctionStats() internal view {
+        console2.log("\n=== Function Call Statistics ===");
+        console2.log("Function                     Successes  Reverts");
+        console2.log("---------------------------------------------");
+
+        // Ok functions - access via getter function
+        StakeTableV2PropTestBase.OkFunctionStats memory okStats = handler.getOkStats();
+
+        console2.log(
+            string.concat(
+                "advanceTime                  ",
+                _formatNumber(okStats.advanceTime.successes, 9),
+                " ",
+                _formatNumber(okStats.advanceTime.reverts, 7)
+            )
+        );
+        console2.log(
+            string.concat(
+                "claimValidatorExitOk         ",
+                _formatNumber(okStats.claimValidatorExitOk.successes, 9),
+                " ",
+                _formatNumber(okStats.claimValidatorExitOk.reverts, 7)
+            )
+        );
+        console2.log(
+            string.concat(
+                "claimWithdrawalOk            ",
+                _formatNumber(okStats.claimWithdrawalOk.successes, 9),
+                " ",
+                _formatNumber(okStats.claimWithdrawalOk.reverts, 7)
+            )
+        );
+        console2.log(
+            string.concat(
+                "createActor                  ",
+                _formatNumber(okStats.createActor.successes, 9),
+                " ",
+                _formatNumber(okStats.createActor.reverts, 7)
+            )
+        );
+        console2.log(
+            string.concat(
+                "createValidator              ",
+                _formatNumber(okStats.createValidator.successes, 9),
+                " ",
+                _formatNumber(okStats.createValidator.reverts, 7)
+            )
+        );
+        console2.log(
+            string.concat(
+                "delegateOk                   ",
+                _formatNumber(okStats.delegateOk.successes, 9),
+                " ",
+                _formatNumber(okStats.delegateOk.reverts, 7)
+            )
+        );
+        console2.log(
+            string.concat(
+                "deregisterValidatorOk        ",
+                _formatNumber(okStats.deregisterValidatorOk.successes, 9),
+                " ",
+                _formatNumber(okStats.deregisterValidatorOk.reverts, 7)
+            )
+        );
+        console2.log(
+            string.concat(
+                "undelegateOk                 ",
+                _formatNumber(okStats.undelegateOk.successes, 9),
+                " ",
+                _formatNumber(okStats.undelegateOk.reverts, 7)
+            )
+        );
+
+        // Any functions - access via getter function
+        StakeTableV2PropTestBase.AnyFunctionStats memory anyStats = handler.getAnyStats();
+
+        console2.log(
+            string.concat(
+                "claimValidatorExitAny        ",
+                _formatNumber(anyStats.claimValidatorExitAny.successes, 9),
+                " ",
+                _formatNumber(anyStats.claimValidatorExitAny.reverts, 7)
+            )
+        );
+        console2.log(
+            string.concat(
+                "delegateAny                  ",
+                _formatNumber(anyStats.delegateAny.successes, 9),
+                " ",
+                _formatNumber(anyStats.delegateAny.reverts, 7)
+            )
+        );
+        console2.log(
+            string.concat(
+                "deregisterValidatorAny       ",
+                _formatNumber(anyStats.deregisterValidatorAny.successes, 9),
+                " ",
+                _formatNumber(anyStats.deregisterValidatorAny.reverts, 7)
+            )
+        );
+        console2.log(
+            string.concat(
+                "registerValidatorAny         ",
+                _formatNumber(anyStats.registerValidatorAny.successes, 9),
+                " ",
+                _formatNumber(anyStats.registerValidatorAny.reverts, 7)
+            )
+        );
+        console2.log(
+            string.concat(
+                "undelegateAny                ",
+                _formatNumber(anyStats.undelegateAny.successes, 9),
+                " ",
+                _formatNumber(anyStats.undelegateAny.reverts, 7)
+            )
+        );
+
+        console2.log("---------------------------------------------");
+        console2.log(
+            string.concat(
+                "Total                        ",
+                _formatNumber(handler.getTotalSuccesses(), 9),
+                " ",
+                _formatNumber(handler.getTotalReverts(), 7)
+            )
+        );
+    }
+
+    function _logCurrentState() internal view {
         console2.log("\n=== Current State ===");
         console2.log("Num actors:", handler.getNumActors());
         console2.log("Num all validators:", handler.getNumAllValidators());
@@ -68,6 +224,11 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
         console2.log("Total active delegations:", handler.totalActiveDelegations());
         console2.log("Total active undelegations:", handler.totalActiveUndelegations());
         console2.log("Tracked total supply:", handler.trackedTotalSupply());
+    }
+
+    function afterInvariant() external view {
+        _logFunctionStats();
+        _logCurrentState();
     }
 
     /// @dev The total amount of tokens owned by an actor does not change

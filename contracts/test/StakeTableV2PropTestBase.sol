@@ -97,16 +97,34 @@ contract StakeTableV2PropTestBase {
     mapping(address validator => mapping(address delegator => bool exists)) public
         exitedValidatorDelegatorMap;
 
-    // Transaction success counters
-    uint256 public countOk_registerValidator;
-    uint256 public countOk_deregisterValidator;
-    uint256 public countOk_delegate;
-    uint256 public countOk_undelegate;
-    uint256 public countOk_claimWithdrawal;
-    uint256 public countOk_createActor;
-    uint256 public countOk_createValidator;
-    uint256 public countOk_advanceTime;
-    uint256 public countOk_claimValidatorExit;
+    // Structured function call tracking
+    struct FunctionStats {
+        uint256 successes;
+        uint256 reverts;
+    }
+
+    // Split into smaller structs to avoid stack too deep
+    struct OkFunctionStats {
+        FunctionStats delegateOk;
+        FunctionStats undelegateOk;
+        FunctionStats deregisterValidatorOk;
+        FunctionStats claimWithdrawalOk;
+        FunctionStats claimValidatorExitOk;
+        FunctionStats createActor;
+        FunctionStats createValidator;
+        FunctionStats advanceTime;
+    }
+
+    struct AnyFunctionStats {
+        FunctionStats registerValidatorAny;
+        FunctionStats delegateAny;
+        FunctionStats undelegateAny;
+        FunctionStats deregisterValidatorAny;
+        FunctionStats claimValidatorExitAny;
+    }
+
+    OkFunctionStats public okFunctionStats;
+    AnyFunctionStats public anyFunctionStats;
 
     address internal validator;
     address internal actor;
@@ -247,9 +265,10 @@ contract StakeTableV2PropTestBase {
 
         try stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000) {
             _addValidator(actor);
-            countOk_registerValidator++;
+            anyFunctionStats.registerValidatorAny.successes++;
         } catch {
             // Registration failed - this is acceptable for the Any function
+            anyFunctionStats.registerValidatorAny.reverts++;
         }
     }
 
@@ -314,7 +333,7 @@ contract StakeTableV2PropTestBase {
         _removeActiveValidator(validatorAddress);
         _addExitedValidator(validatorAddress);
         _removeValidatorFromDelegations(validatorAddress);
-        countOk_deregisterValidator++;
+        okFunctionStats.deregisterValidatorOk.successes++;
     }
 
     function deregisterValidatorAny(uint256 validatorIndex) public {
@@ -328,8 +347,10 @@ contract StakeTableV2PropTestBase {
             _removeActiveValidator(validatorAddress);
             _addExitedValidator(validatorAddress);
             _removeValidatorFromDelegations(validatorAddress);
-            countOk_deregisterValidator++;
-        } catch { }
+            anyFunctionStats.deregisterValidatorAny.successes++;
+        } catch {
+            anyFunctionStats.deregisterValidatorAny.reverts++;
+        }
     }
 
     function createActor(uint256 seed) public returns (address) {
@@ -347,7 +368,7 @@ contract StakeTableV2PropTestBase {
         // Add to actors array and map
         actors.push(actorAddress);
         actorMap[actorAddress] = true;
-        countOk_createActor++;
+        okFunctionStats.createActor.successes++;
 
         return actorAddress;
     }
@@ -366,7 +387,7 @@ contract StakeTableV2PropTestBase {
         ivm.prank(validatorAddress);
         stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000);
         _addValidator(validatorAddress);
-        countOk_createValidator++;
+        okFunctionStats.createValidator.successes++;
 
         return validatorAddress;
     }
@@ -388,7 +409,7 @@ contract StakeTableV2PropTestBase {
         trackedActorFunds[actor].delegations += amount;
         _addValidatorWithDelegations(validator);
         _addValidatorDelegator(validator, actor);
-        countOk_delegate++;
+        okFunctionStats.delegateOk.successes++;
     }
 
     function delegateAny(uint256 actorIndex, uint256 validatorIndex, uint256 amount)
@@ -402,9 +423,10 @@ contract StakeTableV2PropTestBase {
             trackedActorFunds[actor].delegations += amount;
             _addValidatorWithDelegations(validator);
             _addValidatorDelegator(validator, actor);
-            countOk_delegate++;
+            anyFunctionStats.delegateAny.successes++;
         } catch {
             // Delegation failed - this is acceptable for the Any function
+            anyFunctionStats.delegateAny.reverts++;
         }
     }
 
@@ -443,7 +465,7 @@ contract StakeTableV2PropTestBase {
             _removeValidatorDelegator(validator, actor);
         }
 
-        countOk_undelegate++;
+        okFunctionStats.undelegateOk.successes++;
     }
 
     function undelegateAny(uint256 actorIndex, uint256 validatorIndex, uint256 amount)
@@ -464,9 +486,10 @@ contract StakeTableV2PropTestBase {
                 _removeValidatorDelegator(validator, actor);
             }
 
-            countOk_undelegate++;
+            anyFunctionStats.undelegateAny.successes++;
         } catch {
             // Undelegation failed - this is acceptable for the Any function
+            anyFunctionStats.undelegateAny.reverts++;
         }
     }
 
@@ -623,7 +646,7 @@ contract StakeTableV2PropTestBase {
         totalActiveUndelegations -= undelegationAmount;
         trackedActorFunds[withdrawal.actor].undelegations -= undelegationAmount;
         _removePendingWithdrawal(withdrawal.actor, withdrawal.validator);
-        countOk_claimWithdrawal++;
+        okFunctionStats.claimWithdrawalOk.successes++;
     }
 
     function getNumActors() external view returns (uint256) {
@@ -658,11 +681,53 @@ contract StakeTableV2PropTestBase {
         return exitedValidatorDelegators[validator].length;
     }
 
+    function getTotalSuccesses() external view returns (uint256) {
+        uint256 total = 0;
+        // Ok functions
+        total += okFunctionStats.delegateOk.successes;
+        total += okFunctionStats.undelegateOk.successes;
+        total += okFunctionStats.deregisterValidatorOk.successes;
+        total += okFunctionStats.claimWithdrawalOk.successes;
+        total += okFunctionStats.claimValidatorExitOk.successes;
+        total += okFunctionStats.createActor.successes;
+        total += okFunctionStats.createValidator.successes;
+        total += okFunctionStats.advanceTime.successes;
+        // Any functions
+        total += anyFunctionStats.registerValidatorAny.successes;
+        total += anyFunctionStats.delegateAny.successes;
+        total += anyFunctionStats.undelegateAny.successes;
+        total += anyFunctionStats.deregisterValidatorAny.successes;
+        total += anyFunctionStats.claimValidatorExitAny.successes;
+        return total;
+    }
+
+    function getTotalReverts() external view returns (uint256) {
+        uint256 total = 0;
+        total += anyFunctionStats.registerValidatorAny.reverts;
+        total += anyFunctionStats.delegateAny.reverts;
+        total += anyFunctionStats.undelegateAny.reverts;
+        total += anyFunctionStats.deregisterValidatorAny.reverts;
+        total += anyFunctionStats.claimValidatorExitAny.reverts;
+        return total;
+    }
+
+    function getTotalCalls() external view returns (uint256) {
+        return this.getTotalSuccesses() + this.getTotalReverts();
+    }
+
+    function getOkStats() external view returns (OkFunctionStats memory) {
+        return okFunctionStats;
+    }
+
+    function getAnyStats() external view returns (AnyFunctionStats memory) {
+        return anyFunctionStats;
+    }
+
     function advanceTime(uint256 seed) public {
         // Advance time by a random amount up to the escrow period
         uint256 timeAdvance = boundRange(seed, 1, EXIT_ESCROW_PERIOD);
         ivm.warp(block.timestamp + timeAdvance);
-        countOk_advanceTime++;
+        okFunctionStats.advanceTime.successes++;
     }
 
     function claimValidatorExitOk(uint256 validatorIndex, uint256 delegatorIndex) public {
@@ -696,7 +761,7 @@ contract StakeTableV2PropTestBase {
         totalActiveDelegations -= delegatedAmount;
         trackedActorFunds[actor].delegations -= delegatedAmount;
         _removeExitedValidatorDelegator(validator, actor);
-        countOk_claimValidatorExit++;
+        okFunctionStats.claimValidatorExitOk.successes++;
     }
 
     function claimValidatorExitAny(uint256 validatorIndex, uint256 delegatorIndex) public {
@@ -719,9 +784,10 @@ contract StakeTableV2PropTestBase {
             totalActiveDelegations -= delegatedAmount;
             trackedActorFunds[actor].delegations -= delegatedAmount;
             _removeExitedValidatorDelegator(validator, actor);
-            countOk_claimValidatorExit++;
+            anyFunctionStats.claimValidatorExitAny.successes++;
         } catch {
             // Claim failed - this is acceptable for the Any function
+            anyFunctionStats.claimValidatorExitAny.reverts++;
         }
     }
 }
