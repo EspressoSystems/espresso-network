@@ -65,7 +65,7 @@ contract StakeTableV2PropTestBase {
     address internal validator;
     address internal actor;
 
-    modifier useValidator(uint256 validatorIndex) virtual {
+    modifier withValidator(uint256 validatorIndex) virtual {
         if (allValidators.length == 0) {
             createValidator(validatorIndex);
         }
@@ -73,7 +73,7 @@ contract StakeTableV2PropTestBase {
         _;
     }
 
-    modifier useActiveValidator(uint256 validatorIndex) virtual {
+    modifier withActiveValidator(uint256 validatorIndex) virtual {
         if (activeValidators.length == 0) {
             createValidator(validatorIndex);
         }
