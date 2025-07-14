@@ -303,4 +303,35 @@ contract StakeTableV2PropTestBase {
 
         return validatorAddress;
     }
+
+    function delegateOk(uint256 actorIndex, uint256 validatorIndex, uint256 amount)
+        public
+        withActiveValidator(validatorIndex)
+        useActor(actorIndex)
+    {
+        uint256 balance = token.balanceOf(actor);
+        amount = amount % (balance + 1);
+
+        if (amount == 0) return;
+
+        stakeTable.delegate(validator, amount);
+
+        // Update tracking
+        totalActiveDelegations += amount;
+        trackedActorFunds[actor].delegations += amount;
+    }
+
+    function delegateAny(uint256 actorIndex, uint256 validatorIndex, uint256 amount)
+        public
+        withActiveValidator(validatorIndex)
+        useActor(actorIndex)
+    {
+        try stakeTable.delegate(validator, amount) {
+            // Update tracking on success
+            totalActiveDelegations += amount;
+            trackedActorFunds[actor].delegations += amount;
+        } catch {
+            // Delegation failed - this is acceptable for the Any function
+        }
+    }
 }
