@@ -4,6 +4,7 @@ pragma solidity ^0.8.0;
 
 import "forge-std/Test.sol";
 import "forge-std/StdInvariant.sol";
+import { console2 } from "forge-std/console2.sol";
 import {
     StakeTableV2PropTestBase, MockStakeTableV2, MockERC20
 } from "./StakeTableV2PropTestBase.sol";
@@ -18,6 +19,32 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
         // Configure contract under test
         handler = new StakeTableV2PropTestBase();
         targetContract(address(handler));
+    }
+
+    function afterInvariant() external view {
+        console2.log("\n=== Transaction Success Counters ===");
+        console2.log("countOk_createActor:", handler.countOk_createActor());
+        console2.log("countOk_createValidator:", handler.countOk_createValidator());
+        console2.log("countOk_registerValidator:", handler.countOk_registerValidator());
+        console2.log("countOk_deregisterValidator:", handler.countOk_deregisterValidator());
+        console2.log("countOk_delegate:", handler.countOk_delegate());
+        console2.log("countOk_undelegate:", handler.countOk_undelegate());
+        console2.log("countOk_claimWithdrawal:", handler.countOk_claimWithdrawal());
+
+        uint256 totalSuccessful = handler.countOk_createActor() + handler.countOk_createValidator()
+            + handler.countOk_registerValidator() + handler.countOk_deregisterValidator()
+            + handler.countOk_delegate() + handler.countOk_undelegate()
+            + handler.countOk_claimWithdrawal();
+        console2.log("Total successful transactions:", totalSuccessful);
+
+        console2.log("\n=== Current State ===");
+        console2.log("Num actors:", handler.getNumActors());
+        console2.log("Num all validators:", handler.getNumAllValidators());
+        console2.log("Num active validators:", handler.getNumActiveValidators());
+        console2.log("Num pending withdrawals:", handler.getNumPendingWithdrawals());
+        console2.log("Total active delegations:", handler.totalActiveDelegations());
+        console2.log("Total active undelegations:", handler.totalActiveUndelegations());
+        console2.log("Tracked total supply:", handler.trackedTotalSupply());
     }
 
     /// @dev The total amount of tokens owned by an actor does not change

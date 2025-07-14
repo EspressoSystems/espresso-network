@@ -9,6 +9,7 @@ import { BN254 } from "bn254/BN254.sol";
 import { EdOnBN254 } from "../src/libraries/EdOnBn254.sol";
 import { ILightClient } from "../src/interfaces/ILightClient.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import { console2 } from "forge-std/console2.sol";
 
 // Minimal VM interface that works with foundry and echidna
 interface IVM {
@@ -71,6 +72,15 @@ contract StakeTableV2PropTestBase {
     PendingWithdrawal[] public pendingWithdrawals;
     mapping(bytes32 withdrawalKey => uint256 index) public pendingWithdrawalIndex;
     mapping(bytes32 withdrawalKey => bool exists) public pendingWithdrawalMap;
+
+    // Transaction success counters
+    uint256 public countOk_registerValidator;
+    uint256 public countOk_deregisterValidator;
+    uint256 public countOk_delegate;
+    uint256 public countOk_undelegate;
+    uint256 public countOk_claimWithdrawal;
+    uint256 public countOk_createActor;
+    uint256 public countOk_createValidator;
 
     address internal validator;
     address internal actor;
@@ -199,6 +209,7 @@ contract StakeTableV2PropTestBase {
 
         try stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000) {
             _addValidator(actor);
+            countOk_registerValidator++;
         } catch {
             // Registration failed - this is acceptable for the Any function
         }
@@ -263,6 +274,7 @@ contract StakeTableV2PropTestBase {
         ivm.prank(validatorAddress);
         stakeTable.deregisterValidator();
         _removeActiveValidator(validatorAddress);
+        countOk_deregisterValidator++;
     }
 
     function deregisterValidatorAny(uint256 validatorIndex) public {
@@ -274,6 +286,7 @@ contract StakeTableV2PropTestBase {
         ivm.prank(validatorAddress);
         try stakeTable.deregisterValidator() {
             _removeActiveValidator(validatorAddress);
+            countOk_deregisterValidator++;
         } catch { }
     }
 
@@ -292,6 +305,7 @@ contract StakeTableV2PropTestBase {
         // Add to actors array and map
         actors.push(actorAddress);
         actorMap[actorAddress] = true;
+        countOk_createActor++;
 
         return actorAddress;
     }
@@ -310,6 +324,7 @@ contract StakeTableV2PropTestBase {
         ivm.prank(validatorAddress);
         stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000);
         _addValidator(validatorAddress);
+        countOk_createValidator++;
 
         return validatorAddress;
     }
@@ -329,6 +344,7 @@ contract StakeTableV2PropTestBase {
         // Update tracking
         totalActiveDelegations += amount;
         trackedActorFunds[actor].delegations += amount;
+        countOk_delegate++;
     }
 
     function delegateAny(uint256 actorIndex, uint256 validatorIndex, uint256 amount)
@@ -340,6 +356,7 @@ contract StakeTableV2PropTestBase {
             // Update tracking on success
             totalActiveDelegations += amount;
             trackedActorFunds[actor].delegations += amount;
+            countOk_delegate++;
         } catch {
             // Delegation failed - this is acceptable for the Any function
         }
@@ -367,6 +384,7 @@ contract StakeTableV2PropTestBase {
         trackedActorFunds[actor].delegations -= amount;
         trackedActorFunds[actor].undelegations += amount;
         _addPendingWithdrawal(actor, validator);
+        countOk_undelegate++;
     }
 
     function undelegateAny(uint256 actorIndex, uint256 validatorIndex, uint256 amount)
@@ -381,6 +399,7 @@ contract StakeTableV2PropTestBase {
             trackedActorFunds[actor].delegations -= amount;
             trackedActorFunds[actor].undelegations += amount;
             _addPendingWithdrawal(actor, validator);
+            countOk_undelegate++;
         } catch {
             // Undelegation failed - this is acceptable for the Any function
         }
@@ -440,5 +459,22 @@ contract StakeTableV2PropTestBase {
         totalActiveUndelegations -= undelegationAmount;
         trackedActorFunds[withdrawal.actor].undelegations -= undelegationAmount;
         _removePendingWithdrawal(withdrawal.actor, withdrawal.validator);
+        countOk_claimWithdrawal++;
+    }
+
+    function getNumActors() external view returns (uint256) {
+        return actors.length;
+    }
+
+    function getNumAllValidators() external view returns (uint256) {
+        return allValidators.length;
+    }
+
+    function getNumActiveValidators() external view returns (uint256) {
+        return activeValidators.length;
+    }
+
+    function getNumPendingWithdrawals() external view returns (uint256) {
+        return pendingWithdrawals.length;
     }
 }

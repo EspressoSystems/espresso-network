@@ -30,6 +30,7 @@ optimizer = true
 [invariant]
 show_metrics = true
 fail_on_revert = true
+show_logs = true
 
 [rpc_endpoints]
 local = "http://localhost:8545"
