@@ -73,6 +73,18 @@ contract StakeTableV2PropTestBase {
     mapping(bytes32 withdrawalKey => uint256 index) public pendingWithdrawalIndex;
     mapping(bytes32 withdrawalKey => bool exists) public pendingWithdrawalMap;
 
+    // Track validators with delegations for efficient undelegation
+    address[] public validatorsWithDelegations;
+    mapping(address validator => uint256 index) public validatorsWithDelegationsIndex;
+    mapping(address validator => bool exists) public validatorsWithDelegationsMap;
+
+    // Track delegators per validator for efficient undelegation
+    mapping(address validator => address[] delegators) public validatorDelegators;
+    mapping(address validator => mapping(address delegator => uint256 index)) public
+        validatorDelegatorIndex;
+    mapping(address validator => mapping(address delegator => bool exists)) public
+        validatorDelegatorMap;
+
     // Transaction success counters
     uint256 public countOk_registerValidator;
     uint256 public countOk_deregisterValidator;
@@ -274,6 +286,7 @@ contract StakeTableV2PropTestBase {
         ivm.prank(validatorAddress);
         stakeTable.deregisterValidator();
         _removeActiveValidator(validatorAddress);
+        _removeValidatorFromDelegations(validatorAddress);
         countOk_deregisterValidator++;
     }
 
@@ -286,6 +299,7 @@ contract StakeTableV2PropTestBase {
         ivm.prank(validatorAddress);
         try stakeTable.deregisterValidator() {
             _removeActiveValidator(validatorAddress);
+            _removeValidatorFromDelegations(validatorAddress);
             countOk_deregisterValidator++;
         } catch { }
     }
@@ -344,6 +358,8 @@ contract StakeTableV2PropTestBase {
         // Update tracking
         totalActiveDelegations += amount;
         trackedActorFunds[actor].delegations += amount;
+        _addValidatorWithDelegations(validator);
+        _addValidatorDelegator(validator, actor);
         countOk_delegate++;
     }
 
@@ -356,26 +372,38 @@ contract StakeTableV2PropTestBase {
             // Update tracking on success
             totalActiveDelegations += amount;
             trackedActorFunds[actor].delegations += amount;
+            _addValidatorWithDelegations(validator);
+            _addValidatorDelegator(validator, actor);
             countOk_delegate++;
         } catch {
             // Delegation failed - this is acceptable for the Any function
         }
     }
 
-    function undelegateOk(uint256 actorIndex, uint256 validatorIndex, uint256 amount)
-        public
-        withActiveValidator(validatorIndex)
-        useActor(actorIndex)
-    {
+    function undelegateOk(uint256 actorIndex, uint256 validatorIndex, uint256 amount) public {
+        // Use validators with delegations for higher success rate
+        if (validatorsWithDelegations.length == 0) return;
+
+        validator = validatorsWithDelegations[validatorIndex % validatorsWithDelegations.length];
+
+        // Pick a delegator from this validator's delegators
+        address[] memory delegators = validatorDelegators[validator];
+        if (delegators.length == 0) return;
+
+        actor = delegators[actorIndex % delegators.length];
+
         // Only one undelegation is allowed at a time
         (uint256 existingUndelegation,) = stakeTable.undelegations(validator, actor);
         if (existingUndelegation > 0) return;
 
         uint256 delegatedAmount = stakeTable.delegations(validator, actor);
+        if (delegatedAmount == 0) return;
+
         amount = amount % (delegatedAmount + 1);
 
         if (amount == 0) return;
 
+        ivm.prank(actor);
         stakeTable.undelegate(validator, amount);
 
         // Update tracking
@@ -384,6 +412,12 @@ contract StakeTableV2PropTestBase {
         trackedActorFunds[actor].delegations -= amount;
         trackedActorFunds[actor].undelegations += amount;
         _addPendingWithdrawal(actor, validator);
+
+        // Remove delegator from tracking if delegation amount reaches 0
+        if (stakeTable.delegations(validator, actor) == 0) {
+            _removeValidatorDelegator(validator, actor);
+        }
+
         countOk_undelegate++;
     }
 
@@ -399,6 +433,12 @@ contract StakeTableV2PropTestBase {
             trackedActorFunds[actor].delegations -= amount;
             trackedActorFunds[actor].undelegations += amount;
             _addPendingWithdrawal(actor, validator);
+
+            // Remove delegator from tracking if delegation amount reaches 0
+            if (stakeTable.delegations(validator, actor) == 0) {
+                _removeValidatorDelegator(validator, actor);
+            }
+
             countOk_undelegate++;
         } catch {
             // Undelegation failed - this is acceptable for the Any function
@@ -407,6 +447,61 @@ contract StakeTableV2PropTestBase {
 
     function _getWithdrawalKey(address actor, address validator) internal pure returns (bytes32) {
         return keccak256(abi.encodePacked(actor, validator));
+    }
+
+    function _addValidatorWithDelegations(address validator) internal {
+        if (validatorsWithDelegationsMap[validator]) return; // Already exists
+
+        uint256 newIndex = validatorsWithDelegations.length;
+        validatorsWithDelegations.push(validator);
+        validatorsWithDelegationsIndex[validator] = newIndex;
+        validatorsWithDelegationsMap[validator] = true;
+    }
+
+    function _removeValidatorFromDelegations(address validator) internal {
+        if (!validatorsWithDelegationsMap[validator]) return; // Doesn't exist
+
+        uint256 indexToRemove = validatorsWithDelegationsIndex[validator];
+        uint256 lastIndex = validatorsWithDelegations.length - 1;
+
+        if (indexToRemove != lastIndex) {
+            address lastValidator = validatorsWithDelegations[lastIndex];
+            validatorsWithDelegations[indexToRemove] = lastValidator;
+            validatorsWithDelegationsIndex[lastValidator] = indexToRemove;
+        }
+
+        validatorsWithDelegations.pop();
+        delete validatorsWithDelegationsIndex[validator];
+        validatorsWithDelegationsMap[validator] = false;
+
+        // Clear all delegators for this validator
+        delete validatorDelegators[validator];
+    }
+
+    function _addValidatorDelegator(address validator, address delegator) internal {
+        if (validatorDelegatorMap[validator][delegator]) return; // Already exists
+
+        uint256 newIndex = validatorDelegators[validator].length;
+        validatorDelegators[validator].push(delegator);
+        validatorDelegatorIndex[validator][delegator] = newIndex;
+        validatorDelegatorMap[validator][delegator] = true;
+    }
+
+    function _removeValidatorDelegator(address validator, address delegator) internal {
+        if (!validatorDelegatorMap[validator][delegator]) return; // Doesn't exist
+
+        uint256 indexToRemove = validatorDelegatorIndex[validator][delegator];
+        uint256 lastIndex = validatorDelegators[validator].length - 1;
+
+        if (indexToRemove != lastIndex) {
+            address lastDelegator = validatorDelegators[validator][lastIndex];
+            validatorDelegators[validator][indexToRemove] = lastDelegator;
+            validatorDelegatorIndex[validator][lastDelegator] = indexToRemove;
+        }
+
+        validatorDelegators[validator].pop();
+        delete validatorDelegatorIndex[validator][delegator];
+        validatorDelegatorMap[validator][delegator] = false;
     }
 
     function _addPendingWithdrawal(address actor, address validator) internal {
@@ -476,5 +571,13 @@ contract StakeTableV2PropTestBase {
 
     function getNumPendingWithdrawals() external view returns (uint256) {
         return pendingWithdrawals.length;
+    }
+
+    function getNumValidatorsWithDelegations() external view returns (uint256) {
+        return validatorsWithDelegations.length;
+    }
+
+    function getNumValidatorDelegators(address validator) external view returns (uint256) {
+        return validatorDelegators[validator].length;
     }
 }

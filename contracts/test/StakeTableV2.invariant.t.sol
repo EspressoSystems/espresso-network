@@ -42,6 +42,16 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
         console2.log("Num all validators:", handler.getNumAllValidators());
         console2.log("Num active validators:", handler.getNumActiveValidators());
         console2.log("Num pending withdrawals:", handler.getNumPendingWithdrawals());
+        console2.log("Num validators with delegations:", handler.getNumValidatorsWithDelegations());
+
+        // Count total validator-delegator pairs
+        uint256 totalValidatorDelegatorPairs = 0;
+        for (uint256 i = 0; i < handler.getNumValidatorsWithDelegations(); i++) {
+            address validator = handler.validatorsWithDelegations(i);
+            totalValidatorDelegatorPairs += handler.getNumValidatorDelegators(validator);
+        }
+        console2.log("Total validator-delegator pairs:", totalValidatorDelegatorPairs);
+
         console2.log("Total active delegations:", handler.totalActiveDelegations());
         console2.log("Total active undelegations:", handler.totalActiveUndelegations());
         console2.log("Tracked total supply:", handler.trackedTotalSupply());
