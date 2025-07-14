@@ -614,7 +614,7 @@ where
         }
         .boxed()
     })?
-    .at("get_transaction_no_proof", move |req, state| {
+    .at("get_transaction_without_proof", move |req, state| {
         async move { get_transaction::<_, TransactionQueryData<_>, _>(req, state, timeout).await }
             .boxed()
     })?

@@ -275,7 +275,7 @@ Returns
 ```
 """
 
-[route.get_transaction_no_proof]
+[route.get_transaction_without_proof]
 PATH = ["transaction/:height/:index/noproof", "transaction/hash/:hash/noproof"]
 ":height" = "Integer"
 ":index" = "Integer"
