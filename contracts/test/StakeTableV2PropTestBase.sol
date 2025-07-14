@@ -93,6 +93,7 @@ contract StakeTableV2PropTestBase {
     uint256 public countOk_claimWithdrawal;
     uint256 public countOk_createActor;
     uint256 public countOk_createValidator;
+    uint256 public countOk_advanceTime;
 
     address internal validator;
     address internal actor;
@@ -545,7 +546,10 @@ contract StakeTableV2PropTestBase {
             stakeTable.undelegations(withdrawal.validator, withdrawal.actor);
 
         if (undelegationAmount == 0) return;
-        if (block.timestamp < unlocksAt) return;
+        if (block.timestamp < unlocksAt) {
+            // Advance time by escrow period to enable withdrawal
+            ivm.warp(block.timestamp + EXIT_ESCROW_PERIOD);
+        }
 
         ivm.prank(withdrawal.actor);
         stakeTable.claimWithdrawal(withdrawal.validator);
@@ -579,5 +583,14 @@ contract StakeTableV2PropTestBase {
 
     function getNumValidatorDelegators(address validator) external view returns (uint256) {
         return validatorDelegators[validator].length;
+    }
+
+    function advanceTime(uint256 seed) public {
+        // Advance time by a random amount up to the escrow period
+        uint256 timeAdvance = seed % (EXIT_ESCROW_PERIOD + 1);
+        if (timeAdvance > 0) {
+            ivm.warp(block.timestamp + timeAdvance);
+            countOk_advanceTime++;
+        }
     }
 }

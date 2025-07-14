@@ -30,11 +30,12 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
         console2.log("countOk_delegate:", handler.countOk_delegate());
         console2.log("countOk_undelegate:", handler.countOk_undelegate());
         console2.log("countOk_claimWithdrawal:", handler.countOk_claimWithdrawal());
+        console2.log("countOk_advanceTime:", handler.countOk_advanceTime());
 
         uint256 totalSuccessful = handler.countOk_createActor() + handler.countOk_createValidator()
             + handler.countOk_registerValidator() + handler.countOk_deregisterValidator()
             + handler.countOk_delegate() + handler.countOk_undelegate()
-            + handler.countOk_claimWithdrawal();
+            + handler.countOk_claimWithdrawal() + handler.countOk_advanceTime();
         console2.log("Total successful transactions:", totalSuccessful);
 
         console2.log("\n=== Current State ===");
