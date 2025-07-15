@@ -438,7 +438,12 @@ where
         };
 
         // get the drb result if it's available
-        let drb = if let Ok(drb) = drb_membership.get_epoch_drb().await {
+        let drb = if let Ok(drb) = drb_membership
+            .next_epoch_stake_table()
+            .await?
+            .get_epoch_drb()
+            .await
+        {
             drb
         } else {
             let Ok(drb_seed_input_vec) = bincode::serialize(&root_leaf.justify_qc().signatures)
@@ -475,7 +480,7 @@ where
             compute_drb_result(drb_input, store_drb_progress_fn, load_drb_progress_fn).await
         };
 
-        tracing::info!("Writing drb result from catchup to storage for epoch {epoch}");
+        tracing::info!("Writing drb result from catchup to storage for epoch {epoch}: {drb:?}");
         if let Err(e) = (self.store_drb_result_fn)(epoch, drb).await {
             tracing::warn!("Failed to add drb result to storage: {e}");
         }
