@@ -157,8 +157,9 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
         // Count total validator-delegator pairs
         uint256 totalValidatorDelegatorPairs = 0;
         for (uint256 i = 0; i < handler.getNumValidatorsWithDelegations(); i++) {
-            address validator = handler.validatorsWithDelegations(i);
-            totalValidatorDelegatorPairs += handler.getNumValidatorDelegators(validator);
+            (address validator, uint256 numDelegators) =
+                handler.getValidatorWithDelegationsAtIndex(i);
+            totalValidatorDelegatorPairs += numDelegators;
         }
         console2.log("Total validator-delegator pairs:", totalValidatorDelegatorPairs);
 
@@ -167,7 +168,7 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
         // Count total exited validator-delegator pairs
         uint256 totalExitedValidatorDelegatorPairs = 0;
         for (uint256 i = 0; i < handler.getNumExitedValidators(); i++) {
-            address validator = handler.exitedValidators(i);
+            address validator = handler.getExitedValidatorAtIndex(i);
             totalExitedValidatorDelegatorPairs += handler.getNumExitedValidatorDelegators(validator);
         }
         console2.log("Total exited validator-delegator pairs:", totalExitedValidatorDelegatorPairs);
@@ -184,10 +185,11 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
 
     /// @dev The total amount of tokens owned by an actor does not change
     function invariant_actorOwnedAmounts() public view {
-        for (uint256 i = 0; i < actors.length; i++) {
+        for (uint256 i = 0; i < handler.getNumActors(); i++) {
+            address actor = handler.getActorAtIndex(i);
             assertEq(
-                totalOwnedAmount(actors[i]),
-                initialBalances[actors[i]],
+                handler.totalOwnedAmount(actor),
+                handler.initialBalances(actor),
                 "Actor balance invariant violated"
             );
         }
@@ -195,8 +197,8 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
 
     /// @dev Contract balance should equal sum of all delegated amounts
     function invariant_ContractBalanceMatchesTrackedDelegations() public view {
-        uint256 contractBalance = token.balanceOf(address(stakeTable));
-        uint256 totalTracked = _getTotalTrackedFunds();
+        uint256 contractBalance = handler.token().balanceOf(address(handler.stakeTable()));
+        uint256 totalTracked = handler.totalActiveDelegations() + handler.totalActiveUndelegations();
         assertEq(
             contractBalance,
             totalTracked,
@@ -206,6 +208,10 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
 
     /// @dev Total supply must remain constant
     function invariant_TotalSupply() public view {
-        assertEq(_getTotalSupply(), trackedTotalSupply, "Total supply invariant violated");
+        assertEq(
+            handler.getTotalSupply(),
+            handler.trackedTotalSupply(),
+            "Total supply invariant violated"
+        );
     }
 }

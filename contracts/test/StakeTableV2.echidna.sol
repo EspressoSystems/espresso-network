@@ -3,14 +3,17 @@
 pragma solidity ^0.8.0;
 
 import { StakeTableV2PropTestBase } from "./StakeTableV2PropTestBase.sol";
+import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
+    using EnumerableSet for EnumerableSet.AddressSet;
+
     constructor() { }
 
     /// @dev The total amount of tokens owned by an actor does not change
     function echidna_actorOwnedAmounts() public view returns (bool) {
-        for (uint256 i = 0; i < actors.length; i++) {
-            if (totalOwnedAmount(actors[i]) != initialBalances[actors[i]]) {
+        for (uint256 i = 0; i < actors.length(); i++) {
+            if (totalOwnedAmount(actors.at(i)) != initialBalances[actors.at(i)]) {
                 return false;
             }
         }

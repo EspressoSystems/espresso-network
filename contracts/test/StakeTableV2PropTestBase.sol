@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: MIT
-/* solhint-disable func-name-mixedcase, one-contract-per-file */
 pragma solidity ^0.8.0;
 
 import { MockStakeTableV2 } from "./MockStakeTableV2.sol";
@@ -10,6 +8,8 @@ import { EdOnBN254 } from "../src/libraries/EdOnBn254.sol";
 import { ILightClient } from "../src/interfaces/ILightClient.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { console2 } from "forge-std/console2.sol";
+import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import { EnumerableMap } from "@openzeppelin/contracts/utils/structs/EnumerableMap.sol";
 
 // Minimal VM interface that works with foundry and echidna
 interface IVM {
@@ -34,24 +34,23 @@ contract MockLightClient is ILightClient {
 }
 
 contract StakeTableV2PropTestBase {
+    using EnumerableSet for EnumerableSet.AddressSet;
+    using EnumerableSet for EnumerableSet.Bytes32Set;
+
     MockStakeTableV2 public stakeTable;
     MockERC20 public token;
     MockLightClient public lightClient;
     IVM public ivm = IVM(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
 
-    address[] public actors;
-    address[] public allValidators;
-    address[] public activeValidators;
-
-    mapping(address validator => uint256 index) public activeValidatorIndex;
-    mapping(address validator => bool exists) public activeValidatorMap;
+    EnumerableSet.AddressSet internal actors;
+    EnumerableSet.AddressSet internal allValidators;
+    EnumerableSet.AddressSet internal activeValidators;
 
     uint256 public constant INITIAL_BALANCE = 1000000000e18;
     uint256 public trackedTotalSupply;
     uint256 public constant EXIT_ESCROW_PERIOD = 7 days;
 
     mapping(address account => uint256 balance) public initialBalances;
-    mapping(address account => bool exists) public actorMap;
 
     uint256 public totalActiveDelegations;
     uint256 public totalActiveUndelegations;
@@ -69,33 +68,18 @@ contract StakeTableV2PropTestBase {
         address validator;
     }
 
-    PendingWithdrawal[] public pendingWithdrawals;
-    mapping(bytes32 withdrawalKey => uint256 index) public pendingWithdrawalIndex;
-    mapping(bytes32 withdrawalKey => bool exists) public pendingWithdrawalMap;
+    EnumerableSet.Bytes32Set internal pendingWithdrawalKeys;
+    mapping(bytes32 withdrawalKey => PendingWithdrawal) public pendingWithdrawals;
 
-    // Track validators with delegations for efficient undelegation
-    address[] public validatorsWithDelegations;
-    mapping(address validator => uint256 index) public validatorsWithDelegationsIndex;
-    mapping(address validator => bool exists) public validatorsWithDelegationsMap;
-
-    // Track delegators per validator for efficient undelegation
-    mapping(address validator => address[] delegators) public validatorDelegators;
-    mapping(address validator => mapping(address delegator => uint256 index)) public
-        validatorDelegatorIndex;
-    mapping(address validator => mapping(address delegator => bool exists)) public
-        validatorDelegatorMap;
+    // Track validators with delegations and their delegators
+    EnumerableSet.AddressSet internal validatorsWithDelegations;
+    mapping(address => EnumerableSet.AddressSet) internal validatorDelegators;
 
     // Track validators that have exited for claim processing
-    address[] public exitedValidators;
-    mapping(address validator => uint256 index) public exitedValidatorIndex;
-    mapping(address validator => bool exists) public exitedValidatorMap;
+    EnumerableSet.AddressSet internal exitedValidators;
 
     // Track delegators for each exited validator
-    mapping(address validator => address[] delegators) public exitedValidatorDelegators;
-    mapping(address validator => mapping(address delegator => uint256 index)) public
-        exitedValidatorDelegatorIndex;
-    mapping(address validator => mapping(address delegator => bool exists)) public
-        exitedValidatorDelegatorMap;
+    mapping(address => EnumerableSet.AddressSet) internal exitedValidatorDelegators;
 
     // Structured function call tracking
     struct FunctionStats {
@@ -143,26 +127,26 @@ contract StakeTableV2PropTestBase {
     }
 
     modifier withValidator(uint256 validatorIndex) virtual {
-        if (allValidators.length == 0) {
+        if (allValidators.length() == 0) {
             createValidator(validatorIndex);
         }
-        validator = allValidators[validatorIndex % allValidators.length];
+        validator = allValidators.at(validatorIndex % allValidators.length());
         _;
     }
 
     modifier withActiveValidator(uint256 validatorIndex) virtual {
-        if (activeValidators.length == 0) {
+        if (activeValidators.length() == 0) {
             createValidator(validatorIndex);
         }
-        validator = activeValidators[validatorIndex % activeValidators.length];
+        validator = activeValidators.at(validatorIndex % activeValidators.length());
         _;
     }
 
     modifier useActor(uint256 actorIndex) virtual {
-        if (actors.length == 0) {
+        if (actors.length() == 0) {
             createActor(actorIndex);
         }
-        actor = actors[actorIndex % actors.length];
+        actor = actors.at(actorIndex % actors.length());
         ivm.startPrank(actor);
         _;
         ivm.stopPrank();
@@ -245,8 +229,8 @@ contract StakeTableV2PropTestBase {
 
     function _getTotalSupply() internal view returns (uint256 total) {
         total += token.balanceOf(address(stakeTable));
-        for (uint256 i = 0; i < actors.length; i++) {
-            total += token.balanceOf(actors[i]);
+        for (uint256 i = 0; i < actors.length(); i++) {
+            total += token.balanceOf(actors.at(i));
         }
     }
 
@@ -277,15 +261,11 @@ contract StakeTableV2PropTestBase {
         address candidate = address(uint160(uint256(keccak256(abi.encode(seed)))));
 
         // If address is already an actor, increment until we find an available one
-        while (_isActor(candidate)) {
+        while (actors.contains(candidate)) {
             candidate = address(uint160(candidate) + 1);
         }
 
         return candidate;
-    }
-
-    function _isActor(address candidate) internal view returns (bool) {
-        return actorMap[candidate];
     }
 
     function _isValidator(address candidate) internal view returns (bool) {
@@ -294,40 +274,19 @@ contract StakeTableV2PropTestBase {
     }
 
     function _addValidator(address validatorAddress) internal {
-        allValidators.push(validatorAddress);
-
-        uint256 newIndex = activeValidators.length;
-        activeValidators.push(validatorAddress);
-        activeValidatorIndex[validatorAddress] = newIndex;
-        activeValidatorMap[validatorAddress] = true;
+        allValidators.add(validatorAddress);
+        activeValidators.add(validatorAddress);
     }
 
     function _removeActiveValidator(address validatorAddress) internal {
-        if (!activeValidatorMap[validatorAddress]) {
-            return; // Validator not active
-        }
-
-        uint256 indexToRemove = activeValidatorIndex[validatorAddress];
-        uint256 lastIndex = activeValidators.length - 1;
-
-        if (indexToRemove != lastIndex) {
-            // Move last element to the position being removed
-            address lastValidator = activeValidators[lastIndex];
-            activeValidators[indexToRemove] = lastValidator;
-            activeValidatorIndex[lastValidator] = indexToRemove;
-        }
-
-        // Remove the last element
-        activeValidators.pop();
-        delete activeValidatorIndex[validatorAddress];
-        activeValidatorMap[validatorAddress] = false;
+        activeValidators.remove(validatorAddress);
     }
 
     function deregisterValidatorOk(uint256 validatorIndex) public {
-        if (activeValidators.length == 0) {
+        if (activeValidators.length() == 0) {
             return;
         }
-        address validatorAddress = activeValidators[validatorIndex % activeValidators.length];
+        address validatorAddress = activeValidators.at(validatorIndex % activeValidators.length());
 
         ivm.prank(validatorAddress);
         stakeTable.deregisterValidator();
@@ -338,10 +297,10 @@ contract StakeTableV2PropTestBase {
     }
 
     function deregisterValidatorAny(uint256 validatorIndex) public {
-        if (allValidators.length == 0) {
+        if (allValidators.length() == 0) {
             return;
         }
-        address validatorAddress = allValidators[validatorIndex % allValidators.length];
+        address validatorAddress = allValidators.at(validatorIndex % allValidators.length());
 
         ivm.prank(validatorAddress);
         try stakeTable.deregisterValidator() {
@@ -367,8 +326,7 @@ contract StakeTableV2PropTestBase {
         token.approve(address(stakeTable), type(uint256).max);
 
         // Add to actors array and map
-        actors.push(actorAddress);
-        actorMap[actorAddress] = true;
+        actors.add(actorAddress);
         okFunctionStats.createActor.successes++;
 
         return actorAddress;
@@ -408,7 +366,6 @@ contract StakeTableV2PropTestBase {
         // Update tracking
         totalActiveDelegations += amount;
         trackedActorFunds[actor].delegations += amount;
-        _addValidatorWithDelegations(validator);
         _addValidatorDelegator(validator, actor);
         okFunctionStats.delegateOk.successes++;
     }
@@ -422,7 +379,6 @@ contract StakeTableV2PropTestBase {
             // Update tracking on success
             totalActiveDelegations += amount;
             trackedActorFunds[actor].delegations += amount;
-            _addValidatorWithDelegations(validator);
             _addValidatorDelegator(validator, actor);
             anyFunctionStats.delegateAny.successes++;
         } catch {
@@ -433,15 +389,16 @@ contract StakeTableV2PropTestBase {
 
     function undelegateOk(uint256 actorIndex, uint256 validatorIndex, uint256 amount) public {
         // Use validators with delegations for higher success rate
-        if (validatorsWithDelegations.length == 0) return;
+        if (validatorsWithDelegations.length() == 0) return;
 
-        validator = validatorsWithDelegations[validatorIndex % validatorsWithDelegations.length];
+        validator =
+            validatorsWithDelegations.at(validatorIndex % validatorsWithDelegations.length());
 
         // Pick a delegator from this validator's delegators
-        address[] memory delegators = validatorDelegators[validator];
-        if (delegators.length == 0) return;
+        EnumerableSet.AddressSet storage delegators = validatorDelegators[validator];
+        if (delegators.length() == 0) return;
 
-        actor = delegators[actorIndex % delegators.length];
+        actor = delegators.at(actorIndex % delegators.length());
 
         // Only one undelegation is allowed at a time
         (uint256 existingUndelegation,) = stakeTable.undelegations(validator, actor);
@@ -494,142 +451,72 @@ contract StakeTableV2PropTestBase {
         }
     }
 
-    function _getWithdrawalKey(address actor, address validator) internal pure returns (bytes32) {
-        return keccak256(abi.encodePacked(actor, validator));
+    function _getWithdrawalKey(address _actor, address _validator)
+        internal
+        pure
+        returns (bytes32)
+    {
+        return keccak256(abi.encodePacked(_actor, _validator));
     }
 
-    function _addValidatorWithDelegations(address validator) internal {
-        if (validatorsWithDelegationsMap[validator]) return; // Already exists
-
-        uint256 newIndex = validatorsWithDelegations.length;
-        validatorsWithDelegations.push(validator);
-        validatorsWithDelegationsIndex[validator] = newIndex;
-        validatorsWithDelegationsMap[validator] = true;
+    function _removeValidatorFromDelegations(address _validator) internal {
+        validatorsWithDelegations.remove(_validator);
     }
 
-    function _removeValidatorFromDelegations(address validator) internal {
-        if (!validatorsWithDelegationsMap[validator]) return; // Doesn't exist
+    function _addValidatorDelegator(address _validator, address _delegator) internal {
+        validatorsWithDelegations.add(_validator);
+        validatorDelegators[_validator].add(_delegator);
+    }
 
-        uint256 indexToRemove = validatorsWithDelegationsIndex[validator];
-        uint256 lastIndex = validatorsWithDelegations.length - 1;
-
-        if (indexToRemove != lastIndex) {
-            address lastValidator = validatorsWithDelegations[lastIndex];
-            validatorsWithDelegations[indexToRemove] = lastValidator;
-            validatorsWithDelegationsIndex[lastValidator] = indexToRemove;
+    function _removeValidatorDelegator(address _validator, address _delegator) internal {
+        validatorDelegators[_validator].remove(_delegator);
+        if (validatorDelegators[_validator].length() == 0) {
+            validatorsWithDelegations.remove(_validator);
         }
-
-        validatorsWithDelegations.pop();
-        delete validatorsWithDelegationsIndex[validator];
-        validatorsWithDelegationsMap[validator] = false;
-
-        // Clear all delegators for this validator
-        delete validatorDelegators[validator];
     }
 
-    function _addValidatorDelegator(address validator, address delegator) internal {
-        if (validatorDelegatorMap[validator][delegator]) return; // Already exists
-
-        uint256 newIndex = validatorDelegators[validator].length;
-        validatorDelegators[validator].push(delegator);
-        validatorDelegatorIndex[validator][delegator] = newIndex;
-        validatorDelegatorMap[validator][delegator] = true;
-    }
-
-    function _removeValidatorDelegator(address validator, address delegator) internal {
-        if (!validatorDelegatorMap[validator][delegator]) return; // Doesn't exist
-
-        uint256 indexToRemove = validatorDelegatorIndex[validator][delegator];
-        uint256 lastIndex = validatorDelegators[validator].length - 1;
-
-        if (indexToRemove != lastIndex) {
-            address lastDelegator = validatorDelegators[validator][lastIndex];
-            validatorDelegators[validator][indexToRemove] = lastDelegator;
-            validatorDelegatorIndex[validator][lastDelegator] = indexToRemove;
-        }
-
-        validatorDelegators[validator].pop();
-        delete validatorDelegatorIndex[validator][delegator];
-        validatorDelegatorMap[validator][delegator] = false;
-    }
-
-    function _addExitedValidator(address validator) internal {
-        if (exitedValidatorMap[validator]) return; // Already exists
+    function _addExitedValidator(address _validator) internal {
+        if (exitedValidators.contains(_validator)) return; // Already exists
 
         // Copy current delegators to exit tracking before clearing
-        address[] memory delegators = validatorDelegators[validator];
-        for (uint256 i = 0; i < delegators.length; i++) {
-            _addExitedValidatorDelegator(validator, delegators[i]);
+        EnumerableSet.AddressSet storage delegators = validatorDelegators[_validator];
+        for (uint256 i = 0; i < delegators.length(); i++) {
+            _addExitedValidatorDelegator(_validator, delegators.at(i));
         }
 
-        uint256 newIndex = exitedValidators.length;
-        exitedValidators.push(validator);
-        exitedValidatorIndex[validator] = newIndex;
-        exitedValidatorMap[validator] = true;
+        exitedValidators.add(_validator);
     }
 
-    function _addExitedValidatorDelegator(address validator, address delegator) internal {
-        if (exitedValidatorDelegatorMap[validator][delegator]) return; // Already exists
-
-        uint256 newIndex = exitedValidatorDelegators[validator].length;
-        exitedValidatorDelegators[validator].push(delegator);
-        exitedValidatorDelegatorIndex[validator][delegator] = newIndex;
-        exitedValidatorDelegatorMap[validator][delegator] = true;
+    function _addExitedValidatorDelegator(address _validator, address _delegator) internal {
+        exitedValidatorDelegators[_validator].add(_delegator);
     }
 
-    function _removeExitedValidatorDelegator(address validator, address delegator) internal {
-        if (!exitedValidatorDelegatorMap[validator][delegator]) return; // Doesn't exist
-
-        uint256 indexToRemove = exitedValidatorDelegatorIndex[validator][delegator];
-        uint256 lastIndex = exitedValidatorDelegators[validator].length - 1;
-
-        if (indexToRemove != lastIndex) {
-            address lastDelegator = exitedValidatorDelegators[validator][lastIndex];
-            exitedValidatorDelegators[validator][indexToRemove] = lastDelegator;
-            exitedValidatorDelegatorIndex[validator][lastDelegator] = indexToRemove;
-        }
-
-        exitedValidatorDelegators[validator].pop();
-        delete exitedValidatorDelegatorIndex[validator][delegator];
-        exitedValidatorDelegatorMap[validator][delegator] = false;
+    function _removeExitedValidatorDelegator(address _validator, address _delegator) internal {
+        exitedValidatorDelegators[_validator].remove(_delegator);
     }
 
-    function _addPendingWithdrawal(address actor, address validator) internal {
-        bytes32 key = _getWithdrawalKey(actor, validator);
-        if (pendingWithdrawalMap[key]) return; // Already exists
+    function _addPendingWithdrawal(address _actor, address _validator) internal {
+        bytes32 key = _getWithdrawalKey(_actor, _validator);
+        if (pendingWithdrawalKeys.contains(key)) return; // Already exists
 
-        uint256 newIndex = pendingWithdrawals.length;
-        pendingWithdrawals.push(PendingWithdrawal(actor, validator));
-        pendingWithdrawalIndex[key] = newIndex;
-        pendingWithdrawalMap[key] = true;
+        pendingWithdrawalKeys.add(key);
+        pendingWithdrawals[key] = PendingWithdrawal(_actor, _validator);
     }
 
-    function _removePendingWithdrawal(address actor, address validator) internal {
-        bytes32 key = _getWithdrawalKey(actor, validator);
-        if (!pendingWithdrawalMap[key]) return; // Doesn't exist
+    function _removePendingWithdrawal(address _actor, address _validator) internal {
+        bytes32 key = _getWithdrawalKey(_actor, _validator);
+        if (!pendingWithdrawalKeys.contains(key)) return; // Doesn't exist
 
-        uint256 indexToRemove = pendingWithdrawalIndex[key];
-        uint256 lastIndex = pendingWithdrawals.length - 1;
-
-        if (indexToRemove != lastIndex) {
-            // Move last element to the position being removed
-            PendingWithdrawal memory lastWithdrawal = pendingWithdrawals[lastIndex];
-            pendingWithdrawals[indexToRemove] = lastWithdrawal;
-            bytes32 lastKey = _getWithdrawalKey(lastWithdrawal.actor, lastWithdrawal.validator);
-            pendingWithdrawalIndex[lastKey] = indexToRemove;
-        }
-
-        // Remove the last element
-        pendingWithdrawals.pop();
-        delete pendingWithdrawalIndex[key];
-        pendingWithdrawalMap[key] = false;
+        pendingWithdrawalKeys.remove(key);
+        delete pendingWithdrawals[key];
     }
 
     function claimWithdrawalOk(uint256 withdrawalIndex) public {
-        if (pendingWithdrawals.length == 0) return;
+        if (pendingWithdrawalKeys.length() == 0) return;
 
-        PendingWithdrawal memory withdrawal =
-            pendingWithdrawals[withdrawalIndex % pendingWithdrawals.length];
+        bytes32 withdrawalKey =
+            pendingWithdrawalKeys.at(withdrawalIndex % pendingWithdrawalKeys.length());
+        PendingWithdrawal memory withdrawal = pendingWithdrawals[withdrawalKey];
 
         (uint256 undelegationAmount, uint256 unlocksAt) =
             stakeTable.undelegations(withdrawal.validator, withdrawal.actor);
@@ -651,35 +538,63 @@ contract StakeTableV2PropTestBase {
     }
 
     function getNumActors() external view returns (uint256) {
-        return actors.length;
+        return actors.length();
     }
 
     function getNumAllValidators() external view returns (uint256) {
-        return allValidators.length;
+        return allValidators.length();
     }
 
     function getNumActiveValidators() external view returns (uint256) {
-        return activeValidators.length;
+        return activeValidators.length();
     }
 
     function getNumPendingWithdrawals() external view returns (uint256) {
-        return pendingWithdrawals.length;
+        return pendingWithdrawalKeys.length();
+    }
+
+    function getPendingWithdrawalAtIndex(uint256 index) external view returns (address, address) {
+        require(index < pendingWithdrawalKeys.length(), "Index out of bounds");
+        bytes32 key = pendingWithdrawalKeys.at(index);
+        PendingWithdrawal memory withdrawal = pendingWithdrawals[key];
+        return (withdrawal.actor, withdrawal.validator);
     }
 
     function getNumValidatorsWithDelegations() external view returns (uint256) {
-        return validatorsWithDelegations.length;
+        return validatorsWithDelegations.length();
     }
 
-    function getNumValidatorDelegators(address validator) external view returns (uint256) {
-        return validatorDelegators[validator].length;
+    function getNumValidatorDelegators(address _validator) external view returns (uint256) {
+        return validatorDelegators[_validator].length();
     }
 
     function getNumExitedValidators() external view returns (uint256) {
-        return exitedValidators.length;
+        return exitedValidators.length();
     }
 
-    function getNumExitedValidatorDelegators(address validator) external view returns (uint256) {
-        return exitedValidatorDelegators[validator].length;
+    function getNumExitedValidatorDelegators(address _validator) external view returns (uint256) {
+        return exitedValidatorDelegators[_validator].length();
+    }
+
+    function getActorAtIndex(uint256 index) external view returns (address) {
+        return actors.at(index);
+    }
+
+    function getValidatorWithDelegationsAtIndex(uint256 index)
+        external
+        view
+        returns (address, uint256)
+    {
+        address _validator = validatorsWithDelegations.at(index);
+        return (_validator, validatorDelegators[_validator].length());
+    }
+
+    function getExitedValidatorAtIndex(uint256 index) external view returns (address) {
+        return exitedValidators.at(index);
+    }
+
+    function getTotalSupply() external view returns (uint256) {
+        return _getTotalSupply();
     }
 
     function getTotalSuccesses() external view returns (uint256) {
@@ -732,15 +647,15 @@ contract StakeTableV2PropTestBase {
     }
 
     function claimValidatorExitOk(uint256 validatorIndex, uint256 delegatorIndex) public {
-        if (exitedValidators.length == 0) return;
+        if (exitedValidators.length() == 0) return;
 
-        validator = exitedValidators[validatorIndex % exitedValidators.length];
+        validator = exitedValidators.at(validatorIndex % exitedValidators.length());
 
         // Pick a delegator from this exited validator's delegators
-        address[] memory delegators = exitedValidatorDelegators[validator];
-        if (delegators.length == 0) return;
+        EnumerableSet.AddressSet storage delegators = exitedValidatorDelegators[validator];
+        if (delegators.length() == 0) return;
 
-        actor = delegators[delegatorIndex % delegators.length];
+        actor = delegators.at(delegatorIndex % delegators.length());
 
         // Check if there's actually a delegation to claim
         uint256 delegatedAmount = stakeTable.delegations(validator, actor);
@@ -766,15 +681,15 @@ contract StakeTableV2PropTestBase {
     }
 
     function claimValidatorExitAny(uint256 validatorIndex, uint256 delegatorIndex) public {
-        if (exitedValidators.length == 0) return;
+        if (exitedValidators.length() == 0) return;
 
-        validator = exitedValidators[validatorIndex % exitedValidators.length];
+        validator = exitedValidators.at(validatorIndex % exitedValidators.length());
 
         // Pick a delegator from this exited validator's delegators
-        address[] memory delegators = exitedValidatorDelegators[validator];
-        if (delegators.length == 0) return;
+        EnumerableSet.AddressSet storage delegators = exitedValidatorDelegators[validator];
+        if (delegators.length() == 0) return;
 
-        actor = delegators[delegatorIndex % delegators.length];
+        actor = delegators.at(delegatorIndex % delegators.length());
 
         // Read delegation amount BEFORE claiming (claimValidatorExit clears it)
         uint256 delegatedAmount = stakeTable.delegations(validator, actor);
