@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use alloy::primitives::Address;
 use anyhow::Context;
@@ -143,6 +143,15 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
 
     fn get_block_reward(&self)
         -> impl Send + Future<Output = anyhow::Result<Option<RewardAmount>>>;
+    /// Get the current proposal participation.
+    fn current_proposal_participation(
+        &self,
+    ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
+
+    /// Get the previous proposal participation.
+    fn previous_proposal_participation(
+        &self,
+    ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
 }
 
 pub(crate) trait CatchupDataSource: Sync {

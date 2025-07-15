@@ -22,6 +22,19 @@ type VidCommonQueryData struct {
 	Common      VidCommon     `json:"common"`
 }
 
+type ExplorerTransactionQueryData struct {
+	TransactionsDetails ExplorerTransactionsDetails `json:"transaction_detail"`
+}
+
+type ExplorerTransactionsDetails struct {
+	ExplorerDetails ExplorerDetails `json:"details"`
+}
+
+type ExplorerDetails struct {
+	BlockHeight uint64       `json:"height"`
+	Hash        TaggedBase64 `json:"hash"`
+}
+
 type TransactionQueryData struct {
 	Transaction Transaction     `json:"transaction"`
 	Hash        *TaggedBase64   `json:"hash"`
