@@ -1763,9 +1763,9 @@ impl EpochCommittees {
     }
 }
 
-/// Calculates the stake ratio `p` and reward parameter `R(p)`.
+/// Calculates the stake ratio `p` and reward rate `R(p)`.
 ///
-/// The reward parameter `R(p)` is defined as:
+/// The reward rate `R(p)` is defined as:
 ///
 ///     R(p) = {
 ///         0.03 / sqrt(2 * 0.01),         if 0 <= p <= 0.01
