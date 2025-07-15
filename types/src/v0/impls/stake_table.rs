@@ -1472,25 +1472,34 @@ impl EpochCommittees {
         let total_stake = BigDecimal::from_str(&total_stake.to_string())?;
         let rewards_bd = BigDecimal::from_str(&total_reward_distributed.to_string())?;
         let initial_supply_bd = BigDecimal::from_str(&initial_supply.to_string())?;
-        let total_supply_bd = &initial_supply_bd + &rewards_bd;
+        let total_supply_bd = initial_supply_bd + rewards_bd;
+
         tracing::debug!(?epoch, "total_stake={total_stake}");
         tracing::debug!(?epoch, "total_supply_bd={total_supply_bd}");
+
         let (p, rp) = calculate_p_and_rp(&total_stake, &total_supply_bd)?;
-        let inflation_rate = &p * &rp;
+        let inflation_rate = p * rp;
         // Convert inflation rate to basis points
         let inflation_rate_bp = (inflation_rate * COMMISSION_BASIS_POINTS)
             .to_u64()
             .context("Failed to convert inflation rate to basis points")?;
+
         tracing::debug!(?epoch, "inflation_rate_bp={inflation_rate_bp:?}");
         // Calculate average block time over the last epoch
         let curr_ts = header.timestamp_millis_internal();
         tracing::debug!(?epoch, "curr_ts={curr_ts:?}");
+
         let current_epoch = epoch_from_block_number(header.height(), epoch_height);
         let previous_epoch = current_epoch
             .checked_sub(1)
             .context("underflow: cannot get previous epoch when current_epoch is 0")?;
         tracing::debug!(?epoch, "previous_epoch={previous_epoch:?}");
+
         let first_epoch = *self.first_epoch().context("first epoch is None")?;
+
+        // If the node starts from epoch version V4, there is no previous epoch root available.
+        // In this case, we assume a fixed average block time of 2000 milli seconds (2s)
+        // for the first epoch in which reward id distributed
         let avg_block_time = if previous_epoch <= first_epoch + 1 {
             ASSUMED_BLOCK_TIME_SECONDS as u64 * 1000 // 2 seconds in milliseconds
         } else {
@@ -1522,8 +1531,10 @@ impl EpochCommittees {
                 .context("Epoch height is zero. cannot compute average block time")?
         };
         tracing::debug!(?epoch, "avg_block_time={avg_block_time:?}");
+
         let blocks_per_year = MILLISECONDS_PER_YEAR / avg_block_time as u128;
         tracing::debug!(?epoch, "blocks_per_year={blocks_per_year:?}");
+
         let block_reward = ((total_supply * U256::from(inflation_rate_bp))
             / U256::from(blocks_per_year))
         .checked_div(U256::from(COMMISSION_BASIS_POINTS))

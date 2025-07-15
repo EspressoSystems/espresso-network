@@ -3621,7 +3621,7 @@ mod test {
         }
 
         // Verify no rewards are distributed in the first two epochs.
-        for block in [1, 2] {
+        for block in 0..=EPOCH_HEIGHT * 2 {
             for address in addresses.clone() {
                 let amount = client
                     .get::<Option<RewardAmount>>(&format!(
