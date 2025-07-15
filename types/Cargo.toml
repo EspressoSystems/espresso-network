@@ -19,6 +19,7 @@ base64-bytes = { workspace = true }
 bincode = { workspace = true }
 blake3 = { workspace = true }
 bytesize = { workspace = true }
+bigdecimal = "0.4.8"
 clap = { workspace = true }
 cld = { workspace = true }
 committable = { workspace = true }

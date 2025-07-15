@@ -15,6 +15,7 @@ use clap::Parser;
 use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
+    v0_1::RewardAmount,
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
     Leaf, Leaf2, NetworkConfig, Payload, SeqTypes, ValidatorMap,
 };
@@ -1369,7 +1370,7 @@ impl SequencerPersistence for Persistence {
 
         let drb_result_bytes = bincode::serialize(&drb_result).context("serialize drb result")?;
 
-        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
+        let file_path = dir_path.join(epoch.to_string()).with_extension("bin");
         fs::write(file_path, drb_result_bytes)
             .context(format!("writing epoch drb result file for epoch {epoch:?}"))?;
 
@@ -1390,7 +1391,7 @@ impl SequencerPersistence for Persistence {
         let block_header_bytes =
             bincode::serialize(&block_header).context("serialize block header")?;
 
-        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
+        let file_path = dir_path.join(epoch.to_string()).with_extension("bin");
         fs::write(file_path, block_header_bytes).context(format!(
             "writing epoch root block header file for epoch {epoch:?}"
         ))?;
@@ -1437,7 +1438,7 @@ impl SequencerPersistence for Persistence {
 
                 let block_header_path = block_header_dir_path
                     .join(epoch.to_string())
-                    .with_extension("txt");
+                    .with_extension("bin");
                 let block_header = if block_header_path.is_file() {
                     let bytes = fs::read(&block_header_path).context(format!(
                         "reading epoch root block header {}",
@@ -1511,10 +1512,18 @@ impl SequencerPersistence for Persistence {
 
 #[async_trait]
 impl MembershipPersistence for Persistence {
-    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<ValidatorMap>> {
+    async fn load_stake(
+        &self,
+        epoch: EpochNumber,
+    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>)>> {
         let inner = self.inner.read().await;
         let path = &inner.stake_table_dir_path();
-        let file_path = path.join(epoch.to_string()).with_extension("txt");
+        let file_path = path.join(epoch.to_string()).with_extension("bin");
+
+        if !file_path.exists() {
+            return Ok(None);
+        }
+
         let bytes = fs::read(&file_path).context("read")?;
         Ok(Some(
             bincode::deserialize(&bytes).context("deserialize combined stake table")?,
@@ -1539,13 +1548,18 @@ impl MembershipPersistence for Persistence {
             .collect()
     }
 
-    async fn store_stake(&self, epoch: EpochNumber, stake: ValidatorMap) -> anyhow::Result<()> {
+    async fn store_stake(
+        &self,
+        epoch: EpochNumber,
+        stake: ValidatorMap,
+        block_reward: Option<RewardAmount>,
+    ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
         let dir_path = &inner.stake_table_dir_path();
 
         fs::create_dir_all(dir_path.clone()).context("failed to create stake table dir")?;
 
-        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
+        let file_path = dir_path.join(epoch.to_string()).with_extension("bin");
 
         inner.replace(
             &file_path,
@@ -1554,8 +1568,8 @@ impl MembershipPersistence for Persistence {
                 Ok(true)
             },
             |mut file| {
-                let bytes =
-                    bincode::serialize(&stake).context("serializing combined stake table")?;
+                let bytes = bincode::serialize(&(stake, block_reward))
+                    .context("serializing combined stake table")?;
                 file.write_all(&bytes)?;
                 Ok(())
             },
@@ -1906,7 +1920,7 @@ fn epoch_files(
             return None;
         }
         let path = entry.path();
-        if path.extension()? != "txt" {
+        if path.extension()? != "bin" {
             tracing::debug!(%dir, ?entry, "ignoring non-text file in data directory");
             return None;
         }
