@@ -201,7 +201,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         // Add the request-response protocol to the list of providers for state catchup. Since the interior is mutable,
         // the request-response protocol will now retroactively be used anywhere we passed in the original struct (e.g. in consensus
         // itself)
-         state_catchup.add_provider(Arc::new(request_response_protocol.clone()));
+        state_catchup.add_provider(Arc::new(request_response_protocol.clone()));
 
         // Create the external event handler
         let mut tasks = TaskList::default();
