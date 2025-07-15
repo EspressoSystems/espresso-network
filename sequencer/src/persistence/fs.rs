@@ -1370,7 +1370,7 @@ impl SequencerPersistence for Persistence {
 
         let drb_result_bytes = bincode::serialize(&drb_result).context("serialize drb result")?;
 
-        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
+        let file_path = dir_path.join(epoch.to_string()).with_extension("bin");
         fs::write(file_path, drb_result_bytes)
             .context(format!("writing epoch drb result file for epoch {epoch:?}"))?;
 
@@ -1391,7 +1391,7 @@ impl SequencerPersistence for Persistence {
         let block_header_bytes =
             bincode::serialize(&block_header).context("serialize block header")?;
 
-        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
+        let file_path = dir_path.join(epoch.to_string()).with_extension("bin");
         fs::write(file_path, block_header_bytes).context(format!(
             "writing epoch root block header file for epoch {epoch:?}"
         ))?;
