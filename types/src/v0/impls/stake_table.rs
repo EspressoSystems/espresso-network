@@ -1081,7 +1081,7 @@ impl Fetcher {
     /// contract address. We use the stake table contract initialization block as a safe upper bound when scanning
     ///  backwards for the token contract initialization event
     pub async fn fetch_block_reward(&self) -> Result<RewardAmount, FetchRewardError> {
-        let initial_supply_read = { self.initial_supply.read().await.clone() };
+        let initial_supply_read = *self.initial_supply.read().await;
         let initial_supply = match initial_supply_read {
             Some(supply) => supply,
             None => self.fetch_initial_supply().await?,
@@ -1462,7 +1462,7 @@ impl EpochCommittees {
 
         // Calculate total stake across all active validators
         let total_stake: U256 = validators.values().map(|v| v.stake).sum();
-        let initial_supply = match fetcher.initial_supply.read().await.clone() {
+        let initial_supply = match *fetcher.initial_supply.read().await {
             Some(supply) => supply,
             None => fetcher.fetch_initial_supply().await?,
         };
@@ -1616,8 +1616,7 @@ impl EpochCommittees {
             Some(e) => self
                 .state
                 .get(&e)
-                .map(|committee| committee.block_reward)
-                .flatten(),
+                .and_then(|committee| committee.block_reward),
         }
     }
 
@@ -1753,6 +1752,15 @@ impl EpochCommittees {
     }
 }
 
+/// Calculates the stake ratio `p` and reward parameter `R(p)`.
+///
+/// The reward parameter `R(p)` is defined as:
+///
+///     R(p) = {
+///         0.03 / sqrt(2 * 0.01),         if 0 <= p <= 0.01
+///         0.03 / sqrt(2 * p),            if 0.01 < p <= 1
+///     }
+///
 fn calculate_p_and_rp(
     total_stake: &BigDecimal,
     total_supply: &BigDecimal,
@@ -1768,18 +1776,17 @@ fn calculate_p_and_rp(
     }
 
     let threshold = BigDecimal::from_str("0.01")?;
-    let const_03 = BigDecimal::from_str("0.03")?;
+    let numerator = BigDecimal::from_str("0.03")?;
     let two = BigDecimal::from_u32(2).unwrap();
 
-    let effective_p = if &p <= &threshold { &threshold } else { &p };
-    let inner = &two * effective_p;
+    let inner = two * if p <= threshold { threshold } else { p.clone() };
 
     let sqrt_inner = inner.sqrt().context("Failed to compute sqrt in R(p)")?;
-    let rp = &const_03 / sqrt_inner;
+    let reward_rate = numerator / sqrt_inner;
 
-    tracing::debug!("rp={rp}");
+    tracing::debug!("rp={reward_rate}");
 
-    Ok((p, rp))
+    Ok((p, reward_rate))
 }
 
 #[derive(Error, Debug)]
