@@ -23,7 +23,7 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
     /// @dev Contract balance should equal sum of all delegated amounts
     function echidna_ContractBalanceMatchesTrackedDelegations() public view returns (bool) {
         uint256 contractBalance = token.balanceOf(address(stakeTable));
-        uint256 totalTracked = _getTotalTrackedFunds();
+        uint256 totalTracked = testState.totalDelegated + testState.totalUndelegated;
         return contractBalance == totalTracked;
     }
 

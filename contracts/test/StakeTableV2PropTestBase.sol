@@ -245,10 +245,6 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         }
     }
 
-    function _getTotalTrackedFunds() internal view returns (uint256 total) {
-        return testState.totalDelegated + testState.totalUndelegated;
-    }
-
     // NOTE: The create validator function is used to generate a new validators successfully.
 
     function registerValidatorAny(uint256 actorIndex) public useActor(actorIndex) {
@@ -279,18 +275,9 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         return candidate;
     }
 
-    function _isValidator(address candidate) internal view returns (bool) {
-        (, StakeTable.ValidatorStatus status) = stakeTable.validators(candidate);
-        return status == StakeTable.ValidatorStatus.Active;
-    }
-
     function _addValidator(address val) internal {
         validators.all.add(val);
         validators.active.add(val);
-    }
-
-    function _removeActiveValidator(address val) internal {
-        validators.active.remove(val);
     }
 
     function deregisterValidatorOk(uint256 valIndex) public {
@@ -459,21 +446,11 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         }
     }
 
-    function _addValidatorDelegator(address val, address del) internal {
-        validators.staked.add(val);
-        delegators.delegators[val].add(del);
-    }
-
     function _removeValidatorDelegator(address val, address del) internal {
         delegators.delegators[val].remove(del);
         if (delegators.delegators[val].length() == 0) {
             validators.staked.remove(val);
         }
-    }
-
-    function _addExitedValidator(address val) internal {
-        if (validators.exited.contains(val)) return; // Already exists
-        validators.exited.add(val);
     }
 
     function _addPendingWithdrawal(address actorAddr, address val) internal {
@@ -555,12 +532,6 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
 
     function getNumExitedValidators() external view returns (uint256) {
         return validators.exited.length();
-    }
-
-    function getNumExitedValidatorDelegators(address val) external view returns (uint256) {
-        // Since we no longer track exitedValidatorDelegators separately,
-        // we'll return 0 to indicate no specific tracking
-        return 0;
     }
 
     function getActorAtIndex(uint256 index) external view returns (address) {
