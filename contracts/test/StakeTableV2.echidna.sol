@@ -12,8 +12,8 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
 
     /// @dev The total amount of tokens owned by an actor does not change
     function echidna_actorOwnedAmounts() public view returns (bool) {
-        for (uint256 i = 0; i < actorData.all.length(); i++) {
-            if (totalOwnedAmount(actorData.all.at(i)) != actorData.initialBalances[actorData.all.at(i)]) {
+        for (uint256 i = 0; i < actors.all.length(); i++) {
+            if (totalOwnedAmount(actors.all.at(i)) != actors.initialBalances[actors.all.at(i)]) {
                 return false;
             }
         }

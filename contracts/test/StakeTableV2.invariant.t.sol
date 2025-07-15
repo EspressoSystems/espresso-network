@@ -173,8 +173,8 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
         }
         console2.log("Total exited validator-delegator pairs:", totalExitedValidatorDelegatorPairs);
 
-        console2.log("Total active delegations:", handler.getTestState().totalActiveDelegations);
-        console2.log("Total active undelegations:", handler.getTestState().totalActiveUndelegations);
+        console2.log("Total active delegations:", handler.getTestState().totalDelegated);
+        console2.log("Total active undelegations:", handler.getTestState().totalUndelegated);
         console2.log("Tracked total supply:", handler.getTestState().trackedTotalSupply);
     }
 
@@ -198,7 +198,8 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
     /// @dev Contract balance should equal sum of all delegated amounts
     function invariant_ContractBalanceMatchesTrackedDelegations() public view {
         uint256 contractBalance = handler.token().balanceOf(address(handler.stakeTable()));
-        uint256 totalTracked = handler.getTestState().totalActiveDelegations + handler.getTestState().totalActiveUndelegations;
+        uint256 totalTracked =
+            handler.getTestState().totalDelegated + handler.getTestState().totalUndelegated;
         assertEq(
             contractBalance,
             totalTracked,
