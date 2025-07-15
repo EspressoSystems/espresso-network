@@ -10,6 +10,9 @@
 /// The task which implements the core state logic of consensus.
 pub mod consensus;
 
+/// The task which implements the block builder
+pub mod block_builder;
+
 /// The task which handles the logic for the quorum vote.
 pub mod quorum_vote;
 
