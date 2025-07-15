@@ -555,13 +555,15 @@ pub async fn distribute_block_reward(
                 .await
                 .with_context(|| format!("block reward is None for epoch {epoch}"))?;
 
-            // e.g epoch height. = 10
-            // first epoch = 10
-            // first epoch when rewards are distributed = 3
-            // first reward distribution block = 31
-            // (first_epoch + 2) * 10
-            let first_reward_block = (*first_epoch + 2) * epoch_height;
+            // Compute the first block where rewards start being distributed.
+            // Rewards begin only after the first two epochs
+            // Example:
+            //   epoch_height = 10, first_epoch = 1
+            // first_reward_block = 31
+            let first_reward_block = (*first_epoch + 2) * epoch_height + 1;
 
+            // If v4 upgrade started at block 101, and first_reward_block is 31:
+            // total_distributed = (101 - 31) * fixed_block_reward
             let blocks = height
                 .checked_sub(first_reward_block)
                 .context("height - epoch_start_block underflowed")?;
