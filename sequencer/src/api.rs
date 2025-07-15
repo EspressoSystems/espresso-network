@@ -3717,11 +3717,15 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_rewards_v4() -> anyhow::Result<()> {
-        // The test registers multiple delegators for each validator
-        // It verifies that no rewards are distributed in the first two epochs
-        // and that rewards are correctly allocated starting from the third epoch.
-        // also checks that the total stake of delegators matches the stake of the validator
-        // and that the calculated rewards match those obtained via the merklized state api
+        // This test verifies PoS reward distribution logic for multiple delegators per validator.
+        //
+        //  assertions:
+        // - No rewards are distributed during the first 2 epochs.
+        // - Rewards begin from epoch 3 onward.
+        // - Delegator stake sums match the corresponding validator stake.
+        // - Reward values match those returned by the reward state API.
+        // - Commission calculations are within a small acceptable rounding tolerance.
+        // - Ensure that the `rewards_distributed` field in the block header matches the total block reward distributed
         setup_test();
         const EPOCH_HEIGHT: u64 = 20;
 
@@ -3733,7 +3737,7 @@ mod test {
 
         let api_port = pick_unused_port().expect("No ports free for query service");
 
-        const NUM_NODES: usize = 7;
+        const NUM_NODES: usize = 5;
 
         let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
         let persistence: [_; NUM_NODES] = storage
@@ -3766,7 +3770,7 @@ mod test {
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
-        // Wait for 3 epochs to allow rewards distribution to take effect.
+        // Wait for the chain to progress beyond epoch 3 so rewards start being distributed.
         let mut events = network.peers[0].event_stream().await;
         while let Some(event) = events.next().await {
             if let EventType::Decide { leaf_chain, .. } = event.event {
@@ -3811,29 +3815,9 @@ mod test {
             addresses.extend(v.clone().delegators.keys().collect::<Vec<_>>());
         }
 
-        // Verify no rewards are distributed in the first two epochs.
-        for block in 0..=EPOCH_HEIGHT * 2 {
-            for address in addresses.clone() {
-                let amount = client
-                    .get::<Option<RewardAmount>>(&format!(
-                        "reward-state/reward-balance/{block}/{address}"
-                    ))
-                    .send()
-                    .await
-                    .ok()
-                    .flatten();
-                assert!(amount.is_none(), "amount is not none for block {block}")
-            }
-        }
-
-        // Collect leaves for epoch 3
-        let leaves = client
-            .socket("availability/stream/leaves/41")
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
             .subscribe::<LeafQueryData<SeqTypes>>()
-            .await
-            .unwrap()
-            .take((EPOCH_HEIGHT).try_into().unwrap())
-            .try_collect::<Vec<_>>()
             .await
             .unwrap();
 
@@ -3842,25 +3826,56 @@ mod test {
 
         let membership = coordinator.membership().read().await;
 
-        let epoch_number = EpochNumber::new(3);
+        // Ensure rewards remain zero up for the first two epochs
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            assert_eq!(header.rewards_distributed().unwrap(), U256::ZERO);
 
-        let block_reward = membership
-            .block_reward(Some(epoch_number))
-            .expect("block reward is None");
+            let epoch_number =
+                EpochNumber::new(epoch_from_block_number(leaf.height(), EPOCH_HEIGHT));
+
+            assert!(membership.block_reward(Some(epoch_number)).is_none());
+
+            let height = header.height();
+            for address in addresses.clone() {
+                let amount = client
+                    .get::<Option<RewardAmount>>(&format!(
+                        "reward-state/reward-balance/{height}/{address}"
+                    ))
+                    .send()
+                    .await
+                    .ok()
+                    .flatten();
+                assert!(amount.is_none(), "amount is not none for block {height}")
+            }
+
+            if leaf.height() == EPOCH_HEIGHT * 2 {
+                break;
+            }
+        }
 
         drop(membership);
 
         let mut rewards_map = HashMap::new();
+        let mut total_distributed = U256::ZERO;
+        let mut epoch_rewards = HashMap::<EpochNumber, U256>::new();
 
-        for leaf in leaves {
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+
             let header = leaf.header();
             let distributed = header
                 .rewards_distributed()
                 .expect("rewards distributed is none");
+
             let block = leaf.height();
             tracing::info!("verify rewards for block={block:?}");
             let membership = coordinator.membership().read().await;
+            let epoch_number =
+                EpochNumber::new(epoch_from_block_number(leaf.height(), EPOCH_HEIGHT));
 
+            let block_reward = membership.block_reward(Some(epoch_number)).unwrap();
             let leader = membership
                 .leader(leaf.leaf().view_number(), Some(epoch_number))
                 .expect("leader");
@@ -3889,12 +3904,7 @@ mod test {
 
             let computed_rewards = distributor.compute_rewards().expect("reward computation");
 
-            // Verify that the leader commission amount is within the tolerated range.
-            // Due to potential rounding errors in decimal calculations for delegator rewards,
-            // the actual distributed commission
-            // amount may differ very slightly from the calculated value.
-            // this asserts that it is within 10wei tolerance level.
-            // 10 wei is 10* 10E-18
+            // Validate that the leader's commission is within a 10 wei tolerance of the expected value.
             let total_reward = block_reward.0;
             let leader_commission_basis_points = U256::from(leader_validator.commission);
             let calculated_leader_commission_reward = leader_commission_basis_points
@@ -3908,11 +3918,7 @@ mod test {
                     <= U256::from(10_u64)
             );
 
-            // Aggregate reward amounts by address in the map.
-            // This is necessary because there can be two entries for a leader address:
-            // - One entry for commission rewards.
-            // - Another for delegator rewards when the leader is delegating.
-            // Also, rewards are accumulated for the same addresses
+            // Aggregate rewards by address (both delegator and leader).
             let leader_commission = *computed_rewards.leader_commission();
             for (address, amount) in computed_rewards.delegators().clone() {
                 rewards_map
@@ -3929,16 +3935,47 @@ mod test {
 
             // assert that the reward matches to what is in the reward merkle tree
             for (address, calculated_amount) in rewards_map.iter() {
-                let amount_from_api = client
-                    .get::<Option<RewardAmount>>(&format!(
-                        "reward-state/reward-balance/{block}/{address}"
-                    ))
-                    .send()
-                    .await
-                    .ok()
-                    .flatten()
-                    .expect("amount");
-                assert_eq!(amount_from_api, *calculated_amount)
+                let mut attempt = 0;
+                let amount_from_api = loop {
+                    let result = client
+                        .get::<Option<RewardAmount>>(&format!(
+                            "reward-state/reward-balance/{block}/{address}"
+                        ))
+                        .send()
+                        .await
+                        .ok()
+                        .flatten();
+
+                    if let Some(amount) = result {
+                        break amount;
+                    }
+
+                    attempt += 1;
+                    if attempt >= 3 {
+                        panic!(
+                            "Failed to fetch reward amount for address {address} after 3 retries"
+                        );
+                    }
+
+                    sleep(Duration::from_secs(2)).await;
+                };
+
+                assert_eq!(amount_from_api, *calculated_amount);
+            }
+
+            // Confirm the header's total distributed field matches the cumulative expected amount.
+            total_distributed += block_reward.0;
+            assert_eq!(header.rewards_distributed().unwrap(), total_distributed);
+
+            // Block reward shouldn't change for the same epoch
+            epoch_rewards
+                .entry(epoch_number)
+                .and_modify(|r| assert_eq!(*r, block_reward.0))
+                .or_insert(block_reward.0);
+
+            // Stop the test after verifying 5 full epochs.
+            if leaf.height() == EPOCH_HEIGHT * 5 {
+                break;
             }
         }
 

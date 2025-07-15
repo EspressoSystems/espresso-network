@@ -1481,15 +1481,15 @@ impl EpochCommittees {
         let inflation_rate_bp = (inflation_rate * COMMISSION_BASIS_POINTS)
             .to_u64()
             .context("Failed to convert inflation rate to basis points")?;
-        tracing::debug!(?epoch,"inflation_rate_bp={inflation_rate_bp:?}");
+        tracing::debug!(?epoch, "inflation_rate_bp={inflation_rate_bp:?}");
         // Calculate average block time over the last epoch
         let curr_ts = header.timestamp_millis_internal();
-        tracing::debug!(?epoch,"curr_ts={curr_ts:?}");
+        tracing::debug!(?epoch, "curr_ts={curr_ts:?}");
         let current_epoch = epoch_from_block_number(header.height(), epoch_height);
         let previous_epoch = current_epoch
             .checked_sub(1)
             .context("underflow: cannot get previous epoch when current_epoch is 0")?;
-        tracing::debug!(?epoch,"previous_epoch={previous_epoch:?}");
+        tracing::debug!(?epoch, "previous_epoch={previous_epoch:?}");
         let first_epoch = *self.first_epoch().context("first epoch is None")?;
         let avg_block_time = if previous_epoch <= first_epoch + 1 {
             ASSUMED_BLOCK_TIME_SECONDS as u64 * 1000 // 2 seconds in milliseconds
@@ -1521,9 +1521,9 @@ impl EpochCommittees {
                 .checked_div(epoch_height)
                 .context("Epoch height is zero. cannot compute average block time")?
         };
-        tracing::debug!(?epoch,"avg_block_time={avg_block_time:?}");
+        tracing::debug!(?epoch, "avg_block_time={avg_block_time:?}");
         let blocks_per_year = MILLISECONDS_PER_YEAR / avg_block_time as u128;
-        tracing::debug!(?epoch,"blocks_per_year={blocks_per_year:?}");
+        tracing::debug!(?epoch, "blocks_per_year={blocks_per_year:?}");
         let block_reward = ((total_supply * U256::from(inflation_rate_bp))
             / U256::from(blocks_per_year))
         .checked_div(U256::from(COMMISSION_BASIS_POINTS))
@@ -2065,18 +2065,17 @@ impl Membership<SeqTypes> for EpochCommittees {
             block_reward = Some(reward);
         }
 
+        let mut membership_writer = membership.write().await;
+        membership_writer.insert_committee(epoch, validators.clone(), block_reward);
+
         let persistence_lock = fetcher.persistence.lock().await;
         if let Err(e) = persistence_lock
-            .store_stake(epoch, validators.clone(), block_reward)
+            .store_stake(epoch, validators, block_reward)
             .await
         {
             tracing::error!(?e, "`add_epoch_root`, error storing stake table");
         }
 
-        drop(persistence_lock);
-
-        let mut membership_writer = membership.write().await;
-        membership_writer.insert_committee(epoch, validators, block_reward);
         Ok(())
     }
 

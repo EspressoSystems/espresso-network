@@ -555,8 +555,15 @@ pub async fn distribute_block_reward(
                 .await
                 .with_context(|| format!("block reward is None for epoch {epoch}"))?;
 
+            // e.g epoch height. = 10
+            // first epoch = 10
+            // first epoch when rewards are distributed = 3
+            // first reward distribution block = 31
+            // (first_epoch + 2) * 10
+            let first_reward_block = (*first_epoch + 2) * epoch_height;
+
             let blocks = height
-                .checked_sub(instance_state.epoch_start_block)
+                .checked_sub(first_reward_block)
                 .context("height - epoch_start_block underflowed")?;
 
             total_distributed = U256::from(blocks)
