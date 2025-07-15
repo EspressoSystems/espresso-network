@@ -173,9 +173,9 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
         }
         console2.log("Total exited validator-delegator pairs:", totalExitedValidatorDelegatorPairs);
 
-        console2.log("Total active delegations:", handler.totalActiveDelegations());
-        console2.log("Total active undelegations:", handler.totalActiveUndelegations());
-        console2.log("Tracked total supply:", handler.trackedTotalSupply());
+        console2.log("Total active delegations:", handler.getTestState().totalActiveDelegations);
+        console2.log("Total active undelegations:", handler.getTestState().totalActiveUndelegations);
+        console2.log("Tracked total supply:", handler.getTestState().trackedTotalSupply);
     }
 
     function afterInvariant() external view {
@@ -189,7 +189,7 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
             address actor = handler.getActorAtIndex(i);
             assertEq(
                 handler.totalOwnedAmount(actor),
-                handler.initialBalances(actor),
+                handler.getInitialBalance(actor),
                 "Actor balance invariant violated"
             );
         }
@@ -198,7 +198,7 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
     /// @dev Contract balance should equal sum of all delegated amounts
     function invariant_ContractBalanceMatchesTrackedDelegations() public view {
         uint256 contractBalance = handler.token().balanceOf(address(handler.stakeTable()));
-        uint256 totalTracked = handler.totalActiveDelegations() + handler.totalActiveUndelegations();
+        uint256 totalTracked = handler.getTestState().totalActiveDelegations + handler.getTestState().totalActiveUndelegations;
         assertEq(
             contractBalance,
             totalTracked,
@@ -210,7 +210,7 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
     function invariant_TotalSupply() public view {
         assertEq(
             handler.getTotalSupply(),
-            handler.trackedTotalSupply(),
+            handler.getTestState().trackedTotalSupply,
             "Total supply invariant violated"
         );
     }

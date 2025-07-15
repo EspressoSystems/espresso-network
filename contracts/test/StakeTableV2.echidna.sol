@@ -12,8 +12,8 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
 
     /// @dev The total amount of tokens owned by an actor does not change
     function echidna_actorOwnedAmounts() public view returns (bool) {
-        for (uint256 i = 0; i < actors.length(); i++) {
-            if (totalOwnedAmount(actors.at(i)) != initialBalances[actors.at(i)]) {
+        for (uint256 i = 0; i < actorData.all.length(); i++) {
+            if (totalOwnedAmount(actorData.all.at(i)) != actorData.initialBalances[actorData.all.at(i)]) {
                 return false;
             }
         }
@@ -29,6 +29,6 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
 
     /// @dev Total supply must remain constant
     function echidna_TotalSupply() public view returns (bool) {
-        return _getTotalSupply() == trackedTotalSupply;
+        return _getTotalSupply() == this.getTestState().trackedTotalSupply;
     }
 }
