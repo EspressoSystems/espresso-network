@@ -458,7 +458,7 @@ impl RewardDistributor {
 
         // Distribute delegator rewards
         let total_stake = self.validator.stake;
-        let mut delegators_rewards_distributed = U256::from(0);
+        let mut delegators_total_reward_distributed = U256::from(0);
         for (delegator_address, delegator_stake) in &self.validator.delegators {
             let delegator_reward = RewardAmount::from(
                 (delegator_stake
@@ -470,13 +470,13 @@ impl RewardDistributor {
                 .context("overflow")?,
             );
 
-            delegators_rewards_distributed += delegator_reward.0;
+            delegators_total_reward_distributed += delegator_reward.0;
 
             rewards.push((*delegator_address, delegator_reward));
         }
 
         let leader_commission = total_reward
-            .checked_sub(delegators_rewards_distributed)
+            .checked_sub(delegators_total_reward_distributed)
             .context("overflow")?;
 
         Ok(ComputedRewards::new(
@@ -533,7 +533,7 @@ pub async fn distribute_block_reward(
     let parent_header = parent_leaf.block_header();
     // Initialize the total rewards distributed so far in this block.
 
-    let mut total_distributed = parent_header.rewards_distributed().unwrap_or_default();
+    let mut total_distributed = parent_header.total_reward_distributed().unwrap_or_default();
 
     // Decide whether to use a fixed or dynamic block reward.
     let block_reward = if version >= DrbAndHeaderUpgradeVersion::version() {

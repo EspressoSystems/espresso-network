@@ -1456,9 +1456,9 @@ impl EpochCommittees {
     ) -> anyhow::Result<RewardAmount> {
         let fetcher = self.fetcher.clone();
         let epoch_height = self.epoch_height;
-        let rewards_distributed = header
-            .rewards_distributed()
-            .context("Invalid block header: missing rewards_distributed field")?;
+        let total_reward_distributed = header
+            .total_reward_distributed()
+            .context("Invalid block header: missing total_reward_distributed field")?;
 
         // Calculate total stake across all active validators
         let total_stake: U256 = validators.values().map(|v| v.stake).sum();
@@ -1466,11 +1466,11 @@ impl EpochCommittees {
             Some(supply) => supply,
             None => fetcher.fetch_initial_supply().await?,
         };
-        let total_supply = initial_supply + rewards_distributed;
+        let total_supply = initial_supply + total_reward_distributed;
 
         // Convert to BigDecimal for precision
         let total_stake = BigDecimal::from_str(&total_stake.to_string())?;
-        let rewards_bd = BigDecimal::from_str(&rewards_distributed.to_string())?;
+        let rewards_bd = BigDecimal::from_str(&total_reward_distributed.to_string())?;
         let initial_supply_bd = BigDecimal::from_str(&initial_supply.to_string())?;
         let total_supply_bd = &initial_supply_bd + &rewards_bd;
         tracing::debug!(?epoch, "total_stake={total_stake}");

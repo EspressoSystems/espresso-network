@@ -28,7 +28,7 @@ pub struct Header {
     pub(crate) fee_info: FeeInfo,
     pub(crate) builder_signature: Option<BuilderSignature>,
     pub(crate) reward_merkle_tree_root: RewardMerkleCommitment,
-    pub(crate) rewards_distributed: U256
+    pub(crate) total_reward_distributed: U256
 }
 
 impl Committable for Header {
@@ -63,7 +63,7 @@ impl Committable for Header {
             .var_size_field("fee_merkle_tree_root", &fmt_bytes)
             .field("fee_info", self.fee_info.commit())
             .var_size_field("reward_merkle_tree_root", &rwd_bytes)
-            .var_size_field("rewards_distributed", &self.rewards_distributed.as_le_bytes())
+            .var_size_field("total_reward_distributed", &self.total_reward_distributed.as_le_bytes())
             .finalize()
     }
 

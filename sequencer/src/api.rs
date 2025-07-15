@@ -3756,7 +3756,7 @@ mod test {
         // - Delegator stake sums match the corresponding validator stake.
         // - Reward values match those returned by the reward state API.
         // - Commission calculations are within a small acceptable rounding tolerance.
-        // - Ensure that the `rewards_distributed` field in the block header matches the total block reward distributed
+        // - Ensure that the `total_reward_distributed` field in the block header matches the total block reward distributed
         setup_test();
         const EPOCH_HEIGHT: u64 = 20;
 
@@ -3861,7 +3861,7 @@ mod test {
         while let Some(leaf) = leaves.next().await {
             let leaf = leaf.unwrap();
             let header = leaf.header();
-            assert_eq!(header.rewards_distributed().unwrap(), U256::ZERO);
+            assert_eq!(header.total_reward_distributed().unwrap(), U256::ZERO);
 
             let epoch_number =
                 EpochNumber::new(epoch_from_block_number(leaf.height(), EPOCH_HEIGHT));
@@ -3897,7 +3897,7 @@ mod test {
 
             let header = leaf.header();
             let distributed = header
-                .rewards_distributed()
+                .total_reward_distributed()
                 .expect("rewards distributed is none");
 
             let block = leaf.height();
@@ -3996,7 +3996,10 @@ mod test {
 
             // Confirm the header's total distributed field matches the cumulative expected amount.
             total_distributed += block_reward.0;
-            assert_eq!(header.rewards_distributed().unwrap(), total_distributed);
+            assert_eq!(
+                header.total_reward_distributed().unwrap(),
+                total_distributed
+            );
 
             // Block reward shouldn't change for the same epoch
             epoch_rewards

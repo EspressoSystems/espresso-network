@@ -282,7 +282,7 @@ impl Header {
         reward_merkle_tree_root: RewardMerkleCommitment,
         fee_info: Vec<FeeInfo>,
         builder_signature: Vec<BuilderSignature>,
-        rewards_distributed: Option<U256>,
+        total_reward_distributed: Option<U256>,
         version: Version,
     ) -> Self {
         // Ensure FeeInfo contains at least 1 element
@@ -351,7 +351,7 @@ impl Header {
                 fee_info: fee_info[0], // NOTE this is asserted to exist above
                 builder_signature: builder_signature.first().copied(),
                 reward_merkle_tree_root,
-                rewards_distributed: rewards_distributed.unwrap_or_default(),
+                total_reward_distributed: total_reward_distributed.unwrap_or_default(),
             }),
             // This case should never occur
             // but if it does, we must panic
@@ -399,7 +399,7 @@ impl Header {
         mut state: ValidatedState,
         chain_config: ChainConfig,
         version: Version,
-        rewards_distributed: Option<RewardDistributor>,
+        total_reward_distributed: Option<RewardDistributor>,
     ) -> anyhow::Result<Self> {
         ensure!(
             version.major == 0,
@@ -579,7 +579,7 @@ impl Header {
                 reward_merkle_tree_root: state.reward_merkle_tree.commitment(),
                 fee_info: fee_info[0],
                 builder_signature: builder_signature.first().copied(),
-                rewards_distributed: rewards_distributed
+                total_reward_distributed: total_reward_distributed
                     .map(|r| r.total_distributed())
                     .unwrap_or_default()
                     .into(),
@@ -807,10 +807,10 @@ impl Header {
         }
     }
 
-    pub fn rewards_distributed(&self) -> Option<U256> {
+    pub fn total_reward_distributed(&self) -> Option<U256> {
         match self {
             Self::V1(_) | Self::V2(_) | Self::V3(_) => None,
-            Self::V4(fields) => Some(fields.rewards_distributed),
+            Self::V4(fields) => Some(fields.total_reward_distributed),
         }
     }
 }
