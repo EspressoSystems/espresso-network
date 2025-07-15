@@ -67,14 +67,14 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
         return string(buffer);
     }
 
-    function _logStat(string memory name, StakeTableV2PropTestBase.FunctionStats memory stat)
+    function _logStat(string memory name, StakeTableV2PropTestBase.FuncStats memory stat)
         internal
         pure
     {
         console2.log(
             string.concat(
                 _formatString(name, 29),
-                _formatNumber(stat.successes, 9),
+                _formatNumber(stat.ok, 9),
                 " ",
                 _formatNumber(stat.reverts, 7)
             )
@@ -112,28 +112,25 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
         console2.log("Function                     Successes  Reverts");
         console2.log("-----------------------------------------------");
 
-        // Ok functions - access via getter function
-        StakeTableV2PropTestBase.OkFunctionStats memory okStats = handler.getOkStats();
+        // Get call stats via getter function
+        StakeTableV2PropTestBase.CallStats memory callStats = handler.getCallStats();
 
-        _logStat("advanceTime", okStats.advanceTime);
-        _logStat("claimValidatorExitOk", okStats.claimValidatorExitOk);
-        _logStat("claimWithdrawalOk", okStats.claimWithdrawalOk);
-        _logStat("createActor", okStats.createActor);
-        _logStat("createValidator", okStats.createValidator);
-        _logStat("delegateOk", okStats.delegateOk);
-        _logStat("deregisterValidatorOk", okStats.deregisterValidatorOk);
-        _logStat("undelegateOk", okStats.undelegateOk);
+        _logStat("advanceTime", callStats.ok.advanceTime);
+        _logStat("claimValidatorExitOk", callStats.ok.claimValidatorExit);
+        _logStat("claimWithdrawalOk", callStats.ok.claimWithdrawal);
+        _logStat("createActor", callStats.ok.createActor);
+        _logStat("createValidator", callStats.ok.createValidator);
+        _logStat("delegateOk", callStats.ok.delegate);
+        _logStat("deregisterValidatorOk", callStats.ok.deregisterValidator);
+        _logStat("undelegateOk", callStats.ok.undelegate);
 
         console2.log("-----------------------------------------------");
 
-        // Any functions - access via getter function
-        StakeTableV2PropTestBase.AnyFunctionStats memory anyStats = handler.getAnyStats();
-
-        _logStat("claimValidatorExitAny", anyStats.claimValidatorExitAny);
-        _logStat("delegateAny", anyStats.delegateAny);
-        _logStat("deregisterValidatorAny", anyStats.deregisterValidatorAny);
-        _logStat("registerValidatorAny", anyStats.registerValidatorAny);
-        _logStat("undelegateAny", anyStats.undelegateAny);
+        _logStat("claimValidatorExitAny", callStats.any.claimValidatorExit);
+        _logStat("delegateAny", callStats.any.delegate);
+        _logStat("deregisterValidatorAny", callStats.any.deregisterValidator);
+        _logStat("registerValidatorAny", callStats.any.registerValidator);
+        _logStat("undelegateAny", callStats.any.undelegate);
 
         console2.log("-----------------------------------------------");
         console2.log(
