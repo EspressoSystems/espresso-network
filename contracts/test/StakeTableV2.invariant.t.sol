@@ -69,7 +69,7 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
 
     function _logStat(string memory name, StakeTableV2PropTestBase.FunctionStats memory stat)
         internal
-        view
+        pure
     {
         console2.log(
             string.concat(
@@ -157,8 +157,7 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
         // Count total validator-delegator pairs
         uint256 totalValidatorDelegatorPairs = 0;
         for (uint256 i = 0; i < handler.getNumValidatorsWithDelegations(); i++) {
-            (address validator, uint256 numDelegators) =
-                handler.getValidatorWithDelegationsAtIndex(i);
+            (, uint256 numDelegators) = handler.getValidatorWithDelegationsAtIndex(i);
             totalValidatorDelegatorPairs += numDelegators;
         }
         console2.log("Total validator-delegator pairs:", totalValidatorDelegatorPairs);
@@ -168,8 +167,9 @@ contract StakeTableV2InvariantTest is StdInvariant, Test, StakeTableV2PropTestBa
         // Count total exited validator-delegator pairs
         uint256 totalExitedValidatorDelegatorPairs = 0;
         for (uint256 i = 0; i < handler.getNumExitedValidators(); i++) {
-            address validator = handler.getExitedValidatorAtIndex(i);
-            totalExitedValidatorDelegatorPairs += handler.getNumExitedValidatorDelegators(validator);
+            address validator_ = handler.getExitedValidatorAtIndex(i);
+            totalExitedValidatorDelegatorPairs +=
+                handler.getNumExitedValidatorDelegators(validator_);
         }
         console2.log("Total exited validator-delegator pairs:", totalExitedValidatorDelegatorPairs);
 

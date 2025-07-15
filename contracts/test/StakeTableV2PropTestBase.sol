@@ -33,54 +33,7 @@ contract MockLightClient is ILightClient {
     }
 }
 
-contract StakeTableV2PropTestBase {
-    using EnumerableSet for EnumerableSet.AddressSet;
-    using EnumerableSet for EnumerableSet.Bytes32Set;
-
-    MockStakeTableV2 public stakeTable;
-    MockERC20 public token;
-    MockLightClient public lightClient;
-    IVM public ivm = IVM(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
-
-    EnumerableSet.AddressSet internal actors;
-    EnumerableSet.AddressSet internal allValidators;
-    EnumerableSet.AddressSet internal activeValidators;
-
-    uint256 public constant INITIAL_BALANCE = 1000000000e18;
-    uint256 public trackedTotalSupply;
-    uint256 public constant EXIT_ESCROW_PERIOD = 7 days;
-
-    mapping(address account => uint256 balance) public initialBalances;
-
-    uint256 public totalActiveDelegations;
-    uint256 public totalActiveUndelegations;
-
-    struct ActorFunds {
-        uint256 delegations;
-        uint256 undelegations;
-    }
-
-    mapping(address actor => ActorFunds funds) public trackedActorFunds;
-
-    // Track pending withdrawals for efficient claiming
-    struct PendingWithdrawal {
-        address actor;
-        address validator;
-    }
-
-    EnumerableSet.Bytes32Set internal pendingWithdrawalKeys;
-    mapping(bytes32 withdrawalKey => PendingWithdrawal) public pendingWithdrawals;
-
-    // Track validators with delegations and their delegators
-    EnumerableSet.AddressSet internal validatorsWithDelegations;
-    mapping(address => EnumerableSet.AddressSet) internal validatorDelegators;
-
-    // Track validators that have exited for claim processing
-    EnumerableSet.AddressSet internal exitedValidators;
-
-    // Track delegators for each exited validator
-    mapping(address => EnumerableSet.AddressSet) internal exitedValidatorDelegators;
-
+contract FunctionCallTracking {
     // Structured function call tracking
     struct FunctionStats {
         uint256 successes;
@@ -109,7 +62,49 @@ contract StakeTableV2PropTestBase {
 
     OkFunctionStats public okFunctionStats;
     AnyFunctionStats public anyFunctionStats;
+}
 
+contract StakeTableV2PropTestBase is FunctionCallTracking {
+    using EnumerableSet for EnumerableSet.AddressSet;
+    using EnumerableSet for EnumerableSet.Bytes32Set;
+
+    struct ActorFunds {
+        uint256 delegations;
+        uint256 undelegations;
+    }
+
+    struct PendingWithdrawal {
+        address actor;
+        address validator;
+    }
+
+    MockStakeTableV2 public stakeTable;
+    MockERC20 public token;
+    MockLightClient public lightClient;
+    IVM public ivm = IVM(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
+
+    uint256 public constant INITIAL_BALANCE = 1000000000e18;
+    uint256 public constant EXIT_ESCROW_PERIOD = 7 days;
+
+    // State tracking
+    uint256 public trackedTotalSupply;
+    uint256 public totalActiveDelegations;
+    uint256 public totalActiveUndelegations;
+
+    EnumerableSet.AddressSet internal actors;
+    EnumerableSet.AddressSet internal allValidators;
+    EnumerableSet.AddressSet internal activeValidators;
+    EnumerableSet.AddressSet internal exitedValidators;
+    EnumerableSet.Bytes32Set internal pendingWithdrawalKeys;
+    EnumerableSet.AddressSet internal validatorsWithDelegations;
+
+    mapping(address account => uint256 balance) public initialBalances;
+    mapping(bytes32 withdrawalKey => PendingWithdrawal) public pendingWithdrawals;
+    mapping(address => EnumerableSet.AddressSet) internal validatorDelegators;
+    mapping(address => EnumerableSet.AddressSet) internal exitedValidatorDelegators;
+    mapping(address actor => ActorFunds funds) public trackedActorFunds;
+
+    // For current validator and actor modifiers
     address internal validator;
     address internal actor;
 
