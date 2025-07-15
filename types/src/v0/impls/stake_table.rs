@@ -2958,7 +2958,7 @@ mod tests {
             .checked_div(U256::from(COMMISSION_BASIS_POINTS))
             .unwrap();
 
-        println!("Calculated reward: {}", reward);
+        println!("Calculated reward: {reward}");
         assert!(reward > U256::ZERO);
     }
 

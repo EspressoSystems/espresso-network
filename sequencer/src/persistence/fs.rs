@@ -1438,7 +1438,7 @@ impl SequencerPersistence for Persistence {
 
                 let block_header_path = block_header_dir_path
                     .join(epoch.to_string())
-                    .with_extension("txt");
+                    .with_extension("bin");
                 let block_header = if block_header_path.is_file() {
                     let bytes = fs::read(&block_header_path).context(format!(
                         "reading epoch root block header {}",
