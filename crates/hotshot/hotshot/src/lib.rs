@@ -370,15 +370,22 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
 
         let consensus = Arc::new(RwLock::new(consensus));
 
-        tracing::error!("LOADING EPOCH");
         if let Some(epoch) = epoch {
-            tracing::error!("LOADING DRB RESULT");
-            membership_coordinator.membership_for_epoch(Some(epoch + 1)).await;
+            // trigger catchup for the current and next epoch if needed
+            let _ = membership_coordinator
+                .membership_for_epoch(Some(epoch))
+                .await;
+            let _ = membership_coordinator
+                .membership_for_epoch(Some(epoch + 1))
+                .await;
 
             if let Ok(drb_result) = storage.load_drb_result(epoch + 1).await {
                 tracing::error!("Writing DRB result for epoch {}", epoch + 1);
-                if let Ok(mem) = membership_coordinator.stake_table_for_epoch(Some(epoch + 1)).await {
-                  mem.add_drb_result(drb_result).await;
+                if let Ok(mem) = membership_coordinator
+                    .stake_table_for_epoch(Some(epoch + 1))
+                    .await
+                {
+                    mem.add_drb_result(drb_result).await;
                 }
             }
         }
@@ -1243,11 +1250,6 @@ async fn load_start_epoch_info<TYPES: NodeType>(
     epoch_height: u64,
     epoch_start_block: u64,
 ) {
-    tracing::error!("HERE");
-    tracing::error!("HERE");
-    tracing::error!("HERE");
-    tracing::error!("HERE");
-    tracing::error!("{:?}", start_epoch_info);
     let first_epoch_number =
         TYPES::Epoch::new(epoch_from_block_number(epoch_start_block, epoch_height));
 

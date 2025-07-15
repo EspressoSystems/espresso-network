@@ -1922,7 +1922,7 @@ impl Membership<SeqTypes> for EpochCommittees {
                     .randomized_committees
                     .get(&epoch)
                     .map(|committee| committee.drb_result())
-                    .context(format!("Missing randomized committee for epoch {}", epoch))
+                    .context(format!("Missing randomized committee for epoch {epoch}"))
             },
         };
 

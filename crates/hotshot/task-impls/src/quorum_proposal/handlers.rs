@@ -594,24 +594,24 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             None
         };
         let next_drb_result = if is_epoch_transition(block_header.block_number(), self.epoch_height)
-        {    
-            tracing::error!("TRANSITION BLOCK, ATTACHING DRB RESULT!");
+        {
             if let Some(epoch_val) = &epoch {
-                epoch_membership.next_epoch().await
-                .context(warn!("No stake table for epoch {}", *epoch_val + 1))?
-                .get_epoch_drb()
-                .await
-                .clone()
-                .ok()
+                let drb_result = epoch_membership
+                    .next_epoch()
+                    .await
+                    .context(warn!("No stake table for epoch {}", *epoch_val + 1))?
+                    .get_epoch_drb()
+                    .await
+                    .clone()
+                    .context(warn!("No DRB result for epoch {}", *epoch_val + 1))?;
+
+                Some(drb_result)
             } else {
-            tracing::error!("DRB RESULT MISSING!");
                 None
             }
         } else {
             None
         };
-
-        tracing::error!("DRB RESULT: {:?}", next_drb_result);
 
         let proposal = QuorumProposalWrapper {
             proposal: QuorumProposal2 {
@@ -658,8 +658,6 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             &self.sender,
         )
         .await;
-
-        tracing::error!("PROPOSAL SENT");
 
         Ok(())
     }

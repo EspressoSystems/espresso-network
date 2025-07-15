@@ -171,7 +171,7 @@ pub async fn compute_drb_result(
     let final_drb_input = DrbInput {
         epoch: drb_input.epoch,
         iteration,
-        value: drb_result.clone(),
+        value: drb_result,
         difficulty_level: drb_input.difficulty_level,
     };
 

@@ -8,8 +8,8 @@ use std::{
     marker::PhantomData,
 };
 
-use anyhow::Context;
 use alloy::primitives::U256;
+use anyhow::Context;
 use hotshot_types::{
     drb::DrbResult,
     stake_table::HSStakeTable,

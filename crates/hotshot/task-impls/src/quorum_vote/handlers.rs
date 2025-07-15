@@ -67,7 +67,6 @@ async fn store_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Vers
                 task_state.membership.membership(),
                 current_epoch_number + 1,
                 &task_state.storage,
-                &task_state.consensus,
                 result,
             )
             .await;

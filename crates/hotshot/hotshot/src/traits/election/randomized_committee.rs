@@ -6,10 +6,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::Context;
-use crate::Arc;
-use crate::RwLock;
 use alloy::primitives::U256;
+use anyhow::Context;
 use hotshot_types::{
     drb::{
         election::{generate_stake_cdf, select_randomized_leader, RandomizedCommittee},
@@ -24,6 +22,8 @@ use hotshot_types::{
     PeerConfig,
 };
 use hotshot_utils::anytrace::*;
+
+use crate::{Arc, RwLock};
 
 #[derive(Clone, Debug)]
 
@@ -248,8 +248,8 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
     }
 
     fn add_drb_result(&mut self, epoch: <TYPES as NodeType>::Epoch, drb_result: DrbResult) {
-      self.drb_results.insert(epoch, drb_result);
-      }
+        self.drb_results.insert(epoch, drb_result);
+    }
 
     fn set_first_epoch(&mut self, epoch: TYPES::Epoch, initial_drb_result: DrbResult) {
         self.first_epoch = Some(epoch);
@@ -266,8 +266,12 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
         membership: Arc<RwLock<Self>>,
         epoch: TYPES::Epoch,
     ) -> anyhow::Result<DrbResult> {
-      let membership_reader = membership.read().await;
+        let membership_reader = membership.read().await;
 
-      membership_reader.drb_results.get(&epoch).context("DRB result missing").copied()
+        membership_reader
+            .drb_results
+            .get(&epoch)
+            .context("DRB result missing")
+            .copied()
     }
 }

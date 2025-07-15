@@ -155,7 +155,6 @@ pub async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     membership: &Arc<RwLock<TYPES::Membership>>,
     epoch: TYPES::Epoch,
     storage: &I::Storage,
-    consensus: &OuterConsensus<TYPES>,
     drb_result: DrbResult,
 ) {
     tracing::debug!("Calling store_drb_result for epoch {epoch}");
@@ -215,8 +214,7 @@ pub(crate) async fn verify_drb_result<
             .coordinator
             .stake_table_for_epoch(epoch)
             .await
-            .context(warn!("No stake table for epoch {}", epoch_val))?
-            ;
+            .context(warn!("No stake table for epoch {}", epoch_val))?;
 
         let has_stake_current_epoch = current_epoch_membership
             .has_stake(&validation_info.public_key)
@@ -347,14 +345,8 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
             };
 
             let start = Instant::now();
-            handle_drb_result::<TYPES, I>(
-                &membership,
-                next_epoch_number,
-                &storage,
-                &consensus,
-                drb_result,
-            )
-            .await;
+            handle_drb_result::<TYPES, I>(&membership, next_epoch_number, &storage, drb_result)
+                .await;
             tracing::info!("Time taken to handle drb result: {:?}", start.elapsed());
         });
     }
