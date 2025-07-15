@@ -298,7 +298,6 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
 
         let membership = coordinator.membership().read().await;
 
-        // TODO:
         Ok(membership.block_reward(epoch))
     }
 
