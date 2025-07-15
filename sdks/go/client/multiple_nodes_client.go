@@ -70,6 +70,17 @@ func (c *MultipleNodesClient) FetchTransactionByHash(ctx context.Context, hash *
 	return res, nil
 }
 
+func (c *MultipleNodesClient) FetchExplorerTransactionByHash(ctx context.Context, hash *types.TaggedBase64) (types.ExplorerTransactionQueryData, error) {
+	if hash == nil {
+		return types.ExplorerTransactionQueryData{}, fmt.Errorf("hash is nil")
+	}
+	var res types.ExplorerTransactionQueryData
+	if err := c.getWithMajority(ctx, &res, "explorer/transaction/hash/%s", hash.String()); err != nil {
+		return types.ExplorerTransactionQueryData{}, err
+	}
+	return res, nil
+}
+
 func (c *MultipleNodesClient) FetchHeadersByRange(ctx context.Context, from uint64, until uint64) ([]types.HeaderImpl, error) {
 	var res []types.HeaderImpl
 	if err := c.getWithMajority(ctx, &res, "availability/header/%d/%d", from, until); err != nil {

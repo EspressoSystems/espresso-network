@@ -397,6 +397,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
             .await;
         }
 
+        let leader = epoch_membership.leader(self.view_number).await;
+        if let (Ok(leader_key), Some(cur_epoch)) = (leader, cur_epoch) {
+            self.consensus
+                .write()
+                .await
+                .update_validator_participation(leader_key, cur_epoch, true);
+        }
+
         submit_vote::<TYPES, I, V>(
             self.sender.clone(),
             epoch_membership,

@@ -628,6 +628,7 @@ async fn main() -> anyhow::Result<()> {
     })
     .submit(Default::default())
     .config(Default::default())
+    .explorer(Default::default())
     .query_sql(Default::default(), sql);
 
     let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
@@ -932,8 +933,9 @@ mod tests {
     use espresso_types::{BlockMerkleTree, Header, NamespaceProofQueryData, SeqTypes, Transaction};
     use futures::{StreamExt, TryStreamExt};
     use hotshot_contract_adapter::sol_types::LightClientV2Mock;
-    use hotshot_query_service::availability::{
-        BlockQueryData, TransactionQueryData, VidCommonQueryData,
+    use hotshot_query_service::{
+        availability::{BlockQueryData, TransactionQueryData, VidCommonQueryData},
+        explorer::TransactionDetailResponse,
     };
     use jf_merkle_tree::MerkleTreeScheme;
     use portpicker::pick_unused_port;
@@ -1045,6 +1047,25 @@ mod tests {
             tx_result = api_client
                 .get::<TransactionQueryData<SeqTypes>>(&format!(
                     "availability/transaction/hash/{tx_hash}"
+                ))
+                .send()
+                .await;
+        }
+
+        let mut tx_result_from_explorer = api_client
+            .get::<TransactionDetailResponse<SeqTypes>>(&format!(
+                "explorer/transaction/hash/{tx_hash}",
+            ))
+            .send()
+            .await;
+
+        while tx_result_from_explorer.is_err() {
+            sleep(Duration::from_secs(1)).await;
+            tracing::warn!("waiting for tx");
+
+            tx_result_from_explorer = api_client
+                .get::<TransactionDetailResponse<SeqTypes>>(&format!(
+                    "explorer/transaction/hash/{tx_hash}"
                 ))
                 .send()
                 .await;
