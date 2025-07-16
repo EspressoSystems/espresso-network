@@ -2,7 +2,7 @@
 use std::collections::BTreeMap;
 
 use hotshot::traits::BlockPayload;
-use hotshot_query_service::availability::QueryablePayload;
+use hotshot_query_service::{availability::QueryablePayload, VidCommon};
 use hotshot_types::{data::VidCommitment, traits::EncodeBytes, vid::advz::advz_scheme};
 use jf_vid::VidScheme;
 use rand::RngCore;
@@ -53,6 +53,9 @@ async fn basic_correctness() {
             (disperse_data.commit, disperse_data.common)
         };
 
+        let vid_commit = VidCommitment::V0(vid_commit);
+        let vid_common = VidCommon::V0(vid_common);
+
         // test iterate over all txs
         for tx_index in block.iter(block.ns_table()) {
             let tx = block.transaction(&tx_index).unwrap();
@@ -76,7 +79,10 @@ async fn basic_correctness() {
             "not all test txs consumed by block.iter"
         );
 
-        let vid_commit = VidCommitment::V0(vid_commit);
+        // TODO(Chengyu): these APIs are troublemakers
+        let VidCommon::V0(vid_common) = vid_common else {
+            unreachable!();
+        };
 
         // test iterate over all namespaces
         for ns_index in block.ns_table().iter() {

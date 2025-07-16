@@ -15,6 +15,7 @@ mod header;
 mod impls;
 mod nsproof;
 pub mod traits;
+mod txproof;
 mod utils;
 pub use header::Header;
 #[cfg(any(test, feature = "testing"))]
@@ -24,6 +25,7 @@ pub use impls::{
     EpochCommittees, FeeError, ProposalValidationError, StateValidationError,
 };
 pub use nsproof::*;
+pub use txproof::*;
 pub use utils::*;
 use vbs::version::{StaticVersion, StaticVersionType};
 
@@ -113,7 +115,6 @@ reexport_unchanged_types!(
     TxIter,
     TxPayload,
     TxPayloadRange,
-    TxProof,
     TxTableEntries,
     TxTableEntriesRange,
     Upgrade,
