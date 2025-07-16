@@ -44,19 +44,27 @@ contract StakeTableV2InvariantTest is StdInvariant, Test {
         handler.verifyFinalState();
 
         // verify the invariants
-        invariant_actorOwnedAmounts();
         invariant_ContractBalanceMatchesTrackedDelegations();
         invariant_TotalSupply();
+
+        // additionally check the actor balances
+        assertActorsRecoveredFunds();
     }
 
     /// @dev The total amount of tokens owned by an actor does not change
-    function invariant_actorOwnedAmounts() public view {
+    function assertActorsRecoveredFunds() public view {
+        // Slow: O(n) in contrast to all others that may run during each step.
         for (uint256 i = 0; i < handler.getNumActors(); i++) {
             address actor = handler.getActorAtIndex(i);
             assertEq(
                 handler.totalOwnedAmount(actor),
                 handler.getInitialBalance(actor),
-                "Actor balance invariant violated"
+                "Actor balance not conserved in tracking"
+            );
+            assertEq(
+                handler.token().balanceOf(actor),
+                handler.getInitialBalance(actor),
+                "Actor balance not conserved after withdrawal"
             );
         }
     }
@@ -77,7 +85,7 @@ contract StakeTableV2InvariantTest is StdInvariant, Test {
     /// @dev Total supply must remain constant
     function invariant_TotalSupply() public view {
         assertEq(
-            handler.getTotalSupply(),
+            handler.token().totalSupply(),
             handler.getTestState().trackedTotalSupply,
             "Total supply invariant violated"
         );

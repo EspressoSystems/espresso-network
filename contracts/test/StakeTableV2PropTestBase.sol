@@ -554,13 +554,6 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         return testState;
     }
 
-    function getTotalSupply() external view returns (uint256 total) {
-        total += token.balanceOf(address(stakeTable));
-        for (uint256 i = 0; i < actors.all.length(); i++) {
-            total += token.balanceOf(actors.all.at(i));
-        }
-    }
-
     function getTotalSuccesses() external view returns (uint256) {
         uint256 total = 0;
         // Ok functions

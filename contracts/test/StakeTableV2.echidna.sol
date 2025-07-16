@@ -27,7 +27,7 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
 
     /// @dev Total supply must remain constant
     function echidna_TotalSupply() public view returns (bool) {
-        return this.getTotalSupply() == this.getTestState().trackedTotalSupply;
+        return token.totalSupply() == this.getTestState().trackedTotalSupply;
     }
 
     // Note: Unlike Foundry invariant tests, Echidna doesn't support post-test cleanup.
