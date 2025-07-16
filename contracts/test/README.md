@@ -33,8 +33,7 @@ Key challenges are:
 ### Shared Base Contract
 
 Both Foundry (`StakeTableV2.invariant.t.sol`) and Echidna (`StakeTableV2.echidna.sol`) tests inherit from the same base
-contract (`StakeTableV2PropTestBase.sol`) to minimize code duplications. switching between them without losing test
-coverage.
+contract (`StakeTableV2PropTestBase.sol`) to minimize code duplications.
 
 It was difficult to choose one of the two frameworks. Using both gives us extra coverage.
 
@@ -43,6 +42,5 @@ Statistics are displayed through the `InvariantStats` utility contract.
 
 ### Key Invariants
 
-- **Balance conservation**: Total token supply remains constant
-- **Accounting accuracy**: Contract balance equals tracked delegations plus pending withdrawals
-- **Actor balances**: Individual actor owned amounts remain unchanged (tokens are delegated, not transferred)
+- Global accounting accuracy: Contract balance equals tracked delegations plus pending withdrawals.
+- Individual accounting accuracy: The tokens owned by each actor are always accounted for.
