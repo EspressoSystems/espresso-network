@@ -26,7 +26,7 @@ coverage and state space exploration.
 
 Key challenges are:
 
-1. Finding good invariant to track. More should be added.
+1. Finding good invariants to track. More should be added.
 1. Evolving the state space: a lot of extra tracking is needed to have a reasonable fraction of non-reverting
    transactions.
 
