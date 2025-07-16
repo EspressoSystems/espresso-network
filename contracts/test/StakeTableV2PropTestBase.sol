@@ -170,11 +170,11 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
     }
 
     constructor() {
-        _deployStakeTable();
+        deployStakeTable();
         testState.trackedTotalSupply = token.totalSupply();
     }
 
-    function _deployStakeTable() internal {
+    function deployStakeTable() internal {
         address admin = address(this);
 
         token = new MockERC20();
@@ -208,7 +208,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         stakeTable = MockStakeTableV2(payable(address(proxy)));
     }
 
-    function _genDummyValidatorKeys(address _validator)
+    function genDummyValidatorKeys(address _validator)
         internal
         pure
         returns (
@@ -252,10 +252,10 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
             EdOnBN254.EdOnBN254Point memory schnorrVK,
             BN254.G1Point memory blsSig,
             bytes memory schnorrSig
-        ) = _genDummyValidatorKeys(actor);
+        ) = genDummyValidatorKeys(actor);
 
         try stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000) {
-            _addValidator(actor);
+            addValidator(actor);
             stats.any.registerValidator.ok++;
         } catch {
             // Registration failed - this is acceptable for the Any function
@@ -263,7 +263,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         }
     }
 
-    function _newAddress(uint256 seed) internal view returns (address) {
+    function newAddress(uint256 seed) internal view returns (address) {
         address candidate = address(uint160(uint256(keccak256(abi.encode(seed)))));
 
         // If address is already an actor, increment until we find an available one
@@ -274,7 +274,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         return candidate;
     }
 
-    function _addValidator(address val) internal {
+    function addValidator(address val) internal {
         validators.all.add(val);
         validators.active.add(val);
     }
@@ -287,7 +287,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
 
         ivm.prank(val);
         stakeTable.deregisterValidator();
-        _deregisterValidator(val);
+        deregisterValidator(val);
         stats.ok.deregisterValidator.ok++;
     }
 
@@ -299,7 +299,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
 
         ivm.prank(val);
         try stakeTable.deregisterValidator() {
-            _deregisterValidator(val);
+            deregisterValidator(val);
             stats.any.deregisterValidator.ok++;
         } catch {
             stats.any.deregisterValidator.reverts++;
@@ -307,7 +307,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
     }
 
     function createActor(uint256 seed) public returns (address) {
-        address newActor = _newAddress(seed);
+        address newActor = newAddress(seed);
 
         // Fund the actor with tokens
         token.mint(newActor, INITIAL_BALANCE);
@@ -334,11 +334,11 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
             EdOnBN254.EdOnBN254Point memory schnorrVK,
             BN254.G1Point memory blsSig,
             bytes memory schnorrSig
-        ) = _genDummyValidatorKeys(val);
+        ) = genDummyValidatorKeys(val);
 
         ivm.prank(val);
         stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000);
-        _addValidator(val);
+        addValidator(val);
         stats.ok.createValidator.ok++;
 
         return val;
@@ -357,7 +357,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         stakeTable.delegate(validator, amount);
 
         // Update tracking
-        _trackDelegation(actor, validator, amount);
+        trackDelegation(actor, validator, amount);
         stats.ok.delegate.ok++;
     }
 
@@ -367,11 +367,9 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         useActor(actorIndex)
     {
         try stakeTable.delegate(validator, amount) {
-            // Update tracking on success
-            _trackDelegation(actor, validator, amount);
+            trackDelegation(actor, validator, amount);
             stats.any.delegate.ok++;
         } catch {
-            // Delegation failed - this is acceptable for the Any function
             stats.any.delegate.reverts++;
         }
     }
@@ -382,12 +380,11 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
 
         validator = validators.staked.at(valIndex % validators.staked.length());
 
-        // Pick a delegator from this validator's delegators
         EnumerableSet.AddressSet storage validatorDelegators = delegators.delegators[validator];
 
         actor = validatorDelegators.at(actorIndex % validatorDelegators.length());
 
-        // Only one pending withdrawal is allowed at a time
+        // only one pending withdrawal is allowed at a time
         (uint256 existingUndelegation,) = stakeTable.undelegations(validator, actor);
         if (existingUndelegation > 0) return;
 
@@ -403,7 +400,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         stakeTable.undelegate(validator, amount);
 
         // Update tracking
-        _trackUndelegation(actor, validator, amount);
+        trackUndelegation(actor, validator, amount);
         stats.ok.undelegate.ok++;
     }
 
@@ -413,22 +410,20 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         useActor(actorIndex)
     {
         try stakeTable.undelegate(validator, amount) {
-            // Update tracking on success
-            _trackUndelegation(actor, validator, amount);
+            trackUndelegation(actor, validator, amount);
             stats.any.undelegate.ok++;
         } catch {
-            // Pending withdrawal failed - this is acceptable for the Any function
             stats.any.undelegate.reverts++;
         }
     }
 
-    function _deregisterValidator(address val) internal {
+    function deregisterValidator(address val) internal {
         validators.active.remove(val);
         validators.exited.add(val);
         validators.staked.remove(val);
     }
 
-    function _trackDelegation(address actorAddr, address val, uint256 amount) internal {
+    function trackDelegation(address actorAddr, address val, uint256 amount) internal {
         testState.totalDelegated += amount;
         actors.trackedFunds[actorAddr].delegated += amount;
         validators.staked.add(val);
@@ -441,20 +436,20 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         delegators.delegators[val].add(actorAddr);
     }
 
-    function _trackUndelegation(address actorAddr, address val, uint256 amount) internal {
+    function trackUndelegation(address actorAddr, address val, uint256 amount) internal {
         testState.totalDelegated -= amount;
         testState.totalPendingWithdrawal += amount;
         actors.trackedFunds[actorAddr].delegated -= amount;
         actors.trackedFunds[actorAddr].pendingWithdrawal += amount;
-        _addPendingWithdrawal(actorAddr, val);
+        addPendingWithdrawal(actorAddr, val);
 
         // Remove delegator from tracking if delegation amount reaches 0
         if (stakeTable.delegations(val, actorAddr) == 0) {
-            _removeValidatorDelegator(val, actorAddr);
+            removeDelegator(val, actorAddr);
         }
     }
 
-    function _removeValidatorDelegator(address val, address del) internal {
+    function removeDelegator(address val, address del) internal {
         if (delegators.delegators[val].contains(del)) {
             delegators.delegators[val].remove(del);
             testState.numActiveDelegations--;
@@ -464,7 +459,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         }
     }
 
-    function _addPendingWithdrawal(address actorAddr, address val) internal {
+    function addPendingWithdrawal(address actorAddr, address val) internal {
         if (delegators.pendingWithdrawals[val].contains(actorAddr)) return; // Already exists
 
         delegators.pendingWithdrawals[val].add(actorAddr);
@@ -472,7 +467,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         testState.numPendingWithdrawals++;
     }
 
-    function _removePendingWithdrawal(address actorAddr, address val) internal {
+    function removePendingWithdrawal(address actorAddr, address val) internal {
         if (!delegators.pendingWithdrawals[val].contains(actorAddr)) return; // Doesn't exist
 
         delegators.pendingWithdrawals[val].remove(actorAddr);
@@ -511,7 +506,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         // Update tracking
         testState.totalPendingWithdrawal -= undelegationAmount;
         actors.trackedFunds[pendingActor].pendingWithdrawal -= undelegationAmount;
-        _removePendingWithdrawal(pendingActor, val);
+        removePendingWithdrawal(pendingActor, val);
         stats.ok.claimWithdrawal.ok++;
     }
 
@@ -629,7 +624,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         // Update tracking
         testState.totalDelegated -= delegatedAmount;
         actors.trackedFunds[actor].delegated -= delegatedAmount;
-        _removeValidatorDelegator(validator, actor);
+        removeDelegator(validator, actor);
         stats.ok.claimValidatorExit.ok++;
     }
 
@@ -648,13 +643,11 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
 
         ivm.prank(actor);
         try stakeTable.claimValidatorExit(validator) {
-            // Update tracking on success using pre-read amount
             testState.totalDelegated -= delegatedAmount;
             actors.trackedFunds[actor].delegated -= delegatedAmount;
-            _removeValidatorDelegator(validator, actor);
+            removeDelegator(validator, actor);
             stats.any.claimValidatorExit.ok++;
         } catch {
-            // Claim failed - this is acceptable for the Any function
             stats.any.claimValidatorExit.reverts++;
         }
     }
@@ -672,7 +665,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
     // solhint-disable code-complexity
     function withdrawAllFunds() public {
         // unlock
-        ivm.warp(block.timestamp + EXIT_ESCROW_PERIOD + 1);
+        ivm.warp(block.timestamp + EXIT_ESCROW_PERIOD);
 
         for (uint256 i = 0; i < actors.all.length(); i++) {
             address del = actors.all.at(i);
@@ -688,7 +681,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
                     // Track the withdrawal using helper function
                     testState.totalPendingWithdrawal -= undelegationAmount;
                     actors.trackedFunds[del].pendingWithdrawal -= undelegationAmount;
-                    _removePendingWithdrawal(del, val);
+                    removePendingWithdrawal(del, val);
                 }
 
                 uint256 delegatedAmount = stakeTable.delegations(val, del);
@@ -702,20 +695,20 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
                         // Track the validator exit claim using helper function
                         testState.totalDelegated -= delegatedAmount;
                         actors.trackedFunds[del].delegated -= delegatedAmount;
-                        _removeValidatorDelegator(val, del);
+                        removeDelegator(val, del);
                     } else {
                         // undelegate remaining delegated amount
                         ivm.prank(del);
                         stakeTable.undelegate(val, delegatedAmount);
                         // Track the undelegation using helper function
-                        _trackUndelegation(del, val, delegatedAmount);
+                        trackUndelegation(del, val, delegatedAmount);
                     }
                 }
             }
         }
 
         // unlock
-        ivm.warp(block.timestamp + EXIT_ESCROW_PERIOD + 1);
+        ivm.warp(block.timestamp + EXIT_ESCROW_PERIOD);
 
         // Finally, claim the new withdrawals
         for (uint256 i = 0; i < actors.all.length(); i++) {
@@ -730,7 +723,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
                     // Track the withdrawal using helper function
                     testState.totalPendingWithdrawal -= undelegationAmount;
                     actors.trackedFunds[del].pendingWithdrawal -= undelegationAmount;
-                    _removePendingWithdrawal(del, val);
+                    removePendingWithdrawal(del, val);
                 }
             }
         }
