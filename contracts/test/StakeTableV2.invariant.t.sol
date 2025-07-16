@@ -63,9 +63,10 @@ contract StakeTableV2InvariantTest is StdInvariant, Test {
 
     /// @dev Contract balance should equal sum of all delegated amounts
     function invariant_ContractBalanceMatchesTrackedDelegations() public view {
+        StakeTableV2PropTestBase.TestState memory state = handler.getTestState();
+
         uint256 contractBalance = handler.token().balanceOf(address(handler.stakeTable()));
-        uint256 totalTracked =
-            handler.getTestState().totalDelegated + handler.getTestState().totalPendingWithdrawals;
+        uint256 totalTracked = state.totalDelegated + state.totalPendingWithdrawal;
         assertEq(
             contractBalance,
             totalTracked,

@@ -80,7 +80,9 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
     struct TestState {
         uint256 trackedTotalSupply;
         uint256 totalDelegated;
-        uint256 totalPendingWithdrawals;
+        uint256 totalPendingWithdrawal;
+        uint256 numPendingWithdrawals;
+        uint256 numActiveDelegations;
     }
 
     // Actors can be validators and/or delegators
@@ -240,13 +242,6 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         uint256 walletBalance = token.balanceOf(account);
         ActorFunds memory funds = actors.trackedFunds[account];
         return walletBalance + funds.delegated + funds.pendingWithdrawal;
-    }
-
-    function _getTotalSupply() internal view returns (uint256 total) {
-        total += token.balanceOf(address(stakeTable));
-        for (uint256 i = 0; i < actors.all.length(); i++) {
-            total += token.balanceOf(actors.all.at(i));
-        }
     }
 
     // NOTE: The create validator function is used to generate a new validators successfully.
@@ -437,12 +432,18 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         testState.totalDelegated += amount;
         actors.trackedFunds[actorAddr].delegated += amount;
         validators.staked.add(val);
+
+        // Only increment counter if this is a new delegation (actor wasn't already delegating to
+        // this validator)
+        if (!delegators.delegators[val].contains(actorAddr)) {
+            testState.numActiveDelegations++;
+        }
         delegators.delegators[val].add(actorAddr);
     }
 
     function _trackUndelegation(address actorAddr, address val, uint256 amount) internal {
         testState.totalDelegated -= amount;
-        testState.totalPendingWithdrawals += amount;
+        testState.totalPendingWithdrawal += amount;
         actors.trackedFunds[actorAddr].delegated -= amount;
         actors.trackedFunds[actorAddr].pendingWithdrawal += amount;
         _addPendingWithdrawal(actorAddr, val);
@@ -454,9 +455,12 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
     }
 
     function _removeValidatorDelegator(address val, address del) internal {
-        delegators.delegators[val].remove(del);
-        if (delegators.delegators[val].length() == 0) {
-            validators.staked.remove(val);
+        if (delegators.delegators[val].contains(del)) {
+            delegators.delegators[val].remove(del);
+            testState.numActiveDelegations--;
+            if (delegators.delegators[val].length() == 0) {
+                validators.staked.remove(val);
+            }
         }
     }
 
@@ -465,6 +469,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
 
         delegators.pendingWithdrawals[val].add(actorAddr);
         validators.withPendingWithdrawals.add(val);
+        testState.numPendingWithdrawals++;
     }
 
     function _removePendingWithdrawal(address actorAddr, address val) internal {
@@ -474,6 +479,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         if (delegators.pendingWithdrawals[val].length() == 0) {
             validators.withPendingWithdrawals.remove(val);
         }
+        testState.numPendingWithdrawals--;
     }
 
     function claimWithdrawalOk(uint256 withdrawalIndex) public {
@@ -503,16 +509,13 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         stakeTable.claimWithdrawal(val);
 
         // Update tracking
-        testState.totalPendingWithdrawals -= undelegationAmount;
+        testState.totalPendingWithdrawal -= undelegationAmount;
         actors.trackedFunds[pendingActor].pendingWithdrawal -= undelegationAmount;
         _removePendingWithdrawal(pendingActor, val);
         stats.ok.claimWithdrawal.ok++;
     }
 
-    // TODO: (MA) so many getters, which are actually still necessary?
-    //
-    // We can make all variables in this contract public, if necessary.
-    // We only need to keep the getters that are called in external contracts.
+    // Getter functions for external contract usage (invariant tests, stats logging)
     function getNumActors() external view returns (uint256) {
         return actors.all.length();
     }
@@ -525,26 +528,12 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         return validators.active.length();
     }
 
-    // TODO: (MA) For the total number of pending withdrawals we should add a
-    // tracking variable instead of needing a loop.
     function getNumPendingWithdrawals() external view returns (uint256) {
-        uint256 total = 0;
-        for (uint256 i = 0; i < validators.withPendingWithdrawals.length(); i++) {
-            total += delegators.pendingWithdrawals[validators.withPendingWithdrawals.at(i)].length();
-        }
-        return total;
-    }
-
-    function getValidatorAtIndex(uint256 index) external view returns (address) {
-        return validators.all.at(index);
+        return testState.numPendingWithdrawals;
     }
 
     function getNumValidatorsWithDelegations() external view returns (uint256) {
         return validators.staked.length();
-    }
-
-    function getNumValidatorDelegators(address val) external view returns (uint256) {
-        return delegators.delegators[val].length();
     }
 
     function getNumExitedValidators() external view returns (uint256) {
@@ -555,19 +544,6 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         return actors.all.at(index);
     }
 
-    function getValidatorWithDelegationsAtIndex(uint256 index)
-        external
-        view
-        returns (address, uint256)
-    {
-        address val = validators.staked.at(index);
-        return (val, delegators.delegators[val].length());
-    }
-
-    function getExitedValidatorAtIndex(uint256 index) external view returns (address) {
-        return validators.exited.at(index);
-    }
-
     function getInitialBalance(address actorAddr) external view returns (uint256) {
         return actors.initialBalances[actorAddr];
     }
@@ -576,8 +552,11 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         return testState;
     }
 
-    function getTotalSupply() external view returns (uint256) {
-        return _getTotalSupply();
+    function getTotalSupply() external view returns (uint256 total) {
+        total += token.balanceOf(address(stakeTable));
+        for (uint256 i = 0; i < actors.all.length(); i++) {
+            total += token.balanceOf(actors.all.at(i));
+        }
     }
 
     function getTotalSuccesses() external view returns (uint256) {
@@ -706,9 +685,10 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
                 if (undelegationAmount > 0) {
                     ivm.prank(del);
                     stakeTable.claimWithdrawal(val);
-                    // Track the withdrawal
-                    testState.totalPendingWithdrawals -= undelegationAmount;
+                    // Track the withdrawal using helper function
+                    testState.totalPendingWithdrawal -= undelegationAmount;
                     actors.trackedFunds[del].pendingWithdrawal -= undelegationAmount;
+                    _removePendingWithdrawal(del, val);
                 }
 
                 uint256 delegatedAmount = stakeTable.delegations(val, del);
@@ -719,18 +699,16 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
                     if (validatorExitTime > 0) {
                         ivm.prank(del);
                         stakeTable.claimValidatorExit(val);
-                        // Track the validator exit claim
+                        // Track the validator exit claim using helper function
                         testState.totalDelegated -= delegatedAmount;
                         actors.trackedFunds[del].delegated -= delegatedAmount;
+                        _removeValidatorDelegator(val, del);
                     } else {
                         // undelegate remaining delegated amount
                         ivm.prank(del);
                         stakeTable.undelegate(val, delegatedAmount);
-                        // Track the undelegation
-                        testState.totalDelegated -= delegatedAmount;
-                        testState.totalPendingWithdrawals += delegatedAmount;
-                        actors.trackedFunds[del].delegated -= delegatedAmount;
-                        actors.trackedFunds[del].pendingWithdrawal += delegatedAmount;
+                        // Track the undelegation using helper function
+                        _trackUndelegation(del, val, delegatedAmount);
                     }
                 }
             }
@@ -749,9 +727,10 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
                 if (undelegationAmount > 0) {
                     ivm.prank(del);
                     stakeTable.claimWithdrawal(val);
-                    // Track the withdrawal
-                    testState.totalPendingWithdrawals -= undelegationAmount;
+                    // Track the withdrawal using helper function
+                    testState.totalPendingWithdrawal -= undelegationAmount;
                     actors.trackedFunds[del].pendingWithdrawal -= undelegationAmount;
+                    _removePendingWithdrawal(del, val);
                 }
             }
         }
@@ -771,7 +750,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         }
 
         // Verify no pending withdrawals remain
-        require(testState.totalPendingWithdrawals == 0, "No pending withdrawals should remain");
+        require(testState.totalPendingWithdrawal == 0, "No pending withdrawals should remain");
         require(testState.totalDelegated == 0, "No delegations should remain");
     }
 }

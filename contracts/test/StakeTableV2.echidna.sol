@@ -21,16 +21,15 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
     /// @dev Contract balance should equal sum of all delegated amounts
     function echidna_ContractBalanceMatchesTrackedDelegations() public view returns (bool) {
         uint256 contractBalance = token.balanceOf(address(stakeTable));
-        uint256 totalTracked = testState.totalDelegated + testState.totalPendingWithdrawals;
+        uint256 totalTracked = testState.totalDelegated + testState.totalPendingWithdrawal;
         return contractBalance == totalTracked;
     }
 
     /// @dev Total supply must remain constant
     function echidna_TotalSupply() public view returns (bool) {
-        return _getTotalSupply() == this.getTestState().trackedTotalSupply;
+        return this.getTotalSupply() == this.getTestState().trackedTotalSupply;
     }
 
-    // TODO: (MA) we would like to perform an action after the test to check if
-    // we can withdraw all funds like we do in the foundry invariant test, but
-    // so far I haven't found a way to do this with Echidna.
+    // Note: Unlike Foundry invariant tests, Echidna doesn't support post-test cleanup.
+    // The withdrawAllFunds() verification is only available in the Foundry test suite.
 }

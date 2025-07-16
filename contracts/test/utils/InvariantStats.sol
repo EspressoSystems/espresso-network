@@ -135,22 +135,16 @@ contract InvariantStats {
     }
 
     function logCurrentState() public view {
+        StakeTableV2PropTestBase.TestState memory state = handler.getTestState();
         console.log("Num actors:", handler.getNumActors());
         console.log("Num all validators:", handler.getNumAllValidators());
         console.log("Num active validators:", handler.getNumActiveValidators());
         console.log("Num pending withdrawals:", handler.getNumPendingWithdrawals());
         console.log("Num validators with delegations:", handler.getNumValidatorsWithDelegations());
-
-        // Count total validator-delegator pairs
-        uint256 totalValidatorDelegatorPairs = 0;
-        for (uint256 i = 0; i < handler.getNumValidatorsWithDelegations(); i++) {
-            (, uint256 numDelegators) = handler.getValidatorWithDelegationsAtIndex(i);
-            totalValidatorDelegatorPairs += numDelegators;
-        }
-        console.log("Total validator-delegator pairs:", totalValidatorDelegatorPairs);
+        console.log("Total validator-delegator pairs:", state.numActiveDelegations);
         console.log("Num exited validators:", handler.getNumExitedValidators());
-        console.log("Total active delegations:", handler.getTestState().totalDelegated);
-        console.log("Total pending withdrawals:", handler.getTestState().totalPendingWithdrawals);
-        console.log("Tracked total supply:", handler.getTestState().trackedTotalSupply);
+        console.log("Total active delegation:", state.totalDelegated);
+        console.log("Total pending withdrawal:", state.totalPendingWithdrawal);
+        console.log("Tracked total supply:", state.trackedTotalSupply);
     }
 }
