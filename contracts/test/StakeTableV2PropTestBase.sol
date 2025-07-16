@@ -509,6 +509,10 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         stats.ok.claimWithdrawal.ok++;
     }
 
+    // TODO: (MA) so many getters, which are actually still necessary?
+    //
+    // We can make all variables in this contract public, if necessary.
+    // We only need to keep the getters that are called in external contracts.
     function getNumActors() external view returns (uint256) {
         return actors.all.length();
     }
@@ -521,6 +525,8 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         return validators.active.length();
     }
 
+    // TODO: (MA) For the total number of pending withdrawals we should add a
+    // tracking variable instead of needing a loop.
     function getNumPendingWithdrawals() external view returns (uint256) {
         uint256 total = 0;
         for (uint256 i = 0; i < validators.withPendingWithdrawals.length(); i++) {
