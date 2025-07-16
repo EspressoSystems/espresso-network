@@ -43,8 +43,6 @@ jobs:
         with:
           submodules: recursive
 
-      # NOTE: no rust cache, it doesn't work out of the box our nix env
-
       - name: Check toolchain versions
         run: nix develop --accept-flake-config -c ./scripts/show-toolchain-versions
 
@@ -57,10 +55,7 @@ jobs:
       - name: Build non-test contracts without warnings
         run: nix develop --accept-flake-config -c forge build --skip test --deny-warnings
 
-      - name: Build all contracts
-        run: nix develop --accept-flake-config -c forge build
-
-      - name: Check if bindings up to date
+      - name: Check if bindings up to date (also forces a build)
         run: nix develop --accept-flake-config -c pre-commit run contract-bindings --all-files --show-diff-on-failure
 
       - name: Print changes to bindings
@@ -68,14 +63,6 @@ jobs:
         run: |
           git status
           git diff
-
-      - name: Build diff-test
-        run: |
-          nix develop --accept-flake-config -c cargo build --locked --bin diff-test --profile test
-
-      - name: Print light contract gas benchmark
-        run: |
-          nix develop --accept-flake-config -c forge test --mt testCorrectUpdateBench
 
   contracts-test:
     timeout-minutes: 60
