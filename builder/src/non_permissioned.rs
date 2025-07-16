@@ -66,7 +66,7 @@ pub fn build_instance_state<V: Versions>(
         chain_config,
     );
 
-    let epoch_height = genesis.epoch_height.unwrap();
+    let epoch_height = 100;
 
     let coordinator = EpochMembershipCoordinator::new(
         Arc::new(RwLock::new(EpochCommittees::new_stake(
