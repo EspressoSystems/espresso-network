@@ -202,8 +202,6 @@ pub(crate) async fn verify_drb_result<
         validation_info.epoch_height,
     );
 
-    tracing::error!("RECEIVED DRB RESULT: {:?}", proposal.next_drb_result());
-
     let proposal_result = proposal
         .next_drb_result()
         .context(info!("Proposal is missing the next epoch's DRB result."))?;
