@@ -42,6 +42,7 @@ use vbs::version::StaticVersion;
 /// in the deployment process. The generated .env file will include all the addresses passed in as
 /// well as those newly deployed.
 #[derive(Clone, Debug, Parser)]
+
 struct Options {
     /// A JSON-RPC endpoint for the L1 to deploy to.
     #[clap(
@@ -159,6 +160,14 @@ struct Options {
     /// Option to transfer ownership from multisig
     #[clap(long, default_value = "false")]
     propose_transfer_ownership_to_timelock_fee_contract: bool,
+
+    /// Option to transfer ownership directly from EOA to a new owner
+    #[clap(long, default_value = "false")]
+    transfer_ownership_from_eoa: bool,
+
+    /// The new owner address (when using --transfer-ownership-from-eoa)
+    #[clap(long, env = "ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER")]
+    transfer_ownership_new_owner: Option<Address>,
 
     /// Write deployment results to OUT as a .env file.
     ///
@@ -283,12 +292,8 @@ struct Options {
 
     /// The target contract of the timelock operation
     /// The timelock is the owner of this contract and can perform the timelock operation on it
-    #[clap(
-        long,
-        env = "ESPRESSO_TIMELOCK_OPERATION_TARGET_CONTRACT",
-        requires = "perform_timelock_operation"
-    )]
-    timelock_target_contract: Option<String>,
+    #[clap(long, env = "ESPRESSO_TARGET_CONTRACT")]
+    target_contract: Option<String>,
 
     /// The value to send with the timelock operation
     #[clap(
@@ -421,7 +426,7 @@ async fn main() -> anyhow::Result<()> {
     // First use builder to build constructor input arguments
     let mut args_builder = DeployerArgsBuilder::default();
     args_builder
-        .deployer(provider)
+        .deployer(provider.clone())
         .mock_light_client(opt.use_mock)
         .use_multisig(opt.use_multisig)
         .dry_run(opt.dry_run)
@@ -563,15 +568,15 @@ async fn main() -> anyhow::Result<()> {
                  var when scheduling timelock operation"
             )
         })?;
+
         args_builder.timelock_operation_type(timelock_operation_type);
-        let timelock_target_contract = opt.timelock_target_contract.clone().ok_or_else(|| {
+        let target_contract = opt.target_contract.clone().ok_or_else(|| {
             anyhow::anyhow!(
-                "Must provide --timelock-target-contract or \
-                 ESPRESSO_TIMELOCK_OPERATION_TARGET_CONTRACT env var when scheduling timelock \
-                 operation"
+                "Must provide --target-contract or ESPRESSO_TARGET_CONTRACT env var when \
+                 scheduling timelock operation"
             )
         })?;
-        args_builder.timelock_target_contract(timelock_target_contract);
+        args_builder.target_contract(target_contract);
         let function_signature = opt.function_signature.ok_or_else(|| {
             anyhow::anyhow!(
                 "Must provide --function-signature or \
@@ -681,6 +686,59 @@ async fn main() -> anyhow::Result<()> {
             Contract::FeeContractProxy,
         )
         .await?;
+    }
+
+    // Execute ownership transfer when the admin is an EOA
+    if opt.transfer_ownership_from_eoa {
+        let contract_name = opt.target_contract.ok_or_else(|| {
+            anyhow::bail!("Must provide --target-contract when using --transfer-ownership-from-eoa")
+        })?;
+        let new_owner = opt.transfer_ownership_new_owner.ok_or_else(|| {
+            anyhow::bail!(
+                "Must provide --transfer-ownership-new-owner when using \
+                 --transfer-ownership-from-eoa"
+            )
+        })?;
+
+        // Parse the contract type from string
+        let contract_type = match contract_name.to_lowercase().as_str() {
+            "lightclient" | "lightclientproxy" => Contract::LightClientProxy,
+            "feecontract" | "feecontractproxy" => Contract::FeeContractProxy,
+            "esptoken" | "esptokenproxy" => Contract::EspTokenProxy,
+            "staketable" | "staketableproxy" => Contract::StakeTableProxy,
+            _ => anyhow::bail!(
+                "Unknown contract type: {}. Supported types: lightclient, feecontract, esptoken, \
+                 staketable",
+                contract_name
+            ),
+        };
+
+        // Get the contract address from the contracts map
+        let contract_address = contracts.address(contract_type).ok_or_else(|| {
+            anyhow::anyhow!("Contract {} not found in deployed contracts", contract_name)
+        })?;
+
+        tracing::info!(
+            "Transferring ownership of {} from EOA to {}",
+            contract_name,
+            new_owner
+        );
+
+        // Use the existing transfer_ownership function from lib.rs
+        let receipt = espresso_contract_deployer::transfer_ownership(
+            &provider,
+            contract_type,
+            contract_address,
+            new_owner,
+        )
+        .await?;
+
+        tracing::info!(
+            "Successfully transferred ownership of {} to {}. Transaction: {}",
+            contract_name,
+            new_owner,
+            receipt.transaction_hash
+        );
     }
 
     // finally print out or persist deployed addresses

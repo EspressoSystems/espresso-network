@@ -51,6 +51,68 @@ unset ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
 RUST_LOG=info cargo run --bin deploy -- --deploy-fee --rpc-url=$RPC_URL
 ```
 
+### Transfer Ownership with Cargo
+
+This section covers transferring ownership directly from an EOA (Externally Owned Account) to a new owner address.
+
+#### Prerequisites
+
+- The contract must be deployed and owned by an EOA (not a multisig or timelock)
+- The `ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS` env value is set to the valid proxy address for the env you're
+  using
+- You must have access to the current owner's private key/mnemonic
+- The new owner address must be valid
+
+#### Transferring Ownership with Cargo
+
+```bash
+set -a
+source .env
+set +a
+export ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER=0xNEWOWNERADDRESS
+RUST_LOG=info cargo run --bin deploy -- \
+--rpc-url=$RPC_URL \
+--transfer-ownership-from-eoa \
+--target-contract FeeContract \
+--transfer-ownership-new-owner $ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER
+```
+
+### Transferring Ownership with Docker Compose
+
+```bash
+export RPC_URL=http://host.docker.internal:8545
+```
+
+```bash
+docker compose run --rm \
+  -e RPC_URL \
+  -e ESPRESSO_SEQUENCER_ETH_MNEMONIC \
+  -e ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS \
+  deploy-sequencer-contracts \
+  deploy --rpc-url=$RPC_URL \
+  --transfer-ownership-from-eoa \
+  --target-contract FeeContract \
+  --transfer-ownership-new-owner $ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER
+```
+
+#### Supported Contract Types
+
+The following contract types are supported for EOA ownership transfer:
+
+- `lightclient` or `lightclientproxy` - LightClientProxy
+- `feecontract` or `feecontractproxy` - FeeContractProxy
+- `esptoken` or `esptokenproxy` - EspTokenProxy
+- `staketable` or `staketableproxy` - StakeTableProxy
+
+#### Verification
+
+After the transfer is completed, verify the ownership change on-chain:
+
+```bash
+# Verify the new owner is set correctly
+cast call $ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER
+```
+
 ## Multisig Owner
 
 ### Deploying with Cargo
@@ -229,7 +291,7 @@ RUST_LOG=info cargo run --bin deploy -- \
 --rpc-url=$RPC_URL \
 --perform-timelock-operation \
 --timelock-operation-type schedule \
---timelock-target-contract FeeContract \
+--target-contract FeeContract \
 --function-signature "transferOwnership(address)" \
 --function-values "0xa0Ee7A142d267C1f36714E4a8F75612F20a79720" \
 --timelock-operation-salt 0x \
@@ -244,7 +306,7 @@ RUST_LOG=info cargo run --bin deploy -- \
 --rpc-url=$RPC_URL \
 --perform-timelock-operation \
 --timelock-operation-type execute \
---timelock-target-contract FeeContract \
+--target-contract FeeContract \
 --function-signature "transferOwnership(address)" \
 --function-values "0xa0Ee7A142d267C1f36714E4a8F75612F20a79720" \
 --timelock-operation-salt 0x \
@@ -282,7 +344,7 @@ docker compose run --rm \
   deploy --rpc-url=$RPC_URL \
   --perform-timelock-operation \
   --timelock-operation-type schedule \
-  --timelock-target-contract FeeContract \
+  --target-contract FeeContract \
   --function-signature "transferOwnership(address)" \
   --function-values "0xa0Ee7A142d267C1f36714E4a8F75612F20a79720" \
   --timelock-operation-salt 0x \
@@ -300,7 +362,7 @@ docker compose run --rm \
   deploy --rpc-url=$RPC_URL \
   --perform-timelock-operation \
   --timelock-operation-type execute \
-  --timelock-target-contract FeeContract \
+  --target-contract FeeContract \
   --function-signature "transferOwnership(address)" \
   --function-values "0xa0Ee7A142d267C1f36714E4a8F75612F20a79720" \
   --timelock-operation-salt 0x \
@@ -344,7 +406,7 @@ RUST_LOG=info cargo run --bin deploy -- \
 --rpc-url=$RPC_URL \
 --perform-timelock-operation \
 --timelock-operation-type schedule \
---timelock-target-contract FeeContract \
+--target-contract FeeContract \
 --function-signature "upgradeToAndCall(address,bytes)" \
 --function-values $ESPRESSO_SEQUENCER_FEE_CONTRACT_ADDRESS \
 --function-values "0x" \
@@ -360,7 +422,7 @@ RUST_LOG=info cargo run --bin deploy -- \
 --rpc-url=$RPC_URL \
 --perform-timelock-operation \
 --timelock-operation-type execute \
---timelock-target-contract FeeContract \
+--target-contract FeeContract \
 --function-signature "upgradeToAndCall(address,bytes)" \
 --function-values $ESPRESSO_SEQUENCER_FEE_CONTRACT_ADDRESS \
 --function-values 0x \
@@ -401,7 +463,7 @@ docker compose run --rm \
   deploy --rpc-url=$RPC_URL \
   --perform-timelock-operation \
   --timelock-operation-type schedule \
-  --timelock-target-contract FeeContract \
+  --target-contract FeeContract \
   --function-signature "upgradeToAndCall(address,bytes)" \
   --function-values $ESPRESSO_SEQUENCER_FEE_CONTRACT_ADDRESS \
   --function-values "0x" \
@@ -421,7 +483,7 @@ docker compose run --rm \
   deploy --rpc-url=$RPC_URL \
   --perform-timelock-operation \
   --timelock-operation-type execute \
-  --timelock-target-contract FeeContract \
+  --target-contract FeeContract \
   --function-signature "upgradeToAndCall(address,bytes)" \
   --function-values $ESPRESSO_SEQUENCER_FEE_CONTRACT_ADDRESS \
   --function-values "0x" \

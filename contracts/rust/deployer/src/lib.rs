@@ -870,14 +870,14 @@ async fn upgrade_stake_table_v2(
 /// Common logic for any Ownable contract to transfer ownership
 pub async fn transfer_ownership(
     provider: impl Provider,
-    target: Contract,
-    addr: Address,
+    target_contract: Contract,
+    target_address: Address,
     new_owner: Address,
 ) -> Result<TransactionReceipt> {
-    let receipt = match target {
+    let receipt = match target_contract {
         Contract::LightClient | Contract::LightClientProxy => {
-            tracing::info!(%addr, %new_owner, "Transfer LightClient ownership");
-            let lc = LightClient::new(addr, &provider);
+            tracing::info!(%target_address, %new_owner, "Transfer LightClient ownership");
+            let lc = LightClient::new(target_address, &provider);
             lc.transferOwnership(new_owner)
                 .send()
                 .await?
@@ -885,8 +885,8 @@ pub async fn transfer_ownership(
                 .await?
         },
         Contract::FeeContract | Contract::FeeContractProxy => {
-            tracing::info!(%addr, %new_owner, "Transfer FeeContract ownership");
-            let fee = FeeContract::new(addr, &provider);
+            tracing::info!(%target_address, %new_owner, "Transfer FeeContract ownership");
+            let fee = FeeContract::new(target_address, &provider);
             fee.transferOwnership(new_owner)
                 .send()
                 .await?
@@ -894,8 +894,8 @@ pub async fn transfer_ownership(
                 .await?
         },
         Contract::EspToken | Contract::EspTokenProxy => {
-            tracing::info!(%addr, %new_owner, "Transfer EspToken ownership");
-            let token = EspToken::new(addr, &provider);
+            tracing::info!(%target_address, %new_owner, "Transfer EspToken ownership");
+            let token = EspToken::new(target_address, &provider);
             token
                 .transferOwnership(new_owner)
                 .send()
@@ -904,8 +904,8 @@ pub async fn transfer_ownership(
                 .await?
         },
         Contract::StakeTable | Contract::StakeTableProxy | Contract::StakeTableV2 => {
-            tracing::info!(%addr, %new_owner, "Transfer StakeTable ownership");
-            let stake_table = StakeTable::new(addr, &provider);
+            tracing::info!(%target_address, %new_owner, "Transfer StakeTable ownership");
+            let stake_table = StakeTable::new(target_address, &provider);
             stake_table
                 .transferOwnership(new_owner)
                 .send()

@@ -49,7 +49,7 @@ use crate::{
 /// - `safe_exit_timelock_executors`: executors for the safe exit timelock
 /// - `safe_exit_timelock_proposers`: proposers for the safe exit timelock
 /// - `timelock_operation_type`: type of the timelock operation
-/// - `timelock_target_contract`: target contract for the timelock operation
+/// - `target_contract`: target contract for the contract operations
 /// - `timelock_operation_value`: value for the timelock operation
 /// - `timelock_operation_delay`: delay for the timelock operation
 /// - `timelock_operation_function_signature`: function signature for the timelock operation
@@ -111,7 +111,7 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     #[builder(default)]
     timelock_operation_type: Option<TimelockOperationType>,
     #[builder(default)]
-    timelock_target_contract: Option<String>,
+    target_contract: Option<String>,
     #[builder(default)]
     timelock_operation_value: Option<U256>,
     #[builder(default)]
@@ -507,7 +507,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             .timelock_operation_type
             .context("Timelock operation type not found")?;
         let target_contract = self
-            .timelock_target_contract
+            .target_contract
             .clone()
             .context("Timelock target not found")?;
         let value = self
