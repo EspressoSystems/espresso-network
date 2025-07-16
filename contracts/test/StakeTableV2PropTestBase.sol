@@ -78,7 +78,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
 
     struct ActorFunds {
         uint256 delegated;
-        uint256 undelegated;
+        uint256 pendingWithdrawal;
     }
 
     struct Validators {
@@ -97,7 +97,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
     struct TestState {
         uint256 trackedTotalSupply;
         uint256 totalDelegated;
-        uint256 totalUndelegated;
+        uint256 totalPendingWithdrawals;
     }
 
     struct Actors {
@@ -235,7 +235,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
     function totalOwnedAmount(address account) public view returns (uint256) {
         uint256 walletBalance = token.balanceOf(account);
         ActorFunds memory funds = actors.trackedFunds[account];
-        return walletBalance + funds.delegated + funds.undelegated;
+        return walletBalance + funds.delegated + funds.pendingWithdrawal;
     }
 
     function _getTotalSupply() internal view returns (uint256 total) {
@@ -389,7 +389,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
 
         actor = validatorDelegators.at(actorIndex % validatorDelegators.length());
 
-        // Only one undelegation is allowed at a time
+        // Only one pending withdrawal is allowed at a time
         (uint256 existingUndelegation,) = stakeTable.undelegations(validator, actor);
         if (existingUndelegation > 0) return;
 
@@ -415,7 +415,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
             _trackUndelegation(actor, validator, amount);
             stats.any.undelegate.ok++;
         } catch {
-            // Undelegation failed - this is acceptable for the Any function
+            // Pending withdrawal failed - this is acceptable for the Any function
             stats.any.undelegate.reverts++;
         }
     }
@@ -435,9 +435,9 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
 
     function _trackUndelegation(address actorAddr, address val, uint256 amount) internal {
         testState.totalDelegated -= amount;
-        testState.totalUndelegated += amount;
+        testState.totalPendingWithdrawals += amount;
         actors.trackedFunds[actorAddr].delegated -= amount;
-        actors.trackedFunds[actorAddr].undelegated += amount;
+        actors.trackedFunds[actorAddr].pendingWithdrawal += amount;
         _addPendingWithdrawal(actorAddr, val);
 
         // Remove delegator from tracking if delegation amount reaches 0
@@ -496,8 +496,8 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         stakeTable.claimWithdrawal(val);
 
         // Update tracking
-        testState.totalUndelegated -= undelegationAmount;
-        actors.trackedFunds[pendingActor].undelegated -= undelegationAmount;
+        testState.totalPendingWithdrawals -= undelegationAmount;
+        actors.trackedFunds[pendingActor].pendingWithdrawal -= undelegationAmount;
         _removePendingWithdrawal(pendingActor, val);
         stats.ok.claimWithdrawal.ok++;
     }
