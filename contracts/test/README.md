@@ -18,6 +18,8 @@ framework has two main goals:
 
 1. Test that the balance accounting is correct as the state space evolves.
 2. Ensure that contract safety is preserved as the state space evolves.
+3. Ensure that each participant can withdraw all their funds in the end. Note that this is currently only done for the
+   foundry invariant test, because it's unclear how to achieve it with echidna.
 
 The tests track detailed statistics about function calls, reverts, and state changes to provide insight into test
 coverage and state space exploration.

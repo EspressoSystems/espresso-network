@@ -678,7 +678,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
     //
     // We used to have a bug where the contract lost track of pending
     // withdrawals by overwriting them. Draining all tracked funds from the
-    // contract will surface such inconsitencies.
+    // contract will surface such inconsistencies.
     //
     // TODO: this function is missing tracking. Refactor out helper functions to
     // perform actions and update tracking. Use them here and in the Ok()
