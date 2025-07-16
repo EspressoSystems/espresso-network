@@ -234,3 +234,6 @@ test-go:
 
 contracts-test-echidna *args:
     nix develop .#echidna -c echidna contracts/test/StakeTableV2.echidna.sol --contract StakeTableV2EchidnaTest --config contracts/echidna.yaml {{args}}
+
+contracts-test-invariant *args:
+    forge test --match-path '*invariant.t*' -vv {{args}}
