@@ -19,10 +19,12 @@ env:
   RUST_LOG: info,libp2p=off
 
 jobs:
-  contracts:
-    timeout-minutes: 120
+  contracts-lint:
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
+      - uses: taiki-e/install-action@just
+
       - name: Install Nix
         uses: cachix/install-nix-action@v31
 
@@ -71,23 +73,32 @@ jobs:
         run: |
           nix develop --accept-flake-config -c cargo build --locked --bin diff-test --profile test
 
-      - name: Run tests (quick version for PR)
-        if: ${{ github.event_name == 'pull_request' }}
-        run: |
-          export FOUNDRY_PROFILE=quick
-          nix develop --accept-flake-config -c forge test -vvv
-
-      - name: Run tests (full version for main)
-        if: ${{ github.event_name != 'pull_request' }}
-        run: |
-          nix develop --accept-flake-config -c forge test -vvv
-
       - name: Print light contract gas benchmark
         run: |
           nix develop --accept-flake-config -c forge test --mt testCorrectUpdateBench
 
-  echidna-tests:
+  contracts-test:
+    timeout-minutes: 60
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - test-type: forge
+            command: "just contracts-test-forge"
+            nix-env: ""
+            with-diff-test: true
+          - test-type: invariant
+            command: "just contracts-test-invariant"
+            nix-env: ""
+            with-diff-test: false
+          - test-type: fuzz
+            command: "just contracts-test-fuzz"
+            nix-env: ""
+            with-diff-test: true
+          - test-type: echidna
+            command: "just contracts-test-echidna --format text"
+            nix-env: ".#echidna"
+            with-diff-test: false
     steps:
       - uses: taiki-e/install-action@just
 
@@ -104,18 +115,28 @@ jobs:
           extraPullNames: nix-community
           skipPush: ${{ github.actor == 'dependabot[bot]' }}
 
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - name: Checkout Repository
+        uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Check toolchain versions
-        run: nix develop .#echidna --accept-flake-config -c ./scripts/show-toolchain-versions
+      # NOTE: no rust cache, it doesn't work out of the box our nix env
 
-      - name: Run Echidna
+      - name: Check toolchain versions
+        run: nix develop ${{ matrix.nix-env && matrix.nix-env || '' }} --accept-flake-config -c ./scripts/show-toolchain-versions
+
+      - name: Build diff-test
+        if: ${{ matrix.with-diff-test }}
+        run: |
+          nix develop --accept-flake-config -c cargo build --locked --bin diff-test --profile test
+
+      - name: Run ${{ matrix.test-type }} tests
         run: |
           set -euo pipefail
-          echo "## Echidna results" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            export FOUNDRY_PROFILE=quick
+          fi
+          echo "## ${{ matrix.test-type }} test results" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          just contracts-test-echidna --format text 2>&1 | tee -a $GITHUB_STEP_SUMMARY
+          nix develop ${{ matrix.nix-env }} --accept-flake-config -c ${{ matrix.command }} 2>&1 | tee -a $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
