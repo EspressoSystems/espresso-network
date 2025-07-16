@@ -100,7 +100,6 @@ contract InvariantStats {
     }
 
     function logFunctionStats() public view {
-        console.log("\n=== Call stats for last invariant run ===");
         console.log("function                     successes  reverts");
         console.log("-----------------------------------------------");
 
@@ -136,7 +135,6 @@ contract InvariantStats {
     }
 
     function logCurrentState() public view {
-        console.log("\n=== Current State ===");
         console.log("Num actors:", handler.getNumActors());
         console.log("Num all validators:", handler.getNumAllValidators());
         console.log("Num active validators:", handler.getNumActiveValidators());

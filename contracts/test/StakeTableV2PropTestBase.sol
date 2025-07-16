@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: UNLICENSED
+/* solhint-disable no-console */
 pragma solidity ^0.8.0;
 
 import { MockStakeTableV2 } from "./MockStakeTableV2.sol";
@@ -10,6 +11,7 @@ import { ILightClient } from "../src/interfaces/ILightClient.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import { EnumerableMap } from "@openzeppelin/contracts/utils/structs/EnumerableMap.sol";
+import { console } from "forge-std/console.sol";
 
 // Minimal VM interface that works with foundry and echidna
 interface IVM {
@@ -74,25 +76,6 @@ contract FunctionCallTracking {
 
 contract StakeTableV2PropTestBase is FunctionCallTracking {
     using EnumerableSet for EnumerableSet.AddressSet;
-    using EnumerableSet for EnumerableSet.Bytes32Set;
-
-    struct ActorFunds {
-        uint256 delegated;
-        uint256 pendingWithdrawal;
-    }
-
-    struct Validators {
-        EnumerableSet.AddressSet all; // validators
-        EnumerableSet.AddressSet active; // validatorsActive
-        EnumerableSet.AddressSet exited; // validatorsExited
-        EnumerableSet.AddressSet staked; // validatorsStaked (has delegations)
-        EnumerableSet.AddressSet withPendingWithdrawals; // validatorsWithPendingWithdrawals
-    }
-
-    struct Delegators {
-        mapping(address validator => EnumerableSet.AddressSet delegators) delegators;
-        mapping(address validator => EnumerableSet.AddressSet actors) pendingWithdrawals;
-    }
 
     struct TestState {
         uint256 trackedTotalSupply;
@@ -100,10 +83,31 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         uint256 totalPendingWithdrawals;
     }
 
+    // Actors can be validators and/or delegators
     struct Actors {
-        EnumerableSet.AddressSet all; // actors
+        EnumerableSet.AddressSet all;
         mapping(address actor => uint256 balance) initialBalances;
         mapping(address actor => ActorFunds funds) trackedFunds;
+    }
+
+    struct ActorFunds {
+        uint256 delegated;
+        uint256 pendingWithdrawal;
+    }
+
+    // All validators are in `all`, other sets are used to track validators in
+    // specific states.
+    struct Validators {
+        EnumerableSet.AddressSet all;
+        EnumerableSet.AddressSet active;
+        EnumerableSet.AddressSet exited;
+        EnumerableSet.AddressSet staked;
+        EnumerableSet.AddressSet withPendingWithdrawals;
+    }
+
+    struct Delegators {
+        mapping(address validator => EnumerableSet.AddressSet delegators) delegators;
+        mapping(address validator => EnumerableSet.AddressSet actors) pendingWithdrawals;
     }
 
     MockStakeTableV2 public stakeTable;
@@ -385,7 +389,6 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
 
         // Pick a delegator from this validator's delegators
         EnumerableSet.AddressSet storage validatorDelegators = delegators.delegators[validator];
-        if (validatorDelegators.length() == 0) return;
 
         actor = validatorDelegators.at(actorIndex % validatorDelegators.length());
 
@@ -394,6 +397,10 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         if (existingUndelegation > 0) return;
 
         uint256 delegatedAmount = stakeTable.delegations(validator, actor);
+
+        if (delegatedAmount == 0) {
+            revert("Tracking inconsistency: delegatedAmount=0 but actor still has delegations");
+        }
 
         amount = boundRange(amount, 1, delegatedAmount);
 
@@ -522,6 +529,10 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         return total;
     }
 
+    function getValidatorAtIndex(uint256 index) external view returns (address) {
+        return validators.all.at(index);
+    }
+
     function getNumValidatorsWithDelegations() external view returns (uint256) {
         return validators.staked.length();
     }
@@ -633,6 +644,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         // Update tracking
         testState.totalDelegated -= delegatedAmount;
         actors.trackedFunds[actor].delegated -= delegatedAmount;
+        _removeValidatorDelegator(validator, actor);
         stats.ok.claimValidatorExit.ok++;
     }
 
@@ -654,10 +666,106 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
             // Update tracking on success using pre-read amount
             testState.totalDelegated -= delegatedAmount;
             actors.trackedFunds[actor].delegated -= delegatedAmount;
+            _removeValidatorDelegator(validator, actor);
             stats.any.claimValidatorExit.ok++;
         } catch {
             // Claim failed - this is acceptable for the Any function
             stats.any.claimValidatorExit.reverts++;
         }
+    }
+
+    // NOTE: intended to be run at the end of the test
+    //
+    // We used to have a bug where the contract lost track of pending
+    // withdrawals by overwriting them. Draining all tracked funds from the
+    // contract will surface such inconsitencies.
+    //
+    // TODO: this function is missing tracking. Refactor out helper functions to
+    // perform actions and update tracking. Use them here and in the Ok()
+    // functions.
+    //
+    // solhint-disable code-complexity
+    function withdrawAllFunds() public {
+        // unlock
+        ivm.warp(block.timestamp + EXIT_ESCROW_PERIOD + 1);
+
+        for (uint256 i = 0; i < actors.all.length(); i++) {
+            address del = actors.all.at(i);
+            for (uint256 j = 0; j < validators.all.length(); j++) {
+                address val = validators.all.at(j);
+
+                // claim undelegation
+                (uint256 undelegationAmount,) = stakeTable.undelegations(val, del);
+
+                if (undelegationAmount > 0) {
+                    ivm.prank(del);
+                    stakeTable.claimWithdrawal(val);
+                    // Track the withdrawal
+                    testState.totalPendingWithdrawals -= undelegationAmount;
+                    actors.trackedFunds[del].pendingWithdrawal -= undelegationAmount;
+                }
+
+                uint256 delegatedAmount = stakeTable.delegations(val, del);
+
+                if (delegatedAmount > 0) {
+                    //  if validator exited, claim exit
+                    uint256 validatorExitTime = stakeTable.validatorExits(val);
+                    if (validatorExitTime > 0) {
+                        ivm.prank(del);
+                        stakeTable.claimValidatorExit(val);
+                        // Track the validator exit claim
+                        testState.totalDelegated -= delegatedAmount;
+                        actors.trackedFunds[del].delegated -= delegatedAmount;
+                    } else {
+                        // undelegate remaining delegated amount
+                        ivm.prank(del);
+                        stakeTable.undelegate(val, delegatedAmount);
+                        // Track the undelegation
+                        testState.totalDelegated -= delegatedAmount;
+                        testState.totalPendingWithdrawals += delegatedAmount;
+                        actors.trackedFunds[del].delegated -= delegatedAmount;
+                        actors.trackedFunds[del].pendingWithdrawal += delegatedAmount;
+                    }
+                }
+            }
+        }
+
+        // unlock
+        ivm.warp(block.timestamp + EXIT_ESCROW_PERIOD + 1);
+
+        // Finally, claim the new withdrawals
+        for (uint256 i = 0; i < actors.all.length(); i++) {
+            address del = actors.all.at(i);
+            for (uint256 j = 0; j < validators.all.length(); j++) {
+                address val = validators.all.at(j);
+                (uint256 undelegationAmount,) = stakeTable.undelegations(val, del);
+
+                if (undelegationAmount > 0) {
+                    ivm.prank(del);
+                    stakeTable.claimWithdrawal(val);
+                    // Track the withdrawal
+                    testState.totalPendingWithdrawals -= undelegationAmount;
+                    actors.trackedFunds[del].pendingWithdrawal -= undelegationAmount;
+                }
+            }
+        }
+    }
+
+    function verifyFinalState() external view {
+        // Verify StakeTable has zero balance
+        uint256 contractBalance = token.balanceOf(address(stakeTable));
+        require(contractBalance == 0, "StakeTable should have zero balance after full withdrawal");
+
+        // Verify each actor has their original balance back
+        for (uint256 i = 0; i < actors.all.length(); i++) {
+            address actor_ = actors.all.at(i);
+            uint256 currentBalance = token.balanceOf(actor_);
+            uint256 originalBalance = actors.initialBalances[actor_];
+            require(currentBalance == originalBalance, "Actor should have original balance back");
+        }
+
+        // Verify no pending withdrawals remain
+        require(testState.totalPendingWithdrawals == 0, "No pending withdrawals should remain");
+        require(testState.totalDelegated == 0, "No delegations should remain");
     }
 }

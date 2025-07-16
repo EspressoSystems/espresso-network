@@ -29,4 +29,8 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
     function echidna_TotalSupply() public view returns (bool) {
         return _getTotalSupply() == this.getTestState().trackedTotalSupply;
     }
+
+    // TODO: (MA) we would like to perform an action after the test to check if
+    // we can withdraw all funds like we do in the foundry invariant test, but
+    // so far I haven't found a way to do this with Echidna.
 }

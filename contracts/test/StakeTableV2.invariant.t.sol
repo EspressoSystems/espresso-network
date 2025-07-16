@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
-/* solhint-disable func-name-mixedcase */
+/* solhint-disable func-name-mixedcase, no-console */
 pragma solidity ^0.8.0;
 
 import "forge-std/Test.sol";
 import "forge-std/StdInvariant.sol";
+import { console } from "forge-std/console.sol";
 import {
     StakeTableV2PropTestBase, MockStakeTableV2, MockERC20
 } from "./StakeTableV2PropTestBase.sol";
@@ -22,11 +23,30 @@ contract StakeTableV2InvariantTest is StdInvariant, Test {
         handler = new StakeTableV2PropTestBase();
         stats = new InvariantStats(handler);
         targetContract(address(handler));
+        bytes4[] memory selectors = new bytes4[](1);
+        selectors[0] = StakeTableV2PropTestBase.withdrawAllFunds.selector;
+        excludeSelector(FuzzSelector(address(handler), selectors));
     }
 
-    function afterInvariant() external view {
+    function afterInvariant() external {
+        console.log("\n=== Call stats for last invariant run ===");
         stats.logFunctionStats();
+
+        console.log("\n=== State before withdrawal ===");
         stats.logCurrentState();
+
+        // Ensure all participants can withdraw all their funds
+        handler.withdrawAllFunds();
+
+        console.log("\n=== State after withdrawal ===");
+        stats.logCurrentState();
+
+        handler.verifyFinalState();
+
+        // verify the invariants
+        invariant_actorOwnedAmounts();
+        invariant_ContractBalanceMatchesTrackedDelegations();
+        invariant_TotalSupply();
     }
 
     /// @dev The total amount of tokens owned by an actor does not change
