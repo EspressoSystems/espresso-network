@@ -124,6 +124,10 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     timelock_operation_salt: Option<String>,
     #[builder(default)]
     use_timelock_owner: Option<bool>,
+    #[builder(default)]
+    transfer_ownership_from_eoa: Option<bool>,
+    #[builder(default)]
+    transfer_ownership_new_owner: Option<Address>,
 }
 
 impl<P: Provider + WalletProvider> DeployerArgs<P> {
@@ -649,6 +653,67 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             );
         }
         tracing::info!("Successfully proposed ownership transfer for {}", contract);
+        Ok(())
+    }
+
+    /// Transfer ownership from EOA to new owner
+    pub async fn transfer_ownership_from_eoa(&self, contracts: &mut Contracts) -> Result<()> {
+        let transfer_ownership_from_eoa = self
+            .transfer_ownership_from_eoa
+            .ok_or_else(|| anyhow::anyhow!("transfer_ownership_from_eoa flag not set"))?;
+
+        if !transfer_ownership_from_eoa {
+            return Ok(());
+        }
+
+        let target_contract = self.target_contract.clone().ok_or_else(|| {
+            anyhow::anyhow!("Must provide target_contract when using transfer_ownership_from_eoa")
+        })?;
+        let new_owner = self.transfer_ownership_new_owner.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide transfer_ownership_new_owner when using transfer_ownership_from_eoa"
+            )
+        })?;
+
+        // Parse the contract type from string
+        let contract_type = match target_contract.to_lowercase().as_str() {
+            "lightclient" | "lightclientproxy" => Contract::LightClientProxy,
+            "feecontract" | "feecontractproxy" => Contract::FeeContractProxy,
+            "esptoken" | "esptokenproxy" => Contract::EspTokenProxy,
+            "staketable" | "staketableproxy" => Contract::StakeTableProxy,
+            _ => anyhow::bail!(
+                "Unknown contract type: {}. Supported types: lightclient, feecontract, esptoken, \
+                 staketable",
+                target_contract
+            ),
+        };
+
+        // Get the contract address from the contracts map
+        let contract_address = contracts.address(contract_type).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Contract {} not found in deployed contracts",
+                target_contract
+            )
+        })?;
+
+        tracing::info!(
+            "Transferring ownership of {} from EOA to {}",
+            target_contract,
+            new_owner
+        );
+
+        // Use the existing transfer_ownership function from lib.rs
+        let receipt =
+            crate::transfer_ownership(&self.deployer, contract_type, contract_address, new_owner)
+                .await?;
+
+        tracing::info!(
+            "Successfully transferred ownership of {} to {}. Transaction: {}",
+            target_contract,
+            new_owner,
+            receipt.transaction_hash
+        );
+
         Ok(())
     }
 }

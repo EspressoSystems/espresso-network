@@ -629,6 +629,24 @@ async fn main() -> anyhow::Result<()> {
         args_builder.token_recipient(token_recipient);
     }
 
+    // Add EOA ownership transfer parameters to builder
+    if opt.transfer_ownership_from_eoa {
+        let target_contract = opt.target_contract.clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --target-contract when using --transfer-ownership-from-eoa"
+            )
+        })?;
+        let new_owner = opt.transfer_ownership_new_owner.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --transfer-ownership-new-owner when using \
+                 --transfer-ownership-from-eoa"
+            )
+        })?;
+        args_builder.transfer_ownership_from_eoa(true);
+        args_builder.target_contract(target_contract);
+        args_builder.transfer_ownership_new_owner(new_owner);
+    }
+
     // then deploy specified contracts
     let args = args_builder.build()?;
 
@@ -690,55 +708,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Execute ownership transfer when the admin is an EOA
     if opt.transfer_ownership_from_eoa {
-        let contract_name = opt.target_contract.ok_or_else(|| {
-            anyhow::bail!("Must provide --target-contract when using --transfer-ownership-from-eoa")
-        })?;
-        let new_owner = opt.transfer_ownership_new_owner.ok_or_else(|| {
-            anyhow::bail!(
-                "Must provide --transfer-ownership-new-owner when using \
-                 --transfer-ownership-from-eoa"
-            )
-        })?;
-
-        // Parse the contract type from string
-        let contract_type = match contract_name.to_lowercase().as_str() {
-            "lightclient" | "lightclientproxy" => Contract::LightClientProxy,
-            "feecontract" | "feecontractproxy" => Contract::FeeContractProxy,
-            "esptoken" | "esptokenproxy" => Contract::EspTokenProxy,
-            "staketable" | "staketableproxy" => Contract::StakeTableProxy,
-            _ => anyhow::bail!(
-                "Unknown contract type: {}. Supported types: lightclient, feecontract, esptoken, \
-                 staketable",
-                contract_name
-            ),
-        };
-
-        // Get the contract address from the contracts map
-        let contract_address = contracts.address(contract_type).ok_or_else(|| {
-            anyhow::anyhow!("Contract {} not found in deployed contracts", contract_name)
-        })?;
-
-        tracing::info!(
-            "Transferring ownership of {} from EOA to {}",
-            contract_name,
-            new_owner
-        );
-
-        // Use the existing transfer_ownership function from lib.rs
-        let receipt = espresso_contract_deployer::transfer_ownership(
-            &provider,
-            contract_type,
-            contract_address,
-            new_owner,
-        )
-        .await?;
-
-        tracing::info!(
-            "Successfully transferred ownership of {} to {}. Transaction: {}",
-            contract_name,
-            new_owner,
-            receipt.transaction_hash
-        );
+        args.transfer_ownership_from_eoa(&mut contracts).await?;
     }
 
     // finally print out or persist deployed addresses
