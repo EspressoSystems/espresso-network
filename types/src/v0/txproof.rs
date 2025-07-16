@@ -1,7 +1,8 @@
-use super::{v0_1::ADVZTxProof, v0_3::AvidMTxProof, Index, NsTable, Payload, Transaction};
 use hotshot_query_service::VidCommon;
 use hotshot_types::data::VidCommitment;
 use serde::{Deserialize, Serialize};
+
+use super::{v0_1::ADVZTxProof, v0_3::AvidMTxProof, Index, NsTable, Payload, Transaction};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TxProof {

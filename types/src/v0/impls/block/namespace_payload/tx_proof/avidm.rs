@@ -1,10 +1,11 @@
+use hotshot_query_service::VidCommon;
+use hotshot_types::{data::VidCommitment, vid::avidm::AvidMCommon};
+
 use crate::{
     v0_3::{AvidMNsProof, AvidMTxProof},
     Index, NsTable, NumTxs, NumTxsRange, Payload, Transaction, TxIndex, TxPayloadRange,
     TxTableEntriesRange,
 };
-use hotshot_query_service::VidCommon;
-use hotshot_types::{data::VidCommitment, vid::avidm::AvidMCommon};
 
 impl AvidMTxProof {
     pub fn new(
