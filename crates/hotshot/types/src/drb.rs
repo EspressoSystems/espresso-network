@@ -166,6 +166,7 @@ pub async fn compute_drb_result(
 
     let final_checkpoint_iteration = iteration;
 
+    // perform the remaining iterations
     hash = tokio::task::spawn_blocking(move || {
         let mut hash_tmp = hash.clone();
         for _ in final_checkpoint_iteration..drb_input.difficulty_level {
@@ -183,13 +184,19 @@ pub async fn compute_drb_result(
     let mut drb_result = [0u8; 32];
     drb_result.copy_from_slice(&hash);
 
-    let finished_drb_input = DrbInput {
+    let final_drb_input = DrbInput {
         epoch: drb_input.epoch,
         iteration: drb_input.difficulty_level,
-        value: drb_result.clone(),
+        value: drb_result,
         difficulty_level: drb_input.difficulty_level,
     };
-    tracing::warn!("DRB calculation completed: {:?}", finished_drb_input);
+
+    let store_drb_progress = store_drb_progress.clone();
+    tokio::spawn(async move {
+        if let Err(e) = store_drb_progress(final_drb_input).await {
+            tracing::warn!("Failed to store DRB progress during calculation: {}", e);
+        }
+    });
 
     drb_result
 }
@@ -353,6 +360,12 @@ pub mod election {
         stake_table_hash: [u8; 32],
         /// DRB result
         drb: [u8; 32],
+    }
+
+    impl<Entry> RandomizedCommittee<Entry> {
+        pub fn drb_result(&self) -> [u8; 32] {
+            self.drb
+        }
     }
 }
 
