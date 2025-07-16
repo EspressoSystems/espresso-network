@@ -6,13 +6,14 @@ use committable::{Commitment, Committable};
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
-    data::Leaf2,
+    data::{Leaf2, PackedBundle},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     traits::{
-        block_contents::BlockHeader,
+        block_contents::{BlockHeader, BuilderFee},
         node_implementation::{ConsensusTime, NodeType, Versions},
-        BlockPayload,
+        signature_key::BuilderSignatureKey,
+        BlockPayload, EncodeBytes, ValidatedState,
     },
     utils::{is_epoch_transition, is_last_block},
 };
@@ -22,6 +23,7 @@ use vbs::version::{StaticVersionType, Version};
 
 use crate::{
     events::{HotShotEvent, HotShotTaskCompleted},
+    helpers::broadcast_event,
     transactions::send_empty_block,
 };
 
@@ -45,6 +47,18 @@ pub struct BlockBuilderTaskState<TYPES: NodeType, V: Versions> {
     pub consensus: OuterConsensus<TYPES>,
 
     pub transactions: LruCache<Commitment<<TYPES as NodeType>::Transaction>, TYPES::Transaction>,
+
+    /// Instance state
+    pub instance_state: Arc<TYPES::InstanceState>,
+
+    /// Base fee
+    pub base_fee: u64,
+
+    /// This Nodes Public Key
+    pub public_key: TYPES::BuilderSignatureKey,
+
+    /// Our Private Key
+    pub private_key: <TYPES::BuilderSignatureKey as BuilderSignatureKey>::BuilderPrivateKey,
 }
 
 async fn collect_txns<TYPES: NodeType>(
@@ -111,6 +125,65 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
                 block.push(txn.clone());
             }
         }
+
+        let maybe_validated_state = match consensus_reader.validated_state_map().get(&view) {
+            Some(view) => view.state().cloned(),
+            None => None,
+        };
+
+        let validated_state = maybe_validated_state
+            .unwrap_or_else(|| Arc::new(TYPES::ValidatedState::from_header(leaf.block_header())));
+
+        let Some((payload, metadata)) =
+            <TYPES::BlockPayload as BlockPayload<TYPES>>::from_transactions(
+                block.into_iter(),
+                &validated_state,
+                &self.instance_state,
+            )
+            .await
+            .ok()
+        else {
+            tracing::error!("Failed to build block payload");
+            return None;
+        };
+
+        let encoded_payload = payload.encode();
+        let encoded_txns: Vec<u8> = encoded_payload.to_vec();
+        let block_size: u64 = encoded_txns.len() as u64;
+        let offered_fee: u64 = self.base_fee * block_size;
+
+        let Some(signature_over_fee_info) =
+            TYPES::BuilderSignatureKey::sign_fee(&self.private_key, offered_fee, &metadata).ok()
+        else {
+            tracing::error!("Failed to sign fee");
+            send_empty_block::<TYPES, V>(
+                &self.consensus,
+                &self.membership_coordinator,
+                &event_stream,
+                view,
+                epoch,
+                version,
+            )
+            .await;
+            return None;
+        };
+        let builder_fee = BuilderFee {
+            fee_amount: offered_fee,
+            fee_account: self.public_key.clone(),
+            fee_signature: signature_over_fee_info,
+        };
+
+        broadcast_event(
+            Arc::new(HotShotEvent::BlockRecv(PackedBundle::new(
+                encoded_payload,
+                metadata,
+                view,
+                epoch,
+                vec1::vec1![builder_fee],
+            ))),
+            &event_stream,
+        )
+        .await;
 
         None
     }
