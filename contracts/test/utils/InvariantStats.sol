@@ -1,8 +1,8 @@
-// SPDX-License-Identifier: MIT
-/* solhint-disable func-name-mixedcase */
+// SPDX-License-Identifier: UNLICENSED
+/* solhint-disable func-name-mixedcase, no-console */
 pragma solidity ^0.8.0;
 
-import { console2 } from "forge-std/console2.sol";
+import { console } from "forge-std/console.sol";
 import { StakeTableV2PropTestBase } from "../StakeTableV2PropTestBase.sol";
 
 // Contract containing helper functions for displaying stats
@@ -63,7 +63,7 @@ contract InvariantStats {
         internal
         pure
     {
-        console2.log(
+        console.log(
             string.concat(
                 _formatString(name, 29),
                 _formatNumber(stat.ok, 9),
@@ -100,9 +100,9 @@ contract InvariantStats {
     }
 
     function logFunctionStats() public view {
-        console2.log("\n=== Call stats for last invariant run ===");
-        console2.log("function                     successes  reverts");
-        console2.log("-----------------------------------------------");
+        console.log("\n=== Call stats for last invariant run ===");
+        console.log("function                     successes  reverts");
+        console.log("-----------------------------------------------");
 
         // Get call stats via getter function
         StakeTableV2PropTestBase.CallStats memory callStats = handler.getCallStats();
@@ -116,7 +116,7 @@ contract InvariantStats {
         _logStat("deregisterValidatorOk", callStats.ok.deregisterValidator);
         _logStat("undelegateOk", callStats.ok.undelegate);
 
-        console2.log("-----------------------------------------------");
+        console.log("-----------------------------------------------");
 
         _logStat("claimValidatorExitAny", callStats.any.claimValidatorExit);
         _logStat("delegateAny", callStats.any.delegate);
@@ -124,8 +124,8 @@ contract InvariantStats {
         _logStat("registerValidatorAny", callStats.any.registerValidator);
         _logStat("undelegateAny", callStats.any.undelegate);
 
-        console2.log("-----------------------------------------------");
-        console2.log(
+        console.log("-----------------------------------------------");
+        console.log(
             string.concat(
                 "total                        ",
                 _formatNumber(handler.getTotalSuccesses(), 9),
@@ -136,12 +136,12 @@ contract InvariantStats {
     }
 
     function logCurrentState() public view {
-        console2.log("\n=== Current State ===");
-        console2.log("Num actors:", handler.getNumActors());
-        console2.log("Num all validators:", handler.getNumAllValidators());
-        console2.log("Num active validators:", handler.getNumActiveValidators());
-        console2.log("Num pending withdrawals:", handler.getNumPendingWithdrawals());
-        console2.log("Num validators with delegations:", handler.getNumValidatorsWithDelegations());
+        console.log("\n=== Current State ===");
+        console.log("Num actors:", handler.getNumActors());
+        console.log("Num all validators:", handler.getNumAllValidators());
+        console.log("Num active validators:", handler.getNumActiveValidators());
+        console.log("Num pending withdrawals:", handler.getNumPendingWithdrawals());
+        console.log("Num validators with delegations:", handler.getNumValidatorsWithDelegations());
 
         // Count total validator-delegator pairs
         uint256 totalValidatorDelegatorPairs = 0;
@@ -149,10 +149,10 @@ contract InvariantStats {
             (, uint256 numDelegators) = handler.getValidatorWithDelegationsAtIndex(i);
             totalValidatorDelegatorPairs += numDelegators;
         }
-        console2.log("Total validator-delegator pairs:", totalValidatorDelegatorPairs);
-        console2.log("Num exited validators:", handler.getNumExitedValidators());
-        console2.log("Total active delegations:", handler.getTestState().totalDelegated);
-        console2.log("Total pending withdrawals:", handler.getTestState().totalPendingWithdrawals);
-        console2.log("Tracked total supply:", handler.getTestState().trackedTotalSupply);
+        console.log("Total validator-delegator pairs:", totalValidatorDelegatorPairs);
+        console.log("Num exited validators:", handler.getNumExitedValidators());
+        console.log("Total active delegations:", handler.getTestState().totalDelegated);
+        console.log("Total pending withdrawals:", handler.getTestState().totalPendingWithdrawals);
+        console.log("Tracked total supply:", handler.getTestState().trackedTotalSupply);
     }
 }

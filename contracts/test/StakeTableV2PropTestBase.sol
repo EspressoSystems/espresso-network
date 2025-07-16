@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
 import { MockStakeTableV2 } from "./MockStakeTableV2.sol";
@@ -7,7 +8,6 @@ import { BN254 } from "bn254/BN254.sol";
 import { EdOnBN254 } from "../src/libraries/EdOnBn254.sol";
 import { ILightClient } from "../src/interfaces/ILightClient.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import { console2 } from "forge-std/console2.sol";
 import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import { EnumerableMap } from "@openzeppelin/contracts/utils/structs/EnumerableMap.sol";
 

@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: MIT
-/* solhint-disable func-name-mixedcase, one-contract-per-file */
+// SPDX-License-Identifier: Unlicensed
+/* solhint-disable func-name-mixedcase */
 pragma solidity ^0.8.0;
 
 import { StakeTableV2PropTestBase } from "./StakeTableV2PropTestBase.sol";
@@ -7,8 +7,6 @@ import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableS
 
 contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
     using EnumerableSet for EnumerableSet.AddressSet;
-
-    constructor() { }
 
     /// @dev The total amount of tokens owned by an actor does not change
     function echidna_actorOwnedAmounts() public view returns (bool) {

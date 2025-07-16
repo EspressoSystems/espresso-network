@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: MIT
-/* solhint-disable func-name-mixedcase, one-contract-per-file */
+// SPDX-License-Identifier: UNLICENSED
+/* solhint-disable func-name-mixedcase */
 pragma solidity ^0.8.0;
 
 import "forge-std/Test.sol";
