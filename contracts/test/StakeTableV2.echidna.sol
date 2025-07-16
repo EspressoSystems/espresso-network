@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Unlicensed
+// SPDX-License-Identifier: UNLICENSED
 /* solhint-disable func-name-mixedcase */
 pragma solidity ^0.8.0;
 
