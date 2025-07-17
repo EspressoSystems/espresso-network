@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
 use committable::Committable;
-use hotshot_query_service::availability::QueryablePayload;
+use hotshot_query_service::{availability::QueryablePayload, VidCommon};
 use hotshot_types::{
     data::ViewNumber,
     traits::{BlockPayload, EncodeBytes},
@@ -245,7 +245,7 @@ impl QueryablePayload<SeqTypes> for Payload {
             .unwrap()
             .common;
 
-        TxProof::new(index, self, &common)
+        TxProof::new(index, self, &VidCommon::V0(common))
     }
 
     fn transaction(&self, _meta: &Self::Metadata, index: &Index) -> Option<Self::Transaction> {
