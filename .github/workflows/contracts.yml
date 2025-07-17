@@ -9,7 +9,6 @@ on:
       # YYYYMMDD
       - "20[0-9][0-9][0-1][0-9][0-3][0-9]*"
   pull_request:
-    branches:
   workflow_dispatch:
 
 concurrency:
@@ -20,10 +19,76 @@ env:
   RUST_LOG: info,libp2p=off
 
 jobs:
-  contracts:
-    timeout-minutes: 120
+  contracts-lint:
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
+      - uses: taiki-e/install-action@just
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Enable Cachix
+        uses: cachix/cachix-action@v16
+        # If PR is from a non-collaborator (e. g. dependabot) the secrets are missing and the login to cachix fails.
+        continue-on-error: true
+        with:
+          name: espresso-systems-private
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+          extraPullNames: nix-community
+          skipPush: ${{ github.actor == 'dependabot[bot]' }}
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Check toolchain versions
+        run: nix develop --accept-flake-config -c ./scripts/show-toolchain-versions
+
+      - name: Format check
+        run: nix develop --accept-flake-config -c pre-commit run forge-fmt --all-files --show-diff-on-failure
+
+      - name: Solhint solidity linter
+        run: nix develop --accept-flake-config -c pre-commit run solhint --all-files --show-diff-on-failure
+
+      - name: Build non-test contracts without warnings
+        run: nix develop --accept-flake-config -c forge build --skip test --deny-warnings
+
+      - name: Check if bindings up to date (also forces a build)
+        run: nix develop --accept-flake-config -c pre-commit run contract-bindings --all-files --show-diff-on-failure
+
+      - name: Print changes to bindings
+        if: ${{ failure() }}
+        run: |
+          git status
+          git diff
+
+  contracts-test:
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - test-type: forge
+            command: "just contracts-test-forge"
+            nix-env: ""
+            with-diff-test: true
+          - test-type: invariant
+            command: "just contracts-test-invariant"
+            nix-env: ""
+            with-diff-test: false
+          - test-type: fuzz
+            command: "just contracts-test-fuzz"
+            nix-env: ""
+            with-diff-test: true
+          - test-type: echidna
+            command: "just contracts-test-echidna --format text"
+            nix-env: ".#echidna"
+            with-diff-test: false
+    steps:
+      - uses: taiki-e/install-action@just
+
       - name: Install Nix
         uses: cachix/install-nix-action@v31
 
@@ -45,44 +110,20 @@ jobs:
       # NOTE: no rust cache, it doesn't work out of the box our nix env
 
       - name: Check toolchain versions
-        run: nix develop --accept-flake-config -c ./scripts/show-toolchain-versions
-
-      - name: Format check
-        run: nix develop --accept-flake-config -c pre-commit run forge-fmt --all-files --show-diff-on-failure
-
-      - name: Solhint solidity linter
-        run: nix develop --accept-flake-config -c pre-commit run solhint --all-files --show-diff-on-failure
-
-      - name: Build non-test contracts without warnings
-        run: nix develop --accept-flake-config -c forge build --skip test --deny-warnings
-
-      - name: Build all contracts
-        run: nix develop --accept-flake-config -c forge build
-
-      - name: Check if bindings up to date
-        run: nix develop --accept-flake-config -c pre-commit run contract-bindings --all-files --show-diff-on-failure
-
-      - name: Print changes to bindings
-        if: ${{ failure() }}
-        run: |
-          git status
-          git diff
+        run: nix develop ${{ matrix.nix-env && matrix.nix-env || '' }} --accept-flake-config -c ./scripts/show-toolchain-versions
 
       - name: Build diff-test
+        if: ${{ matrix.with-diff-test }}
         run: |
           nix develop --accept-flake-config -c cargo build --locked --bin diff-test --profile test
 
-      - name: Run tests (quick version for PR)
-        if: ${{ github.event_name == 'pull_request' }}
+      - name: Run ${{ matrix.test-type }} tests
         run: |
-          export FOUNDRY_PROFILE=quick
-          nix develop --accept-flake-config -c forge test -vvv
-
-      - name: Run tests (full version for main)
-        if: ${{ github.event_name != 'pull_request' }}
-        run: |
-          nix develop --accept-flake-config -c forge test -vvv
-
-      - name: Print light contract gas benchmark
-        run: |
-          nix develop --accept-flake-config -c forge test --mt testCorrectUpdateBench
+          set -euo pipefail
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            export FOUNDRY_PROFILE=quick
+          fi
+          echo "## ${{ matrix.test-type }} test results" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          nix develop ${{ matrix.nix-env }} --accept-flake-config -c ${{ matrix.command }} 2>&1 | tee -a $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,4 @@
+corpusDir: "contracts/corpus"
+coverage: true
+seqLen: 100
+shrinkLimit: 5000
