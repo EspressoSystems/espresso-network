@@ -154,6 +154,7 @@ impl NodeState {
             vec![],
             RewardAmount(U256::ZERO),
             Fetcher::mock(),
+            0,
         )));
 
         let storage = TestStorage::default();
@@ -186,6 +187,7 @@ impl NodeState {
             vec![],
             RewardAmount(U256::ZERO),
             Fetcher::mock(),
+            0,
         )));
         let storage = TestStorage::default();
         let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
@@ -216,6 +218,7 @@ impl NodeState {
             vec![],
             RewardAmount(U256::ZERO),
             Fetcher::mock(),
+            0,
         )));
 
         let storage = TestStorage::default();
@@ -301,6 +304,7 @@ impl Default for NodeState {
             vec![],
             RewardAmount(U256::ZERO),
             Fetcher::mock(),
+            0,
         )));
         let storage = TestStorage::default();
         let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
