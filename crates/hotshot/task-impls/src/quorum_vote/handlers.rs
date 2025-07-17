@@ -213,13 +213,27 @@ pub(crate) async fn handle_quorum_proposal_validated<
         // We don't need to hold this while we broadcast
         drop(consensus_writer);
 
+        let mut decided_leaves = vec![];
         for leaf_info in &leaf_views {
             tracing::info!(
                 "Sending decide for view {:?} at height {:?}",
                 leaf_info.leaf.view_number(),
                 leaf_info.leaf.block_header().block_number(),
             );
+            decided_leaves.push(leaf_info.leaf.clone());
         }
+
+        let decided_txns = if let Some(txns) = &included_txns {
+            txns.iter().cloned().collect()
+        } else {
+            vec![]
+        };
+
+        broadcast_event(
+            Arc::new(HotShotEvent::ViewDecided(decided_leaves, decided_txns)),
+            event_sender,
+        )
+        .await;
 
         // Send an update to everyone saying that we've reached a decide
         broadcast_event(

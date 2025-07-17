@@ -7,6 +7,7 @@
 use std::fmt::Display;
 
 use async_broadcast::Sender;
+use committable::Commitment;
 use either::Either;
 use hotshot_task::task::TaskEvent;
 use hotshot_types::{
@@ -295,6 +296,12 @@ pub enum HotShotEvent<TYPES: NodeType> {
     ),
     /// A replica receives an epoch root QC
     EpochRootQcRecv(EpochRootQuorumCertificate<TYPES>, TYPES::SignatureKey),
+
+    /// A view has been decided
+    ViewDecided(
+        Vec<Leaf2<TYPES>>,
+        Vec<Commitment<<TYPES as NodeType>::Transaction>>,
+    ),
 }
 
 impl<TYPES: NodeType> HotShotEvent<TYPES> {
@@ -390,6 +397,7 @@ impl<TYPES: NodeType> HotShotEvent<TYPES> {
                 Some(cert.view_number())
             },
             HotShotEvent::SetFirstEpoch(..) => None,
+            HotShotEvent::ViewDecided(leaves, _) => leaves.first().map(|leaf| leaf.view_number()),
         }
     }
 }
@@ -706,6 +714,13 @@ impl<TYPES: NodeType> Display for HotShotEvent<TYPES> {
             },
             HotShotEvent::SetFirstEpoch(view, epoch) => {
                 write!(f, "SetFirstEpoch(view_number={view:?}, epoch={epoch:?})")
+            },
+            HotShotEvent::ViewDecided(leaves, _) => {
+                write!(
+                    f,
+                    "ViewDecided(view_number={:?}",
+                    leaves.first().map(|leaf| leaf.view_number())
+                )
             },
         }
     }
