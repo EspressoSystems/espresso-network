@@ -56,6 +56,7 @@ use crate::{
 /// - `timelock_operation_function_values`: function values for the timelock operation
 /// - `timelock_operation_salt`: salt for the timelock operation
 /// - `use_timelock_owner`: flag to indicate whether to transfer ownership to the timelock owner
+/// - `timelock_address`: address of the timelock contract
 #[derive(Builder, Clone)]
 #[builder(setter(strip_option))]
 pub struct DeployerArgs<P: Provider + WalletProvider> {
@@ -128,6 +129,8 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     transfer_ownership_from_eoa: Option<bool>,
     #[builder(default)]
     transfer_ownership_new_owner: Option<Address>,
+    #[builder(default)]
+    timelock_address: Option<Address>,
 }
 
 impl<P: Provider + WalletProvider> DeployerArgs<P> {
@@ -615,16 +618,48 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
     }
 
     /// Propose ownership transfer from multisig to timelock
-    pub async fn propose_transfer_ownership_from_multisig_to_timelock(
+    pub async fn propose_transfer_ownership_to_timelock(
         &self,
         contracts: &mut Contracts,
-        timelock_controller: Address,
-        contract: Contract,
     ) -> Result<()> {
         let multisig = self.multisig.expect(
             "Multisig address must be set when proposing ownership transfer. Use \
              --multisig-address or ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS",
         );
+        let target_contract = self.target_contract.clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide target_contract when using \
+                 --propose-transfer-ownership-to-timelock. Use --target-contract or \
+                 ESPRESSO_TARGET_CONTRACT"
+            )
+        })?;
+
+        let timelock_address = self.timelock_address.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Timelock address must be set when proposing ownership transfer. Use \
+                 --timelock-address or ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS"
+            )
+        })?;
+
+        // Parse the contract type from string
+        let contract_type = match target_contract.to_lowercase().as_str() {
+            "lightclient" | "lightclientproxy" => Contract::LightClientProxy,
+            "feecontract" | "feecontractproxy" => Contract::FeeContractProxy,
+            "esptoken" | "esptokenproxy" => Contract::EspTokenProxy,
+            "staketable" | "staketableproxy" => Contract::StakeTableProxy,
+            _ => anyhow::bail!(
+                "Unknown contract type: {}. Supported types: lightclient, feecontract, esptoken, \
+                 staketable",
+                target_contract
+            ),
+        };
+
+        tracing::info!(
+            "Proposing transfer of ownership from multisig to timelock for {}",
+            target_contract
+        );
+
+        let contract = contract_type;
         let rpc_url = self.rpc_url.clone();
         let dry_run = self.dry_run;
         let use_hardware_wallet = false;
@@ -633,7 +668,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             contracts,
             contract,
             TransferOwnershipParams {
-                new_owner: timelock_controller,
+                new_owner: timelock_address,
                 rpc_url,
                 safe_addr: multisig,
                 use_hardware_wallet,

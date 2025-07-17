@@ -2316,7 +2316,7 @@ mod tests {
                     mnemonic = val.to_string();
                 } else if key == "ESPRESSO_DEPLOYER_ACCOUNT_INDEX" {
                     account_index = val.parse::<u32>()?;
-                } else if key == "ESPRESSO_SEQUENCER_TIMELOCK_CONTROLLER_ADDRESS" {
+                } else if key == "ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS" {
                     timelock = val.parse::<Address>()?;
                 }
             }
@@ -2324,8 +2324,7 @@ mod tests {
             if sepolia_rpc_url.is_empty() || multisig_admin.is_zero() || timelock.is_zero() {
                 panic!(
                     "ESPRESSO_SEQUENCER_L1_PROVIDER, ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS, \
-                     ESPRESSO_SEQUENCER_TIMELOCK_CONTROLLER_ADDRESS must be set in \
-                     .env.deployer.rs.test"
+                     ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS must be set in .env.deployer.rs.test"
                 );
             }
         }

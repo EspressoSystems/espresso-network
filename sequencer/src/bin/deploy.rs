@@ -159,7 +159,7 @@ struct Options {
     use_timelock_owner: bool,
     /// Option to transfer ownership from multisig
     #[clap(long, default_value = "false")]
-    propose_transfer_ownership_to_timelock_fee_contract: bool,
+    propose_transfer_ownership_to_timelock: bool,
 
     /// Option to transfer ownership directly from EOA to a new owner
     #[clap(long, default_value = "false")]
@@ -337,8 +337,8 @@ struct Options {
     )]
     timelock_operation_delay: Option<u64>,
     /// The address of the timelock controller
-    #[clap(long, env = "ESPRESSO_SEQUENCER_TIMELOCK_CONTROLLER_ADDRESS")]
-    timelock_controller: Option<Address>,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS")]
+    timelock_address: Option<Address>,
 
     #[clap(flatten)]
     logging: logging::Config,
@@ -647,6 +647,24 @@ async fn main() -> anyhow::Result<()> {
         args_builder.transfer_ownership_new_owner(new_owner);
     }
 
+    // Add multisig to timelock transfer parameters to builder
+    if opt.propose_transfer_ownership_to_timelock {
+        let target_contract = opt.target_contract.clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --target-contract when using \
+                 --propose-transfer-ownership-to-timelock"
+            )
+        })?;
+        let timelock_address = opt.timelock_address.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --timelock-address when using \
+                 --propose-transfer-ownership-to-timelock"
+            )
+        })?;
+        args_builder.target_contract(target_contract);
+        args_builder.timelock_address(timelock_address);
+    }
+
     // then deploy specified contracts
     let args = args_builder.build()?;
 
@@ -692,18 +710,9 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Execute ownership transfer proposal if requested
-    if opt.propose_transfer_ownership_to_timelock_fee_contract {
-        let timelock_controller = opt.timelock_controller.expect(
-            "Must provide --timelock-controller when transferring ownership from multisig to \
-             timelock",
-        );
-
-        args.propose_transfer_ownership_from_multisig_to_timelock(
-            &mut contracts,
-            timelock_controller,
-            Contract::FeeContractProxy,
-        )
-        .await?;
+    if opt.propose_transfer_ownership_to_timelock {
+        args.propose_transfer_ownership_to_timelock(&mut contracts)
+            .await?;
     }
 
     // Execute ownership transfer when the admin is an EOA

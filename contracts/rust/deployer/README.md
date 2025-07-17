@@ -43,11 +43,14 @@ export RPC_URL=http://localhost:8545
 ### Deploying with Cargo
 
 ```bash
+# Set environment variables
 set -a
 source .env
 set +a
 unset ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
 unset ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
+
+# Execute the deployment command
 RUST_LOG=info cargo run --bin deploy -- --deploy-fee --rpc-url=$RPC_URL
 ```
 
@@ -118,10 +121,13 @@ cast call $ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS "owner()(address)" --rp
 ### Deploying with Cargo
 
 ```bash
+# Set the env vars
 set -a
 source .env
 set +a
 unset ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
+
+# Deploy the fee contract with a multisig owner (requires ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS to be set which occurs in the step above)
 RUST_LOG=info cargo run --bin deploy -- --deploy-fee --rpc-url=$RPC_URL
 ```
 
@@ -540,7 +546,7 @@ echo $RPC_URL
 echo $ESPRESSO_OPS_TIMELOCK_ADMIN
 
 # Set them if missing
-export ESPRESSO_SEQUENCER_ETH_MNEMONIC="your mnemonic here"
+export ESPRESSO_SEQUENCER_ETH_MNEMONIC="<your-12-word-mnemonic-phrase>"
 export RPC_URL="http://host.docker.internal:8545"
 ```
 
@@ -557,7 +563,7 @@ Before upgrading to ESP Token V2, ensure you have:
 - set the multisig as a real multisig address or add `--dry-run` to the commands below if not doing a real run.
 
 ```bash
-export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS=YOUR_MULTISIG_ADDRESS
+export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS="<0x...multisig-address>"
 ```
 
 ### Upgrading with Cargo
@@ -613,6 +619,121 @@ After each upgrade, verify:
 2. **Functionality**: Test V2-specific functions
 3. **Ownership**: Verify ownership hasn't changed unexpectedly
 4. **State**: Ensure contract state is preserved correctly
+
+## Transfer ownership from Multisig to Timelock
+
+This section describes how to transfer ownership of contracts from a multisig wallet to a timelock contract using the
+deployer binary. This is useful for implementing governance controls where contract upgrades and administrative
+functions require timelock approval.
+
+### Prerequisites
+
+- The target contract must be deployed and owned by a multisig wallet
+- The timelock contract must be deployed and accessible
+- You must have access to the multisig wallet (either through private keys or multisig signing)
+- The deployer binary must be built and available
+
+### Usage
+
+**Using Cargo:**
+
+```bash
+# Set environment variables
+set +a
+source .env
+set -a
+
+# Re-specify the most important vars if needed
+export ESPRESSO_SEQUENCER_ETH_MNEMONIC="<your-12-word-mnemonic-phrase>"
+export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS="<0x...multisig-address>"
+export ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS="0x..."      # timelock contract address, select the correct timelock for the contract
+export RPC_URL=""
+
+# Run the ownership transfer proposal
+cargo run --bin deploy -- \
+    --propose-transfer-ownership-to-timelock \
+    --target-contract FeeContract \
+    --timelock-address $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
+    --fee-contract-proxy $ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS \
+    --multisig-address $ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
+    --rpc-url $RPC_URL \
+```
+
+**Using Docker Compose:**
+
+```bash
+# Set environment variables
+set +a
+source .env
+set -a
+
+# Re-specify the most important vars if needed
+export ESPRESSO_SEQUENCER_ETH_MNEMONIC="<your-12-word-mnemonic-phrase>"
+export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS="<0x...multisig-address>"
+export ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS="0x..."      # timelock contract address
+export RPC_URL=""
+
+# Run the ownership transfer proposal
+docker-compose run --rm deploy-sequencer-contracts \
+    --propose-transfer-ownership-to-timelock \
+    --target-contract lightclient \
+    --timelock-address $ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS \
+    --light-client-proxy $ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS \
+    --multisig-address $ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
+    --rpc-url $RPC_URL
+```
+
+### Supported Contract Types
+
+The `--target-contract` parameter supports the following values:
+
+- `lightclient` or `lightclientproxy` - for LightClient contracts
+- `feecontract` or `feecontractproxy` - for FeeContract contracts
+- `esptoken` or `esptokenproxy` - for ESP token contracts
+- `staketable` or `staketableproxy` - for StakeTable contracts
+
+### Process Flow
+
+1. **Proposal Creation**: The deployer creates a multisig proposal to transfer ownership from the multisig wallet to the
+   timelock contract
+2. **Multisig Approval**: The multisig wallet owners must approve the proposal (this may require multiple signatures
+   depending on the multisig configuration)
+3. **Execution**: Once approved, the proposal can be executed to complete the ownership transfer
+4. **Verification**: Verify that the timelock contract is now the owner of the target contract
+
+### Verification
+
+After the ownership transfer is completed, verify the transfer on-chain:
+
+```bash
+
+# Verify the timelock address is loaded correctly
+echo "Timelock Address: $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS"
+
+# Verify the timelock is now the owner of the target contract (after it's been signed and executed)
+cast call $ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL
+```
+
+### Troubleshooting
+
+**Common Issues:**
+
+1. **Insufficient Multisig Signatures**: Ensure all required multisig owners have signed the proposal
+2. **Invalid Contract Address**: Verify the target contract and timelock addresses are correct
+3. **Permission Denied**: Ensure the deployer account has permission to create proposals on the multisig
+4. **Network Issues**: Check RPC connectivity and gas settings
+
+**Debug Commands:**
+
+```bash
+# Check current owner of the target contract
+cast call $TARGET_CONTRACT_ADDRESS "owner()(address)" --rpc-url $RPC_URL
+
+# Check multisig proposal status
+cast call $MULTISIG_ADDRESS "getTransactionHash(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,uint256)(bytes32)" \
+    $TARGET_CONTRACT_ADDRESS 0 "transferOwnership(address)" 0 0 0 $TIMELOCK_ADDRESS $TIMELOCK_ADDRESS 0 \
+    --rpc-url $RPC_URL
+```
 
 ### RPC Connection Issues
 
