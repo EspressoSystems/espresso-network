@@ -1,5 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
+use alloy::primitives::map::HashSet;
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
@@ -59,6 +60,9 @@ pub struct BlockBuilderTaskState<TYPES: NodeType, V: Versions> {
 
     /// Our Private Key
     pub private_key: <TYPES::BuilderSignatureKey as BuilderSignatureKey>::BuilderPrivateKey,
+
+    /// Transactions that were decided but not seen in the block builder
+    pub decided_not_seen_txns: HashSet<Commitment<<TYPES as NodeType>::Transaction>>,
 }
 
 async fn collect_txns<TYPES: NodeType>(
@@ -285,6 +289,10 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
         transactions: &Vec<TYPES::Transaction>,
     ) -> Option<HotShotTaskCompleted> {
         for txn in transactions {
+            // ignore decided txns
+            if self.decided_not_seen_txns.remove(&txn.commit()) {
+                continue;
+            }
             self.transactions.push(txn.commit(), txn.clone());
         }
         None
@@ -301,6 +309,14 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
             },
             HotShotEvent::ViewChange(view, epoch) => {
                 self.handle_view_change(*view, *epoch, sender.clone()).await;
+            },
+            HotShotEvent::ViewDecided(_, txns) => {
+                for txn in txns {
+                    // Remove the txn from our mempool if it's in there, else store it to prevent a later duplicate
+                    if self.transactions.pop(txn).is_none() {
+                        self.decided_not_seen_txns.insert(*txn);
+                    }
+                }
             },
             _ => {},
         }
