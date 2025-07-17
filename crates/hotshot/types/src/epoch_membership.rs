@@ -423,26 +423,9 @@ where
         epoch: TYPES::Epoch,
         root_leaf: Leaf2<TYPES>,
     ) -> Result<()> {
-        let root_epoch = TYPES::Epoch::new(epoch.saturating_sub(2));
-        let Ok(root_membership) = self.stake_table_for_epoch(Some(root_epoch)).await else {
-            return Err(anytrace::error!(
-                "We tried to fetch drb result for epoch {epoch:?} but we don't have its root \
-                 epoch {root_epoch:?}. This should not happen"
-            ));
-        };
-
-        let Ok(drb_membership) = root_membership.next_epoch_stake_table().await else {
-            return Err(anytrace::error!(
-                "get drb stake table failed for epoch {root_epoch:?}"
-            ));
-        };
-
-        // get the drb result if it's available
-        let drb = if let Ok(drb) = drb_membership
-            .next_epoch_stake_table()
-            .await?
-            .get_epoch_drb()
-            .await
+        let drb = if let Ok(drb) =
+            <TYPES::Membership as Membership<TYPES>>::get_epoch_drb(self.membership.clone(), epoch)
+                .await
         {
             drb
         } else {
