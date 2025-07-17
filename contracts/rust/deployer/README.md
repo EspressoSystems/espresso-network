@@ -759,26 +759,27 @@ If the deployer can't find deployed contracts:
 - [Ethereum Sepolia](#ethereum-sepolia)
 - [Arbitrum Sepolia](#arbitrum-sepolia)
 
+**Prerequisites:**
+
+- Docker and Docker Compose installed
+- Foundry installed (for verification)
+- Access to Ethereum and Arbitrum RPC endpoints
+- Foundation Multisig and EspressoSys Multisig addresses
+- Espresso Devs addresses for proposer roles
+
 ## Ethereum Mainnet
 
 ### Step 1: Deploy `SafeExitTimelock`
 
 `Deploy SafeExitTimelock, set Foundation Multisig as the admin, Espresso Devs as proposers and the Foundation Multisig as the executor.`
 
-#### Deploying SafeExitTimelock with Docker Compose
-
-1. Ensure you're on the main branch or the release tag branch
-2. Set the RPC URL env var for Ethereum mainnet and set the OUTPUT FILE env var to an appropriate location
+#### Step 1: Deploy SafeExitTimelock
 
 ```bash
 export RPC_URL=https://eth-mainnet.g.alchemy.com/v2/YOUR_API_KEY
 export OUTPUT_FILE=.env.eth.mainnet.safeexittimelock
 touch $OUTPUT_FILE
-```
-
-3. Set the environment variables for the SafeExitTimelock configuration
-
-```bash
+# Set timelock configuration
 export ESPRESSO_SAFE_EXIT_TIMELOCK_ADMIN=0xFOUNDATION_MULTISIG_ADDRESS
 export ESPRESSO_DEVS_ADDRESS_1=0xADDRESS_1
 export ESPRESSO_DEVS_ADDRESS_2=0xADDRESS_2
@@ -850,24 +851,13 @@ cast call $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS "hasRole(bytes32,addres
 cast call $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS "getMinDelay()(uint256)" --rpc-url $RPC_URL
 ```
 
-### Step 2: Deploy `OpsTimelock`
-
-`Deploy OpsTimelock, set Foundation Multisig as the admin, Espresso Devs as proposers and the Foundation Multisig as the executor.`
-
-#### Deploying OpsTimelock with Docker Compose
-
-1. Ensure you're on the main branch or the release tag branch
-2. Set the RPC URL env var for Ethereum mainnet and set the OUTPUT FILE env var to an appropriate location
+#### Step 2: Deploy OpsTimelock
 
 ```bash
-export RPC_URL=https://eth-mainnet.g.alchemy.com/v2/YOUR_API_KEY
 export OUTPUT_FILE=.env.eth.mainnet.opstimelock
 touch $OUTPUT_FILE
-```
 
-3. Set the environment variables for the OpsTimelock configuration
-
-```bash
+# Set timelock configuration
 export ESPRESSO_OPS_TIMELOCK_ADMIN=0xFOUNDATION_MULTISIG_ADDRESS
 export ESPRESSO_DEVS_ADDRESS_1=0xADDRESS_1
 export ESPRESSO_DEVS_ADDRESS_2=0xADDRESS_2
@@ -940,21 +930,9 @@ cast call $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS "hasRole(bytes32,address)(boo
 cast call $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS "getMinDelay()(uint256)" --rpc-url $RPC_URL
 ```
 
-### Step 3: Upgrade LightClientV2
-
-#### Upgrading LightClientV2 with Docker Compose
-
-**Prerequisites:**
-
-- LightClient V1 proxy must already be deployed
-- The proxy must be owned by the appropriate multisig or timelock
-- Set the multisig as a real multisig address or add `--dry-run` to the commands below if not doing a real run
-
-1. Ensure you're on the main branch or the release tag branch
-2. Set the RPC URL env var for Ethereum mainnet and set the OUTPUT FILE env var to an appropriate location
+#### Step 3: Upgrade LightClientV2
 
 ```bash
-export RPC_URL=https://eth-mainnet.g.alchemy.com/v2/YOUR_API_KEY
 export OUTPUT_FILE=.env.eth.mainnet.lightclientv2
 touch $OUTPUT_FILE
 ```
@@ -1027,17 +1005,6 @@ cast call $ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS "epochStartBlock()(uint
 cast call $ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS "isInitialized()(bool)" --rpc-url $RPC_URL
 ```
 
-#### Upgrade Verification Checklist
-
-After the upgrade is executed, verify:
-
-1. **Implementation Address**: Check that the proxy points to the new LightClientV2 implementation
-2. **Version**: Verify the version shows V2 (major version should be 2)
-3. **Epoch Configuration**: Confirm the blocks per epoch and epoch start block are set correctly
-4. **Ownership**: Verify ownership hasn't changed unexpectedly
-5. **State**: Ensure contract state is preserved correctly from V1
-6. **Initialization**: Ensure the contract was reinitialized
-
 ### Step 4: Multisig Proposal to change admin of LightClientProxy from EspressoSys multisig to OpsTimelock
 
 #### Creating Multisig Proposal to Transfer LightClientProxy Admin with Docker Compose
@@ -1052,7 +1019,6 @@ After the upgrade is executed, verify:
 2. Set the RPC URL env var for Ethereum mainnet and set the OUTPUT FILE env var to an appropriate location
 
 ```bash
-export RPC_URL=https://eth-mainnet.g.alchemy.com/v2/YOUR_API_KEY
 export OUTPUT_FILE=.env.eth.mainnet.lightclient.admin.transfer
 touch $OUTPUT_FILE
 ```
@@ -1115,75 +1081,93 @@ echo "OpsTimelock Address: $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS"
 cast call $ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS
 ```
 
-### Step 5: Create a multisig proposal to transfer the owner of the `EspToken`, set `SafeExitTimelock` as the admin
+#### Step 5: Deploy EspToken with SafeExitTimelock as Admin
 
 ```bash
-export RPC_URL=https://eth-sepolia.g.alchemy.com/v2/YOUR_API_KEY
-export OUTPUT_FILE=.env.eth.sepolia.esptoken.admin.transfer
+export OUTPUT_FILE=.env.eth.mainnet.esptoken
 touch $OUTPUT_FILE
 ```
 
-**Prerequisites:**
-
-- EspToken proxy must be deployed and owned by a multisig
-- SafeExitTimelock must be deployed (from Step 1)
-- The signers on the multisig must be available for signing the proposal
-
-1. **Set the environment variables for the admin transfer configuration:**
+3. Set the environment variables for the EspToken deployment configuration
 
 ```bash
-# Set the multisig address (current admin of EspToken proxy)
-export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS=0xMULTISIG_ADDRESS
-
-# Set the SafeExitTimelock address (new admin)
+# Set the SafeExitTimelock address (will be the admin of EspTokenProxy)
 export ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS=0xSAFE_EXIT_TIMELOCK_ADDRESS
 
-# Set the EspToken proxy address
-export ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS=0xESP_TOKEN_PROXY_ADDRESS
+# Set the initial token supply (optional, will use default if not set)
+export ESPRESSO_SEQUENCER_ESP_TOKEN_INITIAL_SUPPLY=3590000000000000000000000000 # 3.59 billion tokens with 18 decimals
+
+# Set the token name and symbol (optional, will use defaults if not set)
+export ESPRESSO_SEQUENCER_ESP_TOKEN_NAME="Espresso Token"
+export ESPRESSO_SEQUENCER_ESP_TOKEN_SYMBOL="ESP"
 ```
 
-2. **Run the docker-compose command to create the multisig proposal for admin transfer:**
+4. Run the docker-compose command to deploy EspTokenProxy with SafeExitTimelock as admin
 
 ```bash
 docker compose run --rm \
   -e RPC_URL \
   -e ESPRESSO_SEQUENCER_ETH_MNEMONIC \
-  -e ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
   -e ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS \
-  -e ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS \
+  -e ESPRESSO_SEQUENCER_ESP_TOKEN_INITIAL_SUPPLY \
+  -e ESPRESSO_SEQUENCER_ESP_TOKEN_NAME \
+  -e ESPRESSO_SEQUENCER_ESP_TOKEN_SYMBOL \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
   \
   deploy-sequencer-contracts \
-  deploy --propose-transfer-ownership-to-timelock \
-  --target-contract esptoken \
-  --timelock-address $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS \
-  --rpc-url=$RPC_URL \
-  --out $OUTPUT_FILE
+  deploy --deploy-esp-token --use-timelock-owner --rpc-url=$RPC_URL --out $OUTPUT_FILE
   # if doing a real run then add --dry-run
 ```
 
-**Note**: The admin transfer process will:
+**Note**: The EspToken deployment process will:
 
-- Create a multisig proposal to call `transferOwnership(address)` on the EspToken proxy
-- Set the SafeExitTimelock as the new admin/owner of the EspToken proxy
-- Maintain the proxy's functionality while changing administrative control
+- Deploy the EspTokenV1 implementation contract
+- Deploy the EspToken proxy contract with SafeExitTimelock as the initial owner
+- Initialize the token with the provided configuration (name, symbol, initial supply)
+- Set up the proxy to point to the implementation contract
 
-3. **Verify the admin transfer proposal was created:**
+5. Verify the deployment by checking the output file
 
-You should see output similar to:
-`EspTokenProxy ownership transfer proposal sent. Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe=0xMULTISIG_ADDRESS`
+```bash
+cat $OUTPUT_FILE
+```
 
-4. **After the signer threshold signs the proposal and one executes the proposal, verify the admin transfer on-chain:**
+Example output file ($OUTPUT_FILE) contents after a successful EspToken deployment:
+
+```text
+ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS=0x1234567890123456789012345678901234567890
+ESPRESSO_SEQUENCER_ESP_TOKEN_ADDRESS=0x0987654321098765432109876543210987654321
+ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS=0x5555555555555555555555555555555555555555
+```
+
+6. Verify the deployment and ownership were successful
+
+You should see output similar to: `EspTokenProxy deployed successfully` `Ownership set to SafeExitTimelock`
+
+7. After the deployment is completed, verify the EspToken deployment on-chain (assuming you have Foundry installed)
 
 ```bash
 # First, source the output file to load the deployed contract addresses
 source $OUTPUT_FILE
 
-# Verify the variables are loaded correctly
-echo "SafeExitTimelock Address: $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS"
+# Check the owner/admin of the EspToken proxy (should be SafeExitTimelock)
+cast call $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL
 
-# Verify the SafeExitTimelock is now the owner
+# Verify the SafeExitTimelock is the owner
 cast call $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS
+
+# Check the implementation address (should point to EspTokenV1)
+cast storage $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc --rpc-url $RPC_URL
+
+# Check the token name and symbol
+cast call $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS "name()(string)" --rpc-url $RPC_URL
+cast call $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS "symbol()(string)" --rpc-url $RPC_URL
+
+# Check the total supply
+cast call $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS "totalSupply()(uint256)" --rpc-url $RPC_URL
+
+# Check the decimals
+cast call $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS "decimals()(uint8)" --rpc-url $RPC_URL
 ```
 
 ### Step 6: Deploy StakeTableProxy & immediately Upgrade to StakeTableV2, setting the EspressoSys Multisig as the pauser
@@ -1199,7 +1183,6 @@ cast call $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS "owner()(address)" --rpc-u
 2. Set the RPC URL env var for Ethereum mainnet and set the OUTPUT FILE env var to an appropriate location
 
 ```bash
-export RPC_URL=https://eth-mainnet.g.alchemy.com/v2/YOUR_API_KEY
 export OUTPUT_FILE=.env.eth.mainnet.staketable
 touch $OUTPUT_FILE
 ```
@@ -1260,17 +1243,6 @@ docker compose run --rm \
 cat $OUTPUT_FILE
 ```
 
-Example output file ($OUTPUT_FILE) contents after a successful StakeTable deployment and upgrade:
-
-```text
-ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS=0x1234567890123456789012345678901234567890
-ESPRESSO_SEQUENCER_STAKE_TABLE_ADDRESS=0x0987654321098765432109876543210987654321
-ESPRESSO_SEQUENCER_STAKE_TABLE_V2_ADDRESS=0x5555555555555555555555555555555555555555
-ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS=0x6666666666666666666666666666666666666666
-ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS=0x7777777777777777777777777777777777777777
-ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS=0x8888888888888888888888888888888888888888
-```
-
 6. Verify the deployment and upgrade were successful
 
 You should see output similar to: `StakeTable successfully upgraded to 0x...` `Transferring ownership to OpsTimelock`
@@ -1303,14 +1275,15 @@ cast call $ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS "hasRole(bytes32,address
 cast call $ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS "token()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
 ```
 
-#### StakeTable Deployment and Upgrade Verification Checklist
+### Final Verification Checklist
 
-After the deployment and upgrade are completed, verify:
+After completing all steps, verify:
 
-1. **Ownership**: Confirm the StakeTable proxy owner is the OpsTimelock address
-2. **Implementation**: Verify the proxy points to the StakeTableV2 implementation
-3. **Pauser Role**: Confirm the EspressoSys multisig has the PAUSER_ROLE
-4. **EspToken Integration**: Verify the EspToken address is correctly set in StakeTableV2
+1. **Timelocks**: Both timelocks have correct roles and delays
+2. **LightClient**: Upgraded to V2, owned by OpsTimelock, properly initialized
+3. **EspToken**: Deployed with SafeExitTimelock as owner, correct supply, correct initial recipient
+4. **StakeTable**: Upgraded to V2, owned by OpsTimelock, EspressoSys multisig has pauser role
+5. **All proxies**: Point to correct implementation addresses
 
 ## Arbitrum Mainnet
 
@@ -1510,6 +1483,26 @@ export OUTPUT_FILE=.env.eth.sepolia.staketable.admin.transfer
 touch $OUTPUT_FILE
 ```
 
+**Run the docker-compose command to create the multisig proposal for admin transfer:**
+
+```bash
+docker compose run --rm \
+  -e RPC_URL \
+  -e ESPRESSO_SEQUENCER_ETH_MNEMONIC \
+  -e ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
+  -e ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
+  -e ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS \
+  -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
+  \
+  deploy-sequencer-contracts \
+  deploy --propose-transfer-ownership-to-timelock \
+  --target-contract staketable \
+  --timelock-address $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
+  --rpc-url=$RPC_URL \
+  --out $OUTPUT_FILE
+  # if doing a real run then add --dry-run
+```
+
 Then create a multisig proposal to transfer ownership of the StakeTableProxy to the OpsTimelock.
 
 ## Arbitrum Sepolia
@@ -1606,4 +1599,154 @@ echo "OpsTimelock Address: $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS"
 
 # Verify the OpsTimelock is now the owner
 cast call $ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS
+```
+
+## Water (Ethereum Devnet)
+
+### Step 1: Deploy `SafeExitTimelock`, set `Espresso EOA admin` as the admin, Espresso Devs as proposers and the `Espresso EOA admin` as the executor.
+
+Follow the same steps as in [Step 1: Deploy SafeExitTimelock](#step-1-deploy-safeexittimelock) from the Ethereum Mainnet
+section above, but use Water devnet RPC URL and set Espresso EOA admin instead of Foundation Multisig:
+
+```bash
+export RPC_URL=https://water-devnet.example.com
+export OUTPUT_FILE=.env.water.safeexittimelock
+touch $OUTPUT_FILE
+
+# Set timelock configuration (use Espresso EOA admin instead of Foundation Multisig)
+export ESPRESSO_SAFE_EXIT_TIMELOCK_ADMIN=0xESPRESSO_EOA_ADMIN_ADDRESS
+export ESPRESSO_DEVS_ADDRESS_1=0xADDRESS_1
+export ESPRESSO_DEVS_ADDRESS_2=0xADDRESS_2
+export ESPRESSO_SAFE_EXIT_TIMELOCK_EXECUTORS=0xESPRESSO_EOA_ADMIN_ADDRESS
+```
+
+Then proceed with the same deployment steps as outlined in the Ethereum Mainnet section.
+
+### Step 2: Deploy `OpsTimelock`, set `Espresso EOA admin` as the admin, Espresso Devs as proposers and the `Espresso EOA admin` as the executor.
+
+Follow the same steps as in [Step 2: Deploy OpsTimelock](#step-2-deploy-opstimelock) from the Ethereum Mainnet section
+above, but use Water devnet RPC URL and set Espresso EOA admin instead of Foundation Multisig:
+
+```bash
+export RPC_URL=https://water-devnet.example.com
+export OUTPUT_FILE=.env.water.opstimelock
+touch $OUTPUT_FILE
+
+# Set timelock configuration (use Espresso EOA admin instead of Foundation Multisig)
+export ESPRESSO_OPS_TIMELOCK_ADMIN=0xESPRESSO_EOA_ADMIN_ADDRESS
+export ESPRESSO_DEVS_ADDRESS_1=0xADDRESS_1
+export ESPRESSO_DEVS_ADDRESS_2=0xADDRESS_2
+export ESPRESSO_OPS_TIMELOCK_EXECUTORS=0xESPRESSO_EOA_ADMIN_ADDRESS
+```
+
+Then proceed with the same deployment steps as outlined in the Ethereum Mainnet section.
+
+### Step 3: Upgrade `LightClientV2`
+
+Follow the same steps as in [Step 3: Upgrade LightClientV2](#step-3-upgrade-lightclientv2) from the Ethereum Mainnet
+section above, but use Water devnet RPC URL:
+
+```bash
+export RPC_URL=https://water-devnet.example.com
+export OUTPUT_FILE=.env.water.lightclientv2
+touch $OUTPUT_FILE
+```
+
+Then proceed with the same deployment steps as outlined in the Ethereum Mainnet section.
+
+### Step 4: Change owner of `LightClientProxy` from `Espresso EOA admin` to `OpsTimelock`
+
+Follow the same steps as in
+[Step 3: Change admin of LightClientProxy from EspressoSys admin EOA to OpsTimelock](#step-3-change-admin-of-lightclientproxy-from-espressosys-admin-eoa-to-opstimelock)
+from the Arbitrum Sepolia section above, but use Water devnet RPC URL and the Espresso EOA admin instead of EspressoSys
+admin EOA:
+
+```bash
+export RPC_URL=https://water-devnet.example.com
+export OUTPUT_FILE=.env.water.lightclient.admin.transfer
+touch $OUTPUT_FILE
+
+# Set the OpsTimelock address (new admin)
+export ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS=0xOPS_TIMELOCK_ADDRESS
+
+# Set the LightClientProxy address
+export ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS=0xLIGHT_CLIENT_PROXY_ADDRESS
+
+# Set the new owner (OpsTimelock)
+export ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER=$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS
+```
+
+Then proceed with the same docker-compose command as outlined in the Arbitrum Sepolia section above.
+
+### Step 5: Deploy `EspToken`, set `SafeExitTimelock` as the admin
+
+Follow the same steps as in
+[Step 5: Deploy EspToken, set SafeExitTimelock as the admin](#step-5-deploy-esptoken-set-safeexittimelock-as-the-admin)
+from the Ethereum Mainnet section above, but use Water devnet RPC URL:
+
+```bash
+export RPC_URL=https://water-devnet.example.com
+export OUTPUT_FILE=.env.water.esptoken
+touch $OUTPUT_FILE
+```
+
+Then proceed with the same deployment steps as outlined in the Ethereum Mainnet section.
+
+### Step 6: Upgrade to `StakeTableV2`, setting the `Espresso EOA admin` as the pauser
+
+Follow the same steps as in
+[Step 6: Deploy StakeTableProxy & immediately Upgrade to StakeTableV2, setting the EspressoSys Multisig as the pauser](#step-6-deploy-staketableproxy--immediately-upgrade-to-staketablev2-setting-the-espressosys-multisig-as-the-pauser)
+from the Ethereum Mainnet section above, but use Water devnet RPC URL and set Espresso EOA admin instead of EspressoSys
+Multisig:
+
+```bash
+export RPC_URL=https://water-devnet.example.com
+export OUTPUT_FILE=.env.water.staketable
+touch $OUTPUT_FILE
+
+# Set StakeTable configuration (use Espresso EOA admin instead of EspressoSys Multisig)
+export ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS=0xESPRESSO_EOA_ADMIN_ADDRESS
+```
+
+Then proceed with the same deployment steps as outlined in the Ethereum Mainnet section.
+
+### Step 7: Change owner of `StakeTableProxy` to `OpsTimelock`
+
+Follow the same steps as in
+[Step 3: Change admin of LightClientProxy from EspressoSys admin EOA to OpsTimelock](#step-3-change-admin-of-lightclientproxy-from-espressosys-admin-eoa-to-opstimelock)
+from the Arbitrum Sepolia section above, but use Water devnet RPC URL and target the StakeTableProxy instead:
+
+```bash
+export RPC_URL=https://water-devnet.example.com
+export OUTPUT_FILE=.env.water.staketable.admin.transfer
+touch $OUTPUT_FILE
+
+# Set the OpsTimelock address (new admin)
+export ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS=0xOPS_TIMELOCK_ADDRESS
+
+# Set the StakeTableProxy address
+export ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS=0xSTAKE_TABLE_PROXY_ADDRESS
+
+# Set the new owner (OpsTimelock)
+export ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER=$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS
+```
+
+Then use the same docker-compose command as in Step 4 above, but change the target contract to `staketable`:
+
+```bash
+docker compose run --rm \
+  -e RPC_URL \
+  -e ESPRESSO_SEQUENCER_ETH_MNEMONIC \
+  -e ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
+  -e ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS \
+  -e ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER \
+  -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
+  \
+  deploy-sequencer-contracts \
+  deploy --transfer-ownership-from-eoa \
+  --target-contract staketable \
+  --transfer-ownership-new-owner $ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER \
+  --rpc-url=$RPC_URL \
+  --out $OUTPUT_FILE
+  # if doing a real run then add --dry-run
 ```
