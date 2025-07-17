@@ -88,7 +88,11 @@ Opens a WebSockets connection and sends a stream of the same data type returned 
 """
 
 [route.get_header]
-PATH = ["header/:height", "header/hash/:hash",  "header/payload-hash/:payload-hash"]
+PATH = [
+    "header/:height",
+    "header/hash/:hash",
+    "header/payload-hash/:payload-hash",
+]
 ":height" = "Integer"
 ":hash" = "TaggedBase64"
 ":payload-hash" = "TaggedBase64"
@@ -169,7 +173,11 @@ Opens a WebSockets connection and sends a stream of the same data type returned 
 """
 
 [route.get_payload]
-PATH = ["payload/:height", "payload/hash/:hash", "payload/block-hash/:block-hash"]
+PATH = [
+    "payload/:height",
+    "payload/hash/:hash",
+    "payload/block-hash/:block-hash",
+]
 ":height" = "Integer"
 ":hash" = "TaggedBase64"
 ":block-hash" = "TaggedBase64"
@@ -201,7 +209,11 @@ Opens a WebSockets connection and sends a stream of the same data type returned 
 """
 
 [route.get_vid_common]
-PATH = ["vid/common/:height", "vid/common/hash/:hash", "vid/common/payload-hash/:payload-hash"]
+PATH = [
+    "vid/common/:height",
+    "vid/common/hash/:hash",
+    "vid/common/payload-hash/:payload-hash",
+]
 ":height" = "Integer"
 ":hash" = "TaggedBase64"
 ":payload-hash" = "TaggedBase64"
@@ -263,8 +275,26 @@ Returns
 ```
 """
 
+[route.get_transaction_without_proof]
+PATH = ["transaction/:height/:index/noproof", "transaction/hash/:hash/noproof"]
+":height" = "Integer"
+":index" = "Integer"
+":hash" = "TaggedBase64"
+DOC = """
+Get a transaction without proof.
+
+This is similar to the corresponding transaction endpoints without the `/noproof` modifier. The
+response simply omits the `proof` field. In some cases this endpoint can be significantly faster
+than the version with proof; however the absence of a proof means that the server is trusted to
+accurately report information about whether and where the transaction is included in the Espresso
+blockchain.
+"""
+
 [route.stream_transactions]
-PATH = ["stream/transactions/:height/namespace/:namespace", "stream/transactions/:height"]
+PATH = [
+    "stream/transactions/:height/namespace/:namespace",
+    "stream/transactions/:height",
+]
 METHOD = "SOCKET"
 ":namespace" = "Integer"
 ":height" = "Integer"
