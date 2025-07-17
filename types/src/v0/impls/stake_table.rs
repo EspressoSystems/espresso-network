@@ -1973,6 +1973,12 @@ impl Membership<SeqTypes> for EpochCommittees {
             bail!("DRB leaf is missing the DRB result.");
         };
 
+        let mut membership_writer = membership.write().await;
+
+        membership_writer.add_drb_result(epoch, drb);
+
+        drop(membership_writer);
+
         Ok(drb)
     }
 
