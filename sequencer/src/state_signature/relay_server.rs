@@ -153,14 +153,14 @@ impl StateRelayServerState {
         Ok(())
     }
 
-    /// sync the stake table at `height` for the relayer server, fetching from the sequencer.
-    /// If the requested `height` is older than `latest_block_height`, then does nothing.
+    /// sync the stake table at `epoch` for the relayer server, fetching from the sequencer.
+    /// If the requested `epoch` is older than `latest_epoch`, then does nothing.
     ///
     /// NOTE: should not be publicly invocable, always in-sync with `self.queue` for easier garbage collection.
-    async fn sync_stake_table(&mut self, height: u64) -> anyhow::Result<()> {
+    async fn sync_stake_table(&mut self, epoch: u64) -> anyhow::Result<()> {
         let blocks_per_epoch = self.blocks_per_epoch.expect("forget to init genesis");
         let epoch_start_block = self.epoch_start_block.expect("forget to init genesis");
-        let epoch = epoch_from_block_number(height, blocks_per_epoch);
+        let first_epoch = epoch_from_block_number(epoch_start_block, blocks_per_epoch);
         let latest_epoch = epoch_from_block_number(
             self.latest_block_height.unwrap_or_default(),
             blocks_per_epoch,
@@ -180,7 +180,8 @@ impl StateRelayServerState {
 
         tracing::info!(%epoch, "Syncing stake table");
 
-        if height >= epoch_start_block {
+        // Stake table for the first epoch will be the same as the genesis stake table.
+        if epoch > first_epoch {
             let peer_configs = {
                 let client = surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(
                     self.sequencer_url.clone(),
@@ -386,7 +387,7 @@ impl StateRelayServerDataSource for StateRelayServerState {
         }
 
         if !self.known_nodes.contains_key(&epoch) {
-            self.sync_stake_table(block_height).await.map_err(|e| {
+            self.sync_stake_table(epoch).await.map_err(|e| {
                 ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}"))
             })?;
         }
