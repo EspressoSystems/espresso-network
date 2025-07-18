@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use hotshot_task::task::TaskState;
 use hotshot_types::{
-    consensus::OuterConsensus,
+    consensus::{Consensus, OuterConsensus},
     data::{Leaf2, PackedBundle},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
@@ -56,10 +56,13 @@ pub struct BlockBuilderTaskState<TYPES: NodeType, V: Versions> {
     pub base_fee: u64,
 
     /// This Nodes Public Key
-    pub public_key: TYPES::BuilderSignatureKey,
+    pub public_key: TYPES::SignatureKey,
+
+    /// This Nodes Public Key
+    pub builder_public_key: TYPES::BuilderSignatureKey,
 
     /// Our Private Key
-    pub private_key: <TYPES::BuilderSignatureKey as BuilderSignatureKey>::BuilderPrivateKey,
+    pub builder_private_key: <TYPES::BuilderSignatureKey as BuilderSignatureKey>::BuilderPrivateKey,
 
     /// Transactions that were decided but not seen in the block builder
     pub decided_not_seen_txns: HashSet<Commitment<<TYPES as NodeType>::Transaction>>,
@@ -67,13 +70,12 @@ pub struct BlockBuilderTaskState<TYPES: NodeType, V: Versions> {
 
 async fn collect_txns<TYPES: NodeType>(
     proposed_leaf: &Leaf2<TYPES>,
-    consensus: &OuterConsensus<TYPES>,
+    consensus: &Consensus<TYPES>,
 ) -> HashMap<Commitment<<TYPES as NodeType>::Transaction>, TYPES::Transaction> {
     let mut txns = HashMap::new();
-    let consensus_reader = consensus.read().await;
 
     // We've reached decide, now get the leaf chain all the way back to the last decided view, not including it.
-    let old_anchor_view = consensus_reader.last_decided_view();
+    let old_anchor_view = consensus.last_decided_view();
     let mut current_leaf = Some(proposed_leaf.clone());
     while current_leaf
         .as_ref()
@@ -83,13 +85,13 @@ async fn collect_txns<TYPES: NodeType>(
         let leaf = &mut current_leaf.unwrap();
 
         // If the block payload is available for this leaf add the transactions to the set
-        if let Some(payload) = consensus_reader.saved_payloads().get(&leaf.view_number()) {
+        if let Some(payload) = consensus.saved_payloads().get(&leaf.view_number()) {
             for txn in payload.payload.transactions(leaf.block_header().metadata()) {
                 txns.insert(txn.commit(), txn.clone());
             }
         }
 
-        current_leaf = consensus_reader
+        current_leaf = consensus
             .saved_leaves()
             .get(&leaf.justify_qc().data.leaf_commit)
             .cloned();
@@ -106,9 +108,15 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
         event_stream: Sender<Arc<HotShotEvent<TYPES>>>,
         version: Version,
     ) -> Option<HotShotTaskCompleted> {
-        let consensus_reader = self.consensus.read().await;
-        let Some(proposal) = consensus_reader.last_proposals().get(&view) else {
-            tracing::info!("No proposal found for view {view}, sending empty block");
+        let Some(proposal) = self
+            .consensus
+            .read()
+            .await
+            .last_proposals()
+            .get(&view)
+            .cloned()
+        else {
+            tracing::error!("No proposal found for view {view}, sending empty block");
             send_empty_block::<TYPES, V>(
                 &self.consensus,
                 &self.membership_coordinator,
@@ -120,8 +128,10 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
             .await;
             return None;
         };
+
         let leaf = Leaf2::from_quorum_proposal(&proposal.data);
-        let in_flight_txns = collect_txns(&leaf, &self.consensus).await;
+        let consensus_reader = self.consensus.read().await;
+        let in_flight_txns = collect_txns(&leaf, &*consensus_reader).await;
 
         let mut block = vec![];
         for (txn_hash, txn) in self.transactions.iter().rev() {
@@ -129,6 +139,8 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
                 block.push(txn.clone());
             }
         }
+
+        let consensus_reader = self.consensus.read().await;
 
         let maybe_validated_state = match consensus_reader.validated_state_map().get(&view) {
             Some(view) => view.state().cloned(),
@@ -147,7 +159,16 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
             .await
             .ok()
         else {
-            tracing::error!("Failed to build block payload");
+            tracing::error!("Failed to build block payload, sending empty block");
+            send_empty_block::<TYPES, V>(
+                &self.consensus,
+                &self.membership_coordinator,
+                &event_stream,
+                view,
+                epoch,
+                version,
+            )
+            .await;
             return None;
         };
 
@@ -157,9 +178,10 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
         let offered_fee: u64 = self.base_fee * block_size;
 
         let Some(signature_over_fee_info) =
-            TYPES::BuilderSignatureKey::sign_fee(&self.private_key, offered_fee, &metadata).ok()
+            TYPES::BuilderSignatureKey::sign_fee(&self.builder_private_key, offered_fee, &metadata)
+                .ok()
         else {
-            tracing::error!("Failed to sign fee");
+            tracing::error!("Failed to sign fee, sending empty block");
             send_empty_block::<TYPES, V>(
                 &self.consensus,
                 &self.membership_coordinator,
@@ -173,7 +195,7 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
         };
         let builder_fee = BuilderFee {
             fee_amount: offered_fee,
-            fee_account: self.public_key.clone(),
+            fee_account: self.builder_public_key.clone(),
             fee_signature: signature_over_fee_info,
         };
 
@@ -308,7 +330,28 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
                 self.handle_transactions(transactions).await;
             },
             HotShotEvent::ViewChange(view, epoch) => {
-                self.handle_view_change(*view, *epoch, sender.clone()).await;
+                let view = TYPES::View::new(std::cmp::max(1, **view));
+                ensure!(
+                    *view > *self.cur_view && *epoch >= self.cur_epoch,
+                    debug!(
+                        "Received a view change to an older view and epoch: tried to change view \
+                         to {view}and epoch {epoch:?} though we are at view {} and epoch {:?}",
+                        self.cur_view, self.cur_epoch
+                    )
+                );
+                self.cur_view = view;
+                self.cur_epoch = *epoch;
+
+                let leader = self
+                    .membership_coordinator
+                    .membership_for_epoch(*epoch)
+                    .await?
+                    .leader(view)
+                    .await?;
+                if leader == self.public_key {
+                    self.handle_view_change(view, *epoch, sender.clone()).await;
+                    return Ok(());
+                }
             },
             HotShotEvent::ViewDecided(_, txns) => {
                 for txn in txns {

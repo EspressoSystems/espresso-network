@@ -28,7 +28,6 @@ use hotshot_task_impls::{
     request::NetworkRequestState,
     response::{run_response_task, NetworkResponseState},
     stats::StatsTaskState,
-    transactions::TransactionTaskState,
     upgrade::UpgradeTaskState,
     vid::VidTaskState,
     view_sync::ViewSyncTaskState,
