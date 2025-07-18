@@ -348,6 +348,8 @@ pub fn root_block_in_epoch(epoch: u64, epoch_height: u64) -> u64 {
 }
 
 /// Get the block height of the transition block for the given epoch
+///
+/// This is the height at which we begin the transition to LEAVE the specified epoch
 #[must_use]
 pub fn transition_block_for_epoch(epoch: u64, epoch_height: u64) -> u64 {
     if epoch_height == 0 || epoch < 1 {

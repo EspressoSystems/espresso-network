@@ -25,7 +25,6 @@ use crate::{
         Leaf2, QuorumProposalWrapper, VidCommitment, VidDisperse, VidDisperseAndDuration,
         VidDisperseShare,
     },
-    drb::DrbResults,
     epoch_membership::EpochMembershipCoordinator,
     error::HotShotError,
     event::{HotShotAction, LeafInfo},
@@ -432,9 +431,6 @@ pub struct Consensus<TYPES: NodeType> {
     /// Number of iterations for the DRB calculation post-difficulty upgrade, taken from HotShotConfig
     pub drb_upgrade_difficulty: u64,
 
-    /// Tables for the DRB seeds and results.
-    pub drb_results: DrbResults<TYPES>,
-
     /// The transition QC for the current epoch
     transition_qc: Option<(
         QuorumCertificate2<TYPES>,
@@ -613,7 +609,6 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             next_epoch_high_qc,
             metrics,
             epoch_height,
-            drb_results: DrbResults::new(),
             transition_qc,
             highest_block: 0,
             state_cert,

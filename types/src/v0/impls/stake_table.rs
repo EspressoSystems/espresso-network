@@ -13,7 +13,7 @@ use alloy::{
     rpc::types::Log,
 };
 use anyhow::{bail, ensure, Context};
-use async_lock::{Mutex, RwLock};
+use async_lock::{Mutex, RwLock, RwLockUpgradableReadGuard};
 use committable::Committable;
 use futures::{
     future::BoxFuture,
@@ -39,6 +39,7 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeType},
         signature_key::StakeTableEntryType,
     },
+    utils::transition_block_for_epoch,
     PeerConfig,
 };
 use humantime::format_duration;
@@ -572,6 +573,7 @@ pub struct EpochCommittees {
     /// Randomized committees, filled when we receive the DrbResult
     randomized_committees: BTreeMap<Epoch, RandomizedCommittee<StakeTableEntry<PubKey>>>,
     first_epoch: Option<Epoch>,
+    epoch_height: u64,
     block_reward: RewardAmount,
     fetcher: Arc<Fetcher>,
 }
@@ -1222,11 +1224,16 @@ impl Fetcher {
         }
     }
 
-    pub async fn fetch(&self, epoch: Epoch, header: Header) -> anyhow::Result<ValidatorMap> {
-        let chain_config = self.get_chain_config(&header).await?;
+    pub async fn update_chain_config(&self, header: &Header) -> anyhow::Result<()> {
+        let chain_config = self.get_chain_config(header).await?;
         // update chain config
         *self.chain_config.lock().await = chain_config;
 
+        Ok(())
+    }
+
+    pub async fn fetch(&self, epoch: Epoch, header: &Header) -> anyhow::Result<ValidatorMap> {
+        let chain_config = *self.chain_config.lock().await;
         let Some(address) = chain_config.stake_table_contract else {
             bail!("No stake table contract address found in Chain config");
         };
@@ -1272,9 +1279,8 @@ impl Fetcher {
             None => peers
                 .fetch_chain_config(header_cf.commit())
                 .await
-                .map_err(|err| {
+                .inspect_err(|err| {
                     tracing::error!("failed to get chain_config from peers. err: {err:?}");
-                    err
                 })?,
         };
 
@@ -1384,12 +1390,7 @@ impl EpochCommittees {
     /// to be called before calling `self.stake()` so that
     /// `Self.stake_table` only needs to be updated once in a given
     /// life-cycle but may be read from many times.
-    fn update(
-        &mut self,
-        epoch: EpochNumber,
-        validators: ValidatorMap,
-        block_reward: Option<RewardAmount>,
-    ) {
+    fn insert_committee(&mut self, epoch: EpochNumber, validators: ValidatorMap) {
         let mut address_mapping = HashMap::new();
         let stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>> = validators
             .values()
@@ -1420,10 +1421,6 @@ impl EpochCommittees {
                 address_mapping,
             },
         );
-
-        if let Some(block_reward) = block_reward {
-            self.block_reward = block_reward;
-        }
     }
 
     pub fn validators(&self, epoch: &Epoch) -> anyhow::Result<ValidatorMap> {
@@ -1473,6 +1470,7 @@ impl EpochCommittees {
         da_members: Vec<PeerConfig<SeqTypes>>,
         block_reward: RewardAmount,
         fetcher: Fetcher,
+        epoch_height: u64,
     ) -> Self {
         // For each member, get the stake table entry
         let stake_table: Vec<_> = committee_members
@@ -1541,12 +1539,25 @@ impl EpochCommittees {
             first_epoch: None,
             block_reward,
             fetcher: Arc::new(fetcher),
+            epoch_height,
         }
     }
 
     pub async fn reload_stake(&mut self, limit: u64) {
-        // Load the 50 latest stored stake tables
+        match self.fetcher.fetch_block_reward().await {
+            Ok(block_reward) => {
+                tracing::info!("Fetched block reward: {block_reward}");
+                self.block_reward = block_reward;
+            },
+            Err(err) => {
+                tracing::error!(
+                    "Failed to fetch the block reward when reloading the stake tables: {err}"
+                );
+                return;
+            },
+        }
 
+        // Load the 50 latest stored stake tables
         let loaded_stake = match self
             .fetcher
             .persistence
@@ -1567,7 +1578,7 @@ impl EpochCommittees {
         };
 
         for (epoch, stake_table) in loaded_stake {
-            self.update(epoch, stake_table, None);
+            self.insert_committee(epoch, stake_table);
         }
     }
 
@@ -1804,33 +1815,45 @@ impl Membership<SeqTypes> for EpochCommittees {
         epoch: Epoch,
         block_header: Header,
     ) -> anyhow::Result<()> {
-        let membership_reader = membership.read().await;
-        if membership_reader.state.contains_key(&epoch) {
-            tracing::info!(
-                "We already have the stake table for epoch {}. Skipping L1 fetching.",
-                epoch
-            );
-            return Ok(());
+        let fetcher = { membership.read().await.fetcher.clone() };
+
+        // Update the chain config if the block header contains a newer one.
+        fetcher.update_chain_config(&block_header).await?;
+
+        // Fetch the block reward and update it if its zero.
+        // Assumes the stake table contract proxy address does not change
+        // In the future, if we want to support updates to the stake table contract address via chain config,
+        // or allow the contract to handle additional block reward calculation parameters (e.g., inflation, block time),
+        // the `fetch_block_reward` logic can be updated to support per-epoch rewards.
+        // Initially, the block reward is zero if the node starts on pre-epoch version
+        // but it is updated on the first call to `add_epoch_root()`
+        {
+            let membership_reader = membership.upgradable_read().await;
+            if membership_reader.block_reward.0.is_zero() {
+                tracing::warn!(%epoch,
+                    "Block reward is zero. attempting to fetch it from L1",
+
+                );
+                let block_reward = fetcher.fetch_block_reward().await.inspect_err(|err| {
+                    tracing::error!(?epoch, ?err, "failed to fetch block_reward");
+                })?;
+                let mut writer = RwLockUpgradableReadGuard::upgrade(membership_reader).await;
+                writer.block_reward = block_reward;
+            };
         }
-        let fetcher = Arc::clone(&membership_reader.fetcher);
-        drop(membership_reader);
-
-        let stake_tables = fetcher.fetch(epoch, block_header).await?;
-
-        let mut block_reward = None;
 
         {
             let membership_reader = membership.read().await;
-            // Assumes the stake table contract proxy address does not change
-            // In the future, if we want to support updates to the stake table contract address via chain config,
-            // or allow the contract to handle additional block reward calculation parameters (e.g., inflation, block time),
-            // the `fetch_block_reward` logic can be updated to support per-epoch rewards.
-            // Initially, the block reward is zero if the node starts on pre-epoch version
-            // but it is updated on the first call to `add_epoch_root()`
-            if membership_reader.block_reward == RewardAmount(U256::ZERO) {
-                block_reward = Some(fetcher.fetch_block_reward().await?);
+            if membership_reader.state.contains_key(&epoch) {
+                tracing::info!(
+                    "We already have the stake table for epoch {}. Skipping L1 fetching.",
+                    epoch
+                );
+                return Ok(());
             }
         }
+
+        let stake_tables = fetcher.fetch(epoch, &block_header).await?;
 
         // Store stake table in persistence
         {
@@ -1844,7 +1867,8 @@ impl Membership<SeqTypes> for EpochCommittees {
         }
 
         let mut membership_writer = membership.write().await;
-        membership_writer.update(epoch, stake_tables, block_reward);
+        membership_writer.insert_committee(epoch, stake_tables);
+
         Ok(())
     }
 
@@ -1900,17 +1924,46 @@ impl Membership<SeqTypes> for EpochCommittees {
 
     async fn get_epoch_drb(
         membership: Arc<RwLock<Self>>,
-        block_height: u64,
         epoch: Epoch,
     ) -> anyhow::Result<DrbResult> {
         let membership_reader = membership.read().await;
         let peers = membership_reader.fetcher.peers.clone();
+
+        tracing::error!("DRB LOG: Trying to get DRB from existing committee");
+
+        // Try to retrieve the DRB result from an existing committee
+        if let Some(randomized_committee) = membership_reader.randomized_committees.get(&epoch) {
+            tracing::error!("DRB LOG: Got DRB from existing committee");
+            return Ok(randomized_committee.drb_result());
+        }
+
+        tracing::error!("DRB LOG: Trying to fetch the epoch transition leaf");
+
+        // Otherwise, we try to fetch the epoch transition leaf
+        let previous_epoch = match epoch.checked_sub(1) {
+            Some(epoch) => epoch,
+            None => {
+                return membership_reader
+                    .randomized_committees
+                    .get(&epoch)
+                    .map(|committee| committee.drb_result())
+                    .context({
+                        tracing::error!("DRB LOG: Missing randomized committee for epoch {epoch}");
+                        format!("Missing randomized committee for epoch {epoch}")
+                    })
+            },
+        };
+
         let stake_table = membership_reader.stake_table(Some(epoch)).clone();
         let success_threshold = membership_reader.success_threshold(Some(epoch));
+
+        let block_height =
+            transition_block_for_epoch(previous_epoch, membership_reader.epoch_height);
+
         drop(membership_reader);
 
-        tracing::debug!(
-            "Getting DRB for epoch {}, block height {}",
+        tracing::error!(
+            "DRB LOG: Getting DRB for epoch {}, block height {}",
             epoch,
             block_height
         );
@@ -1918,15 +1971,24 @@ impl Membership<SeqTypes> for EpochCommittees {
             .try_fetch_leaf(1, block_height, stake_table, success_threshold)
             .await?;
 
+        tracing::error!("DRB LOG: Fetched DRB leaf {drb_leaf:?}",);
         let Some(drb) = drb_leaf.next_drb_result else {
             tracing::error!(
-                "We received a leaf that should contain a DRB result, but the DRB result is \
-                 missing: {:?}",
+                "DRB LOG: We received a leaf that should contain a DRB result, but the DRB result \
+                 is missing: {:?}",
                 drb_leaf
             );
 
             bail!("DRB leaf is missing the DRB result.");
         };
+
+        let mut membership_writer = membership.write().await;
+
+        tracing::error!("DRB LOG: Adding DRB result to membership");
+
+        membership_writer.add_drb_result(epoch, drb);
+
+        drop(membership_writer);
 
         Ok(drb)
     }

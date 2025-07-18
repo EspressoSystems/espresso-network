@@ -155,18 +155,92 @@ pub async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     membership: &Arc<RwLock<TYPES::Membership>>,
     epoch: TYPES::Epoch,
     storage: &I::Storage,
-    consensus: &OuterConsensus<TYPES>,
     drb_result: DrbResult,
 ) {
-    let mut consensus_writer = consensus.write().await;
-    consensus_writer.drb_results.store_result(epoch, drb_result);
-    drop(consensus_writer);
     tracing::debug!("Calling store_drb_result for epoch {epoch}");
     if let Err(e) = storage.store_drb_result(epoch, drb_result).await {
         tracing::error!("Failed to store drb result for epoch {epoch}: {e}");
     }
 
     membership.write().await.add_drb_result(epoch, drb_result)
+}
+
+/// Verify the DRB result from the proposal for the next epoch if this is the last block of the
+/// current epoch.
+///
+/// Uses the result from `start_drb_task`.
+///
+/// Returns an error if we should not vote.
+pub(crate) async fn verify_drb_result<
+    TYPES: NodeType,
+    I: NodeImplementation<TYPES>,
+    V: Versions,
+>(
+    proposal: &QuorumProposalWrapper<TYPES>,
+    validation_info: &ValidationInfo<TYPES, I, V>,
+) -> Result<()> {
+    // Skip if this is not the expected block.
+    if validation_info.epoch_height == 0
+        || !is_epoch_transition(
+            proposal.block_header().block_number(),
+            validation_info.epoch_height,
+        )
+    {
+        tracing::debug!("Skipping DRB result verification");
+        return Ok(());
+    }
+
+    // #3967 REVIEW NOTE: Check if this is the right way to decide if we're doing epochs
+    // Alternatively, should we just return Err() if epochs aren't happening here? Or can we assume
+    // that epochs are definitely happening by virtue of getting here?
+    let epoch = option_epoch_from_block_number::<TYPES>(
+        validation_info
+            .upgrade_lock
+            .epochs_enabled(proposal.view_number())
+            .await,
+        proposal.block_header().block_number(),
+        validation_info.epoch_height,
+    );
+
+    let proposal_result = proposal
+        .next_drb_result()
+        .context(info!("Proposal is missing the next epoch's DRB result."))?;
+
+    if let Some(epoch_val) = epoch {
+        let current_epoch_membership = validation_info
+            .membership
+            .coordinator
+            .stake_table_for_epoch(epoch)
+            .await
+            .context(warn!("No stake table for epoch {}", epoch_val))?;
+
+        let has_stake_current_epoch = current_epoch_membership
+            .has_stake(&validation_info.public_key)
+            .await;
+
+        if has_stake_current_epoch {
+            let computed_result = current_epoch_membership
+                .next_epoch()
+                .await
+                .context(warn!("No stake table for epoch {}", epoch_val + 1))?
+                .get_epoch_drb()
+                .await
+                .clone()
+                .context(warn!("DRB result not found"))?;
+
+            ensure!(
+                proposal_result == computed_result,
+                warn!(
+                    "Our calculated DRB result is {computed_result:?}, which does not match the \
+                     proposed DRB result of {proposal_result:?}"
+                )
+            );
+        }
+
+        Ok(())
+    } else {
+        Err(error!("Epochs are not available"))
+    }
 }
 
 /// Handles calling add_epoch_root and sync_l1 on Membership if necessary.
@@ -233,12 +307,6 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
                 tracing::info!("Time taken to add epoch root: {:?}", start.elapsed());
             });
 
-            let mut consensus_writer = consensus.write().await;
-            consensus_writer
-                .drb_results
-                .garbage_collect(next_epoch_number);
-            drop(consensus_writer);
-
             let drb_result_future = tokio::spawn(async move {
                 let start = Instant::now();
                 let mut drb_seed_input = [0u8; 32];
@@ -251,7 +319,8 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
                     value: drb_seed_input,
                     difficulty_level,
                 };
-
+                
+                tracing::error!("DRB LOG: compute_drb_result spawned from consensus for epoch {next_epoch_number}");
                 let drb_result = hotshot_types::drb::compute_drb_result(
                     drb_input,
                     store_drb_progress_fn,
@@ -275,14 +344,8 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
             };
 
             let start = Instant::now();
-            handle_drb_result::<TYPES, I>(
-                &membership,
-                next_epoch_number,
-                &storage,
-                &consensus,
-                drb_result,
-            )
-            .await;
+            handle_drb_result::<TYPES, I>(&membership, next_epoch_number, &storage, drb_result)
+                .await;
             tracing::info!("Time taken to handle drb result: {:?}", start.elapsed());
         });
     }

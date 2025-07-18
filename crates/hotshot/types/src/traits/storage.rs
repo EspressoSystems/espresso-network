@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, ensure, Result};
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 
@@ -150,6 +150,16 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
         epoch: TYPES::Epoch,
         block_header: TYPES::BlockHeader,
     ) -> Result<()>;
+    async fn load_drb_result(&self, epoch: TYPES::Epoch) -> Result<DrbResult> {
+        match self.load_drb_input(*epoch).await {
+            Ok(drb_input) => {
+                ensure!(drb_input.iteration == drb_input.difficulty_level);
+
+                Ok(drb_input.value)
+            },
+            Err(e) => Err(e),
+        }
+    }
     async fn store_drb_input(&self, drb_input: DrbInput) -> Result<()>;
     async fn load_drb_input(&self, _epoch: u64) -> Result<DrbInput>;
 }
