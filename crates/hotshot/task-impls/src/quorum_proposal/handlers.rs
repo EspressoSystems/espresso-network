@@ -596,6 +596,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         let next_drb_result = if is_epoch_transition(block_header.block_number(), self.epoch_height)
         {
             if let Some(epoch_val) = &epoch {
+                tracing::error!("DRB LOG: Getting next_drb_result for proposal");
                 let drb_result = epoch_membership
                     .next_epoch()
                     .await
@@ -604,6 +605,8 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                     .await
                     .clone()
                     .context(warn!("No DRB result for epoch {}", *epoch_val + 1))?;
+
+                tracing::error!("DRB LOG: Got next_drb_result");
 
                 Some(drb_result)
             } else {

@@ -1929,12 +1929,17 @@ impl Membership<SeqTypes> for EpochCommittees {
         let membership_reader = membership.read().await;
         let peers = membership_reader.fetcher.peers.clone();
 
+        tracing::error!("DRB LOG: Trying to get DRB from existing committee");
+
         // Try to retrieve the DRB result from an existing committee
         if let Some(randomized_committee) = membership_reader.randomized_committees.get(&epoch) {
+            tracing::error!("DRB LOG: Got DRB from existing committee");
             return Ok(randomized_committee.drb_result());
         }
 
-        // Otherwise, we try to fetch the epoch root leaf
+        tracing::error!("DRB LOG: Trying to fetch the epoch transition leaf");
+
+        // Otherwise, we try to fetch the epoch transition leaf
         let previous_epoch = match epoch.checked_sub(1) {
             Some(epoch) => epoch,
             None => {
@@ -1942,7 +1947,10 @@ impl Membership<SeqTypes> for EpochCommittees {
                     .randomized_committees
                     .get(&epoch)
                     .map(|committee| committee.drb_result())
-                    .context(format!("Missing randomized committee for epoch {epoch}"))
+                    .context({
+                        tracing::error!("DRB LOG: Missing randomized committee for epoch {epoch}");
+                        format!("Missing randomized committee for epoch {epoch}")
+                    })
             },
         };
 
@@ -1954,8 +1962,8 @@ impl Membership<SeqTypes> for EpochCommittees {
 
         drop(membership_reader);
 
-        tracing::debug!(
-            "Getting DRB for epoch {}, block height {}",
+        tracing::error!(
+            "DRB LOG: Getting DRB for epoch {}, block height {}",
             epoch,
             block_height
         );
@@ -1963,10 +1971,11 @@ impl Membership<SeqTypes> for EpochCommittees {
             .try_fetch_leaf(1, block_height, stake_table, success_threshold)
             .await?;
 
+        tracing::error!("DRB LOG: Fetched DRB leaf {drb_leaf:?}",);
         let Some(drb) = drb_leaf.next_drb_result else {
             tracing::error!(
-                "We received a leaf that should contain a DRB result, but the DRB result is \
-                 missing: {:?}",
+                "DRB LOG: We received a leaf that should contain a DRB result, but the DRB result \
+                 is missing: {:?}",
                 drb_leaf
             );
 
@@ -1974,6 +1983,8 @@ impl Membership<SeqTypes> for EpochCommittees {
         };
 
         let mut membership_writer = membership.write().await;
+
+        tracing::error!("DRB LOG: Adding DRB result to membership");
 
         membership_writer.add_drb_result(epoch, drb);
 
