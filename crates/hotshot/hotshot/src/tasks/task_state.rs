@@ -234,8 +234,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             transactions: LruCache::new(NonZero::new(10000).unwrap()),
             instance_state: handle.hotshot.instance_state(),
             base_fee: 1,
-            public_key: builder_key,
-            private_key: builder_private_key,
+            public_key: handle.public_key().clone(),
+            builder_public_key: builder_key,
+            builder_private_key,
             decided_not_seen_txns: HashSet::new(),
         }
     }

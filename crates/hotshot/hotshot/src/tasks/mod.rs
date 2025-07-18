@@ -21,17 +21,7 @@ use hotshot_task::task::Task;
 #[cfg(feature = "rewind")]
 use hotshot_task_impls::rewind::RewindTaskState;
 use hotshot_task_impls::{
-    block_builder::BlockBuilderTaskState,
-    da::DaTaskState,
-    events::HotShotEvent,
-    network::{NetworkEventTaskState, NetworkMessageTaskState},
-    request::NetworkRequestState,
-    response::{run_response_task, NetworkResponseState},
-    stats::StatsTaskState,
-    transactions::TransactionTaskState,
-    upgrade::UpgradeTaskState,
-    vid::VidTaskState,
-    view_sync::ViewSyncTaskState,
+    block_builder::BlockBuilderTaskState, da::DaTaskState, events::HotShotEvent, network::{NetworkEventTaskState, NetworkMessageTaskState}, request::NetworkRequestState, response::{run_response_task, NetworkResponseState}, stats::StatsTaskState, upgrade::UpgradeTaskState, vid::VidTaskState, view_sync::ViewSyncTaskState
 };
 use hotshot_types::{
     consensus::OuterConsensus,
