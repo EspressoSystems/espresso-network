@@ -68,7 +68,7 @@ pub struct NodeState {
 }
 
 impl NodeState {
-    pub async fn block_reward(&self) -> RewardAmount {
+    pub async fn block_reward(&self) -> Option<RewardAmount> {
         let coordinator = self.coordinator.clone();
         let membership = coordinator.membership().read().await;
         membership.block_reward()
@@ -139,11 +139,10 @@ impl NodeState {
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock() -> Self {
-        use alloy::primitives::U256;
         use hotshot_example_types::storage_types::TestStorage;
         use vbs::version::StaticVersion;
 
-        use crate::{v0_1::RewardAmount, v0_3::Fetcher};
+        use crate::v0_3::Fetcher;
 
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
@@ -152,7 +151,7 @@ impl NodeState {
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
             vec![],
-            RewardAmount(U256::ZERO),
+            None,
             Fetcher::mock(),
         )));
 
@@ -171,11 +170,10 @@ impl NodeState {
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v2() -> Self {
-        use alloy::primitives::U256;
         use hotshot_example_types::storage_types::TestStorage;
         use vbs::version::StaticVersion;
 
-        use crate::{v0_1::RewardAmount, v0_3::Fetcher};
+        use crate::v0_3::Fetcher;
 
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
@@ -184,7 +182,7 @@ impl NodeState {
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
             vec![],
-            RewardAmount(U256::ZERO),
+            None,
             Fetcher::mock(),
         )));
         let storage = TestStorage::default();
@@ -203,18 +201,17 @@ impl NodeState {
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v3() -> Self {
-        use alloy::primitives::U256;
         use hotshot_example_types::storage_types::TestStorage;
         use vbs::version::StaticVersion;
 
-        use crate::{v0_1::RewardAmount, v0_3::Fetcher};
+        use crate::v0_3::Fetcher;
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
 
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
             vec![],
-            RewardAmount(U256::ZERO),
+            None,
             Fetcher::mock(),
         )));
 
@@ -286,11 +283,10 @@ impl From<BTreeMap<Version, Upgrade>> for UpgradeMap {
 #[cfg(any(test, feature = "testing"))]
 impl Default for NodeState {
     fn default() -> Self {
-        use alloy::primitives::U256;
         use hotshot_example_types::storage_types::TestStorage;
         use vbs::version::StaticVersion;
 
-        use crate::{v0_1::RewardAmount, v0_3::Fetcher};
+        use crate::v0_3::Fetcher;
 
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
@@ -299,7 +295,7 @@ impl Default for NodeState {
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
             vec![],
-            RewardAmount(U256::ZERO),
+            None,
             Fetcher::mock(),
         )));
         let storage = TestStorage::default();
