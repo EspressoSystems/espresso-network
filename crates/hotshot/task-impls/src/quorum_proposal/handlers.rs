@@ -653,6 +653,24 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             proposed_leaf.justify_qc().view_number()
         );
 
+        if view_change_evidence.is_none() {
+            let consensus_reader = self.consensus.read().await;
+            if let Some(previous_proposal_time) = consensus_reader
+                .last_proposals()
+                .get(&self.view_number)
+                .map(|proposal| proposal.data.block_header().timestamp())
+            {
+                let current_timestamp = message.data.block_header().timestamp();
+
+                if let Some(elapsed_time) = current_timestamp.checked_sub(previous_proposal_time) {
+                    consensus_reader
+                        .metrics
+                        .previous_proposal_to_proposal_time
+                        .add_point(elapsed_time as f64);
+                }
+            }
+        }
+
         broadcast_event(
             Arc::new(HotShotEvent::QuorumProposalSend(
                 message.clone(),
