@@ -12,7 +12,7 @@
 
 use std::{future::IntoFuture, time::Duration};
 
-use futures::future::{BoxFuture, FutureExt};
+use futures::future::{BoxFuture, Future, FutureExt};
 use snafu::{Error, ErrorCompat, IntoError, NoneError, OptionExt};
 use tokio::time::timeout;
 
@@ -77,6 +77,28 @@ impl<T> Fetch<T> {
     /// Does this fetch represent an unresolved query?
     pub fn is_pending(&self) -> bool {
         matches!(self, Self::Pending(_))
+    }
+
+    pub async fn then_fetch<Fut, R>(
+        self,
+        f: impl Send + FnOnce(&T) -> Fut + 'static,
+    ) -> Fetch<(T, R)>
+    where
+        Fut: Send + Future<Output = Fetch<R>>,
+        T: Send + 'static,
+        R: Send + 'static,
+    {
+        match self {
+            Fetch::Ready(t) => f(&t).await.map(|r| (t, r)),
+            Fetch::Pending(t) => Fetch::Pending(
+                async move {
+                    let t = t.await;
+                    let r = f(&t).await.await;
+                    (t, r)
+                }
+                .boxed(),
+            ),
+        }
     }
 }
 

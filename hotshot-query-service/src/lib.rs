@@ -614,10 +614,10 @@ mod test {
     use super::*;
     use crate::{
         availability::{
-            AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch, FetchStream, LeafId,
-            LeafQueryData, NamespaceId, PayloadMetadata, PayloadQueryData, StateCertQueryData,
-            TransactionFromBlock, TransactionHash, UpdateAvailabilityData, VidCommonMetadata,
-            VidCommonQueryData,
+            AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
+            Fetch, FetchStream, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
+            PayloadQueryData, StateCertQueryData, TransactionHash, UpdateAvailabilityData,
+            VidCommonMetadata, VidCommonQueryData,
         },
         metrics::PrometheusMetrics,
         node::{NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
@@ -777,11 +777,11 @@ mod test {
                 .get_vid_common_metadata_range_rev(start, end)
                 .await
         }
-        async fn get_transaction<T: TransactionFromBlock<MockTypes>>(
+        async fn get_block_containing_transaction(
             &self,
             hash: TransactionHash<MockTypes>,
-        ) -> Fetch<T> {
-            self.hotshot_qs.get_transaction(hash).await
+        ) -> Fetch<BlockWithTransaction<MockTypes>> {
+            self.hotshot_qs.get_block_containing_transaction(hash).await
         }
         async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryData<MockTypes>> {
             self.hotshot_qs.get_state_cert(epoch).await

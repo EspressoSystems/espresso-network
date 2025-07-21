@@ -29,7 +29,7 @@ use hotshot_example_types::node_types::TestVersions;
 use hotshot_query_service::{
     availability::{
         BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, StateCertQueryData,
-        TransactionFromBlock, TransactionWithProofQueryData, VidCommonQueryData,
+        TransactionQueryData, TransactionWithProofQueryData, VidCommonQueryData,
     },
     testing::mocks::MockVersions,
     VidCommon,
@@ -603,7 +603,16 @@ async fn test_transaction_query_data() {
         .enumerate()
         .enumerate()
         .map(|(i, (index, _))| {
-            TransactionWithProofQueryData::from_block(&block, index, i as u64).unwrap()
+            let avid_m_param = init_avidm_param(10).unwrap();
+            let vid = VidCommonQueryData::<SeqTypes>::new(
+                block.header().clone(),
+                VidCommon::V1(avid_m_param),
+            );
+
+            let tx = block.transaction(&index).unwrap();
+            let tx = TransactionQueryData::new(tx, &block, &index, i as u64).unwrap();
+            let proof = block.transaction_proof(&vid, &index).unwrap();
+            TransactionWithProofQueryData::new(tx, proof)
         })
         .collect::<Vec<_>>();
 

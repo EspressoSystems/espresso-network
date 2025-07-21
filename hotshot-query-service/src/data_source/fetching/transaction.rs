@@ -15,13 +15,13 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use derive_more::{Deref, From, Into};
+use derive_more::From;
 use futures::future::{BoxFuture, FutureExt};
 use hotshot_types::traits::node_implementation::NodeType;
 
 use super::{AvailabilityProvider, FetchRequest, Fetchable, Fetcher, Notifiers};
 use crate::{
-    availability::{QueryableHeader, QueryablePayload, TransactionFromBlock, TransactionHash},
+    availability::{BlockWithTransaction, QueryableHeader, QueryablePayload, TransactionHash},
     data_source::{
         storage::{
             pruning::PrunedHeightStorage, AvailabilityStorage, NodeStorage,
@@ -38,21 +38,17 @@ pub(super) struct TransactionRequest<Types: NodeType>(TransactionHash<Types>);
 
 impl<Types: NodeType> FetchRequest for TransactionRequest<Types> {}
 
-#[derive(Clone, Debug, From, Deref)]
-pub(super) struct FetchableTransaction<T>(pub(super) T);
-
 #[async_trait]
-impl<Types, T> Fetchable<Types> for FetchableTransaction<T>
+impl<Types> Fetchable<Types> for BlockWithTransaction<Types>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
-    T: TransactionFromBlock<Types>,
 {
     type Request = TransactionRequest<Types>;
 
     fn satisfies(&self, req: Self::Request) -> bool {
-        req.0 == self.hash()
+        req.0 == self.transaction.hash()
     }
 
     async fn passive_fetch(
@@ -68,7 +64,7 @@ where
 
         async move {
             let block = wait_block.await?;
-            Some(T::with_hash(&block, req.0)?.into())
+            BlockWithTransaction::with_hash(block, req.0)
         }
         .boxed()
     }
@@ -98,13 +94,11 @@ where
     {
         let hash = req.0;
         let block = storage.get_block_with_transaction(hash).await?;
-        T::with_hash(&block, hash)
-            .ok_or(QueryError::Error {
-                message: format!(
-                    "transaction index inconsistent: block {} contains no transaction {hash}",
-                    block.height()
-                ),
-            })
-            .map(Self::from)
+        let height = block.height();
+        BlockWithTransaction::with_hash(block, hash).ok_or(QueryError::Error {
+            message: format!(
+                "transaction index inconsistent: block {height} contains no transaction {hash}"
+            ),
+        })
     }
 }

@@ -40,7 +40,7 @@ use snafu::{OptionExt, Snafu};
 use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, RequestParams, StatusCode};
 use vbs::version::StaticVersionType;
 
-use crate::{api::load_api, Header, Payload, QueryError, VidCommon};
+use crate::{api::load_api, types::HeightIndexed, Header, Payload, QueryError, VidCommon};
 
 pub(crate) mod data_source;
 mod fetch;
@@ -610,13 +610,28 @@ where
     })?
     .at("get_transaction", move |req, state| {
         async move {
-            get_transaction::<_, TransactionWithProofQueryData<_>, _>(req, state, timeout).await
+            let tx = get_transaction(req, state, timeout).await?;
+            let height = tx.block.height();
+            let vid = state
+                .read(|state| state.get_vid_common(height as usize))
+                .await
+                .with_timeout(timeout)
+                .await
+                .context(FetchBlockSnafu {
+                    resource: height.to_string(),
+                })?;
+            let proof = tx.block.transaction_proof(&vid, &tx.index).context(
+                InvalidTransactionIndexSnafu {
+                    height,
+                    index: tx.transaction.index(),
+                },
+            )?;
+            Ok(TransactionWithProofQueryData::new(tx.transaction, proof))
         }
         .boxed()
     })?
     .at("get_transaction_without_proof", move |req, state| {
-        async move { get_transaction::<_, TransactionQueryData<_>, _>(req, state, timeout).await }
-            .boxed()
+        async move { Ok(get_transaction(req, state, timeout).await?.transaction) }.boxed()
     })?
     .stream("stream_transactions", move |req, state| {
         async move {
@@ -656,7 +671,8 @@ where
                                             }
                                         }
 
-                                        TransactionQueryData::from_block(&block, index, i as u64)
+                                        let tx = block.transaction(&index)?;
+                                        TransactionQueryData::new(tx, &block, &index, i as u64)
                                     })
                                     .collect::<Vec<_>>();
 
@@ -742,31 +758,27 @@ fn enforce_range_limit(from: usize, until: usize, limit: usize) -> Result<(), Er
     Ok(())
 }
 
-async fn get_transaction<Types, T, State>(
+async fn get_transaction<Types, State>(
     req: RequestParams,
     state: &State,
     timeout: Duration,
-) -> Result<T, Error>
+) -> Result<BlockWithTransaction<Types>, Error>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
-    T: TransactionFromBlock<Types>,
     State: 'static + Send + Sync + ReadState,
     <State as ReadState>::State: Send + Sync + AvailabilityDataSource<Types>,
 {
     match req.opt_blob_param("hash")? {
-        Some(hash) => {
-            let fetch = state
-                .read(|state| state.get_transaction(hash).boxed())
-                .await;
-            fetch
-                .with_timeout(timeout)
-                .await
-                .context(FetchTransactionSnafu {
-                    resource: hash.to_string(),
-                })
-        },
+        Some(hash) => state
+            .read(|state| state.get_block_containing_transaction(hash).boxed())
+            .await
+            .with_timeout(timeout)
+            .await
+            .context(FetchTransactionSnafu {
+                resource: hash.to_string(),
+            }),
         None => {
             let height: u64 = req.integer_param("height")?;
             let fetch = state
@@ -780,8 +792,16 @@ where
                 .payload()
                 .nth(block.metadata(), i as usize)
                 .context(InvalidTransactionIndexSnafu { height, index: i })?;
-            T::from_block(&block, index, i)
-                .context(InvalidTransactionIndexSnafu { height, index: i })
+            let transaction = block
+                .transaction(&index)
+                .context(InvalidTransactionIndexSnafu { height, index: i })?;
+            let transaction = TransactionQueryData::new(transaction, &block, &index, i)
+                .context(InvalidTransactionIndexSnafu { height, index: i })?;
+            Ok(BlockWithTransaction {
+                transaction,
+                block,
+                index,
+            })
         },
     }
 }

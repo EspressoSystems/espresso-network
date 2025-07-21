@@ -75,7 +75,7 @@ pub trait QueryableHeader<Types: NodeType>: BlockHeader<Types> {
     fn namespace_size(&self, i: &Self::NamespaceIndex, payload_size: usize) -> u64;
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TransactionIndex<Types: NodeType>
 where
     Header<Types>: QueryableHeader<Types>,
@@ -137,30 +137,22 @@ where
         }))
     }
 
-    /// Get a transaction by its block-specific index, along with an inclusion proof.
-    fn transaction_with_proof(
-        &self,
-        meta: &Self::Metadata,
-        index: &TransactionIndex<Types>,
-    ) -> Option<(Self::Transaction, Self::InclusionProof)>;
-
     /// Get a transaction by its block-specific index.
     fn transaction(
         &self,
         meta: &Self::Metadata,
         index: &TransactionIndex<Types>,
-    ) -> Option<Self::Transaction> {
-        Some(self.transaction_with_proof(meta, index)?.0)
-    }
+    ) -> Option<Self::Transaction>;
 
-    /// Get an inclusion proof for a transaction with a given index.
-    fn proof(
+    /// Get an inclusion proof for the given transaction.
+    ///
+    /// This function may be slow and computationally intensive, especially for large transactions.
+    fn transaction_proof(
         &self,
         meta: &Self::Metadata,
+        vid: &VidCommonQueryData<Types>,
         index: &TransactionIndex<Types>,
-    ) -> Option<Self::InclusionProof> {
-        Some(self.transaction_with_proof(meta, index)?.1)
-    }
+    ) -> Option<Self::InclusionProof>;
 
     /// Get the index of the `nth` transaction.
     fn nth(&self, meta: &Self::Metadata, n: usize) -> Option<TransactionIndex<Types>> {
@@ -170,15 +162,6 @@ where
     /// Get the `nth` transaction.
     fn nth_transaction(&self, meta: &Self::Metadata, n: usize) -> Option<Self::Transaction> {
         self.transaction(meta, &self.nth(meta, n)?)
-    }
-
-    /// Get the `nth` transaction, along with an inclusion proof.
-    fn nth_transaction_with_proof(
-        &self,
-        meta: &Self::Metadata,
-        n: usize,
-    ) -> Option<(Self::Transaction, Self::InclusionProof)> {
-        self.transaction_with_proof(meta, &self.nth(meta, n)?)
     }
 
     /// Get the index of the transaction with a given hash, if it is in the block.
@@ -203,15 +186,6 @@ where
         hash: Commitment<Self::Transaction>,
     ) -> Option<Self::Transaction> {
         self.transaction(meta, &self.by_hash(meta, hash)?)
-    }
-
-    /// Get the transaction with a given hash, if it is in the block, along with an inclusion proof.
-    fn transaction_by_hash_with_proof(
-        &self,
-        meta: &Self::Metadata,
-        hash: Commitment<Self::Transaction>,
-    ) -> Option<(Self::Transaction, Self::InclusionProof)> {
-        self.transaction_with_proof(meta, &self.by_hash(meta, hash)?)
     }
 }
 
@@ -520,6 +494,15 @@ where
         self.payload().by_hash(self.metadata(), hash)
     }
 
+    pub fn transaction_proof(
+        &self,
+        vid_common: &VidCommonQueryData<Types>,
+        ix: &TransactionIndex<Types>,
+    ) -> Option<TransactionInclusionProof<Types>> {
+        self.payload()
+            .transaction_proof(self.metadata(), vid_common, ix)
+    }
+
     pub fn len(&self) -> usize {
         self.payload.len(self.metadata())
     }
@@ -744,6 +727,40 @@ impl<Types: NodeType> HeightIndexed for (VidCommonQueryData<Types>, Option<VidSh
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockWithTransaction<Types: NodeType>
+where
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+{
+    pub block: BlockQueryData<Types>,
+    pub transaction: TransactionQueryData<Types>,
+    pub index: TransactionIndex<Types>,
+}
+
+impl<Types: NodeType> BlockWithTransaction<Types>
+where
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+{
+    pub fn with_hash(block: BlockQueryData<Types>, hash: TransactionHash<Types>) -> Option<Self> {
+        let (tx, i, index) = block.enumerate().enumerate().find_map(|(i, (index, tx))| {
+            if tx.commit() == hash {
+                Some((tx, i as u64, index))
+            } else {
+                None
+            }
+        })?;
+        let transaction = TransactionQueryData::new(tx, &block, &index, i)?;
+
+        Some(BlockWithTransaction {
+            block,
+            transaction,
+            index,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(bound = "")]
 pub struct TransactionQueryData<Types: NodeType>
@@ -792,7 +809,7 @@ where
     pub fn new(
         transaction: Transaction<Types>,
         block: &BlockQueryData<Types>,
-        i: TransactionIndex<Types>,
+        i: &TransactionIndex<Types>,
         index: u64,
     ) -> Option<Self> {
         Some(Self {

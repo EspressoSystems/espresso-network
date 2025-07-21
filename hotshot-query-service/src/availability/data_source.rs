@@ -16,7 +16,6 @@ use std::{
 };
 
 use async_trait::async_trait;
-use committable::Committable;
 use derivative::Derivative;
 use derive_more::{Display, From};
 use futures::{
@@ -32,12 +31,11 @@ use super::{
     fetch::Fetch,
     query_data::{
         BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadMetadata, PayloadQueryData,
-        QueryableHeader, QueryablePayload, TransactionHash, TransactionIndex, TransactionQueryData,
-        VidCommonMetadata, VidCommonQueryData,
+        QueryableHeader, QueryablePayload, TransactionHash, VidCommonMetadata, VidCommonQueryData,
     },
-    StateCertQueryData,
+    BlockWithTransaction, StateCertQueryData,
 };
-use crate::{availability::TransactionWithProofQueryData, types::HeightIndexed, Header, Payload};
+use crate::{types::HeightIndexed, Header, Payload};
 
 #[derive(Derivative, From, Display)]
 #[derivative(Ord = "feature_allow_slow_enum")]
@@ -230,11 +228,10 @@ where
         end: usize,
     ) -> FetchStream<VidCommonMetadata<Types>>;
 
-    /// Returns the transaction with the given `hash`.
-    async fn get_transaction<T: TransactionFromBlock<Types>>(
+    async fn get_block_containing_transaction(
         &self,
-        hash: TransactionHash<Types>,
-    ) -> Fetch<T>;
+        h: TransactionHash<Types>,
+    ) -> Fetch<BlockWithTransaction<Types>>;
 
     async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryData<Types>>;
 
@@ -294,77 +291,6 @@ where
             .await
             .then(Fetch::resolve)
             .boxed()
-    }
-}
-
-pub trait TransactionFromBlock<Types: NodeType>: Sized + Send + Sync + Clone + 'static
-where
-    Header<Types>: QueryableHeader<Types>,
-    Payload<Types>: QueryablePayload<Types>,
-{
-    fn from_block(
-        block: &BlockQueryData<Types>,
-        i: TransactionIndex<Types>,
-        index: u64,
-    ) -> Option<Self>;
-
-    fn with_hash(block: &BlockQueryData<Types>, hash: TransactionHash<Types>) -> Option<Self> {
-        block
-            .enumerate()
-            .enumerate()
-            .find_map(|(i, (index, tx))| {
-                if tx.commit() == hash {
-                    Some(Self::from_block(block, index, i as u64))
-                } else {
-                    None
-                }
-            })
-            .flatten()
-    }
-
-    fn hash(&self) -> TransactionHash<Types>;
-}
-
-impl<Types: NodeType> TransactionFromBlock<Types> for TransactionQueryData<Types>
-where
-    Header<Types>: QueryableHeader<Types>,
-    Payload<Types>: QueryablePayload<Types>,
-{
-    fn from_block(
-        block: &BlockQueryData<Types>,
-        i: TransactionIndex<Types>,
-        index: u64,
-    ) -> Option<Self> {
-        let transaction = block.payload().transaction(block.metadata(), &i)?;
-        Self::new(transaction, block, i, index)
-    }
-
-    fn hash(&self) -> TransactionHash<Types> {
-        self.hash()
-    }
-}
-
-impl<Types: NodeType> TransactionFromBlock<Types> for TransactionWithProofQueryData<Types>
-where
-    Header<Types>: QueryableHeader<Types>,
-    Payload<Types>: QueryablePayload<Types>,
-{
-    fn from_block(
-        block: &BlockQueryData<Types>,
-        i: TransactionIndex<Types>,
-        index: u64,
-    ) -> Option<Self> {
-        let (transaction, proof) = block
-            .payload()
-            .transaction_with_proof(block.metadata(), &i)?;
-        Some(Self::new(
-            TransactionQueryData::new(transaction, block, i, index)?,
-            proof,
-        ))
-    }
-
-    fn hash(&self) -> TransactionHash<Types> {
-        self.hash()
     }
 }
 
