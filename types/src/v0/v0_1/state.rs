@@ -22,11 +22,11 @@ pub struct Delta {
 pub const BLOCK_MERKLE_TREE_HEIGHT: usize = 32;
 pub const FEE_MERKLE_TREE_HEIGHT: usize = 20;
 pub const REWARD_MERKLE_TREE_HEIGHT: usize = 160;
+pub const LEGACY_REWARD_MERKLE_TREE_HEIGHT: usize = 20;
 const FEE_MERKLE_TREE_ARITY: usize = 256;
 const REWARD_MERKLE_TREE_ARITY: usize = 2;
 
-pub const LEGACY_REWARD_MERKLE_TREE_HEIGHT: usize = 160;
-const REWARD_MERKLE_TREE_ARITY_LEGACY: usize = 2;
+const REWARD_MERKLE_TREE_ARITY_LEGACY: usize = 256;
 
 // The block merkle tree accumulates header commitments. However, since the underlying
 // representation of the commitment type remains the same even while the header itself changes,
