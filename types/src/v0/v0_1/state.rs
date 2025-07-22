@@ -11,7 +11,7 @@ use jf_merkle_tree::{
 use serde::{Deserialize, Serialize};
 
 use super::{FeeAccount, FeeAmount};
-use crate::Header;
+use crate::{v0::sparse_mt::{JellyfishKeccak256Hasher, JellyfishKeccakNode}, Header};
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Delta {
@@ -21,9 +21,12 @@ pub struct Delta {
 
 pub const BLOCK_MERKLE_TREE_HEIGHT: usize = 32;
 pub const FEE_MERKLE_TREE_HEIGHT: usize = 20;
-pub const REWARD_MERKLE_TREE_HEIGHT: usize = 20;
+pub const REWARD_MERKLE_TREE_HEIGHT: usize = 160;
 const FEE_MERKLE_TREE_ARITY: usize = 256;
-const REWARD_MERKLE_TREE_ARITY: usize = 256;
+const REWARD_MERKLE_TREE_ARITY: usize = 2;
+
+pub const REWARD_MERKLE_TREE_HEIGHT_LEGACY: usize = 160;
+const REWARD_MERKLE_TREE_ARITY_LEGACY: usize = 2;
 
 // The block merkle tree accumulates header commitments. However, since the underlying
 // representation of the commitment type remains the same even while the header itself changes,
@@ -35,16 +38,32 @@ pub type FeeMerkleTree =
     UniversalMerkleTree<FeeAmount, Sha3Digest, FeeAccount, FEE_MERKLE_TREE_ARITY, Sha3Node>;
 pub type FeeMerkleCommitment = <FeeMerkleTree as MerkleTreeScheme>::Commitment;
 
-// TODO: Update JELLYFISH crate to use KECCACK256
-pub type RewardMerkleTree = UniversalMerkleTree<
+// UniversalMerkleTree<
+//     Value,                    // Element type (U256 value)
+//     JellyfishKeccak256Hasher, // Custom hasher
+//     AddressKey,               // Index type (20-byte address)
+//     ARITY,                    // Arity (generic)
+//     JellyfishKeccakNode,      // Node type
+// >;
+
+pub type RewardMerkleTreeLegacy = UniversalMerkleTree<
     RewardAmount,
     Sha3Digest,
     RewardAccount,
-    REWARD_MERKLE_TREE_ARITY,
+    REWARD_MERKLE_TREE_ARITY_LEGACY,
     Sha3Node,
 >;
-pub type RewardMerkleCommitment = <RewardMerkleTree as MerkleTreeScheme>::Commitment;
 
+// TODO: Update JELLYFISH crate to use KECCACK256
+pub type RewardMerkleTree = UniversalMerkleTree<
+    RewardAmount,
+    JellyfishKeccak256Hasher,
+    RewardAccount,
+    REWARD_MERKLE_TREE_ARITY,
+    JellyfishKeccakNode,
+>;
+pub type RewardMerkleCommitment = <RewardMerkleTree as MerkleTreeScheme>::Commitment;
+pub type RewardMerkleCommitmentLegacy = <RewardMerkleTreeLegacy as MerkleTreeScheme>::Commitment;
 // New Type for `Address` in order to implement `CanonicalSerialize` and
 // `CanonicalDeserialize`
 #[derive(
@@ -122,4 +141,17 @@ pub enum RewardMerkleProof {
 pub struct RewardAccountQueryData {
     pub balance: U256,
     pub proof: RewardAccountProof,
+}
+
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RewardAccountProofLegacy {
+    pub account: Address,
+    pub proof: RewardMerkleProofLegacy,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum RewardMerkleProofLegacy {
+    Presence(<RewardMerkleTreeLegacy as MerkleTreeScheme>::MembershipProof),
+    Absence(<RewardMerkleTreeLegacy as UniversalMerkleTreeScheme>::NonMembershipProof),
 }

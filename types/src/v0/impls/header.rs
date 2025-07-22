@@ -3,6 +3,7 @@ use std::fmt;
 use anyhow::{ensure, Context};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
+use either::Either;
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
 use hotshot_types::{
     data::{vid_commitment, VidCommitment, ViewNumber},
@@ -37,7 +38,11 @@ use crate::{
         header::{EitherOrVersion, VersionedHeader},
         impls::reward::{find_validator_info, first_two_epochs, RewardDistributor},
     },
-    v0_1, v0_2, v0_3, v0_4, BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
+    v0_1::{
+        self, RewardMerkleCommitmentLegacy, RewardMerkleTreeLegacy,
+        REWARD_MERKLE_TREE_HEIGHT_LEGACY,
+    },
+    v0_2, v0_3, v0_4, BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
     FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable,
     PayloadByteLen, SeqTypes, TimestampMillis, UpgradeType,
 };
@@ -278,6 +283,7 @@ impl Header {
         ns_table: NsTable,
         fee_merkle_tree_root: FeeMerkleCommitment,
         block_merkle_tree_root: BlockMerkleCommitment,
+        reward_merkle_tree_root_legacy: RewardMerkleCommitmentLegacy,
         reward_merkle_tree_root: RewardMerkleCommitment,
         fee_info: Vec<FeeInfo>,
         builder_signature: Vec<BuilderSignature>,
@@ -332,7 +338,7 @@ impl Header {
                 fee_merkle_tree_root,
                 fee_info: fee_info[0], // NOTE this is asserted to exist above
                 builder_signature: builder_signature.first().copied(),
-                reward_merkle_tree_root,
+                reward_merkle_tree_root: reward_merkle_tree_root_legacy,
             }),
             (0, 4) => Self::V4(v0_4::Header {
                 chain_config: chain_config.into(),
@@ -563,7 +569,7 @@ impl Header {
                 ns_table,
                 block_merkle_tree_root,
                 fee_merkle_tree_root,
-                reward_merkle_tree_root: state.reward_merkle_tree.commitment(),
+                reward_merkle_tree_root: state.reward_merkle_tree_legacy.commitment(),
                 fee_info: fee_info[0],
                 builder_signature: builder_signature.first().copied(),
             }),
@@ -774,14 +780,15 @@ impl Header {
         }
     }
 
-    /// Fee paid by the block builder
-    pub fn reward_merkle_tree_root(&self) -> RewardMerkleCommitment {
-        let empty_reward_merkle_tree = RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT);
+    pub fn reward_merkle_tree_root(
+        &self,
+    ) -> Either<RewardMerkleCommitmentLegacy, RewardMerkleCommitment> {
+        let empty_reward_merkle_tree = RewardMerkleTreeLegacy::new(REWARD_MERKLE_TREE_HEIGHT);
         match self {
-            Self::V1(_) => empty_reward_merkle_tree.commitment(),
-            Self::V2(_) => empty_reward_merkle_tree.commitment(),
-            Self::V3(fields) => fields.reward_merkle_tree_root,
-            Self::V4(fields) => fields.reward_merkle_tree_root,
+            Self::V1(_) => Either::Left(empty_reward_merkle_tree.commitment()),
+            Self::V2(_) => Either::Left(empty_reward_merkle_tree.commitment()),
+            Self::V3(fields) => Either::Left(fields.reward_merkle_tree_root),
+            Self::V4(fields) => Either::Right(fields.reward_merkle_tree_root),
         }
     }
 
@@ -1010,6 +1017,7 @@ impl BlockHeader<SeqTypes> for Header {
         let ValidatedState {
             fee_merkle_tree,
             block_merkle_tree,
+            reward_merkle_tree_legacy,
             reward_merkle_tree,
             ..
         } = ValidatedState::genesis(instance_state).0;
@@ -1039,6 +1047,7 @@ impl BlockHeader<SeqTypes> for Header {
             metadata.clone(),
             fee_merkle_tree_root,
             block_merkle_tree_root,
+            reward_merkle_tree_legacy.commitment(),
             reward_merkle_tree_root,
             vec![FeeInfo::genesis()],
             vec![],
@@ -1226,10 +1235,18 @@ mod test_headers {
                 Vec::from([(reward_info.account, reward_info.amount)]),
             )
             .unwrap();
+
+            let reward_merkle_tree_legacy = RewardMerkleTreeLegacy::from_kv_set(
+                20,
+                Vec::from([(reward_info.account, reward_info.amount)]),
+            )
+            .unwrap();
+
             let mut validated_state = ValidatedState {
                 block_merkle_tree: block_merkle_tree.clone(),
                 fee_merkle_tree,
                 reward_merkle_tree,
+                reward_merkle_tree_legacy,
                 chain_config: genesis.instance_state.chain_config.into(),
             };
 
@@ -1611,7 +1628,13 @@ mod test_headers {
             ns_table.clone(),
             header.fee_merkle_tree_root(),
             header.block_merkle_tree_root(),
-            header.reward_merkle_tree_root(),
+            header.reward_merkle_tree_root().left().unwrap_or_else(|| {
+                RewardMerkleTreeLegacy::new(REWARD_MERKLE_TREE_HEIGHT_LEGACY).commitment()
+            }),
+            header
+                .reward_merkle_tree_root()
+                .right()
+                .unwrap_or_else(|| RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT).commitment()),
             vec![FeeInfo {
                 amount: 0.into(),
                 account: fee_account,
@@ -1636,7 +1659,13 @@ mod test_headers {
             ns_table.clone(),
             header.fee_merkle_tree_root(),
             header.block_merkle_tree_root(),
-            header.reward_merkle_tree_root(),
+            header.reward_merkle_tree_root().left().unwrap_or_else(|| {
+                RewardMerkleTreeLegacy::new(REWARD_MERKLE_TREE_HEIGHT_LEGACY).commitment()
+            }),
+            header
+                .reward_merkle_tree_root()
+                .right()
+                .unwrap_or_else(|| RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT).commitment()),
             vec![FeeInfo {
                 amount: 0.into(),
                 account: fee_account,
@@ -1661,7 +1690,13 @@ mod test_headers {
             ns_table.clone(),
             header.fee_merkle_tree_root(),
             header.block_merkle_tree_root(),
-            header.reward_merkle_tree_root(),
+            header.reward_merkle_tree_root().left().unwrap_or_else(|| {
+                RewardMerkleTreeLegacy::new(REWARD_MERKLE_TREE_HEIGHT_LEGACY).commitment()
+            }),
+            header
+                .reward_merkle_tree_root()
+                .right()
+                .unwrap_or_else(|| RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT).commitment()),
             vec![FeeInfo {
                 amount: 0.into(),
                 account: fee_account,

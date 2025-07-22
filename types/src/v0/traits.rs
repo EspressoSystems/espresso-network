@@ -40,8 +40,11 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
 use crate::{
-    v0::impls::ValidatedState, v0_3::ChainConfig, BlockMerkleTree, Event, FeeAccount,
-    FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig, SeqTypes, ValidatorMap,
+    v0::impls::ValidatedState,
+    v0_1::{RewardAccountProofLegacy, RewardMerkleCommitmentLegacy},
+    v0_3::ChainConfig,
+    BlockMerkleTree, Event, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig,
+    SeqTypes, ValidatorMap,
 };
 
 #[async_trait]
@@ -215,6 +218,52 @@ pub trait StateCatchup: Send + Sync {
             .await
     }
 
+    /// Fetch the given list of reward accounts without retrying on transient errors.
+    async fn try_fetch_reward_accounts_legacy(
+        &self,
+        retry: usize,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitmentLegacy,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<Vec<RewardAccountProofLegacy>>;
+
+    /// Fetch the given list of reward accounts, retrying on transient errors.
+    async fn fetch_reward_accounts_legacy(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitmentLegacy,
+        accounts: Vec<RewardAccount>,
+    ) -> anyhow::Result<Vec<RewardAccountProofLegacy>> {
+        self.backoff()
+            .retry(self, |provider, retry| {
+                let accounts = &accounts;
+                async move {
+                    provider
+                        .try_fetch_reward_accounts_legacy(
+                            retry,
+                            instance,
+                            height,
+                            view,
+                            reward_merkle_tree_root,
+                            accounts,
+                        )
+                        .await
+                        .map_err(|err| {
+                            err.context(format!(
+                                "fetching reward accounts {accounts:?}, height {height}, view \
+                                 {view}"
+                            ))
+                        })
+                }
+                .boxed()
+            })
+            .await
+    }
+
     /// Returns true if the catchup provider is local (e.g. does not make calls to remote resources).
     fn is_local(&self) -> bool;
 
@@ -354,6 +403,40 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
     ) -> anyhow::Result<Vec<RewardAccountProof>> {
         (**self)
             .fetch_reward_accounts(instance, height, view, reward_merkle_tree_root, accounts)
+            .await
+    }
+
+    async fn try_fetch_reward_accounts_legacy(
+        &self,
+        retry: usize,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitmentLegacy,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<Vec<RewardAccountProofLegacy>> {
+        (**self)
+            .try_fetch_reward_accounts_legacy(
+                retry,
+                instance,
+                height,
+                view,
+                reward_merkle_tree_root,
+                accounts,
+            )
+            .await
+    }
+
+    async fn fetch_reward_accounts_legacy(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitmentLegacy,
+        accounts: Vec<RewardAccount>,
+    ) -> anyhow::Result<Vec<RewardAccountProofLegacy>> {
+        (**self)
+            .fetch_reward_accounts_legacy(instance, height, view, reward_merkle_tree_root, accounts)
             .await
     }
 

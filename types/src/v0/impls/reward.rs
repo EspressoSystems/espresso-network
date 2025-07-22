@@ -24,6 +24,7 @@ use num_traits::CheckedSub;
 use sequencer_utils::{
     impl_serde_from_string_or_integer, impl_to_fixed_bytes, ser::FromStringOrInteger,
 };
+use vbs::version::StaticVersionType;
 
 use super::{
     v0_1::{
@@ -33,7 +34,7 @@ use super::{
     v0_3::Validator,
     Leaf2, NodeState, ValidatedState,
 };
-use crate::{eth_signature_key::EthKeyPair, Delta, FeeAccount};
+use crate::{eth_signature_key::EthKeyPair, v0_1::{RewardAccountProofLegacy, RewardMerkleCommitmentLegacy, RewardMerkleProofLegacy, RewardMerkleTreeLegacy}, Delta, EpochVersion, FeeAccount};
 
 impl Committable for RewardInfo {
     fn commit(&self) -> Commitment<Self> {
@@ -210,17 +211,6 @@ impl CanonicalDeserialize for RewardAccount {
     }
 }
 
-impl ToTraversalPath<256> for RewardAccount {
-    fn to_traversal_path(&self, height: usize) -> Vec<usize> {
-        self.0
-            .as_slice()
-            .iter()
-            .take(height)
-            .map(|i| *i as usize)
-            .collect()
-    }
-}
-
 #[allow(dead_code)]
 impl RewardAccountProof {
     pub fn presence(
@@ -306,6 +296,95 @@ impl RewardAccountProof {
         }
     }
 }
+
+
+
+#[allow(dead_code)]
+impl RewardAccountProofLegacy {
+    pub fn presence(
+        pos: FeeAccount,
+        proof: <RewardMerkleTreeLegacy as MerkleTreeScheme>::MembershipProof,
+    ) -> Self {
+        Self {
+            account: pos.into(),
+            proof: RewardMerkleProofLegacy::Presence(proof),
+        }
+    }
+
+    pub fn absence(
+        pos: RewardAccount,
+        proof: <RewardMerkleTreeLegacy as UniversalMerkleTreeScheme>::NonMembershipProof,
+    ) -> Self {
+        Self {
+            account: pos.into(),
+            proof: RewardMerkleProofLegacy::Absence(proof),
+        }
+    }
+
+    pub fn prove(tree: &RewardMerkleTreeLegacy, account: Address) -> Option<(Self, U256)> {
+        match tree.universal_lookup(RewardAccount(account)) {
+            LookupResult::Ok(balance, proof) => Some((
+                Self {
+                    account,
+                    proof: RewardMerkleProofLegacy::Presence(proof),
+                },
+                balance.0,
+            )),
+            LookupResult::NotFound(proof) => Some((
+                Self {
+                    account,
+                    proof: RewardMerkleProofLegacy::Absence(proof),
+                },
+                U256::ZERO,
+            )),
+            LookupResult::NotInMemory => None,
+        }
+    }
+
+    pub fn verify(&self, comm: &RewardMerkleCommitmentLegacy) -> anyhow::Result<U256> {
+        match &self.proof {
+            RewardMerkleProofLegacy::Presence(proof) => {
+                ensure!(
+                    RewardMerkleTreeLegacy::verify(comm.digest(), RewardAccount(self.account), proof)?
+                        .is_ok(),
+                    "invalid proof"
+                );
+                Ok(proof
+                    .elem()
+                    .context("presence proof is missing account balance")?
+                    .0)
+            },
+            RewardMerkleProofLegacy::Absence(proof) => {
+                let tree = RewardMerkleTreeLegacy::from_commitment(comm);
+                ensure!(
+                    tree.non_membership_verify(RewardAccount(self.account), proof)?,
+                    "invalid proof"
+                );
+                Ok(U256::ZERO)
+            },
+        }
+    }
+
+    pub fn remember(&self, tree: &mut RewardMerkleTreeLegacy) -> anyhow::Result<()> {
+        match &self.proof {
+            RewardMerkleProofLegacy::Presence(proof) => {
+                tree.remember(
+                    RewardAccount(self.account),
+                    proof
+                        .elem()
+                        .context("presence proof is missing account balance")?,
+                    proof,
+                )?;
+                Ok(())
+            },
+            RewardMerkleProofLegacy::Absence(proof) => {
+                tree.non_membership_remember(RewardAccount(self.account), proof)?;
+                Ok(())
+            },
+        }
+    }
+}
+
 
 impl From<(RewardAccountProof, U256)> for RewardAccountQueryData {
     fn from((proof, balance): (RewardAccountProof, U256)) -> Self {
@@ -542,7 +621,42 @@ pub async fn find_validator_info(
         .collect::<Vec<RewardAccount>>();
 
     reward_accounts.extend(delegators.clone());
-    let missing_reward_accts = validated_state.forgotten_reward_accounts(reward_accounts);
+   
+
+    let parent_header =  parent_leaf.block_header();
+
+    if parent_header.version() <= EpochVersion::version() {
+         let missing_reward_accts = validated_state.forgotten_reward_accounts_legacy(reward_accounts);
+
+    if !missing_reward_accts.is_empty() {
+        tracing::warn!(
+            parent_height,
+            ?parent_view,
+            ?missing_reward_accts,
+            "fetching missing reward accounts from peers"
+        );
+
+        let missing_account_proofs = instance_state
+            .state_catchup
+            .fetch_reward_accounts_legacy(
+                instance_state,
+                parent_height,
+                parent_view,
+                validated_state.reward_merkle_tree_legacy.commitment(),
+                missing_reward_accts,
+            )
+            .await?;
+
+        for proof in missing_account_proofs.iter() {
+            proof
+                .remember(&mut validated_state.reward_merkle_tree_legacy)
+                .expect("proof previously verified");
+        }
+    }
+    } else {
+
+
+          let missing_reward_accts = validated_state.forgotten_reward_accounts(reward_accounts);
 
     if !missing_reward_accts.is_empty() {
         tracing::warn!(
@@ -568,8 +682,17 @@ pub async fn find_validator_info(
                 .remember(&mut validated_state.reward_merkle_tree)
                 .expect("proof previously verified");
         }
+
+
+
+
+
     }
-    Ok(validator)
+
+    
+}
+
+Ok(validator)
 }
 
 #[cfg(test)]

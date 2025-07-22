@@ -92,28 +92,26 @@ where
     Ok(api)
 }
 
-pub(super) fn reward<State, Ver>(
+pub(super) fn reward<State, Ver, MT, const ARITY: usize>(
     api_ver: semver::Version,
 ) -> Result<Api<State, merklized_state::Error, Ver>>
 where
     State: 'static + Send + Sync + ReadState,
     Ver: 'static + StaticVersionType,
+    MT: MerklizedState<SeqTypes, ARITY>,
+    for<'a> <MT::Commit as TryFrom<&'a TaggedBase64>>::Error: std::fmt::Display,
+    <MT as MerklizedState<SeqTypes, ARITY>>::Entry: std::marker::Copy,
     <State as ReadState>::State: Send
         + Sync
-        + MerklizedStateDataSource<SeqTypes, RewardMerkleTree, { RewardMerkleTree::ARITY }>
+        + MerklizedStateDataSource<SeqTypes, MT, ARITY>
         + MerklizedStateHeightPersistence,
 {
     let mut options = merklized_state::Options::default();
     let extension = toml::from_str(include_str!("../../api/reward.toml"))?;
     options.extensions.push(extension);
 
-    let mut api = merklized_state::define_api::<
-        State,
-        SeqTypes,
-        RewardMerkleTree,
-        Ver,
-        { RewardMerkleTree::ARITY },
-    >(&options, api_ver)?;
+    let mut api =
+        merklized_state::define_api::<State, SeqTypes, MT, Ver, ARITY>(&options, api_ver)?;
 
     api.get("get_latest_reward_balance", move |req, state| {
         async move {

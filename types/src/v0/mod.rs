@@ -14,6 +14,7 @@ pub mod config;
 mod header;
 mod impls;
 mod nsproof;
+mod sparse_mt;
 pub mod traits;
 mod utils;
 pub use header::Header;

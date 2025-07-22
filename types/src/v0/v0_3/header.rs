@@ -1,4 +1,4 @@
-use crate::{v0_1::RewardMerkleCommitment, NsTable};
+use crate::{v0_1::{RewardMerkleCommitment, RewardMerkleCommitmentLegacy}, NsTable};
 
 use super::{
     BlockMerkleCommitment, BuilderSignature, FeeInfo, FeeMerkleCommitment, L1BlockInfo,
@@ -25,7 +25,7 @@ pub struct Header {
     pub(crate) fee_merkle_tree_root: FeeMerkleCommitment,
     pub(crate) fee_info: FeeInfo,
     pub(crate) builder_signature: Option<BuilderSignature>,
-    pub(crate) reward_merkle_tree_root: RewardMerkleCommitment,
+    pub(crate) reward_merkle_tree_root: RewardMerkleCommitmentLegacy,
 }
 
 impl Committable for Header {

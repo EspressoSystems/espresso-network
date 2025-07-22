@@ -15,7 +15,10 @@ use espresso_types::{
     config::PublicNetworkConfig,
     traits::SequencerPersistence,
     v0::traits::StateCatchup,
-    v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment, RewardMerkleTree},
+    v0_1::{
+        RewardAccount, RewardAccountProof, RewardAccountProofLegacy, RewardMerkleCommitment,
+        RewardMerkleCommitmentLegacy, RewardMerkleTree, RewardMerkleTreeLegacy,
+    },
     v0_3::ChainConfig,
     BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions, ValidatedState,
@@ -408,6 +411,44 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         .await
     }
 
+    #[tracing::instrument(skip(self, _instance))]
+    async fn try_fetch_reward_accounts_legacy(
+        &self,
+        retry: usize,
+        _instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitmentLegacy,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<Vec<RewardAccountProofLegacy>> {
+        self.fetch(retry, |client| async move {
+            let tree = client
+                .inner
+                .post::<RewardMerkleTreeLegacy>(&format!(
+                    "catchup/{height}/{}/reward-accounts",
+                    view.u64()
+                ))
+                .body_binary(&accounts.to_vec())?
+                .send()
+                .await?;
+
+            // Verify proofs.
+            // Verify proofs.
+            let mut proofs = Vec::new();
+            for account in accounts {
+                let (proof, _) = RewardAccountProofLegacy::prove(&tree, (*account).into())
+                    .context(format!("response missing reward account {account}"))?;
+                proof
+                    .verify(&reward_merkle_tree_root)
+                    .context(format!("invalid proof for reward account {account}"))?;
+                proofs.push(proof);
+            }
+
+            anyhow::Ok(proofs)
+        })
+        .await
+    }
+
     fn backoff(&self) -> &BackoffParams {
         &self.backoff
     }
@@ -449,6 +490,18 @@ pub(crate) trait CatchupStorage: Sync {
         // state storage. This default implementation is overridden for those that do. Otherwise,
         // catchup can still be provided by fetching undecided merklized state from consensus
         // memory.
+        async {
+            bail!("merklized state catchup is not supported for this data source");
+        }
+    }
+
+    fn get_reward_accounts_legacy(
+        &self,
+        _instance: &NodeState,
+        _height: u64,
+        _view: ViewNumber,
+        _accounts: &[RewardAccount],
+    ) -> impl Send + Future<Output = anyhow::Result<(RewardMerkleTreeLegacy, Leaf2)>> {
         async {
             bail!("merklized state catchup is not supported for this data source");
         }
@@ -711,6 +764,37 @@ where
         Ok(proofs)
     }
 
+    #[tracing::instrument(skip(self, _retry, instance))]
+    async fn try_fetch_reward_accounts_legacy(
+        &self,
+        _retry: usize,
+        instance: &NodeState,
+        block_height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitmentLegacy,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<Vec<RewardAccountProofLegacy>> {
+        // Get the accounts
+        let (reward_merkle_tree_from_db, _) = self
+            .db
+            .get_reward_accounts_legacy(instance, block_height, view, accounts)
+            .await
+            .with_context(|| "failed to get reward accounts from DB")?;
+        // Verify the accounts
+        let mut proofs = Vec::new();
+        for account in accounts {
+            let (proof, _) =
+                RewardAccountProofLegacy::prove(&reward_merkle_tree_from_db, (*account).into())
+                    .context(format!("response missing account {account}"))?;
+            proof
+                .verify(&reward_merkle_tree_root)
+                .context(format!("invalid proof for account {account}"))?;
+            proofs.push(proof);
+        }
+
+        Ok(proofs)
+    }
+
     fn backoff(&self) -> &BackoffParams {
         &self.backoff
     }
@@ -811,6 +895,18 @@ impl StateCatchup for NullStateCatchup {
             .get(&commitment)
             .copied()
             .context(format!("chain config {commitment} not available"))
+    }
+
+    async fn try_fetch_reward_accounts_legacy(
+        &self,
+        _retry: usize,
+        _instance: &NodeState,
+        _height: u64,
+        _view: ViewNumber,
+        _fee_merkle_tree_root: RewardMerkleCommitmentLegacy,
+        _account: &[RewardAccount],
+    ) -> anyhow::Result<Vec<RewardAccountProofLegacy>> {
+        bail!("state catchup is disabled");
     }
 
     fn backoff(&self) -> &BackoffParams {
@@ -1147,6 +1243,56 @@ impl StateCatchup for ParallelStateCatchup {
             clone!{(instance, accounts_vec) async move {
                 provider
                 .try_fetch_reward_accounts(
+                    retry,
+                    &instance,
+                    height,
+                    view,
+                    reward_merkle_tree_root,
+                    &accounts_vec,
+                ).await
+            }}
+        }})
+        .await
+    }
+
+    async fn try_fetch_reward_accounts_legacy(
+        &self,
+        retry: usize,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitmentLegacy,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<Vec<RewardAccountProofLegacy>> {
+        // Try to get the accounts on local providers first
+        let accounts_vec = accounts.to_vec();
+        let local_result = self
+            .on_local_providers(clone! {(instance, accounts_vec) move |provider| {
+                clone! {(instance, accounts_vec) async move {
+                    provider
+                        .try_fetch_reward_accounts_legacy(
+                            retry,
+                            &instance,
+                            height,
+                            view,
+                            reward_merkle_tree_root,
+                            &accounts_vec,
+                        )
+                        .await
+                }}
+            }})
+            .await;
+
+        // Check if we were successful locally
+        if local_result.is_ok() {
+            return local_result;
+        }
+
+        // If that fails, try the remote ones
+        self.on_remote_providers(clone! {(instance, accounts_vec) move |provider| {
+            clone!{(instance, accounts_vec) async move {
+                provider
+                .try_fetch_reward_accounts_legacy(
                     retry,
                     &instance,
                     height,
