@@ -1,4 +1,4 @@
-use std::{collections::HashSet, iter::once, str::FromStr};
+use std::{borrow::Borrow, collections::HashSet, iter::once, str::FromStr};
 
 use alloy::primitives::{
     utils::{parse_units, ParseUnits},
@@ -485,36 +485,63 @@ impl RewardDistributor {
         Ok(())
     }
 
-    pub fn apply_rewards(
-        &self,
-        mut reward_state: RewardMerkleTree,
-    ) -> anyhow::Result<RewardMerkleTree> {
-        let mut update_balance = |account: &RewardAccount, amount: RewardAmount| {
-            let mut err = None;
-            reward_state = reward_state.persistent_update_with(account, |balance| {
-                let balance = balance.copied();
-                match balance.unwrap_or_default().0.checked_add(amount.0) {
-                    Some(updated) => Some(updated.into()),
-                    None => {
-                        err = Some(format!("overflowed reward balance for account {account}"));
-                        balance
-                    },
-                }
-            })?;
-
-            if let Some(error) = err {
-                tracing::warn!(error);
-                bail!(error)
+    fn update_reward_balance<P>(
+        tree: &mut P,
+        account: &RewardAccount,
+        amount: P::Element,
+    ) -> anyhow::Result<()>
+    where
+        P: PersistentUniversalMerkleTreeScheme,
+        P: MerkleTreeScheme<Element = RewardAmount>,
+        RewardAccount: Borrow<<P as MerkleTreeScheme>::Index>,
+    {
+        let mut err = None;
+        *tree = tree.persistent_update_with(*account, |balance| {
+            let balance = balance.copied();
+            match balance.unwrap_or_default().0.checked_add(amount.0) {
+                Some(updated) => Some(updated.into()),
+                None => {
+                    err = Some(format!("overflowed reward balance for account {account}"));
+                    balance
+                },
             }
-            Ok::<(), anyhow::Error>(())
-        };
-        let computed_rewards = self.compute_rewards()?;
-        for (address, reward) in computed_rewards.all_rewards() {
-            update_balance(&RewardAccount(address), reward)?;
-            tracing::debug!("applied rewards address={address} reward={reward}",);
+        })?;
+
+        if let Some(error) = err {
+            tracing::warn!(error);
+            bail!(error)
         }
 
-        Ok(reward_state)
+        Ok(())
+    }
+    pub fn apply_rewards(
+        &self,
+        version: vbs::version::Version,
+        state: &mut ValidatedState,
+    ) -> anyhow::Result<()> {
+        let computed_rewards = self.compute_rewards()?;
+
+        if version <= EpochVersion::version() {
+            for (address, reward) in computed_rewards.all_rewards() {
+                Self::update_reward_balance(
+                    &mut state.reward_merkle_tree_legacy,
+                    &RewardAccount(address),
+                    reward,
+                )?;
+                tracing::debug!(%address, %reward, "applied legacy rewards");
+            }
+        } else {
+            for (address, reward) in computed_rewards.all_rewards() {
+                Self::update_reward_balance(
+                    &mut state.reward_merkle_tree,
+                    &RewardAccount(address),
+                    reward,
+                )?;
+                tracing::debug!(%address, %reward, "applied current rewards");
+            }
+        }
+
+        Ok(())
     }
 
     /// Computes the reward in a block for the validator and its delegators
@@ -669,9 +696,7 @@ pub async fn distribute_block_reward(
 
     let reward_distributor = RewardDistributor::new(leader, block_reward, total_distributed.into());
 
-    let reward_state =
-        reward_distributor.apply_rewards(validated_state.reward_merkle_tree.clone())?;
-    validated_state.reward_merkle_tree = reward_state;
+    reward_distributor.apply_rewards(version, validated_state)?;
 
     Ok(Some(reward_distributor))
 }
