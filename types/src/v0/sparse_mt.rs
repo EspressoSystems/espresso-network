@@ -118,12 +118,12 @@ impl DigestAlgorithm<RewardAmount, RewardAccount, KeccakNode> for Keccak256Hashe
     ) -> Result<KeccakNode, jf_merkle_tree::MerkleTreeError> {
         // First hash of the value
         let mut hasher = Keccak256::new();
-        hasher.update(&elem.0.to_be_bytes::<32>()); // 32-byte value as big-endian
+        hasher.update(elem.0.to_be_bytes::<32>()); // 32-byte value as big-endian
         let first_hash = hasher.finalize();
 
         // Second hash (double hashing)
         let mut hasher = Keccak256::new();
-        hasher.update(&first_hash);
+        hasher.update(first_hash);
         let result = hasher.finalize();
 
         Ok(KeccakNode(result.into()))
