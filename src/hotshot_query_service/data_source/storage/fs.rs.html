@@ -49,7 +49,7 @@
 <a href=#49 id=49 data-nosnippet>49</a>        data_source::{BlockId, LeafId},
 <a href=#50 id=50 data-nosnippet>50</a>        query_data::{
 <a href=#51 id=51 data-nosnippet>51</a>            BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadQueryData, QueryableHeader,
-<a href=#52 id=52 data-nosnippet>52</a>            QueryablePayload, TransactionHash, TransactionQueryData, VidCommonQueryData,
+<a href=#52 id=52 data-nosnippet>52</a>            QueryablePayload, TransactionHash, VidCommonQueryData,
 <a href=#53 id=53 data-nosnippet>53</a>        },
 <a href=#54 id=54 data-nosnippet>54</a>        NamespaceId, StateCertQueryData,
 <a href=#55 id=55 data-nosnippet>55</a>    },
@@ -58,7 +58,7 @@
 <a href=#58 id=58 data-nosnippet>58</a>    node::{SyncStatus, TimeWindowQueryData, WindowStart},
 <a href=#59 id=59 data-nosnippet>59</a>    status::HasMetrics,
 <a href=#60 id=60 data-nosnippet>60</a>    types::HeightIndexed,
-<a href=#61 id=61 data-nosnippet>61</a>    ErrorSnafu, Header, MissingSnafu, NotFoundSnafu, Payload, QueryError, QueryResult,
+<a href=#61 id=61 data-nosnippet>61</a>    Header, MissingSnafu, NotFoundSnafu, Payload, QueryError, QueryResult,
 <a href=#62 id=62 data-nosnippet>62</a>};
 <a href=#63 id=63 data-nosnippet>63</a>
 <a href=#64 id=64 data-nosnippet>64</a><span class="kw">const </span>CACHED_LEAVES_COUNT: usize = <span class="number">100</span>;
@@ -630,314 +630,309 @@
 <a href=#630 id=630 data-nosnippet>630</a>            .collect())
 <a href=#631 id=631 data-nosnippet>631</a>    }
 <a href=#632 id=632 data-nosnippet>632</a>
-<a href=#633 id=633 data-nosnippet>633</a>    <span class="kw">async fn </span>get_transaction(
+<a href=#633 id=633 data-nosnippet>633</a>    <span class="kw">async fn </span>get_block_with_transaction(
 <a href=#634 id=634 data-nosnippet>634</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
 <a href=#635 id=635 data-nosnippet>635</a>        hash: TransactionHash&lt;Types&gt;,
-<a href=#636 id=636 data-nosnippet>636</a>    ) -&gt; QueryResult&lt;TransactionQueryData&lt;Types&gt;&gt; {
+<a href=#636 id=636 data-nosnippet>636</a>    ) -&gt; QueryResult&lt;BlockQueryData&lt;Types&gt;&gt; {
 <a href=#637 id=637 data-nosnippet>637</a>        <span class="kw">let </span>height = <span class="self">self
 <a href=#638 id=638 data-nosnippet>638</a>            </span>.inner
 <a href=#639 id=639 data-nosnippet>639</a>            .index_by_txn_hash
 <a href=#640 id=640 data-nosnippet>640</a>            .get(<span class="kw-2">&amp;</span>hash)
 <a href=#641 id=641 data-nosnippet>641</a>            .context(NotFoundSnafu)<span class="question-mark">?</span>;
-<a href=#642 id=642 data-nosnippet>642</a>        <span class="kw">let </span>block = <span class="self">self</span>.inner.get_block((<span class="kw-2">*</span>height <span class="kw">as </span>usize).into())<span class="question-mark">?</span>;
-<a href=#643 id=643 data-nosnippet>643</a>        TransactionQueryData::with_hash(<span class="kw-2">&amp;</span>block, hash).context(ErrorSnafu {
-<a href=#644 id=644 data-nosnippet>644</a>            message: <span class="macro">format!</span>(
-<a href=#645 id=645 data-nosnippet>645</a>                <span class="string">"transaction index inconsistent: block {height} contains no transaction {hash}"
-<a href=#646 id=646 data-nosnippet>646</a>            </span>),
-<a href=#647 id=647 data-nosnippet>647</a>        })
-<a href=#648 id=648 data-nosnippet>648</a>    }
-<a href=#649 id=649 data-nosnippet>649</a>
-<a href=#650 id=650 data-nosnippet>650</a>    <span class="kw">async fn </span>first_available_leaf(<span class="kw-2">&amp;mut </span><span class="self">self</span>, from: u64) -&gt; QueryResult&lt;LeafQueryData&lt;Types&gt;&gt; {
-<a href=#651 id=651 data-nosnippet>651</a>        <span class="comment">// The file system backend doesn't index by whether a leaf is present, so we can't
-<a href=#652 id=652 data-nosnippet>652</a>        // efficiently seek to the first leaf with height &gt;= `from`. Our best effort is to return
-<a href=#653 id=653 data-nosnippet>653</a>        // `from` itself if we can, or fail.
-<a href=#654 id=654 data-nosnippet>654</a>        </span><span class="self">self</span>.get_leaf((from <span class="kw">as </span>usize).into()).<span class="kw">await
-<a href=#655 id=655 data-nosnippet>655</a>    </span>}
-<a href=#656 id=656 data-nosnippet>656</a>
-<a href=#657 id=657 data-nosnippet>657</a>    <span class="kw">async fn </span>get_state_cert(<span class="kw-2">&amp;mut </span><span class="self">self</span>, epoch: u64) -&gt; QueryResult&lt;StateCertQueryData&lt;Types&gt;&gt; {
-<a href=#658 id=658 data-nosnippet>658</a>        <span class="self">self</span>.inner
-<a href=#659 id=659 data-nosnippet>659</a>            .state_cert_storage
-<a href=#660 id=660 data-nosnippet>660</a>            .iter()
-<a href=#661 id=661 data-nosnippet>661</a>            .nth(epoch <span class="kw">as </span>usize)
-<a href=#662 id=662 data-nosnippet>662</a>            .context(NotFoundSnafu)<span class="question-mark">?
-<a href=#663 id=663 data-nosnippet>663</a>            </span>.context(MissingSnafu)
-<a href=#664 id=664 data-nosnippet>664</a>    }
-<a href=#665 id=665 data-nosnippet>665</a>}
-<a href=#666 id=666 data-nosnippet>666</a>
-<a href=#667 id=667 data-nosnippet>667</a><span class="kw">impl</span>&lt;Types: NodeType&gt; UpdateAvailabilityStorage&lt;Types&gt;
-<a href=#668 id=668 data-nosnippet>668</a>    <span class="kw">for </span>Transaction&lt;RwLockWriteGuard&lt;<span class="lifetime">'_</span>, FileSystemStorageInner&lt;Types&gt;&gt;&gt;
-<a href=#669 id=669 data-nosnippet>669</a><span class="kw">where
-<a href=#670 id=670 data-nosnippet>670</a>    </span>Payload&lt;Types&gt;: QueryablePayload&lt;Types&gt;,
-<a href=#671 id=671 data-nosnippet>671</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
-<a href=#672 id=672 data-nosnippet>672</a>{
-<a href=#673 id=673 data-nosnippet>673</a>    <span class="kw">async fn </span>insert_leaf(<span class="kw-2">&amp;mut </span><span class="self">self</span>, leaf: LeafQueryData&lt;Types&gt;) -&gt; anyhow::Result&lt;()&gt; {
-<a href=#674 id=674 data-nosnippet>674</a>        <span class="self">self</span>.inner
-<a href=#675 id=675 data-nosnippet>675</a>            .leaf_storage
-<a href=#676 id=676 data-nosnippet>676</a>            .insert(leaf.height() <span class="kw">as </span>usize, leaf.clone())<span class="question-mark">?</span>;
-<a href=#677 id=677 data-nosnippet>677</a>        <span class="self">self</span>.inner
-<a href=#678 id=678 data-nosnippet>678</a>            .index_by_leaf_hash
-<a href=#679 id=679 data-nosnippet>679</a>            .insert(leaf.hash(), leaf.height());
+<a href=#642 id=642 data-nosnippet>642</a>        <span class="self">self</span>.inner.get_block((<span class="kw-2">*</span>height <span class="kw">as </span>usize).into())
+<a href=#643 id=643 data-nosnippet>643</a>    }
+<a href=#644 id=644 data-nosnippet>644</a>
+<a href=#645 id=645 data-nosnippet>645</a>    <span class="kw">async fn </span>first_available_leaf(<span class="kw-2">&amp;mut </span><span class="self">self</span>, from: u64) -&gt; QueryResult&lt;LeafQueryData&lt;Types&gt;&gt; {
+<a href=#646 id=646 data-nosnippet>646</a>        <span class="comment">// The file system backend doesn't index by whether a leaf is present, so we can't
+<a href=#647 id=647 data-nosnippet>647</a>        // efficiently seek to the first leaf with height &gt;= `from`. Our best effort is to return
+<a href=#648 id=648 data-nosnippet>648</a>        // `from` itself if we can, or fail.
+<a href=#649 id=649 data-nosnippet>649</a>        </span><span class="self">self</span>.get_leaf((from <span class="kw">as </span>usize).into()).<span class="kw">await
+<a href=#650 id=650 data-nosnippet>650</a>    </span>}
+<a href=#651 id=651 data-nosnippet>651</a>
+<a href=#652 id=652 data-nosnippet>652</a>    <span class="kw">async fn </span>get_state_cert(<span class="kw-2">&amp;mut </span><span class="self">self</span>, epoch: u64) -&gt; QueryResult&lt;StateCertQueryData&lt;Types&gt;&gt; {
+<a href=#653 id=653 data-nosnippet>653</a>        <span class="self">self</span>.inner
+<a href=#654 id=654 data-nosnippet>654</a>            .state_cert_storage
+<a href=#655 id=655 data-nosnippet>655</a>            .iter()
+<a href=#656 id=656 data-nosnippet>656</a>            .nth(epoch <span class="kw">as </span>usize)
+<a href=#657 id=657 data-nosnippet>657</a>            .context(NotFoundSnafu)<span class="question-mark">?
+<a href=#658 id=658 data-nosnippet>658</a>            </span>.context(MissingSnafu)
+<a href=#659 id=659 data-nosnippet>659</a>    }
+<a href=#660 id=660 data-nosnippet>660</a>}
+<a href=#661 id=661 data-nosnippet>661</a>
+<a href=#662 id=662 data-nosnippet>662</a><span class="kw">impl</span>&lt;Types: NodeType&gt; UpdateAvailabilityStorage&lt;Types&gt;
+<a href=#663 id=663 data-nosnippet>663</a>    <span class="kw">for </span>Transaction&lt;RwLockWriteGuard&lt;<span class="lifetime">'_</span>, FileSystemStorageInner&lt;Types&gt;&gt;&gt;
+<a href=#664 id=664 data-nosnippet>664</a><span class="kw">where
+<a href=#665 id=665 data-nosnippet>665</a>    </span>Payload&lt;Types&gt;: QueryablePayload&lt;Types&gt;,
+<a href=#666 id=666 data-nosnippet>666</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
+<a href=#667 id=667 data-nosnippet>667</a>{
+<a href=#668 id=668 data-nosnippet>668</a>    <span class="kw">async fn </span>insert_leaf(<span class="kw-2">&amp;mut </span><span class="self">self</span>, leaf: LeafQueryData&lt;Types&gt;) -&gt; anyhow::Result&lt;()&gt; {
+<a href=#669 id=669 data-nosnippet>669</a>        <span class="self">self</span>.inner
+<a href=#670 id=670 data-nosnippet>670</a>            .leaf_storage
+<a href=#671 id=671 data-nosnippet>671</a>            .insert(leaf.height() <span class="kw">as </span>usize, leaf.clone())<span class="question-mark">?</span>;
+<a href=#672 id=672 data-nosnippet>672</a>        <span class="self">self</span>.inner
+<a href=#673 id=673 data-nosnippet>673</a>            .index_by_leaf_hash
+<a href=#674 id=674 data-nosnippet>674</a>            .insert(leaf.hash(), leaf.height());
+<a href=#675 id=675 data-nosnippet>675</a>        update_index_by_hash(
+<a href=#676 id=676 data-nosnippet>676</a>            <span class="kw-2">&amp;mut </span><span class="self">self</span>.inner.index_by_block_hash,
+<a href=#677 id=677 data-nosnippet>677</a>            leaf.block_hash(),
+<a href=#678 id=678 data-nosnippet>678</a>            leaf.height(),
+<a href=#679 id=679 data-nosnippet>679</a>        );
 <a href=#680 id=680 data-nosnippet>680</a>        update_index_by_hash(
-<a href=#681 id=681 data-nosnippet>681</a>            <span class="kw-2">&amp;mut </span><span class="self">self</span>.inner.index_by_block_hash,
-<a href=#682 id=682 data-nosnippet>682</a>            leaf.block_hash(),
+<a href=#681 id=681 data-nosnippet>681</a>            <span class="kw-2">&amp;mut </span><span class="self">self</span>.inner.index_by_payload_hash,
+<a href=#682 id=682 data-nosnippet>682</a>            leaf.payload_hash(),
 <a href=#683 id=683 data-nosnippet>683</a>            leaf.height(),
 <a href=#684 id=684 data-nosnippet>684</a>        );
-<a href=#685 id=685 data-nosnippet>685</a>        update_index_by_hash(
-<a href=#686 id=686 data-nosnippet>686</a>            <span class="kw-2">&amp;mut </span><span class="self">self</span>.inner.index_by_payload_hash,
-<a href=#687 id=687 data-nosnippet>687</a>            leaf.payload_hash(),
-<a href=#688 id=688 data-nosnippet>688</a>            leaf.height(),
-<a href=#689 id=689 data-nosnippet>689</a>        );
-<a href=#690 id=690 data-nosnippet>690</a>        <span class="self">self</span>.inner
-<a href=#691 id=691 data-nosnippet>691</a>            .index_by_time
-<a href=#692 id=692 data-nosnippet>692</a>            .entry(leaf.header().timestamp())
-<a href=#693 id=693 data-nosnippet>693</a>            .or_default()
-<a href=#694 id=694 data-nosnippet>694</a>            .push(leaf.height());
-<a href=#695 id=695 data-nosnippet>695</a>        <span class="prelude-val">Ok</span>(())
-<a href=#696 id=696 data-nosnippet>696</a>    }
-<a href=#697 id=697 data-nosnippet>697</a>
-<a href=#698 id=698 data-nosnippet>698</a>    <span class="kw">async fn </span>insert_block(<span class="kw-2">&amp;mut </span><span class="self">self</span>, block: BlockQueryData&lt;Types&gt;) -&gt; anyhow::Result&lt;()&gt; {
-<a href=#699 id=699 data-nosnippet>699</a>        <span class="kw">if </span>!<span class="self">self
-<a href=#700 id=700 data-nosnippet>700</a>            </span>.inner
-<a href=#701 id=701 data-nosnippet>701</a>            .block_storage
-<a href=#702 id=702 data-nosnippet>702</a>            .insert(block.height() <span class="kw">as </span>usize, block.clone())<span class="question-mark">?
-<a href=#703 id=703 data-nosnippet>703</a>        </span>{
-<a href=#704 id=704 data-nosnippet>704</a>            <span class="comment">// The block was already present.
-<a href=#705 id=705 data-nosnippet>705</a>            </span><span class="kw">return </span><span class="prelude-val">Ok</span>(());
-<a href=#706 id=706 data-nosnippet>706</a>        }
-<a href=#707 id=707 data-nosnippet>707</a>        <span class="self">self</span>.inner.num_transactions += block.len();
-<a href=#708 id=708 data-nosnippet>708</a>        <span class="self">self</span>.inner.payload_size += block.size() <span class="kw">as </span>usize;
-<a href=#709 id=709 data-nosnippet>709</a>        <span class="kw">for </span>(<span class="kw">_</span>, txn) <span class="kw">in </span>block.enumerate() {
-<a href=#710 id=710 data-nosnippet>710</a>            update_index_by_hash(
-<a href=#711 id=711 data-nosnippet>711</a>                <span class="kw-2">&amp;mut </span><span class="self">self</span>.inner.index_by_txn_hash,
-<a href=#712 id=712 data-nosnippet>712</a>                txn.commit(),
-<a href=#713 id=713 data-nosnippet>713</a>                block.height(),
-<a href=#714 id=714 data-nosnippet>714</a>            );
-<a href=#715 id=715 data-nosnippet>715</a>        }
-<a href=#716 id=716 data-nosnippet>716</a>        <span class="prelude-val">Ok</span>(())
-<a href=#717 id=717 data-nosnippet>717</a>    }
-<a href=#718 id=718 data-nosnippet>718</a>
-<a href=#719 id=719 data-nosnippet>719</a>    <span class="kw">async fn </span>insert_vid(
-<a href=#720 id=720 data-nosnippet>720</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#721 id=721 data-nosnippet>721</a>        common: VidCommonQueryData&lt;Types&gt;,
-<a href=#722 id=722 data-nosnippet>722</a>        share: <span class="prelude-ty">Option</span>&lt;VidShare&gt;,
-<a href=#723 id=723 data-nosnippet>723</a>    ) -&gt; anyhow::Result&lt;()&gt; {
-<a href=#724 id=724 data-nosnippet>724</a>        <span class="self">self</span>.inner
-<a href=#725 id=725 data-nosnippet>725</a>            .vid_storage
-<a href=#726 id=726 data-nosnippet>726</a>            .insert(common.height() <span class="kw">as </span>usize, (common, share))<span class="question-mark">?</span>;
-<a href=#727 id=727 data-nosnippet>727</a>        <span class="prelude-val">Ok</span>(())
-<a href=#728 id=728 data-nosnippet>728</a>    }
-<a href=#729 id=729 data-nosnippet>729</a>
-<a href=#730 id=730 data-nosnippet>730</a>    <span class="kw">async fn </span>insert_state_cert(
-<a href=#731 id=731 data-nosnippet>731</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#732 id=732 data-nosnippet>732</a>        state_cert: StateCertQueryData&lt;Types&gt;,
-<a href=#733 id=733 data-nosnippet>733</a>    ) -&gt; anyhow::Result&lt;()&gt; {
-<a href=#734 id=734 data-nosnippet>734</a>        <span class="self">self</span>.inner
-<a href=#735 id=735 data-nosnippet>735</a>            .state_cert_storage
-<a href=#736 id=736 data-nosnippet>736</a>            .insert(state_cert.<span class="number">0</span>.epoch.u64() <span class="kw">as </span>usize, state_cert)<span class="question-mark">?</span>;
-<a href=#737 id=737 data-nosnippet>737</a>        <span class="prelude-val">Ok</span>(())
-<a href=#738 id=738 data-nosnippet>738</a>    }
-<a href=#739 id=739 data-nosnippet>739</a>}
-<a href=#740 id=740 data-nosnippet>740</a>
-<a href=#741 id=741 data-nosnippet>741</a><span class="doccomment">/// Update an index mapping hashes of objects to their positions in the ledger.
-<a href=#742 id=742 data-nosnippet>742</a>///
-<a href=#743 id=743 data-nosnippet>743</a>/// This function will insert the mapping from `hash` to `pos` into `index`, _unless_ there is
-<a href=#744 id=744 data-nosnippet>744</a>/// already an entry for `hash` at an earlier position in the ledger.
-<a href=#745 id=745 data-nosnippet>745</a></span><span class="kw">fn </span>update_index_by_hash&lt;H: Eq + Hash, P: Ord&gt;(index: <span class="kw-2">&amp;mut </span>HashMap&lt;H, P&gt;, hash: H, pos: P) {
-<a href=#746 id=746 data-nosnippet>746</a>    <span class="kw">match </span>index.entry(hash) {
-<a href=#747 id=747 data-nosnippet>747</a>        Entry::Occupied(<span class="kw-2">mut </span>e) =&gt; {
-<a href=#748 id=748 data-nosnippet>748</a>            <span class="kw">if </span><span class="kw-2">&amp;</span>pos &lt; e.get() {
-<a href=#749 id=749 data-nosnippet>749</a>                <span class="comment">// Overwrite the existing entry if the new object was sequenced first.
-<a href=#750 id=750 data-nosnippet>750</a>                </span>e.insert(pos);
-<a href=#751 id=751 data-nosnippet>751</a>            }
-<a href=#752 id=752 data-nosnippet>752</a>        },
-<a href=#753 id=753 data-nosnippet>753</a>        Entry::Vacant(e) =&gt; {
-<a href=#754 id=754 data-nosnippet>754</a>            e.insert(pos);
-<a href=#755 id=755 data-nosnippet>755</a>        },
-<a href=#756 id=756 data-nosnippet>756</a>    }
-<a href=#757 id=757 data-nosnippet>757</a>}
-<a href=#758 id=758 data-nosnippet>758</a>
-<a href=#759 id=759 data-nosnippet>759</a><span class="attr">#[async_trait]
-<a href=#760 id=760 data-nosnippet>760</a></span><span class="kw">impl</span>&lt;Types, T&gt; NodeStorage&lt;Types&gt; <span class="kw">for </span>Transaction&lt;T&gt;
-<a href=#761 id=761 data-nosnippet>761</a><span class="kw">where
-<a href=#762 id=762 data-nosnippet>762</a>    </span>Types: NodeType,
-<a href=#763 id=763 data-nosnippet>763</a>    Payload&lt;Types&gt;: QueryablePayload&lt;Types&gt;,
-<a href=#764 id=764 data-nosnippet>764</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
-<a href=#765 id=765 data-nosnippet>765</a>    T: Revert + Deref&lt;Target = FileSystemStorageInner&lt;Types&gt;&gt; + Send,
-<a href=#766 id=766 data-nosnippet>766</a>{
-<a href=#767 id=767 data-nosnippet>767</a>    <span class="kw">async fn </span>block_height(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; QueryResult&lt;usize&gt; {
-<a href=#768 id=768 data-nosnippet>768</a>        <span class="prelude-val">Ok</span>(<span class="self">self</span>.inner.leaf_storage.iter().len())
-<a href=#769 id=769 data-nosnippet>769</a>    }
-<a href=#770 id=770 data-nosnippet>770</a>
-<a href=#771 id=771 data-nosnippet>771</a>    <span class="kw">async fn </span>count_transactions_in_range(
-<a href=#772 id=772 data-nosnippet>772</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#773 id=773 data-nosnippet>773</a>        range: <span class="kw">impl </span>RangeBounds&lt;usize&gt; + Send,
-<a href=#774 id=774 data-nosnippet>774</a>        namespace: <span class="prelude-ty">Option</span>&lt;NamespaceId&lt;Types&gt;&gt;,
-<a href=#775 id=775 data-nosnippet>775</a>    ) -&gt; QueryResult&lt;usize&gt; {
-<a href=#776 id=776 data-nosnippet>776</a>        <span class="kw">if </span>!<span class="macro">matches!</span>(range.start_bound(), Bound::Unbounded | Bound::Included(<span class="number">0</span>))
-<a href=#777 id=777 data-nosnippet>777</a>            || !<span class="macro">matches!</span>(range.end_bound(), Bound::Unbounded)
-<a href=#778 id=778 data-nosnippet>778</a>        {
-<a href=#779 id=779 data-nosnippet>779</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(QueryError::Error {
-<a href=#780 id=780 data-nosnippet>780</a>                message: <span class="string">"partial aggregates are not supported with file system backend"</span>.into(),
-<a href=#781 id=781 data-nosnippet>781</a>            });
-<a href=#782 id=782 data-nosnippet>782</a>        }
-<a href=#783 id=783 data-nosnippet>783</a>
-<a href=#784 id=784 data-nosnippet>784</a>        <span class="kw">if </span>namespace.is_some() {
-<a href=#785 id=785 data-nosnippet>785</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(QueryError::Error {
-<a href=#786 id=786 data-nosnippet>786</a>                message: <span class="string">"file system does not support per-namespace stats"</span>.into(),
-<a href=#787 id=787 data-nosnippet>787</a>            });
-<a href=#788 id=788 data-nosnippet>788</a>        }
-<a href=#789 id=789 data-nosnippet>789</a>
-<a href=#790 id=790 data-nosnippet>790</a>        <span class="prelude-val">Ok</span>(<span class="self">self</span>.inner.num_transactions)
-<a href=#791 id=791 data-nosnippet>791</a>    }
-<a href=#792 id=792 data-nosnippet>792</a>
-<a href=#793 id=793 data-nosnippet>793</a>    <span class="kw">async fn </span>payload_size_in_range(
-<a href=#794 id=794 data-nosnippet>794</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#795 id=795 data-nosnippet>795</a>        range: <span class="kw">impl </span>RangeBounds&lt;usize&gt; + Send,
-<a href=#796 id=796 data-nosnippet>796</a>        namespace: <span class="prelude-ty">Option</span>&lt;NamespaceId&lt;Types&gt;&gt;,
-<a href=#797 id=797 data-nosnippet>797</a>    ) -&gt; QueryResult&lt;usize&gt; {
-<a href=#798 id=798 data-nosnippet>798</a>        <span class="kw">if </span>!<span class="macro">matches!</span>(range.start_bound(), Bound::Unbounded | Bound::Included(<span class="number">0</span>))
-<a href=#799 id=799 data-nosnippet>799</a>            || !<span class="macro">matches!</span>(range.end_bound(), Bound::Unbounded)
-<a href=#800 id=800 data-nosnippet>800</a>        {
-<a href=#801 id=801 data-nosnippet>801</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(QueryError::Error {
-<a href=#802 id=802 data-nosnippet>802</a>                message: <span class="string">"partial aggregates are not supported with file system backend"</span>.into(),
-<a href=#803 id=803 data-nosnippet>803</a>            });
-<a href=#804 id=804 data-nosnippet>804</a>        }
-<a href=#805 id=805 data-nosnippet>805</a>
-<a href=#806 id=806 data-nosnippet>806</a>        <span class="kw">if </span>namespace.is_some() {
-<a href=#807 id=807 data-nosnippet>807</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(QueryError::Error {
-<a href=#808 id=808 data-nosnippet>808</a>                message: <span class="string">"file system does not support per-namespace stats"</span>.into(),
-<a href=#809 id=809 data-nosnippet>809</a>            });
-<a href=#810 id=810 data-nosnippet>810</a>        }
-<a href=#811 id=811 data-nosnippet>811</a>
-<a href=#812 id=812 data-nosnippet>812</a>        <span class="prelude-val">Ok</span>(<span class="self">self</span>.inner.payload_size)
-<a href=#813 id=813 data-nosnippet>813</a>    }
-<a href=#814 id=814 data-nosnippet>814</a>
-<a href=#815 id=815 data-nosnippet>815</a>    <span class="kw">async fn </span>vid_share&lt;ID&gt;(<span class="kw-2">&amp;mut </span><span class="self">self</span>, id: ID) -&gt; QueryResult&lt;VidShare&gt;
-<a href=#816 id=816 data-nosnippet>816</a>    <span class="kw">where
-<a href=#817 id=817 data-nosnippet>817</a>        </span>ID: Into&lt;BlockId&lt;Types&gt;&gt; + Send + Sync,
-<a href=#818 id=818 data-nosnippet>818</a>    {
-<a href=#819 id=819 data-nosnippet>819</a>        <span class="self">self</span>.inner
-<a href=#820 id=820 data-nosnippet>820</a>            .vid_storage
-<a href=#821 id=821 data-nosnippet>821</a>            .iter()
-<a href=#822 id=822 data-nosnippet>822</a>            .nth(<span class="self">self</span>.inner.get_block_index(id.into())<span class="question-mark">?</span>)
-<a href=#823 id=823 data-nosnippet>823</a>            .context(NotFoundSnafu)<span class="question-mark">?
-<a href=#824 id=824 data-nosnippet>824</a>            </span>.context(MissingSnafu)<span class="question-mark">?
-<a href=#825 id=825 data-nosnippet>825</a>            </span>.<span class="number">1
-<a href=#826 id=826 data-nosnippet>826</a>            </span>.context(MissingSnafu)
-<a href=#827 id=827 data-nosnippet>827</a>    }
-<a href=#828 id=828 data-nosnippet>828</a>
-<a href=#829 id=829 data-nosnippet>829</a>    <span class="kw">async fn </span>sync_status(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; QueryResult&lt;SyncStatus&gt; {
-<a href=#830 id=830 data-nosnippet>830</a>        <span class="kw">let </span>height = <span class="self">self</span>.inner.leaf_storage.iter().len();
-<a href=#831 id=831 data-nosnippet>831</a>
-<a href=#832 id=832 data-nosnippet>832</a>        <span class="comment">// The number of missing VID common is just the number of completely missing VID
-<a href=#833 id=833 data-nosnippet>833</a>        // entries, since every entry we have is guaranteed to have the common data.
-<a href=#834 id=834 data-nosnippet>834</a>        </span><span class="kw">let </span>missing_vid = <span class="self">self</span>.inner.vid_storage.missing(height);
-<a href=#835 id=835 data-nosnippet>835</a>        <span class="comment">// Missing shares includes the completely missing VID entries, plus any entry which
-<a href=#836 id=836 data-nosnippet>836</a>        // is _not_ messing but which has a null share.
-<a href=#837 id=837 data-nosnippet>837</a>        </span><span class="kw">let </span>null_vid_shares: usize = <span class="self">self
-<a href=#838 id=838 data-nosnippet>838</a>            </span>.inner
-<a href=#839 id=839 data-nosnippet>839</a>            .vid_storage
-<a href=#840 id=840 data-nosnippet>840</a>            .iter()
-<a href=#841 id=841 data-nosnippet>841</a>            .map(|res| <span class="kw">if </span><span class="macro">matches!</span>(res, <span class="prelude-val">Some</span>((<span class="kw">_</span>, <span class="prelude-val">None</span>))) { <span class="number">1 </span>} <span class="kw">else </span>{ <span class="number">0 </span>})
-<a href=#842 id=842 data-nosnippet>842</a>            .sum();
-<a href=#843 id=843 data-nosnippet>843</a>        <span class="prelude-val">Ok</span>(SyncStatus {
-<a href=#844 id=844 data-nosnippet>844</a>            missing_blocks: <span class="self">self</span>.inner.block_storage.missing(height),
-<a href=#845 id=845 data-nosnippet>845</a>            missing_leaves: <span class="self">self</span>.inner.leaf_storage.missing(height),
-<a href=#846 id=846 data-nosnippet>846</a>            missing_vid_common: missing_vid,
-<a href=#847 id=847 data-nosnippet>847</a>            missing_vid_shares: missing_vid + null_vid_shares,
-<a href=#848 id=848 data-nosnippet>848</a>            pruned_height: <span class="prelude-val">None</span>,
-<a href=#849 id=849 data-nosnippet>849</a>        })
-<a href=#850 id=850 data-nosnippet>850</a>    }
-<a href=#851 id=851 data-nosnippet>851</a>
-<a href=#852 id=852 data-nosnippet>852</a>    <span class="kw">async fn </span>get_header_window(
-<a href=#853 id=853 data-nosnippet>853</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#854 id=854 data-nosnippet>854</a>        start: <span class="kw">impl </span>Into&lt;WindowStart&lt;Types&gt;&gt; + Send + Sync,
-<a href=#855 id=855 data-nosnippet>855</a>        end: u64,
-<a href=#856 id=856 data-nosnippet>856</a>        limit: usize,
-<a href=#857 id=857 data-nosnippet>857</a>    ) -&gt; QueryResult&lt;TimeWindowQueryData&lt;Header&lt;Types&gt;&gt;&gt; {
-<a href=#858 id=858 data-nosnippet>858</a>        <span class="kw">let </span>first_block = <span class="kw">match </span>start.into() {
-<a href=#859 id=859 data-nosnippet>859</a>            WindowStart::Height(h) =&gt; h,
-<a href=#860 id=860 data-nosnippet>860</a>            WindowStart::Hash(h) =&gt; <span class="self">self</span>.inner.get_header(h.into())<span class="question-mark">?</span>.block_number(),
-<a href=#861 id=861 data-nosnippet>861</a>            WindowStart::Time(t) =&gt; {
-<a href=#862 id=862 data-nosnippet>862</a>                <span class="comment">// Find the minimum timestamp which is at least `t`, and all the blocks with
-<a href=#863 id=863 data-nosnippet>863</a>                // that timestamp.
-<a href=#864 id=864 data-nosnippet>864</a>                </span><span class="kw">let </span>blocks = <span class="self">self
-<a href=#865 id=865 data-nosnippet>865</a>                    </span>.inner
-<a href=#866 id=866 data-nosnippet>866</a>                    .index_by_time
-<a href=#867 id=867 data-nosnippet>867</a>                    .range(t..)
-<a href=#868 id=868 data-nosnippet>868</a>                    .next()
-<a href=#869 id=869 data-nosnippet>869</a>                    .context(NotFoundSnafu)<span class="question-mark">?
-<a href=#870 id=870 data-nosnippet>870</a>                    </span>.<span class="number">1</span>;
-<a href=#871 id=871 data-nosnippet>871</a>                <span class="comment">// Multiple blocks can have the same timestamp (when truncated to seconds);
-<a href=#872 id=872 data-nosnippet>872</a>                // we want the first one. It is an invariant that any timestamp which has an
-<a href=#873 id=873 data-nosnippet>873</a>                // entry in `index_by_time` has a non-empty list associated with it, so this
-<a href=#874 id=874 data-nosnippet>874</a>                // indexing is safe.
-<a href=#875 id=875 data-nosnippet>875</a>                </span>blocks[<span class="number">0</span>]
-<a href=#876 id=876 data-nosnippet>876</a>            },
-<a href=#877 id=877 data-nosnippet>877</a>        } <span class="kw">as </span>usize;
-<a href=#878 id=878 data-nosnippet>878</a>
-<a href=#879 id=879 data-nosnippet>879</a>        <span class="kw">let </span><span class="kw-2">mut </span>res = TimeWindowQueryData::default();
+<a href=#685 id=685 data-nosnippet>685</a>        <span class="self">self</span>.inner
+<a href=#686 id=686 data-nosnippet>686</a>            .index_by_time
+<a href=#687 id=687 data-nosnippet>687</a>            .entry(leaf.header().timestamp())
+<a href=#688 id=688 data-nosnippet>688</a>            .or_default()
+<a href=#689 id=689 data-nosnippet>689</a>            .push(leaf.height());
+<a href=#690 id=690 data-nosnippet>690</a>        <span class="prelude-val">Ok</span>(())
+<a href=#691 id=691 data-nosnippet>691</a>    }
+<a href=#692 id=692 data-nosnippet>692</a>
+<a href=#693 id=693 data-nosnippet>693</a>    <span class="kw">async fn </span>insert_block(<span class="kw-2">&amp;mut </span><span class="self">self</span>, block: BlockQueryData&lt;Types&gt;) -&gt; anyhow::Result&lt;()&gt; {
+<a href=#694 id=694 data-nosnippet>694</a>        <span class="kw">if </span>!<span class="self">self
+<a href=#695 id=695 data-nosnippet>695</a>            </span>.inner
+<a href=#696 id=696 data-nosnippet>696</a>            .block_storage
+<a href=#697 id=697 data-nosnippet>697</a>            .insert(block.height() <span class="kw">as </span>usize, block.clone())<span class="question-mark">?
+<a href=#698 id=698 data-nosnippet>698</a>        </span>{
+<a href=#699 id=699 data-nosnippet>699</a>            <span class="comment">// The block was already present.
+<a href=#700 id=700 data-nosnippet>700</a>            </span><span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#701 id=701 data-nosnippet>701</a>        }
+<a href=#702 id=702 data-nosnippet>702</a>        <span class="self">self</span>.inner.num_transactions += block.len();
+<a href=#703 id=703 data-nosnippet>703</a>        <span class="self">self</span>.inner.payload_size += block.size() <span class="kw">as </span>usize;
+<a href=#704 id=704 data-nosnippet>704</a>        <span class="kw">for </span>(<span class="kw">_</span>, txn) <span class="kw">in </span>block.enumerate() {
+<a href=#705 id=705 data-nosnippet>705</a>            update_index_by_hash(
+<a href=#706 id=706 data-nosnippet>706</a>                <span class="kw-2">&amp;mut </span><span class="self">self</span>.inner.index_by_txn_hash,
+<a href=#707 id=707 data-nosnippet>707</a>                txn.commit(),
+<a href=#708 id=708 data-nosnippet>708</a>                block.height(),
+<a href=#709 id=709 data-nosnippet>709</a>            );
+<a href=#710 id=710 data-nosnippet>710</a>        }
+<a href=#711 id=711 data-nosnippet>711</a>        <span class="prelude-val">Ok</span>(())
+<a href=#712 id=712 data-nosnippet>712</a>    }
+<a href=#713 id=713 data-nosnippet>713</a>
+<a href=#714 id=714 data-nosnippet>714</a>    <span class="kw">async fn </span>insert_vid(
+<a href=#715 id=715 data-nosnippet>715</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#716 id=716 data-nosnippet>716</a>        common: VidCommonQueryData&lt;Types&gt;,
+<a href=#717 id=717 data-nosnippet>717</a>        share: <span class="prelude-ty">Option</span>&lt;VidShare&gt;,
+<a href=#718 id=718 data-nosnippet>718</a>    ) -&gt; anyhow::Result&lt;()&gt; {
+<a href=#719 id=719 data-nosnippet>719</a>        <span class="self">self</span>.inner
+<a href=#720 id=720 data-nosnippet>720</a>            .vid_storage
+<a href=#721 id=721 data-nosnippet>721</a>            .insert(common.height() <span class="kw">as </span>usize, (common, share))<span class="question-mark">?</span>;
+<a href=#722 id=722 data-nosnippet>722</a>        <span class="prelude-val">Ok</span>(())
+<a href=#723 id=723 data-nosnippet>723</a>    }
+<a href=#724 id=724 data-nosnippet>724</a>
+<a href=#725 id=725 data-nosnippet>725</a>    <span class="kw">async fn </span>insert_state_cert(
+<a href=#726 id=726 data-nosnippet>726</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#727 id=727 data-nosnippet>727</a>        state_cert: StateCertQueryData&lt;Types&gt;,
+<a href=#728 id=728 data-nosnippet>728</a>    ) -&gt; anyhow::Result&lt;()&gt; {
+<a href=#729 id=729 data-nosnippet>729</a>        <span class="self">self</span>.inner
+<a href=#730 id=730 data-nosnippet>730</a>            .state_cert_storage
+<a href=#731 id=731 data-nosnippet>731</a>            .insert(state_cert.<span class="number">0</span>.epoch.u64() <span class="kw">as </span>usize, state_cert)<span class="question-mark">?</span>;
+<a href=#732 id=732 data-nosnippet>732</a>        <span class="prelude-val">Ok</span>(())
+<a href=#733 id=733 data-nosnippet>733</a>    }
+<a href=#734 id=734 data-nosnippet>734</a>}
+<a href=#735 id=735 data-nosnippet>735</a>
+<a href=#736 id=736 data-nosnippet>736</a><span class="doccomment">/// Update an index mapping hashes of objects to their positions in the ledger.
+<a href=#737 id=737 data-nosnippet>737</a>///
+<a href=#738 id=738 data-nosnippet>738</a>/// This function will insert the mapping from `hash` to `pos` into `index`, _unless_ there is
+<a href=#739 id=739 data-nosnippet>739</a>/// already an entry for `hash` at an earlier position in the ledger.
+<a href=#740 id=740 data-nosnippet>740</a></span><span class="kw">fn </span>update_index_by_hash&lt;H: Eq + Hash, P: Ord&gt;(index: <span class="kw-2">&amp;mut </span>HashMap&lt;H, P&gt;, hash: H, pos: P) {
+<a href=#741 id=741 data-nosnippet>741</a>    <span class="kw">match </span>index.entry(hash) {
+<a href=#742 id=742 data-nosnippet>742</a>        Entry::Occupied(<span class="kw-2">mut </span>e) =&gt; {
+<a href=#743 id=743 data-nosnippet>743</a>            <span class="kw">if </span><span class="kw-2">&amp;</span>pos &lt; e.get() {
+<a href=#744 id=744 data-nosnippet>744</a>                <span class="comment">// Overwrite the existing entry if the new object was sequenced first.
+<a href=#745 id=745 data-nosnippet>745</a>                </span>e.insert(pos);
+<a href=#746 id=746 data-nosnippet>746</a>            }
+<a href=#747 id=747 data-nosnippet>747</a>        },
+<a href=#748 id=748 data-nosnippet>748</a>        Entry::Vacant(e) =&gt; {
+<a href=#749 id=749 data-nosnippet>749</a>            e.insert(pos);
+<a href=#750 id=750 data-nosnippet>750</a>        },
+<a href=#751 id=751 data-nosnippet>751</a>    }
+<a href=#752 id=752 data-nosnippet>752</a>}
+<a href=#753 id=753 data-nosnippet>753</a>
+<a href=#754 id=754 data-nosnippet>754</a><span class="attr">#[async_trait]
+<a href=#755 id=755 data-nosnippet>755</a></span><span class="kw">impl</span>&lt;Types, T&gt; NodeStorage&lt;Types&gt; <span class="kw">for </span>Transaction&lt;T&gt;
+<a href=#756 id=756 data-nosnippet>756</a><span class="kw">where
+<a href=#757 id=757 data-nosnippet>757</a>    </span>Types: NodeType,
+<a href=#758 id=758 data-nosnippet>758</a>    Payload&lt;Types&gt;: QueryablePayload&lt;Types&gt;,
+<a href=#759 id=759 data-nosnippet>759</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
+<a href=#760 id=760 data-nosnippet>760</a>    T: Revert + Deref&lt;Target = FileSystemStorageInner&lt;Types&gt;&gt; + Send,
+<a href=#761 id=761 data-nosnippet>761</a>{
+<a href=#762 id=762 data-nosnippet>762</a>    <span class="kw">async fn </span>block_height(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; QueryResult&lt;usize&gt; {
+<a href=#763 id=763 data-nosnippet>763</a>        <span class="prelude-val">Ok</span>(<span class="self">self</span>.inner.leaf_storage.iter().len())
+<a href=#764 id=764 data-nosnippet>764</a>    }
+<a href=#765 id=765 data-nosnippet>765</a>
+<a href=#766 id=766 data-nosnippet>766</a>    <span class="kw">async fn </span>count_transactions_in_range(
+<a href=#767 id=767 data-nosnippet>767</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#768 id=768 data-nosnippet>768</a>        range: <span class="kw">impl </span>RangeBounds&lt;usize&gt; + Send,
+<a href=#769 id=769 data-nosnippet>769</a>        namespace: <span class="prelude-ty">Option</span>&lt;NamespaceId&lt;Types&gt;&gt;,
+<a href=#770 id=770 data-nosnippet>770</a>    ) -&gt; QueryResult&lt;usize&gt; {
+<a href=#771 id=771 data-nosnippet>771</a>        <span class="kw">if </span>!<span class="macro">matches!</span>(range.start_bound(), Bound::Unbounded | Bound::Included(<span class="number">0</span>))
+<a href=#772 id=772 data-nosnippet>772</a>            || !<span class="macro">matches!</span>(range.end_bound(), Bound::Unbounded)
+<a href=#773 id=773 data-nosnippet>773</a>        {
+<a href=#774 id=774 data-nosnippet>774</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(QueryError::Error {
+<a href=#775 id=775 data-nosnippet>775</a>                message: <span class="string">"partial aggregates are not supported with file system backend"</span>.into(),
+<a href=#776 id=776 data-nosnippet>776</a>            });
+<a href=#777 id=777 data-nosnippet>777</a>        }
+<a href=#778 id=778 data-nosnippet>778</a>
+<a href=#779 id=779 data-nosnippet>779</a>        <span class="kw">if </span>namespace.is_some() {
+<a href=#780 id=780 data-nosnippet>780</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(QueryError::Error {
+<a href=#781 id=781 data-nosnippet>781</a>                message: <span class="string">"file system does not support per-namespace stats"</span>.into(),
+<a href=#782 id=782 data-nosnippet>782</a>            });
+<a href=#783 id=783 data-nosnippet>783</a>        }
+<a href=#784 id=784 data-nosnippet>784</a>
+<a href=#785 id=785 data-nosnippet>785</a>        <span class="prelude-val">Ok</span>(<span class="self">self</span>.inner.num_transactions)
+<a href=#786 id=786 data-nosnippet>786</a>    }
+<a href=#787 id=787 data-nosnippet>787</a>
+<a href=#788 id=788 data-nosnippet>788</a>    <span class="kw">async fn </span>payload_size_in_range(
+<a href=#789 id=789 data-nosnippet>789</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#790 id=790 data-nosnippet>790</a>        range: <span class="kw">impl </span>RangeBounds&lt;usize&gt; + Send,
+<a href=#791 id=791 data-nosnippet>791</a>        namespace: <span class="prelude-ty">Option</span>&lt;NamespaceId&lt;Types&gt;&gt;,
+<a href=#792 id=792 data-nosnippet>792</a>    ) -&gt; QueryResult&lt;usize&gt; {
+<a href=#793 id=793 data-nosnippet>793</a>        <span class="kw">if </span>!<span class="macro">matches!</span>(range.start_bound(), Bound::Unbounded | Bound::Included(<span class="number">0</span>))
+<a href=#794 id=794 data-nosnippet>794</a>            || !<span class="macro">matches!</span>(range.end_bound(), Bound::Unbounded)
+<a href=#795 id=795 data-nosnippet>795</a>        {
+<a href=#796 id=796 data-nosnippet>796</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(QueryError::Error {
+<a href=#797 id=797 data-nosnippet>797</a>                message: <span class="string">"partial aggregates are not supported with file system backend"</span>.into(),
+<a href=#798 id=798 data-nosnippet>798</a>            });
+<a href=#799 id=799 data-nosnippet>799</a>        }
+<a href=#800 id=800 data-nosnippet>800</a>
+<a href=#801 id=801 data-nosnippet>801</a>        <span class="kw">if </span>namespace.is_some() {
+<a href=#802 id=802 data-nosnippet>802</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(QueryError::Error {
+<a href=#803 id=803 data-nosnippet>803</a>                message: <span class="string">"file system does not support per-namespace stats"</span>.into(),
+<a href=#804 id=804 data-nosnippet>804</a>            });
+<a href=#805 id=805 data-nosnippet>805</a>        }
+<a href=#806 id=806 data-nosnippet>806</a>
+<a href=#807 id=807 data-nosnippet>807</a>        <span class="prelude-val">Ok</span>(<span class="self">self</span>.inner.payload_size)
+<a href=#808 id=808 data-nosnippet>808</a>    }
+<a href=#809 id=809 data-nosnippet>809</a>
+<a href=#810 id=810 data-nosnippet>810</a>    <span class="kw">async fn </span>vid_share&lt;ID&gt;(<span class="kw-2">&amp;mut </span><span class="self">self</span>, id: ID) -&gt; QueryResult&lt;VidShare&gt;
+<a href=#811 id=811 data-nosnippet>811</a>    <span class="kw">where
+<a href=#812 id=812 data-nosnippet>812</a>        </span>ID: Into&lt;BlockId&lt;Types&gt;&gt; + Send + Sync,
+<a href=#813 id=813 data-nosnippet>813</a>    {
+<a href=#814 id=814 data-nosnippet>814</a>        <span class="self">self</span>.inner
+<a href=#815 id=815 data-nosnippet>815</a>            .vid_storage
+<a href=#816 id=816 data-nosnippet>816</a>            .iter()
+<a href=#817 id=817 data-nosnippet>817</a>            .nth(<span class="self">self</span>.inner.get_block_index(id.into())<span class="question-mark">?</span>)
+<a href=#818 id=818 data-nosnippet>818</a>            .context(NotFoundSnafu)<span class="question-mark">?
+<a href=#819 id=819 data-nosnippet>819</a>            </span>.context(MissingSnafu)<span class="question-mark">?
+<a href=#820 id=820 data-nosnippet>820</a>            </span>.<span class="number">1
+<a href=#821 id=821 data-nosnippet>821</a>            </span>.context(MissingSnafu)
+<a href=#822 id=822 data-nosnippet>822</a>    }
+<a href=#823 id=823 data-nosnippet>823</a>
+<a href=#824 id=824 data-nosnippet>824</a>    <span class="kw">async fn </span>sync_status(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; QueryResult&lt;SyncStatus&gt; {
+<a href=#825 id=825 data-nosnippet>825</a>        <span class="kw">let </span>height = <span class="self">self</span>.inner.leaf_storage.iter().len();
+<a href=#826 id=826 data-nosnippet>826</a>
+<a href=#827 id=827 data-nosnippet>827</a>        <span class="comment">// The number of missing VID common is just the number of completely missing VID
+<a href=#828 id=828 data-nosnippet>828</a>        // entries, since every entry we have is guaranteed to have the common data.
+<a href=#829 id=829 data-nosnippet>829</a>        </span><span class="kw">let </span>missing_vid = <span class="self">self</span>.inner.vid_storage.missing(height);
+<a href=#830 id=830 data-nosnippet>830</a>        <span class="comment">// Missing shares includes the completely missing VID entries, plus any entry which
+<a href=#831 id=831 data-nosnippet>831</a>        // is _not_ messing but which has a null share.
+<a href=#832 id=832 data-nosnippet>832</a>        </span><span class="kw">let </span>null_vid_shares: usize = <span class="self">self
+<a href=#833 id=833 data-nosnippet>833</a>            </span>.inner
+<a href=#834 id=834 data-nosnippet>834</a>            .vid_storage
+<a href=#835 id=835 data-nosnippet>835</a>            .iter()
+<a href=#836 id=836 data-nosnippet>836</a>            .map(|res| <span class="kw">if </span><span class="macro">matches!</span>(res, <span class="prelude-val">Some</span>((<span class="kw">_</span>, <span class="prelude-val">None</span>))) { <span class="number">1 </span>} <span class="kw">else </span>{ <span class="number">0 </span>})
+<a href=#837 id=837 data-nosnippet>837</a>            .sum();
+<a href=#838 id=838 data-nosnippet>838</a>        <span class="prelude-val">Ok</span>(SyncStatus {
+<a href=#839 id=839 data-nosnippet>839</a>            missing_blocks: <span class="self">self</span>.inner.block_storage.missing(height),
+<a href=#840 id=840 data-nosnippet>840</a>            missing_leaves: <span class="self">self</span>.inner.leaf_storage.missing(height),
+<a href=#841 id=841 data-nosnippet>841</a>            missing_vid_common: missing_vid,
+<a href=#842 id=842 data-nosnippet>842</a>            missing_vid_shares: missing_vid + null_vid_shares,
+<a href=#843 id=843 data-nosnippet>843</a>            pruned_height: <span class="prelude-val">None</span>,
+<a href=#844 id=844 data-nosnippet>844</a>        })
+<a href=#845 id=845 data-nosnippet>845</a>    }
+<a href=#846 id=846 data-nosnippet>846</a>
+<a href=#847 id=847 data-nosnippet>847</a>    <span class="kw">async fn </span>get_header_window(
+<a href=#848 id=848 data-nosnippet>848</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#849 id=849 data-nosnippet>849</a>        start: <span class="kw">impl </span>Into&lt;WindowStart&lt;Types&gt;&gt; + Send + Sync,
+<a href=#850 id=850 data-nosnippet>850</a>        end: u64,
+<a href=#851 id=851 data-nosnippet>851</a>        limit: usize,
+<a href=#852 id=852 data-nosnippet>852</a>    ) -&gt; QueryResult&lt;TimeWindowQueryData&lt;Header&lt;Types&gt;&gt;&gt; {
+<a href=#853 id=853 data-nosnippet>853</a>        <span class="kw">let </span>first_block = <span class="kw">match </span>start.into() {
+<a href=#854 id=854 data-nosnippet>854</a>            WindowStart::Height(h) =&gt; h,
+<a href=#855 id=855 data-nosnippet>855</a>            WindowStart::Hash(h) =&gt; <span class="self">self</span>.inner.get_header(h.into())<span class="question-mark">?</span>.block_number(),
+<a href=#856 id=856 data-nosnippet>856</a>            WindowStart::Time(t) =&gt; {
+<a href=#857 id=857 data-nosnippet>857</a>                <span class="comment">// Find the minimum timestamp which is at least `t`, and all the blocks with
+<a href=#858 id=858 data-nosnippet>858</a>                // that timestamp.
+<a href=#859 id=859 data-nosnippet>859</a>                </span><span class="kw">let </span>blocks = <span class="self">self
+<a href=#860 id=860 data-nosnippet>860</a>                    </span>.inner
+<a href=#861 id=861 data-nosnippet>861</a>                    .index_by_time
+<a href=#862 id=862 data-nosnippet>862</a>                    .range(t..)
+<a href=#863 id=863 data-nosnippet>863</a>                    .next()
+<a href=#864 id=864 data-nosnippet>864</a>                    .context(NotFoundSnafu)<span class="question-mark">?
+<a href=#865 id=865 data-nosnippet>865</a>                    </span>.<span class="number">1</span>;
+<a href=#866 id=866 data-nosnippet>866</a>                <span class="comment">// Multiple blocks can have the same timestamp (when truncated to seconds);
+<a href=#867 id=867 data-nosnippet>867</a>                // we want the first one. It is an invariant that any timestamp which has an
+<a href=#868 id=868 data-nosnippet>868</a>                // entry in `index_by_time` has a non-empty list associated with it, so this
+<a href=#869 id=869 data-nosnippet>869</a>                // indexing is safe.
+<a href=#870 id=870 data-nosnippet>870</a>                </span>blocks[<span class="number">0</span>]
+<a href=#871 id=871 data-nosnippet>871</a>            },
+<a href=#872 id=872 data-nosnippet>872</a>        } <span class="kw">as </span>usize;
+<a href=#873 id=873 data-nosnippet>873</a>
+<a href=#874 id=874 data-nosnippet>874</a>        <span class="kw">let </span><span class="kw-2">mut </span>res = TimeWindowQueryData::default();
+<a href=#875 id=875 data-nosnippet>875</a>
+<a href=#876 id=876 data-nosnippet>876</a>        <span class="comment">// Include the block just before the start of the window, if there is one.
+<a href=#877 id=877 data-nosnippet>877</a>        </span><span class="kw">if </span>first_block &gt; <span class="number">0 </span>{
+<a href=#878 id=878 data-nosnippet>878</a>            res.prev = <span class="prelude-val">Some</span>(<span class="self">self</span>.inner.get_header((first_block - <span class="number">1</span>).into())<span class="question-mark">?</span>);
+<a href=#879 id=879 data-nosnippet>879</a>        }
 <a href=#880 id=880 data-nosnippet>880</a>
-<a href=#881 id=881 data-nosnippet>881</a>        <span class="comment">// Include the block just before the start of the window, if there is one.
-<a href=#882 id=882 data-nosnippet>882</a>        </span><span class="kw">if </span>first_block &gt; <span class="number">0 </span>{
-<a href=#883 id=883 data-nosnippet>883</a>            res.prev = <span class="prelude-val">Some</span>(<span class="self">self</span>.inner.get_header((first_block - <span class="number">1</span>).into())<span class="question-mark">?</span>);
-<a href=#884 id=884 data-nosnippet>884</a>        }
-<a href=#885 id=885 data-nosnippet>885</a>
-<a href=#886 id=886 data-nosnippet>886</a>        <span class="comment">// Add blocks to the window, starting from `first_block`, until we reach the end of
-<a href=#887 id=887 data-nosnippet>887</a>        // the requested time window.
-<a href=#888 id=888 data-nosnippet>888</a>        </span><span class="kw">for </span>block <span class="kw">in </span><span class="self">self</span>.inner.get_block_range(first_block..)<span class="question-mark">? </span>{
-<a href=#889 id=889 data-nosnippet>889</a>            <span class="kw">let </span>header = block<span class="question-mark">?</span>.header().clone();
-<a href=#890 id=890 data-nosnippet>890</a>            <span class="kw">if </span>header.timestamp() &gt;= end {
-<a href=#891 id=891 data-nosnippet>891</a>                res.next = <span class="prelude-val">Some</span>(header);
-<a href=#892 id=892 data-nosnippet>892</a>                <span class="kw">break</span>;
-<a href=#893 id=893 data-nosnippet>893</a>            }
-<a href=#894 id=894 data-nosnippet>894</a>            res.window.push(header);
-<a href=#895 id=895 data-nosnippet>895</a>            <span class="kw">if </span>res.window.len() &gt;= limit {
-<a href=#896 id=896 data-nosnippet>896</a>                <span class="kw">break</span>;
-<a href=#897 id=897 data-nosnippet>897</a>            }
-<a href=#898 id=898 data-nosnippet>898</a>        }
-<a href=#899 id=899 data-nosnippet>899</a>
-<a href=#900 id=900 data-nosnippet>900</a>        <span class="prelude-val">Ok</span>(res)
-<a href=#901 id=901 data-nosnippet>901</a>    }
-<a href=#902 id=902 data-nosnippet>902</a>}
-<a href=#903 id=903 data-nosnippet>903</a>
-<a href=#904 id=904 data-nosnippet>904</a><span class="kw">impl</span>&lt;Types, T: Revert + Send&gt; AggregatesStorage&lt;Types&gt; <span class="kw">for </span>Transaction&lt;T&gt;
-<a href=#905 id=905 data-nosnippet>905</a><span class="kw">where
-<a href=#906 id=906 data-nosnippet>906</a>    </span>Types: NodeType,
-<a href=#907 id=907 data-nosnippet>907</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
-<a href=#908 id=908 data-nosnippet>908</a>{
-<a href=#909 id=909 data-nosnippet>909</a>    <span class="kw">async fn </span>aggregates_height(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; anyhow::Result&lt;usize&gt; {
-<a href=#910 id=910 data-nosnippet>910</a>        <span class="prelude-val">Ok</span>(<span class="number">0</span>)
-<a href=#911 id=911 data-nosnippet>911</a>    }
+<a href=#881 id=881 data-nosnippet>881</a>        <span class="comment">// Add blocks to the window, starting from `first_block`, until we reach the end of
+<a href=#882 id=882 data-nosnippet>882</a>        // the requested time window.
+<a href=#883 id=883 data-nosnippet>883</a>        </span><span class="kw">for </span>block <span class="kw">in </span><span class="self">self</span>.inner.get_block_range(first_block..)<span class="question-mark">? </span>{
+<a href=#884 id=884 data-nosnippet>884</a>            <span class="kw">let </span>header = block<span class="question-mark">?</span>.header().clone();
+<a href=#885 id=885 data-nosnippet>885</a>            <span class="kw">if </span>header.timestamp() &gt;= end {
+<a href=#886 id=886 data-nosnippet>886</a>                res.next = <span class="prelude-val">Some</span>(header);
+<a href=#887 id=887 data-nosnippet>887</a>                <span class="kw">break</span>;
+<a href=#888 id=888 data-nosnippet>888</a>            }
+<a href=#889 id=889 data-nosnippet>889</a>            res.window.push(header);
+<a href=#890 id=890 data-nosnippet>890</a>            <span class="kw">if </span>res.window.len() &gt;= limit {
+<a href=#891 id=891 data-nosnippet>891</a>                <span class="kw">break</span>;
+<a href=#892 id=892 data-nosnippet>892</a>            }
+<a href=#893 id=893 data-nosnippet>893</a>        }
+<a href=#894 id=894 data-nosnippet>894</a>
+<a href=#895 id=895 data-nosnippet>895</a>        <span class="prelude-val">Ok</span>(res)
+<a href=#896 id=896 data-nosnippet>896</a>    }
+<a href=#897 id=897 data-nosnippet>897</a>}
+<a href=#898 id=898 data-nosnippet>898</a>
+<a href=#899 id=899 data-nosnippet>899</a><span class="kw">impl</span>&lt;Types, T: Revert + Send&gt; AggregatesStorage&lt;Types&gt; <span class="kw">for </span>Transaction&lt;T&gt;
+<a href=#900 id=900 data-nosnippet>900</a><span class="kw">where
+<a href=#901 id=901 data-nosnippet>901</a>    </span>Types: NodeType,
+<a href=#902 id=902 data-nosnippet>902</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
+<a href=#903 id=903 data-nosnippet>903</a>{
+<a href=#904 id=904 data-nosnippet>904</a>    <span class="kw">async fn </span>aggregates_height(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; anyhow::Result&lt;usize&gt; {
+<a href=#905 id=905 data-nosnippet>905</a>        <span class="prelude-val">Ok</span>(<span class="number">0</span>)
+<a href=#906 id=906 data-nosnippet>906</a>    }
+<a href=#907 id=907 data-nosnippet>907</a>
+<a href=#908 id=908 data-nosnippet>908</a>    <span class="kw">async fn </span>load_prev_aggregate(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;Aggregate&lt;Types&gt;&gt;&gt; {
+<a href=#909 id=909 data-nosnippet>909</a>        <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>)
+<a href=#910 id=910 data-nosnippet>910</a>    }
+<a href=#911 id=911 data-nosnippet>911</a>}
 <a href=#912 id=912 data-nosnippet>912</a>
-<a href=#913 id=913 data-nosnippet>913</a>    <span class="kw">async fn </span>load_prev_aggregate(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;Aggregate&lt;Types&gt;&gt;&gt; {
-<a href=#914 id=914 data-nosnippet>914</a>        <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>)
-<a href=#915 id=915 data-nosnippet>915</a>    }
-<a href=#916 id=916 data-nosnippet>916</a>}
-<a href=#917 id=917 data-nosnippet>917</a>
-<a href=#918 id=918 data-nosnippet>918</a><span class="kw">impl</span>&lt;Types, T: Revert + Send&gt; UpdateAggregatesStorage&lt;Types&gt; <span class="kw">for </span>Transaction&lt;T&gt;
-<a href=#919 id=919 data-nosnippet>919</a><span class="kw">where
-<a href=#920 id=920 data-nosnippet>920</a>    </span>Types: NodeType,
-<a href=#921 id=921 data-nosnippet>921</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
-<a href=#922 id=922 data-nosnippet>922</a>{
-<a href=#923 id=923 data-nosnippet>923</a>    <span class="kw">async fn </span>update_aggregates(
-<a href=#924 id=924 data-nosnippet>924</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#925 id=925 data-nosnippet>925</a>        _prev: Aggregate&lt;Types&gt;,
-<a href=#926 id=926 data-nosnippet>926</a>        _blocks: <span class="kw-2">&amp;</span>[PayloadMetadata&lt;Types&gt;],
-<a href=#927 id=927 data-nosnippet>927</a>    ) -&gt; anyhow::Result&lt;Aggregate&lt;Types&gt;&gt; {
-<a href=#928 id=928 data-nosnippet>928</a>        <span class="prelude-val">Ok</span>(Aggregate::default())
-<a href=#929 id=929 data-nosnippet>929</a>    }
-<a href=#930 id=930 data-nosnippet>930</a>}
-<a href=#931 id=931 data-nosnippet>931</a>
-<a href=#932 id=932 data-nosnippet>932</a><span class="kw">impl</span>&lt;T: Revert&gt; PrunedHeightStorage <span class="kw">for </span>Transaction&lt;T&gt; {}
-<a href=#933 id=933 data-nosnippet>933</a>
-<a href=#934 id=934 data-nosnippet>934</a><span class="kw">impl</span>&lt;Types&gt; HasMetrics <span class="kw">for </span>FileSystemStorage&lt;Types&gt;
-<a href=#935 id=935 data-nosnippet>935</a><span class="kw">where
-<a href=#936 id=936 data-nosnippet>936</a>    </span>Types: NodeType,
-<a href=#937 id=937 data-nosnippet>937</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
-<a href=#938 id=938 data-nosnippet>938</a>    Payload&lt;Types&gt;: QueryablePayload&lt;Types&gt;,
-<a href=#939 id=939 data-nosnippet>939</a>{
-<a href=#940 id=940 data-nosnippet>940</a>    <span class="kw">fn </span>metrics(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PrometheusMetrics {
-<a href=#941 id=941 data-nosnippet>941</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.metrics
-<a href=#942 id=942 data-nosnippet>942</a>    }
-<a href=#943 id=943 data-nosnippet>943</a>}</code></pre></div></section></main></body></html>
+<a href=#913 id=913 data-nosnippet>913</a><span class="kw">impl</span>&lt;Types, T: Revert + Send&gt; UpdateAggregatesStorage&lt;Types&gt; <span class="kw">for </span>Transaction&lt;T&gt;
+<a href=#914 id=914 data-nosnippet>914</a><span class="kw">where
+<a href=#915 id=915 data-nosnippet>915</a>    </span>Types: NodeType,
+<a href=#916 id=916 data-nosnippet>916</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
+<a href=#917 id=917 data-nosnippet>917</a>{
+<a href=#918 id=918 data-nosnippet>918</a>    <span class="kw">async fn </span>update_aggregates(
+<a href=#919 id=919 data-nosnippet>919</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#920 id=920 data-nosnippet>920</a>        _prev: Aggregate&lt;Types&gt;,
+<a href=#921 id=921 data-nosnippet>921</a>        _blocks: <span class="kw-2">&amp;</span>[PayloadMetadata&lt;Types&gt;],
+<a href=#922 id=922 data-nosnippet>922</a>    ) -&gt; anyhow::Result&lt;Aggregate&lt;Types&gt;&gt; {
+<a href=#923 id=923 data-nosnippet>923</a>        <span class="prelude-val">Ok</span>(Aggregate::default())
+<a href=#924 id=924 data-nosnippet>924</a>    }
+<a href=#925 id=925 data-nosnippet>925</a>}
+<a href=#926 id=926 data-nosnippet>926</a>
+<a href=#927 id=927 data-nosnippet>927</a><span class="kw">impl</span>&lt;T: Revert&gt; PrunedHeightStorage <span class="kw">for </span>Transaction&lt;T&gt; {}
+<a href=#928 id=928 data-nosnippet>928</a>
+<a href=#929 id=929 data-nosnippet>929</a><span class="kw">impl</span>&lt;Types&gt; HasMetrics <span class="kw">for </span>FileSystemStorage&lt;Types&gt;
+<a href=#930 id=930 data-nosnippet>930</a><span class="kw">where
+<a href=#931 id=931 data-nosnippet>931</a>    </span>Types: NodeType,
+<a href=#932 id=932 data-nosnippet>932</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
+<a href=#933 id=933 data-nosnippet>933</a>    Payload&lt;Types&gt;: QueryablePayload&lt;Types&gt;,
+<a href=#934 id=934 data-nosnippet>934</a>{
+<a href=#935 id=935 data-nosnippet>935</a>    <span class="kw">fn </span>metrics(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PrometheusMetrics {
+<a href=#936 id=936 data-nosnippet>936</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.metrics
+<a href=#937 id=937 data-nosnippet>937</a>    }
+<a href=#938 id=938 data-nosnippet>938</a>}</code></pre></div></section></main></body></html>

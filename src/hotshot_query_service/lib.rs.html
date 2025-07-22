@@ -260,7 +260,7 @@
 <a href=#260 id=260 data-nosnippet>260</a>//! # use hotshot_query_service::{Header, QueryResult, VidShare};
 <a href=#261 id=261 data-nosnippet>261</a>//! # use hotshot_query_service::availability::{
 <a href=#262 id=262 data-nosnippet>262</a>//! #   AvailabilityDataSource, BlockId, BlockQueryData, Fetch, FetchStream, LeafId, LeafQueryData,
-<a href=#263 id=263 data-nosnippet>263</a>//! #   PayloadMetadata, PayloadQueryData, TransactionHash, TransactionQueryData,
+<a href=#263 id=263 data-nosnippet>263</a>//! #   PayloadMetadata, PayloadQueryData, TransactionFromBlock, TransactionHash,
 <a href=#264 id=264 data-nosnippet>264</a>//! #   VidCommonMetadata, VidCommonQueryData,
 <a href=#265 id=265 data-nosnippet>265</a>//! # };
 <a href=#266 id=266 data-nosnippet>266</a>//! # use hotshot_query_service::metrics::PrometheusMetrics;
@@ -306,7 +306,7 @@
 <a href=#306 id=306 data-nosnippet>306</a>//! #   async fn get_vid_common_metadata&lt;ID&gt;(&amp;self, id: ID) -&gt; Fetch&lt;VidCommonMetadata&lt;AppTypes&gt;&gt;
 <a href=#307 id=307 data-nosnippet>307</a>//! #   where
 <a href=#308 id=308 data-nosnippet>308</a>//! #       ID: Into&lt;BlockId&lt;AppTypes&gt;&gt; + Send + Sync { todo!() }
-<a href=#309 id=309 data-nosnippet>309</a>//! #   async fn get_transaction(&amp;self, hash: TransactionHash&lt;AppTypes&gt;) -&gt; Fetch&lt;TransactionQueryData&lt;AppTypes&gt;&gt; { todo!() }
+<a href=#309 id=309 data-nosnippet>309</a>//! #   async fn get_transaction&lt;T: TransactionFromBlock&lt;AppTypes&gt;&gt;(&amp;self, hash: TransactionHash&lt;AppTypes&gt;) -&gt; Fetch&lt;T&gt; { todo!() }
 <a href=#310 id=310 data-nosnippet>310</a>//! #   async fn get_leaf_range&lt;R&gt;(&amp;self, range: R) -&gt; FetchStream&lt;LeafQueryData&lt;AppTypes&gt;&gt;
 <a href=#311 id=311 data-nosnippet>311</a>//! #   where
 <a href=#312 id=312 data-nosnippet>312</a>//! #       R: RangeBounds&lt;usize&gt; + Send { todo!() }
@@ -614,10 +614,10 @@
 <a href=#614 id=614 data-nosnippet>614</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
 <a href=#615 id=615 data-nosnippet>615</a>    <span class="kw">use crate</span>::{
 <a href=#616 id=616 data-nosnippet>616</a>        availability::{
-<a href=#617 id=617 data-nosnippet>617</a>            AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch, FetchStream, LeafId,
-<a href=#618 id=618 data-nosnippet>618</a>            LeafQueryData, NamespaceId, PayloadMetadata, PayloadQueryData, StateCertQueryData,
-<a href=#619 id=619 data-nosnippet>619</a>            TransactionHash, TransactionQueryData, UpdateAvailabilityData, VidCommonMetadata,
-<a href=#620 id=620 data-nosnippet>620</a>            VidCommonQueryData,
+<a href=#617 id=617 data-nosnippet>617</a>            AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
+<a href=#618 id=618 data-nosnippet>618</a>            Fetch, FetchStream, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
+<a href=#619 id=619 data-nosnippet>619</a>            PayloadQueryData, StateCertQueryData, TransactionHash, UpdateAvailabilityData,
+<a href=#620 id=620 data-nosnippet>620</a>            VidCommonMetadata, VidCommonQueryData,
 <a href=#621 id=621 data-nosnippet>621</a>        },
 <a href=#622 id=622 data-nosnippet>622</a>        metrics::PrometheusMetrics,
 <a href=#623 id=623 data-nosnippet>623</a>        node::{NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
@@ -777,11 +777,11 @@
 <a href=#777 id=777 data-nosnippet>777</a>                .get_vid_common_metadata_range_rev(start, end)
 <a href=#778 id=778 data-nosnippet>778</a>                .<span class="kw">await
 <a href=#779 id=779 data-nosnippet>779</a>        </span>}
-<a href=#780 id=780 data-nosnippet>780</a>        <span class="kw">async fn </span>get_transaction(
+<a href=#780 id=780 data-nosnippet>780</a>        <span class="kw">async fn </span>get_block_containing_transaction(
 <a href=#781 id=781 data-nosnippet>781</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
 <a href=#782 id=782 data-nosnippet>782</a>            hash: TransactionHash&lt;MockTypes&gt;,
-<a href=#783 id=783 data-nosnippet>783</a>        ) -&gt; Fetch&lt;TransactionQueryData&lt;MockTypes&gt;&gt; {
-<a href=#784 id=784 data-nosnippet>784</a>            <span class="self">self</span>.hotshot_qs.get_transaction(hash).<span class="kw">await
+<a href=#783 id=783 data-nosnippet>783</a>        ) -&gt; Fetch&lt;BlockWithTransaction&lt;MockTypes&gt;&gt; {
+<a href=#784 id=784 data-nosnippet>784</a>            <span class="self">self</span>.hotshot_qs.get_block_containing_transaction(hash).<span class="kw">await
 <a href=#785 id=785 data-nosnippet>785</a>        </span>}
 <a href=#786 id=786 data-nosnippet>786</a>        <span class="kw">async fn </span>get_state_cert(<span class="kw-2">&amp;</span><span class="self">self</span>, epoch: u64) -&gt; Fetch&lt;StateCertQueryData&lt;MockTypes&gt;&gt; {
 <a href=#787 id=787 data-nosnippet>787</a>            <span class="self">self</span>.hotshot_qs.get_state_cert(epoch).<span class="kw">await

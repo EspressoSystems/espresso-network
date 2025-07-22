@@ -69,7 +69,7 @@
 <a href=#69 id=69 data-nosnippet>69</a>    availability::{
 <a href=#70 id=70 data-nosnippet>70</a>        BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
 <a href=#71 id=71 data-nosnippet>71</a>        PayloadQueryData, QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
-<a href=#72 id=72 data-nosnippet>72</a>        TransactionQueryData, VidCommonMetadata, VidCommonQueryData,
+<a href=#72 id=72 data-nosnippet>72</a>        VidCommonMetadata, VidCommonQueryData,
 <a href=#73 id=73 data-nosnippet>73</a>    },
 <a href=#74 id=74 data-nosnippet>74</a>    explorer::{
 <a href=#75 id=75 data-nosnippet>75</a>        query_data::{
@@ -188,10 +188,10 @@
 <a href=#188 id=188 data-nosnippet>188</a>    <span class="kw">where
 <a href=#189 id=189 data-nosnippet>189</a>        </span>R: RangeBounds&lt;usize&gt; + Send + <span class="lifetime">'static</span>;
 <a href=#190 id=190 data-nosnippet>190</a>
-<a href=#191 id=191 data-nosnippet>191</a>    <span class="kw">async fn </span>get_transaction(
+<a href=#191 id=191 data-nosnippet>191</a>    <span class="kw">async fn </span>get_block_with_transaction(
 <a href=#192 id=192 data-nosnippet>192</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
 <a href=#193 id=193 data-nosnippet>193</a>        hash: TransactionHash&lt;Types&gt;,
-<a href=#194 id=194 data-nosnippet>194</a>    ) -&gt; QueryResult&lt;TransactionQueryData&lt;Types&gt;&gt;;
+<a href=#194 id=194 data-nosnippet>194</a>    ) -&gt; QueryResult&lt;BlockQueryData&lt;Types&gt;&gt;;
 <a href=#195 id=195 data-nosnippet>195</a>
 <a href=#196 id=196 data-nosnippet>196</a>    <span class="doccomment">/// Get the first leaf which is available in the database with height &gt;= `from`.
 <a href=#197 id=197 data-nosnippet>197</a>    </span><span class="kw">async fn </span>first_available_leaf(<span class="kw-2">&amp;mut </span><span class="self">self</span>, from: u64) -&gt; QueryResult&lt;LeafQueryData&lt;Types&gt;&gt;;
