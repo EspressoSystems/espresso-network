@@ -387,7 +387,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             let tree = client
                 .inner
                 .post::<RewardMerkleTree>(&format!(
-                    "catchup/{height}/{}/reward-accounts",
+                    "catchup/{height}/{}/reward/accounts",
                     view.u64()
                 ))
                 .body_binary(&accounts.to_vec())?
@@ -587,6 +587,18 @@ where
     ) -> anyhow::Result<(RewardMerkleTree, Leaf2)> {
         self.inner()
             .get_reward_accounts(instance, height, view, accounts)
+            .await
+    }
+
+    async fn get_reward_accounts_legacy(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<(RewardMerkleTreeLegacy, Leaf2)> {
+        self.inner()
+            .get_reward_accounts_legacy(instance, height, view, accounts)
             .await
     }
 

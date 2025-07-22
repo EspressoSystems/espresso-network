@@ -428,7 +428,7 @@ impl Options {
             .context("failed to define reward-state api")
         })?;
 
-        register_api("reward-state-v4", &mut app, move |ver| {
+        register_api("reward-state-v2", &mut app, move |ver| {
             endpoints::reward::<
                 _,
                 SequencerApiVersion,

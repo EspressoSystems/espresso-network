@@ -41,7 +41,7 @@ use jf_merkle_tree::MerkleTreeScheme;
 use serde::de::Error as _;
 use snafu::OptionExt;
 use tagged_base64::TaggedBase64;
-use tide_disco::{method::ReadState, Api, Error as _, StatusCode};
+use tide_disco::{method::ReadState, Api, Error as _, RequestParams, StatusCode};
 use tracing::warn;
 use vbs::version::{StaticVersion, StaticVersionType};
 use vid::avid_m::namespaced::NsAvidMScheme;
@@ -695,44 +695,54 @@ where
     let mut api = Api::<S, Error, ApiVer>::new(toml)?;
     api.with_version(api_ver);
 
-    api.get("account", |req, state| {
-        async move {
-            let height = req
-                .integer_param("height")
-                .map_err(Error::from_request_error)?;
-            let view = req
-                .integer_param("view")
-                .map_err(Error::from_request_error)?;
-            let account = req
-                .string_param("address")
-                .map_err(Error::from_request_error)?;
-            let account = account.parse().map_err(|err| {
-                Error::catch_all(
-                    StatusCode::BAD_REQUEST,
-                    format!("malformed account {account}: {err}"),
-                )
-            })?;
+    let parse_height_view = |req: &RequestParams| -> Result<(u64, ViewNumber), Error> {
+        let height = req
+            .integer_param("height")
+            .map_err(Error::from_request_error)?;
+        let view = req
+            .integer_param("view")
+            .map_err(Error::from_request_error)?;
+        Ok((height, ViewNumber::new(view)))
+    };
 
+    let parse_fee_account = |req: &RequestParams| -> Result<FeeAccount, Error> {
+        let raw = req
+            .string_param("address")
+            .map_err(Error::from_request_error)?;
+        raw.parse().map_err(|err| {
+            Error::catch_all(
+                StatusCode::BAD_REQUEST,
+                format!("malformed fee account {raw}: {err}"),
+            )
+        })
+    };
+
+    let parse_reward_account = |req: &RequestParams| -> Result<RewardAccount, Error> {
+        let raw = req
+            .string_param("address")
+            .map_err(Error::from_request_error)?;
+        raw.parse().map_err(|err| {
+            Error::catch_all(
+                StatusCode::BAD_REQUEST,
+                format!("malformed reward account {raw}: {err}"),
+            )
+        })
+    };
+
+    api.get("account", move |req, state| {
+        async move {
+            let (height, view) = parse_height_view(&req)?;
+            let account = parse_fee_account(&req)?;
             state
-                .get_account(
-                    &state.node_state().await,
-                    height,
-                    ViewNumber::new(view),
-                    account,
-                )
+                .get_account(&state.node_state().await, height, view, account)
                 .await
                 .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
         }
         .boxed()
     })?
-    .at("accounts", |req, state| {
+    .at("accounts", move |req, state| {
         async move {
-            let height = req
-                .integer_param("height")
-                .map_err(Error::from_request_error)?;
-            let view = req
-                .integer_param("view")
-                .map_err(Error::from_request_error)?;
+            let (height, view) = parse_height_view(&req)?;
             let accounts = req
                 .body_auto::<Vec<FeeAccount>, ApiVer>(ApiVer::instance())
                 .map_err(Error::from_request_error)?;
@@ -741,10 +751,44 @@ where
                 .read(|state| {
                     async move {
                         state
-                            .get_accounts(
+                            .get_accounts(&state.node_state().await, height, view, &accounts)
+                            .await
+                            .map_err(|err| {
+                                Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}"))
+                            })
+                    }
+                    .boxed()
+                })
+                .await
+        }
+        .boxed()
+    })?
+    .get("reward_account", move |req, state| {
+        async move {
+            let (height, view) = parse_height_view(&req)?;
+            let account = parse_reward_account(&req)?;
+            state
+                .get_reward_account_legacy(&state.node_state().await, height, view, account)
+                .await
+                .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
+        }
+        .boxed()
+    })?
+    .at("reward_accounts", move |req, state| {
+        async move {
+            let (height, view) = parse_height_view(&req)?;
+            let accounts = req
+                .body_auto::<Vec<RewardAccount>, ApiVer>(ApiVer::instance())
+                .map_err(Error::from_request_error)?;
+
+            state
+                .read(|state| {
+                    async move {
+                        state
+                            .get_reward_accounts_legacy(
                                 &state.node_state().await,
                                 height,
-                                ViewNumber::new(view),
+                                view,
                                 &accounts,
                             )
                             .await
@@ -758,44 +802,21 @@ where
         }
         .boxed()
     })?
-    .get("reward_account", |req, state| {
+    .get("reward_account_v2", move |req, state| {
         async move {
-            let height = req
-                .integer_param("height")
-                .map_err(Error::from_request_error)?;
-            let view = req
-                .integer_param("view")
-                .map_err(Error::from_request_error)?;
-            let account = req
-                .string_param("address")
-                .map_err(Error::from_request_error)?;
-            let account = account.parse().map_err(|err| {
-                Error::catch_all(
-                    StatusCode::BAD_REQUEST,
-                    format!("malformed account {account}: {err}"),
-                )
-            })?;
+            let (height, view) = parse_height_view(&req)?;
+            let account = parse_reward_account(&req)?;
 
             state
-                .get_reward_account_legacy(
-                    &state.node_state().await,
-                    height,
-                    ViewNumber::new(view),
-                    account,
-                )
+                .get_reward_account(&state.node_state().await, height, view, account)
                 .await
                 .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
         }
         .boxed()
     })?
-    .at("reward_accounts", |req, state| {
+    .at("reward_accounts_v2", move |req, state| {
         async move {
-            let height = req
-                .integer_param("height")
-                .map_err(Error::from_request_error)?;
-            let view = req
-                .integer_param("view")
-                .map_err(Error::from_request_error)?;
+            let (height, view) = parse_height_view(&req)?;
             let accounts = req
                 .body_auto::<Vec<RewardAccount>, ApiVer>(ApiVer::instance())
                 .map_err(Error::from_request_error)?;
@@ -804,12 +825,7 @@ where
                 .read(|state| {
                     async move {
                         state
-                            .get_reward_accounts_legacy(
-                                &state.node_state().await,
-                                height,
-                                ViewNumber::new(view),
-                                &accounts,
-                            )
+                            .get_reward_accounts(&state.node_state().await, height, view, &accounts)
                             .await
                             .map_err(|err| {
                                 Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}"))
