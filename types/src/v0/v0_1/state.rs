@@ -11,7 +11,7 @@ use jf_merkle_tree::{
 use serde::{Deserialize, Serialize};
 
 use super::{FeeAccount, FeeAmount};
-use crate::{v0::sparse_mt::{JellyfishKeccak256Hasher, JellyfishKeccakNode}, Header};
+use crate::{v0::sparse_mt::{Keccak256Hasher, KeccakNode}, Header};
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Delta {
@@ -25,7 +25,7 @@ pub const REWARD_MERKLE_TREE_HEIGHT: usize = 160;
 const FEE_MERKLE_TREE_ARITY: usize = 256;
 const REWARD_MERKLE_TREE_ARITY: usize = 2;
 
-pub const REWARD_MERKLE_TREE_HEIGHT_LEGACY: usize = 160;
+pub const LEGACY_REWARD_MERKLE_TREE_HEIGHT: usize = 160;
 const REWARD_MERKLE_TREE_ARITY_LEGACY: usize = 2;
 
 // The block merkle tree accumulates header commitments. However, since the underlying
@@ -38,14 +38,6 @@ pub type FeeMerkleTree =
     UniversalMerkleTree<FeeAmount, Sha3Digest, FeeAccount, FEE_MERKLE_TREE_ARITY, Sha3Node>;
 pub type FeeMerkleCommitment = <FeeMerkleTree as MerkleTreeScheme>::Commitment;
 
-// UniversalMerkleTree<
-//     Value,                    // Element type (U256 value)
-//     JellyfishKeccak256Hasher, // Custom hasher
-//     AddressKey,               // Index type (20-byte address)
-//     ARITY,                    // Arity (generic)
-//     JellyfishKeccakNode,      // Node type
-// >;
-
 pub type RewardMerkleTreeLegacy = UniversalMerkleTree<
     RewardAmount,
     Sha3Digest,
@@ -54,13 +46,12 @@ pub type RewardMerkleTreeLegacy = UniversalMerkleTree<
     Sha3Node,
 >;
 
-// TODO: Update JELLYFISH crate to use KECCACK256
 pub type RewardMerkleTree = UniversalMerkleTree<
     RewardAmount,
-    JellyfishKeccak256Hasher,
+    Keccak256Hasher,
     RewardAccount,
     REWARD_MERKLE_TREE_ARITY,
-    JellyfishKeccakNode,
+    KeccakNode,
 >;
 pub type RewardMerkleCommitment = <RewardMerkleTree as MerkleTreeScheme>::Commitment;
 pub type RewardMerkleCommitmentLegacy = <RewardMerkleTreeLegacy as MerkleTreeScheme>::Commitment;
@@ -139,6 +130,12 @@ pub enum RewardMerkleProof {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RewardAccountQueryDataLegacy {
+    pub balance: U256,
+    pub proof: RewardAccountProofLegacy,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RewardAccountQueryData {
     pub balance: U256,
     pub proof: RewardAccountProof,
@@ -156,3 +153,4 @@ pub enum RewardMerkleProofLegacy {
     Presence(<RewardMerkleTreeLegacy as MerkleTreeScheme>::MembershipProof),
     Absence(<RewardMerkleTreeLegacy as UniversalMerkleTreeScheme>::NonMembershipProof),
 }
+

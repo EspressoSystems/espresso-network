@@ -17,7 +17,7 @@ use hotshot_types::{
 };
 use jf_merkle_tree::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
-    MerkleCommitment, MerkleTreeScheme, PersistentUniversalMerkleTreeScheme, ToTraversalPath,
+    MerkleCommitment, MerkleTreeScheme, PersistentUniversalMerkleTreeScheme,
     UniversalMerkleTreeScheme,
 };
 use num_traits::CheckedSub;
@@ -35,7 +35,12 @@ use super::{
     Leaf2, NodeState, ValidatedState,
 };
 use crate::{
-    eth_signature_key::EthKeyPair, Delta, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount,
+    eth_signature_key::EthKeyPair,
+    v0_1::{
+        RewardAccountProofLegacy, RewardMerkleCommitmentLegacy, RewardMerkleProofLegacy,
+        RewardMerkleTreeLegacy,
+    },
+    Delta, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount,
 };
 
 impl Committable for RewardInfo {
@@ -299,8 +304,6 @@ impl RewardAccountProof {
     }
 }
 
-
-
 #[allow(dead_code)]
 impl RewardAccountProofLegacy {
     pub fn presence(
@@ -347,8 +350,12 @@ impl RewardAccountProofLegacy {
         match &self.proof {
             RewardMerkleProofLegacy::Presence(proof) => {
                 ensure!(
-                    RewardMerkleTreeLegacy::verify(comm.digest(), RewardAccount(self.account), proof)?
-                        .is_ok(),
+                    RewardMerkleTreeLegacy::verify(
+                        comm.digest(),
+                        RewardAccount(self.account),
+                        proof
+                    )?
+                    .is_ok(),
                     "invalid proof"
                 );
                 Ok(proof
@@ -386,7 +393,6 @@ impl RewardAccountProofLegacy {
         }
     }
 }
-
 
 impl From<(RewardAccountProof, U256)> for RewardAccountQueryData {
     fn from((proof, balance): (RewardAccountProof, U256)) -> Self {
@@ -712,78 +718,69 @@ pub async fn get_leader_and_fetch_missing_rewards(
         .collect::<Vec<RewardAccount>>();
 
     reward_accounts.extend(delegators.clone());
-   
 
-    let parent_header =  parent_leaf.block_header();
+    let parent_header = parent_leaf.block_header();
 
     if parent_header.version() <= EpochVersion::version() {
-         let missing_reward_accts = validated_state.forgotten_reward_accounts_legacy(reward_accounts);
+        let missing_reward_accts =
+            validated_state.forgotten_reward_accounts_legacy(reward_accounts);
 
-    if !missing_reward_accts.is_empty() {
-        tracing::warn!(
-            parent_height,
-            ?parent_view,
-            ?missing_reward_accts,
-            "fetching missing reward accounts from peers"
-        );
-
-        let missing_account_proofs = instance_state
-            .state_catchup
-            .fetch_reward_accounts_legacy(
-                instance_state,
+        if !missing_reward_accts.is_empty() {
+            tracing::warn!(
                 parent_height,
-                parent_view,
-                validated_state.reward_merkle_tree_legacy.commitment(),
-                missing_reward_accts,
-            )
-            .await?;
+                ?parent_view,
+                ?missing_reward_accts,
+                "fetching missing reward accounts from peers"
+            );
 
-        for proof in missing_account_proofs.iter() {
-            proof
-                .remember(&mut validated_state.reward_merkle_tree_legacy)
-                .expect("proof previously verified");
+            let missing_account_proofs = instance_state
+                .state_catchup
+                .fetch_reward_accounts_legacy(
+                    instance_state,
+                    parent_height,
+                    parent_view,
+                    validated_state.reward_merkle_tree_legacy.commitment(),
+                    missing_reward_accts,
+                )
+                .await?;
+
+            for proof in missing_account_proofs.iter() {
+                proof
+                    .remember(&mut validated_state.reward_merkle_tree_legacy)
+                    .expect("proof previously verified");
+            }
         }
-    }
     } else {
+        let missing_reward_accts = validated_state.forgotten_reward_accounts(reward_accounts);
 
-
-          let missing_reward_accts = validated_state.forgotten_reward_accounts(reward_accounts);
-
-    if !missing_reward_accts.is_empty() {
-        tracing::warn!(
-            parent_height,
-            ?parent_view,
-            ?missing_reward_accts,
-            "fetching missing reward accounts from peers"
-        );
-
-        let missing_account_proofs = instance_state
-            .state_catchup
-            .fetch_reward_accounts(
-                instance_state,
+        if !missing_reward_accts.is_empty() {
+            tracing::warn!(
                 parent_height,
-                parent_view,
-                validated_state.reward_merkle_tree.commitment(),
-                missing_reward_accts,
-            )
-            .await?;
+                ?parent_view,
+                ?missing_reward_accts,
+                "fetching missing reward accounts from peers"
+            );
 
-        for proof in missing_account_proofs.iter() {
-            proof
-                .remember(&mut validated_state.reward_merkle_tree)
-                .expect("proof previously verified");
+            let missing_account_proofs = instance_state
+                .state_catchup
+                .fetch_reward_accounts(
+                    instance_state,
+                    parent_height,
+                    parent_view,
+                    validated_state.reward_merkle_tree.commitment(),
+                    missing_reward_accts,
+                )
+                .await?;
+
+            for proof in missing_account_proofs.iter() {
+                proof
+                    .remember(&mut validated_state.reward_merkle_tree)
+                    .expect("proof previously verified");
+            }
         }
-
-
-
-
-
     }
 
-    
-}
-
-Ok(validator)
+    Ok(validator)
 }
 
 #[cfg(test)]

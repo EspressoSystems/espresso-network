@@ -14,7 +14,7 @@ use espresso_types::{
     config::PublicNetworkConfig,
     retain_accounts,
     v0::traits::SequencerPersistence,
-    v0_1::{RewardAccount, RewardAmount, RewardMerkleTree},
+    v0_1::{RewardAccount, RewardAmount, RewardMerkleTree, RewardMerkleTreeLegacy},
     v0_3::ChainConfig,
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction, ValidatorMap,
@@ -50,10 +50,13 @@ use tokio::time::timeout;
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
 use crate::{
-    catchup::{add_fee_accounts_to_state, add_reward_accounts_to_state, CatchupStorage},
+    catchup::{
+        add_fee_accounts_to_state, add_reward_accounts_to_state,
+        add_reward_accounts_to_state_legacy, CatchupStorage,
+    },
     context::Consensus,
     request_response::{
-        data_source::retain_reward_accounts,
+        data_source::{retain_reward_accounts, retain_reward_accounts_legacy},
         request::{Request, Response},
     },
     state_signature::StateSigner,
@@ -660,6 +663,54 @@ impl<
 
         Ok(tree)
     }
+
+    #[tracing::instrument(skip(self, instance))]
+    async fn get_reward_accounts_legacy(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<RewardMerkleTreeLegacy> {
+        // Check if we have the desired state in memory.
+        match self
+            .as_ref()
+            .get_reward_accounts_legacy(instance, height, view, accounts)
+            .await
+        {
+            Ok(accounts) => return Ok(accounts),
+            Err(err) => {
+                tracing::info!("reward accounts not in memory, trying storage: {err:#}");
+            },
+        }
+
+        // Try storage.
+        let (tree, leaf) = self
+            .inner()
+            .get_reward_accounts_legacy(instance, height, view, accounts)
+            .await
+            .context("accounts not in memory, and could not fetch from storage")?;
+
+        // If we successfully fetched accounts from storage, try to add them back into the in-memory
+        // state.
+        let consensus = self
+            .as_ref()
+            .consensus()
+            .await
+            .read()
+            .await
+            .consensus()
+            .clone();
+        if let Err(err) =
+            add_reward_accounts_to_state_legacy::<N, V, P>(&consensus, &view, accounts, &tree, leaf)
+                .await
+        {
+            tracing::warn!(?view, "cannot update fetched account state: {err:#}");
+        }
+        tracing::info!(?view, "updated with fetched account state");
+
+        Ok(tree)
+    }
 }
 
 impl<N, V, P> NodeStateDataSource for ApiState<N, P, V>
@@ -795,6 +846,28 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
             ))?;
 
         retain_reward_accounts(&state.reward_merkle_tree, accounts.iter().copied())
+    }
+
+    #[tracing::instrument(skip(self, _instance))]
+    async fn get_reward_accounts_legacy(
+        &self,
+        _instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<RewardMerkleTreeLegacy> {
+        let state = self
+            .consensus()
+            .await
+            .read()
+            .await
+            .state(view)
+            .await
+            .context(format!(
+                "state not available for height {height}, view {view}"
+            ))?;
+
+        retain_reward_accounts_legacy(&state.reward_merkle_tree_legacy, accounts.iter().copied())
     }
 }
 

@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use espresso_types::{
     retain_accounts,
     traits::SequencerPersistence,
-    v0_1::{RewardAccount, RewardMerkleTree},
+    v0_1::{RewardAccount, RewardMerkleTree, RewardMerkleTreeLegacy},
     NodeState, PubKey, SeqTypes,
 };
 use hotshot::{traits::NodeImplementation, SystemContext};
@@ -296,6 +296,34 @@ pub fn retain_reward_accounts(
     accounts: impl IntoIterator<Item = RewardAccount>,
 ) -> anyhow::Result<RewardMerkleTree> {
     let mut snapshot = RewardMerkleTree::from_commitment(state.commitment());
+    for account in accounts {
+        match state.universal_lookup(account) {
+            LookupResult::Ok(elem, proof) => {
+                // This remember cannot fail, since we just constructed a valid proof, and are
+                // remembering into a tree with the same commitment.
+                snapshot.remember(account, *elem, proof).unwrap();
+            },
+            LookupResult::NotFound(proof) => {
+                // Likewise this cannot fail.
+                snapshot.non_membership_remember(account, proof).unwrap()
+            },
+            LookupResult::NotInMemory => {
+                bail!("missing account {account}");
+            },
+        }
+    }
+
+    Ok(snapshot)
+}
+
+/// Get a partial snapshot of the given reward state, which contains only the specified accounts.
+///
+/// Fails if one of the requested accounts is not represented in the original `state`.
+pub fn retain_reward_accounts_legacy(
+    state: &RewardMerkleTreeLegacy,
+    accounts: impl IntoIterator<Item = RewardAccount>,
+) -> anyhow::Result<RewardMerkleTreeLegacy> {
+    let mut snapshot = RewardMerkleTreeLegacy::from_commitment(state.commitment());
     for account in accounts {
         match state.universal_lookup(account) {
             LookupResult::Ok(elem, proof) => {

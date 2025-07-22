@@ -7,7 +7,7 @@ use espresso_types::{
     get_l1_deposits,
     v0_1::{
         IterableFeeInfo, RewardAccount, RewardMerkleTree, RewardMerkleTreeLegacy,
-        REWARD_MERKLE_TREE_HEIGHT, REWARD_MERKLE_TREE_HEIGHT_LEGACY,
+        LEGACY_REWARD_MERKLE_TREE_HEIGHT, REWARD_MERKLE_TREE_HEIGHT,
     },
     v0_3::ChainConfig,
     BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2,
@@ -103,7 +103,7 @@ impl CatchupStorage for SqlStorage {
         accounts: &[RewardAccount],
     ) -> anyhow::Result<(RewardMerkleTreeLegacy, Leaf2)> {
         let mut tx = self.read().await.context(format!(
-            "opening transaction to fetch reward account {accounts:?}; height {height}"
+            "opening transaction to fetch legacy reward account {accounts:?}; height {height}"
         ))?;
 
         let block_height = NodeStorage::<SeqTypes>::block_height(&mut tx)
@@ -378,7 +378,7 @@ async fn load_reward_accounts_legacy<Mode: TransactionMode>(
         || header.version() >= DrbAndHeaderUpgradeVersion::version()
     {
         return Ok((
-            RewardMerkleTreeLegacy::new(REWARD_MERKLE_TREE_HEIGHT_LEGACY),
+            RewardMerkleTreeLegacy::new(LEGACY_REWARD_MERKLE_TREE_HEIGHT),
             leaf.leaf().clone(),
         ));
     }
@@ -395,11 +395,11 @@ async fn load_reward_accounts_legacy<Mode: TransactionMode>(
             )
             .await
             .context(format!(
-                "fetching reward account {account}; height {}",
+                "fetching legacy reward account {account}; height {}",
                 header.height()
             ))?;
         match proof.proof.first().context(format!(
-            "empty proof for reward account {account}; height {}",
+            "empty proof for legacy reward account {account}; height {}",
             header.height()
         ))? {
             MerkleNode::Leaf { pos, elem, .. } => {
@@ -417,6 +417,7 @@ async fn load_reward_accounts_legacy<Mode: TransactionMode>(
     Ok((snapshot, leaf.leaf().clone()))
 }
 
+/// Loads reward accounts for new reward merkle tree (V4).
 async fn load_reward_accounts<Mode: TransactionMode>(
     tx: &mut Transaction<Mode>,
     height: u64,
@@ -620,21 +621,21 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
 
     // Load all required reward accounts and update the reward Merkle tree.
     match parent.block_header().reward_merkle_tree_root() {
-        either::Either::Left(legacy_root) => {
+        either::Either::Left(expected_root) => {
             state.reward_merkle_tree_legacy =
                 load_reward_accounts_legacy(tx, from_height, &reward_accounts)
                     .await
                     .context(
-                        "unable to reconstruct state because reward accounts are not available at \
-                         origin",
+                        "unable to reconstruct state because legacy reward accounts are not \
+                         available at origin",
                     )?
                     .0;
             ensure!(
-                state.reward_merkle_tree_legacy.commitment() == legacy_root,
-                "loaded reward state does not match parent header"
+                state.reward_merkle_tree_legacy.commitment() == expected_root,
+                "loaded legacy reward state does not match parent header"
             );
         },
-        either::Either::Right(root) => {
+        either::Either::Right(expected_root) => {
             state.reward_merkle_tree = load_reward_accounts(tx, from_height, &reward_accounts)
                 .await
                 .context(
@@ -643,7 +644,7 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
                 )?
                 .0;
             ensure!(
-                state.reward_merkle_tree.commitment() == root,
+                state.reward_merkle_tree.commitment() == expected_root,
                 "loaded reward state does not match parent header"
             );
         },

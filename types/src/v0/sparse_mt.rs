@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt};
+use std::fmt;
 
 use alloy::{
     hex,
@@ -9,10 +9,7 @@ use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
 use derive_more::From;
-use jf_merkle_tree::{
-    prelude::*, universal_merkle_tree::UniversalMerkleTree, DigestAlgorithm, MerkleTreeScheme,
-    ToTraversalPath, UniversalMerkleTreeScheme,
-};
+use jf_merkle_tree::{DigestAlgorithm, ToTraversalPath};
 use sha3::{Digest as _, Keccak256};
 
 use crate::v0_1::{RewardAccount, RewardAmount};
@@ -47,75 +44,25 @@ impl<const ARITY: usize> ToTraversalPath<ARITY> for RewardAccount {
     }
 }
 
-/// Value newtype for U256
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Value(pub U256);
-
-impl Valid for Value {
-    fn check(&self) -> Result<(), SerializationError> {
-        Ok(())
-    }
-}
-
-impl From<U256> for Value {
-    fn from(val: U256) -> Self {
-        Self(val)
-    }
-}
-
-impl CanonicalSerialize for Value {
-    fn serialize_with_mode<W: ark_serialize::Write>(
-        &self,
-        mut writer: W,
-        _compress: Compress,
-    ) -> Result<(), SerializationError> {
-        Ok(writer.write_all(&self.0.to_be_bytes::<32>())?)
-    }
-
-    fn serialized_size(&self, _compress: Compress) -> usize {
-        core::mem::size_of::<U256>()
-    }
-}
-impl CanonicalDeserialize for Value {
-    fn deserialize_with_mode<R: Read>(
-        mut reader: R,
-        _compress: Compress,
-        _validate: Validate,
-    ) -> Result<Self, SerializationError> {
-        let mut bytes = [0u8; core::mem::size_of::<U256>()];
-        reader.read_exact(&mut bytes)?;
-        let value = U256::from_be_slice(&bytes);
-        Ok(Self(value))
-    }
-}
-
-impl AsRef<[u8]> for Value {
-    fn as_ref(&self) -> &[u8] {
-        // This implementation should ideally not be used for hashing
-        // The digest_leaf function uses u256_to_bytes32 for proper big-endian conversion
-        self.0.as_le_slice()
-    }
-}
-
 /// Custom Keccak256 node for our merkle tree
 #[derive(Default, Eq, PartialEq, Clone, Copy, Ord, PartialOrd, Hash)]
-pub struct JellyfishKeccakNode(pub [u8; 32]);
+pub struct KeccakNode(pub [u8; 32]);
 
-impl fmt::Debug for JellyfishKeccakNode {
+impl fmt::Debug for KeccakNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("JellyfishKeccakNode")
+        f.debug_tuple("KeccakNode")
             .field(&hex::encode(self.0))
             .finish()
     }
 }
 
-impl AsRef<[u8]> for JellyfishKeccakNode {
+impl AsRef<[u8]> for KeccakNode {
     fn as_ref(&self) -> &[u8] {
         &self.0
     }
 }
 
-impl CanonicalSerialize for JellyfishKeccakNode {
+impl CanonicalSerialize for KeccakNode {
     fn serialize_with_mode<W: ark_serialize::Write>(
         &self,
         mut writer: W,
@@ -130,7 +77,7 @@ impl CanonicalSerialize for JellyfishKeccakNode {
     }
 }
 
-impl CanonicalDeserialize for JellyfishKeccakNode {
+impl CanonicalDeserialize for KeccakNode {
     fn deserialize_with_mode<R: Read>(
         mut reader: R,
         _compress: Compress,
@@ -142,7 +89,7 @@ impl CanonicalDeserialize for JellyfishKeccakNode {
     }
 }
 
-impl Valid for JellyfishKeccakNode {
+impl Valid for KeccakNode {
     fn check(&self) -> Result<(), SerializationError> {
         Ok(())
     }
@@ -150,14 +97,10 @@ impl Valid for JellyfishKeccakNode {
 
 /// Keccak256 hasher that matches our Solidity implementation
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub struct JellyfishKeccak256Hasher;
+pub struct Keccak256Hasher;
 
-impl DigestAlgorithm<RewardAmount, RewardAccount, JellyfishKeccakNode>
-    for JellyfishKeccak256Hasher
-{
-    fn digest(
-        data: &[JellyfishKeccakNode],
-    ) -> Result<JellyfishKeccakNode, jf_merkle_tree::MerkleTreeError> {
+impl DigestAlgorithm<RewardAmount, RewardAccount, KeccakNode> for Keccak256Hasher {
+    fn digest(data: &[KeccakNode]) -> Result<KeccakNode, jf_merkle_tree::MerkleTreeError> {
         let mut hasher = Keccak256::new();
 
         // Hash the concatenated node data directly (no domain separator)
@@ -166,13 +109,13 @@ impl DigestAlgorithm<RewardAmount, RewardAccount, JellyfishKeccakNode>
         }
 
         let result = hasher.finalize();
-        Ok(JellyfishKeccakNode(result.into()))
+        Ok(KeccakNode(result.into()))
     }
 
     fn digest_leaf(
         _pos: &RewardAccount,
         elem: &RewardAmount,
-    ) -> Result<JellyfishKeccakNode, jf_merkle_tree::MerkleTreeError> {
+    ) -> Result<KeccakNode, jf_merkle_tree::MerkleTreeError> {
         // First hash of the value
         let mut hasher = Keccak256::new();
         hasher.update(&elem.0.to_be_bytes::<32>()); // 32-byte value as big-endian
@@ -183,6 +126,6 @@ impl DigestAlgorithm<RewardAmount, RewardAccount, JellyfishKeccakNode>
         hasher.update(&first_hash);
         let result = hasher.finalize();
 
-        Ok(JellyfishKeccakNode(result.into()))
+        Ok(KeccakNode(result.into()))
     }
 }

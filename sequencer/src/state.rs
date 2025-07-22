@@ -447,7 +447,7 @@ impl<T> SequencerStateUpdate for T where
         + UpdateStateData<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>
         + UpdateStateData<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
         + UpdateStateData<SeqTypes, RewardMerkleTree, { RewardMerkleTree::ARITY }>
-         + UpdateStateData<SeqTypes, RewardMerkleTreeLegacy, { RewardMerkleTreeLegacy::ARITY }>
+        + UpdateStateData<SeqTypes, RewardMerkleTreeLegacy, { RewardMerkleTreeLegacy::ARITY }>
         + ChainConfigPersistence
 {
 }

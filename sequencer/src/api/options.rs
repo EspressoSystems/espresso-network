@@ -433,7 +433,7 @@ impl Options {
                 _,
                 SequencerApiVersion,
                 RewardMerkleTree,
-                { RewardMerkleTreeLegacy::ARITY },
+                { RewardMerkleTree::ARITY },
             >(ver)
             .context("failed to define reward-state api")
         })?;

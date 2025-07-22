@@ -2,9 +2,6 @@
 ALTER TABLE reward_merkle_tree
 RENAME TO reward_merkle_tree_legacy;
 
--- -- Rename the generated column
--- ALTER TABLE header
--- RENAME COLUMN reward_merkle_tree_root TO reward_merkle_tree_legacy_root;
 
 ALTER TABLE reward_merkle_tree_legacy
 RENAME CONSTRAINT reward_merkle_tree_pk TO reward_merkle_tree_legacy_pk;
@@ -29,8 +26,3 @@ ADD
   CONSTRAINT reward_merkle_tree_pk  PRIMARY KEY (path, created);
 
 CREATE INDEX reward_merkle_tree_created ON reward_merkle_tree (created);
-
-
--- ALTER TABLE header
--- ADD column reward_merkle_tree_root text
--- GENERATED ALWAYS AS (data->'fields'->>'reward_merkle_tree_root') STORED;

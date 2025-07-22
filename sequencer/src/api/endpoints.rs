@@ -9,7 +9,7 @@ use std::{
 use anyhow::Result;
 use committable::Committable;
 use espresso_types::{
-    v0_1::{ADVZNsProof, RewardAccount, RewardMerkleTree},
+    v0_1::{ADVZNsProof, RewardAccount},
     FeeAccount, FeeMerkleTree, NamespaceId, NsProof, PubKey, Transaction,
 };
 // re-exported here to avoid breaking changes in consumers
@@ -777,7 +777,7 @@ where
             })?;
 
             state
-                .get_reward_account(
+                .get_reward_account_legacy(
                     &state.node_state().await,
                     height,
                     ViewNumber::new(view),
@@ -804,7 +804,7 @@ where
                 .read(|state| {
                     async move {
                         state
-                            .get_reward_accounts(
+                            .get_reward_accounts_legacy(
                                 &state.node_state().await,
                                 height,
                                 ViewNumber::new(view),

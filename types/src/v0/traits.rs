@@ -40,8 +40,11 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
 use crate::{
-    v0::impls::ValidatedState, v0_1::RewardAmount, v0_3::ChainConfig, BlockMerkleTree, Event,
-    FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig, SeqTypes, ValidatorMap,
+    v0::impls::ValidatedState,
+    v0_1::{RewardAccountProofLegacy, RewardAmount, RewardMerkleCommitmentLegacy},
+    v0_3::ChainConfig,
+    BlockMerkleTree, Event, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig,
+    SeqTypes, ValidatorMap,
 };
 
 #[async_trait]
@@ -251,8 +254,8 @@ pub trait StateCatchup: Send + Sync {
                         .await
                         .map_err(|err| {
                             err.context(format!(
-                                "fetching reward accounts {accounts:?}, height {height}, view \
-                                 {view}"
+                                "fetching legacy reward accounts {accounts:?}, height {height}, \
+                                 view {view}"
                             ))
                         })
                 }

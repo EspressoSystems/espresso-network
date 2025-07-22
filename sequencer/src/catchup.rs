@@ -1659,6 +1659,64 @@ pub async fn add_reward_accounts_to_state<
     Ok(())
 }
 
+/// Add accounts to the in-memory consensus state.
+/// We use this during catchup after receiving verified accounts.
+#[allow(clippy::type_complexity)]
+pub async fn add_reward_accounts_to_state_legacy<
+    N: ConnectedNetwork<PubKey>,
+    V: Versions,
+    P: SequencerPersistence,
+>(
+    consensus: &Arc<RwLock<Consensus<SeqTypes>>>,
+    view: &<SeqTypes as NodeType>::View,
+    accounts: &[RewardAccount],
+    tree: &RewardMerkleTreeLegacy,
+    leaf: Leaf2,
+) -> anyhow::Result<()> {
+    // Get the consensus handle
+    let mut consensus = consensus.write().await;
+
+    let (state, delta) = match consensus.validated_state_map().get(view) {
+        Some(View {
+            view_inner: ViewInner::Leaf { state, delta, .. },
+        }) => {
+            let mut state = (**state).clone();
+
+            // Add the fetched accounts to the state.
+            for account in accounts {
+                if let Some((proof, _)) = RewardAccountProofLegacy::prove(tree, (*account).into()) {
+                    if let Err(err) = proof.remember(&mut state.reward_merkle_tree_legacy) {
+                        tracing::warn!(
+                            ?view,
+                            %account,
+                            "cannot update fetched account state: {err:#}"
+                        );
+                    }
+                } else {
+                    tracing::warn!(?view, %account, "cannot update fetched account state because account is not in the merkle tree");
+                };
+            }
+
+            (Arc::new(state), delta.clone())
+        },
+        _ => {
+            // If we don't already have a leaf for this view, or if we don't have the view
+            // at all, we can create a new view based on the recovered leaf and add it to
+            // our state map. In this case, we must also add the leaf to the saved leaves
+            // map to ensure consistency.
+            let mut state = ValidatedState::from_header(leaf.block_header());
+            state.reward_merkle_tree_legacy = tree.clone();
+            (Arc::new(state), None)
+        },
+    };
+
+    consensus
+        .update_leaf(leaf, Arc::clone(&state), delta)
+        .with_context(|| "failed to update leaf")?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

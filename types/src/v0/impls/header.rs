@@ -30,7 +30,7 @@ use vbs::version::{StaticVersionType, Version};
 use super::{
     instance_state::NodeState,
     state::ValidatedState,
-    v0_1::{IterableFeeInfo, RewardMerkleCommitment, RewardMerkleTree, REWARD_MERKLE_TREE_HEIGHT},
+    v0_1::{IterableFeeInfo, RewardMerkleCommitment, REWARD_MERKLE_TREE_HEIGHT},
     v0_3::ChainConfig,
 };
 use crate::{
@@ -39,10 +39,7 @@ use crate::{
         header::{EitherOrVersion, VersionedHeader},
         impls::{distribute_block_reward, reward::RewardDistributor},
     },
-    v0_1::{
-        self, RewardMerkleCommitmentLegacy, RewardMerkleTreeLegacy,
-        REWARD_MERKLE_TREE_HEIGHT_LEGACY,
-    },
+    v0_1::{self, RewardMerkleCommitmentLegacy, RewardMerkleTreeLegacy},
     v0_2, v0_3, v0_4, BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
     FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable,
     PayloadByteLen, SeqTypes, TimestampMillis, UpgradeType,
@@ -1173,7 +1170,7 @@ mod test_headers {
     use crate::{
         eth_signature_key::EthKeyPair,
         mock::MockStateCatchup,
-        v0_1::{RewardInfo, RewardMerkleTree},
+        v0_1::{RewardInfo, RewardMerkleTree, LEGACY_REWARD_MERKLE_TREE_HEIGHT},
         Leaf,
     };
 
@@ -1632,7 +1629,7 @@ mod test_headers {
             header.fee_merkle_tree_root(),
             header.block_merkle_tree_root(),
             header.reward_merkle_tree_root().left().unwrap_or_else(|| {
-                RewardMerkleTreeLegacy::new(REWARD_MERKLE_TREE_HEIGHT_LEGACY).commitment()
+                RewardMerkleTreeLegacy::new(LEGACY_REWARD_MERKLE_TREE_HEIGHT).commitment()
             }),
             header
                 .reward_merkle_tree_root()
@@ -1664,7 +1661,7 @@ mod test_headers {
             header.fee_merkle_tree_root(),
             header.block_merkle_tree_root(),
             header.reward_merkle_tree_root().left().unwrap_or_else(|| {
-                RewardMerkleTreeLegacy::new(REWARD_MERKLE_TREE_HEIGHT_LEGACY).commitment()
+                RewardMerkleTreeLegacy::new(LEGACY_REWARD_MERKLE_TREE_HEIGHT).commitment()
             }),
             header
                 .reward_merkle_tree_root()
@@ -1696,7 +1693,7 @@ mod test_headers {
             header.fee_merkle_tree_root(),
             header.block_merkle_tree_root(),
             header.reward_merkle_tree_root().left().unwrap_or_else(|| {
-                RewardMerkleTreeLegacy::new(REWARD_MERKLE_TREE_HEIGHT_LEGACY).commitment()
+                RewardMerkleTreeLegacy::new(LEGACY_REWARD_MERKLE_TREE_HEIGHT).commitment()
             }),
             header
                 .reward_merkle_tree_root()
