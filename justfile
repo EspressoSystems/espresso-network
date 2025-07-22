@@ -86,11 +86,11 @@ test *args:
     just nextest --features embedded-db  {{args}}
     just nextest {{args}}
 
-test-slow:
+test-slow *args:
     @echo 'Only slow tests are included. Use `test` for those deemed not slow. Or `test-all` for all tests.'
     @echo 'features: "embedded-db"'
-    just nextest --features embedded-db --profile slow
-    just nextest --profile slow
+    just nextest --features embedded-db --profile slow {{args}}
+    just nextest --profile slow {{args}}
 
 test-all:
     @echo 'features: "embedded-db"'

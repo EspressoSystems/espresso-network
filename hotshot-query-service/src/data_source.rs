@@ -267,16 +267,24 @@ pub mod availability_tests {
                 let ix = seen_transactions
                     .entry(txn.commit())
                     .or_insert((i as u64, j.clone()));
-                if let Ok(tx_data) = ds.get_transaction(txn.commit()).await.try_resolve() {
-                    assert_eq!(tx_data.transaction(), &txn);
-                    assert_eq!(tx_data.block_height(), ix.0);
-                    assert_eq!(tx_data.index(), ix.1.position as u64);
+                if let Ok(tx_data) = ds
+                    .get_block_containing_transaction(txn.commit())
+                    .await
+                    .try_resolve()
+                {
+                    assert_eq!(tx_data.transaction.transaction(), &txn);
+                    assert_eq!(tx_data.transaction.block_height(), ix.0);
+                    assert_eq!(tx_data.transaction.index(), ix.1.position as u64);
+                    assert_eq!(tx_data.index, ix.1);
+                    assert_eq!(tx_data.block, block);
                 } else {
                     tracing::warn!(
                         "skipping transaction index check for missing transaction {j:?} {txn:?}"
                     );
                     // At least check that _some_ transaction can be fetched.
-                    ds.get_transaction(txn.commit()).await.await;
+                    ds.get_block_containing_transaction(txn.commit())
+                        .await
+                        .await;
                 }
             }
         }
