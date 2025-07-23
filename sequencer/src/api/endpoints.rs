@@ -9,7 +9,7 @@ use std::{
 use anyhow::Result;
 use committable::Committable;
 use espresso_types::{
-    v0_1::{ADVZNsProof, RewardAccount},
+    v0_1::{ADVZNsProof, RewardAccount, RewardAccountLegacy},
     FeeAccount, FeeMerkleTree, NamespaceId, NsProof, PubKey, Transaction,
 };
 // re-exported here to avoid breaking changes in consumers
@@ -768,7 +768,7 @@ where
             let (height, view) = parse_height_view(&req)?;
             let account = parse_reward_account(&req)?;
             state
-                .get_reward_account_legacy(&state.node_state().await, height, view, account)
+                .get_reward_account_legacy(&state.node_state().await, height, view, account.into())
                 .await
                 .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
         }
@@ -778,7 +778,7 @@ where
         async move {
             let (height, view) = parse_height_view(&req)?;
             let accounts = req
-                .body_auto::<Vec<RewardAccount>, ApiVer>(ApiVer::instance())
+                .body_auto::<Vec<RewardAccountLegacy>, ApiVer>(ApiVer::instance())
                 .map_err(Error::from_request_error)?;
 
             state

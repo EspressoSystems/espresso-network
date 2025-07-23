@@ -5,8 +5,8 @@ use committable::{Commitment, Committable};
 use espresso_types::{
     traits::{SequencerPersistence, StateCatchup},
     v0_1::{
-        RewardAccount, RewardAccountProof, RewardAccountProofLegacy, RewardMerkleCommitment,
-        RewardMerkleCommitmentLegacy,
+        RewardAccount, RewardAccountLegacy, RewardAccountProof, RewardAccountProofLegacy,
+        RewardMerkleCommitment, RewardMerkleCommitmentLegacy,
     },
     v0_3::ChainConfig,
     BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
@@ -151,7 +151,7 @@ impl<
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentLegacy,
-        accounts: &[RewardAccount],
+        accounts: &[RewardAccountLegacy],
     ) -> anyhow::Result<Vec<RewardAccountProofLegacy>> {
         // Timeout after a few batches
         let timeout_duration = self.config.request_batch_interval * 3;

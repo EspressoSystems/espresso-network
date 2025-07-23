@@ -41,7 +41,7 @@ pub type FeeMerkleCommitment = <FeeMerkleTree as MerkleTreeScheme>::Commitment;
 pub type RewardMerkleTreeLegacy = UniversalMerkleTree<
     RewardAmount,
     Sha3Digest,
-    RewardAccount,
+    RewardAccountLegacy,
     REWARD_MERKLE_TREE_ARITY_LEGACY,
     Sha3Node,
 >;
@@ -76,6 +76,41 @@ pub type RewardMerkleCommitmentLegacy = <RewardMerkleTreeLegacy as MerkleTreeSch
 #[display("{_0:x}")]
 pub struct RewardAccount(pub Address);
 
+
+// New Type for `Address` in order to implement `CanonicalSerialize` and
+// `CanonicalDeserialize`
+#[derive(
+    Default,
+    Hash,
+    Copy,
+    Clone,
+    Debug,
+    Display,
+    Deserialize,
+    Serialize,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    From,
+    Into,
+)]
+#[display("{_0:x}")]
+pub struct RewardAccountLegacy(pub Address);
+
+
+impl From<RewardAccount> for RewardAccountLegacy {
+    fn from(account: RewardAccount) -> Self {
+        RewardAccountLegacy(account.0)
+    }
+}
+
+impl From<RewardAccountLegacy> for RewardAccount {
+    fn from(account: RewardAccountLegacy) -> Self {
+        RewardAccount(account.0)
+    }
+}
+
 // New Type for `U256` in order to implement `CanonicalSerialize` and
 // `CanonicalDeserialize`
 #[derive(
@@ -106,12 +141,7 @@ pub(crate) const SECONDS_PER_YEAR: u128 = 60 * 60 * 24 * 365;
 pub(crate) const MILLISECONDS_PER_YEAR: u128 = 86_400_000 * 365;
 pub(crate) const BLOCKS_PER_YEAR: u128 = SECONDS_PER_YEAR / ASSUMED_BLOCK_TIME_SECONDS;
 pub const COMMISSION_BASIS_POINTS: u16 = 10_000;
-
-#[derive(Clone, Debug, Default)]
-pub struct RewardInfo {
-    pub account: RewardAccount,
-    pub amount: RewardAmount,
-}
+ 
 
 /// A proof of the balance of an account in the fee ledger.
 ///

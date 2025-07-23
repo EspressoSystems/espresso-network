@@ -41,7 +41,9 @@ use super::{
 };
 use crate::{
     v0::impls::ValidatedState,
-    v0_1::{RewardAccountProofLegacy, RewardAmount, RewardMerkleCommitmentLegacy},
+    v0_1::{
+        RewardAccountLegacy, RewardAccountProofLegacy, RewardAmount, RewardMerkleCommitmentLegacy,
+    },
     v0_3::ChainConfig,
     BlockMerkleTree, Event, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig,
     SeqTypes, ValidatorMap,
@@ -226,7 +228,7 @@ pub trait StateCatchup: Send + Sync {
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentLegacy,
-        accounts: &[RewardAccount],
+        accounts: &[RewardAccountLegacy],
     ) -> anyhow::Result<Vec<RewardAccountProofLegacy>>;
 
     /// Fetch the given list of reward accounts, retrying on transient errors.
@@ -236,7 +238,7 @@ pub trait StateCatchup: Send + Sync {
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentLegacy,
-        accounts: Vec<RewardAccount>,
+        accounts: Vec<RewardAccountLegacy>,
     ) -> anyhow::Result<Vec<RewardAccountProofLegacy>> {
         self.backoff()
             .retry(self, |provider, retry| {
@@ -413,7 +415,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentLegacy,
-        accounts: &[RewardAccount],
+        accounts: &[RewardAccountLegacy],
     ) -> anyhow::Result<Vec<RewardAccountProofLegacy>> {
         (**self)
             .try_fetch_reward_accounts_legacy(
@@ -433,7 +435,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentLegacy,
-        accounts: Vec<RewardAccount>,
+        accounts: Vec<RewardAccountLegacy>,
     ) -> anyhow::Result<Vec<RewardAccountProofLegacy>> {
         (**self)
             .fetch_reward_accounts_legacy(instance, height, view, reward_merkle_tree_root, accounts)

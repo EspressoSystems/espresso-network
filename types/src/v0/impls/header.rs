@@ -1174,7 +1174,10 @@ mod test_headers {
     use crate::{
         eth_signature_key::EthKeyPair,
         mock::MockStateCatchup,
-        v0_1::{RewardInfo, RewardMerkleTree, LEGACY_REWARD_MERKLE_TREE_HEIGHT, REWARD_MERKLE_TREE_HEIGHT},
+        v0_1::{
+            RewardAccount, RewardAccountLegacy, RewardAmount, RewardMerkleTree,
+            LEGACY_REWARD_MERKLE_TREE_HEIGHT, REWARD_MERKLE_TREE_HEIGHT,
+        },
         Leaf,
     };
 
@@ -1230,19 +1233,16 @@ mod test_headers {
             )
             .unwrap();
 
-            let reward_info = RewardInfo {
-                account: Default::default(),
-                amount: Default::default(),
-            };
-            let reward_merkle_tree = RewardMerkleTree::from_kv_set(
-                20,
-                Vec::from([(reward_info.account, reward_info.amount)]),
-            )
-            .unwrap();
+            let reward_account_legacy = RewardAccountLegacy::default();
+            let reward_account = RewardAccount::default();
+            let reward_amount = RewardAmount::default();
+            let reward_merkle_tree =
+                RewardMerkleTree::from_kv_set(20, Vec::from([(reward_account, reward_amount)]))
+                    .unwrap();
 
             let reward_merkle_tree_legacy = RewardMerkleTreeLegacy::from_kv_set(
                 20,
-                Vec::from([(reward_info.account, reward_info.amount)]),
+                Vec::from([(reward_account_legacy, reward_amount)]),
             )
             .unwrap();
 

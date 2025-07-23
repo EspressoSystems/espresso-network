@@ -14,7 +14,9 @@ use espresso_types::{
     config::PublicNetworkConfig,
     retain_accounts,
     v0::traits::SequencerPersistence,
-    v0_1::{RewardAccount, RewardAmount, RewardMerkleTree, RewardMerkleTreeLegacy},
+    v0_1::{
+        RewardAccount, RewardAccountLegacy, RewardAmount, RewardMerkleTree, RewardMerkleTreeLegacy,
+    },
     v0_3::ChainConfig,
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction, ValidatorMap,
@@ -670,7 +672,7 @@ impl<
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        accounts: &[RewardAccount],
+        accounts: &[RewardAccountLegacy],
     ) -> anyhow::Result<RewardMerkleTreeLegacy> {
         // Check if we have the desired state in memory.
         match self
@@ -854,7 +856,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
         _instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        accounts: &[RewardAccount],
+        accounts: &[RewardAccountLegacy],
     ) -> anyhow::Result<RewardMerkleTreeLegacy> {
         let state = self
             .consensus()

@@ -5,7 +5,7 @@ use anyhow::{bail, ensure, Context};
 use either::Either;
 use espresso_types::{
     traits::StateCatchup,
-    v0_1::{RewardAccount, RewardMerkleTree, RewardMerkleTreeLegacy},
+    v0_1::{RewardAccount, RewardAccountLegacy, RewardMerkleTree, RewardMerkleTreeLegacy},
     v0_3::ChainConfig,
     BlockMerkleTree, Delta, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
 };
@@ -156,17 +156,19 @@ async fn store_state_update(
 
     if version <= EpochVersion::version() {
         for delta in rewards_delta {
-            let proof = match reward_merkle_tree_legacy.universal_lookup(delta) {
+            let proof = match reward_merkle_tree_legacy
+                .universal_lookup(RewardAccountLegacy::from(delta))
+            {
                 LookupResult::Ok(_, proof) => proof,
                 LookupResult::NotFound(proof) => proof,
                 LookupResult::NotInMemory => {
                     bail!("missing merkle path for reward account {delta}")
                 },
             };
-            let path: Vec<usize> = <RewardAccount as ToTraversalPath<
+            let path: Vec<usize> = <RewardAccountLegacy as ToTraversalPath<
                 { RewardMerkleTreeLegacy::ARITY },
             >>::to_traversal_path(
-                &delta, reward_merkle_tree.height()
+                &delta.into(), reward_merkle_tree_legacy.height()
             );
 
             tracing::debug!(%delta, "inserting reward account");

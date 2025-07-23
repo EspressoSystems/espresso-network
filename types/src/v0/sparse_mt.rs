@@ -1,48 +1,14 @@
 use std::fmt;
 
-use alloy::{
-    hex,
-    primitives::{Address, U256},
-};
+use alloy::hex;
 use anyhow::Result;
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
-use derive_more::From;
-use jf_merkle_tree::{DigestAlgorithm, ToTraversalPath};
+use jf_merkle_tree::DigestAlgorithm;
 use sha3::{Digest as _, Keccak256};
 
 use crate::v0_1::{RewardAccount, RewardAmount};
-
-impl From<[u8; 20]> for RewardAccount {
-    fn from(bytes: [u8; 20]) -> Self {
-        Self(Address::from(bytes))
-    }
-}
-
-impl AsRef<[u8]> for RewardAccount {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_slice()
-    }
-}
-
-impl<const ARITY: usize> ToTraversalPath<ARITY> for RewardAccount {
-    fn to_traversal_path(&self, height: usize) -> Vec<usize> {
-        let mut result = vec![0; height];
-
-        // Convert 20-byte address to U256
-        let mut value = U256::from_be_slice(self.0.as_slice());
-
-        // Extract digits using modulo and division (LSB first)
-        for item in result.iter_mut().take(height) {
-            let digit = (value % U256::from(ARITY)).to::<usize>();
-            *item = digit;
-            value /= U256::from(ARITY);
-        }
-
-        result
-    }
-}
 
 /// Custom Keccak256 node for our merkle tree
 #[derive(Default, Eq, PartialEq, Clone, Copy, Ord, PartialOrd, Hash)]

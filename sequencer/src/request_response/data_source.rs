@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use espresso_types::{
     retain_accounts,
     traits::SequencerPersistence,
-    v0_1::{RewardAccount, RewardMerkleTree, RewardMerkleTreeLegacy},
+    v0_1::{RewardAccount, RewardAccountLegacy, RewardMerkleTree, RewardMerkleTreeLegacy},
     NodeState, PubKey, SeqTypes,
 };
 use hotshot::{traits::NodeImplementation, SystemContext};
@@ -321,7 +321,7 @@ pub fn retain_reward_accounts(
 /// Fails if one of the requested accounts is not represented in the original `state`.
 pub fn retain_reward_accounts_legacy(
     state: &RewardMerkleTreeLegacy,
-    accounts: impl IntoIterator<Item = RewardAccount>,
+    accounts: impl IntoIterator<Item = RewardAccountLegacy>,
 ) -> anyhow::Result<RewardMerkleTreeLegacy> {
     let mut snapshot = RewardMerkleTreeLegacy::from_commitment(state.commitment());
     for account in accounts {

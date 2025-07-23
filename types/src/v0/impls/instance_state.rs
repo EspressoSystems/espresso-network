@@ -396,8 +396,8 @@ pub mod mock {
     use crate::{
         retain_accounts,
         v0_1::{
-            RewardAccount, RewardAccountProof, RewardAccountProofLegacy, RewardMerkleCommitment,
-            RewardMerkleCommitmentLegacy,
+            RewardAccount, RewardAccountLegacy, RewardAccountProof, RewardAccountProofLegacy,
+            RewardMerkleCommitment, RewardMerkleCommitmentLegacy,
         },
         BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
     };
@@ -511,7 +511,7 @@ pub mod mock {
             _height: u64,
             _view: ViewNumber,
             _reward_merkle_tree_root: RewardMerkleCommitmentLegacy,
-            _accounts: &[RewardAccount],
+            _accounts: &[RewardAccountLegacy],
         ) -> anyhow::Result<Vec<RewardAccountProofLegacy>> {
             anyhow::bail!("unimplemented")
         }

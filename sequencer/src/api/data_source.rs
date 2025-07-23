@@ -8,8 +8,9 @@ use espresso_types::{
     config::PublicNetworkConfig,
     v0::traits::{PersistenceOptions, SequencerPersistence},
     v0_1::{
-        RewardAccount, RewardAccountProof, RewardAccountProofLegacy, RewardAccountQueryData,
-        RewardAccountQueryDataLegacy, RewardAmount, RewardMerkleTree, RewardMerkleTreeLegacy,
+        RewardAccount, RewardAccountLegacy, RewardAccountProof, RewardAccountProofLegacy,
+        RewardAccountQueryData, RewardAccountQueryDataLegacy, RewardAmount, RewardMerkleTree,
+        RewardMerkleTreeLegacy,
     },
     v0_3::{ChainConfig, Validator},
     FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
@@ -256,7 +257,7 @@ pub(crate) trait CatchupDataSource: Sync {
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        account: RewardAccount,
+        account: RewardAccountLegacy,
     ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataLegacy>> {
         async move {
             let tree = self
@@ -274,7 +275,7 @@ pub(crate) trait CatchupDataSource: Sync {
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        accounts: &[RewardAccount],
+        accounts: &[RewardAccountLegacy],
     ) -> impl Send + Future<Output = anyhow::Result<RewardMerkleTreeLegacy>>;
 }
 

@@ -6,8 +6,8 @@ use committable::{Commitment, Committable};
 use espresso_types::{
     get_l1_deposits,
     v0_1::{
-        IterableFeeInfo, RewardAccount, RewardMerkleTree, RewardMerkleTreeLegacy,
-        LEGACY_REWARD_MERKLE_TREE_HEIGHT, REWARD_MERKLE_TREE_HEIGHT,
+        IterableFeeInfo, RewardAccount, RewardAccountLegacy, RewardMerkleTree,
+        RewardMerkleTreeLegacy, LEGACY_REWARD_MERKLE_TREE_HEIGHT, REWARD_MERKLE_TREE_HEIGHT,
     },
     v0_3::ChainConfig,
     BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2,
@@ -100,7 +100,7 @@ impl CatchupStorage for SqlStorage {
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        accounts: &[RewardAccount],
+        accounts: &[RewardAccountLegacy],
     ) -> anyhow::Result<(RewardMerkleTreeLegacy, Leaf2)> {
         let mut tx = self.read().await.context(format!(
             "opening transaction to fetch legacy reward account {accounts:?}; height {height}"
@@ -119,10 +119,15 @@ impl CatchupStorage for SqlStorage {
         if height < block_height {
             load_reward_accounts_legacy(&mut tx, height, accounts).await
         } else {
+            let accounts: Vec<_> = accounts
+                .iter()
+                .map(|acct| RewardAccount::from(*acct))
+                .collect();
             // If we do not have the exact snapshot we need, we can try going back to the last
             // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
             let (state, leaf) =
-                reconstruct_state(instance, &mut tx, block_height - 1, view, &[], accounts).await?;
+                reconstruct_state(instance, &mut tx, block_height - 1, view, &[], &accounts)
+                    .await?;
             Ok((state.reward_merkle_tree_legacy, leaf))
         }
     }
@@ -366,7 +371,7 @@ async fn load_frontier<Mode: TransactionMode>(
 async fn load_reward_accounts_legacy<Mode: TransactionMode>(
     tx: &mut Transaction<Mode>,
     height: u64,
-    accounts: &[RewardAccount],
+    accounts: &[RewardAccountLegacy],
 ) -> anyhow::Result<(RewardMerkleTreeLegacy, Leaf2)> {
     let leaf = tx
         .get_leaf(LeafId::<SeqTypes>::from(height as usize))
@@ -622,14 +627,17 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
     // Load all required reward accounts and update the reward Merkle tree.
     match parent.block_header().reward_merkle_tree_root() {
         either::Either::Left(expected_root) => {
-            state.reward_merkle_tree_legacy =
-                load_reward_accounts_legacy(tx, from_height, &reward_accounts)
-                    .await
-                    .context(
-                        "unable to reconstruct state because legacy reward accounts are not \
-                         available at origin",
-                    )?
-                    .0;
+            let accts = reward_accounts
+                .into_iter()
+                .map(RewardAccountLegacy::from)
+                .collect::<Vec<_>>();
+            state.reward_merkle_tree_legacy = load_reward_accounts_legacy(tx, from_height, &accts)
+                .await
+                .context(
+                    "unable to reconstruct state because legacy reward accounts are not available \
+                     at origin",
+                )?
+                .0;
             ensure!(
                 state.reward_merkle_tree_legacy.commitment() == expected_root,
                 "loaded legacy reward state does not match parent header"

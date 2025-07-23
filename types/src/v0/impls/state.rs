@@ -41,7 +41,8 @@ use crate::{
         sparse_mt::{Keccak256Hasher, KeccakNode},
     },
     v0_1::{
-        RewardMerkleCommitmentLegacy, RewardMerkleTreeLegacy, LEGACY_REWARD_MERKLE_TREE_HEIGHT,
+        RewardAccountLegacy, RewardMerkleCommitmentLegacy, RewardMerkleTreeLegacy,
+        LEGACY_REWARD_MERKLE_TREE_HEIGHT,
     },
     v0_3::{ChainConfig, ResolvableChainConfig},
     BlockMerkleTree, Delta, FeeAccount, FeeAmount, FeeInfo, FeeMerkleTree, Header, Leaf2,
@@ -194,7 +195,7 @@ impl Default for ValidatedState {
 
         let reward_merkle_tree_legacy = RewardMerkleTreeLegacy::from_kv_set(
             LEGACY_REWARD_MERKLE_TREE_HEIGHT,
-            Vec::<(RewardAccount, RewardAmount)>::new(),
+            Vec::<(RewardAccountLegacy, RewardAmount)>::new(),
         )
         .unwrap();
 
@@ -268,8 +269,8 @@ impl ValidatedState {
 
     pub fn forgotten_reward_accounts_legacy(
         &self,
-        accounts: impl IntoIterator<Item = RewardAccount>,
-    ) -> Vec<RewardAccount> {
+        accounts: impl IntoIterator<Item = RewardAccountLegacy>,
+    ) -> Vec<RewardAccountLegacy> {
         accounts
             .into_iter()
             .unique()
