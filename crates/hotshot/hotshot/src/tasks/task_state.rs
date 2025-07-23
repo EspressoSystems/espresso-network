@@ -14,7 +14,12 @@ use std::{
 use async_trait::async_trait;
 use chrono::Utc;
 use hotshot_task_impls::{
-    block_builder::BlockBuilderTaskState, builder::BuilderClient, consensus::ConsensusTaskState, da::DaTaskState, quorum_proposal::QuorumProposalTaskState, quorum_proposal_recv::QuorumProposalRecvTaskState, quorum_vote::QuorumVoteTaskState, request::NetworkRequestState, rewind::RewindTaskState, stats::StatsTaskState, transactions::TransactionTaskState, upgrade::UpgradeTaskState, vid::VidTaskState, view_sync::ViewSyncTaskState
+    block_builder::BlockBuilderTaskState, builder::BuilderClient, consensus::ConsensusTaskState,
+    da::DaTaskState, quorum_proposal::QuorumProposalTaskState,
+    quorum_proposal_recv::QuorumProposalRecvTaskState, quorum_vote::QuorumVoteTaskState,
+    request::NetworkRequestState, rewind::RewindTaskState, stats::StatsTaskState,
+    transactions::TransactionTaskState, upgrade::UpgradeTaskState, vid::VidTaskState,
+    view_sync::ViewSyncTaskState,
 };
 use hotshot_types::{
     consensus::OuterConsensus,
