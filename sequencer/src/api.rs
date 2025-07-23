@@ -2157,8 +2157,9 @@ mod test {
         traits::{NullEventConsumer, PersistenceOptions},
         v0_1::{RewardAmount, COMMISSION_BASIS_POINTS},
         v0_3::Fetcher,
-        validators_from_l1_events, EpochVersion, FeeAmount, FeeVersion, Header, L1ClientOptions,
-        MockSequencerVersions, NamespaceId, RewardDistributor, SequencerVersions, ValidatedState,
+        validators_from_l1_events, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAmount, FeeVersion,
+        Header, L1ClientOptions, MockSequencerVersions, NamespaceId, RewardDistributor,
+        SequencerVersions, ValidatedState,
     };
     use futures::{
         future::{self, join_all},
@@ -2186,6 +2187,7 @@ mod test {
     use jf_merkle_tree::prelude::{MerkleProof, Sha3Node};
     use portpicker::pick_unused_port;
     use rand::seq::SliceRandom;
+    use rstest::rstest;
     use sequencer_utils::test_utils::setup_test;
     use staking_cli::demo::DelegationConfig;
     use surf_disco::Client;
@@ -2212,6 +2214,9 @@ mod test {
         persistence::no_storage,
         testing::{wait_for_decide_on_handle, TestConfig, TestConfigBuilder},
     };
+
+    type PosVersionV3 = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+    type PosVersionV4 = SequencerVersions<StaticVersion<0, 4>, StaticVersion<0, 0>>;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_healthcheck() {
@@ -3184,8 +3189,6 @@ mod test {
         let epoch_height = 35;
         let wanted_epochs = 4;
 
-        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
-
         let network_config = TestConfigBuilder::default()
             .epoch_height(epoch_height)
             .build();
@@ -3208,12 +3211,12 @@ mod test {
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config.clone())
-            .pos_hook::<PosVersion>(DelegationConfig::VariableAmounts, Default::default())
+            .pos_hook::<PosVersionV3>(DelegationConfig::VariableAmounts, Default::default())
             .await
             .expect("Pos Deployment")
             .build();
 
-        let _network = TestNetwork::new(config, PosVersion::new()).await;
+        let _network = TestNetwork::new(config, PosVersionV3::new()).await;
 
         let mut subscribed_events = client
             .socket("hotshot-events/events")
@@ -3275,8 +3278,6 @@ mod test {
         setup_test();
         let epoch_height = 20;
 
-        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
-
         let network_config = TestConfigBuilder::default()
             .epoch_height(epoch_height)
             .build();
@@ -3307,12 +3308,12 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(DelegationConfig::VariableAmounts, Default::default())
+            .pos_hook::<PosVersionV3>(DelegationConfig::VariableAmounts, Default::default())
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, PosVersion::new()).await;
+        let network = TestNetwork::new(config, PosVersionV3::new()).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -3373,8 +3374,6 @@ mod test {
         setup_test();
         let epoch_height = 20;
 
-        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
-
         let network_config = TestConfigBuilder::default()
             .epoch_height(epoch_height)
             .build();
@@ -3405,12 +3404,12 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators, Default::default())
+            .pos_hook::<PosVersionV3>(DelegationConfig::MultipleDelegators, Default::default())
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, PosVersion::new()).await;
+        let network = TestNetwork::new(config, PosVersionV3::new()).await;
         let node_state = network.server.node_state();
         let membership = node_state.coordinator.membership().read().await;
         let block_reward = membership.block_reward(None).expect("block reward is None");
@@ -3495,8 +3494,6 @@ mod test {
         setup_test();
         let epoch_height = 20;
 
-        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
-
         let network_config = TestConfigBuilder::default()
             .epoch_height(epoch_height)
             .build();
@@ -3528,12 +3525,12 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators, Default::default())
+            .pos_hook::<PosVersionV3>(DelegationConfig::MultipleDelegators, Default::default())
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, PosVersion::new()).await;
+        let network = TestNetwork::new(config, PosVersionV3::new()).await;
 
         let mut prev_st = None;
         let state = network.server.decided_state().await;
@@ -3608,8 +3605,6 @@ mod test {
         setup_test();
         const EPOCH_HEIGHT: u64 = 20;
 
-        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
-
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
             .build();
@@ -3640,12 +3635,12 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators, Default::default())
+            .pos_hook::<PosVersionV3>(DelegationConfig::MultipleDelegators, Default::default())
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, PosVersion::new()).await;
+        let network = TestNetwork::new(config, PosVersionV3::new()).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -4044,7 +4039,7 @@ mod test {
                 let amount_from_api = loop {
                     let result = client
                         .get::<Option<RewardAmount>>(&format!(
-                            "reward-state/reward-balance/{block}/{address}"
+                            "reward-state-v2/reward-balance/{block}/{address}"
                         ))
                         .send()
                         .await
@@ -4081,8 +4076,9 @@ mod test {
                 .and_modify(|r| assert_eq!(*r, block_reward.0))
                 .or_insert(block_reward.0);
 
-            // Stop the test after verifying 5 full epochs.
+            // Stop the test after verifying 5 epochs.
             if leaf.height() == EPOCH_HEIGHT * 5 {
+                tracing::info!("verified 5 epoch rewards.");
                 break;
             }
         }
@@ -4090,12 +4086,14 @@ mod test {
         Ok(())
     }
 
+    #[rstest]
+    #[case(PosVersionV3::new())]
+    #[case(PosVersionV4::new())]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_node_stake_table_api() {
+
+    async fn test_node_stake_table_api<Ver: Versions>(#[case] ver: Ver) {
         setup_test();
         let epoch_height = 20;
-
-        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(epoch_height)
@@ -4127,12 +4125,12 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators, Default::default())
+            .pos_hook::<Ver>(DelegationConfig::MultipleDelegators, Default::default())
             .await
             .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, PosVersion::new()).await;
+        let _network = TestNetwork::new(config, ver).await;
 
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
@@ -4163,11 +4161,13 @@ mod test {
             .expect("failed to get stake table");
     }
 
+    #[rstest]
+    #[case(PosVersionV3::new())]
+    #[case(PosVersionV4::new())]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_epoch_stake_table_catchup() {
-        setup_test();
 
-        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+    async fn test_epoch_stake_table_catchup<Ver: Versions>(#[case] ver: Ver) {
+        setup_test();
 
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 6;
@@ -4204,13 +4204,13 @@ mod test {
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .catchups(catchup_peers)
-            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators, Default::default())
+            .pos_hook::<Ver>(DelegationConfig::MultipleDelegators, Default::default())
             .await
             .unwrap()
             .build();
 
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, EpochsTestVersions {}).await;
+        let mut network = TestNetwork::new(config, ver).await;
 
         // Wait for the peer 0 (node 1) to advance past three epochs
         let mut events = network.peers[0].event_stream().await;
@@ -4233,8 +4233,6 @@ mod test {
         while let Some(event) = events.next().await {
             if let EventType::Decide { leaf_chain, .. } = event.event {
                 let height = leaf_chain[0].leaf.height();
-                tracing::info!("Server decided at height: {height}");
-                //  until 7 epochs
                 if height > EPOCH_HEIGHT * 7 {
                     break;
                 }
@@ -4244,7 +4242,6 @@ mod test {
         // add node 1 to the network with fresh storage
         let storage = SqlDataSource::create_storage().await;
         let options = <SqlDataSource as TestableSequencerDataSource>::persistence_options(&storage);
-
         tracing::info!("Restarting peer 0");
         let node = network
             .cfg
@@ -4261,19 +4258,16 @@ mod test {
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
-                EpochsTestVersions {},
+                ver,
                 Default::default(),
             )
             .await;
 
         let coordinator = node.node_state().coordinator;
-
         let server_node_state = network.server.node_state();
         let server_coordinator = server_node_state.coordinator;
-
         // Verify that the restarted node catches up for each epoch
         for epoch_num in 1..=7 {
-            println!("getting stake table for epoch = {epoch_num}");
             let epoch = EpochNumber::new(epoch_num);
             let membership_for_epoch = coordinator.membership_for_epoch(Some(epoch)).await;
             if membership_for_epoch.is_err() {
@@ -4292,7 +4286,6 @@ mod test {
                 .read()
                 .await
                 .stake_table(Some(epoch));
-
             println!("asserting stake table for epoch = {epoch_num}");
 
             assert_eq!(
@@ -4302,11 +4295,13 @@ mod test {
         }
     }
 
+    #[rstest]
+    #[case(PosVersionV3::new())]
+    #[case(PosVersionV4::new())]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_epoch_stake_table_catchup_stress() {
-        setup_test();
 
-        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+    async fn test_epoch_stake_table_catchup_stress<Ver: Versions>(#[case] versions: Ver) {
+        setup_test();
 
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 6;
@@ -4343,13 +4338,13 @@ mod test {
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .catchups(catchup_peers)
-            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators, Default::default())
+            .pos_hook::<Ver>(DelegationConfig::MultipleDelegators, Default::default())
             .await
             .unwrap()
             .build();
 
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, EpochsTestVersions {}).await;
+        let mut network = TestNetwork::new(config, versions).await;
 
         // Wait for the peer 0 (node 1) to advance past three epochs
         let mut events = network.peers[0].event_stream().await;
@@ -4400,7 +4395,7 @@ mod test {
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
-                EpochsTestVersions {},
+                versions,
                 Default::default(),
             )
             .await;
@@ -4447,8 +4442,14 @@ mod test {
         }
     }
 
+    #[rstest]
+    #[case(PosVersionV3::new())]
+    #[case(PosVersionV4::new())]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_merklized_state_catchup_on_restart() -> anyhow::Result<()> {
+
+    async fn test_merklized_state_catchup_on_restart<Ver: Versions>(
+        #[case] versions: Ver,
+    ) -> anyhow::Result<()> {
         // This test verifies that a query node can catch up on
         // merklized state after being offline for multiple epochs.
         //
@@ -4462,8 +4463,6 @@ mod test {
         //    - The node is expected to reconstruct or catch up on its own
         setup_test();
         const EPOCH_HEIGHT: u64 = 10;
-
-        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
@@ -4496,7 +4495,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(
+            .pos_hook::<Ver>(
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
             )
@@ -4504,7 +4503,7 @@ mod test {
             .unwrap()
             .build();
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, PosVersion::new()).await;
+        let mut network = TestNetwork::new(config, versions.clone()).await;
 
         // Remove peer 0 and restart it with the query module enabled.
         // Adding an additional node to the test network is not straight forward,
@@ -4530,6 +4529,7 @@ mod test {
                 let cfg = network.cfg.clone();
                 let node_0_persistence = node_0_persistence.clone();
                 let state = state.clone();
+                let versions = versions.clone();
                 async move {
                     Ok(cfg
                         .init_node(
@@ -4545,7 +4545,7 @@ mod test {
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
-                            PosVersion::new(),
+                            versions,
                             Default::default(),
                         )
                         .await)
@@ -4569,6 +4569,7 @@ mod test {
         let node_0 = opt
             .serve(|metrics, consumer, storage| {
                 let cfg = network.cfg.clone();
+                let versions = versions.clone();
                 async move {
                     Ok(cfg
                         .init_node(
@@ -4584,7 +4585,7 @@ mod test {
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
-                            PosVersion::new(),
+                            versions,
                             Default::default(),
                         )
                         .await)
@@ -4605,18 +4606,21 @@ mod test {
         loop {
             sleep(Duration::from_secs(1)).await;
             let state = node_0.decided_state().await;
-            let reward_accounts = state
-                .reward_merkle_tree
-                .clone()
-                .into_iter()
-                .collect::<Vec<_>>();
 
-            if !reward_accounts.is_empty() {
-                tracing::info!("Node's state has reward accounts. {reward_accounts:?}");
+            let count = if Ver::Base::VERSION == EpochVersion::VERSION {
+                // Use legacy tree for V3
+                state.reward_merkle_tree_legacy.clone().into_iter().count()
+            } else {
+                // Use new tree for V4 and above
+                state.reward_merkle_tree.clone().into_iter().count()
+            };
+
+            if count > 0 {
+                tracing::info!("Node's state has reward accounts");
                 break;
             }
-            retries += 1;
 
+            retries += 1;
             if retries > 120 {
                 panic!("max retries reached. failed to catchup reward state");
             }
@@ -4652,8 +4656,13 @@ mod test {
         Ok(())
     }
 
+    #[rstest]
+    #[case(PosVersionV3::new())]
+    #[case(PosVersionV4::new())]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_state_reconstruction() -> anyhow::Result<()> {
+    async fn test_state_reconstruction<Ver: Versions>(
+        #[case] pos_version: Ver,
+    ) -> anyhow::Result<()> {
         // This test verifies that a query node can successfully reconstruct its state
         // after being shut down from the database
         //
@@ -4671,8 +4680,6 @@ mod test {
 
         setup_test();
         const EPOCH_HEIGHT: u64 = 10;
-
-        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
@@ -4705,7 +4712,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(
+            .pos_hook::<Ver>(
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
             )
@@ -4713,7 +4720,7 @@ mod test {
             .unwrap()
             .build();
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, PosVersion::new()).await;
+        let mut network = TestNetwork::new(config, pos_version).await;
         // Remove peer 0 and restart it with the query module enabled.
         // Adding an additional node to the test network is not straight forward,
         // as the keys have already been initialized in the config above.
@@ -4751,7 +4758,7 @@ mod test {
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
-                            PosVersion::new(),
+                            pos_version,
                             Default::default(),
                         )
                         .await)
@@ -4777,12 +4784,21 @@ mod test {
             .into_iter()
             .map(|(acct, _)| acct)
             .collect::<Vec<_>>();
-        let reward_accounts = state
-            .reward_merkle_tree
-            .clone()
-            .into_iter()
-            .map(|(acct, _)| acct)
-            .collect::<Vec<_>>();
+        let reward_accounts = match Ver::Base::VERSION {
+            EpochVersion::VERSION => state
+                .reward_merkle_tree_legacy
+                .clone()
+                .into_iter()
+                .map(|(acct, _)| RewardAccount::from(acct))
+                .collect::<Vec<_>>(),
+            DrbAndHeaderUpgradeVersion::VERSION => state
+                .reward_merkle_tree
+                .clone()
+                .into_iter()
+                .map(|(acct, _)| acct)
+                .collect::<Vec<_>>(),
+            _ => panic!("invalid version"),
+        };
 
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{node_0_port}").parse().unwrap());
@@ -4871,13 +4887,27 @@ mod test {
         .await
         .unwrap();
 
-        for account in &reward_accounts {
-            state
-                .reward_merkle_tree
-                .lookup(account)
-                .expect_ok()
-                .unwrap();
-        }
+        match Ver::Base::VERSION {
+            EpochVersion::VERSION => {
+                for account in reward_accounts.clone() {
+                    state
+                        .reward_merkle_tree_legacy
+                        .lookup(RewardAccountLegacy::from(account))
+                        .expect_ok()
+                        .unwrap();
+                }
+            },
+            DrbAndHeaderUpgradeVersion::VERSION => {
+                for account in &reward_accounts {
+                    state
+                        .reward_merkle_tree
+                        .lookup(account)
+                        .expect_ok()
+                        .unwrap();
+                }
+            },
+            _ => panic!("invalid version"),
+        };
 
         assert_eq!(leaf.view_number(), to_view);
         assert!(
@@ -4910,13 +4940,28 @@ mod test {
             "inconsistent block merkle tree"
         );
         assert_eq!(leaf.view_number(), to_view);
-        for account in &reward_accounts {
-            state
-                .reward_merkle_tree
-                .lookup(account)
-                .expect_ok()
-                .unwrap();
-        }
+
+        match Ver::Base::VERSION {
+            EpochVersion::VERSION => {
+                for account in reward_accounts.clone() {
+                    state
+                        .reward_merkle_tree_legacy
+                        .lookup(RewardAccountLegacy::from(account))
+                        .expect_ok()
+                        .unwrap();
+                }
+            },
+            DrbAndHeaderUpgradeVersion::VERSION => {
+                for account in &reward_accounts {
+                    state
+                        .reward_merkle_tree
+                        .lookup(account)
+                        .expect_ok()
+                        .unwrap();
+                }
+            },
+            _ => panic!("invalid version"),
+        };
 
         for account in &fee_accounts {
             state.fee_merkle_tree.lookup(account).expect_ok().unwrap();
@@ -4949,12 +4994,13 @@ mod test {
         }
     }
 
+    #[rstest]
+    #[case(PosVersionV3::new())]
+    #[case(PosVersionV4::new())]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_block_reward_api() -> anyhow::Result<()> {
+    async fn test_block_reward_api<Ver: Versions>(#[case] versions: Ver) -> anyhow::Result<()> {
         setup_test();
         let epoch_height = 10;
-
-        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(epoch_height)
@@ -4986,12 +5032,12 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(DelegationConfig::VariableAmounts, Default::default())
+            .pos_hook::<Ver>(DelegationConfig::VariableAmounts, Default::default())
             .await
             .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, PosVersion::new()).await;
+        let _network = TestNetwork::new(config, versions).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
