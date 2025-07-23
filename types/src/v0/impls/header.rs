@@ -1174,7 +1174,7 @@ mod test_headers {
     use crate::{
         eth_signature_key::EthKeyPair,
         mock::MockStateCatchup,
-        v0_1::{RewardInfo, RewardMerkleTree, LEGACY_REWARD_MERKLE_TREE_HEIGHT},
+        v0_1::{RewardInfo, RewardMerkleTree, LEGACY_REWARD_MERKLE_TREE_HEIGHT, REWARD_MERKLE_TREE_HEIGHT},
         Leaf,
     };
 
