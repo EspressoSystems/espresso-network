@@ -3829,8 +3829,6 @@ mod test {
         setup_test();
         const EPOCH_HEIGHT: u64 = 20;
 
-        type V4 = SequencerVersions<StaticVersion<0, 4>, StaticVersion<0, 0>>;
-
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
             .build();
@@ -3861,12 +3859,12 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<V4>(DelegationConfig::MultipleDelegators, Default::default())
+            .pos_hook::<PosVersionV4>(DelegationConfig::MultipleDelegators, Default::default())
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, V4::new()).await;
+        let network = TestNetwork::new(config, PosVersionV4::new()).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -3941,7 +3939,7 @@ mod test {
             for address in addresses.clone() {
                 let amount = client
                     .get::<Option<RewardAmount>>(&format!(
-                        "reward-state/reward-balance/{height}/{address}"
+                        "reward-state-v2/reward-balance/{height}/{address}"
                     ))
                     .send()
                     .await
@@ -4503,7 +4501,7 @@ mod test {
             .unwrap()
             .build();
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, versions.clone()).await;
+        let mut network = TestNetwork::new(config, versions).await;
 
         // Remove peer 0 and restart it with the query module enabled.
         // Adding an additional node to the test network is not straight forward,
@@ -4529,7 +4527,6 @@ mod test {
                 let cfg = network.cfg.clone();
                 let node_0_persistence = node_0_persistence.clone();
                 let state = state.clone();
-                let versions = versions.clone();
                 async move {
                     Ok(cfg
                         .init_node(
@@ -4569,7 +4566,6 @@ mod test {
         let node_0 = opt
             .serve(|metrics, consumer, storage| {
                 let cfg = network.cfg.clone();
-                let versions = versions.clone();
                 async move {
                     Ok(cfg
                         .init_node(
