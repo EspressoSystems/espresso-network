@@ -30,7 +30,7 @@ use vbs::version::{StaticVersionType, Version};
 use super::{
     instance_state::NodeState,
     state::ValidatedState,
-    v0_1::{IterableFeeInfo, RewardMerkleCommitment, REWARD_MERKLE_TREE_HEIGHT},
+    v0_1::{IterableFeeInfo, RewardMerkleCommitment},
     v0_3::ChainConfig,
 };
 use crate::{
@@ -39,7 +39,10 @@ use crate::{
         header::{EitherOrVersion, VersionedHeader},
         impls::{distribute_block_reward, reward::RewardDistributor},
     },
-    v0_1::{self, RewardMerkleCommitmentLegacy, RewardMerkleTreeLegacy},
+    v0_1::{
+        self, RewardMerkleCommitmentLegacy, RewardMerkleTreeLegacy,
+        LEGACY_REWARD_MERKLE_TREE_HEIGHT,
+    },
     v0_2, v0_3, v0_4, BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
     FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable,
     PayloadByteLen, SeqTypes, TimestampMillis, UpgradeType,
@@ -781,7 +784,8 @@ impl Header {
     pub fn reward_merkle_tree_root(
         &self,
     ) -> Either<RewardMerkleCommitmentLegacy, RewardMerkleCommitment> {
-        let empty_reward_merkle_tree = RewardMerkleTreeLegacy::new(REWARD_MERKLE_TREE_HEIGHT);
+        let empty_reward_merkle_tree =
+            RewardMerkleTreeLegacy::new(LEGACY_REWARD_MERKLE_TREE_HEIGHT);
         match self {
             Self::V1(_) => Either::Left(empty_reward_merkle_tree.commitment()),
             Self::V2(_) => Either::Left(empty_reward_merkle_tree.commitment()),

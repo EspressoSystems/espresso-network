@@ -1207,7 +1207,7 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for RewardMerkleTree {
     type Digest = Keccak256Hasher;
 
     fn state_type() -> &'static str {
-        "reward_merkle_tree_legacy"
+        "reward_merkle_tree"
     }
 
     fn header_state_commitment_field() -> &'static str {
@@ -1215,7 +1215,7 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for RewardMerkleTree {
     }
 
     fn tree_height() -> usize {
-        LEGACY_REWARD_MERKLE_TREE_HEIGHT
+        REWARD_MERKLE_TREE_HEIGHT
     }
 
     fn insert_path(
@@ -1239,7 +1239,7 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for RewardMerkleTreeLegacy {
     type Digest = Sha3Digest;
 
     fn state_type() -> &'static str {
-        "reward_merkle_tree"
+        "reward_merkle_tree_legacy"
     }
 
     fn header_state_commitment_field() -> &'static str {
@@ -1247,7 +1247,7 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for RewardMerkleTreeLegacy {
     }
 
     fn tree_height() -> usize {
-        REWARD_MERKLE_TREE_HEIGHT
+        LEGACY_REWARD_MERKLE_TREE_HEIGHT
     }
 
     fn insert_path(
