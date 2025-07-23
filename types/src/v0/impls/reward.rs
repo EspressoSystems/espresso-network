@@ -852,34 +852,37 @@ pub async fn get_leader_and_fetch_missing_rewards(
     let parent_header = parent_leaf.block_header();
 
     if parent_header.version() <= EpochVersion::version() {
-        // let missing_reward_accts =
-        //     validated_state.forgotten_reward_accounts_legacy(reward_accounts);
+        let accts: HashSet<_> = reward_accounts
+            .into_iter()
+            .map(RewardAccountLegacy::from)
+            .collect();
+        let missing_reward_accts = validated_state.forgotten_reward_accounts_legacy(accts);
 
-        // if !missing_reward_accts.is_empty() {
-        //     tracing::warn!(
-        //         parent_height,
-        //         ?parent_view,
-        //         ?missing_reward_accts,
-        //         "fetching missing reward accounts from peers"
-        //     );
+        if !missing_reward_accts.is_empty() {
+            tracing::warn!(
+                parent_height,
+                ?parent_view,
+                ?missing_reward_accts,
+                "fetching missing legacy reward accounts from peers"
+            );
 
-        //     let missing_account_proofs = instance_state
-        //         .state_catchup
-        //         .fetch_reward_accounts_legacy(
-        //             instance_state,
-        //             parent_height,
-        //             parent_view,
-        //             validated_state.reward_merkle_tree_legacy.commitment(),
-        //             missing_reward_accts,
-        //         )
-        //         .await?;
+            let missing_account_proofs = instance_state
+                .state_catchup
+                .fetch_reward_accounts_legacy(
+                    instance_state,
+                    parent_height,
+                    parent_view,
+                    validated_state.reward_merkle_tree_legacy.commitment(),
+                    missing_reward_accts,
+                )
+                .await?;
 
-        //     for proof in missing_account_proofs.iter() {
-        //         proof
-        //             .remember(&mut validated_state.reward_merkle_tree_legacy)
-        //             .expect("proof previously verified");
-        //     }
-        // }
+            for proof in missing_account_proofs.iter() {
+                proof
+                    .remember(&mut validated_state.reward_merkle_tree_legacy)
+                    .expect("proof previously verified");
+            }
+        }
     } else {
         let missing_reward_accts = validated_state.forgotten_reward_accounts(reward_accounts);
 
