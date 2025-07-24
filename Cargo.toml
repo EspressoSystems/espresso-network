@@ -9,7 +9,6 @@ resolver = "2"
 
 members = [
     "alloy-compat",
-    "hotshot-builder",
     "builder-legacy",
     "builder-refactored",
     "client",
@@ -29,6 +28,7 @@ members = [
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
+    "hotshot-builder",
     "hotshot-events-service",
     "hotshot-query-service",
     "hotshot-state-prover",
