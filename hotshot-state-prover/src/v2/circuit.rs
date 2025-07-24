@@ -17,6 +17,13 @@ use jf_signature::{
     schnorr::{Signature, VerKey as SchnorrVerKey},
 };
 
+// TODO: (alex) overwrite GenericPublicInput instead when circuit is updated
+#[derive(Clone, Debug)]
+pub struct NewGenericPublicInput<F: PrimeField> {
+    pub voting_st_state: GenericStakeTableState<F>,
+    pub auth_root: F,
+}
+
 /// Public input to the light client state prover service
 #[derive(Clone, Debug)]
 pub struct GenericPublicInput<F: PrimeField> {

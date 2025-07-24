@@ -31,10 +31,9 @@ use super::{
     fetch::Fetch,
     query_data::{
         BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadMetadata, PayloadQueryData,
-        QueryableHeader, QueryablePayload, TransactionHash, TransactionQueryData,
-        VidCommonMetadata, VidCommonQueryData,
+        QueryableHeader, QueryablePayload, TransactionHash, VidCommonMetadata, VidCommonQueryData,
     },
-    StateCertQueryData,
+    BlockWithTransaction, StateCertQueryData,
 };
 use crate::{types::HeightIndexed, Header, Payload};
 
@@ -229,11 +228,10 @@ where
         end: usize,
     ) -> FetchStream<VidCommonMetadata<Types>>;
 
-    /// Returns the transaction with the given `hash`.
-    async fn get_transaction(
+    async fn get_block_containing_transaction(
         &self,
-        hash: TransactionHash<Types>,
-    ) -> Fetch<TransactionQueryData<Types>>;
+        h: TransactionHash<Types>,
+    ) -> Fetch<BlockWithTransaction<Types>>;
 
     async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryData<Types>>;
 

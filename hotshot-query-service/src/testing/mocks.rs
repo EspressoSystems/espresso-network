@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersion;
 
 use crate::{
-    availability::{QueryableHeader, QueryablePayload, TransactionIndex},
+    availability::{QueryableHeader, QueryablePayload, TransactionIndex, VidCommonQueryData},
     explorer::traits::{ExplorerHeader, ExplorerTransaction},
     merklized_state::MerklizedState,
     types::HeightIndexed,
@@ -129,15 +129,21 @@ impl QueryablePayload<MockTypes> for MockPayload {
             .into_iter()
     }
 
-    fn transaction_with_proof(
+    fn transaction(
         &self,
         _meta: &Self::Metadata,
         index: &TransactionIndex<MockTypes>,
-    ) -> Option<(Self::Transaction, Self::InclusionProof)> {
-        self.transactions
-            .get(index.position as usize)
-            .cloned()
-            .map(|tx| (tx, ()))
+    ) -> Option<Self::Transaction> {
+        self.transactions.get(index.position as usize).cloned()
+    }
+
+    fn transaction_proof(
+        &self,
+        _meta: &Self::Metadata,
+        _vid: &VidCommonQueryData<MockTypes>,
+        _index: &TransactionIndex<MockTypes>,
+    ) -> Option<Self::InclusionProof> {
+        Some(())
     }
 }
 
