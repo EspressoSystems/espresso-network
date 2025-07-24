@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
+    iter::once,
     sync::Arc,
 };
 
@@ -18,11 +19,19 @@ use hotshot_task_impls::{
     },
 };
 use hotshot_types::{
-    consensus::{Consensus, OuterConsensus},
+    consensus::OuterConsensus,
     data::QuorumProposalWrapper,
-    message::{Proposal, UpgradeLock},
-    simple_vote::QuorumVote2,
-    traits::node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
+    epoch_membership::EpochMembershipCoordinator,
+    message::{
+        convert_proposal, GeneralConsensusMessage, Message, MessageKind, Proposal,
+        SequencingMessage, UpgradeLock,
+    },
+    simple_vote::{HasEpoch, QuorumVote2},
+    traits::{
+        election::Membership,
+        network::ConnectedNetwork,
+        node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
+    },
 };
 
 #[derive(Debug)]
@@ -48,7 +57,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
         _public_key: &TYPES::SignatureKey,
         _private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
         _upgrade_lock: &UpgradeLock<TYPES, V>,
-        consensus: Arc<RwLock<Consensus<TYPES>>>,
+        consensus: OuterConsensus<TYPES>,
+        _membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        _network: Arc<I::Network>,
     ) -> Vec<HotShotEvent<TYPES>> {
         match event {
             HotShotEvent::QuorumProposalSend(proposal, signature) => {
@@ -91,7 +102,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
         _public_key: &TYPES::SignatureKey,
         _private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
         _upgrade_lock: &UpgradeLock<TYPES, V>,
-        _consensus: Arc<RwLock<Consensus<TYPES>>>,
+        _consensus: OuterConsensus<TYPES>,
+        _membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        _network: Arc<I::Network>,
     ) -> Vec<HotShotEvent<TYPES>> {
         match event {
             HotShotEvent::QuorumProposalSend(..) | HotShotEvent::QuorumVoteSend(_) => {
@@ -173,7 +186,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
         _public_key: &TYPES::SignatureKey,
         _private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
         _upgrade_lock: &UpgradeLock<TYPES, V>,
-        _consensus: Arc<RwLock<Consensus<TYPES>>>,
+        _consensus: OuterConsensus<TYPES>,
+        _membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        _network: Arc<I::Network>,
     ) -> Vec<HotShotEvent<TYPES>> {
         match event {
             HotShotEvent::QuorumProposalSend(proposal, sender) => {
@@ -217,7 +232,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
         _public_key: &TYPES::SignatureKey,
         _private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
         _upgrade_lock: &UpgradeLock<TYPES, V>,
-        _consensus: Arc<RwLock<Consensus<TYPES>>>,
+        _consensus: OuterConsensus<TYPES>,
+        _membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        _network: Arc<I::Network>,
     ) -> Vec<HotShotEvent<TYPES>> {
         if let HotShotEvent::DacSend(cert, sender) = event {
             self.total_da_certs_sent_from_node += 1;
@@ -287,7 +304,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
         _public_key: &TYPES::SignatureKey,
         _private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
         _upgrade_lock: &UpgradeLock<TYPES, V>,
-        _consensus: Arc<RwLock<Consensus<TYPES>>>,
+        _consensus: OuterConsensus<TYPES>,
+        _membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        _network: Arc<I::Network>,
     ) -> Vec<HotShotEvent<TYPES>> {
         vec![event.clone()]
     }
@@ -315,7 +334,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
         public_key: &TYPES::SignatureKey,
         private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
         upgrade_lock: &UpgradeLock<TYPES, V>,
-        _consensus: Arc<RwLock<Consensus<TYPES>>>,
+        _consensus: OuterConsensus<TYPES>,
+        _membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        _network: Arc<I::Network>,
     ) -> Vec<HotShotEvent<TYPES>> {
         if let HotShotEvent::QuorumVoteSend(vote) = event {
             let new_view = vote.view_number + self.view_increment;
@@ -392,7 +413,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
         public_key: &TYPES::SignatureKey,
         private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
         upgrade_lock: &UpgradeLock<TYPES, V>,
-        _consensus: Arc<RwLock<Consensus<TYPES>>>,
+        _consensus: OuterConsensus<TYPES>,
+        _membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        _network: Arc<I::Network>,
     ) -> Vec<HotShotEvent<TYPES>> {
         match event {
             HotShotEvent::QuorumProposalRecv(proposal, _sender) => {
@@ -429,6 +452,252 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
             },
             _ => {},
         }
+        vec![event.clone()]
+    }
+}
+
+/// Implements a byzantine behaviour which aims at splitting the honest nodes during view sync protocol
+/// so that the honest nodes cannot view sync on their own.
+///
+/// Requirement: The scenario requires at least 4 dishonest nodes so total number of nodes need to be
+/// at least 13.
+///
+/// Scenario:
+/// 1. The first dishonest leader sends a proposal to only f + 1 honest nodes and f dishonest nodes
+/// 2. The second dishonest leader sends a proposal to only f + 1 honest nodes.
+/// 3. All dishonest nodes do not send timeout votes.
+/// 4. The first dishonest relay sends a correctly formed precommit certificate to f + 1 honest nodes
+///    and f dishonest nodes.
+/// 5. The first dishonest relay sends a correctly formed commit certificate to only one honest node.
+/// 6. The second dishonest relay behaves in the same way as the first dishonest relay.
+#[derive(Debug)]
+pub struct DishonestViewSyncRelay {
+    pub dishonest_proposal_view_numbers: Vec<u64>,
+    pub dishonest_vote_view_numbers: Vec<u64>,
+    pub first_f_honest_nodes: Vec<u64>,
+    pub second_f_honest_nodes: Vec<u64>,
+    pub one_honest_node: u64,
+    pub f_dishonest_nodes: Vec<u64>,
+}
+
+#[async_trait]
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransformerState<TYPES, I, V>
+    for DishonestViewSyncRelay
+{
+    async fn send_handler(
+        &mut self,
+        event: &HotShotEvent<TYPES>,
+        _public_key: &TYPES::SignatureKey,
+        _private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
+        upgrade_lock: &UpgradeLock<TYPES, V>,
+        _consensus: OuterConsensus<TYPES>,
+        membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        network: Arc<I::Network>,
+    ) -> Vec<HotShotEvent<TYPES>> {
+        match event {
+            HotShotEvent::QuorumProposalSend(proposal, sender) => {
+                let view_number = proposal.data.view_number();
+                if !self.dishonest_proposal_view_numbers.contains(&view_number) {
+                    return vec![event.clone()];
+                }
+                let message_kind = if upgrade_lock.epochs_enabled(view_number).await {
+                    MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
+                        GeneralConsensusMessage::Proposal2(convert_proposal(proposal.clone())),
+                    ))
+                } else {
+                    MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
+                        GeneralConsensusMessage::Proposal(convert_proposal(proposal.clone())),
+                    ))
+                };
+                let message = Message {
+                    sender: sender.clone(),
+                    kind: message_kind,
+                };
+                let serialized_message = match upgrade_lock.serialize(&message).await {
+                    Ok(serialized) => serialized,
+                    Err(e) => {
+                        panic!("Failed to serialize message: {e}");
+                    },
+                };
+                let second_f_honest_it = self.second_f_honest_nodes.iter();
+                let f_dishonest_it = self.f_dishonest_nodes.iter();
+                let one_honest_it = once(&self.one_honest_node);
+                let chained_it: Box<dyn Iterator<Item = &u64> + Send> =
+                    if &*view_number == self.dishonest_proposal_view_numbers.first().unwrap() {
+                        // The first dishonest proposal is sent to f + 1 honest nodes and f dishonest nodes
+                        Box::new(second_f_honest_it.chain(one_honest_it.chain(f_dishonest_it)))
+                    } else {
+                        // All other dishonest proposals are sent to f + 1 honest nodes
+                        Box::new(second_f_honest_it.chain(one_honest_it))
+                    };
+                for node_id in chained_it {
+                    let dummy_view = TYPES::View::new(*node_id);
+                    let Ok(node) = membership_coordinator
+                        .membership()
+                        .read()
+                        .await
+                        .leader(dummy_view, proposal.data.epoch())
+                    else {
+                        panic!(
+                            "Failed to find leader for view {} and epoch {:?}",
+                            dummy_view,
+                            proposal.data.epoch()
+                        );
+                    };
+                    let transmit_result = network
+                        .direct_message(serialized_message.clone(), node.clone())
+                        .await;
+                    match transmit_result {
+                        Ok(()) => tracing::info!(
+                            "Sent proposal for view {} to node {}",
+                            proposal.data.view_number(),
+                            node_id
+                        ),
+                        Err(e) => panic!("Failed to send message task: {e:?}"),
+                    }
+                }
+                vec![]
+            },
+            HotShotEvent::QuorumVoteSend(vote) => {
+                if !self.dishonest_vote_view_numbers.contains(&vote.view_number) {
+                    return vec![event.clone()];
+                }
+                vec![]
+            },
+            HotShotEvent::TimeoutVoteSend(vote) => {
+                if !self.dishonest_vote_view_numbers.contains(&vote.view_number) {
+                    return vec![event.clone()];
+                }
+                vec![]
+            },
+            HotShotEvent::ViewSyncPreCommitVoteSend(vote) => {
+                if !self.dishonest_vote_view_numbers.contains(&vote.view_number) {
+                    return vec![event.clone()];
+                }
+                vec![]
+            },
+            HotShotEvent::ViewSyncPreCommitCertificateSend(certificate, sender) => {
+                let view_number = certificate.data.round;
+                if !self.dishonest_proposal_view_numbers.contains(&view_number) {
+                    return vec![event.clone()];
+                }
+                let message_kind = if upgrade_lock.epochs_enabled(view_number).await {
+                    MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
+                        GeneralConsensusMessage::ViewSyncPreCommitCertificate2(certificate.clone()),
+                    ))
+                } else {
+                    MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
+                        GeneralConsensusMessage::ViewSyncPreCommitCertificate(
+                            certificate.clone().to_vsc(),
+                        ),
+                    ))
+                };
+                let message = Message {
+                    sender: sender.clone(),
+                    kind: message_kind,
+                };
+                let serialized_message = match upgrade_lock.serialize(&message).await {
+                    Ok(serialized) => serialized,
+                    Err(e) => {
+                        panic!("Failed to serialize message: {e}");
+                    },
+                };
+                let second_f_honest_it = self.second_f_honest_nodes.iter();
+                let f_dishonest_it = self.f_dishonest_nodes.iter();
+                let one_honest_it = once(&self.one_honest_node);
+                // The pre-commit certificate is sent to f + 1 honest nodes and f dishonest nodes
+                let chained_it: Box<dyn Iterator<Item = &u64> + Send> =
+                    Box::new(second_f_honest_it.chain(one_honest_it.chain(f_dishonest_it)));
+                for node_id in chained_it {
+                    let dummy_view = TYPES::View::new(*node_id);
+                    let Ok(node) = membership_coordinator
+                        .membership()
+                        .read()
+                        .await
+                        .leader(dummy_view, certificate.epoch())
+                    else {
+                        panic!(
+                            "Failed to find leader for view {} and epoch {:?}",
+                            dummy_view,
+                            certificate.epoch()
+                        );
+                    };
+                    let transmit_result = network
+                        .direct_message(serialized_message.clone(), node.clone())
+                        .await;
+                    match transmit_result {
+                        Ok(()) => tracing::info!(
+                            "Sent ViewSyncPreCommitCertificate for view {} to node {}",
+                            view_number,
+                            node_id
+                        ),
+                        Err(e) => panic!("Failed to send message task: {e:?}"),
+                    }
+                }
+                vec![]
+            },
+            HotShotEvent::ViewSyncCommitCertificateSend(certificate, sender) => {
+                let view_number = certificate.data.round;
+                if !self.dishonest_proposal_view_numbers.contains(&view_number) {
+                    return vec![event.clone()];
+                }
+                let message_kind = if upgrade_lock.epochs_enabled(view_number).await {
+                    MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
+                        GeneralConsensusMessage::ViewSyncCommitCertificate2(certificate.clone()),
+                    ))
+                } else {
+                    MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
+                        GeneralConsensusMessage::ViewSyncCommitCertificate(
+                            certificate.clone().to_vsc(),
+                        ),
+                    ))
+                };
+                let message = Message {
+                    sender: sender.clone(),
+                    kind: message_kind,
+                };
+                let serialized_message = match upgrade_lock.serialize(&message).await {
+                    Ok(serialized) => serialized,
+                    Err(e) => {
+                        panic!("Failed to serialize message: {e}");
+                    },
+                };
+                let one_honest_it = once(&self.one_honest_node);
+                // The commit certificate is sent to 1 honest node
+                let chained_it: Box<dyn Iterator<Item = &u64> + Send> = Box::new(one_honest_it);
+                for node_id in chained_it {
+                    let dummy_view = TYPES::View::new(*node_id);
+                    let Ok(node) = membership_coordinator
+                        .membership()
+                        .read()
+                        .await
+                        .leader(dummy_view, certificate.epoch())
+                    else {
+                        panic!(
+                            "Failed to find leader for view {} and epoch {:?}",
+                            dummy_view,
+                            certificate.epoch()
+                        );
+                    };
+                    let transmit_result = network
+                        .direct_message(serialized_message.clone(), node.clone())
+                        .await;
+                    match transmit_result {
+                        Ok(()) => tracing::info!(
+                            "Sent ViewSyncCommitCertificate for view {} to node {}",
+                            view_number,
+                            node_id
+                        ),
+                        Err(e) => panic!("Failed to send message task: {e:?}"),
+                    }
+                }
+                vec![]
+            },
+            _ => vec![event.clone()],
+        }
+    }
+
+    async fn recv_handler(&mut self, event: &HotShotEvent<TYPES>) -> Vec<HotShotEvent<TYPES>> {
         vec![event.clone()]
     }
 }

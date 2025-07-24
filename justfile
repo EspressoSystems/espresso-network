@@ -86,11 +86,11 @@ test *args:
     just nextest --features embedded-db  {{args}}
     just nextest {{args}}
 
-test-slow:
+test-slow *args:
     @echo 'Only slow tests are included. Use `test` for those deemed not slow. Or `test-all` for all tests.'
     @echo 'features: "embedded-db"'
-    just nextest --features embedded-db --profile slow
-    just nextest --profile slow
+    just nextest --features embedded-db --profile slow {{args}}
+    just nextest --profile slow {{args}}
 
 test-all:
     @echo 'features: "embedded-db"'
@@ -157,7 +157,8 @@ gen-bindings:
     forge bind --skip test --skip script --use "0.8.28" --alloy --alloy-version "0.13.0" --contracts ./contracts/src/ \
       --module --bindings-path contracts/rust/adapter/src/bindings --select "{{REGEXP}}" --overwrite --force \
       --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:0xffffffffffffffffffffffffffffffffffffffff \
-      --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:0xffffffffffffffffffffffffffffffffffffffff
+      --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:0xffffffffffffffffffffffffffffffffffffffff \
+      --libraries contracts/src/libraries/PlonkVerifierV3.sol:PlonkVerifierV3:0xffffffffffffffffffffffffffffffffffffffff
 
     just export-contract-abis
     just gen-go-bindings
