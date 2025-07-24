@@ -671,7 +671,7 @@ pub mod testing {
         },
         types::EventType::Decide,
     };
-    use hotshot_builder_core_refactored::service::{
+    use hotshot_builder_refactored::service::{
         BuilderConfig as LegacyBuilderConfig, GlobalState as LegacyGlobalState,
     };
     use hotshot_testing::block_builder::{

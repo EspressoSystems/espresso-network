@@ -33,7 +33,7 @@ use hotshot_types::{
     utils::BuilderCommitment,
 };
 use lru::LruCache;
-use marketplace_builder_shared::block::{BlockId, BuilderStateId, ParentBlockReferences};
+use builder_shared::block::{BlockId, BuilderStateId, ParentBlockReferences};
 use sha2::{Digest, Sha256};
 use tagged_base64::TaggedBase64;
 use tide_disco::method::ReadState;
@@ -1557,7 +1557,7 @@ mod test {
         },
         utils::{BuilderCommitment, EpochTransitionIndicator},
     };
-    use marketplace_builder_shared::{
+    use builder_shared::{
         block::{BlockId, BuilderStateId, ParentBlockReferences},
         testing::constants::{
             TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM,

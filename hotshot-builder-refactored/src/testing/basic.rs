@@ -18,7 +18,7 @@ use hotshot_types::{
     },
     utils::BuilderCommitment,
 };
-use marketplace_builder_shared::{
+use builder_shared::{
     error::Error,
     testing::{
         consensus::SimulatedChainState,

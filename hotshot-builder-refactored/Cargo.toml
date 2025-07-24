@@ -22,7 +22,7 @@ hotshot-builder-api = { workspace = true }
 hotshot-types = { workspace = true }
 jf-vid = { workspace = true }
 lru = { workspace = true }
-marketplace-builder-shared = { workspace = true }
+builder-shared = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 sha2 = { workspace = true }
 tagged-base64 = { workspace = true }

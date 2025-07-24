@@ -2172,13 +2172,13 @@ dependencies = [
  "futures",
  "hotshot",
  "hotshot-builder-api",
- "hotshot-builder-core",
+ "hotshot-builder",
  "hotshot-events-service",
  "hotshot-example-types",
  "hotshot-state-prover",
  "hotshot-types",
  "jf-signature 0.2.0",
- "marketplace-builder-shared",
+ "builder-shared",
  "portpicker",
  "rand 0.8.5",
  "sequencer",
@@ -5440,7 +5440,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "hotshot-builder-core"
+name = "hotshot-builder"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -5462,7 +5462,7 @@ dependencies = [
  "hotshot-testing",
  "hotshot-types",
  "lru 0.12.5",
- "marketplace-builder-shared",
+ "builder-shared",
  "num_cpus",
  "portpicker",
  "serde",
@@ -5478,7 +5478,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "hotshot-builder-core-refactored"
+name = "hotshot-builder-refactored"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -5501,7 +5501,7 @@ dependencies = [
  "hotshot-types",
  "jf-vid",
  "lru 0.12.5",
- "marketplace-builder-shared",
+ "builder-shared",
  "num_cpus",
  "portpicker",
  "serde",
@@ -7776,7 +7776,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "marketplace-builder-shared"
+name = "builder-shared"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -10569,7 +10569,7 @@ dependencies = [
  "futures",
  "generic-tests",
  "hotshot",
- "hotshot-builder-core-refactored",
+ "hotshot-builder-refactored",
  "hotshot-contract-adapter",
  "hotshot-events-service",
  "hotshot-example-types",

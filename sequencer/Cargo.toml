@@ -73,7 +73,7 @@ futures = { workspace = true }
 generic-tests = "0.1.3"
 
 hotshot = { workspace = true }
-hotshot-builder-core-refactored = { path = "../hotshot-builder-core-refactored" }
+hotshot-builder-refactored = { path = "../hotshot-builder-refactored" }
 hotshot-contract-adapter = { workspace = true }
 hotshot-events-service = { workspace = true }
 hotshot-libp2p-networking = { workspace = true }

@@ -34,7 +34,7 @@ mod tests {
         traits::{block_contents::BlockHeader, node_implementation::Versions, EncodeBytes},
         utils::{BuilderCommitment, EpochTransitionIndicator},
     };
-    use marketplace_builder_shared::{
+    use builder_shared::{
         block::ParentBlockReferences,
         testing::constants::{
             TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM,

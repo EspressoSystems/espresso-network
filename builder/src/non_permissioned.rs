@@ -11,7 +11,7 @@ use espresso_types::{
     EpochCommittees, FeeAmount, NodeState, Payload, SeqTypes, ValidatedState,
 };
 use hotshot::traits::BlockPayload;
-use hotshot_builder_core::{
+use hotshot_builder::{
     builder_state::{BuilderState, MessageType},
     service::{
         run_non_permissioned_standalone_builder_service, GlobalState, ProxyGlobalState,
@@ -26,7 +26,7 @@ use hotshot_types::{
         node_implementation::Versions, EncodeBytes,
     },
 };
-use marketplace_builder_shared::{block::ParentBlockReferences, utils::EventServiceStream};
+use builder_shared::{block::ParentBlockReferences, utils::EventServiceStream};
 use sequencer::{catchup::StatePeers, L1Params, SequencerApiVersion};
 use tide_disco::Url;
 use tokio::spawn;

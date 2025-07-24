@@ -11,7 +11,7 @@ use hotshot_types::{
     data::{VidCommitment, ViewNumber},
     traits::node_implementation::ConsensusTime,
 };
-use marketplace_builder_shared::{
+use builder_shared::{
     block::{BlockId, BuilderStateId},
     testing::{consensus::SimulatedChainState, constants::TEST_NUM_NODES_IN_VID_COMPUTATION},
 };

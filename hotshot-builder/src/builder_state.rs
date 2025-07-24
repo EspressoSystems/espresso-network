@@ -22,7 +22,7 @@ use hotshot_types::{
     },
     utils::BuilderCommitment,
 };
-use marketplace_builder_shared::block::{BlockId, BuilderStateId, ParentBlockReferences};
+use builder_shared::block::{BlockId, BuilderStateId, ParentBlockReferences};
 use tokio::{
     spawn,
     sync::{mpsc::UnboundedSender, oneshot},
@@ -1157,7 +1157,7 @@ mod test {
         traits::node_implementation::{ConsensusTime, NodeType},
         utils::BuilderCommitment,
     };
-    use marketplace_builder_shared::testing::constants::TEST_NUM_NODES_IN_VID_COMPUTATION;
+    use builder_shared::testing::constants::TEST_NUM_NODES_IN_VID_COMPUTATION;
     use tracing_subscriber::EnvFilter;
 
     use super::{DAProposalInfo, MessageType, ParentBlockReferences};

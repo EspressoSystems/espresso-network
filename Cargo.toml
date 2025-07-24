@@ -27,8 +27,8 @@ members = [
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
-    "hotshot-builder-core",
-    "hotshot-builder-core-refactored",
+    "hotshot-builder",
+    "hotshot-builder-refactored",
     "hotshot-events-service",
     "hotshot-query-service",
     "hotshot-state-prover",
@@ -66,8 +66,8 @@ default-members = [
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
-    "hotshot-builder-core",
-    "hotshot-builder-core-refactored",
+    "hotshot-builder",
+    "hotshot-builder-refactored",
     "hotshot-events-service",
     "hotshot-query-service",
     "hotshot-state-prover",
@@ -169,8 +169,8 @@ parking_lot = { version = "0.12", features = ["send_guard"] }
 indexmap = { version = "2", features = ["serde"] }
 
 # Builder imports
-marketplace-builder-shared = { path = "marketplace-builder-shared" }
-hotshot-builder-core = { path = "hotshot-builder-core" }
+builder-shared = { path = "builder-shared" }
+hotshot-builder = { path = "hotshot-builder" }
 
 # Hotshot imports
 hotshot = { path = "crates/hotshot/hotshot" }
