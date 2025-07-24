@@ -487,14 +487,15 @@ mod tests {
             .check_circuit_satisfiability(&public_inputs.to_vec())
             .is_err());
 
-        // bad path: bad stake table commitment
+        // bad path: bad lc state digest
+        let bad_lc_state_digest = F::from(12387u64);
         let (bad_circuit, public_inputs) = build(
             &entries,
             &bit_vec,
             &sigs,
             &st_state,
             ST_CAPACITY,
-            &lc_state_digest,
+            &bad_lc_state_digest,
         )
         .unwrap();
         assert!(bad_circuit
