@@ -1,5 +1,5 @@
 [package]
-name = "builder"
+name = "hotshot-builder"
 description = "A standalone builder service"
 version = { workspace = true }
 authors = { workspace = true }
