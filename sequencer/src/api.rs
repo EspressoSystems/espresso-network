@@ -5568,4 +5568,91 @@ mod test {
             );
         }
     }
+
+    #[rstest]
+    #[case(PosVersionV3::new())]
+    #[case(PosVersionV4::new())]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_v3_and_v4_reward_tree_updates<Ver: Versions>(
+        #[case] versions: Ver,
+    ) -> anyhow::Result<()> {
+        // This test checks that the correct merkle tree is updated based on version
+        //
+        // When the protocol version is v3:
+        // - The v3 Merkle tree is updated
+        // - The v4 Merkle tree must be empty.
+        //
+        // When the protocol version is v4:
+        // - The v4 Merkle tree is updated
+        // - The v3 Merkle tree must be empty.
+        setup_test();
+        const EPOCH_HEIGHT: u64 = 10;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        tracing::info!("API PORT = {api_port}");
+        const NUM_NODES: usize = 5;
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port).catchup(Default::default()),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<Ver>(
+                DelegationConfig::MultipleDelegators,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+            )
+            .await
+            .unwrap()
+            .build();
+        let mut network = TestNetwork::new(config, versions).await;
+
+        let mut events = network.peers[2].event_stream().await;
+        // wait for 4 epochs
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, 4).await;
+
+        let validated_state = network.server.decided_state().await;
+        let version = Ver::Base::VERSION;
+        if version == EpochVersion::VERSION {
+            let v3_tree = &validated_state.reward_merkle_tree_legacy;
+            assert!(v3_tree.num_leaves() > 0, "legacy reward tree tree is empty");
+            let v4_tree = &validated_state.reward_merkle_tree;
+            assert!(
+                v4_tree.num_leaves() == 0,
+                "v4 reward tree tree is not empty"
+            );
+        } else {
+            let v3_tree = &validated_state.reward_merkle_tree_legacy;
+            assert!(
+                v3_tree.num_leaves() == 0,
+                "legacy reward tree tree is not empty"
+            );
+            let v4_tree = &validated_state.reward_merkle_tree;
+            assert!(v4_tree.num_leaves() > 0, "v4 reward tree tree is empty");
+        }
+
+        network.stop_consensus().await;
+        Ok(())
+    }
 }
