@@ -7,10 +7,11 @@ use committable::Commitment;
 use espresso_types::{
     config::PublicNetworkConfig,
     v0::traits::{PersistenceOptions, SequencerPersistence},
-    v0_1::{
-        RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardAmount, RewardMerkleTree,
+    v0_3::{
+        ChainConfig, RewardAccountLegacy, RewardAccountProofLegacy, RewardAccountQueryDataLegacy,
+        RewardAmount, RewardMerkleTreeLegacy, Validator,
     },
-    v0_3::{ChainConfig, Validator},
+    v0_4::{RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardMerkleTree},
     FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
 };
 use futures::future::Future;
@@ -249,6 +250,32 @@ pub(crate) trait CatchupDataSource: Sync {
         view: ViewNumber,
         accounts: &[RewardAccount],
     ) -> impl Send + Future<Output = anyhow::Result<RewardMerkleTree>>;
+
+    fn get_reward_account_legacy(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        account: RewardAccountLegacy,
+    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataLegacy>> {
+        async move {
+            let tree = self
+                .get_reward_accounts_legacy(instance, height, view, &[account])
+                .await?;
+            let (proof, balance) = RewardAccountProofLegacy::prove(&tree, account.into()).context(
+                format!("reward account {account} not available for height {height}, view {view}"),
+            )?;
+            Ok(RewardAccountQueryDataLegacy { balance, proof })
+        }
+    }
+
+    fn get_reward_accounts_legacy(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        accounts: &[RewardAccountLegacy],
+    ) -> impl Send + Future<Output = anyhow::Result<RewardMerkleTreeLegacy>>;
 }
 
 #[async_trait]

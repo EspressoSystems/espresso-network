@@ -1,4 +1,4 @@
-use crate::{v0_1::RewardMerkleCommitment, NsTable, TimestampMillis};
+use crate::{  v0_4::RewardMerkleCommitment, NsTable, TimestampMillis};
 
 use super::{
     BlockMerkleCommitment, BuilderSignature, FeeInfo, FeeMerkleCommitment, L1BlockInfo,

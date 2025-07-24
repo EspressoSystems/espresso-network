@@ -3,6 +3,7 @@ use std::ops::Add;
 use alloy::primitives::{Address, U256};
 use anyhow::{bail, Context};
 use committable::{Commitment, Committable};
+use either::Either;
 use hotshot_query_service::merklized_state::MerklizedState;
 use hotshot_types::{
     data::{BlockError, ViewNumber},
@@ -25,19 +26,23 @@ use time::OffsetDateTime;
 use vbs::version::{StaticVersionType, Version};
 
 use super::{
-    fee_info::FeeError,
-    instance_state::NodeState,
-    v0_1::{
-        IterableFeeInfo, RewardAccount, RewardAmount, RewardMerkleCommitment, RewardMerkleTree,
-        REWARD_MERKLE_TREE_HEIGHT,
-    },
+    fee_info::FeeError, instance_state::NodeState, v0_1::IterableFeeInfo, v0_3::RewardAmount,
     BlockMerkleCommitment, BlockSize, EpochVersion, FeeMerkleCommitment, L1Client,
 };
 use crate::{
     traits::StateCatchup,
-    v0::impls::distribute_block_reward,
-    v0_3::{ChainConfig, ResolvableChainConfig},
-    BlockMerkleTree, Delta, FeeAccount, FeeAmount, FeeInfo, FeeMerkleTree, Header, Leaf2,
+    v0::{
+        impls::distribute_block_reward,
+        sparse_mt::{Keccak256Hasher, KeccakNode},
+    },
+    v0_3::{
+        ChainConfig, ResolvableChainConfig, RewardAccountLegacy, RewardMerkleCommitmentLegacy,
+        RewardMerkleTreeLegacy, LEGACY_REWARD_MERKLE_TREE_HEIGHT,
+    },
+    v0_4::{
+        Delta, RewardAccount, RewardMerkleCommitment, RewardMerkleTree, REWARD_MERKLE_TREE_HEIGHT,
+    },
+    BlockMerkleTree, FeeAccount, FeeAmount, FeeInfo, FeeMerkleTree, Header, Leaf2,
     NsTableValidationError, PayloadByteLen, SeqTypes, UpgradeType, BLOCK_MERKLE_TREE_HEIGHT,
     FEE_MERKLE_TREE_HEIGHT,
 };
@@ -101,6 +106,13 @@ pub enum ProposalValidationError {
         expected_root: FeeMerkleCommitment,
         proposal_root: FeeMerkleCommitment,
     },
+    #[error(
+        "Invalid legacy Reward Root Error: expected={expected_root:?}, proposal={proposal_root:?}"
+    )]
+    InvalidRewardRootLegacy {
+        expected_root: RewardMerkleCommitmentLegacy,
+        proposal_root: RewardMerkleCommitmentLegacy,
+    },
     #[error("Invalid Reward Root Error: expected={expected_root:?}, proposal={proposal_root:?}")]
     InvalidRewardRoot {
         expected_root: RewardMerkleCommitment,
@@ -155,6 +167,7 @@ pub struct ValidatedState {
     pub block_merkle_tree: BlockMerkleTree,
     /// Frontier of [`FeeMerkleTree`]
     pub fee_merkle_tree: FeeMerkleTree,
+    pub reward_merkle_tree_legacy: RewardMerkleTreeLegacy,
     pub reward_merkle_tree: RewardMerkleTree,
     /// Configuration [`Header`] proposals will be validated against.
     pub chain_config: ResolvableChainConfig,
@@ -177,6 +190,12 @@ impl Default for ValidatedState {
         )
         .unwrap();
 
+        let reward_merkle_tree_legacy = RewardMerkleTreeLegacy::from_kv_set(
+            LEGACY_REWARD_MERKLE_TREE_HEIGHT,
+            Vec::<(RewardAccountLegacy, RewardAmount)>::new(),
+        )
+        .unwrap();
+
         let reward_merkle_tree = RewardMerkleTree::from_kv_set(
             REWARD_MERKLE_TREE_HEIGHT,
             Vec::<(RewardAccount, RewardAmount)>::new(),
@@ -188,6 +207,7 @@ impl Default for ValidatedState {
         Self {
             block_merkle_tree,
             fee_merkle_tree,
+            reward_merkle_tree_legacy,
             reward_merkle_tree,
             chain_config,
         }
@@ -237,6 +257,22 @@ impl ValidatedState {
             .unique()
             .filter(|account| {
                 self.reward_merkle_tree
+                    .lookup(*account)
+                    .expect_not_in_memory()
+                    .is_ok()
+            })
+            .collect()
+    }
+
+    pub fn forgotten_reward_accounts_legacy(
+        &self,
+        accounts: impl IntoIterator<Item = RewardAccountLegacy>,
+    ) -> Vec<RewardAccountLegacy> {
+        accounts
+            .into_iter()
+            .unique()
+            .filter(|account| {
+                self.reward_merkle_tree_legacy
                     .lookup(*account)
                     .expect_not_in_memory()
                     .is_ok()
@@ -647,12 +683,25 @@ impl<'a> ValidatedTransition<'a> {
     /// Validate [`RewardMerkleTree`] by comparing proposed commitment
     /// against that stored in [`ValidatedState`].
     fn validate_reward_merkle_tree(&self) -> Result<(), ProposalValidationError> {
-        let reward_merkle_tree_root = self.state.reward_merkle_tree.commitment();
-        if self.proposal.header.reward_merkle_tree_root() != reward_merkle_tree_root {
-            return Err(ProposalValidationError::InvalidRewardRoot {
-                expected_root: reward_merkle_tree_root,
-                proposal_root: self.proposal.header.reward_merkle_tree_root(),
-            });
+        match self.proposal.header.reward_merkle_tree_root() {
+            Either::Left(proposal_root) => {
+                let expected_root = self.state.reward_merkle_tree_legacy.commitment();
+                if proposal_root != expected_root {
+                    return Err(ProposalValidationError::InvalidRewardRootLegacy {
+                        expected_root,
+                        proposal_root,
+                    });
+                }
+            },
+            Either::Right(proposal_root) => {
+                let expected_root = self.state.reward_merkle_tree.commitment();
+                if proposal_root != expected_root {
+                    return Err(ProposalValidationError::InvalidRewardRoot {
+                        expected_root,
+                        proposal_root,
+                    });
+                }
+            },
         }
 
         Ok(())
@@ -692,6 +741,9 @@ impl ValidatedState {
             ),
             reward_merkle_tree: RewardMerkleTree::from_commitment(
                 self.reward_merkle_tree.commitment(),
+            ),
+            reward_merkle_tree_legacy: RewardMerkleTreeLegacy::from_commitment(
+                self.reward_merkle_tree_legacy.commitment(),
             ),
             chain_config: ResolvableChainConfig::from(self.chain_config.commit()),
         }
@@ -1025,16 +1077,34 @@ impl HotShotState<SeqTypes> for ValidatedState {
             BlockMerkleTree::from_commitment(block_header.block_merkle_tree_root())
         };
 
-        let reward_merkle_tree = if block_header.reward_merkle_tree_root().size() == 0 {
-            RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT)
-        } else {
-            RewardMerkleTree::from_commitment(block_header.reward_merkle_tree_root())
-        };
+        let (reward_merkle_tree_legacy, reward_merkle_tree) =
+            match block_header.reward_merkle_tree_root() {
+                Either::Left(reward_legacy) => {
+                    let reward_merkle_tree = RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT);
+                    let reward_merkle_tree_legacy = if reward_legacy.size() == 0 {
+                        RewardMerkleTreeLegacy::new(LEGACY_REWARD_MERKLE_TREE_HEIGHT)
+                    } else {
+                        RewardMerkleTreeLegacy::from_commitment(reward_legacy)
+                    };
+                    (reward_merkle_tree_legacy, reward_merkle_tree)
+                },
+                Either::Right(reward) => {
+                    let reward_merkle_tree_legacy =
+                        RewardMerkleTreeLegacy::new(LEGACY_REWARD_MERKLE_TREE_HEIGHT);
+                    let reward_merkle_tree = if reward.size() == 0 {
+                        RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT)
+                    } else {
+                        RewardMerkleTree::from_commitment(reward)
+                    };
+                    (reward_merkle_tree_legacy, reward_merkle_tree)
+                },
+            };
 
         Self {
             fee_merkle_tree,
             block_merkle_tree,
             reward_merkle_tree,
+            reward_merkle_tree_legacy,
             chain_config: block_header.chain_config(),
         }
     }
@@ -1130,9 +1200,9 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for FeeMerkleTree {
 impl MerklizedState<SeqTypes, { Self::ARITY }> for RewardMerkleTree {
     type Key = Self::Index;
     type Entry = Self::Element;
-    type T = Sha3Node;
+    type T = KeccakNode;
     type Commit = Self::Commitment;
-    type Digest = Sha3Digest;
+    type Digest = Keccak256Hasher;
 
     fn state_type() -> &'static str {
         "reward_merkle_tree"
@@ -1144,6 +1214,38 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for RewardMerkleTree {
 
     fn tree_height() -> usize {
         REWARD_MERKLE_TREE_HEIGHT
+    }
+
+    fn insert_path(
+        &mut self,
+        key: Self::Key,
+        proof: &MerkleProof<Self::Entry, Self::Key, Self::T, { Self::ARITY }>,
+    ) -> anyhow::Result<()> {
+        match proof.elem() {
+            Some(elem) => self.remember(key, elem, proof)?,
+            None => self.non_membership_remember(key, proof)?,
+        }
+        Ok(())
+    }
+}
+
+impl MerklizedState<SeqTypes, { Self::ARITY }> for RewardMerkleTreeLegacy {
+    type Key = Self::Index;
+    type Entry = Self::Element;
+    type T = Sha3Node;
+    type Commit = Self::Commitment;
+    type Digest = Sha3Digest;
+
+    fn state_type() -> &'static str {
+        "reward_merkle_tree_legacy"
+    }
+
+    fn header_state_commitment_field() -> &'static str {
+        "reward_merkle_tree_root"
+    }
+
+    fn tree_height() -> usize {
+        LEGACY_REWARD_MERKLE_TREE_HEIGHT
     }
 
     fn insert_path(

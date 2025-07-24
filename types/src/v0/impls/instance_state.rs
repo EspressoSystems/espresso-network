@@ -27,7 +27,7 @@ use crate::{
         traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
         Upgrade, UpgradeMode,
     },
-    v0_1::RewardAmount,
+    v0_3::RewardAmount,
     ValidatorMap,
 };
 
@@ -395,7 +395,8 @@ pub mod mock {
     use super::*;
     use crate::{
         retain_accounts,
-        v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment},
+        v0_3::{RewardAccountLegacy, RewardAccountProofLegacy, RewardMerkleCommitmentLegacy},
+        v0_4::{RewardAccount, RewardAccountProof, RewardMerkleCommitment},
         BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
     };
 
@@ -498,6 +499,18 @@ pub mod mock {
             _reward_merkle_tree_root: RewardMerkleCommitment,
             _accounts: &[RewardAccount],
         ) -> anyhow::Result<Vec<RewardAccountProof>> {
+            anyhow::bail!("unimplemented")
+        }
+
+        async fn try_fetch_reward_accounts_legacy(
+            &self,
+            _retry: usize,
+            _instance: &NodeState,
+            _height: u64,
+            _view: ViewNumber,
+            _reward_merkle_tree_root: RewardMerkleCommitmentLegacy,
+            _accounts: &[RewardAccountLegacy],
+        ) -> anyhow::Result<Vec<RewardAccountProofLegacy>> {
             anyhow::bail!("unimplemented")
         }
 

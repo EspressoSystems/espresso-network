@@ -6,8 +6,7 @@ use async_trait::async_trait;
 use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_1::RewardAmount,
-    v0_3::{EventKey, IndexedStake, StakeTableEvent},
+    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent},
     Leaf2, NetworkConfig, ValidatorMap,
 };
 use hotshot::InitializerEpochInfo;
