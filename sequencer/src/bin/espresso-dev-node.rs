@@ -29,7 +29,7 @@ use espresso_types::{
 };
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
-use hotshot_state_prover::service::{run_prover_service, StateProverConfig};
+use hotshot_state_prover::{v2::service::run_prover_service, StateProverConfig};
 use hotshot_types::{
     stake_table::{one_honest_threshold, HSStakeTable},
     utils::epoch_from_block_number,

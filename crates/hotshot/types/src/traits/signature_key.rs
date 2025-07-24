@@ -26,7 +26,7 @@ use super::EncodeBytes;
 use crate::{
     bundle::Bundle,
     data::VidCommitment,
-    light_client::{LightClientState, StakeTableState, ToFieldsLightClientCompat},
+    light_client::{CircuitField, LightClientState, StakeTableState, ToFieldsLightClientCompat},
     traits::node_implementation::NodeType,
     utils::BuilderCommitment,
 };
@@ -437,14 +437,27 @@ pub trait StateSignatureKey:
     type SignError: std::error::Error + Send + Sync;
 
     /// Sign the light client state
-    fn sign_state(
+    /// The input `msg` should be the keccak256 hash of ABI encodings of the light client state,
+    /// next stake table state, and the auth root, mod into the `CircuitField`.
+    fn v3_sign_state(
+        private_key: &Self::StatePrivateKey,
+        msg: CircuitField,
+    ) -> Result<Self::StateSignature, Self::SignError>;
+
+    /// Verify the light client state signature
+    /// The input `msg` should be the keccak256 hash of ABI encodings of the light client state,
+    /// next stake table state, and the auth root, mod into the `CircuitField`.
+    fn v3_verify_state_sig(&self, signature: &Self::StateSignature, msg: CircuitField) -> bool;
+
+    /// Sign the light client state
+    fn v2_sign_state(
         private_key: &Self::StatePrivateKey,
         light_client_state: &LightClientState,
         next_stake_table_state: &StakeTableState,
     ) -> Result<Self::StateSignature, Self::SignError>;
 
     /// Verify the light client state signature
-    fn verify_state_sig(
+    fn v2_verify_state_sig(
         &self,
         signature: &Self::StateSignature,
         light_client_state: &LightClientState,
@@ -452,13 +465,13 @@ pub trait StateSignatureKey:
     ) -> bool;
 
     /// Sign the state for legacy light client
-    fn legacy_sign_state(
+    fn v1_sign_state(
         private_key: &Self::StatePrivateKey,
         light_client_state: &LightClientState,
     ) -> Result<Self::StateSignature, Self::SignError>;
 
     /// Verify the state signature for legacy light client
-    fn legacy_verify_state_sig(
+    fn v1_verify_state_sig(
         &self,
         signature: &Self::StateSignature,
         light_client_state: &LightClientState,

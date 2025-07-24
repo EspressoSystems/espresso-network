@@ -6,7 +6,7 @@ use ark_std::{
     rand::{CryptoRng, RngCore},
 };
 /// BLS verification key, base field and Schnorr verification key
-use hotshot_types::light_client::{CircuitField, LightClientState, StakeTableState, StateVerKey};
+use hotshot_types::light_client::{CircuitField, StakeTableState, StateVerKey};
 use jf_plonk::{
     errors::PlonkError,
     proof_system::{PlonkKzgSnark, UniversalSNARK},
@@ -23,7 +23,7 @@ pub type Proof = jf_plonk::proof_system::structs::Proof<Bn254>;
 /// Universal SRS
 pub type UniversalSrs = jf_plonk::proof_system::structs::UniversalSrs<Bn254>;
 /// Public input to the light client state prover service
-pub type PublicInput = crate::circuit::GenericPublicInput<CircuitField>;
+pub type PublicInput = super::circuit::GenericPublicInput<CircuitField>;
 
 /// Given a SRS, returns the proving key and verifying key for state update
 /// # Errors
@@ -33,7 +33,7 @@ pub fn preprocess(
     srs: &UniversalSrs,
     stake_table_capacity: usize,
 ) -> Result<(ProvingKey, VerifyingKey), PlonkError> {
-    let (circuit, _) = crate::circuit::build_for_preprocessing::<CircuitField, EdwardsConfig>(
+    let (circuit, _) = super::circuit::build_for_preprocessing::<CircuitField, EdwardsConfig>(
         stake_table_capacity,
     )?;
     PlonkKzgSnark::preprocess(srs, &circuit)
@@ -64,10 +64,9 @@ pub fn generate_state_update_proof<STIter, R, BitIter, SigIter>(
     stake_table_entries: STIter,
     signer_bit_vec: BitIter,
     signatures: SigIter,
-    lightclient_state: &LightClientState,
     stake_table_state: &StakeTableState,
     stake_table_capacity: usize,
-    next_stake_table_state: &StakeTableState,
+    lc_state_digest: &CircuitField,
 ) -> Result<(Proof, PublicInput), PlonkError>
 where
     STIter: IntoIterator,
@@ -89,14 +88,13 @@ where
         }
     });
 
-    let (circuit, public_inputs) = crate::circuit::build(
+    let (circuit, public_inputs) = super::circuit::build(
         stake_table_entries,
         signer_bit_vec,
         signatures,
-        lightclient_state,
         stake_table_state,
         stake_table_capacity,
-        next_stake_table_state,
+        lc_state_digest,
     )?;
 
     // Sanity check
@@ -110,14 +108,9 @@ mod tests {
     use ark_bn254::Bn254;
     use ark_ec::pairing::Pairing;
     use ark_ed_on_bn254::EdwardsConfig as Config;
-    use ark_std::{
-        rand::{CryptoRng, RngCore},
-        One, UniformRand,
-    };
-    use hotshot_types::{
-        light_client::LightClientState, signature_key::SchnorrPubKey,
-        traits::signature_key::StateSignatureKey,
-    };
+    use ark_ff::One;
+    use ark_std::rand::{CryptoRng, RngCore};
+    use hotshot_types::{signature_key::SchnorrPubKey, traits::signature_key::StateSignatureKey};
     use jf_plonk::{
         proof_system::{PlonkKzgSnark, UniversalSNARK},
         transcript::SolidityTranscript,
@@ -128,8 +121,8 @@ mod tests {
 
     use super::{generate_state_update_proof, preprocess, CircuitField, UniversalSrs};
     use crate::{
-        circuit::build_for_preprocessing,
         test_utils::{key_pairs_for_testing, stake_table_for_testing},
+        v3::circuit::build_for_preprocessing,
     };
 
     const ST_CAPACITY: usize = 20;
@@ -199,7 +192,6 @@ mod tests {
         let st_state = st
             .commitment(ST_CAPACITY)
             .expect("Failed to compute stake table commitment");
-        let next_st_state = st_state;
 
         let stake_table_entries = st
             .iter()
@@ -211,21 +203,12 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let lightclient_state = LightClientState {
-            view_number: 100,
-            block_height: 73,
-            block_comm_root: CircuitField::rand(&mut prng),
-        };
+        let lc_state_digest = CircuitField::from(2u64);
 
         let sigs: Vec<_> = schnorr_keys
             .iter()
             .map(|(key, _)| {
-                <SchnorrPubKey as StateSignatureKey>::sign_state(
-                    key,
-                    &lightclient_state,
-                    &next_st_state,
-                )
-                .unwrap()
+                <SchnorrPubKey as StateSignatureKey>::v3_sign_state(key, lc_state_digest).unwrap()
             })
             .collect();
 
@@ -264,10 +247,9 @@ mod tests {
             &stake_table_entries,
             &bit_vec,
             &bit_masked_sigs,
-            &lightclient_state,
             &st_state,
             ST_CAPACITY,
-            &next_st_state,
+            &lc_state_digest,
         );
         assert!(result.is_ok());
 
@@ -289,10 +271,9 @@ mod tests {
             &stake_table_entries,
             &bit_vec,
             &bit_masked_sigs,
-            &lightclient_state,
             &bad_st_state,
             ST_CAPACITY,
-            &next_st_state,
+            &lc_state_digest,
         );
         assert!(result.is_err());
     }

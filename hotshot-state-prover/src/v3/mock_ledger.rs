@@ -1,3 +1,5 @@
+// TODO(Chengyu): this mock ledger is still under development.
+
 use std::collections::HashMap;
 
 use alloy::primitives::U256;
@@ -11,9 +13,11 @@ use ark_std::{
 };
 use espresso_types::SeqTypes;
 use hotshot_contract_adapter::{field_to_u256, jellyfish::open_key};
+use hotshot_task_impls::helpers::derive_lc_state_digest;
 use hotshot_types::{
     light_client::{GenericLightClientState, GenericStakeTableState, LightClientState},
     stake_table::{HSStakeTable, StakeTableEntry},
+    utils::{epoch_from_block_number, is_epoch_root, is_ge_epoch_root, is_last_block},
     PeerConfig,
 };
 use itertools::izip;
@@ -30,7 +34,7 @@ use jf_signature::{
 };
 use jf_utils::test_rng;
 
-use crate::legacy::{
+use super::{
     circuit::GenericPublicInput, generate_state_update_proof, preprocess, Proof, VerifyingKey,
 };
 
@@ -40,11 +44,19 @@ type SchnorrSignKey = jf_signature::schnorr::SignKey<ark_ed_on_bn254::Fr>;
 
 /// Stake table capacity used for testing
 pub const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 10;
+/// Number of block per epoch for testing
+pub const EPOCH_HEIGHT_FOR_TEST: u64 = 10;
+/// Our "first epoch" in test is epoch 2: ceil(EPOCH_START_BLOCK / EPOCH_HEIGHT_FOR_TEST)
+pub const EPOCH_START_BLOCK_FOR_TEST: u64 = 12;
 
 /// Mock for system parameter of `MockLedger`
 pub struct MockSystemParam {
     /// max capacity of stake table
     st_cap: usize,
+    /// number of block per epoch
+    epoch_height: u64,
+    /// indicate the first epoch
+    epoch_start_bock: u64,
 }
 
 impl MockSystemParam {
@@ -52,6 +64,8 @@ impl MockSystemParam {
     pub fn init() -> Self {
         Self {
             st_cap: STAKE_TABLE_CAPACITY_FOR_TEST,
+            epoch_height: EPOCH_HEIGHT_FOR_TEST,
+            epoch_start_bock: EPOCH_START_BLOCK_FOR_TEST,
         }
     }
 }
@@ -61,8 +75,14 @@ impl MockSystemParam {
 pub struct MockLedger {
     pp: MockSystemParam,
     pub rng: StdRng,
+    pub(crate) epoch: u64,
     pub(crate) state: GenericLightClientState<F>,
     pub(crate) voting_st: HSStakeTable<SeqTypes>,
+    pub(crate) next_voting_st: HSStakeTable<SeqTypes>,
+    pub(crate) pending_st: HSStakeTable<SeqTypes>,
+    pub(crate) qc_keys: Vec<BLSVerKey>,
+    pub(crate) state_keys: Vec<(SchnorrSignKey, SchnorrVerKey)>,
+    pub(crate) auth_root: U256,
     key_archive: HashMap<BLSVerKey, SchnorrSignKey>,
 }
 
@@ -77,6 +97,8 @@ impl MockLedger {
             key_archive.insert(qc_keys[i], state_keys[i].0.clone());
         }
         let voting_st = stake_table_for_testing(&qc_keys, &state_keys);
+        let next_voting_st = voting_st.clone();
+        let pending_st = voting_st.clone();
 
         // arbitrary commitment values as they don't affect logic being tested
         let block_comm_root = F::from(1234);
@@ -85,18 +107,89 @@ impl MockLedger {
             block_height: 0,
             block_comm_root,
         };
+        let auth_root = U256::from(0);
 
         Self {
             pp,
             rng,
+            epoch: 0,
             state: genesis,
             voting_st,
+            next_voting_st,
+            pending_st,
+            qc_keys,
+            state_keys,
+            auth_root,
             key_archive,
+        }
+    }
+
+    /// returns the current epoch
+    pub fn cur_epoch(&self) -> u64 {
+        epoch_from_block_number(self.state.block_height, self.pp.epoch_height)
+    }
+
+    /// return true if epoch is activated
+    pub fn epoch_activated(&self) -> bool {
+        self.state.block_height >= self.pp.epoch_start_bock
+    }
+
+    /// return true of the current state is epoch root
+    /// since it has no meaning before activation, always return false before epoch_start_block
+    pub fn is_epoch_root(&self) -> bool {
+        self.epoch_activated() && is_epoch_root(self.state.block_height, self.pp.epoch_height)
+    }
+
+    /// return true of the current state is between epoch root and the last block
+    /// since it has no meaning before activation, always return false before epoch_start_block
+    pub fn is_ge_epoch_root(&self) -> bool {
+        self.epoch_activated() && is_ge_epoch_root(self.state.block_height, self.pp.epoch_height)
+    }
+
+    /// return the first epoch (activation epoch)
+    pub fn first_epoch(&self) -> u64 {
+        epoch_from_block_number(self.pp.epoch_start_bock, self.pp.epoch_height)
+    }
+
+    /// compute the epoch corresponding to `height`
+    pub fn derive_epoch(&self, height: u64) -> u64 {
+        epoch_from_block_number(height, self.pp.epoch_height)
+    }
+
+    fn is_last_block_in_epoch(&self) -> bool {
+        is_last_block(self.state.block_height, self.pp.epoch_height)
+    }
+
+    /// attempt to advance epoch, should be invoked at the *beginning* of every `fn elapse_with_block()`
+    /// when we reach epoch root, we will elapse the rest of the blocks in this epoch and enter the next epoch
+    fn try_advance_epoch(&mut self) {
+        if self.epoch_activated() {
+            if self.is_epoch_root() {
+                // skip the rest of the blocks (between epoch_root and last_block_in_epoch)
+                while self.cur_epoch() == self.epoch {
+                    self.state.view_number += 1;
+                    self.state.block_height += 1;
+                    self.state.block_comm_root = self.new_dummy_comm();
+                }
+                // simulate 2 new registration, 1 exit, this snapshot only take effect another 1 epoch later
+                self.sync_stake_table(2, 1);
+                self.epoch += 1;
+                self.voting_st = self.next_voting_st.clone();
+                self.next_voting_st = self.pending_st.clone();
+            }
+        } else {
+            // before epoch activation, only advance at the end/last block of each epoch
+            // no need to update stake table since it's still static
+            if self.is_last_block_in_epoch() {
+                self.epoch += 1;
+            }
         }
     }
 
     /// Elapse a view with a new finalized block
     pub fn elapse_with_block(&mut self) {
+        self.try_advance_epoch();
+
         self.state.view_number += 1;
         self.state.block_height += 1;
         self.state.block_comm_root = self.new_dummy_comm();
@@ -108,13 +201,73 @@ impl MockLedger {
         self.state.view_number += 1;
     }
 
+    /// Update the pending stake table with `num_reg` number of new registrations and `num_exit` number of exits on L1
+    pub fn sync_stake_table(&mut self, num_reg: usize, num_exit: usize) {
+        if !self.epoch_activated() {
+            return;
+        }
+        // ensure input parameter won't exceed stake table capacity
+        let before_st_size = self.qc_keys.len();
+        assert!(self.qc_keys.len() + num_reg - num_exit <= self.pp.st_cap);
+
+        let mut st_map: HashMap<_, _> = self
+            .pending_st
+            .iter()
+            .map(|config| (config.stake_table_entry.stake_key, config.clone()))
+            .collect();
+
+        // process exits/deregister
+        for _ in 0..num_exit {
+            let exit_idx = self.rng.next_u32() as usize % self.qc_keys.len();
+            let exit_qc_key = self.qc_keys[exit_idx];
+
+            st_map.remove(&exit_qc_key).unwrap_or_else(|| {
+                panic!("failed to deregister {exit_idx}-th key");
+            });
+            self.qc_keys.remove(exit_idx);
+            self.state_keys.remove(exit_idx);
+        }
+
+        // process register
+        for _ in 0..num_reg {
+            let bls_key: BLSVerKey = BLSOverBN254CurveSignatureScheme::key_gen(&(), &mut self.rng)
+                .unwrap()
+                .1;
+            let schnorr_key: (SchnorrSignKey, SchnorrVerKey) =
+                SchnorrSignatureScheme::key_gen(&(), &mut self.rng).unwrap();
+            let amount = U256::from(self.rng.gen_range(1..1000u32));
+
+            st_map.insert(
+                bls_key,
+                PeerConfig {
+                    stake_table_entry: StakeTableEntry {
+                        stake_key: bls_key,
+                        stake_amount: amount,
+                    },
+                    state_ver_key: schnorr_key.1.clone(),
+                },
+            );
+            self.key_archive.insert(bls_key, schnorr_key.0.clone());
+            self.qc_keys.push(bls_key);
+            self.state_keys.push(schnorr_key);
+        }
+
+        self.pending_st = st_map.into_values().collect::<Vec<_>>().into();
+
+        assert!(self.qc_keys.len() == self.state_keys.len());
+        assert!(self.qc_keys.len() == before_st_size + num_reg - num_exit);
+    }
+
     /// Return the light client state and proof of consensus on this finalized state
     pub fn gen_state_proof(&mut self) -> (GenericPublicInput<F>, Proof) {
         let voting_st_state = self.voting_stake_table_state();
+        let next_st_state = self.next_stake_table_state();
 
         let mut msg = Vec::with_capacity(7);
         let state_msg: [F; 3] = self.state.into();
         msg.extend_from_slice(&state_msg);
+        let next_stake_msg: [F; 4] = next_st_state.into();
+        msg.extend_from_slice(&next_stake_msg);
 
         let st: Vec<(BLSVerKey, U256, SchnorrVerKey)> = self
             .voting_st
@@ -180,15 +333,17 @@ impl MockLedger {
             .into_iter()
             .map(|(_, stake_amount, schnorr_key)| (schnorr_key, stake_amount))
             .collect::<Vec<_>>();
+        let lc_state_digest =
+            derive_lc_state_digest(&self.state, &voting_st_state, &self.auth_root);
         let (proof, pi) = generate_state_update_proof(
             &mut self.rng,
             &pk,
             &stake_table_entries,
             &bit_vec,
             &sigs,
-            &self.state,
             &voting_st_state,
             self.pp.st_cap,
+            &lc_state_digest,
         )
         .expect("Fail to generate state proof");
 
@@ -211,6 +366,8 @@ impl MockLedger {
         let mut msg = Vec::with_capacity(7);
         let state_msg: [F; 3] = new_state.into();
         msg.extend_from_slice(&state_msg);
+        let adv_st_state_msg: [F; 4] = adv_st_state.into();
+        msg.extend_from_slice(&adv_st_state_msg);
 
         // every fake stakers sign on the adverarial new state
         let bit_vec = vec![true; self.pp.st_cap];
@@ -242,15 +399,16 @@ impl MockLedger {
             .into_iter()
             .map(|config| (config.state_ver_key, config.stake_table_entry.stake_amount))
             .collect::<Vec<_>>();
+        let lc_state_digest = derive_lc_state_digest(&new_state, &adv_st_state, &self.auth_root);
         let (proof, pi) = generate_state_update_proof::<_, _, _, _>(
             &mut self.rng,
             &pk,
             &stake_table_entries,
             &bit_vec,
             &sigs,
-            &new_state,
             &adv_st_state,
             self.pp.st_cap,
+            &lc_state_digest,
         )
         .expect("Fail to generate state proof");
 
@@ -262,6 +420,18 @@ impl MockLedger {
         self.voting_st
             .commitment(self.pp.st_cap)
             .expect("Failed to compute stake table commitment")
+    }
+
+    /// Returns epoch-aware stake table state for the next block.
+    /// This will be the same most of the time as `self.voting_st_state()` except during epoch change
+    pub fn next_stake_table_state(&self) -> GenericStakeTableState<F> {
+        if self.epoch_activated() && self.is_ge_epoch_root() {
+            self.next_voting_st
+                .commitment(self.pp.st_cap)
+                .expect("Failed to compute stake table commitment")
+        } else {
+            self.voting_stake_table_state()
+        }
     }
 
     /// Returns the light client state

@@ -347,10 +347,10 @@ impl StateRelayServerDataSource for StateRelayServerState {
         // sanity check the signature validity first before adding in
         if !req
             .key
-            .verify_state_sig(&req.signature, &req.state, &req.next_stake)
+            .v2_verify_state_sig(&req.signature, &req.state, &req.next_stake)
         {
             // If it's a legacy signature, handle it separately
-            if req.key.legacy_verify_state_sig(&req.signature, &req.state) {
+            if req.key.v1_verify_state_sig(&req.signature, &req.state) {
                 return self.post_legacy_signature(req).await;
             }
             tracing::warn!("Received invalid signature: {:?}", req);
@@ -489,7 +489,7 @@ impl StateRelayServerDataSource for StateRelayServerState {
         };
 
         // sanity check the signature validity first before adding in
-        if !req.key.legacy_verify_state_sig(&req.signature, &req.state) {
+        if !req.key.v1_verify_state_sig(&req.signature, &req.state) {
             tracing::warn!("Received invalid legacy signature: {:?}", req);
             return Err(ServerError::catch_all(
                 StatusCode::BAD_REQUEST,

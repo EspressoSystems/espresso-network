@@ -276,7 +276,7 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
             state_ver_key,
         } = membership.stake(key).await?;
 
-        if !state_ver_key.verify_state_sig(
+        if !state_ver_key.v2_verify_state_sig(
             &vote.signature,
             &vote.light_client_state,
             &vote.next_stake_table_state,
