@@ -4481,7 +4481,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port),
+                Options::with_port(api_port).catchup(Default::default()),
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
@@ -4595,7 +4595,7 @@ mod test {
             Client::new(format!("http://localhost:{node_0_port}").parse().unwrap());
         client.connect(None).await;
 
-         wait_for_epochs(&mut events, EPOCH_HEIGHT, 6).await;
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, 6).await;
 
         let epoch_7_block = EPOCH_HEIGHT * 6 + 1;
 
@@ -4624,9 +4624,7 @@ mod test {
             }
         }
 
-          
-
-           retries = 0;
+        retries = 0;
         // check that the node has stored atleast 6 epochs merklized state in persistence
         loop {
             sleep(Duration::from_secs(3)).await;
@@ -4644,7 +4642,10 @@ mod test {
 
             retries += 1;
             if retries > 30 {
-                panic!("max retries reached. block state block height is less than epoch 6 start block");
+                panic!(
+                    "max retries reached. block state block height is less than epoch 6 start \
+                     block"
+                );
             }
         }
 

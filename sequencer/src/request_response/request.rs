@@ -31,7 +31,7 @@ pub enum Request {
     BlocksFrontier(Height, ViewNumber),
     /// A request for the reward accounts at a given height and view
     RewardAccounts(Height, ViewNumber, Vec<RewardAccount>),
-     /// A request for the legacy reward accounts at a given height and view
+    /// A request for the legacy reward accounts at a given height and view
     RewardAccountsLegacy(Height, ViewNumber, Vec<RewardAccountLegacy>),
     /// A request for the VID share at the given block height
     VidShare(Height, RequestId),

@@ -1486,9 +1486,7 @@ impl StateCatchup for ParallelStateCatchup {
         .await
     }
 
-
-
-     async fn fetch_reward_accounts_legacy(
+    async fn fetch_reward_accounts_legacy(
         &self,
         instance: &NodeState,
         height: u64,

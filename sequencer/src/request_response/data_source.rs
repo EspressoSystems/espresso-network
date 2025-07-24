@@ -38,7 +38,10 @@ use request_response::data_source::DataSource as DataSourceTrait;
 use super::request::{Request, Response};
 use crate::{
     api::BlocksFrontier,
-    catchup::{add_fee_accounts_to_state, add_reward_accounts_to_state, add_reward_accounts_to_state_legacy, CatchupStorage},
+    catchup::{
+        add_fee_accounts_to_state, add_reward_accounts_to_state,
+        add_reward_accounts_to_state_legacy, CatchupStorage,
+    },
 };
 
 /// A type alias for SQL storage
@@ -259,12 +262,13 @@ impl<
                 Ok(Response::RewardAccounts(merkle_tree))
             },
 
-             Request::RewardAccountsLegacy(height, view, accounts) => {
+            Request::RewardAccountsLegacy(height, view, accounts) => {
                 // Try to get the reward accounts from memory first, then fall back to storage
                 if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await {
-                    if let Ok(reward_accounts) =
-                        retain_reward_accounts_legacy(&state.reward_merkle_tree_legacy, accounts.iter().copied())
-                    {
+                    if let Ok(reward_accounts) = retain_reward_accounts_legacy(
+                        &state.reward_merkle_tree_legacy,
+                        accounts.iter().copied(),
+                    ) {
                         return Ok(Response::RewardAccountsLegacy(reward_accounts));
                     }
                 }
@@ -297,7 +301,10 @@ impl<
                 )
                 .await
                 {
-                    tracing::warn!(?view, "Cannot update fetched legacy reward account state: {err:#}");
+                    tracing::warn!(
+                        ?view,
+                        "Cannot update fetched legacy reward account state: {err:#}"
+                    );
                 }
 
                 Ok(Response::RewardAccountsLegacy(merkle_tree))

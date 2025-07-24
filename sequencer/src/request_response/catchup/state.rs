@@ -433,8 +433,7 @@ impl<
         Ok(response)
     }
 
-
-     async fn fetch_reward_accounts_legacy(
+    async fn fetch_reward_accounts_legacy(
         &self,
         _instance: &NodeState,
         height: u64,
@@ -461,11 +460,12 @@ impl<
                 // Verify the merkle proofs
                 let mut proofs = Vec::new();
                 for account in accounts_clone {
-                    let (proof, _) = RewardAccountProofLegacy::prove(&reward_merkle_tree, account.into())
-                        .with_context(|| format!("response was missing account {account}"))?;
-                    proof
-                        .verify(&reward_merkle_tree_root)
-                        .with_context(|| format!("invalid proof for legacy reward account {account}"))?;
+                    let (proof, _) =
+                        RewardAccountProofLegacy::prove(&reward_merkle_tree, account.into())
+                            .with_context(|| format!("response was missing account {account}"))?;
+                    proof.verify(&reward_merkle_tree_root).with_context(|| {
+                        format!("invalid proof for legacy reward account {account}")
+                    })?;
                     proofs.push(proof);
                 }
 
@@ -487,7 +487,6 @@ impl<
 
         Ok(response)
     }
-
 
     fn is_local(&self) -> bool {
         false

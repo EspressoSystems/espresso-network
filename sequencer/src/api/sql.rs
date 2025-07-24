@@ -319,6 +319,18 @@ impl CatchupStorage for DataSource {
             .await
     }
 
+    async fn get_reward_accounts_legacy(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        accounts: &[RewardAccountLegacy],
+    ) -> anyhow::Result<(RewardMerkleTreeLegacy, Leaf2)> {
+        self.as_ref()
+            .get_reward_accounts_legacy(instance, height, view, accounts)
+            .await
+    }
+
     async fn get_frontier(
         &self,
         instance: &NodeState,
