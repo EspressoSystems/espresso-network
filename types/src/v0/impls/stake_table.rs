@@ -61,11 +61,12 @@ use super::{
 };
 use crate::{
     traits::EventsPersistenceRead,
-    v0_1::{
-        L1Provider, RewardAmount, ASSUMED_BLOCK_TIME_SECONDS, BLOCKS_PER_YEAR,
-        COMMISSION_BASIS_POINTS, INFLATION_RATE, MILLISECONDS_PER_YEAR,
+    v0_1::L1Provider,
+    v0_3::{
+        EventSortingError, ExpectedStakeTableError, FetchRewardError, RewardAmount,
+        StakeTableError, ASSUMED_BLOCK_TIME_SECONDS, BLOCKS_PER_YEAR, COMMISSION_BASIS_POINTS,
+        INFLATION_RATE, MILLISECONDS_PER_YEAR,
     },
-    v0_3::{EventSortingError, ExpectedStakeTableError, FetchRewardError, StakeTableError},
     DrbAndHeaderUpgradeVersion, EpochVersion,
 };
 

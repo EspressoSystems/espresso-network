@@ -7,12 +7,11 @@ use committable::Commitment;
 use espresso_types::{
     config::PublicNetworkConfig,
     v0::traits::{PersistenceOptions, SequencerPersistence},
-    v0_1::{
-        RewardAccount, RewardAccountLegacy, RewardAccountProof, RewardAccountProofLegacy,
-        RewardAccountQueryData, RewardAccountQueryDataLegacy, RewardAmount, RewardMerkleTree,
-        RewardMerkleTreeLegacy,
+    v0_3::{
+        ChainConfig, RewardAccountLegacy, RewardAccountProofLegacy, RewardAccountQueryDataLegacy,
+        RewardAmount, RewardMerkleTreeLegacy, Validator,
     },
-    v0_3::{ChainConfig, Validator},
+    v0_4::{RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardMerkleTree},
     FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
 };
 use futures::future::Future;

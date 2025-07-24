@@ -4,11 +4,10 @@ use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
     traits::{SequencerPersistence, StateCatchup},
-    v0_1::{
-        RewardAccount, RewardAccountLegacy, RewardAccountProof, RewardAccountProofLegacy,
-        RewardMerkleCommitment, RewardMerkleCommitmentLegacy,
+    v0_3::{
+        ChainConfig, RewardAccountLegacy, RewardAccountProofLegacy, RewardMerkleCommitmentLegacy,
     },
-    v0_3::ChainConfig,
+    v0_4::{RewardAccount, RewardAccountProof, RewardMerkleCommitment},
     BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
 };

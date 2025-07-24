@@ -1,4 +1,4 @@
-use crate::{v0_1::{ RewardMerkleCommitmentLegacy}, NsTable};
+use crate::{ v0_3::state::RewardMerkleCommitmentLegacy, NsTable};
 
 use super::{
     BlockMerkleCommitment, BuilderSignature, FeeInfo, FeeMerkleCommitment, L1BlockInfo,

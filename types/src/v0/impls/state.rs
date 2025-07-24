@@ -26,12 +26,7 @@ use time::OffsetDateTime;
 use vbs::version::{StaticVersionType, Version};
 
 use super::{
-    fee_info::FeeError,
-    instance_state::NodeState,
-    v0_1::{
-        IterableFeeInfo, RewardAccount, RewardAmount, RewardMerkleCommitment, RewardMerkleTree,
-        REWARD_MERKLE_TREE_HEIGHT,
-    },
+    fee_info::FeeError, instance_state::NodeState, v0_1::IterableFeeInfo, v0_3::RewardAmount,
     BlockMerkleCommitment, BlockSize, EpochVersion, FeeMerkleCommitment, L1Client,
 };
 use crate::{
@@ -40,12 +35,14 @@ use crate::{
         impls::distribute_block_reward,
         sparse_mt::{Keccak256Hasher, KeccakNode},
     },
-    v0_1::{
-        RewardAccountLegacy, RewardMerkleCommitmentLegacy, RewardMerkleTreeLegacy,
-        LEGACY_REWARD_MERKLE_TREE_HEIGHT,
+    v0_3::{
+        ChainConfig, ResolvableChainConfig, RewardAccountLegacy, RewardMerkleCommitmentLegacy,
+        RewardMerkleTreeLegacy, LEGACY_REWARD_MERKLE_TREE_HEIGHT,
     },
-    v0_3::{ChainConfig, ResolvableChainConfig},
-    BlockMerkleTree, Delta, FeeAccount, FeeAmount, FeeInfo, FeeMerkleTree, Header, Leaf2,
+    v0_4::{
+        Delta, RewardAccount, RewardMerkleCommitment, RewardMerkleTree, REWARD_MERKLE_TREE_HEIGHT,
+    },
+    BlockMerkleTree, FeeAccount, FeeAmount, FeeInfo, FeeMerkleTree, Header, Leaf2,
     NsTableValidationError, PayloadByteLen, SeqTypes, UpgradeType, BLOCK_MERKLE_TREE_HEIGHT,
     FEE_MERKLE_TREE_HEIGHT,
 };

@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use committable::Commitment;
 use espresso_types::{
-    v0_1::{RewardAccount, RewardAccountLegacy, RewardMerkleTree, RewardMerkleTreeLegacy},
-    v0_3::ChainConfig,
+    v0_3::{ChainConfig, RewardAccountLegacy, RewardMerkleTreeLegacy},
+    v0_4::{RewardAccount, RewardMerkleTree},
     FeeAccount, FeeMerkleTree, Leaf2,
 };
 use hotshot_types::data::VidShare;

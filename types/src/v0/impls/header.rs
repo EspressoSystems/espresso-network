@@ -28,10 +28,7 @@ use time::OffsetDateTime;
 use vbs::version::{StaticVersionType, Version};
 
 use super::{
-    instance_state::NodeState,
-    state::ValidatedState,
-    v0_1::{IterableFeeInfo, RewardMerkleCommitment},
-    v0_3::ChainConfig,
+    instance_state::NodeState, state::ValidatedState, v0_1::IterableFeeInfo, v0_3::ChainConfig,
 };
 use crate::{
     eth_signature_key::BuilderSignature,
@@ -39,13 +36,15 @@ use crate::{
         header::{EitherOrVersion, VersionedHeader},
         impls::{distribute_block_reward, reward::RewardDistributor},
     },
-    v0_1::{
+    v0_1, v0_2,
+    v0_3::{
         self, RewardMerkleCommitmentLegacy, RewardMerkleTreeLegacy,
         LEGACY_REWARD_MERKLE_TREE_HEIGHT,
     },
-    v0_2, v0_3, v0_4, BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
-    FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable,
-    PayloadByteLen, SeqTypes, TimestampMillis, UpgradeType,
+    v0_4::{self, RewardMerkleCommitment},
+    BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment,
+    Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable, PayloadByteLen,
+    SeqTypes, TimestampMillis, UpgradeType,
 };
 
 impl v0_1::Header {
@@ -1174,10 +1173,8 @@ mod test_headers {
     use crate::{
         eth_signature_key::EthKeyPair,
         mock::MockStateCatchup,
-        v0_1::{
-            RewardAccount, RewardAccountLegacy, RewardAmount, RewardMerkleTree,
-            LEGACY_REWARD_MERKLE_TREE_HEIGHT, REWARD_MERKLE_TREE_HEIGHT,
-        },
+        v0_3::{RewardAccountLegacy, RewardAmount, LEGACY_REWARD_MERKLE_TREE_HEIGHT},
+        v0_4::{RewardAccount, RewardMerkleTree, REWARD_MERKLE_TREE_HEIGHT},
         Leaf,
     };
 

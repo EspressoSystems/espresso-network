@@ -17,7 +17,7 @@ use tokio::task::JoinHandle;
 
 use super::L1Client;
 use crate::{
-    traits::{MembershipPersistence, StateCatchup}, v0::ChainConfig, v0_1::RewardAmount, SeqTypes, ValidatorMap
+    traits::{MembershipPersistence, StateCatchup}, v0::ChainConfig, v0_3::RewardAmount, SeqTypes, ValidatorMap
 };
 
 /// Stake table holding all staking information (DA and non-DA stakers)

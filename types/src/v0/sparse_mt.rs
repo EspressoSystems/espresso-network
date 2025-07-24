@@ -8,7 +8,7 @@ use ark_serialize::{
 use jf_merkle_tree::DigestAlgorithm;
 use sha3::{Digest as _, Keccak256};
 
-use crate::v0_1::{RewardAccount, RewardAmount};
+use crate::{v0_3::RewardAmount, v0_4::RewardAccount};
 
 /// Custom Keccak256 node for our merkle tree
 #[derive(Default, Eq, PartialEq, Clone, Copy, Ord, PartialOrd, Hash)]

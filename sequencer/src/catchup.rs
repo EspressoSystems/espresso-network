@@ -15,12 +15,11 @@ use espresso_types::{
     config::PublicNetworkConfig,
     traits::SequencerPersistence,
     v0::traits::StateCatchup,
-    v0_1::{
-        RewardAccount, RewardAccountLegacy, RewardAccountProof, RewardAccountProofLegacy,
-        RewardMerkleCommitment, RewardMerkleCommitmentLegacy, RewardMerkleTree,
+    v0_3::{
+        ChainConfig, RewardAccountLegacy, RewardAccountProofLegacy, RewardMerkleCommitmentLegacy,
         RewardMerkleTreeLegacy,
     },
-    v0_3::ChainConfig,
+    v0_4::{RewardAccount, RewardAccountProof, RewardMerkleCommitment, RewardMerkleTree},
     BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions, ValidatedState,
 };

@@ -6,7 +6,8 @@ use anyhow::{bail, Context};
 use clap::Parser;
 use espresso_types::{
     v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_1::{RewardMerkleTree, RewardMerkleTreeLegacy},
+    v0_3::RewardMerkleTreeLegacy,
+    v0_4::RewardMerkleTree,
     BlockMerkleTree, PubKey,
 };
 use futures::{

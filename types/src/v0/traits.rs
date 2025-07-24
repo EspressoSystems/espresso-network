@@ -36,15 +36,15 @@ use serde::{de::DeserializeOwned, Serialize};
 use super::{
     impls::NodeState,
     utils::BackoffParams,
-    v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment},
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
 use crate::{
     v0::impls::ValidatedState,
-    v0_1::{
-        RewardAccountLegacy, RewardAccountProofLegacy, RewardAmount, RewardMerkleCommitmentLegacy,
+    v0_3::{
+        ChainConfig, RewardAccountLegacy, RewardAccountProofLegacy, RewardAmount,
+        RewardMerkleCommitmentLegacy,
     },
-    v0_3::ChainConfig,
+    v0_4::{RewardAccount, RewardAccountProof, RewardMerkleCommitment},
     BlockMerkleTree, Event, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig,
     SeqTypes, ValidatorMap,
 };

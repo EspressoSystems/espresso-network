@@ -78,7 +78,6 @@ reexport_unchanged_types!(
     BlockMerkleTree,
     BuilderSignature,
     ChainId,
-    Delta,
     FeeAccount,
     FeeAccountProof,
     FeeAmount,

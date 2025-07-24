@@ -27,7 +27,7 @@ use crate::{
         traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
         Upgrade, UpgradeMode,
     },
-    v0_1::RewardAmount,
+    v0_3::RewardAmount,
     ValidatorMap,
 };
 
@@ -395,10 +395,8 @@ pub mod mock {
     use super::*;
     use crate::{
         retain_accounts,
-        v0_1::{
-            RewardAccount, RewardAccountLegacy, RewardAccountProof, RewardAccountProofLegacy,
-            RewardMerkleCommitment, RewardMerkleCommitmentLegacy,
-        },
+        v0_3::{RewardAccountLegacy, RewardAccountProofLegacy, RewardMerkleCommitmentLegacy},
+        v0_4::{RewardAccount, RewardAccountProof, RewardMerkleCommitment},
         BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
     };
 

@@ -26,20 +26,21 @@ use sequencer_utils::{
 use vbs::version::StaticVersionType;
 
 use super::{
-    v0_1::{
-        RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardAmount,
-        RewardMerkleCommitment, RewardMerkleProof, RewardMerkleTree, COMMISSION_BASIS_POINTS,
+    v0_3::{RewardAmount, Validator, COMMISSION_BASIS_POINTS},
+    v0_4::{
+        RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardMerkleCommitment,
+        RewardMerkleProof, RewardMerkleTree,
     },
-    v0_3::Validator,
     Leaf2, NodeState, ValidatedState,
 };
 use crate::{
     eth_signature_key::EthKeyPair,
-    v0_1::{
+    v0_3::{
         RewardAccountLegacy, RewardAccountProofLegacy, RewardMerkleCommitmentLegacy,
         RewardMerkleProofLegacy, RewardMerkleTreeLegacy,
     },
-    Delta, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount,
+    v0_4::Delta,
+    DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount,
 };
 
 impl_serde_from_string_or_integer!(RewardAmount);

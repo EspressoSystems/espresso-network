@@ -9,7 +9,8 @@ use async_trait::async_trait;
 use espresso_types::{
     retain_accounts,
     traits::SequencerPersistence,
-    v0_1::{RewardAccount, RewardAccountLegacy, RewardMerkleTree, RewardMerkleTreeLegacy},
+    v0_3::{RewardAccountLegacy, RewardMerkleTreeLegacy},
+    v0_4::{RewardAccount, RewardMerkleTree},
     NodeState, PubKey, SeqTypes,
 };
 use hotshot::{traits::NodeImplementation, SystemContext};

@@ -9,8 +9,8 @@ use std::{
 use anyhow::Result;
 use committable::Committable;
 use espresso_types::{
-    v0_1::{ADVZNsProof, RewardAccount, RewardAccountLegacy},
-    FeeAccount, FeeMerkleTree, NamespaceId, NsProof, PubKey, Transaction,
+    v0_1::ADVZNsProof, v0_3::RewardAccountLegacy, v0_4::RewardAccount, FeeAccount, FeeMerkleTree,
+    NamespaceId, NsProof, PubKey, Transaction,
 };
 // re-exported here to avoid breaking changes in consumers
 // "deprecated" does not work with "pub use": https://github.com/rust-lang/rust/issues/30827

@@ -14,10 +14,8 @@ use espresso_types::{
     config::PublicNetworkConfig,
     retain_accounts,
     v0::traits::SequencerPersistence,
-    v0_1::{
-        RewardAccount, RewardAccountLegacy, RewardAmount, RewardMerkleTree, RewardMerkleTreeLegacy,
-    },
-    v0_3::ChainConfig,
+    v0_3::{ChainConfig, RewardAccountLegacy, RewardAmount, RewardMerkleTreeLegacy},
+    v0_4::{RewardAccount, RewardMerkleTree},
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction, ValidatorMap,
 };
@@ -2155,8 +2153,7 @@ mod test {
     use espresso_types::{
         config::PublicHotShotConfig,
         traits::{NullEventConsumer, PersistenceOptions},
-        v0_1::{RewardAmount, COMMISSION_BASIS_POINTS},
-        v0_3::Fetcher,
+        v0_3::{Fetcher, RewardAmount, COMMISSION_BASIS_POINTS},
         validators_from_l1_events, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAmount, FeeVersion,
         Header, L1ClientOptions, MockSequencerVersions, NamespaceId, RewardDistributor,
         SequencerVersions, ValidatedState,

@@ -5,9 +5,9 @@ use anyhow::{bail, ensure, Context};
 use either::Either;
 use espresso_types::{
     traits::StateCatchup,
-    v0_1::{RewardAccount, RewardAccountLegacy, RewardMerkleTree, RewardMerkleTreeLegacy},
-    v0_3::ChainConfig,
-    BlockMerkleTree, Delta, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
+    v0_3::{ChainConfig, RewardAccountLegacy, RewardMerkleTreeLegacy},
+    v0_4::{Delta, RewardAccount, RewardMerkleTree},
+    BlockMerkleTree, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
 };
 use futures::{future::Future, StreamExt};
 use hotshot::traits::ValidatedState as HotShotState;

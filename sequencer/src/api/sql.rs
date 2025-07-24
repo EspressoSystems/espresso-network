@@ -5,11 +5,11 @@ use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
     get_l1_deposits,
-    v0_1::{
-        IterableFeeInfo, RewardAccount, RewardAccountLegacy, RewardMerkleTree,
-        RewardMerkleTreeLegacy, LEGACY_REWARD_MERKLE_TREE_HEIGHT, REWARD_MERKLE_TREE_HEIGHT,
+    v0_1::IterableFeeInfo,
+    v0_3::{
+        ChainConfig, RewardAccountLegacy, RewardMerkleTreeLegacy, LEGACY_REWARD_MERKLE_TREE_HEIGHT,
     },
-    v0_3::ChainConfig,
+    v0_4::{RewardAccount, RewardMerkleTree, REWARD_MERKLE_TREE_HEIGHT},
     BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2,
     NodeState, ValidatedState,
 };
