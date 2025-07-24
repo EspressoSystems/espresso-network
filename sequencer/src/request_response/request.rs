@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use committable::Commitment;
 use espresso_types::{
-    v0_1::{RewardAccount, RewardMerkleTree},
+    v0_1::{RewardAccount, RewardAccountLegacy, RewardMerkleTree, RewardMerkleTreeLegacy},
     v0_3::ChainConfig,
     FeeAccount, FeeMerkleTree, Leaf2,
 };
@@ -31,6 +31,8 @@ pub enum Request {
     BlocksFrontier(Height, ViewNumber),
     /// A request for the reward accounts at a given height and view
     RewardAccounts(Height, ViewNumber, Vec<RewardAccount>),
+     /// A request for the legacy reward accounts at a given height and view
+    RewardAccountsLegacy(Height, ViewNumber, Vec<RewardAccountLegacy>),
     /// A request for the VID share at the given block height
     VidShare(Height, RequestId),
 }
@@ -49,6 +51,8 @@ pub enum Response {
     BlocksFrontier(BlocksFrontier),
     /// A response for the reward accounts at a given height and view
     RewardAccounts(RewardMerkleTree),
+    /// A response for the legacy reward accounts at a given height and view
+    RewardAccountsLegacy(RewardMerkleTreeLegacy),
     /// A response for a VID share at the given block height
     VidShare(VidShare),
 }

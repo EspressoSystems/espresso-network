@@ -1486,6 +1486,55 @@ impl StateCatchup for ParallelStateCatchup {
         .await
     }
 
+
+
+     async fn fetch_reward_accounts_legacy(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitmentLegacy,
+        accounts: Vec<RewardAccountLegacy>,
+    ) -> anyhow::Result<Vec<RewardAccountProofLegacy>> {
+        // Try to get the accounts on local providers first
+        let accounts_vec = accounts.to_vec();
+        let local_result = self
+            .on_local_providers(clone! {(instance, accounts_vec) move |provider| {
+                clone! {(instance, accounts_vec) async move {
+                    provider
+                        .try_fetch_reward_accounts_legacy(
+                            0,
+                            &instance,
+                            height,
+                            view,
+                            reward_merkle_tree_root,
+                            &accounts_vec,
+                        )
+                        .await
+                }}
+            }})
+            .await;
+
+        // Check if we were successful locally
+        if local_result.is_ok() {
+            return local_result;
+        }
+
+        // If that fails, try the remote ones (with retry)
+        self.on_remote_providers(clone! {(instance, accounts_vec) move |provider| {
+            clone!{(instance, accounts_vec) async move {
+                provider
+                .fetch_reward_accounts_legacy(
+                    &instance,
+                    height,
+                    view,
+                    reward_merkle_tree_root,
+                    accounts_vec,
+                ).await
+            }}
+        }})
+        .await
+    }
     async fn remember_blocks_merkle_tree(
         &self,
         instance: &NodeState,

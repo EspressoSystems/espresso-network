@@ -797,6 +797,11 @@ pub async fn distribute_block_reward(
             .with_context(|| format!("fixed block reward is None for epoch {epoch}"))?
     };
 
+    if block_reward.0.is_zero() {
+        tracing::info!("block reward is zero. height={height}. epoch={epoch}");
+        return Ok(None);
+    }
+
     total_distributed += block_reward.0;
 
     let reward_distributor = RewardDistributor::new(leader, block_reward, total_distributed.into());

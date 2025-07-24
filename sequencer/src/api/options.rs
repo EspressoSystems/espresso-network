@@ -428,6 +428,7 @@ impl Options {
             .context("failed to define reward-state api")
         })?;
 
+        // register new api for new reward merkle tree
         register_api("reward-state-v2", &mut app, move |ver| {
             endpoints::reward::<
                 _,

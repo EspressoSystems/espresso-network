@@ -433,6 +433,62 @@ impl<
         Ok(response)
     }
 
+
+     async fn fetch_reward_accounts_legacy(
+        &self,
+        _instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitmentLegacy,
+        accounts: Vec<RewardAccountLegacy>,
+    ) -> anyhow::Result<Vec<RewardAccountProofLegacy>> {
+        tracing::info!("Fetching legacy reward accounts for height: {height}, view: {view}");
+
+        // Clone things we need in the first closure
+        let accounts_clone = accounts.clone();
+
+        // Create the response validation function
+        let response_validation_fn = move |_request: &Request, response: Response| {
+            // Clone again
+            let accounts_clone = accounts_clone.clone();
+
+            async move {
+                // Make sure the response is a reward accounts response
+                let Response::RewardAccountsLegacy(reward_merkle_tree) = response else {
+                    return Err(anyhow::anyhow!("expected legacy reward accounts response"));
+                };
+
+                // Verify the merkle proofs
+                let mut proofs = Vec::new();
+                for account in accounts_clone {
+                    let (proof, _) = RewardAccountProofLegacy::prove(&reward_merkle_tree, account.into())
+                        .with_context(|| format!("response was missing account {account}"))?;
+                    proof
+                        .verify(&reward_merkle_tree_root)
+                        .with_context(|| format!("invalid proof for legacy reward account {account}"))?;
+                    proofs.push(proof);
+                }
+
+                Ok(proofs)
+            }
+        };
+
+        // Wait for the protocol to send us the reward accounts
+        let response = self
+            .request_indefinitely(
+                Request::RewardAccountsLegacy(height, *view, accounts),
+                RequestType::Batched,
+                response_validation_fn,
+            )
+            .await
+            .with_context(|| "failed to request legacy reward accounts")?;
+
+        tracing::info!("Fetched legacy reward accounts for height: {height}, view: {view}");
+
+        Ok(response)
+    }
+
+
     fn is_local(&self) -> bool {
         false
     }

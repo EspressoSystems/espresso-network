@@ -62,7 +62,7 @@ pub(crate) async fn compute_state_update(
         Either::Left(legacy_root) => {
             ensure!(
                 state.reward_merkle_tree_legacy.commitment() == legacy_root,
-                "internal error! in-memory reward tree {:?} does not match parent header {:?}",
+                "internal error! in-memory legacy reward tree {:?} does not match parent header {:?}",
                 state.reward_merkle_tree_legacy.commitment(),
                 legacy_root
             )

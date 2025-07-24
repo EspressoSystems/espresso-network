@@ -1,4 +1,11 @@
--- Rename the table
+-- Rename the existing reward_merkle_tree table to reward_merkle_tree_legacy
+-- and create a new reward_merkle_tree table for the updated merkle tree.
+--
+-- The renamed table corresponds to the `RewardMerkleTreeLegacy` type,
+-- which is used in protocol version V3.
+--
+-- The new reward_merkle_tree table corresponds to `RewardMerkleTree`,
+-- and is used starting from protocol version V4.
 ALTER TABLE reward_merkle_tree
 RENAME TO reward_merkle_tree_legacy;
 

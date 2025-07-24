@@ -4444,7 +4444,6 @@ mod test {
     #[case(PosVersionV3::new())]
     #[case(PosVersionV4::new())]
     #[tokio::test(flavor = "multi_thread")]
-
     async fn test_merklized_state_catchup_on_restart<Ver: Versions>(
         #[case] versions: Ver,
     ) -> anyhow::Result<()> {
@@ -4507,6 +4506,7 @@ mod test {
         // Adding an additional node to the test network is not straight forward,
         // as the keys have already been initialized in the config above.
         // So, we remove this node and re-add it using the same index.
+        network.peers[0].shut_down().await;
         network.peers.remove(0);
         let node_0_storage = &storage[1];
         let node_0_persistence = persistence[1].clone();
@@ -4595,7 +4595,9 @@ mod test {
             Client::new(format!("http://localhost:{node_0_port}").parse().unwrap());
         client.connect(None).await;
 
-        let epoch_6_block = EPOCH_HEIGHT * 6 + 1;
+         wait_for_epochs(&mut events, EPOCH_HEIGHT, 6).await;
+
+        let epoch_7_block = EPOCH_HEIGHT * 6 + 1;
 
         // check that the node's state has reward accounts
         let mut retries = 0;
@@ -4603,15 +4605,15 @@ mod test {
             sleep(Duration::from_secs(1)).await;
             let state = node_0.decided_state().await;
 
-            let count = if Ver::Base::VERSION == EpochVersion::VERSION {
+            let leaves = if Ver::Base::VERSION == EpochVersion::VERSION {
                 // Use legacy tree for V3
-                state.reward_merkle_tree_legacy.clone().into_iter().count()
+                state.reward_merkle_tree_legacy.num_leaves()
             } else {
                 // Use new tree for V4 and above
-                state.reward_merkle_tree.clone().into_iter().count()
+                state.reward_merkle_tree.num_leaves()
             };
 
-            if count > 0 {
+            if leaves > 0 {
                 tracing::info!("Node's state has reward accounts");
                 break;
             }
@@ -4622,9 +4624,12 @@ mod test {
             }
         }
 
+          
+
+           retries = 0;
         // check that the node has stored atleast 6 epochs merklized state in persistence
         loop {
-            sleep(Duration::from_secs(1)).await;
+            sleep(Duration::from_secs(3)).await;
 
             let bh = client
                 .get::<u64>("block-state/block-height")
@@ -4633,8 +4638,13 @@ mod test {
                 .expect("block height not found");
 
             tracing::info!("block state: block height={bh}");
-            if bh > epoch_6_block {
+            if bh > epoch_7_block {
                 break;
+            }
+
+            retries += 1;
+            if retries > 30 {
+                panic!("max retries reached. block state block height is less than epoch 6 start block");
             }
         }
 
