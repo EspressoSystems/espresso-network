@@ -16,18 +16,18 @@ alloy = { workspace = true }
 anyhow = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
+builder-legacy = { workspace = true }
+builder-shared = { workspace = true }
 clap = { workspace = true }
 committable = { workspace = true }
 espresso-types = { path = "../types" }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-builder-api = { workspace = true }
-hotshot-builder = { workspace = true }
 hotshot-events-service = { workspace = true }
 hotshot-example-types = { workspace = true }
 hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
-hotshot-builder-shared = { workspace = true }
 portpicker = { workspace = true }
 rand = "0.8.5"
 sequencer = { path = "../sequencer", default-features = false }

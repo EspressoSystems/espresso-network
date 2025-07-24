@@ -10,6 +10,7 @@ use std::{
 
 use async_broadcast::{broadcast, Receiver as BroadcastReceiver, Sender as BroadcastSender};
 use async_lock::RwLock;
+use builder_shared::block::{BlockId, BuilderStateId, ParentBlockReferences};
 use committable::{Commitment, Committable};
 use futures::StreamExt;
 use hotshot_types::{
@@ -22,7 +23,6 @@ use hotshot_types::{
     },
     utils::BuilderCommitment,
 };
-use hotshot_builder_shared::block::{BlockId, BuilderStateId, ParentBlockReferences};
 use tokio::{
     spawn,
     sync::{mpsc::UnboundedSender, oneshot},
@@ -1147,6 +1147,7 @@ mod test {
     use std::collections::HashMap;
 
     use async_broadcast::broadcast;
+    use builder_shared::testing::constants::TEST_NUM_NODES_IN_VID_COMPUTATION;
     use committable::RawCommitmentBuilder;
     use hotshot_example_types::{
         block_types::TestTransaction,
@@ -1157,7 +1158,6 @@ mod test {
         traits::node_implementation::{ConsensusTime, NodeType},
         utils::BuilderCommitment,
     };
-    use hotshot_builder_shared::testing::constants::TEST_NUM_NODES_IN_VID_COMPUTATION;
     use tracing_subscriber::EnvFilter;
 
     use super::{DAProposalInfo, MessageType, ParentBlockReferences};

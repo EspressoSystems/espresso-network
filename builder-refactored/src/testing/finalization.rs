@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use async_broadcast::broadcast;
-use hotshot_example_types::{block_types::TestTransaction, state_types::TestInstanceState};
-use hotshot_builder_shared::testing::{
+use builder_shared::testing::{
     consensus::SimulatedChainState,
     constants::{TEST_NUM_NODES_IN_VID_COMPUTATION, TEST_PROTOCOL_MAX_BLOCK_SIZE},
 };
+use hotshot_example_types::{block_types::TestTransaction, state_types::TestInstanceState};
 use tracing_test::traced_test;
 
 use crate::{

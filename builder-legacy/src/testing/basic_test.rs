@@ -19,6 +19,13 @@ mod tests {
     use std::{collections::VecDeque, hash::Hash, marker::PhantomData, sync::Arc, time::Duration};
 
     use async_lock::RwLock;
+    use builder_shared::{
+        block::ParentBlockReferences,
+        testing::constants::{
+            TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM,
+            TEST_NUM_NODES_IN_VID_COMPUTATION, TEST_PROTOCOL_MAX_BLOCK_SIZE,
+        },
+    };
     use committable::{Commitment, CommitmentBoundsArkless, Committable};
     use hotshot::types::SignatureKey;
     use hotshot_builder_api::v0_2::data_source::BuilderDataSource;
@@ -33,13 +40,6 @@ mod tests {
         simple_vote::QuorumData2,
         traits::{block_contents::BlockHeader, node_implementation::Versions, EncodeBytes},
         utils::{BuilderCommitment, EpochTransitionIndicator},
-    };
-    use hotshot_builder_shared::{
-        block::ParentBlockReferences,
-        testing::constants::{
-            TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM,
-            TEST_NUM_NODES_IN_VID_COMPUTATION, TEST_PROTOCOL_MAX_BLOCK_SIZE,
-        },
     };
     use serde::{Deserialize, Serialize};
     use sha2::{Digest, Sha256};

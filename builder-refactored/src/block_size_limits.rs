@@ -110,7 +110,7 @@ impl BlockSizeLimits {
 
 #[cfg(test)]
 mod tests {
-    use hotshot_builder_shared::testing::constants::{
+    use builder_shared::testing::constants::{
         TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_PROTOCOL_MAX_BLOCK_SIZE,
     };
     use tracing_test::traced_test;

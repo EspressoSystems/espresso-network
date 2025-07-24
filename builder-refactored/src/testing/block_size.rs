@@ -4,16 +4,16 @@ use std::{
 };
 
 use async_broadcast::broadcast;
+use builder_shared::{
+    block::{BlockId, BuilderStateId},
+    testing::{consensus::SimulatedChainState, constants::TEST_NUM_NODES_IN_VID_COMPUTATION},
+};
 use committable::Committable;
 use hotshot_builder_api::v0_1::builder::TransactionStatus;
 use hotshot_example_types::{block_types::TestTransaction, state_types::TestInstanceState};
 use hotshot_types::{
     data::{VidCommitment, ViewNumber},
     traits::node_implementation::ConsensusTime,
-};
-use hotshot_builder_shared::{
-    block::{BlockId, BuilderStateId},
-    testing::{consensus::SimulatedChainState, constants::TEST_NUM_NODES_IN_VID_COMPUTATION},
 };
 use tracing_test::traced_test;
 

@@ -8,7 +8,7 @@ test-ci-rest *args:
   --exclude builder \
   --exclude client \
   --exclude espresso-* \
-  --exclude hotshot-builder-refactored \
+  --exclude builder-refactored \
   --exclude hotshot-query-service \
   --exclude hotshot-state-prover \
   --exclude hotshot-testing \

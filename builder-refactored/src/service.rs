@@ -10,6 +10,13 @@ use std::{
 pub use async_broadcast::{broadcast, RecvError, TryRecvError};
 use async_lock::RwLock;
 use async_trait::async_trait;
+use builder_shared::{
+    block::{BlockId, BuilderStateId, ReceivedTransaction, TransactionSource},
+    coordinator::{BuilderStateCoordinator, BuilderStateLookup},
+    error::Error,
+    state::BuilderState,
+    utils::BuilderKeys,
+};
 use committable::Commitment;
 use futures::{
     future::BoxFuture,
@@ -37,13 +44,6 @@ use hotshot_types::{
         EncodeBytes,
     },
     utils::BuilderCommitment,
-};
-use hotshot_builder_shared::{
-    block::{BlockId, BuilderStateId, ReceivedTransaction, TransactionSource},
-    coordinator::{BuilderStateCoordinator, BuilderStateLookup},
-    error::Error,
-    state::BuilderState,
-    utils::BuilderKeys,
 };
 use tagged_base64::TaggedBase64;
 use tide_disco::{app::AppError, method::ReadState, App};
@@ -112,7 +112,7 @@ pub struct BuilderConfig<Types: NodeType> {
 #[cfg(test)]
 impl<Types: NodeType> BuilderConfig<Types> {
     pub(crate) fn test() -> Self {
-        use hotshot_builder_shared::testing::constants::*;
+        use builder_shared::testing::constants::*;
         Self {
             builder_keys:
                 <Types::BuilderSignatureKey as BuilderSignatureKey>::generated_from_seed_indexed(

@@ -1,5 +1,5 @@
 [package]
-name = "hotshot-builder-core-refactored"
+name = "builder-refactored"
 version = { workspace = true }
 edition = { workspace = true }
 license = "MIT"
@@ -12,6 +12,7 @@ async-lock = { workspace = true }
 async-trait = { workspace = true }
 atomic = "0.6"
 bincode = { workspace = true }
+builder-shared = { workspace = true }
 bytemuck = { version = "1.19", features = ["derive"] }
 coarsetime = "0.1.34"
 committable = { workspace = true }
@@ -22,7 +23,6 @@ hotshot-builder-api = { workspace = true }
 hotshot-types = { workspace = true }
 jf-vid = { workspace = true }
 lru = { workspace = true }
-hotshot-builder-shared = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 sha2 = { workspace = true }
 tagged-base64 = { workspace = true }

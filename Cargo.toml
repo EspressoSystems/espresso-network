@@ -10,6 +10,8 @@ resolver = "2"
 members = [
     "alloy-compat",
     "builder",
+    "builder-legacy",
+    "builder-refactored",
     "client",
     "contracts/rust/adapter",
     "contracts/rust/deployer",
@@ -27,8 +29,6 @@ members = [
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
-    "hotshot-builder",
-    "hotshot-builder-refactored",
     "hotshot-events-service",
     "hotshot-query-service",
     "hotshot-state-prover",
@@ -66,8 +66,8 @@ default-members = [
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
-    "hotshot-builder",
-    "hotshot-builder-refactored",
+    "builder-legacy",
+    "builder-refactored",
     "hotshot-events-service",
     "hotshot-query-service",
     "hotshot-state-prover",
@@ -169,8 +169,8 @@ parking_lot = { version = "0.12", features = ["send_guard"] }
 indexmap = { version = "2", features = ["serde"] }
 
 # Builder imports
-hotshot-builder-shared = { path = "hotshot-builder-shared" }
-hotshot-builder = { path = "hotshot-builder" }
+builder-shared = { path = "builder-shared" }
+builder-legacy = { path = "builder-legacy" }
 
 # Hotshot imports
 hotshot = { path = "crates/hotshot/hotshot" }

@@ -10,6 +10,7 @@ pub use async_broadcast::{broadcast, RecvError, TryRecvError};
 use async_broadcast::{Sender as BroadcastSender, TrySendError};
 use async_lock::RwLock;
 use async_trait::async_trait;
+use builder_shared::block::{BlockId, BuilderStateId, ParentBlockReferences};
 use committable::{Commitment, Committable};
 use futures::{future::BoxFuture, stream::StreamExt, Stream};
 use hotshot::types::Event;
@@ -33,7 +34,6 @@ use hotshot_types::{
     utils::BuilderCommitment,
 };
 use lru::LruCache;
-use hotshot_builder_shared::block::{BlockId, BuilderStateId, ParentBlockReferences};
 use sha2::{Digest, Sha256};
 use tagged_base64::TaggedBase64;
 use tide_disco::method::ReadState;
@@ -1528,6 +1528,13 @@ mod test {
     use std::{sync::Arc, time::Duration};
 
     use async_lock::RwLock;
+    use builder_shared::{
+        block::{BlockId, BuilderStateId, ParentBlockReferences},
+        testing::constants::{
+            TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM,
+            TEST_NUM_NODES_IN_VID_COMPUTATION, TEST_PROTOCOL_MAX_BLOCK_SIZE,
+        },
+    };
     use committable::{Commitment, Committable};
     use futures::StreamExt;
     use hotshot::{
@@ -1556,13 +1563,6 @@ mod test {
             signature_key::BuilderSignatureKey,
         },
         utils::{BuilderCommitment, EpochTransitionIndicator},
-    };
-    use hotshot_builder_shared::{
-        block::{BlockId, BuilderStateId, ParentBlockReferences},
-        testing::constants::{
-            TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM,
-            TEST_NUM_NODES_IN_VID_COMPUTATION, TEST_PROTOCOL_MAX_BLOCK_SIZE,
-        },
     };
     use sha2::{Digest, Sha256};
     use tokio::{

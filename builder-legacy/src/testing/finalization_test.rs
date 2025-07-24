@@ -2,6 +2,14 @@ use std::{sync::Arc, time::Duration};
 
 use async_broadcast::{broadcast, Sender};
 use async_lock::RwLock;
+use builder_shared::{
+    block::{BuilderStateId, ParentBlockReferences},
+    testing::constants::{
+        TEST_CHANNEL_BUFFER_SIZE, TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM,
+        TEST_NUM_CONSENSUS_RETRIES, TEST_NUM_NODES_IN_VID_COMPUTATION,
+        TEST_PROTOCOL_MAX_BLOCK_SIZE,
+    },
+};
 use committable::Commitment;
 use hotshot::{
     traits::BlockPayload,
@@ -27,14 +35,6 @@ use hotshot_types::{
         EncodeBytes,
     },
     utils::{BuilderCommitment, EpochTransitionIndicator},
-};
-use hotshot_builder_shared::{
-    block::{BuilderStateId, ParentBlockReferences},
-    testing::constants::{
-        TEST_CHANNEL_BUFFER_SIZE, TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM,
-        TEST_NUM_CONSENSUS_RETRIES, TEST_NUM_NODES_IN_VID_COMPUTATION,
-        TEST_PROTOCOL_MAX_BLOCK_SIZE,
-    },
 };
 use sha2::{Digest, Sha256};
 use vbs::version::StaticVersionType;
