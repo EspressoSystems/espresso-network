@@ -20,7 +20,7 @@
 
 ## Assumptions
 
-- the config in .env file is valid, if not, change it
+- the config in .env file is valid, if not, check the readme or code for the requirements
 - if using multisigs, the eth network is supported by Safe SDK
 
 # Fee Contract
@@ -62,10 +62,10 @@ This section covers transferring ownership directly from an EOA (Externally Owne
 #### Prerequisites
 
 - The contract must be deployed and owned by an EOA (not a multisig or timelock)
-- The `ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS` env value is set to the valid proxy address for the env you're
-  using
+- The `ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS` environment variable is set to the correct proxy address for your
+  current environment.
 - You must have access to the current owner's private key/mnemonic
-- The new owner address must be valid
+- The new owner address must be a valid, non-zero Ethereum address
 
 #### Transferring Ownership with Cargo
 
@@ -580,7 +580,7 @@ RUST_LOG=info cargo run --bin deploy -- \
   --upgrade-esp-token-v2 \
   --rpc-url=$RPC_URL \
   --use-multisig
-  # if doing a real run then add --dry-run
+  # to similuate, add --dry-run
 ```
 
 ### Upgrading with Docker Compose
@@ -593,7 +593,7 @@ docker compose run --rm \
   -v $(pwd)/.env.mydemo:/app/.env.mydemo \
   deploy-sequencer-contracts \
   deploy --deploy-esp-token --upgrade-esp-token-v2 --rpc-url=$RPC_URL --use-multisig
-  # if doing a real run then add --dry-run
+  # to similuate, add --dry-run
 ```
 
 You should see the output which says something like:
@@ -624,15 +624,14 @@ After each upgrade, verify:
 ## Transfer ownership from Multisig to Timelock
 
 This section describes how to transfer ownership of contracts from a multisig wallet to a timelock contract using the
-deployer binary. This is useful for implementing governance controls where contract upgrades and administrative
-functions require timelock approval.
+deploy binary. This is useful for implementing governance controls where contract upgrades and administrative functions
+require timelock approval.
 
 ### Prerequisites
 
 - The target contract must be deployed and owned by a multisig wallet
 - The timelock contract must be deployed and accessible
 - You must have access to the multisig wallet (either through private keys or multisig signing)
-- The deployer binary must be built and available
 
 ### Usage
 
@@ -966,7 +965,7 @@ docker compose run --rm \
   \
   deploy-sequencer-contracts \
   deploy --upgrade-light-client-v2 --rpc-url=$RPC_URL --use-multisig --out $OUTPUT_FILE
-  # if doing a real run then add --dry-run
+  # to similuate, add --dry-run
 ```
 
 **Note**: The upgrade process will:
@@ -1053,7 +1052,7 @@ docker compose run --rm \
   --timelock-address $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
   --rpc-url=$RPC_URL \
   --out $OUTPUT_FILE
-  # if doing a real run then add --dry-run
+  # to similuate, add --dry-run
 ```
 
 **Note**: The admin transfer process will:
@@ -1095,11 +1094,12 @@ touch $OUTPUT_FILE
 export ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS=0xSAFE_EXIT_TIMELOCK_ADDRESS
 
 # Set the initial token supply (optional, will use default if not set)
-export ESPRESSO_SEQUENCER_ESP_TOKEN_INITIAL_SUPPLY=3590000000000000000000000000 # 3.59 billion tokens with 18 decimals
+export ESP_TOKEN_INITIAL_SUPPLY=3590000000000000000000000000 # 3.59 billion tokens with 18 decimals
 
 # Set the token name and symbol (optional, will use defaults if not set)
-export ESPRESSO_SEQUENCER_ESP_TOKEN_NAME="Espresso Token"
-export ESPRESSO_SEQUENCER_ESP_TOKEN_SYMBOL="ESP"
+export ESP_TOKEN_NAME="Espresso Token"
+export ESP_TOKEN_SYMBOL="ESP"
+export ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS=0xRecipientAddress
 ```
 
 4. Run the docker-compose command to deploy EspTokenProxy with SafeExitTimelock as admin
@@ -1109,14 +1109,15 @@ docker compose run --rm \
   -e RPC_URL \
   -e ESPRESSO_SEQUENCER_ETH_MNEMONIC \
   -e ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS \
-  -e ESPRESSO_SEQUENCER_ESP_TOKEN_INITIAL_SUPPLY \
-  -e ESPRESSO_SEQUENCER_ESP_TOKEN_NAME \
-  -e ESPRESSO_SEQUENCER_ESP_TOKEN_SYMBOL \
+  -e ESP_TOKEN_INITIAL_SUPPLY \
+  -e ESP_TOKEN_NAME \
+  -e ESP_TOKEN_SYMBOL \
+  -e ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
   \
   deploy-sequencer-contracts \
   deploy --deploy-esp-token --use-timelock-owner --rpc-url=$RPC_URL --out $OUTPUT_FILE
-  # if doing a real run then add --dry-run
+  # to similuate, add --dry-run
 ```
 
 **Note**: The EspToken deployment process will:
@@ -1225,7 +1226,7 @@ docker compose run --rm \
   \
   deploy-sequencer-contracts \
   deploy --deploy-stake-table --upgrade-stake-table-v2 --use-timelock-owner --rpc-url=$RPC_URL --out $OUTPUT_FILE
-  # if doing a real run then add --dry-run
+  # to similuate, add --dry-run
 ```
 
 **Note**: The StakeTable deployment and upgrade process will:
@@ -1426,7 +1427,7 @@ docker compose run --rm \
   --timelock-address $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS \
   --rpc-url=$RPC_URL \
   --out $OUTPUT_FILE
-  # if doing a real run then add --dry-run
+  # to similuate, add --dry-run
 ```
 
 **Note**: The admin transfer process will:
@@ -1500,7 +1501,7 @@ docker compose run --rm \
   --timelock-address $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
   --rpc-url=$RPC_URL \
   --out $OUTPUT_FILE
-  # if doing a real run then add --dry-run
+  # to similuate, add --dry-run
 ```
 
 Then create a multisig proposal to transfer ownership of the StakeTableProxy to the OpsTimelock.
@@ -1579,7 +1580,7 @@ docker compose run --rm \
   --transfer-ownership-new-owner $ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER \
   --rpc-url=$RPC_URL \
   --out $OUTPUT_FILE
-  # if doing a real run then add --dry-run
+  # to similuate, add --dry-run
 ```
 
 **Note**: The admin transfer process will:
@@ -1748,5 +1749,5 @@ docker compose run --rm \
   --transfer-ownership-new-owner $ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER \
   --rpc-url=$RPC_URL \
   --out $OUTPUT_FILE
-  # if doing a real run then add --dry-run
+  # to similuate, add --dry-run
 ```
