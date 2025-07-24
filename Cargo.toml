@@ -169,7 +169,7 @@ parking_lot = { version = "0.12", features = ["send_guard"] }
 indexmap = { version = "2", features = ["serde"] }
 
 # Builder imports
-builder-shared = { path = "builder-shared" }
+hotshot-builder-shared = { path = "hotshot-builder-shared" }
 hotshot-builder = { path = "hotshot-builder" }
 
 # Hotshot imports

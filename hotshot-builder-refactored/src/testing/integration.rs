@@ -10,7 +10,7 @@ use hotshot_testing::{
     test_builder::BuilderChange,
 };
 use hotshot_types::{data::ViewNumber, traits::node_implementation::NodeType};
-use builder_shared::testing::constants::TEST_PROTOCOL_MAX_BLOCK_SIZE;
+use hotshot_builder_shared::testing::constants::TEST_PROTOCOL_MAX_BLOCK_SIZE;
 use tagged_base64::TaggedBase64;
 use tokio::spawn;
 use url::Url;
@@ -125,7 +125,7 @@ mod tests {
         overall_safety_task::OverallSafetyPropertiesDescription,
         test_builder::TestDescription,
     };
-    use builder_shared::testing::{
+    use hotshot_builder_shared::testing::{
         generation::{self, TransactionGenerationConfig},
         run_test,
         validation::BuilderValidationConfig,

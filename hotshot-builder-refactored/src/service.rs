@@ -38,7 +38,7 @@ use hotshot_types::{
     },
     utils::BuilderCommitment,
 };
-use builder_shared::{
+use hotshot_builder_shared::{
     block::{BlockId, BuilderStateId, ReceivedTransaction, TransactionSource},
     coordinator::{BuilderStateCoordinator, BuilderStateLookup},
     error::Error,
@@ -112,7 +112,7 @@ pub struct BuilderConfig<Types: NodeType> {
 #[cfg(test)]
 impl<Types: NodeType> BuilderConfig<Types> {
     pub(crate) fn test() -> Self {
-        use builder_shared::testing::constants::*;
+        use hotshot_builder_shared::testing::constants::*;
         Self {
             builder_keys:
                 <Types::BuilderSignatureKey as BuilderSignatureKey>::generated_from_seed_indexed(

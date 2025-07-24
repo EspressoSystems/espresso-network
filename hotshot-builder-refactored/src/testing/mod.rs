@@ -21,7 +21,7 @@ use hotshot_types::{
     data::ViewNumber,
     traits::node_implementation::{ConsensusTime, NodeType},
 };
-use builder_shared::{
+use hotshot_builder_shared::{
     block::{BlockId, BuilderStateId},
     error::Error,
     utils::BuilderKeys,

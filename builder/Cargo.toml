@@ -27,7 +27,7 @@ hotshot-events-service = { workspace = true }
 hotshot-example-types = { workspace = true }
 hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
-builder-shared = { workspace = true }
+hotshot-builder-shared = { workspace = true }
 portpicker = { workspace = true }
 rand = "0.8.5"
 sequencer = { path = "../sequencer", default-features = false }

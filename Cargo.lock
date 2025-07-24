@@ -2178,7 +2178,7 @@ dependencies = [
  "hotshot-state-prover",
  "hotshot-types",
  "jf-signature 0.2.0",
- "builder-shared",
+ "hotshot-builder-shared",
  "portpicker",
  "rand 0.8.5",
  "sequencer",
@@ -5462,7 +5462,7 @@ dependencies = [
  "hotshot-testing",
  "hotshot-types",
  "lru 0.12.5",
- "builder-shared",
+ "hotshot-builder-shared",
  "num_cpus",
  "portpicker",
  "serde",
@@ -5501,7 +5501,7 @@ dependencies = [
  "hotshot-types",
  "jf-vid",
  "lru 0.12.5",
- "builder-shared",
+ "hotshot-builder-shared",
  "num_cpus",
  "portpicker",
  "serde",
@@ -7776,7 +7776,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "builder-shared"
+name = "hotshot-builder-shared"
 version = "0.1.0"
 dependencies = [
  "anyhow",

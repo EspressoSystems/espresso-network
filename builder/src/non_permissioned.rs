@@ -26,7 +26,7 @@ use hotshot_types::{
         node_implementation::Versions, EncodeBytes,
     },
 };
-use builder_shared::{block::ParentBlockReferences, utils::EventServiceStream};
+use hotshot_builder_shared::{block::ParentBlockReferences, utils::EventServiceStream};
 use sequencer::{catchup::StatePeers, L1Params, SequencerApiVersion};
 use tide_disco::Url;
 use tokio::spawn;

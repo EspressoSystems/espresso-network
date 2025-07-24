@@ -28,7 +28,7 @@ use hotshot_types::{
     },
     utils::{BuilderCommitment, EpochTransitionIndicator},
 };
-use builder_shared::{
+use hotshot_builder_shared::{
     block::{BuilderStateId, ParentBlockReferences},
     testing::constants::{
         TEST_CHANNEL_BUFFER_SIZE, TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM,
