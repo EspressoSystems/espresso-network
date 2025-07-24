@@ -1119,7 +1119,7 @@ pub mod test_helpers {
                 .multisig_pauser(signer.address())
                 .token_name("Espresso".to_string())
                 .token_symbol("ESP".to_string())
-                .initial_token_supply(U256::from(3590000000u64))
+                .initial_token_supply(U256::from(100000u64))
                 .ops_timelock_delay(U256::from(0))
                 .ops_timelock_admin(signer.address())
                 .ops_timelock_proposers(vec![signer.address()])
@@ -4640,7 +4640,7 @@ mod test {
             retries += 1;
             if retries > 30 {
                 panic!(
-                    "max retries reached. block state block height is less than epoch 6 start \
+                    "max retries reached. block state block height is less than epoch 7 start \
                      block"
                 );
             }
