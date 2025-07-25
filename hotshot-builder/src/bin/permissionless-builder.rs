@@ -1,10 +1,10 @@
 use std::{num::NonZeroUsize, path::PathBuf, time::Duration};
 
-use builder::non_permissioned::{build_instance_state, BuilderConfig};
 use clap::Parser;
 use espresso_types::{eth_signature_key::EthKeyPair, parse_duration, SequencerVersions};
 use futures::future::pending;
 use hotshot::traits::ValidatedState;
+use hotshot_builder::non_permissioned::{build_instance_state, BuilderConfig};
 use hotshot_types::{
     data::ViewNumber,
     traits::node_implementation::{ConsensusTime, Versions},
