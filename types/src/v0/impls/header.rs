@@ -35,9 +35,10 @@ use crate::{
     eth_signature_key::BuilderSignature,
     v0::{
         header::{EitherOrVersion, VersionedHeader},
-        impls::reward::{find_validator_info, first_two_epochs, RewardDistributor},
+        impls::{distribute_block_reward, reward::RewardDistributor},
     },
-    v0_1, v0_2, v0_3, v0_4, BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
+    v0_1::{self, RewardAmount},
+    v0_2, v0_3, v0_4, BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
     FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable,
     PayloadByteLen, SeqTypes, TimestampMillis, UpgradeType,
 };
@@ -281,6 +282,7 @@ impl Header {
         reward_merkle_tree_root: RewardMerkleCommitment,
         fee_info: Vec<FeeInfo>,
         builder_signature: Vec<BuilderSignature>,
+        total_reward_distributed: Option<RewardAmount>,
         version: Version,
     ) -> Self {
         // Ensure FeeInfo contains at least 1 element
@@ -349,6 +351,7 @@ impl Header {
                 fee_info: fee_info[0], // NOTE this is asserted to exist above
                 builder_signature: builder_signature.first().copied(),
                 reward_merkle_tree_root,
+                total_reward_distributed: total_reward_distributed.unwrap_or_default(),
             }),
             // This case should never occur
             // but if it does, we must panic
@@ -513,12 +516,6 @@ impl Header {
 
         let fee_merkle_tree_root = state.fee_merkle_tree.commitment();
 
-        if let Some(reward_distributor) = reward_distributor {
-            let reward_state =
-                reward_distributor.apply_rewards(state.reward_merkle_tree.clone())?;
-            state.reward_merkle_tree = reward_state;
-        }
-
         let header = match (version.major, version.minor) {
             (0, 1) => Self::V1(v0_1::Header {
                 chain_config: v0_1::ResolvableChainConfig::from(v0_1::ChainConfig::from(
@@ -582,6 +579,9 @@ impl Header {
                 reward_merkle_tree_root: state.reward_merkle_tree.commitment(),
                 fee_info: fee_info[0],
                 builder_signature: builder_signature.first().copied(),
+                total_reward_distributed: reward_distributor
+                    .map(|r| r.total_distributed())
+                    .unwrap_or_default(),
             }),
             // This case should never occur
             // but if it does, we must panic
@@ -805,6 +805,13 @@ impl Header {
             Self::V4(fields) => fields.builder_signature.as_slice().to_vec(),
         }
     }
+
+    pub fn total_reward_distributed(&self) -> Option<RewardAmount> {
+        match self {
+            Self::V1(_) | Self::V2(_) | Self::V3(_) => None,
+            Self::V4(fields) => Some(fields.total_reward_distributed),
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -950,22 +957,16 @@ impl BlockHeader<SeqTypes> for Header {
                 .context("remembering block proof")?;
         }
 
-        let mut compute_reward = None;
-        // Rewards are distributed only if the current epoch is not the first or second epoch
-        // this is because we don't have stake table from the contract for the first two epochs
-        let proposed_header_height = parent_leaf.height() + 1;
-        if version >= EpochVersion::version()
-            && !first_two_epochs(proposed_header_height, instance_state).await?
-        {
-            let leader = find_validator_info(
+        let mut rewards = None;
+        if version >= EpochVersion::version() {
+            rewards = distribute_block_reward(
                 instance_state,
                 &mut validated_state,
                 parent_leaf,
                 ViewNumber::new(view_number),
+                version,
             )
             .await?;
-            let block_reward = instance_state.block_reward().await;
-            compute_reward = Some(RewardDistributor::new(leader, block_reward));
         };
 
         let now = OffsetDateTime::now_utc();
@@ -986,7 +987,7 @@ impl BlockHeader<SeqTypes> for Header {
             validated_state,
             chain_config,
             version,
-            compute_reward,
+            rewards,
         )?)
     }
 
@@ -1042,6 +1043,7 @@ impl BlockHeader<SeqTypes> for Header {
             reward_merkle_tree_root,
             vec![FeeInfo::genesis()],
             vec![],
+            None,
             instance_state.current_version,
         )
     }
@@ -1617,6 +1619,7 @@ mod test_headers {
                 account: fee_account,
             }],
             Default::default(),
+            None,
             Version { major: 0, minor: 1 },
         );
 
@@ -1642,6 +1645,7 @@ mod test_headers {
                 account: fee_account,
             }],
             Default::default(),
+            None,
             Version { major: 0, minor: 2 },
         );
 
@@ -1667,6 +1671,7 @@ mod test_headers {
                 account: fee_account,
             }],
             Default::default(),
+            None,
             Version { major: 0, minor: 3 },
         );
 
