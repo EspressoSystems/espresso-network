@@ -46,7 +46,7 @@ use hotshot_types::{
 };
 use humantime::format_duration;
 use indexmap::IndexMap;
-use num_traits::{FromPrimitive, ToPrimitive, Zero};
+use num_traits::{FromPrimitive, Zero};
 use thiserror::Error;
 use tokio::{spawn, time::sleep};
 use tracing::Instrument;
@@ -1458,6 +1458,39 @@ impl EpochCommittees {
         }
     }
 
+    pub fn compute_block_reward(
+        epoch: &EpochNumber,
+        total_supply: U256,
+        total_stake: U256,
+        avg_block_time_ms: u64,
+    ) -> anyhow::Result<RewardAmount> {
+        // Convert to BigDecimal for precision
+        let total_stake_bd = BigDecimal::from_str(&total_stake.to_string())?;
+        let total_supply_bd = BigDecimal::from_str(&(total_supply.to_string()))?;
+
+        tracing::debug!(?epoch, "total_stake={total_stake}");
+        tracing::debug!(?epoch, "total_supply_bd={total_supply_bd}");
+
+        let (proportion, reward_rate) =
+            calculate_proportion_staked_and_reward_rate(&total_stake_bd, &total_supply_bd)?;
+        let inflation_rate = proportion * reward_rate;
+
+        tracing::debug!(?epoch, "inflation_rate={inflation_rate:?}");
+
+        let blocks_per_year = MILLISECONDS_PER_YEAR
+            .checked_div(avg_block_time_ms.into())
+            .context("avg_block_time_ms is zero")?;
+
+        tracing::debug!(?epoch, "blocks_per_year={blocks_per_year:?}");
+
+        ensure!(!blocks_per_year.is_zero(), "blocks per year is zero");
+        let block_reward = (total_supply_bd * inflation_rate) / blocks_per_year;
+
+        let block_reward_u256 = U256::from_str(&block_reward.round(0).to_string())?;
+
+        Ok(block_reward_u256.into())
+    }
+
     /// Calculates the dynamic block reward for a given block header within an epoch.
     ///
     /// The reward is based on a dynamic inflation rate computed from the current stake ratio (p),
@@ -1472,7 +1505,7 @@ impl EpochCommittees {
     ) -> anyhow::Result<RewardAmount> {
         let fetcher = self.fetcher.clone();
         let epoch_height = self.epoch_height;
-        let total_reward_distributed = header
+        let previous_reward_distributed = header
             .total_reward_distributed()
             .context("Invalid block header: missing total_reward_distributed field")?;
 
@@ -1482,26 +1515,10 @@ impl EpochCommittees {
             Some(supply) => supply,
             None => fetcher.fetch_initial_supply().await?,
         };
-        let total_supply = initial_supply + total_reward_distributed;
+        let total_supply = initial_supply
+            .checked_add(previous_reward_distributed)
+            .context("initial_supply + previous_reward_distributed overflow")?;
 
-        // Convert to BigDecimal for precision
-        let total_stake = BigDecimal::from_str(&total_stake.to_string())?;
-        let rewards_bd = BigDecimal::from_str(&total_reward_distributed.to_string())?;
-        let initial_supply_bd = BigDecimal::from_str(&initial_supply.to_string())?;
-        let total_supply_bd = initial_supply_bd + rewards_bd;
-
-        tracing::debug!(?epoch, "total_stake={total_stake}");
-        tracing::debug!(?epoch, "total_supply_bd={total_supply_bd}");
-
-        let (proportion, reward_rate) =
-            calculate_proportion_staked_and_reward_rate(&total_stake, &total_supply_bd)?;
-        let inflation_rate = proportion * reward_rate;
-        // Convert inflation rate to basis points
-        let inflation_rate_bp = (inflation_rate * COMMISSION_BASIS_POINTS)
-            .to_u64()
-            .context("Failed to convert inflation rate to basis points")?;
-
-        tracing::debug!(?epoch, "inflation_rate_bp={inflation_rate_bp:?}");
         // Calculate average block time over the last epoch
         let curr_ts = header.timestamp_millis_internal();
         tracing::debug!(?epoch, "curr_ts={curr_ts:?}");
@@ -1549,23 +1566,9 @@ impl EpochCommittees {
         };
         tracing::debug!(?epoch, "avg_block_time={avg_block_time:?}");
 
-        let blocks_per_year = MILLISECONDS_PER_YEAR
-            .checked_div(avg_block_time.into())
-            .context("avg_block_time is zero")?;
-        tracing::debug!(?epoch, "blocks_per_year={blocks_per_year:?}");
+        let block_reward =
+            Self::compute_block_reward(epoch, total_supply, total_stake, avg_block_time)?;
 
-        // block_reward = ((total_supply * inflation_rate_bp) / blocks_per_year) / COMMISSION_BASIS_POINTS
-        let block_reward = ((total_supply
-            .checked_mul(U256::from(inflation_rate_bp))
-            .ok_or(FetchRewardError::Overflow(
-                "total_supply * inflation_rate_bp overflow",
-            ))?)
-        .checked_div(U256::from(blocks_per_year)))
-        .ok_or(FetchRewardError::DivisionByZero("blocks_per_year is zero"))?
-        .checked_div(U256::from(COMMISSION_BASIS_POINTS))
-        .ok_or(FetchRewardError::DivisionByZero(
-            "commission basis points is zero",
-        ))?;
         Ok(block_reward.into())
     }
 
@@ -3110,6 +3113,82 @@ mod tests {
             assert!(
                 (&computed_rp - &expected_rp).abs() < tolerance,
                 "R(p) mismatch for p={p}: got {computed_rp}, expected {expected_rp}"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_dynamic_block_reward_with_expected_values() {
+        // 10B tokens = 10_000_000_000 * 10^18
+        let total_supply = U256::from_str("10000000000000000000000000000").unwrap();
+        let total_supply_bd = BigDecimal::from_str(&total_supply.to_string()).unwrap();
+
+        let test_cases = [
+            // --- Block time: 1 ms ---
+            ("0.0000", "0.2121", 1, "0"), // 0% staked → inflation = 0 → 0 tokens
+            ("0.0050", "0.2121", 1, "3362823439878234"), // 0.105% inflation → ~0.00336 tokens
+            ("0.0100", "0.2121", 1, "6725646879756468"), // 0.2121% inflation → ~0.00673 tokens
+            ("0.0250", "0.1342", 1, "10638635210553018"), // 0.3355% inflation → ~0.01064 tokens
+            ("0.0500", "0.0949", 1, "15046296296296296"), // 0.4745% inflation → ~0.01505 tokens
+            ("0.1000", "0.0671", 1, "21277270421106037"), // 0.671% inflation → ~0.02128 tokens
+            ("0.2500", "0.0424", 1, "33612379502790461"), // 1.06% inflation → ~0.03361 tokens
+            ("0.5000", "0.0300", 1, "47564687975646879"), // 1.5% inflation → ~0.04756 tokens
+            ("0.7500", "0.0245", 1, "58266742770167427"), // 1.8375% inflation → ~0.05827 tokens
+            ("1.0000", "0.0212", 1, "67224759005580923"), // 2.12% inflation → ~0.06722 tokens
+            // --- Block time: 2000 ms (2 seconds) ---
+            ("0.0000", "0.2121", 2000, "0"), // 0% staked → inflation = 0 → 0 tokens
+            ("0.0050", "0.2121", 2000, "672564687975646880"), // 0.105% inflation → ~0.67256 tokens
+            ("0.0100", "0.2121", 2000, "1345129375951293760"), // 0.2121% inflation → ~1.34513 tokens
+            ("0.0250", "0.1342", 2000, "2127727042110603754"), // 0.3355% inflation → ~2.12773 tokens
+            ("0.0500", "0.0949", 2000, "3009259259259259259"), // 0.4745% inflation → ~3.00926 tokens
+            ("0.1000", "0.0671", 2000, "4255454084221207509"), // 0.671% inflation → ~4.25545 tokens
+            ("0.2500", "0.0424", 2000, "6722475900558092339"), // 1.06% inflation → ~6.72248 tokens
+            ("0.5000", "0.0300", 2000, "9512937595129375951"), // 1.5% inflation → ~9.51294 tokens
+            ("0.7500", "0.0245", 2000, "11653348554033485540"), // 1.8375% inflation → ~11.65335 tokens
+            ("1.0000", "0.0212", 2000, "13444951801116184678"), // 2.12% inflation → ~13.44495 tokens
+            // --- Block time: 10000 ms (10 seconds) ---
+            ("0.0000", "0.2121", 10000, "0"), // 0% staked → inflation = 0 → 0 tokens
+            ("0.0050", "0.2121", 10000, "3362823439878234400"), // 0.105% inflation → ~3.36 tokens
+            ("0.0100", "0.2121", 10000, "6725646879756468800"), // 0.2121% inflation → ~6.73 tokens
+            ("0.0250", "0.1342", 10000, "10638635210553018770"), // 0.3355% inflation → ~10.64 tokens
+            ("0.0500", "0.0949", 10000, "15046296296296296295"), // 0.4745% inflation → ~15.05 tokens
+            ("0.1000", "0.0671", 10000, "21277270421106037545"), // 0.671% inflation → ~21.28 tokens
+            ("0.2500", "0.0424", 10000, "33612379502790461695"), // 1.06% inflation → ~33.61 tokens
+            ("0.5000", "0.0300", 10000, "47564687975646879755"), // 1.5% inflation → ~47.56 tokens
+            ("0.7500", "0.0245", 10000, "58266742770167427700"), // 1.8375% inflation → ~58.27 tokens
+            ("1.0000", "0.0212", 10000, "67224759005580923390"), // 2.12% inflation → ~67.22 tokens
+        ];
+
+        let tolerance = U256::from(100_000_000_000_000_000u128); // 0.1 token
+
+        for (p, rp, avg_block_time_ms, expected_reward) in test_cases {
+            let p = BigDecimal::from_str(p).unwrap();
+            let total_stake_bd = (&p * &total_supply_bd).round(0);
+            println!("total_stake_bd={total_stake_bd}");
+
+            let total_stake = U256::from_str(&total_stake_bd.to_plain_string()).unwrap();
+            let expected_reward = U256::from_str(expected_reward).unwrap();
+
+            let epoch = EpochNumber::new(0);
+            let actual_reward = EpochCommittees::compute_block_reward(
+                &epoch,
+                total_supply,
+                total_stake,
+                avg_block_time_ms,
+            )
+            .unwrap()
+            .0;
+
+            let diff = if actual_reward > expected_reward {
+                actual_reward - expected_reward
+            } else {
+                expected_reward - actual_reward
+            };
+
+            assert!(
+                diff <= tolerance,
+                "Reward mismatch for p = {p}, R(p) = {rp}, block_time = {avg_block_time_ms}: \
+                 expected = {expected_reward}, actual = {actual_reward}, diff = {diff}"
             );
         }
     }
