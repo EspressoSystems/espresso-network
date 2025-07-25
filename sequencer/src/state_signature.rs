@@ -218,7 +218,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         state: &LightClientState,
         next_stake_table: StakeTableState,
     ) -> Result<StateSignature, SignatureError> {
-        let signature = <SchnorrPubKey as StateSignatureKey>::sign_state(
+        let signature = <SchnorrPubKey as StateSignatureKey>::v2_sign_state(
             &self.sign_key,
             state,
             &next_stake_table,
@@ -244,7 +244,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         &self,
         state: &LightClientState,
     ) -> Result<StateSignature, SignatureError> {
-        <SchnorrPubKey as StateSignatureKey>::legacy_sign_state(&self.sign_key, state)
+        <SchnorrPubKey as StateSignatureKey>::v1_sign_state(&self.sign_key, state)
     }
 }
 

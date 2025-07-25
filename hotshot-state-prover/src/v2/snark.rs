@@ -1,4 +1,3 @@
-/// Legacy proof generation
 use alloy::primitives::U256;
 use ark_bn254::Bn254;
 use ark_ed_on_bn254::EdwardsConfig;
@@ -68,6 +67,7 @@ pub fn generate_state_update_proof<STIter, R, BitIter, SigIter>(
     lightclient_state: &LightClientState,
     stake_table_state: &StakeTableState,
     stake_table_capacity: usize,
+    next_stake_table_state: &StakeTableState,
 ) -> Result<(Proof, PublicInput), PlonkError>
 where
     STIter: IntoIterator,
@@ -96,6 +96,7 @@ where
         lightclient_state,
         stake_table_state,
         stake_table_capacity,
+        next_stake_table_state,
     )?;
 
     // Sanity check
@@ -127,8 +128,8 @@ mod tests {
 
     use super::{generate_state_update_proof, preprocess, CircuitField, UniversalSrs};
     use crate::{
-        legacy::circuit::build_for_preprocessing,
         test_utils::{key_pairs_for_testing, stake_table_for_testing},
+        v2::circuit::build_for_preprocessing,
     };
 
     const ST_CAPACITY: usize = 20;
@@ -198,6 +199,7 @@ mod tests {
         let st_state = st
             .commitment(ST_CAPACITY)
             .expect("Failed to compute stake table commitment");
+        let next_st_state = st_state;
 
         let stake_table_entries = st
             .iter()
@@ -218,8 +220,12 @@ mod tests {
         let sigs: Vec<_> = schnorr_keys
             .iter()
             .map(|(key, _)| {
-                <SchnorrPubKey as StateSignatureKey>::legacy_sign_state(key, &lightclient_state)
-                    .unwrap()
+                <SchnorrPubKey as StateSignatureKey>::v2_sign_state(
+                    key,
+                    &lightclient_state,
+                    &next_st_state,
+                )
+                .unwrap()
             })
             .collect();
 
@@ -261,6 +267,7 @@ mod tests {
             &lightclient_state,
             &st_state,
             ST_CAPACITY,
+            &next_st_state,
         );
         assert!(result.is_ok());
 
@@ -285,6 +292,7 @@ mod tests {
             &lightclient_state,
             &bad_st_state,
             ST_CAPACITY,
+            &next_st_state,
         );
         assert!(result.is_err());
     }

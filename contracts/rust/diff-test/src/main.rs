@@ -12,7 +12,7 @@ use ark_poly::{domain::radix2::Radix2EvaluationDomain, EvaluationDomain};
 use ark_std::rand::{rngs::StdRng, Rng, SeedableRng};
 use clap::{Parser, ValueEnum};
 use hotshot_contract_adapter::{field_to_u256, jellyfish::*, sol_types::*, u256_to_field};
-use hotshot_state_prover::mock_ledger::{
+use hotshot_state_prover::v2::mock_ledger::{
     gen_plonk_proof_for_test, MockLedger, MockSystemParam, STAKE_TABLE_CAPACITY_FOR_TEST,
 };
 use hotshot_types::utils::{epoch_from_block_number, is_epoch_root, is_ge_epoch_root};

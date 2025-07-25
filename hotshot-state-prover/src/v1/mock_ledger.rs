@@ -30,7 +30,7 @@ use jf_signature::{
 };
 use jf_utils::test_rng;
 
-use crate::legacy::{
+use crate::v1::{
     circuit::GenericPublicInput, generate_state_update_proof, preprocess, Proof, VerifyingKey,
 };
 

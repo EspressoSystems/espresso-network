@@ -19,7 +19,7 @@ use rand_chacha::ChaCha20Rng;
 use tracing::instrument;
 
 use crate::{
-    light_client::{LightClientState, StakeTableState},
+    light_client::{CircuitField, LightClientState, StakeTableState},
     qc::{BitVectorQc, QcParams},
     stake_table::StakeTableEntry,
     traits::{
@@ -222,7 +222,24 @@ impl StateSignatureKey for SchnorrPubKey {
 
     type SignError = SignatureError;
 
-    fn sign_state(
+    /// Sign the light client state
+    /// The input `msg` should be the keccak256 hash of ABI encodings of the light client state,
+    /// next stake table state, and the auth root, mod into the `CircuitField`.
+    fn v3_sign_state(
+        private_key: &Self::StatePrivateKey,
+        msg: CircuitField,
+    ) -> Result<Self::StateSignature, Self::SignError> {
+        SchnorrSignatureScheme::sign(&(), private_key, [msg], &mut rand::thread_rng())
+    }
+
+    /// Verify the light client state signature
+    /// The input `msg` should be the keccak256 hash of ABI encodings of the light client state,
+    /// next stake table state, and the auth root, mod into the `CircuitField`.
+    fn v3_verify_state_sig(&self, signature: &Self::StateSignature, msg: CircuitField) -> bool {
+        SchnorrSignatureScheme::verify(&(), self, [msg], signature).is_ok()
+    }
+
+    fn v2_sign_state(
         sk: &Self::StatePrivateKey,
         light_client_state: &LightClientState,
         next_stake_table_state: &StakeTableState,
@@ -235,7 +252,7 @@ impl StateSignatureKey for SchnorrPubKey {
         SchnorrSignatureScheme::sign(&(), sk, msg, &mut rand::thread_rng())
     }
 
-    fn verify_state_sig(
+    fn v2_verify_state_sig(
         &self,
         signature: &Self::StateSignature,
         light_client_state: &LightClientState,
@@ -249,7 +266,7 @@ impl StateSignatureKey for SchnorrPubKey {
         SchnorrSignatureScheme::verify(&(), self, msg, signature).is_ok()
     }
 
-    fn legacy_sign_state(
+    fn v1_sign_state(
         sk: &Self::StatePrivateKey,
         light_client_state: &LightClientState,
     ) -> Result<Self::StateSignature, Self::SignError> {
@@ -257,7 +274,7 @@ impl StateSignatureKey for SchnorrPubKey {
         SchnorrSignatureScheme::sign(&(), sk, state_msg, &mut rand::thread_rng())
     }
 
-    fn legacy_verify_state_sig(
+    fn v1_verify_state_sig(
         &self,
         signature: &Self::StateSignature,
         light_client_state: &LightClientState,

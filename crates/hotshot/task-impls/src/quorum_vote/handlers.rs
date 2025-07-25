@@ -572,7 +572,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
             .commitment(stake_table_capacity)
             .wrap()
             .context(error!("Failed to compute stake table commitment"))?;
-        let signature = <TYPES::StateSignatureKey as StateSignatureKey>::sign_state(
+        let signature = <TYPES::StateSignatureKey as StateSignatureKey>::v2_sign_state(
             state_private_key,
             &light_client_state,
             &next_stake_table_state,

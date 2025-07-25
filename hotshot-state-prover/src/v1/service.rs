@@ -30,8 +30,8 @@ use tokio::{io, spawn, task::spawn_blocking, time::sleep};
 use vbs::version::StaticVersionType;
 
 use crate::{
-    legacy::snark::{Proof, ProvingKey, PublicInput},
-    service::{ProverError, ProverServiceState, StateProverConfig},
+    v1::snark::{Proof, ProvingKey, PublicInput},
+    ProverError, ProverServiceState, StateProverConfig,
 };
 
 pub fn load_proving_key(stake_table_capacity: usize) -> ProvingKey {
@@ -174,7 +174,7 @@ async fn generate_proof(
     entries.iter().enumerate().for_each(|(i, (key, stake))| {
         if let Some(sig) = signature_map.get(key) {
             // Check if the signature is valid
-            if key.legacy_verify_state_sig(sig, &light_client_state) {
+            if key.v1_verify_state_sig(sig, &light_client_state) {
                 signer_bit_vec[i] = true;
                 signatures[i] = sig.clone();
                 accumulated_weight += *stake;
@@ -424,7 +424,7 @@ mod test {
     use sequencer_utils::test_utils::setup_test;
 
     use super::*;
-    use crate::legacy::mock_ledger::{MockLedger, MockSystemParam, STAKE_TABLE_CAPACITY_FOR_TEST};
+    use crate::v1::mock_ledger::{MockLedger, MockSystemParam, STAKE_TABLE_CAPACITY_FOR_TEST};
 
     // const MAX_HISTORY_SECONDS: u32 = 864000;
     const NUM_INIT_VALIDATORS: usize = STAKE_TABLE_CAPACITY_FOR_TEST / 2;

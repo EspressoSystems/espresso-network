@@ -22,6 +22,7 @@ futures = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
+hotshot-task-impls = { workspace = true }
 itertools = { workspace = true }
 jf-crhf = { workspace = true }
 jf-pcs = { workspace = true }
@@ -43,7 +44,6 @@ url = { workspace = true }
 vbs = { workspace = true }
 
 [dev-dependencies]
-hotshot-types = { workspace = true }
 sequencer-utils = { path = "../utils", features = ["testing"] }
 
 [features]
