@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["find_validator_info","first_two_epochs"],"struct":["ComputedRewards","RewardDistributor"]};
+window.SIDEBAR_ITEMS = {"fn":["distribute_block_reward","get_leader_and_fetch_missing_rewards"],"struct":["ComputedRewards","RewardDistributor"]};
