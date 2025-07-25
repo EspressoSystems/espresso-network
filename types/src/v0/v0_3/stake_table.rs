@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use alloy::{primitives::{Address, Log, U256}, transports::{RpcError, TransportErrorKind}};
-use async_lock::Mutex;
+use async_lock::{Mutex, RwLock};
 use derive_more::derive::{From, Into};
 use hotshot::types::{SignatureKey};
 use hotshot_contract_adapter::sol_types::StakeTableV2::{
@@ -17,9 +17,7 @@ use tokio::task::JoinHandle;
 
 use super::L1Client;
 use crate::{
-    traits::{MembershipPersistence, StateCatchup},
-    v0::ChainConfig,
-    SeqTypes, ValidatorMap,
+    traits::{MembershipPersistence, StateCatchup}, v0::ChainConfig, v0_1::RewardAmount, SeqTypes, ValidatorMap
 };
 
 /// Stake table holding all staking information (DA and non-DA stakers)
@@ -61,7 +59,7 @@ pub struct Delegator {
 /// Type for holding result sets matching epochs to stake tables.
 pub type IndexedStake = (
     EpochNumber,
-    ValidatorMap,
+    (ValidatorMap, Option<RewardAmount>),
 );
 
 #[derive(Clone, derive_more::derive::Debug)]
@@ -77,7 +75,10 @@ pub struct Fetcher {
     /// Verifiable `ChainConfig` holding contract address
     pub(crate) chain_config: Arc<Mutex<ChainConfig>>,
     pub(crate) update_task: Arc<StakeTableUpdateTask>,
+    pub initial_supply: Arc<RwLock<Option<U256>>>,
 }
+
+
 
 #[derive(Debug, Default)]
 pub(crate) struct StakeTableUpdateTask(pub(crate) Mutex<Option<JoinHandle<()>>>);
@@ -161,8 +162,11 @@ pub enum FetchRewardError {
     #[error("First transfer should be a mint from the zero address")]
     InvalidMintFromAddress,
 
-    #[error("Division by zero in commission basis points")]
-    DivisionByZero,
+    #[error("Division by zero {0}")]
+    DivisionByZero(&'static str),
+
+    #[error("Overflow {0}")]
+    Overflow(&'static str),
 
     #[error("Contract call failed: {0}")]
     ContractCall(#[source] alloy::contract::Error),
