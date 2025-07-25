@@ -581,8 +581,7 @@ impl Header {
                 builder_signature: builder_signature.first().copied(),
                 total_reward_distributed: reward_distributor
                     .map(|r| r.total_distributed())
-                    .unwrap_or_default()
-                    .into(),
+                    .unwrap_or_default(),
             }),
             // This case should never occur
             // but if it does, we must panic

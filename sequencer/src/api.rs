@@ -3930,7 +3930,7 @@ mod test {
                 .expect("leader not found");
 
             let distributor =
-                RewardDistributor::new(leader_validator.clone(), block_reward, distributed.into());
+                RewardDistributor::new(leader_validator.clone(), block_reward, distributed);
             // Verify that the sum of delegator stakes equals the validator's total stake.
             for validator in validators.values() {
                 let delegator_stake_sum: U256 = validator.delegators.values().cloned().sum();

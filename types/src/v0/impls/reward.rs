@@ -585,7 +585,7 @@ pub async fn distribute_block_reward(
     };
 
     let mut reward_distributor =
-        RewardDistributor::new(leader, block_reward, previously_distributed.into());
+        RewardDistributor::new(leader, block_reward, previously_distributed);
 
     let reward_state =
         reward_distributor.apply_rewards(validated_state.reward_merkle_tree.clone())?;

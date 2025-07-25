@@ -1370,7 +1370,7 @@ impl SequencerPersistence for Persistence {
 
         let drb_result_bytes = bincode::serialize(&drb_result).context("serialize drb result")?;
 
-        let file_path = dir_path.join(epoch.to_string()).with_extension("bin");
+        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
         fs::write(file_path, drb_result_bytes)
             .context(format!("writing epoch drb result file for epoch {epoch:?}"))?;
 
@@ -1391,7 +1391,7 @@ impl SequencerPersistence for Persistence {
         let block_header_bytes =
             bincode::serialize(&block_header).context("serialize block header")?;
 
-        let file_path = dir_path.join(epoch.to_string()).with_extension("bin");
+        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
         fs::write(file_path, block_header_bytes).context(format!(
             "writing epoch root block header file for epoch {epoch:?}"
         ))?;
@@ -1438,7 +1438,7 @@ impl SequencerPersistence for Persistence {
 
                 let block_header_path = block_header_dir_path
                     .join(epoch.to_string())
-                    .with_extension("bin");
+                    .with_extension("txt");
                 let block_header = if block_header_path.is_file() {
                     let bytes = fs::read(&block_header_path).context(format!(
                         "reading epoch root block header {}",
@@ -1518,34 +1518,70 @@ impl MembershipPersistence for Persistence {
     ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>)>> {
         let inner = self.inner.read().await;
         let path = &inner.stake_table_dir_path();
-        let file_path = path.join(epoch.to_string()).with_extension("bin");
+        let file_path = path.join(epoch.to_string()).with_extension("txt");
 
         if !file_path.exists() {
             return Ok(None);
         }
 
-        let bytes = fs::read(&file_path).context("read")?;
-        Ok(Some(
-            bincode::deserialize(&bytes).context("deserialize combined stake table")?,
-        ))
+        let bytes = fs::read(&file_path).with_context(|| {
+            format!("failed to read stake table file at {}", file_path.display())
+        })?;
+
+        let stake = match bincode::deserialize(&bytes) {
+            Ok(res) => res,
+            Err(err) => {
+                let map = bincode::deserialize::<ValidatorMap>(&bytes).with_context(|| {
+                    format!(
+                        "fallback deserialization of legacy stake table at {} failed after \
+                         initial error: {}",
+                        file_path.display(),
+                        err
+                    )
+                })?;
+                (map, None)
+            },
+        };
+
+        Ok(Some(stake))
     }
 
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
         let limit = limit as usize;
         let inner = self.inner.read().await;
         let path = &inner.stake_table_dir_path();
-        let sorted = epoch_files(&path)?
+        let sorted_files = epoch_files(&path)?
             .sorted_by(|(e1, _), (e2, _)| e2.cmp(e1))
             .take(limit);
+        let mut validator_sets: Vec<IndexedStake> = Vec::new();
 
-        sorted
-            .map(|(epoch, path)| -> anyhow::Result<Option<IndexedStake>> {
-                let bytes = fs::read(path).context("read")?;
-                let st =
-                    bincode::deserialize(&bytes).context("deserialize combined stake table")?;
-                Ok(Some((epoch, st)))
-            })
-            .collect()
+        for (epoch, file_path) in sorted_files {
+            let bytes = fs::read(&file_path).with_context(|| {
+                format!("failed to read stake table file at {}", file_path.display())
+            })?;
+
+            let stake: (ValidatorMap, Option<RewardAmount>) =
+                match bincode::deserialize::<(ValidatorMap, Option<RewardAmount>)>(&bytes) {
+                    Ok(res) => res,
+                    Err(err) => {
+                        let validatormap = bincode::deserialize::<ValidatorMap>(&bytes)
+                            .with_context(|| {
+                                format!(
+                                    "failed to deserialize legacy stake table at {}: fallback \
+                                     also failed after initial error: {}",
+                                    file_path.display(),
+                                    err
+                                )
+                            })?;
+
+                        (validatormap, None)
+                    },
+                };
+
+            validator_sets.push((epoch, stake));
+        }
+
+        Ok(Some(validator_sets))
     }
 
     async fn store_stake(
@@ -1559,7 +1595,7 @@ impl MembershipPersistence for Persistence {
 
         fs::create_dir_all(dir_path.clone()).context("failed to create stake table dir")?;
 
-        let file_path = dir_path.join(epoch.to_string()).with_extension("bin");
+        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
 
         inner.replace(
             &file_path,
@@ -1920,7 +1956,7 @@ fn epoch_files(
             return None;
         }
         let path = entry.path();
-        if path.extension()? != "bin" {
+        if path.extension()? != "txt" {
             tracing::debug!(%dir, ?entry, "ignoring non-text file in data directory");
             return None;
         }
