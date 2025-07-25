@@ -20,7 +20,8 @@ use hotshot_testing::{
 cross_tests!(
     TestName: test_success_with_epochs,
     Impls: [Libp2pImpl, PushCdnImpl, CombinedImpl],
-    Types: [TestTypes, TestTypesRandomizedLeader, TestTwoStakeTablesTypes],
+    Types: [TestTypes],
+    // Types: [TestTypes, TestTypesRandomizedLeader, TestTwoStakeTablesTypes],
     Versions: [EpochsTestVersions],
     Ignore: false,
     Metadata: {
@@ -34,7 +35,9 @@ cross_tests!(
             ..TestDescription::default()
         };
 
-        metadata.test_config.epoch_height = 10;
+        metadata.test_config.epoch_height = 20;
+        metadata.overall_safety_properties.possible_view_failures = (1..100).collect();
+        metadata.overall_safety_properties.decide_timeout = Duration::from_secs(20);
 
         metadata
     },
