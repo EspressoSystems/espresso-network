@@ -21,11 +21,11 @@ use jf_plonk::PlonkError;
 use tide_disco::error::ServerError;
 use url::Url;
 
-/// Light client V1 prover
+/// The original prover for light client V1
 pub mod v1;
-/// Light client V2 prover
+/// Light client V2 prover, where we allow stake table update for proof of stake upgrade.
 pub mod v2;
-/// Light client V3 prover
+/// Light client V3 prover, where we introduce a new field `auth_root` for contract friendly state verification.
 pub mod v3;
 
 #[cfg(test)]

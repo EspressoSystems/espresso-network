@@ -18,15 +18,15 @@ use jf_signature::{
 #[derive(Clone, Debug)]
 pub struct GenericPublicInput<F: PrimeField> {
     pub voting_st_state: GenericStakeTableState<F>,
-    pub lc_state_digest: F,
+    pub signed_state_digest: F,
 }
 
 impl<F: PrimeField> GenericPublicInput<F> {
     /// Construct a public input from light client state and static stake table state
-    pub fn new(voting_st_state: GenericStakeTableState<F>, lc_state_digest: F) -> Self {
+    pub fn new(voting_st_state: GenericStakeTableState<F>, signed_state_digest: F) -> Self {
         Self {
             voting_st_state,
-            lc_state_digest,
+            signed_state_digest,
         }
     }
 
@@ -37,7 +37,7 @@ impl<F: PrimeField> GenericPublicInput<F> {
             self.voting_st_state.schnorr_key_comm,
             self.voting_st_state.amount_comm,
             self.voting_st_state.threshold,
-            self.lc_state_digest,
+            self.signed_state_digest,
         ]
     }
 }
@@ -49,7 +49,7 @@ impl<F: PrimeField> From<GenericPublicInput<F>> for Vec<F> {
             v.voting_st_state.schnorr_key_comm,
             v.voting_st_state.amount_comm,
             v.voting_st_state.threshold,
-            v.lc_state_digest,
+            v.signed_state_digest,
         ]
     }
 }
@@ -62,10 +62,10 @@ impl<F: PrimeField> From<Vec<F>> for GenericPublicInput<F> {
             amount_comm: v[2],
             threshold: v[3],
         };
-        let lc_state_digest = v[4];
+        let signed_state_digest = v[4];
         Self {
             voting_st_state,
-            lc_state_digest,
+            signed_state_digest,
         }
     }
 }
@@ -115,7 +115,7 @@ impl StakeTableVar {
 /// - a bit vector indicates the signers
 /// - a list of schnorr signatures of the updated states (`Vec<SchnorrSignature>`), default if the node doesn't sign the state
 /// - voting stake table state (containing 3 commitments to the 3 columns of the stake table and a threshold)
-/// - The `lc_state_digest`, which is the keccak hash of all state to certify, currently containing the new light client state, stake table state for the next update, a reward Merkle tree root, and more in the future upon request.
+/// - The `signed_state_digest`, which is the keccak hash of all state to certify, currently containing the new light client state, stake table state for the next update, a reward Merkle tree root, and maybe more in the future upon request.
 ///
 /// Lengths of input vectors should not exceed the `stake_table_capacity`.
 /// The list of stake table entries, bit indicators and signatures will be padded to the `stake_table_capacity`.
@@ -123,7 +123,7 @@ impl StakeTableVar {
 /// - the vector that indicates who signed is a bit vector
 /// - the signers' accumulated weight exceeds the quorum threshold
 /// - the stake table corresponds to the one committed in the light client state
-/// - all Schnorr signatures over the light client state are valid
+/// - all Schnorr signatures over the signed state digest are valid
 ///
 /// and returns
 /// - A circuit for proof generation
@@ -136,7 +136,7 @@ pub(crate) fn build<F, P, STIter, BitIter, SigIter>(
     signatures: SigIter,
     stake_table_state: &GenericStakeTableState<F>,
     stake_table_capacity: usize,
-    lc_state_digest: &F,
+    signed_state_digest: &F,
 ) -> Result<(PlonkCircuit<F>, GenericPublicInput<F>), PlonkError>
 where
     F: RescueParameter,
@@ -240,7 +240,7 @@ where
 
     // public inputs
     let stake_table_state_pub_var = StakeTableVar::new(&mut circuit, stake_table_state)?;
-    let lc_state_digest_var = circuit.create_public_variable(*lc_state_digest)?;
+    let signed_state_digest_var = circuit.create_public_variable(*signed_state_digest)?;
 
     // Checking whether the accumulated weight exceeds the quorum threshold
     let mut signed_amount_var = (0..stake_table_capacity / 2)
@@ -304,7 +304,7 @@ where
             SignatureGadget::<_, P>::check_signature_validity(
                 &mut circuit,
                 &entry.state_ver_key,
-                &[lc_state_digest_var],
+                &[signed_state_digest_var],
                 &sig,
             )
         })
@@ -323,7 +323,7 @@ where
     circuit.finalize_for_arithmetization()?;
     Ok((
         circuit,
-        GenericPublicInput::new(*stake_table_state, *lc_state_digest),
+        GenericPublicInput::new(*stake_table_state, *signed_state_digest),
     ))
 }
 
@@ -336,7 +336,7 @@ where
     P: TECurveConfig<BaseField = F>,
 {
     let stake_table_state = StakeTableStateSol::dummy_genesis().into();
-    let lc_state_digest = F::default();
+    let signed_state_digest = F::default();
 
     build::<F, P, _, _, _>(
         &[],
@@ -344,7 +344,7 @@ where
         &[],
         &stake_table_state,
         stake_table_capacity,
-        &lc_state_digest,
+        &signed_state_digest,
     )
 }
 
@@ -382,12 +382,13 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let lc_state_digest = F::from(2u64);
+        let signed_state_digest = F::from(2u64);
 
         let sigs: Vec<_> = state_keys
             .iter()
             .map(|(key, _)| {
-                <SchnorrPubKey as StateSignatureKey>::v3_sign_state(key, lc_state_digest).unwrap()
+                <SchnorrPubKey as StateSignatureKey>::v3_sign_state(key, signed_state_digest)
+                    .unwrap()
             })
             .collect();
 
@@ -417,7 +418,7 @@ mod tests {
             &bit_masked_sigs,
             &st_state,
             ST_CAPACITY,
-            &lc_state_digest,
+            &signed_state_digest,
         )
         .unwrap();
         assert!(circuit
@@ -433,7 +434,7 @@ mod tests {
             &bit_masked_sigs,
             &good_st_state,
             ST_CAPACITY,
-            &lc_state_digest,
+            &signed_state_digest,
         )
         .unwrap();
         assert!(circuit
@@ -448,7 +449,7 @@ mod tests {
             &bit_masked_sigs,
             &st_state,
             ST_CAPACITY,
-            &lc_state_digest,
+            &signed_state_digest,
         )
         .unwrap();
         assert!(circuit
@@ -480,7 +481,7 @@ mod tests {
             &bad_bit_masked_sigs,
             &st_state,
             ST_CAPACITY,
-            &lc_state_digest,
+            &signed_state_digest,
         )
         .unwrap();
         assert!(bad_circuit
@@ -488,14 +489,14 @@ mod tests {
             .is_err());
 
         // bad path: bad lc state digest
-        let bad_lc_state_digest = F::from(12387u64);
+        let bad_signed_state_digest = F::from(12387u64);
         let (bad_circuit, public_inputs) = build(
             &entries,
             &bit_vec,
             &sigs,
             &st_state,
             ST_CAPACITY,
-            &bad_lc_state_digest,
+            &bad_signed_state_digest,
         )
         .unwrap();
         assert!(bad_circuit
@@ -503,11 +504,11 @@ mod tests {
             .is_err());
 
         // bad path: incorrect signing message
-        let bad_lc_state_digest = F::from(12387u64);
+        let bad_signed_state_digest = F::from(12387u64);
         let bad_sigs: Vec<_> = state_keys
             .iter()
             .map(|(key, _)| {
-                <SchnorrPubKey as StateSignatureKey>::v3_sign_state(key, bad_lc_state_digest)
+                <SchnorrPubKey as StateSignatureKey>::v3_sign_state(key, bad_signed_state_digest)
                     .unwrap()
             })
             .collect();
@@ -517,7 +518,7 @@ mod tests {
             &bad_sigs,
             &st_state,
             ST_CAPACITY,
-            &lc_state_digest,
+            &signed_state_digest,
         )
         .unwrap();
         assert!(bad_circuit
@@ -531,7 +532,7 @@ mod tests {
             &bit_masked_sigs,
             &st_state,
             9,
-            &lc_state_digest,
+            &signed_state_digest,
         )
         .is_err());
     }

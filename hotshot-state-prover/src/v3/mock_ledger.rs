@@ -13,7 +13,7 @@ use ark_std::{
 };
 use espresso_types::SeqTypes;
 use hotshot_contract_adapter::{field_to_u256, jellyfish::open_key};
-use hotshot_task_impls::helpers::derive_lc_state_digest;
+use hotshot_task_impls::helpers::derive_signed_state_digest;
 use hotshot_types::{
     light_client::{GenericLightClientState, GenericStakeTableState, LightClientState},
     stake_table::{HSStakeTable, StakeTableEntry},
@@ -333,8 +333,8 @@ impl MockLedger {
             .into_iter()
             .map(|(_, stake_amount, schnorr_key)| (schnorr_key, stake_amount))
             .collect::<Vec<_>>();
-        let lc_state_digest =
-            derive_lc_state_digest(&self.state, &voting_st_state, &self.auth_root);
+        let signed_state_digest =
+            derive_signed_state_digest(&self.state, &voting_st_state, &self.auth_root);
         let (proof, pi) = generate_state_update_proof(
             &mut self.rng,
             &pk,
@@ -343,7 +343,7 @@ impl MockLedger {
             &sigs,
             &voting_st_state,
             self.pp.st_cap,
-            &lc_state_digest,
+            &signed_state_digest,
         )
         .expect("Fail to generate state proof");
 
@@ -399,7 +399,8 @@ impl MockLedger {
             .into_iter()
             .map(|config| (config.state_ver_key, config.stake_table_entry.stake_amount))
             .collect::<Vec<_>>();
-        let lc_state_digest = derive_lc_state_digest(&new_state, &adv_st_state, &self.auth_root);
+        let signed_state_digest =
+            derive_signed_state_digest(&new_state, &adv_st_state, &self.auth_root);
         let (proof, pi) = generate_state_update_proof::<_, _, _, _>(
             &mut self.rng,
             &pk,
@@ -408,7 +409,7 @@ impl MockLedger {
             &sigs,
             &adv_st_state,
             self.pp.st_cap,
-            &lc_state_digest,
+            &signed_state_digest,
         )
         .expect("Fail to generate state proof");
 

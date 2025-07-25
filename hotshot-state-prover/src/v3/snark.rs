@@ -66,7 +66,7 @@ pub fn generate_state_update_proof<STIter, R, BitIter, SigIter>(
     signatures: SigIter,
     stake_table_state: &StakeTableState,
     stake_table_capacity: usize,
-    lc_state_digest: &CircuitField,
+    signed_state_digest: &CircuitField,
 ) -> Result<(Proof, PublicInput), PlonkError>
 where
     STIter: IntoIterator,
@@ -94,7 +94,7 @@ where
         signatures,
         stake_table_state,
         stake_table_capacity,
-        lc_state_digest,
+        signed_state_digest,
     )?;
 
     // Sanity check
@@ -203,12 +203,13 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let lc_state_digest = CircuitField::from(2u64);
+        let signed_state_digest = CircuitField::from(2u64);
 
         let sigs: Vec<_> = schnorr_keys
             .iter()
             .map(|(key, _)| {
-                <SchnorrPubKey as StateSignatureKey>::v3_sign_state(key, lc_state_digest).unwrap()
+                <SchnorrPubKey as StateSignatureKey>::v3_sign_state(key, signed_state_digest)
+                    .unwrap()
             })
             .collect();
 
@@ -249,7 +250,7 @@ mod tests {
             &bit_masked_sigs,
             &st_state,
             ST_CAPACITY,
-            &lc_state_digest,
+            &signed_state_digest,
         );
         assert!(result.is_ok());
 
@@ -273,7 +274,7 @@ mod tests {
             &bit_masked_sigs,
             &bad_st_state,
             ST_CAPACITY,
-            &lc_state_digest,
+            &signed_state_digest,
         );
         assert!(result.is_err());
     }

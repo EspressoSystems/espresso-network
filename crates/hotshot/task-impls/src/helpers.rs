@@ -10,7 +10,10 @@ use std::{
     time::Instant,
 };
 
-use alloy::{primitives::U256, sol_types::SolValue};
+use alloy::{
+    primitives::{FixedBytes, U256},
+    sol_types::SolValue,
+};
 use ark_ff::PrimeField;
 use async_broadcast::{Receiver, SendError, Sender};
 use async_lock::RwLock;
@@ -1432,10 +1435,10 @@ pub async fn broadcast_view_change<TYPES: NodeType>(
     .await
 }
 
-pub fn derive_lc_state_digest(
+pub fn derive_signed_state_digest(
     lc_state: &LightClientState,
     next_stake_state: &StakeTableState,
-    auth_root: &U256, // TODO(Chengyu): replace with actual types
+    auth_root: &FixedBytes<32>,
 ) -> CircuitField {
     let lc_state_sol: LightClientStateSol = (*lc_state).into();
     let stake_st_sol: StakeTableStateSol = (*next_stake_state).into();

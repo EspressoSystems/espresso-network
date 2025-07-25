@@ -18,7 +18,7 @@ use hotshot_contract_adapter::{
     sol_types::{LightClientStateSol, LightClientV2, StakeTableStateSol},
 };
 use hotshot_query_service::availability::StateCertQueryData;
-use hotshot_task_impls::helpers::derive_lc_state_digest;
+use hotshot_task_impls::helpers::derive_signed_state_digest;
 use hotshot_types::{
     data::EpochNumber,
     light_client::{
@@ -210,8 +210,8 @@ async fn generate_proof(
     let proving_key_clone = proving_key.clone();
     let stake_table_capacity = state.config.stake_table_capacity;
     let auth_root = U256::from(0); // TODO(Chengyu): replace with actual auth_root
-    let lc_state_digest =
-        derive_lc_state_digest(&light_client_state, &next_stake_table_state, &auth_root);
+    let signed_state_digest =
+        derive_signed_state_digest(&light_client_state, &next_stake_table_state, &auth_root);
     let (proof, public_input) = spawn_blocking(move || {
         super::snark::generate_state_update_proof(
             &mut ark_std::rand::thread_rng(),
@@ -221,7 +221,7 @@ async fn generate_proof(
             signatures,
             &current_stake_table_state,
             stake_table_capacity,
-            &lc_state_digest,
+            &signed_state_digest,
         )
     })
     .await
