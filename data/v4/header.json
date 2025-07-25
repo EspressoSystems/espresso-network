@@ -38,7 +38,7 @@
     "reward_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAKA",
     "timestamp": 789,
     "timestamp_millis": 789000000000,
-    "total_reward_distributed": "0x0"
+    "total_reward_distributed": "0"
   },
   "version": {
     "Version": {

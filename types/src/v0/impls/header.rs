@@ -1,6 +1,5 @@
 use std::fmt;
 
-use alloy::primitives::U256;
 use anyhow::{ensure, Context};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
@@ -38,7 +37,8 @@ use crate::{
         header::{EitherOrVersion, VersionedHeader},
         impls::{distribute_block_reward, reward::RewardDistributor},
     },
-    v0_1, v0_2, v0_3, v0_4, BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
+    v0_1::{self, RewardAmount},
+    v0_2, v0_3, v0_4, BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
     FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable,
     PayloadByteLen, SeqTypes, TimestampMillis, UpgradeType,
 };
@@ -282,7 +282,7 @@ impl Header {
         reward_merkle_tree_root: RewardMerkleCommitment,
         fee_info: Vec<FeeInfo>,
         builder_signature: Vec<BuilderSignature>,
-        total_reward_distributed: Option<U256>,
+        total_reward_distributed: Option<RewardAmount>,
         version: Version,
     ) -> Self {
         // Ensure FeeInfo contains at least 1 element
@@ -807,7 +807,7 @@ impl Header {
         }
     }
 
-    pub fn total_reward_distributed(&self) -> Option<U256> {
+    pub fn total_reward_distributed(&self) -> Option<RewardAmount> {
         match self {
             Self::V1(_) | Self::V2(_) | Self::V3(_) => None,
             Self::V4(fields) => Some(fields.total_reward_distributed),

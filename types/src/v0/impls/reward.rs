@@ -572,7 +572,8 @@ pub async fn distribute_block_reward(
 
             previously_distributed = U256::from(blocks)
                 .checked_mul(fixed_block_reward.0)
-                .context("overflow during total_distributed calculation")?;
+                .context("overflow during total_distributed calculation")?
+                .into();
         }
 
         block_reward

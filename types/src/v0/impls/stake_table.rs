@@ -1516,7 +1516,7 @@ impl EpochCommittees {
             None => fetcher.fetch_initial_supply().await?,
         };
         let total_supply = initial_supply
-            .checked_add(previous_reward_distributed)
+            .checked_add(previous_reward_distributed.0)
             .context("initial_supply + previous_reward_distributed overflow")?;
 
         // Calculate average block time over the last epoch
@@ -1569,7 +1569,7 @@ impl EpochCommittees {
         let block_reward =
             Self::compute_block_reward(epoch, total_supply, total_stake, avg_block_time)?;
 
-        Ok(block_reward.into())
+        Ok(block_reward)
     }
 
     /// Updates `Self.stake_table` with stake_table for

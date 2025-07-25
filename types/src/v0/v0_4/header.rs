@@ -1,10 +1,9 @@
-use crate::{v0_1::RewardMerkleCommitment, NsTable, TimestampMillis};
+use crate::{v0_1::{RewardAmount, RewardMerkleCommitment}, NsTable, TimestampMillis};
 
 use super::{
     BlockMerkleCommitment, BuilderSignature, FeeInfo, FeeMerkleCommitment, L1BlockInfo,
     ResolvableChainConfig,
 };
-use alloy::primitives::U256;
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot_types::{data::VidCommitment, utils::BuilderCommitment};
@@ -28,7 +27,7 @@ pub struct Header {
     pub(crate) fee_info: FeeInfo,
     pub(crate) builder_signature: Option<BuilderSignature>,
     pub(crate) reward_merkle_tree_root: RewardMerkleCommitment,
-    pub(crate) total_reward_distributed: U256
+    pub(crate) total_reward_distributed: RewardAmount
 }
 
 impl Committable for Header {
@@ -63,7 +62,7 @@ impl Committable for Header {
             .var_size_field("fee_merkle_tree_root", &fmt_bytes)
             .field("fee_info", self.fee_info.commit())
             .var_size_field("reward_merkle_tree_root", &rwd_bytes)
-            .var_size_field("total_reward_distributed", &self.total_reward_distributed.as_le_bytes())
+            .var_size_field("total_reward_distributed", &self.total_reward_distributed.to_fixed_bytes())
             .finalize()
     }
 

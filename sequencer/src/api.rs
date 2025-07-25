@@ -3866,7 +3866,7 @@ mod test {
         while let Some(leaf) = leaves.next().await {
             let leaf = leaf.unwrap();
             let header = leaf.header();
-            assert_eq!(header.total_reward_distributed().unwrap(), U256::ZERO);
+            assert_eq!(header.total_reward_distributed().unwrap().0, U256::ZERO);
 
             let epoch_number =
                 EpochNumber::new(epoch_from_block_number(leaf.height(), EPOCH_HEIGHT));
@@ -4002,7 +4002,7 @@ mod test {
             // Confirm the header's total distributed field matches the cumulative expected amount.
             total_distributed += block_reward.0;
             assert_eq!(
-                header.total_reward_distributed().unwrap(),
+                header.total_reward_distributed().unwrap().0,
                 total_distributed
             );
 
