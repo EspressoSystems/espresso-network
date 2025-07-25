@@ -1071,6 +1071,25 @@ mod tests {
                 .await;
         }
 
+        let mut tx_result_from_explorer = api_client
+            .get::<TransactionDetailResponse<SeqTypes>>(&format!(
+                "explorer/transaction/hash/{tx_hash}",
+            ))
+            .send()
+            .await;
+
+        while tx_result_from_explorer.is_err() {
+            sleep(Duration::from_secs(1)).await;
+            tracing::warn!("waiting for tx");
+
+            tx_result_from_explorer = api_client
+                .get::<TransactionDetailResponse<SeqTypes>>(&format!(
+                    "explorer/transaction/hash/{tx_hash}"
+                ))
+                .send()
+                .await;
+        }
+
         let large_tx = Transaction::new(100_u32.into(), vec![0; 20000]);
         let large_hash: Commitment<Transaction> = api_client
             .post("submit/submit")

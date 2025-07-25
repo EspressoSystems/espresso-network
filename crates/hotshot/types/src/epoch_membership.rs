@@ -23,7 +23,7 @@ use crate::{
             Storage, StoreDrbProgressFn, StoreDrbResultFn,
         },
     },
-    utils::{root_block_in_epoch, transition_block_for_epoch},
+    utils::root_block_in_epoch,
     PeerConfig,
 };
 
@@ -258,7 +258,7 @@ where
         // Iterate through the epochs we need to fetch in reverse, i.e. from the oldest to the newest
         while let Some((current_fetch_epoch, tx)) = fetch_epochs.pop() {
             let root_leaf = match self.fetch_stake_table(current_fetch_epoch).await {
-                Ok(roof_leaf) => roof_leaf,
+                Ok(root_leaf) => root_leaf,
                 Err(err) => {
                     fetch_epochs.push((current_fetch_epoch, tx));
                     self.catchup_cleanup(epoch, fetch_epochs, err).await;
@@ -423,31 +423,35 @@ where
         epoch: TYPES::Epoch,
         root_leaf: Leaf2<TYPES>,
     ) -> Result<()> {
-        let root_epoch = TYPES::Epoch::new(epoch.saturating_sub(2));
-        let Ok(root_membership) = self.stake_table_for_epoch(Some(root_epoch)).await else {
-            return Err(anytrace::error!(
-                "We tried to fetch drb result for epoch {epoch:?} but we don't have its root \
-                 epoch {root_epoch:?}. This should not happen"
-            ));
-        };
+        tracing::error!("DRB LOG: fetch_or_calc_drb_results called");
+        let drb = match
+            <TYPES::Membership as Membership<TYPES>>::get_epoch_drb(self.membership.clone(), epoch)
+                .await
+        { Ok(drb) => {
+            tracing::error!("DRB LOG: get_epoch_drb returned drb {drb:?}");
 
-        let Ok(drb_membership) = root_membership.next_epoch_stake_table().await else {
-            return Err(anytrace::error!(
-                "get drb stake table failed for epoch {root_epoch:?}"
-            ));
-        };
+            let Some(ref drb_difficulty_selector) = *self.drb_difficulty_selector.read().await
+            else {
+                return Err(anytrace::error!(
+                    "The DRB difficulty selector is missing from the epoch membership \
+                     coordinator. This node will not be able to spawn any DRB calculation tasks \
+                     from catchup."
+                ));
+            };
+            let drb_difficulty = drb_difficulty_selector(root_leaf.view_number()).await;
 
-        // get the DRB from the last block of the epoch right before the one we're catching up to
-        // or compute it if it's not available
-        let drb = if let Ok(drb) = drb_membership
-            .get_epoch_drb(transition_block_for_epoch(
-                *(root_epoch + 1),
-                self.epoch_height,
-            ))
-            .await
-        {
+            let drb_input = DrbInput {
+                epoch: *epoch,
+                iteration: drb_difficulty,
+                value: drb,
+                difficulty_level: drb_difficulty,
+            };
+
+            let _ = (self.store_drb_progress_fn)(drb_input).await;
+
             drb
-        } else {
+        }, Err(e) => {
+            tracing::error!("DRB LOG: get_epoch_drb failed to return drb: {e}");
             let Ok(drb_seed_input_vec) = bincode::serialize(&root_leaf.justify_qc().signatures)
             else {
                 return Err(anytrace::error!(
@@ -480,9 +484,9 @@ where
             let load_drb_progress_fn = self.load_drb_progress_fn.clone();
 
             compute_drb_result(drb_input, store_drb_progress_fn, load_drb_progress_fn).await
-        };
+        }};
 
-        tracing::info!("Writing drb result from catchup to storage for epoch {epoch}");
+        tracing::info!("Writing drb result from catchup to storage for epoch {epoch}: {drb:?}");
         if let Err(e) = (self.store_drb_result_fn)(epoch, drb).await {
             tracing::warn!("Failed to add drb result to storage: {e}");
         }
@@ -563,13 +567,13 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Wraps the same named Membership trait fn
-    async fn get_epoch_drb(&self, block_height: u64) -> Result<DrbResult> {
+    pub async fn get_epoch_drb(&self) -> Result<DrbResult> {
         let Some(epoch) = self.epoch else {
             return Err(anytrace::warn!("Cannot get drb for None epoch"));
         };
+        tracing::error!("DRB LOG: retrieving drb for epoch {epoch}");
         <TYPES::Membership as Membership<TYPES>>::get_epoch_drb(
             self.coordinator.membership.clone(),
-            block_height,
             epoch,
         )
         .await
