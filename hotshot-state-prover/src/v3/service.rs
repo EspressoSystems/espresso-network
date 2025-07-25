@@ -6,7 +6,7 @@ use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use alloy::{
     network::EthereumWallet,
-    primitives::{utils::format_units, Address, U256},
+    primitives::{utils::format_units, Address, FixedBytes, U256},
     providers::{Provider, ProviderBuilder},
     rpc::types::TransactionReceipt,
 };
@@ -209,7 +209,7 @@ async fn generate_proof(
     let proof_gen_start = Instant::now();
     let proving_key_clone = proving_key.clone();
     let stake_table_capacity = state.config.stake_table_capacity;
-    let auth_root = U256::from(0); // TODO(Chengyu): replace with actual auth_root
+    let auth_root = FixedBytes::from([0; 32]); // TODO(Chengyu): replace with actual auth_root
     let signed_state_digest =
         derive_signed_state_digest(&light_client_state, &next_stake_table_state, &auth_root);
     let (proof, public_input) = spawn_blocking(move || {

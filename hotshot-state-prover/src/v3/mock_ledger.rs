@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use alloy::primitives::U256;
+use alloy::primitives::{FixedBytes, U256};
 use anyhow::Result;
 use ark_bn254::Bn254;
 use ark_ed_on_bn254::EdwardsConfig;
@@ -82,7 +82,7 @@ pub struct MockLedger {
     pub(crate) pending_st: HSStakeTable<SeqTypes>,
     pub(crate) qc_keys: Vec<BLSVerKey>,
     pub(crate) state_keys: Vec<(SchnorrSignKey, SchnorrVerKey)>,
-    pub(crate) auth_root: U256,
+    pub(crate) auth_root: FixedBytes<32>,
     key_archive: HashMap<BLSVerKey, SchnorrSignKey>,
 }
 
@@ -107,7 +107,7 @@ impl MockLedger {
             block_height: 0,
             block_comm_root,
         };
-        let auth_root = U256::from(0);
+        let auth_root = FixedBytes::from([0; 32]);
 
         Self {
             pp,
