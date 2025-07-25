@@ -1064,7 +1064,27 @@ impl Fetcher {
         validators_from_l1_events(sorted.into_iter().map(|(_, e)| e))
             .context("failed to construct validators set from l1 events")
     }
-    /// This function is used to calculate the reward for a block.
+
+    /// Calculates the fixed block reward based on the token's initial supply.
+    /// - The initial supply is fetched from the token contract
+    /// - If the supply is not present, it invokes `fetch_initial_supply()` to retrieve it.
+    pub async fn fetch_fixed_block_reward(&self) -> Result<RewardAmount, FetchRewardError> {
+        let initial_supply_read = *self.initial_supply.read().await;
+        let initial_supply = match initial_supply_read {
+            Some(supply) => supply,
+            None => self.fetch_initial_supply().await?,
+        };
+
+        let reward = ((initial_supply * U256::from(INFLATION_RATE)) / U256::from(BLOCKS_PER_YEAR))
+            .checked_div(U256::from(COMMISSION_BASIS_POINTS))
+            .ok_or(FetchRewardError::DivisionByZero(
+                "COMMISSION_BASIS_POINTS is zero",
+            ))?;
+
+        Ok(RewardAmount(reward))
+    }
+
+    /// This function fetches and updates the initial token supply.
     /// It fetches the initial supply from the token contract.
     ///
     /// - We now rely on the `Initialized` event of the token contract (which should only occur once).
@@ -1080,20 +1100,7 @@ impl Fetcher {
     /// The stake table contract is deployed after the token contract as it holds the token
     /// contract address. We use the stake table contract initialization block as a safe upper bound when scanning
     ///  backwards for the token contract initialization event
-    pub async fn fetch_block_reward(&self) -> Result<RewardAmount, FetchRewardError> {
-        let initial_supply_read = *self.initial_supply.read().await;
-        let initial_supply = match initial_supply_read {
-            Some(supply) => supply,
-            None => self.fetch_initial_supply().await?,
-        };
-
-        let reward = ((initial_supply * U256::from(INFLATION_RATE)) / U256::from(BLOCKS_PER_YEAR))
-            .checked_div(U256::from(COMMISSION_BASIS_POINTS))
-            .ok_or(FetchRewardError::DivisionByZero)?;
-
-        Ok(RewardAmount(reward))
-    }
-
+    ///
     pub async fn fetch_initial_supply(&self) -> Result<U256, FetchRewardError> {
         tracing::info!("Fetching token initial supply");
         let chain_config = *self.chain_config.lock().await;
@@ -1203,6 +1210,13 @@ impl Fetcher {
         Ok(initial_supply)
     }
 
+    /// Scans backwards in fixed-size block ranges to locate the `Initialized` event of the token contract.
+    ///
+    /// This is a fallback method used when querying the full block range for the `Initialized` event fails
+    ///
+    /// Starting from the stake table contract’s initialization block (which comes after the token contract
+    /// is deployed), it scans in chunks (defined by `l1_events_max_block_range`) until it finds the event
+    /// or until a maximum number of blocks (`MAX_BLOCKS_SCANNED`) is reached.
     pub async fn scan_token_contract_initialized_event_log(
         &self,
         stake_table_init_block: u64,
@@ -1432,9 +1446,12 @@ impl EpochCommittees {
                     "Block reward is None. attempting to fetch it from L1",
 
                 );
-                let block_reward = fetcher.fetch_block_reward().await.inspect_err(|err| {
-                    tracing::error!(?epoch, ?err, "failed to fetch block_reward");
-                })?;
+                let block_reward = fetcher
+                    .fetch_fixed_block_reward()
+                    .await
+                    .inspect_err(|err| {
+                        tracing::error!(?epoch, ?err, "failed to fetch block_reward");
+                    })?;
                 let mut writer = RwLockUpgradableReadGuard::upgrade(membership_reader).await;
                 writer.block_reward = Some(block_reward);
                 Ok(block_reward)
@@ -1477,8 +1494,9 @@ impl EpochCommittees {
         tracing::debug!(?epoch, "total_stake={total_stake}");
         tracing::debug!(?epoch, "total_supply_bd={total_supply_bd}");
 
-        let (p, rp) = calculate_p_and_rp(&total_stake, &total_supply_bd)?;
-        let inflation_rate = p * rp;
+        let (proportion, reward_rate) =
+            calculate_proportion_staked_and_reward_rate(&total_stake, &total_supply_bd)?;
+        let inflation_rate = proportion * reward_rate;
         // Convert inflation rate to basis points
         let inflation_rate_bp = (inflation_rate * COMMISSION_BASIS_POINTS)
             .to_u64()
@@ -1535,10 +1553,17 @@ impl EpochCommittees {
         let blocks_per_year = MILLISECONDS_PER_YEAR / avg_block_time as u128;
         tracing::debug!(?epoch, "blocks_per_year={blocks_per_year:?}");
 
-        let block_reward = ((total_supply * U256::from(inflation_rate_bp))
-            / U256::from(blocks_per_year))
+        let block_reward = ((total_supply
+            .checked_mul(U256::from(inflation_rate_bp))
+            .ok_or(FetchRewardError::Overflow(
+                "total_supply * inflation_rate_bp overflow",
+            ))?)
+        .checked_div(U256::from(blocks_per_year)))
+        .ok_or(FetchRewardError::DivisionByZero("blocks_per_year is zero"))?
         .checked_div(U256::from(COMMISSION_BASIS_POINTS))
-        .ok_or(FetchRewardError::DivisionByZero)?;
+        .ok_or(FetchRewardError::DivisionByZero(
+            "commission basis points is zero",
+        ))?;
         Ok(block_reward.into())
     }
 
@@ -1714,7 +1739,7 @@ impl EpochCommittees {
     }
 
     pub async fn reload_stake(&mut self, limit: u64) {
-        match self.fetcher.fetch_block_reward().await {
+        match self.fetcher.fetch_fixed_block_reward().await {
             Ok(block_reward) => {
                 tracing::info!("Fetched block reward: {block_reward}");
                 self.block_reward = Some(block_reward);
@@ -1772,7 +1797,7 @@ impl EpochCommittees {
 ///         0.03 / sqrt(2 * p),            if 0.01 < p <= 1
 ///     }
 ///
-fn calculate_p_and_rp(
+fn calculate_proportion_staked_and_reward_rate(
     total_stake: &BigDecimal,
     total_supply: &BigDecimal,
 ) -> anyhow::Result<(BigDecimal, BigDecimal)> {
@@ -1780,24 +1805,25 @@ fn calculate_p_and_rp(
         return Err(anyhow::anyhow!("Total supply cannot be zero"));
     }
 
-    let p = total_stake / total_supply;
+    let proportion_staked = total_stake / total_supply;
 
-    if p < BigDecimal::from(0) || p > BigDecimal::from(1) {
+    if proportion_staked < BigDecimal::from(0) || proportion_staked > BigDecimal::from(1) {
         return Err(anyhow::anyhow!("Stake ratio p must be in the range [0, 1]"));
     }
 
-    let threshold = BigDecimal::from_str("0.01")?;
-    let numerator = BigDecimal::from_str("0.03")?;
     let two = BigDecimal::from_u32(2).unwrap();
+    let min_stake_ratio = BigDecimal::from_str("0.01")?;
+    let numerator = BigDecimal::from_str("0.03")?;
 
-    let inner = two * if p <= threshold { threshold } else { p.clone() };
+    let denominator = (&two * (&proportion_staked).max(&min_stake_ratio))
+        .sqrt()
+        .context("Failed to compute sqrt in R(p)")?;
 
-    let sqrt_inner = inner.sqrt().context("Failed to compute sqrt in R(p)")?;
-    let reward_rate = numerator / sqrt_inner;
+    let reward_rate = numerator / denominator;
 
     tracing::debug!("rp={reward_rate}");
 
-    Ok((p, reward_rate))
+    Ok((proportion_staked, reward_rate))
 }
 
 #[derive(Error, Debug)]
@@ -2978,7 +3004,8 @@ mod tests {
         let total_stake = BigDecimal::from_str("1000").unwrap();
         let total_supply = BigDecimal::from_str("10000").unwrap(); // p = 0.1
 
-        let (p, rp) = calculate_p_and_rp(&total_stake, &total_supply).unwrap();
+        let (p, rp) =
+            calculate_proportion_staked_and_reward_rate(&total_stake, &total_supply).unwrap();
 
         assert!(p > BigDecimal::from(0));
         assert!(p < BigDecimal::from(1));
@@ -2990,7 +3017,7 @@ mod tests {
         let total_stake = BigDecimal::from_str("1000").unwrap();
         let total_supply = BigDecimal::from_str("500").unwrap(); // p = 2.0
 
-        let result = calculate_p_and_rp(&total_stake, &total_supply);
+        let result = calculate_proportion_staked_and_reward_rate(&total_stake, &total_supply);
         assert!(result.is_err());
     }
 
@@ -2999,7 +3026,7 @@ mod tests {
         let total_stake = BigDecimal::from_str("1000").unwrap();
         let total_supply = BigDecimal::from(0);
 
-        let result = calculate_p_and_rp(&total_stake, &total_supply);
+        let result = calculate_proportion_staked_and_reward_rate(&total_stake, &total_supply);
         assert!(result.is_err());
     }
 
@@ -3008,7 +3035,8 @@ mod tests {
         let total_stake = BigDecimal::from_str("5000").unwrap();
         let total_supply = BigDecimal::from_str("10000").unwrap();
 
-        let (p, rp) = calculate_p_and_rp(&total_stake, &total_supply).unwrap();
+        let (p, rp) =
+            calculate_proportion_staked_and_reward_rate(&total_stake, &total_supply).unwrap();
 
         assert_eq!(p, BigDecimal::from_str("0.5").unwrap());
         assert!(rp > BigDecimal::from_str("0.0").unwrap());
@@ -3019,7 +3047,8 @@ mod tests {
         let total_stake = BigDecimal::from_str("1").unwrap(); // 1 wei
         let total_supply = BigDecimal::from_str("10000000000000000000000000000").unwrap(); // 10B * 1e18
 
-        let (p, rp) = calculate_p_and_rp(&total_stake, &total_supply).unwrap();
+        let (p, rp) =
+            calculate_proportion_staked_and_reward_rate(&total_stake, &total_supply).unwrap();
 
         assert!(p > BigDecimal::from_str("0").unwrap());
         assert!(p < BigDecimal::from_str("1e-18").unwrap()); // p should be extremely small
@@ -3031,7 +3060,8 @@ mod tests {
         let total_stake = BigDecimal::from_str("9999999999999999999999999999").unwrap();
         let total_supply = BigDecimal::from_str("10000000000000000000000000000").unwrap();
 
-        let (p, rp) = calculate_p_and_rp(&total_stake, &total_supply).unwrap();
+        let (p, rp) =
+            calculate_proportion_staked_and_reward_rate(&total_stake, &total_supply).unwrap();
 
         assert!(p < BigDecimal::from(1));
         assert!(p > BigDecimal::from_str("0.999999999999999999999999999").unwrap());

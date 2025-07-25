@@ -399,7 +399,7 @@ impl Header {
         mut state: ValidatedState,
         chain_config: ChainConfig,
         version: Version,
-        total_reward_distributed: Option<RewardDistributor>,
+        reward_distributor: Option<RewardDistributor>,
     ) -> anyhow::Result<Self> {
         ensure!(
             version.major == 0,
@@ -579,7 +579,7 @@ impl Header {
                 reward_merkle_tree_root: state.reward_merkle_tree.commitment(),
                 fee_info: fee_info[0],
                 builder_signature: builder_signature.first().copied(),
-                total_reward_distributed: total_reward_distributed
+                total_reward_distributed: reward_distributor
                     .map(|r| r.total_distributed())
                     .unwrap_or_default()
                     .into(),

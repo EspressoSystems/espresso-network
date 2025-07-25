@@ -402,7 +402,7 @@ impl RewardDistributor {
     }
 
     pub fn apply_rewards(
-        &self,
+        &mut self,
         mut reward_state: RewardMerkleTree,
     ) -> anyhow::Result<RewardMerkleTree> {
         let mut update_balance = |account: &RewardAccount, amount: RewardAmount| {
@@ -429,6 +429,8 @@ impl RewardDistributor {
             update_balance(&RewardAccount(address), reward)?;
             tracing::debug!("applied rewards address={address} reward={reward}",);
         }
+
+        self.total_distributed += self.block_reward();
 
         Ok(reward_state)
     }
@@ -533,7 +535,7 @@ pub async fn distribute_block_reward(
     let parent_header = parent_leaf.block_header();
     // Initialize the total rewards distributed so far in this block.
 
-    let mut total_distributed = parent_header.total_reward_distributed().unwrap_or_default();
+    let mut previously_distributed = parent_header.total_reward_distributed().unwrap_or_default();
 
     // Decide whether to use a fixed or dynamic block reward.
     let block_reward = if version >= DrbAndHeaderUpgradeVersion::version() {
@@ -568,7 +570,7 @@ pub async fn distribute_block_reward(
                 .checked_sub(first_reward_block)
                 .context("height - epoch_start_block underflowed")?;
 
-            total_distributed = U256::from(blocks)
+            previously_distributed = U256::from(blocks)
                 .checked_mul(fixed_block_reward.0)
                 .context("overflow during total_distributed calculation")?;
         }
@@ -581,9 +583,8 @@ pub async fn distribute_block_reward(
             .with_context(|| format!("fixed block reward is None for epoch {epoch}"))?
     };
 
-    total_distributed += block_reward.0;
-
-    let reward_distributor = RewardDistributor::new(leader, block_reward, total_distributed.into());
+    let mut reward_distributor =
+        RewardDistributor::new(leader, block_reward, previously_distributed.into());
 
     let reward_state =
         reward_distributor.apply_rewards(validated_state.reward_merkle_tree.clone())?;
