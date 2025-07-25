@@ -15,6 +15,10 @@ use jf_signature::{
 };
 
 /// Public input to the light client state prover service
+/// The `signed_state_digest` is the keccak hash of all state to certify,
+/// currently containing the abi encoding of the light client state,
+/// the stake table state for the next update, the auth root, and maybe
+/// more in the future upon request.
 #[derive(Clone, Debug)]
 pub struct GenericPublicInput<F: PrimeField> {
     pub voting_st_state: GenericStakeTableState<F>,
@@ -115,7 +119,8 @@ impl StakeTableVar {
 /// - a bit vector indicates the signers
 /// - a list of schnorr signatures of the updated states (`Vec<SchnorrSignature>`), default if the node doesn't sign the state
 /// - voting stake table state (containing 3 commitments to the 3 columns of the stake table and a threshold)
-/// - The `signed_state_digest`, which is the keccak hash of all state to certify, currently containing the new light client state, stake table state for the next update, a reward Merkle tree root, and maybe more in the future upon request.
+/// - The `signed_state_digest`, which is the keccak hash of all state to certify, currently containing the abi encoding of
+///   the light client state, the stake table state for the next update, the auth root, and maybe more in the future upon request.
 ///
 /// Lengths of input vectors should not exceed the `stake_table_capacity`.
 /// The list of stake table entries, bit indicators and signatures will be padded to the `stake_table_capacity`.
