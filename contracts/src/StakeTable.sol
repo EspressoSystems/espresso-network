@@ -8,7 +8,7 @@ import { OwnableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { BLSSig } from "./libraries/BLSSig.sol";
-import { LightClientV2 as LightClient } from "../src/LightClientV2.sol";
+import { ILightClient } from "./interfaces/ILightClient.sol";
 import { EdOnBN254 } from "./libraries/EdOnBn254.sol";
 import { InitializedAt } from "./InitializedAt.sol";
 
@@ -176,7 +176,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     ///
     /// @dev Currently unused but will be used for slashing therefore already included in the
     /// contract.
-    LightClient public lightClient;
+    ILightClient public lightClient;
 
     /// The staking token contract.
     ERC20 public token;
@@ -241,7 +241,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
             revert ZeroAddress();
         }
         token = ERC20(_tokenAddress);
-        lightClient = LightClient(_lightClientAddress);
+        lightClient = ILightClient(_lightClientAddress);
         exitEscrowPeriod = _exitEscrowPeriod;
     }
 
