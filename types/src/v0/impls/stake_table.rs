@@ -1100,7 +1100,6 @@ impl Fetcher {
     /// The stake table contract is deployed after the token contract as it holds the token
     /// contract address. We use the stake table contract initialization block as a safe upper bound when scanning
     ///  backwards for the token contract initialization event
-    ///
     pub async fn fetch_initial_supply(&self) -> Result<U256, FetchRewardError> {
         tracing::info!("Fetching token initial supply");
         let chain_config = *self.chain_config.lock().await;
@@ -1550,9 +1549,12 @@ impl EpochCommittees {
         };
         tracing::debug!(?epoch, "avg_block_time={avg_block_time:?}");
 
-        let blocks_per_year = MILLISECONDS_PER_YEAR / avg_block_time as u128;
+        let blocks_per_year = MILLISECONDS_PER_YEAR
+            .checked_div(avg_block_time.into())
+            .context("avg_block_time is zero")?;
         tracing::debug!(?epoch, "blocks_per_year={blocks_per_year:?}");
 
+        // block_reward = ((total_supply * inflation_rate_bp) / blocks_per_year) / COMMISSION_BASIS_POINTS
         let block_reward = ((total_supply
             .checked_mul(U256::from(inflation_rate_bp))
             .ok_or(FetchRewardError::Overflow(
@@ -3066,5 +3068,49 @@ mod tests {
         assert!(p < BigDecimal::from(1));
         assert!(p > BigDecimal::from_str("0.999999999999999999999999999").unwrap());
         assert!(rp > BigDecimal::from(0));
+    }
+
+    /// tests `calculate_proportion_staked_and_reward_rate` produces correct p and R(p) values
+    /// across a range of stake proportions within a small numerical tolerance.
+    ///
+    #[test]
+    fn test_reward_rate_rp() {
+        let test_cases = [
+            // p , R(p)
+            ("0.0000", "0.2121"), // 0%
+            ("0.0050", "0.2121"), // 0.5%
+            ("0.0100", "0.2121"), // 1%
+            ("0.0250", "0.1342"), // 2.5%
+            ("0.0500", "0.0949"), // 5%
+            ("0.1000", "0.0671"), // 10%
+            ("0.2500", "0.0424"), // 25%
+            ("0.5000", "0.0300"), // 50%
+            ("0.7500", "0.0245"), // 75%
+            ("1.0000", "0.0212"), // 100%
+        ];
+
+        let tolerance = BigDecimal::from_str("0.0001").unwrap();
+
+        let total_supply = BigDecimal::from_u32(10_000).unwrap();
+
+        for (p, rp) in test_cases {
+            let p = BigDecimal::from_str(p).unwrap();
+            let expected_rp = BigDecimal::from_str(rp).unwrap();
+
+            let total_stake = &p * &total_supply;
+
+            let (computed_p, computed_rp) =
+                calculate_proportion_staked_and_reward_rate(&total_stake, &total_supply).unwrap();
+
+            assert!(
+                (&computed_p - &p).abs() < tolerance,
+                "p mismatch: got {computed_p}, expected {p}"
+            );
+
+            assert!(
+                (&computed_rp - &expected_rp).abs() < tolerance,
+                "R(p) mismatch for p={p}: got {computed_rp}, expected {expected_rp}"
+            );
+        }
     }
 }
