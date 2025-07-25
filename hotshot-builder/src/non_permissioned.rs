@@ -1,6 +1,5 @@
 use std::{collections::VecDeque, num::NonZeroUsize, sync::Arc, time::Duration};
 
-use alloy::primitives::U256;
 use anyhow::Context;
 use async_broadcast::broadcast;
 use async_lock::{Mutex, RwLock};
@@ -13,10 +12,8 @@ use builder_legacy::{
 };
 use builder_shared::{block::ParentBlockReferences, utils::EventServiceStream};
 use espresso_types::{
-    eth_signature_key::EthKeyPair,
-    v0_1::{NoStorage, RewardAmount},
-    v0_3::Fetcher,
-    EpochCommittees, FeeAmount, NodeState, Payload, SeqTypes, ValidatedState,
+    eth_signature_key::EthKeyPair, v0_1::NoStorage, v0_3::Fetcher, EpochCommittees, FeeAmount,
+    NodeState, Payload, SeqTypes, ValidatedState,
 };
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
@@ -70,10 +67,11 @@ pub fn build_instance_state<V: Versions>(
         Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
             vec![],
-            RewardAmount(U256::ZERO),
+            None,
             fetcher,
+            genesis.epoch_height.unwrap_or_default(),
         ))),
-        100,
+        genesis.epoch_height.unwrap_or_default(),
         &Arc::new(sequencer::persistence::no_storage::NoStorage),
     );
 
