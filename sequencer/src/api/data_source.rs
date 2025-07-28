@@ -141,6 +141,10 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
         epoch: <T as NodeType>::Epoch,
     ) -> impl Send + Future<Output = anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>>>;
 
+    fn get_block_reward(
+        &self,
+        epoch: Option<EpochNumber>,
+    ) -> impl Send + Future<Output = anyhow::Result<Option<RewardAmount>>>;
     /// Get the current proposal participation.
     fn current_proposal_participation(
         &self,
@@ -150,7 +154,6 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     fn previous_proposal_participation(
         &self,
     ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
-    fn get_block_reward(&self) -> impl Send + Future<Output = anyhow::Result<RewardAmount>>;
 }
 
 pub(crate) trait CatchupDataSource: Sync {
