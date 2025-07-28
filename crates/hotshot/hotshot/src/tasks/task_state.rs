@@ -5,7 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     sync::{atomic::AtomicBool, Arc},
     time::Instant,
 };
@@ -16,8 +16,8 @@ use hotshot_task_impls::{
     builder::BuilderClient, consensus::ConsensusTaskState, da::DaTaskState,
     quorum_proposal::QuorumProposalTaskState, quorum_proposal_recv::QuorumProposalRecvTaskState,
     quorum_vote::QuorumVoteTaskState, request::NetworkRequestState, rewind::RewindTaskState,
-    transactions::TransactionTaskState, upgrade::UpgradeTaskState, vid::VidTaskState,
-    view_sync::ViewSyncTaskState,
+    stats::StatsTaskState, transactions::TransactionTaskState, upgrade::UpgradeTaskState,
+    vid::VidTaskState, view_sync::ViewSyncTaskState,
 };
 use hotshot_types::{
     consensus::OuterConsensus,
@@ -174,15 +174,16 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             public_key: handle.public_key().clone(),
             private_key: handle.private_key().clone(),
             num_timeouts_tracked: 0,
-            replica_task_map: HashMap::default().into(),
-            pre_commit_relay_map: HashMap::default().into(),
-            commit_relay_map: HashMap::default().into(),
-            finalize_relay_map: HashMap::default().into(),
+            replica_task_map: BTreeMap::default().into(),
+            pre_commit_relay_map: BTreeMap::default().into(),
+            commit_relay_map: BTreeMap::default().into(),
+            finalize_relay_map: BTreeMap::default().into(),
             view_sync_timeout: handle.hotshot.config.view_sync_timeout,
             id: handle.hotshot.id,
             last_garbage_collected_view: TYPES::View::new(0),
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             first_epoch: None,
+            highest_finalized_epoch_view: (None, TYPES::View::new(0)),
         }
     }
 }
@@ -337,6 +338,21 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             view_start_time: Instant::now(),
             first_epoch: None,
         }
+    }
+}
+
+#[async_trait]
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
+    for StatsTaskState<TYPES>
+{
+    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+        StatsTaskState::<TYPES>::new(
+            handle.cur_view().await,
+            handle.cur_epoch().await,
+            handle.public_key().clone(),
+            OuterConsensus::new(handle.hotshot.consensus()),
+            handle.hotshot.membership_coordinator.clone(),
+        )
     }
 }
 
