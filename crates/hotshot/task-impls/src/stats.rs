@@ -180,8 +180,8 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                 self.replica_entry(proposal.data.view_number())
                     .proposal_recv = Some(now);
             },
-            HotShotEvent::QuorumVoteRecv(vote) => {
-                self.leader_entry(vote.view_number()).vote_recv = Some(now);
+            HotShotEvent::QuorumVoteRecv(_vote) => {
+                // self.leader_entry(vote.view_number()).vote_recv = Some(now);
             },
             HotShotEvent::TimeoutVoteRecv(_vote) => {},
             HotShotEvent::TimeoutVoteSend(vote) => {
@@ -210,7 +210,8 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                         .replica_entry(proposal.data.view_number())
                         .proposal_recv
                     {
-                        let elapsed_time = now - previous_proposal_time;
+                        // calculate the elapsed time as milliseconds (from nanoseconds)
+                        let elapsed_time = (now - previous_proposal_time) / 1_000_000;
                         if elapsed_time > 0 {
                             self.consensus
                                 .read()
@@ -243,7 +244,9 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
             },
             HotShotEvent::QcFormed(either) => {
                 match either {
-                    Either::Left(qc) => self.leader_entry(qc.view_number()).qc_formed = Some(now),
+                    Either::Left(qc) => {
+                        self.leader_entry(qc.view_number() + 1).qc_formed = Some(now)
+                    },
                     Either::Right(tc) => {
                         self.leader_entry(tc.view_number())
                             .timeout_certificate_formed = Some(now)
@@ -252,7 +255,9 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
             },
             HotShotEvent::Qc2Formed(either) => {
                 match either {
-                    Either::Left(qc) => self.leader_entry(qc.view_number()).qc_formed = Some(now),
+                    Either::Left(qc) => {
+                        self.leader_entry(qc.view_number() + 1).qc_formed = Some(now)
+                    },
                     Either::Right(tc) => {
                         self.leader_entry(tc.view_number())
                             .timeout_certificate_formed = Some(now)
