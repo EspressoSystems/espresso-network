@@ -23,6 +23,8 @@ pub type RewardMerkleCommitmentLegacy = <RewardMerkleTreeLegacy as MerkleTreeSch
 
 // New Type for `Address` in order to implement `CanonicalSerialize` and
 // `CanonicalDeserialize`
+// This is the same as `RewardAccount`` but the `ToTraversal` trait implementation 
+// for this type is different
 #[derive(
     Default,
     Hash,

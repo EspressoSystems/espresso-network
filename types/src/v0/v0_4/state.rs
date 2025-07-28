@@ -25,6 +25,8 @@ pub type RewardMerkleTree = UniversalMerkleTree<
 >;
 // New Type for `Address` in order to implement `CanonicalSerialize` and
 // `CanonicalDeserialize`
+// This is the same as `RewardAccountLegacy` but the `ToTraversal` trait implementation 
+// for this type is different
 #[derive(
     Default,
     Hash,
