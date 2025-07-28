@@ -6,10 +6,10 @@ capacity = 200
 
 [chain_config]
 chain_id = 888888888
-base_fee = '1 wei'
-max_block_size = '1mb'
-fee_recipient = '0x0000000000000000000000000000000000000000'
-fee_contract = '0x553adde5f01ff839f98574e3f4f50d9b503f70f3'
+base_fee = "1 wei"
+max_block_size = "1mb"
+fee_recipient = "0x0000000000000000000000000000000000000000"
+fee_contract = "0x553adde5f01ff839f98574e3f4f50d9b503f70f3"
 
 [header]
 timestamp = "1970-01-01T00:00:00Z"
