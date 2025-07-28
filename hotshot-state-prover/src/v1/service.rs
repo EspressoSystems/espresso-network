@@ -19,7 +19,7 @@ use hotshot_types::{
         CircuitField, LightClientState, StakeTableState, StateSignature, StateSignaturesBundle,
         StateVerKey,
     },
-    traits::signature_key::StateSignatureKey,
+    traits::signature_key::LCV1StateSignatureKey,
 };
 use jf_pcs::prelude::UnivariateUniversalParams;
 use jf_relation::Circuit as _;
@@ -174,7 +174,11 @@ async fn generate_proof(
     entries.iter().enumerate().for_each(|(i, (key, stake))| {
         if let Some(sig) = signature_map.get(key) {
             // Check if the signature is valid
-            if key.v1_verify_state_sig(sig, &light_client_state) {
+            if <StateVerKey as LCV1StateSignatureKey>::verify_state_sig(
+                key,
+                sig,
+                &light_client_state,
+            ) {
                 signer_bit_vec[i] = true;
                 signatures[i] = sig.clone();
                 accumulated_weight += *stake;

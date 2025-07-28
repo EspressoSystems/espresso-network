@@ -436,7 +436,7 @@ mod tests {
     use hotshot_types::{
         light_client::{LightClientState, StakeTableState},
         signature_key::SchnorrPubKey,
-        traits::signature_key::StateSignatureKey,
+        traits::signature_key::LCV2StateSignatureKey,
     };
     use jf_relation::Circuit;
     use jf_signature::schnorr::Signature;
@@ -478,7 +478,7 @@ mod tests {
         let sigs: Vec<_> = state_keys
             .iter()
             .map(|(key, _)| {
-                <SchnorrPubKey as StateSignatureKey>::v2_sign_state(
+                <SchnorrPubKey as LCV2StateSignatureKey>::sign_state(
                     key,
                     &lightclient_state,
                     &next_st_state,
@@ -611,7 +611,7 @@ mod tests {
         let bad_sigs: Vec<_> = state_keys
             .iter()
             .map(|(key, _)| {
-                <SchnorrPubKey as StateSignatureKey>::v2_sign_state(
+                <SchnorrPubKey as LCV2StateSignatureKey>::sign_state(
                     key,
                     &bad_lc_state,
                     &bad_st_state,

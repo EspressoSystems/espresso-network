@@ -39,7 +39,7 @@ use hotshot_types::{
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
-        signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
+        signature_key::{LCV2StateSignatureKey, SignatureKey, StakeTableEntryType},
         storage::{load_drb_progress_fn, store_drb_progress_fn, Storage},
         BlockPayload, ValidatedState,
     },
@@ -1313,7 +1313,8 @@ pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
     for (key, sig) in state_cert.signatures.iter() {
         if let Some(stake) = state_key_map.get(key) {
             accumulated_stake += *stake;
-            if !key.v2_verify_state_sig(
+            if !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
+                key,
                 sig,
                 &state_cert.light_client_state,
                 &state_cert.next_stake_table_state,

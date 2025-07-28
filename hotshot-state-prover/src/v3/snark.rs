@@ -110,7 +110,9 @@ mod tests {
     use ark_ed_on_bn254::EdwardsConfig as Config;
     use ark_ff::One;
     use ark_std::rand::{CryptoRng, RngCore};
-    use hotshot_types::{signature_key::SchnorrPubKey, traits::signature_key::StateSignatureKey};
+    use hotshot_types::{
+        signature_key::SchnorrPubKey, traits::signature_key::LCV3StateSignatureKey,
+    };
     use jf_plonk::{
         proof_system::{PlonkKzgSnark, UniversalSNARK},
         transcript::SolidityTranscript,
@@ -208,7 +210,7 @@ mod tests {
         let sigs: Vec<_> = schnorr_keys
             .iter()
             .map(|(key, _)| {
-                <SchnorrPubKey as StateSignatureKey>::v3_sign_state(key, signed_state_digest)
+                <SchnorrPubKey as LCV3StateSignatureKey>::sign_state(key, signed_state_digest)
                     .unwrap()
             })
             .collect();

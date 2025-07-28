@@ -115,7 +115,7 @@ mod tests {
     };
     use hotshot_types::{
         light_client::LightClientState, signature_key::SchnorrPubKey,
-        traits::signature_key::StateSignatureKey,
+        traits::signature_key::LCV1StateSignatureKey,
     };
     use jf_plonk::{
         proof_system::{PlonkKzgSnark, UniversalSNARK},
@@ -218,7 +218,7 @@ mod tests {
         let sigs: Vec<_> = schnorr_keys
             .iter()
             .map(|(key, _)| {
-                <SchnorrPubKey as StateSignatureKey>::v1_sign_state(key, &lightclient_state)
+                <SchnorrPubKey as LCV1StateSignatureKey>::sign_state(key, &lightclient_state)
                     .unwrap()
             })
             .collect();

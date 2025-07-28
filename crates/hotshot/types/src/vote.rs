@@ -27,7 +27,9 @@ use crate::{
     stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
         node_implementation::{NodeType, Versions},
-        signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
+        signature_key::{
+            LCV2StateSignatureKey, SignatureKey, StakeTableEntryType, StateSignatureKey,
+        },
     },
     PeerConfig,
 };
@@ -276,7 +278,8 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
             state_ver_key,
         } = membership.stake(key).await?;
 
-        if !state_ver_key.v2_verify_state_sig(
+        if !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
+            &state_ver_key,
             &vote.signature,
             &vote.light_client_state,
             &vote.next_stake_table_state,

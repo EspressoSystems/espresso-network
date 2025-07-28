@@ -356,7 +356,9 @@ where
 #[cfg(test)]
 mod tests {
     use ark_ed_on_bn254::EdwardsConfig as Config;
-    use hotshot_types::{signature_key::SchnorrPubKey, traits::signature_key::StateSignatureKey};
+    use hotshot_types::{
+        signature_key::SchnorrPubKey, traits::signature_key::LCV3StateSignatureKey,
+    };
     use jf_relation::Circuit;
     use jf_signature::schnorr::Signature;
     use jf_utils::test_rng;
@@ -392,7 +394,7 @@ mod tests {
         let sigs: Vec<_> = state_keys
             .iter()
             .map(|(key, _)| {
-                <SchnorrPubKey as StateSignatureKey>::v3_sign_state(key, signed_state_digest)
+                <SchnorrPubKey as LCV3StateSignatureKey>::sign_state(key, signed_state_digest)
                     .unwrap()
             })
             .collect();
@@ -513,7 +515,7 @@ mod tests {
         let bad_sigs: Vec<_> = state_keys
             .iter()
             .map(|(key, _)| {
-                <SchnorrPubKey as StateSignatureKey>::v3_sign_state(key, bad_signed_state_digest)
+                <SchnorrPubKey as LCV3StateSignatureKey>::sign_state(key, bad_signed_state_digest)
                     .unwrap()
             })
             .collect();

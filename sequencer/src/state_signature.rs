@@ -18,7 +18,7 @@ use hotshot_types::{
         block_contents::BlockHeader,
         network::ConnectedNetwork,
         node_implementation::{NodeType, Versions},
-        signature_key::StateSignatureKey,
+        signature_key::{LCV1StateSignatureKey, LCV2StateSignatureKey},
     },
     utils::{is_ge_epoch_root, option_epoch_from_block_number},
 };
@@ -218,7 +218,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         state: &LightClientState,
         next_stake_table: StakeTableState,
     ) -> Result<StateSignature, SignatureError> {
-        let signature = <SchnorrPubKey as StateSignatureKey>::v2_sign_state(
+        let signature = <SchnorrPubKey as LCV2StateSignatureKey>::sign_state(
             &self.sign_key,
             state,
             &next_stake_table,
@@ -244,7 +244,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         &self,
         state: &LightClientState,
     ) -> Result<StateSignature, SignatureError> {
-        <SchnorrPubKey as StateSignatureKey>::v1_sign_state(&self.sign_key, state)
+        <SchnorrPubKey as LCV1StateSignatureKey>::sign_state(&self.sign_key, state)
     }
 }
 

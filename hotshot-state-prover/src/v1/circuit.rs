@@ -398,7 +398,7 @@ mod tests {
     use ark_std::UniformRand;
     use hotshot_types::{
         light_client::LightClientState, signature_key::SchnorrPubKey,
-        traits::signature_key::StateSignatureKey,
+        traits::signature_key::LCV1StateSignatureKey,
     };
     use jf_relation::Circuit;
     use jf_signature::schnorr::Signature;
@@ -439,7 +439,7 @@ mod tests {
         let sigs: Vec<_> = state_keys
             .iter()
             .map(|(key, _)| {
-                <SchnorrPubKey as StateSignatureKey>::v1_sign_state(key, &lightclient_state)
+                <SchnorrPubKey as LCV1StateSignatureKey>::sign_state(key, &lightclient_state)
                     .unwrap()
             })
             .collect();
@@ -562,7 +562,7 @@ mod tests {
         let bad_sigs: Vec<_> = state_keys
             .iter()
             .map(|(key, _)| {
-                <SchnorrPubKey as StateSignatureKey>::v1_sign_state(key, &bad_lc_state).unwrap()
+                <SchnorrPubKey as LCV1StateSignatureKey>::sign_state(key, &bad_lc_state).unwrap()
             })
             .collect();
         let (bad_circuit, public_inputs) = build(

@@ -25,7 +25,7 @@ use hotshot_types::{
     simple_certificate::LightClientStateUpdateCertificate,
     traits::{
         node_implementation::{ConsensusTime, NodeType},
-        signature_key::StateSignatureKey,
+        signature_key::LCV2StateSignatureKey,
     },
     utils::{
         epoch_from_block_number, is_epoch_root, is_ge_epoch_root, option_epoch_from_block_number,
@@ -212,7 +212,12 @@ async fn generate_proof(
     entries.iter().enumerate().for_each(|(i, (key, stake))| {
         if let Some(sig) = signature_map.get(key) {
             // Check if the signature is valid
-            if key.v2_verify_state_sig(sig, &light_client_state, &next_stake_table_state) {
+            if <StateVerKey as LCV2StateSignatureKey>::verify_state_sig(
+                key,
+                sig,
+                &light_client_state,
+                &next_stake_table_state,
+            ) {
                 signer_bit_vec[i] = true;
                 signatures[i] = sig.clone();
                 accumulated_weight += *stake;

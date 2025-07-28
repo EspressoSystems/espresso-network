@@ -15,7 +15,7 @@ use futures::FutureExt;
 use hotshot_types::{
     light_client::{LegacyStateSignatureRequestBody, StateSignaturesBundle, StateVerKey},
     stake_table::one_honest_threshold,
-    traits::signature_key::{StakeTableEntryType, StateSignatureKey},
+    traits::signature_key::{LCV1StateSignatureKey, LCV2StateSignatureKey, StakeTableEntryType},
     utils::{epoch_from_block_number, is_gt_epoch_root},
     PeerConfig,
 };
@@ -345,12 +345,18 @@ impl StateRelayServerDataSource for StateRelayServerState {
 
     async fn post_signature(&mut self, req: StateSignatureRequestBody) -> Result<(), ServerError> {
         // sanity check the signature validity first before adding in
-        if !req
-            .key
-            .v2_verify_state_sig(&req.signature, &req.state, &req.next_stake)
-        {
+        if !<StateVerKey as LCV2StateSignatureKey>::verify_state_sig(
+            &req.key,
+            &req.signature,
+            &req.state,
+            &req.next_stake,
+        ) {
             // If it's a legacy signature, handle it separately
-            if req.key.v1_verify_state_sig(&req.signature, &req.state) {
+            if <StateVerKey as LCV1StateSignatureKey>::verify_state_sig(
+                &req.key,
+                &req.signature,
+                &req.state,
+            ) {
                 return self.post_legacy_signature(req).await;
             }
             tracing::warn!("Received invalid signature: {:?}", req);
@@ -489,7 +495,11 @@ impl StateRelayServerDataSource for StateRelayServerState {
         };
 
         // sanity check the signature validity first before adding in
-        if !req.key.v1_verify_state_sig(&req.signature, &req.state) {
+        if !<StateVerKey as LCV1StateSignatureKey>::verify_state_sig(
+            &req.key,
+            &req.signature,
+            &req.state,
+        ) {
             tracing::warn!("Received invalid legacy signature: {:?}", req);
             return Err(ServerError::catch_all(
                 StatusCode::BAD_REQUEST,
