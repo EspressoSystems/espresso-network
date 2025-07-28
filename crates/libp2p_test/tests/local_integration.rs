@@ -32,7 +32,19 @@ async fn local_sender_and_receivers() {
     let mut handles: Vec<JoinHandle<()>> = Vec::new();
     let peer_ids: Vec<_> = peers[..]
         .iter()
-        .map(|(key, addr)| (peer_id_from_priv_key(key), addr.clone()))
+        .map(|(key, addr)| {
+            (
+                peer_id_from_priv_key(key),
+                Multiaddr::from_str(
+                    &addr
+                        .clone()
+                        .to_string()
+                        .replace("ip4", "dns4")
+                        .replace("127.0.0.1", "localhost"),
+                )
+                .unwrap(),
+            )
+        })
         .collect();
 
     // Spawn 3 receivers

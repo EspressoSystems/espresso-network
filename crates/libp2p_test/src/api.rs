@@ -14,7 +14,7 @@ use hotshot_libp2p_networking::network::{
 use hotshot_types::{signature_key::BLSPrivKey, traits::node_implementation::NodeType};
 use libp2p_identity::{ed25519, ed25519::SecretKey, Keypair};
 use parking_lot::Mutex;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 use tracing::{error, info};
 
 use crate::config::AppConfig;
@@ -27,6 +27,7 @@ pub async fn run_sender<T: NodeType>(config: AppConfig) -> Result<()> {
     let (handle, mut receiver) = spawn_simple_node::<T>(&config).await?;
     let msg = config.message.clone().unwrap_or_default().into_bytes();
     let mut roundtrips = Vec::new();
+    sleep(Duration::from_secs(1)).await;
     for (peer_id, addr) in config.peers {
         info!("Sending request to {}", addr.to_string());
         let start = Instant::now();
@@ -113,34 +114,13 @@ pub async fn spawn_simple_node<T: NodeType>(
         .build()
         .expect("Failed to build network node config");
     let peers = network_config.to_connect_addrs.clone();
-    let (mut receiver, handle) =
+    let peers_num = peers.len();
+    let (receiver, handle) =
         spawn_network_node(network_config, dht, consensus_key_to_pid_map, NODE_ID).await?;
-    handle.add_known_peers(Vec::from_iter(peers.into_iter()))?;
-    info!("Starting bootstrap, node: {}", config.listen.to_string());
-    handle.begin_bootstrap()?;
-    loop {
-        match timeout(REPLY_TIMEOUT, receiver.recv()).await {
-            Ok(Ok(ev)) => {
-                if let hotshot_libp2p_networking::network::NetworkEvent::IsBootstrapped = ev {
-                    info!("Bootstrap finished, node: {}", config.listen.to_string());
-                    break;
-                }
-            },
-            Ok(Err(e)) => {
-                error!("Receiver error: {:?}", e);
-                break;
-            },
-            Err(_) => {
-                error!("Timeout waiting for bootstrap");
-                break;
-            },
-        }
-    }
-    handle.subscribe("test".to_string()).await?;
-    handle.wait_to_connect(1, NODE_ID).await?;
+    handle.wait_to_connect(peers_num, NODE_ID).await?;
     info!(
         "Connected to {} peers, node: {}",
-        1,
+        peers_num,
         config.listen.to_string()
     );
     Ok((handle, receiver))
