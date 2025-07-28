@@ -1369,7 +1369,7 @@ impl SequencerPersistence for Persistence {
 
         let drb_result_bytes = bincode::serialize(&drb_result).context("serialize drb result")?;
 
-        let file_path = dir_path.join(epoch.to_string()).with_extension("bin");
+        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
         fs::write(file_path, drb_result_bytes)
             .context(format!("writing epoch drb result file for epoch {epoch:?}"))?;
 
@@ -1390,7 +1390,7 @@ impl SequencerPersistence for Persistence {
         let block_header_bytes =
             bincode::serialize(&block_header).context("serialize block header")?;
 
-        let file_path = dir_path.join(epoch.to_string()).with_extension("bin");
+        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
         fs::write(file_path, block_header_bytes).context(format!(
             "writing epoch root block header file for epoch {epoch:?}"
         ))?;
@@ -1437,7 +1437,7 @@ impl SequencerPersistence for Persistence {
 
                 let block_header_path = block_header_dir_path
                     .join(epoch.to_string())
-                    .with_extension("bin");
+                    .with_extension("txt");
                 let block_header = if block_header_path.is_file() {
                     let bytes = fs::read(&block_header_path).context(format!(
                         "reading epoch root block header {}",
@@ -1594,7 +1594,7 @@ impl MembershipPersistence for Persistence {
 
         fs::create_dir_all(dir_path.clone()).context("failed to create stake table dir")?;
 
-        let file_path = dir_path.join(epoch.to_string()).with_extension("bin");
+        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
 
         inner.replace(
             &file_path,
@@ -1955,7 +1955,7 @@ fn epoch_files(
             return None;
         }
         let path = entry.path();
-        if path.extension()? != "bin" {
+        if path.extension()? != "txt" {
             tracing::debug!(%dir, ?entry, "ignoring non-text file in data directory");
             return None;
         }
