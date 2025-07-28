@@ -424,67 +424,72 @@ where
         root_leaf: Leaf2<TYPES>,
     ) -> Result<()> {
         tracing::error!("DRB LOG: fetch_or_calc_drb_results called");
-        let drb = match
-            <TYPES::Membership as Membership<TYPES>>::get_epoch_drb(self.membership.clone(), epoch)
-                .await
-        { Ok(drb) => {
-            tracing::error!("DRB LOG: get_epoch_drb returned drb {drb:?}");
+        let drb = match <TYPES::Membership as Membership<TYPES>>::get_epoch_drb(
+            self.membership.clone(),
+            epoch,
+        )
+        .await
+        {
+            Ok(drb) => {
+                tracing::error!("DRB LOG: get_epoch_drb returned drb {drb:?}");
 
-            let Some(ref drb_difficulty_selector) = *self.drb_difficulty_selector.read().await
-            else {
-                return Err(anytrace::error!(
-                    "The DRB difficulty selector is missing from the epoch membership \
-                     coordinator. This node will not be able to spawn any DRB calculation tasks \
-                     from catchup."
-                ));
-            };
-            let drb_difficulty = drb_difficulty_selector(root_leaf.view_number()).await;
+                let Some(ref drb_difficulty_selector) = *self.drb_difficulty_selector.read().await
+                else {
+                    return Err(anytrace::error!(
+                        "The DRB difficulty selector is missing from the epoch membership \
+                         coordinator. This node will not be able to spawn any DRB calculation \
+                         tasks from catchup."
+                    ));
+                };
+                let drb_difficulty = drb_difficulty_selector(root_leaf.view_number()).await;
 
-            let drb_input = DrbInput {
-                epoch: *epoch,
-                iteration: drb_difficulty,
-                value: drb,
-                difficulty_level: drb_difficulty,
-            };
+                let drb_input = DrbInput {
+                    epoch: *epoch,
+                    iteration: drb_difficulty,
+                    value: drb,
+                    difficulty_level: drb_difficulty,
+                };
 
-            let _ = (self.store_drb_progress_fn)(drb_input).await;
+                let _ = (self.store_drb_progress_fn)(drb_input).await;
 
-            drb
-        }, Err(e) => {
-            tracing::error!("DRB LOG: get_epoch_drb failed to return drb: {e}");
-            let Ok(drb_seed_input_vec) = bincode::serialize(&root_leaf.justify_qc().signatures)
-            else {
-                return Err(anytrace::error!(
-                    "Failed to serialize the QC signature for leaf {root_leaf:?}"
-                ));
-            };
+                drb
+            },
+            Err(e) => {
+                tracing::error!("DRB LOG: get_epoch_drb failed to return drb: {e}");
+                let Ok(drb_seed_input_vec) = bincode::serialize(&root_leaf.justify_qc().signatures)
+                else {
+                    return Err(anytrace::error!(
+                        "Failed to serialize the QC signature for leaf {root_leaf:?}"
+                    ));
+                };
 
-            let Some(ref drb_difficulty_selector) = *self.drb_difficulty_selector.read().await
-            else {
-                return Err(anytrace::error!(
-                    "The DRB difficulty selector is missing from the epoch membership \
-                     coordinator. This node will not be able to spawn any DRB calculation tasks \
-                     from catchup."
-                ));
-            };
+                let Some(ref drb_difficulty_selector) = *self.drb_difficulty_selector.read().await
+                else {
+                    return Err(anytrace::error!(
+                        "The DRB difficulty selector is missing from the epoch membership \
+                         coordinator. This node will not be able to spawn any DRB calculation \
+                         tasks from catchup."
+                    ));
+                };
 
-            let drb_difficulty = drb_difficulty_selector(root_leaf.view_number()).await;
+                let drb_difficulty = drb_difficulty_selector(root_leaf.view_number()).await;
 
-            let mut drb_seed_input = [0u8; 32];
-            let len = drb_seed_input_vec.len().min(32);
-            drb_seed_input[..len].copy_from_slice(&drb_seed_input_vec[..len]);
-            let drb_input = DrbInput {
-                epoch: *epoch,
-                iteration: 0,
-                value: drb_seed_input,
-                difficulty_level: drb_difficulty,
-            };
+                let mut drb_seed_input = [0u8; 32];
+                let len = drb_seed_input_vec.len().min(32);
+                drb_seed_input[..len].copy_from_slice(&drb_seed_input_vec[..len]);
+                let drb_input = DrbInput {
+                    epoch: *epoch,
+                    iteration: 0,
+                    value: drb_seed_input,
+                    difficulty_level: drb_difficulty,
+                };
 
-            let store_drb_progress_fn = self.store_drb_progress_fn.clone();
-            let load_drb_progress_fn = self.load_drb_progress_fn.clone();
+                let store_drb_progress_fn = self.store_drb_progress_fn.clone();
+                let load_drb_progress_fn = self.load_drb_progress_fn.clone();
 
-            compute_drb_result(drb_input, store_drb_progress_fn, load_drb_progress_fn).await
-        }};
+                compute_drb_result(drb_input, store_drb_progress_fn, load_drb_progress_fn).await
+            },
+        };
 
         tracing::info!("Writing drb result from catchup to storage for epoch {epoch}: {drb:?}");
         if let Err(e) = (self.store_drb_result_fn)(epoch, drb).await {

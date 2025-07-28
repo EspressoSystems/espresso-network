@@ -319,8 +319,11 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
                     value: drb_seed_input,
                     difficulty_level,
                 };
-                
-                tracing::error!("DRB LOG: compute_drb_result spawned from consensus for epoch {next_epoch_number}");
+
+                tracing::error!(
+                    "DRB LOG: compute_drb_result spawned from consensus for epoch \
+                     {next_epoch_number}"
+                );
                 let drb_result = hotshot_types::drb::compute_drb_result(
                     drb_input,
                     store_drb_progress_fn,
