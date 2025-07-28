@@ -650,9 +650,6 @@ pub mod testing {
         },
     };
     use async_lock::RwLock;
-    use builder_refactored::service::{
-        BuilderConfig as LegacyBuilderConfig, GlobalState as LegacyGlobalState,
-    };
     use catchup::NullStateCatchup;
     use committable::Committable;
     use espresso_contract_deployer::{
@@ -675,6 +672,9 @@ pub mod testing {
             BlockPayload,
         },
         types::EventType::Decide,
+    };
+    use hotshot_builder_refactored::service::{
+        BuilderConfig as LegacyBuilderConfig, GlobalState as LegacyGlobalState,
     };
     use hotshot_testing::block_builder::{
         BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,

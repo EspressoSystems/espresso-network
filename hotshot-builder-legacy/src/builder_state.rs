@@ -10,9 +10,9 @@ use std::{
 
 use async_broadcast::{broadcast, Receiver as BroadcastReceiver, Sender as BroadcastSender};
 use async_lock::RwLock;
-use builder_shared::block::{BlockId, BuilderStateId, ParentBlockReferences};
 use committable::{Commitment, Committable};
 use futures::StreamExt;
+use hotshot_builder_shared::block::{BlockId, BuilderStateId, ParentBlockReferences};
 use hotshot_types::{
     data::{DaProposal2, Leaf2, QuorumProposalWrapper},
     message::Proposal,
@@ -1147,8 +1147,8 @@ mod test {
     use std::collections::HashMap;
 
     use async_broadcast::broadcast;
-    use builder_shared::testing::constants::TEST_NUM_NODES_IN_VID_COMPUTATION;
     use committable::RawCommitmentBuilder;
+    use hotshot_builder_shared::testing::constants::TEST_NUM_NODES_IN_VID_COMPUTATION;
     use hotshot_example_types::{
         block_types::TestTransaction,
         node_types::{TestTypes, TestVersions},

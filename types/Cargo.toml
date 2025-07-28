@@ -16,10 +16,10 @@ async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
 base64-bytes = { workspace = true }
+bigdecimal = "0.4.8"
 bincode = { workspace = true }
 blake3 = { workspace = true }
 bytesize = { workspace = true }
-bigdecimal = "0.4.8"
 clap = { workspace = true }
 cld = { workspace = true }
 committable = { workspace = true }

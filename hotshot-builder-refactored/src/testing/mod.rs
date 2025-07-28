@@ -5,11 +5,6 @@
 use std::{cell::LazyCell, sync::Arc, time::Duration};
 
 use async_broadcast::Sender;
-use builder_shared::{
-    block::{BlockId, BuilderStateId},
-    error::Error,
-    utils::BuilderKeys,
-};
 use committable::Commitment;
 use hotshot::{
     rand::{thread_rng, Rng},
@@ -19,6 +14,11 @@ use hotshot_builder_api::v0_1::{
     block_info::{AvailableBlockHeaderInputV1, AvailableBlockInfo},
     builder::BuildError,
     data_source::{AcceptsTxnSubmits, BuilderDataSource},
+};
+use hotshot_builder_shared::{
+    block::{BlockId, BuilderStateId},
+    error::Error,
+    utils::BuilderKeys,
 };
 use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes};
 use hotshot_task_impls::builder::v0_1::BuilderClient;

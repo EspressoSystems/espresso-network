@@ -10,13 +10,6 @@ use std::{
 pub use async_broadcast::{broadcast, RecvError, TryRecvError};
 use async_lock::RwLock;
 use async_trait::async_trait;
-use builder_shared::{
-    block::{BlockId, BuilderStateId, ReceivedTransaction, TransactionSource},
-    coordinator::{BuilderStateCoordinator, BuilderStateLookup},
-    error::Error,
-    state::BuilderState,
-    utils::BuilderKeys,
-};
 use committable::Commitment;
 use futures::{
     future::BoxFuture,
@@ -33,6 +26,13 @@ use hotshot_builder_api::{
         data_source::{AcceptsTxnSubmits, BuilderDataSource},
     },
     v0_2::block_info::AvailableBlockHeaderInputV1,
+};
+use hotshot_builder_shared::{
+    block::{BlockId, BuilderStateId, ReceivedTransaction, TransactionSource},
+    coordinator::{BuilderStateCoordinator, BuilderStateLookup},
+    error::Error,
+    state::BuilderState,
+    utils::BuilderKeys,
 };
 use hotshot_types::{
     data::VidCommitment,
@@ -112,7 +112,7 @@ pub struct BuilderConfig<Types: NodeType> {
 #[cfg(test)]
 impl<Types: NodeType> BuilderConfig<Types> {
     pub(crate) fn test() -> Self {
-        use builder_shared::testing::constants::*;
+        use hotshot_builder_shared::testing::constants::*;
         Self {
             builder_keys:
                 <Types::BuilderSignatureKey as BuilderSignatureKey>::generated_from_seed_indexed(

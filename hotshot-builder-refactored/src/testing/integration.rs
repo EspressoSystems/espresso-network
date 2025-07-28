@@ -4,8 +4,8 @@
 use std::{collections::HashMap, fmt::Display, marker::PhantomData, sync::Arc};
 
 use async_trait::async_trait;
-use builder_shared::testing::constants::TEST_PROTOCOL_MAX_BLOCK_SIZE;
 use hotshot::types::SignatureKey;
+use hotshot_builder_shared::testing::constants::TEST_PROTOCOL_MAX_BLOCK_SIZE;
 use hotshot_testing::{
     block_builder::{BuilderTask, TestBuilderImplementation},
     test_builder::BuilderChange,
@@ -118,7 +118,7 @@ where
 mod tests {
     use std::time::Duration;
 
-    use builder_shared::testing::{
+    use hotshot_builder_shared::testing::{
         generation::{self, TransactionGenerationConfig},
         run_test,
         validation::BuilderValidationConfig,

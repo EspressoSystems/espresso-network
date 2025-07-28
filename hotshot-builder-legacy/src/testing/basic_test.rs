@@ -19,16 +19,16 @@ mod tests {
     use std::{collections::VecDeque, hash::Hash, marker::PhantomData, sync::Arc, time::Duration};
 
     use async_lock::RwLock;
-    use builder_shared::{
+    use committable::{Commitment, CommitmentBoundsArkless, Committable};
+    use hotshot::types::SignatureKey;
+    use hotshot_builder_api::v0_2::data_source::BuilderDataSource;
+    use hotshot_builder_shared::{
         block::ParentBlockReferences,
         testing::constants::{
             TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM,
             TEST_NUM_NODES_IN_VID_COMPUTATION, TEST_PROTOCOL_MAX_BLOCK_SIZE,
         },
     };
-    use committable::{Commitment, CommitmentBoundsArkless, Committable};
-    use hotshot::types::SignatureKey;
-    use hotshot_builder_api::v0_2::data_source::BuilderDataSource;
     use hotshot_example_types::{
         block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
         node_types::TestVersions,

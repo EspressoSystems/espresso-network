@@ -4,12 +4,12 @@ use std::{
 };
 
 use async_broadcast::broadcast;
-use builder_shared::{
+use committable::Committable;
+use hotshot_builder_api::v0_1::builder::TransactionStatus;
+use hotshot_builder_shared::{
     block::{BlockId, BuilderStateId},
     testing::{consensus::SimulatedChainState, constants::TEST_NUM_NODES_IN_VID_COMPUTATION},
 };
-use committable::Committable;
-use hotshot_builder_api::v0_1::builder::TransactionStatus;
 use hotshot_example_types::{block_types::TestTransaction, state_types::TestInstanceState};
 use hotshot_types::{
     data::{VidCommitment, ViewNumber},

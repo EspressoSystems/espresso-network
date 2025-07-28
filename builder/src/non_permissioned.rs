@@ -3,19 +3,19 @@ use std::{collections::VecDeque, num::NonZeroUsize, sync::Arc, time::Duration};
 use anyhow::Context;
 use async_broadcast::broadcast;
 use async_lock::{Mutex, RwLock};
-use builder_legacy::{
+use espresso_types::{
+    eth_signature_key::EthKeyPair, v0_1::NoStorage, v0_3::Fetcher, EpochCommittees, FeeAmount,
+    NodeState, Payload, SeqTypes, ValidatedState,
+};
+use hotshot::traits::BlockPayload;
+use hotshot_builder_legacy::{
     builder_state::{BuilderState, MessageType},
     service::{
         run_non_permissioned_standalone_builder_service, GlobalState, ProxyGlobalState,
         ReceivedTransaction,
     },
 };
-use builder_shared::{block::ParentBlockReferences, utils::EventServiceStream};
-use espresso_types::{
-    eth_signature_key::EthKeyPair, v0_1::NoStorage, v0_3::Fetcher, EpochCommittees, FeeAmount,
-    NodeState, Payload, SeqTypes, ValidatedState,
-};
-use hotshot::traits::BlockPayload;
+use hotshot_builder_shared::{block::ParentBlockReferences, utils::EventServiceStream};
 use hotshot_types::{
     data::{fake_commitment, vid_commitment, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,

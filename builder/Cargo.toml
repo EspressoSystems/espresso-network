@@ -1,5 +1,5 @@
 [package]
-name = "hotshot-builder"
+name = "builder"
 description = "A standalone builder service"
 version = { workspace = true }
 authors = { workspace = true }
@@ -16,14 +16,14 @@ alloy = { workspace = true }
 anyhow = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
-builder-legacy = { workspace = true }
-builder-shared = { workspace = true }
 clap = { workspace = true }
 committable = { workspace = true }
 espresso-types = { path = "../types" }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-builder-api = { workspace = true }
+hotshot-builder-legacy = { workspace = true }
+hotshot-builder-shared = { workspace = true }
 hotshot-events-service = { workspace = true }
 hotshot-example-types = { workspace = true }
 hotshot-state-prover = { workspace = true }

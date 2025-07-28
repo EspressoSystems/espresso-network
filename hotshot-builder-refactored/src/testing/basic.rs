@@ -1,15 +1,15 @@
 use std::{sync::Arc, time::Duration};
 
 use async_broadcast::broadcast;
-use builder_shared::{
+use hotshot::types::{EventType, SignatureKey};
+use hotshot_builder_api::v0_1::data_source::BuilderDataSource;
+use hotshot_builder_shared::{
     error::Error,
     testing::{
         consensus::SimulatedChainState,
         constants::{TEST_NUM_NODES_IN_VID_COMPUTATION, TEST_PROTOCOL_MAX_BLOCK_SIZE},
     },
 };
-use hotshot::types::{EventType, SignatureKey};
-use hotshot_builder_api::v0_1::data_source::BuilderDataSource;
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TestTypes, TestVersions},

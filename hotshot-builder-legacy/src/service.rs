@@ -10,7 +10,6 @@ pub use async_broadcast::{broadcast, RecvError, TryRecvError};
 use async_broadcast::{Sender as BroadcastSender, TrySendError};
 use async_lock::RwLock;
 use async_trait::async_trait;
-use builder_shared::block::{BlockId, BuilderStateId, ParentBlockReferences};
 use committable::{Commitment, Committable};
 use futures::{future::BoxFuture, stream::StreamExt, Stream};
 use hotshot::types::Event;
@@ -22,6 +21,7 @@ use hotshot_builder_api::{
     },
     v0_2::builder::TransactionStatus,
 };
+use hotshot_builder_shared::block::{BlockId, BuilderStateId, ParentBlockReferences};
 use hotshot_types::{
     data::{DaProposal2, Leaf2, QuorumProposalWrapper, VidCommitment},
     event::EventType,
@@ -1528,13 +1528,6 @@ mod test {
     use std::{sync::Arc, time::Duration};
 
     use async_lock::RwLock;
-    use builder_shared::{
-        block::{BlockId, BuilderStateId, ParentBlockReferences},
-        testing::constants::{
-            TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM,
-            TEST_NUM_NODES_IN_VID_COMPUTATION, TEST_PROTOCOL_MAX_BLOCK_SIZE,
-        },
-    };
     use committable::{Commitment, Committable};
     use futures::StreamExt;
     use hotshot::{
@@ -1544,6 +1537,13 @@ mod test {
     use hotshot_builder_api::{
         v0_1::data_source::AcceptsTxnSubmits,
         v0_2::{block_info::AvailableBlockInfo, builder::TransactionStatus},
+    };
+    use hotshot_builder_shared::{
+        block::{BlockId, BuilderStateId, ParentBlockReferences},
+        testing::constants::{
+            TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM,
+            TEST_NUM_NODES_IN_VID_COMPUTATION, TEST_PROTOCOL_MAX_BLOCK_SIZE,
+        },
     };
     use hotshot_example_types::{
         block_types::{TestBlockPayload, TestMetadata, TestTransaction},

@@ -1,13 +1,13 @@
 use std::marker::PhantomData;
 
-use builder_shared::{
+use hotshot::traits::BlockPayload;
+use hotshot_builder_api::v0_1::block_info::AvailableBlockInfo;
+use hotshot_builder_shared::{
     block::{BlockId, BuilderStateId},
     coordinator::tiered_view_map::TieredViewMap,
     error::Error,
     utils::BuilderKeys,
 };
-use hotshot::traits::BlockPayload;
-use hotshot_builder_api::v0_1::block_info::AvailableBlockInfo;
 use hotshot_types::traits::{node_implementation::NodeType, signature_key::BuilderSignatureKey};
 
 // It holds all the necessary information for a block

@@ -2,16 +2,16 @@ use std::{collections::VecDeque, marker::PhantomData, sync::Arc, time::Duration}
 
 use async_broadcast::{broadcast, Sender as BroadcastSender};
 use async_lock::RwLock;
-use builder_shared::{
-    block::{BuilderStateId, ParentBlockReferences},
-    testing::constants::{
-        TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM, TEST_PROTOCOL_MAX_BLOCK_SIZE,
-    },
-};
 use committable::{Commitment, CommitmentBoundsArkless, Committable};
 use hotshot::{
     traits::BlockPayload,
     types::{BLSPubKey, SignatureKey},
+};
+use hotshot_builder_shared::{
+    block::{BuilderStateId, ParentBlockReferences},
+    testing::constants::{
+        TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM, TEST_PROTOCOL_MAX_BLOCK_SIZE,
+    },
 };
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
