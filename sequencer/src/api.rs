@@ -3350,7 +3350,9 @@ mod test {
 
         let node_state = network.server.node_state();
         let membership = node_state.coordinator.membership().read().await;
-        let block_reward = membership.block_reward(None).expect("block reward is None");
+        let block_reward = membership
+            .block_reward(None)
+            .expect("block reward is not None");
         drop(membership);
 
         // The validator gets all the block reward so we can calculate the expected amount
@@ -3409,7 +3411,9 @@ mod test {
         let network = TestNetwork::new(config, PosVersionV3::new()).await;
         let node_state = network.server.node_state();
         let membership = node_state.coordinator.membership().read().await;
-        let block_reward = membership.block_reward(None).expect("block reward is None");
+        let block_reward = membership
+            .block_reward(None)
+            .expect("block reward is not None");
         drop(membership);
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
@@ -3716,7 +3720,9 @@ mod test {
         let coordinator = node_state.coordinator;
 
         let membership = coordinator.membership().read().await;
-        let block_reward = membership.block_reward(None).expect("block reward is None");
+        let block_reward = membership
+            .block_reward(None)
+            .expect("block reward is not None");
 
         drop(membership);
 
@@ -3826,6 +3832,8 @@ mod test {
         setup_test();
         const EPOCH_HEIGHT: u64 = 20;
 
+        type V4 = SequencerVersions<StaticVersion<0, 4>, StaticVersion<0, 0>>;
+
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
             .build();
@@ -3856,12 +3864,12 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersionV4>(DelegationConfig::MultipleDelegators, Default::default())
+            .pos_hook::<V4>(DelegationConfig::MultipleDelegators, Default::default())
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, PosVersionV4::new()).await;
+        let network = TestNetwork::new(config, V4::new()).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -3925,7 +3933,7 @@ mod test {
         while let Some(leaf) = leaves.next().await {
             let leaf = leaf.unwrap();
             let header = leaf.header();
-            assert_eq!(header.total_reward_distributed().unwrap(), U256::ZERO);
+            assert_eq!(header.total_reward_distributed().unwrap().0, U256::ZERO);
 
             let epoch_number =
                 EpochNumber::new(epoch_from_block_number(leaf.height(), EPOCH_HEIGHT));
@@ -3989,7 +3997,7 @@ mod test {
                 .expect("leader not found");
 
             let distributor =
-                RewardDistributor::new(leader_validator.clone(), block_reward, distributed.into());
+                RewardDistributor::new(leader_validator.clone(), block_reward, distributed);
             // Verify that the sum of delegator stakes equals the validator's total stake.
             for validator in validators.values() {
                 let delegator_stake_sum: U256 = validator.delegators.values().cloned().sum();
@@ -4061,7 +4069,7 @@ mod test {
             // Confirm the header's total distributed field matches the cumulative expected amount.
             total_distributed += block_reward.0;
             assert_eq!(
-                header.total_reward_distributed().unwrap(),
+                header.total_reward_distributed().unwrap().0,
                 total_distributed
             );
 
@@ -4071,9 +4079,8 @@ mod test {
                 .and_modify(|r| assert_eq!(*r, block_reward.0))
                 .or_insert(block_reward.0);
 
-            // Stop the test after verifying 5 epochs.
+            // Stop the test after verifying 5 full epochs.
             if leaf.height() == EPOCH_HEIGHT * 5 {
-                tracing::info!("verified 5 epoch rewards.");
                 break;
             }
         }

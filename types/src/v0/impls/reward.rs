@@ -621,7 +621,7 @@ impl RewardDistributor {
     }
 
     pub fn apply_rewards(
-        &self,
+        &mut self,
         version: vbs::version::Version,
         state: &mut ValidatedState,
     ) -> anyhow::Result<()> {
@@ -646,6 +646,8 @@ impl RewardDistributor {
                 tracing::debug!(%address, %reward, "applied current rewards");
             }
         }
+
+        self.total_distributed += self.block_reward();
 
         Ok(())
     }
@@ -750,7 +752,7 @@ pub async fn distribute_block_reward(
     let parent_header = parent_leaf.block_header();
     // Initialize the total rewards distributed so far in this block.
 
-    let mut total_distributed = parent_header.total_reward_distributed().unwrap_or_default();
+    let mut previously_distributed = parent_header.total_reward_distributed().unwrap_or_default();
 
     // Decide whether to use a fixed or dynamic block reward.
     let block_reward = if version >= DrbAndHeaderUpgradeVersion::version() {
@@ -785,9 +787,10 @@ pub async fn distribute_block_reward(
                 .checked_sub(first_reward_block)
                 .context("height - epoch_start_block underflowed")?;
 
-            total_distributed = U256::from(blocks)
+            previously_distributed = U256::from(blocks)
                 .checked_mul(fixed_block_reward.0)
-                .context("overflow during total_distributed calculation")?;
+                .context("overflow during total_distributed calculation")?
+                .into();
         }
 
         block_reward
@@ -803,9 +806,8 @@ pub async fn distribute_block_reward(
         return Ok(None);
     }
 
-    total_distributed += block_reward.0;
-
-    let reward_distributor = RewardDistributor::new(leader, block_reward, total_distributed.into());
+    let mut reward_distributor =
+        RewardDistributor::new(leader, block_reward, previously_distributed);
 
     reward_distributor.apply_rewards(version, validated_state)?;
 

@@ -162,8 +162,11 @@ pub enum FetchRewardError {
     #[error("First transfer should be a mint from the zero address")]
     InvalidMintFromAddress,
 
-    #[error("Division by zero in commission basis points")]
-    DivisionByZero,
+    #[error("Division by zero {0}")]
+    DivisionByZero(&'static str),
+
+    #[error("Overflow {0}")]
+    Overflow(&'static str),
 
     #[error("Contract call failed: {0}")]
     ContractCall(#[source] alloy::contract::Error),

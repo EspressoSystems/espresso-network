@@ -21,8 +21,6 @@ pub type RewardMerkleTreeLegacy = UniversalMerkleTree<
  
 pub type RewardMerkleCommitmentLegacy = <RewardMerkleTreeLegacy as MerkleTreeScheme>::Commitment;
 
-
-
 // New Type for `Address` in order to implement `CanonicalSerialize` and
 // `CanonicalDeserialize`
 #[derive(
@@ -67,7 +65,6 @@ pub struct RewardAccountLegacy(pub Address);
 )]
 #[display("{_0}")]
 pub struct RewardAmount(pub U256);
-
  
 pub(crate) const INFLATION_RATE: u128 = 300; // 3% in basis points
 pub(crate) const ASSUMED_BLOCK_TIME_SECONDS: u128 = 2;
@@ -75,19 +72,12 @@ pub(crate) const SECONDS_PER_YEAR: u128 = 60 * 60 * 24 * 365;
 pub(crate) const MILLISECONDS_PER_YEAR: u128 = 86_400_000 * 365;
 pub(crate) const BLOCKS_PER_YEAR: u128 = SECONDS_PER_YEAR / ASSUMED_BLOCK_TIME_SECONDS;
 pub const COMMISSION_BASIS_POINTS: u16 = 10_000;
- 
-
- 
-
- 
+  
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RewardAccountQueryDataLegacy {
     pub balance: U256,
     pub proof: RewardAccountProofLegacy,
 }
-
- 
-
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RewardAccountProofLegacy {

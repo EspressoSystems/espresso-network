@@ -26,8 +26,8 @@ use time::OffsetDateTime;
 use vbs::version::{StaticVersionType, Version};
 
 use super::{
-    fee_info::FeeError, instance_state::NodeState, v0_1::IterableFeeInfo, v0_3::RewardAmount,
-    BlockMerkleCommitment, BlockSize, EpochVersion, FeeMerkleCommitment, L1Client,
+    fee_info::FeeError, instance_state::NodeState, v0_1::IterableFeeInfo, BlockMerkleCommitment,
+    BlockSize, EpochVersion, FeeMerkleCommitment, L1Client,
 };
 use crate::{
     traits::StateCatchup,
@@ -36,8 +36,8 @@ use crate::{
         sparse_mt::{Keccak256Hasher, KeccakNode},
     },
     v0_3::{
-        ChainConfig, ResolvableChainConfig, RewardAccountLegacy, RewardMerkleCommitmentLegacy,
-        RewardMerkleTreeLegacy, LEGACY_REWARD_MERKLE_TREE_HEIGHT,
+        ChainConfig, ResolvableChainConfig, RewardAccountLegacy, RewardAmount,
+        RewardMerkleCommitmentLegacy, RewardMerkleTreeLegacy, LEGACY_REWARD_MERKLE_TREE_HEIGHT,
     },
     v0_4::{
         Delta, RewardAccount, RewardMerkleCommitment, RewardMerkleTree, REWARD_MERKLE_TREE_HEIGHT,

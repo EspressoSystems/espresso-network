@@ -523,7 +523,7 @@ where
         genesis.chain_config,
     );
     fetcher.spawn_update_loop().await;
-    let block_reward = fetcher.fetch_block_reward().await.ok();
+    let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
     // Create the HotShot membership
     let mut membership = EpochCommittees::new_stake(
         network_config.config.known_nodes_with_stake.clone(),
@@ -1247,7 +1247,7 @@ pub mod testing {
             );
             fetcher.spawn_update_loop().await;
 
-            let block_reward = fetcher.fetch_block_reward().await.ok();
+            let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
             let mut membership = EpochCommittees::new_stake(
                 config.known_nodes_with_stake.clone(),
                 config.known_da_nodes.clone(),

@@ -49,7 +49,7 @@ use crate::{
         data_source::{BlockId, LeafId},
         query_data::{
             BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadQueryData, QueryableHeader,
-            QueryablePayload, TransactionHash, TransactionQueryData, VidCommonQueryData,
+            QueryablePayload, TransactionHash, VidCommonQueryData,
         },
         NamespaceId, StateCertQueryData,
     },
@@ -58,7 +58,7 @@ use crate::{
     node::{SyncStatus, TimeWindowQueryData, WindowStart},
     status::HasMetrics,
     types::HeightIndexed,
-    ErrorSnafu, Header, MissingSnafu, NotFoundSnafu, Payload, QueryError, QueryResult,
+    Header, MissingSnafu, NotFoundSnafu, Payload, QueryError, QueryResult,
 };
 
 const CACHED_LEAVES_COUNT: usize = 100;
@@ -630,21 +630,16 @@ where
             .collect())
     }
 
-    async fn get_transaction(
+    async fn get_block_with_transaction(
         &mut self,
         hash: TransactionHash<Types>,
-    ) -> QueryResult<TransactionQueryData<Types>> {
+    ) -> QueryResult<BlockQueryData<Types>> {
         let height = self
             .inner
             .index_by_txn_hash
             .get(&hash)
             .context(NotFoundSnafu)?;
-        let block = self.inner.get_block((*height as usize).into())?;
-        TransactionQueryData::with_hash(&block, hash).context(ErrorSnafu {
-            message: format!(
-                "transaction index inconsistent: block {height} contains no transaction {hash}"
-            ),
-        })
+        self.inner.get_block((*height as usize).into())
     }
 
     async fn first_available_leaf(&mut self, from: u64) -> QueryResult<LeafQueryData<Types>> {

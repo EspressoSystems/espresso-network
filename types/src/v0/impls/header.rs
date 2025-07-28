@@ -1,6 +1,5 @@
 use std::fmt;
 
-use alloy::primitives::U256;
 use anyhow::{ensure, Context};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
@@ -36,9 +35,10 @@ use crate::{
         header::{EitherOrVersion, VersionedHeader},
         impls::{distribute_block_reward, reward::RewardDistributor},
     },
-    v0_1, v0_2,
+    v0_1::{self},
+    v0_2,
     v0_3::{
-        self, RewardMerkleCommitmentLegacy, RewardMerkleTreeLegacy,
+        self, RewardAmount, RewardMerkleCommitmentLegacy, RewardMerkleTreeLegacy,
         LEGACY_REWARD_MERKLE_TREE_HEIGHT,
     },
     v0_4::{self, RewardMerkleCommitment},
@@ -287,7 +287,7 @@ impl Header {
         reward_merkle_tree_root: RewardMerkleCommitment,
         fee_info: Vec<FeeInfo>,
         builder_signature: Vec<BuilderSignature>,
-        total_reward_distributed: Option<U256>,
+        total_reward_distributed: Option<RewardAmount>,
         version: Version,
     ) -> Self {
         // Ensure FeeInfo contains at least 1 element
@@ -586,8 +586,7 @@ impl Header {
                 builder_signature: builder_signature.first().copied(),
                 total_reward_distributed: reward_distributor
                     .map(|r| r.total_distributed())
-                    .unwrap_or_default()
-                    .into(),
+                    .unwrap_or_default(),
             }),
             // This case should never occur
             // but if it does, we must panic
@@ -814,7 +813,7 @@ impl Header {
         }
     }
 
-    pub fn total_reward_distributed(&self) -> Option<U256> {
+    pub fn total_reward_distributed(&self) -> Option<RewardAmount> {
         match self {
             Self::V1(_) | Self::V2(_) | Self::V3(_) => None,
             Self::V4(fields) => Some(fields.total_reward_distributed),
