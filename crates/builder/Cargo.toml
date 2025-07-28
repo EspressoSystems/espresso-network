@@ -18,7 +18,7 @@ async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 clap = { workspace = true }
 committable = { workspace = true }
-espresso-types = { path = "../types" }
+espresso-types = { path = "../../types" }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-builder-api = { workspace = true }
@@ -30,8 +30,8 @@ hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
 portpicker = { workspace = true }
 rand = "0.8.5"
-sequencer = { path = "../sequencer", default-features = false }
-sequencer-utils = { path = "../utils" }
+sequencer = { path = "../../sequencer", default-features = false }
+sequencer-utils = { path = "../../utils" }
 surf-disco = { workspace = true }
 tide-disco = { workspace = true }
 tokio = { workspace = true }
@@ -42,5 +42,5 @@ vec1 = { workspace = true }
 
 [dev-dependencies]
 jf-signature = { workspace = true, features = ["bls"] }
-sequencer = { path = "../sequencer", features = ["testing"] }
+sequencer = { path = "../../sequencer", features = ["testing"] }
 tempfile = { workspace = true }

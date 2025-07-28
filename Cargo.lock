@@ -2172,6 +2172,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "builder"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-broadcast",
+ "async-lock 3.4.0",
+ "clap 4.5.39",
+ "committable",
+ "espresso-types",
+ "futures",
+ "hotshot",
+ "hotshot-builder-api",
+ "hotshot-builder-legacy",
+ "hotshot-builder-shared",
+ "hotshot-events-service",
+ "hotshot-example-types",
+ "hotshot-state-prover",
+ "hotshot-types",
+ "jf-signature 0.2.0",
+ "portpicker",
+ "rand 0.8.5",
+ "sequencer",
+ "sequencer-utils",
+ "surf-disco",
+ "tempfile",
+ "tide-disco",
+ "tokio",
+ "tracing",
+ "url",
+ "vbs",
+ "vec1",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

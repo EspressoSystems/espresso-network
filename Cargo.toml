@@ -14,6 +14,9 @@ members = [
     "contracts/rust/deployer",
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
+    "crates/builder",
+    "crates/hotshot-builder/legacy",
+    "crates/hotshot-builder/refactored",
     "crates/hotshot/builder-api",
     "crates/hotshot/example-types",
     "crates/hotshot/examples",
@@ -26,8 +29,6 @@ members = [
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
-    "hotshot-builder-legacy",
-    "hotshot-builder-refactored",
     "hotshot-events-service",
     "hotshot-query-service",
     "hotshot-state-prover",
@@ -52,6 +53,7 @@ default-members = [
     "contracts/rust/deployer",
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
+    "crates/builder",
     "crates/hotshot/builder-api",
     "crates/hotshot/example-types",
     "crates/hotshot/examples",
@@ -64,8 +66,8 @@ default-members = [
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
-    "hotshot-builder-legacy",
-    "hotshot-builder-refactored",
+    "crates/hotshot-builder/legacy",
+    "crates/hotshot-builder/refactored",
     "hotshot-events-service",
     "hotshot-query-service",
     "hotshot-state-prover",
@@ -167,8 +169,8 @@ parking_lot = { version = "0.12", features = ["send_guard"] }
 indexmap = { version = "2", features = ["serde"] }
 
 # Builder imports
-hotshot-builder-shared = { path = "hotshot-builder-shared" }
-hotshot-builder-legacy = { path = "hotshot-builder-legacy" }
+hotshot-builder-shared = { path = "crates/hotshot-builder/shared" }
+hotshot-builder-legacy = { path = "crates/hotshot-builder/legacy" }
 
 # Hotshot imports
 hotshot = { path = "crates/hotshot/hotshot" }
