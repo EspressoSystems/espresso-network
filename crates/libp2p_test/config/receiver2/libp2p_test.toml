@@ -1,0 +1,8 @@
+listen = "/ip4/0.0.0.0/udp/9002/quic-v1"
+private_key = "BLS_SIGNING_KEY~qruBWMuMtZ5yd1FoO4_e5yULswa7HFNz0Y_fpbOpVBeP"
+peers = [
+    ["12D3KooWGZJippUFtCCSGKDt7hxXspAiM2EZb5KSUaGWN5iFP45w", "/dns4/sender/udp/9000/quic-v1"],
+    ["12D3KooWKRd4rDf2iKjudQfzH2rT8P629XFMUx6P2PQQpJxPcDHi", "/dns4/receiver1/udp/9001/quic-v1"],
+    ["12D3KooWAPho9bSmLeyPSL4zypbPKxKjAJPpSUQ7KN6zG4Jkr5dx", "/dns4/receiver3/udp/9003/quic-v1"]
+]
+send_mode = false
