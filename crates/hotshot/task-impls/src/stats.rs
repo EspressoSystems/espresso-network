@@ -207,7 +207,7 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                 // If the last view succeeded, add the metric for time between proposals
                 if proposal.data.view_change_evidence().is_none() {
                     if let Some(previous_proposal_time) = self
-                        .replica_entry(proposal.data.view_number())
+                        .replica_entry(proposal.data.view_number() - 1)
                         .proposal_recv
                     {
                         // calculate the elapsed time as milliseconds (from nanoseconds)
