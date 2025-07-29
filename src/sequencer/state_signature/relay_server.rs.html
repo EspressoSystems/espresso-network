@@ -15,7 +15,7 @@
 <a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>hotshot_types::{
 <a href=#16 id=16 data-nosnippet>16</a>    light_client::{LegacyStateSignatureRequestBody, StateSignaturesBundle, StateVerKey},
 <a href=#17 id=17 data-nosnippet>17</a>    stake_table::one_honest_threshold,
-<a href=#18 id=18 data-nosnippet>18</a>    traits::signature_key::{StakeTableEntryType, StateSignatureKey},
+<a href=#18 id=18 data-nosnippet>18</a>    traits::signature_key::{LCV1StateSignatureKey, LCV2StateSignatureKey, StakeTableEntryType},
 <a href=#19 id=19 data-nosnippet>19</a>    utils::{epoch_from_block_number, is_gt_epoch_root},
 <a href=#20 id=20 data-nosnippet>20</a>    PeerConfig,
 <a href=#21 id=21 data-nosnippet>21</a>};
@@ -345,316 +345,326 @@
 <a href=#345 id=345 data-nosnippet>345</a>
 <a href=#346 id=346 data-nosnippet>346</a>    <span class="kw">async fn </span>post_signature(<span class="kw-2">&amp;mut </span><span class="self">self</span>, req: StateSignatureRequestBody) -&gt; <span class="prelude-ty">Result</span>&lt;(), ServerError&gt; {
 <a href=#347 id=347 data-nosnippet>347</a>        <span class="comment">// sanity check the signature validity first before adding in
-<a href=#348 id=348 data-nosnippet>348</a>        </span><span class="kw">if </span>!req
-<a href=#349 id=349 data-nosnippet>349</a>            .key
-<a href=#350 id=350 data-nosnippet>350</a>            .verify_state_sig(<span class="kw-2">&amp;</span>req.signature, <span class="kw-2">&amp;</span>req.state, <span class="kw-2">&amp;</span>req.next_stake)
-<a href=#351 id=351 data-nosnippet>351</a>        {
-<a href=#352 id=352 data-nosnippet>352</a>            <span class="comment">// If it's a legacy signature, handle it separately
-<a href=#353 id=353 data-nosnippet>353</a>            </span><span class="kw">if </span>req.key.legacy_verify_state_sig(<span class="kw-2">&amp;</span>req.signature, <span class="kw-2">&amp;</span>req.state) {
-<a href=#354 id=354 data-nosnippet>354</a>                <span class="kw">return </span><span class="self">self</span>.post_legacy_signature(req).<span class="kw">await</span>;
-<a href=#355 id=355 data-nosnippet>355</a>            }
-<a href=#356 id=356 data-nosnippet>356</a>            <span class="macro">tracing::warn!</span>(<span class="string">"Received invalid signature: {:?}"</span>, req);
-<a href=#357 id=357 data-nosnippet>357</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(ServerError::catch_all(
-<a href=#358 id=358 data-nosnippet>358</a>                StatusCode::BAD_REQUEST,
-<a href=#359 id=359 data-nosnippet>359</a>                <span class="string">"The posted signature is not valid."</span>.to_owned(),
-<a href=#360 id=360 data-nosnippet>360</a>            ));
-<a href=#361 id=361 data-nosnippet>361</a>        }
-<a href=#362 id=362 data-nosnippet>362</a>
-<a href=#363 id=363 data-nosnippet>363</a>        <span class="kw">let </span>block_height = req.state.block_height;
-<a href=#364 id=364 data-nosnippet>364</a>        <span class="kw">if </span>block_height &lt;= <span class="self">self</span>.latest_block_height.unwrap_or(<span class="number">0</span>) {
-<a href=#365 id=365 data-nosnippet>365</a>            <span class="comment">// This signature is no longer needed
-<a href=#366 id=366 data-nosnippet>366</a>            </span><span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#348 id=348 data-nosnippet>348</a>        </span><span class="kw">if </span>!&lt;StateVerKey <span class="kw">as </span>LCV2StateSignatureKey&gt;::verify_state_sig(
+<a href=#349 id=349 data-nosnippet>349</a>            <span class="kw-2">&amp;</span>req.key,
+<a href=#350 id=350 data-nosnippet>350</a>            <span class="kw-2">&amp;</span>req.signature,
+<a href=#351 id=351 data-nosnippet>351</a>            <span class="kw-2">&amp;</span>req.state,
+<a href=#352 id=352 data-nosnippet>352</a>            <span class="kw-2">&amp;</span>req.next_stake,
+<a href=#353 id=353 data-nosnippet>353</a>        ) {
+<a href=#354 id=354 data-nosnippet>354</a>            <span class="comment">// If it's a legacy signature, handle it separately
+<a href=#355 id=355 data-nosnippet>355</a>            </span><span class="kw">if </span>&lt;StateVerKey <span class="kw">as </span>LCV1StateSignatureKey&gt;::verify_state_sig(
+<a href=#356 id=356 data-nosnippet>356</a>                <span class="kw-2">&amp;</span>req.key,
+<a href=#357 id=357 data-nosnippet>357</a>                <span class="kw-2">&amp;</span>req.signature,
+<a href=#358 id=358 data-nosnippet>358</a>                <span class="kw-2">&amp;</span>req.state,
+<a href=#359 id=359 data-nosnippet>359</a>            ) {
+<a href=#360 id=360 data-nosnippet>360</a>                <span class="kw">return </span><span class="self">self</span>.post_legacy_signature(req).<span class="kw">await</span>;
+<a href=#361 id=361 data-nosnippet>361</a>            }
+<a href=#362 id=362 data-nosnippet>362</a>            <span class="macro">tracing::warn!</span>(<span class="string">"Received invalid signature: {:?}"</span>, req);
+<a href=#363 id=363 data-nosnippet>363</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(ServerError::catch_all(
+<a href=#364 id=364 data-nosnippet>364</a>                StatusCode::BAD_REQUEST,
+<a href=#365 id=365 data-nosnippet>365</a>                <span class="string">"The posted signature is not valid."</span>.to_owned(),
+<a href=#366 id=366 data-nosnippet>366</a>            ));
 <a href=#367 id=367 data-nosnippet>367</a>        }
 <a href=#368 id=368 data-nosnippet>368</a>
-<a href=#369 id=369 data-nosnippet>369</a>        <span class="kw">let </span>blocks_per_epoch = <span class="kw">match </span><span class="self">self</span>.blocks_per_epoch {
-<a href=#370 id=370 data-nosnippet>370</a>            <span class="prelude-val">Some</span>(v) =&gt; v,
-<a href=#371 id=371 data-nosnippet>371</a>            <span class="prelude-val">None </span>=&gt; {
-<a href=#372 id=372 data-nosnippet>372</a>                <span class="self">self</span>.init_genesis().<span class="kw">await</span>.map_err(|e| {
-<a href=#373 id=373 data-nosnippet>373</a>                    ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, <span class="macro">format!</span>(<span class="string">"{e}"</span>))
-<a href=#374 id=374 data-nosnippet>374</a>                })<span class="question-mark">?</span>;
-<a href=#375 id=375 data-nosnippet>375</a>                <span class="self">self</span>.blocks_per_epoch
-<a href=#376 id=376 data-nosnippet>376</a>                    .expect(<span class="string">"internal err, init_genesis() wrong"</span>)
-<a href=#377 id=377 data-nosnippet>377</a>            },
-<a href=#378 id=378 data-nosnippet>378</a>        };
-<a href=#379 id=379 data-nosnippet>379</a>        <span class="kw">let </span>epoch = epoch_from_block_number(block_height, blocks_per_epoch);
-<a href=#380 id=380 data-nosnippet>380</a>
-<a href=#381 id=381 data-nosnippet>381</a>        <span class="comment">// if epoch is activated and block_height is greater than epoch root, ignore and drop
-<a href=#382 id=382 data-nosnippet>382</a>        </span><span class="kw">if </span>block_height &gt; <span class="self">self</span>.epoch_start_block.expect(<span class="string">"init_genesis wrong"</span>)
-<a href=#383 id=383 data-nosnippet>383</a>            &amp;&amp; is_gt_epoch_root(block_height, blocks_per_epoch)
-<a href=#384 id=384 data-nosnippet>384</a>        {
-<a href=#385 id=385 data-nosnippet>385</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-<a href=#386 id=386 data-nosnippet>386</a>        }
-<a href=#387 id=387 data-nosnippet>387</a>
-<a href=#388 id=388 data-nosnippet>388</a>        <span class="kw">if </span>!<span class="self">self</span>.known_nodes.contains_key(<span class="kw-2">&amp;</span>epoch) {
-<a href=#389 id=389 data-nosnippet>389</a>            <span class="self">self</span>.sync_stake_table(block_height).<span class="kw">await</span>.map_err(|e| {
-<a href=#390 id=390 data-nosnippet>390</a>                ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, <span class="macro">format!</span>(<span class="string">"{e}"</span>))
-<a href=#391 id=391 data-nosnippet>391</a>            })<span class="question-mark">?</span>;
+<a href=#369 id=369 data-nosnippet>369</a>        <span class="kw">let </span>block_height = req.state.block_height;
+<a href=#370 id=370 data-nosnippet>370</a>        <span class="kw">if </span>block_height &lt;= <span class="self">self</span>.latest_block_height.unwrap_or(<span class="number">0</span>) {
+<a href=#371 id=371 data-nosnippet>371</a>            <span class="comment">// This signature is no longer needed
+<a href=#372 id=372 data-nosnippet>372</a>            </span><span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#373 id=373 data-nosnippet>373</a>        }
+<a href=#374 id=374 data-nosnippet>374</a>
+<a href=#375 id=375 data-nosnippet>375</a>        <span class="kw">let </span>blocks_per_epoch = <span class="kw">match </span><span class="self">self</span>.blocks_per_epoch {
+<a href=#376 id=376 data-nosnippet>376</a>            <span class="prelude-val">Some</span>(v) =&gt; v,
+<a href=#377 id=377 data-nosnippet>377</a>            <span class="prelude-val">None </span>=&gt; {
+<a href=#378 id=378 data-nosnippet>378</a>                <span class="self">self</span>.init_genesis().<span class="kw">await</span>.map_err(|e| {
+<a href=#379 id=379 data-nosnippet>379</a>                    ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, <span class="macro">format!</span>(<span class="string">"{e}"</span>))
+<a href=#380 id=380 data-nosnippet>380</a>                })<span class="question-mark">?</span>;
+<a href=#381 id=381 data-nosnippet>381</a>                <span class="self">self</span>.blocks_per_epoch
+<a href=#382 id=382 data-nosnippet>382</a>                    .expect(<span class="string">"internal err, init_genesis() wrong"</span>)
+<a href=#383 id=383 data-nosnippet>383</a>            },
+<a href=#384 id=384 data-nosnippet>384</a>        };
+<a href=#385 id=385 data-nosnippet>385</a>        <span class="kw">let </span>epoch = epoch_from_block_number(block_height, blocks_per_epoch);
+<a href=#386 id=386 data-nosnippet>386</a>
+<a href=#387 id=387 data-nosnippet>387</a>        <span class="comment">// if epoch is activated and block_height is greater than epoch root, ignore and drop
+<a href=#388 id=388 data-nosnippet>388</a>        </span><span class="kw">if </span>block_height &gt; <span class="self">self</span>.epoch_start_block.expect(<span class="string">"init_genesis wrong"</span>)
+<a href=#389 id=389 data-nosnippet>389</a>            &amp;&amp; is_gt_epoch_root(block_height, blocks_per_epoch)
+<a href=#390 id=390 data-nosnippet>390</a>        {
+<a href=#391 id=391 data-nosnippet>391</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
 <a href=#392 id=392 data-nosnippet>392</a>        }
 <a href=#393 id=393 data-nosnippet>393</a>
-<a href=#394 id=394 data-nosnippet>394</a>        <span class="comment">// retrieve the signer/sender's weight from the correct stake table for that epoch
-<a href=#395 id=395 data-nosnippet>395</a>        </span><span class="kw">let </span><span class="prelude-val">Some</span>(nodes) = <span class="self">self</span>.known_nodes.get(<span class="kw-2">&amp;</span>epoch) <span class="kw">else </span>{
-<a href=#396 id=396 data-nosnippet>396</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(ServerError::catch_all(
-<a href=#397 id=397 data-nosnippet>397</a>                StatusCode::INTERNAL_SERVER_ERROR,
-<a href=#398 id=398 data-nosnippet>398</a>                <span class="string">"Stake table not found"</span>.to_owned(),
-<a href=#399 id=399 data-nosnippet>399</a>            ));
-<a href=#400 id=400 data-nosnippet>400</a>        };
-<a href=#401 id=401 data-nosnippet>401</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(threshold) = <span class="self">self</span>.thresholds.get(<span class="kw-2">&amp;</span>epoch) <span class="kw">else </span>{
+<a href=#394 id=394 data-nosnippet>394</a>        <span class="kw">if </span>!<span class="self">self</span>.known_nodes.contains_key(<span class="kw-2">&amp;</span>epoch) {
+<a href=#395 id=395 data-nosnippet>395</a>            <span class="self">self</span>.sync_stake_table(block_height).<span class="kw">await</span>.map_err(|e| {
+<a href=#396 id=396 data-nosnippet>396</a>                ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, <span class="macro">format!</span>(<span class="string">"{e}"</span>))
+<a href=#397 id=397 data-nosnippet>397</a>            })<span class="question-mark">?</span>;
+<a href=#398 id=398 data-nosnippet>398</a>        }
+<a href=#399 id=399 data-nosnippet>399</a>
+<a href=#400 id=400 data-nosnippet>400</a>        <span class="comment">// retrieve the signer/sender's weight from the correct stake table for that epoch
+<a href=#401 id=401 data-nosnippet>401</a>        </span><span class="kw">let </span><span class="prelude-val">Some</span>(nodes) = <span class="self">self</span>.known_nodes.get(<span class="kw-2">&amp;</span>epoch) <span class="kw">else </span>{
 <a href=#402 id=402 data-nosnippet>402</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(ServerError::catch_all(
 <a href=#403 id=403 data-nosnippet>403</a>                StatusCode::INTERNAL_SERVER_ERROR,
-<a href=#404 id=404 data-nosnippet>404</a>                <span class="string">"Threshold not found"</span>.to_owned(),
+<a href=#404 id=404 data-nosnippet>404</a>                <span class="string">"Stake table not found"</span>.to_owned(),
 <a href=#405 id=405 data-nosnippet>405</a>            ));
 <a href=#406 id=406 data-nosnippet>406</a>        };
-<a href=#407 id=407 data-nosnippet>407</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(weight) = nodes.get(<span class="kw-2">&amp;</span>req.key) <span class="kw">else </span>{
+<a href=#407 id=407 data-nosnippet>407</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(threshold) = <span class="self">self</span>.thresholds.get(<span class="kw-2">&amp;</span>epoch) <span class="kw">else </span>{
 <a href=#408 id=408 data-nosnippet>408</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(ServerError::catch_all(
-<a href=#409 id=409 data-nosnippet>409</a>                StatusCode::UNAUTHORIZED,
-<a href=#410 id=410 data-nosnippet>410</a>                <span class="string">"Signature posted by nodes not on the stake table"</span>.to_owned(),
+<a href=#409 id=409 data-nosnippet>409</a>                StatusCode::INTERNAL_SERVER_ERROR,
+<a href=#410 id=410 data-nosnippet>410</a>                <span class="string">"Threshold not found"</span>.to_owned(),
 <a href=#411 id=411 data-nosnippet>411</a>            ));
 <a href=#412 id=412 data-nosnippet>412</a>        };
-<a href=#413 id=413 data-nosnippet>413</a>
-<a href=#414 id=414 data-nosnippet>414</a>        <span class="kw">let </span>bundles_at_height = <span class="self">self</span>.bundles.entry(block_height).or_default();
-<a href=#415 id=415 data-nosnippet>415</a>        <span class="self">self</span>.queue.insert(block_height);
-<a href=#416 id=416 data-nosnippet>416</a>
-<a href=#417 id=417 data-nosnippet>417</a>        <span class="kw">let </span>bundle = bundles_at_height
-<a href=#418 id=418 data-nosnippet>418</a>            .entry(req.state)
-<a href=#419 id=419 data-nosnippet>419</a>            .or_insert(StateSignaturesBundle {
-<a href=#420 id=420 data-nosnippet>420</a>                state: req.state,
-<a href=#421 id=421 data-nosnippet>421</a>                next_stake: req.next_stake,
-<a href=#422 id=422 data-nosnippet>422</a>                signatures: Default::default(),
-<a href=#423 id=423 data-nosnippet>423</a>                accumulated_weight: U256::from(<span class="number">0</span>),
-<a href=#424 id=424 data-nosnippet>424</a>            });
-<a href=#425 id=425 data-nosnippet>425</a>        <span class="macro">tracing::debug!</span>(
-<a href=#426 id=426 data-nosnippet>426</a>            <span class="string">"Accepting new signature for block height {} from {}."</span>,
-<a href=#427 id=427 data-nosnippet>427</a>            block_height,
-<a href=#428 id=428 data-nosnippet>428</a>            req.key
-<a href=#429 id=429 data-nosnippet>429</a>        );
-<a href=#430 id=430 data-nosnippet>430</a>        <span class="kw">match </span>bundle.signatures.entry(req.key) {
-<a href=#431 id=431 data-nosnippet>431</a>            Entry::Occupied(<span class="kw">_</span>) =&gt; {
-<a href=#432 id=432 data-nosnippet>432</a>                <span class="comment">// A signature is already posted for this key with this state
-<a href=#433 id=433 data-nosnippet>433</a>                </span><span class="kw">return </span><span class="prelude-val">Err</span>(ServerError::catch_all(
-<a href=#434 id=434 data-nosnippet>434</a>                    StatusCode::BAD_REQUEST,
-<a href=#435 id=435 data-nosnippet>435</a>                    <span class="string">"A signature of this light client state is already posted at this block \
-<a href=#436 id=436 data-nosnippet>436</a>                     height for this key."
-<a href=#437 id=437 data-nosnippet>437</a>                        </span>.to_owned(),
-<a href=#438 id=438 data-nosnippet>438</a>                ));
-<a href=#439 id=439 data-nosnippet>439</a>            },
-<a href=#440 id=440 data-nosnippet>440</a>            Entry::Vacant(entry) =&gt; {
-<a href=#441 id=441 data-nosnippet>441</a>                entry.insert(req.signature);
-<a href=#442 id=442 data-nosnippet>442</a>                bundle.accumulated_weight += <span class="kw-2">*</span>weight;
-<a href=#443 id=443 data-nosnippet>443</a>            },
-<a href=#444 id=444 data-nosnippet>444</a>        }
-<a href=#445 id=445 data-nosnippet>445</a>
-<a href=#446 id=446 data-nosnippet>446</a>        <span class="kw">if </span>bundle.accumulated_weight &gt;= <span class="kw-2">*</span>threshold {
-<a href=#447 id=447 data-nosnippet>447</a>            <span class="macro">tracing::info!</span>(
-<a href=#448 id=448 data-nosnippet>448</a>                <span class="string">"State signature bundle at block height {} is ready to serve."</span>,
-<a href=#449 id=449 data-nosnippet>449</a>                block_height
-<a href=#450 id=450 data-nosnippet>450</a>            );
-<a href=#451 id=451 data-nosnippet>451</a>            <span class="self">self</span>.latest_block_height = <span class="prelude-val">Some</span>(block_height);
-<a href=#452 id=452 data-nosnippet>452</a>            <span class="self">self</span>.latest_available_bundle = <span class="prelude-val">Some</span>(bundle.clone());
-<a href=#453 id=453 data-nosnippet>453</a>
-<a href=#454 id=454 data-nosnippet>454</a>            <span class="comment">// garbage collect
-<a href=#455 id=455 data-nosnippet>455</a>            </span><span class="self">self</span>.prune(block_height);
-<a href=#456 id=456 data-nosnippet>456</a>        }
-<a href=#457 id=457 data-nosnippet>457</a>
-<a href=#458 id=458 data-nosnippet>458</a>        <span class="prelude-val">Ok</span>(())
-<a href=#459 id=459 data-nosnippet>459</a>    }
-<a href=#460 id=460 data-nosnippet>460</a>
-<a href=#461 id=461 data-nosnippet>461</a>    <span class="kw">async fn </span>post_legacy_signature(
-<a href=#462 id=462 data-nosnippet>462</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#463 id=463 data-nosnippet>463</a>        req: StateSignatureRequestBody,
-<a href=#464 id=464 data-nosnippet>464</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), ServerError&gt; {
-<a href=#465 id=465 data-nosnippet>465</a>        <span class="comment">// Initialize the stake table if not yet done
-<a href=#466 id=466 data-nosnippet>466</a>        </span><span class="kw">if </span><span class="self">self</span>.genesis_threshold.is_zero() {
-<a href=#467 id=467 data-nosnippet>467</a>            <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = <span class="self">self</span>.init_genesis_stake_table().<span class="kw">await </span>{
-<a href=#468 id=468 data-nosnippet>468</a>                <span class="macro">tracing::error!</span>(<span class="string">"Failed to initialize genesis stake table: {e}"</span>);
-<a href=#469 id=469 data-nosnippet>469</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(ServerError::catch_all(
-<a href=#470 id=470 data-nosnippet>470</a>                    StatusCode::INTERNAL_SERVER_ERROR,
-<a href=#471 id=471 data-nosnippet>471</a>                    <span class="macro">format!</span>(<span class="string">"Relay server is not ready to receive signatures: {e}"</span>),
-<a href=#472 id=472 data-nosnippet>472</a>                ));
-<a href=#473 id=473 data-nosnippet>473</a>            }
-<a href=#474 id=474 data-nosnippet>474</a>        }
-<a href=#475 id=475 data-nosnippet>475</a>        <span class="kw">let </span>block_height = req.state.block_height;
-<a href=#476 id=476 data-nosnippet>476</a>        <span class="kw">if </span>block_height &lt;= <span class="self">self</span>.latest_block_height_for_legacy.unwrap_or(<span class="number">0</span>) {
-<a href=#477 id=477 data-nosnippet>477</a>            <span class="comment">// This signature is no longer needed
-<a href=#478 id=478 data-nosnippet>478</a>            </span><span class="kw">return </span><span class="prelude-val">Ok</span>(());
-<a href=#479 id=479 data-nosnippet>479</a>        }
-<a href=#480 id=480 data-nosnippet>480</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(weight) = <span class="self">self</span>.genesis_known_nodes.get(<span class="kw-2">&amp;</span>req.key) <span class="kw">else </span>{
-<a href=#481 id=481 data-nosnippet>481</a>            <span class="macro">tracing::warn!</span>(
-<a href=#482 id=482 data-nosnippet>482</a>                <span class="string">"Received invalid legacy signature from unknown node: {:?}"</span>,
-<a href=#483 id=483 data-nosnippet>483</a>                req
-<a href=#484 id=484 data-nosnippet>484</a>            );
-<a href=#485 id=485 data-nosnippet>485</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(ServerError::catch_all(
-<a href=#486 id=486 data-nosnippet>486</a>                StatusCode::UNAUTHORIZED,
-<a href=#487 id=487 data-nosnippet>487</a>                <span class="string">"Legacy signature posted by nodes not on the stake table"</span>.to_owned(),
-<a href=#488 id=488 data-nosnippet>488</a>            ));
-<a href=#489 id=489 data-nosnippet>489</a>        };
-<a href=#490 id=490 data-nosnippet>490</a>
-<a href=#491 id=491 data-nosnippet>491</a>        <span class="comment">// sanity check the signature validity first before adding in
-<a href=#492 id=492 data-nosnippet>492</a>        </span><span class="kw">if </span>!req.key.legacy_verify_state_sig(<span class="kw-2">&amp;</span>req.signature, <span class="kw-2">&amp;</span>req.state) {
-<a href=#493 id=493 data-nosnippet>493</a>            <span class="macro">tracing::warn!</span>(<span class="string">"Received invalid legacy signature: {:?}"</span>, req);
-<a href=#494 id=494 data-nosnippet>494</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(ServerError::catch_all(
-<a href=#495 id=495 data-nosnippet>495</a>                StatusCode::BAD_REQUEST,
-<a href=#496 id=496 data-nosnippet>496</a>                <span class="string">"The posted legacy signature is not valid."</span>.to_owned(),
-<a href=#497 id=497 data-nosnippet>497</a>            ));
-<a href=#498 id=498 data-nosnippet>498</a>        }
-<a href=#499 id=499 data-nosnippet>499</a>
-<a href=#500 id=500 data-nosnippet>500</a>        <span class="kw">let </span>bundles_at_height = <span class="self">self</span>.legacy_bundles.entry(block_height).or_default();
-<a href=#501 id=501 data-nosnippet>501</a>        <span class="self">self</span>.queue_for_legacy.insert(block_height);
-<a href=#502 id=502 data-nosnippet>502</a>
-<a href=#503 id=503 data-nosnippet>503</a>        <span class="kw">let </span>bundle = bundles_at_height
-<a href=#504 id=504 data-nosnippet>504</a>            .entry(req.state)
-<a href=#505 id=505 data-nosnippet>505</a>            .or_insert(StateSignaturesBundle {
-<a href=#506 id=506 data-nosnippet>506</a>                state: req.state,
-<a href=#507 id=507 data-nosnippet>507</a>                next_stake: req.next_stake,
-<a href=#508 id=508 data-nosnippet>508</a>                signatures: Default::default(),
-<a href=#509 id=509 data-nosnippet>509</a>                accumulated_weight: U256::from(<span class="number">0</span>),
-<a href=#510 id=510 data-nosnippet>510</a>            });
-<a href=#511 id=511 data-nosnippet>511</a>        <span class="macro">tracing::debug!</span>(
-<a href=#512 id=512 data-nosnippet>512</a>            <span class="string">"Accepting new legacy signature for block height {} from {}."</span>,
-<a href=#513 id=513 data-nosnippet>513</a>            block_height,
-<a href=#514 id=514 data-nosnippet>514</a>            req.key
-<a href=#515 id=515 data-nosnippet>515</a>        );
-<a href=#516 id=516 data-nosnippet>516</a>        <span class="kw">match </span>bundle.signatures.entry(req.key) {
-<a href=#517 id=517 data-nosnippet>517</a>            Entry::Occupied(<span class="kw">_</span>) =&gt; {
-<a href=#518 id=518 data-nosnippet>518</a>                <span class="comment">// A signature is already posted for this key with this state
-<a href=#519 id=519 data-nosnippet>519</a>                </span><span class="kw">return </span><span class="prelude-val">Err</span>(ServerError::catch_all(
-<a href=#520 id=520 data-nosnippet>520</a>                    StatusCode::BAD_REQUEST,
-<a href=#521 id=521 data-nosnippet>521</a>                    <span class="string">"A legacy signature of this light client state is already posted at this \
-<a href=#522 id=522 data-nosnippet>522</a>                     block height for this key."
-<a href=#523 id=523 data-nosnippet>523</a>                        </span>.to_owned(),
-<a href=#524 id=524 data-nosnippet>524</a>                ));
-<a href=#525 id=525 data-nosnippet>525</a>            },
-<a href=#526 id=526 data-nosnippet>526</a>            Entry::Vacant(entry) =&gt; {
-<a href=#527 id=527 data-nosnippet>527</a>                entry.insert(req.signature);
-<a href=#528 id=528 data-nosnippet>528</a>                bundle.accumulated_weight += <span class="kw-2">*</span>weight;
-<a href=#529 id=529 data-nosnippet>529</a>            },
-<a href=#530 id=530 data-nosnippet>530</a>        }
-<a href=#531 id=531 data-nosnippet>531</a>
-<a href=#532 id=532 data-nosnippet>532</a>        <span class="kw">if </span>bundle.accumulated_weight &gt;= <span class="self">self</span>.genesis_threshold {
-<a href=#533 id=533 data-nosnippet>533</a>            <span class="macro">tracing::info!</span>(
-<a href=#534 id=534 data-nosnippet>534</a>                <span class="string">"Legacy state signature bundle at block height {} is ready to serve."</span>,
-<a href=#535 id=535 data-nosnippet>535</a>                block_height
-<a href=#536 id=536 data-nosnippet>536</a>            );
-<a href=#537 id=537 data-nosnippet>537</a>            <span class="self">self</span>.latest_block_height_for_legacy = <span class="prelude-val">Some</span>(block_height);
-<a href=#538 id=538 data-nosnippet>538</a>            <span class="self">self</span>.latest_available_legacy_bundle = <span class="prelude-val">Some</span>(bundle.clone());
-<a href=#539 id=539 data-nosnippet>539</a>
-<a href=#540 id=540 data-nosnippet>540</a>            <span class="comment">// garbage collect
-<a href=#541 id=541 data-nosnippet>541</a>            </span><span class="self">self</span>.prune_for_legacy(block_height);
-<a href=#542 id=542 data-nosnippet>542</a>        }
-<a href=#543 id=543 data-nosnippet>543</a>
-<a href=#544 id=544 data-nosnippet>544</a>        <span class="prelude-val">Ok</span>(())
-<a href=#545 id=545 data-nosnippet>545</a>    }
-<a href=#546 id=546 data-nosnippet>546</a>}
-<a href=#547 id=547 data-nosnippet>547</a>
-<a href=#548 id=548 data-nosnippet>548</a><span class="doccomment">/// configurability options for the web server
-<a href=#549 id=549 data-nosnippet>549</a></span><span class="attr">#[derive(Args, Default)]
-<a href=#550 id=550 data-nosnippet>550</a></span><span class="kw">pub struct </span>Options {
-<a href=#551 id=551 data-nosnippet>551</a>    <span class="attr">#[arg(
-<a href=#552 id=552 data-nosnippet>552</a>        long = <span class="string">"state-relay-server-api-path"</span>,
-<a href=#553 id=553 data-nosnippet>553</a>        env = <span class="string">"STATE_RELAY_SERVER_API_PATH"
-<a href=#554 id=554 data-nosnippet>554</a>    </span>)]
-<a href=#555 id=555 data-nosnippet>555</a>    </span><span class="doccomment">/// path to API
-<a href=#556 id=556 data-nosnippet>556</a>    </span><span class="kw">pub </span>api_path: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
-<a href=#557 id=557 data-nosnippet>557</a>}
-<a href=#558 id=558 data-nosnippet>558</a>
-<a href=#559 id=559 data-nosnippet>559</a><span class="doccomment">/// Set up APIs for relay server
-<a href=#560 id=560 data-nosnippet>560</a></span><span class="kw">fn </span>define_api&lt;State, ApiVer: StaticVersionType + <span class="lifetime">'static</span>&gt;(
-<a href=#561 id=561 data-nosnippet>561</a>    options: <span class="kw-2">&amp;</span>Options,
-<a href=#562 id=562 data-nosnippet>562</a>    <span class="kw">_</span>: ApiVer,
-<a href=#563 id=563 data-nosnippet>563</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Api&lt;State, ServerError, ApiVer&gt;, ApiError&gt;
-<a href=#564 id=564 data-nosnippet>564</a><span class="kw">where
-<a href=#565 id=565 data-nosnippet>565</a>    </span>State: <span class="lifetime">'static </span>+ Send + Sync + ReadState + WriteState,
-<a href=#566 id=566 data-nosnippet>566</a>    &lt;State <span class="kw">as </span>ReadState&gt;::State: Send + Sync + StateRelayServerDataSource,
-<a href=#567 id=567 data-nosnippet>567</a>{
-<a href=#568 id=568 data-nosnippet>568</a>    <span class="kw">let </span><span class="kw-2">mut </span>api = <span class="kw">match </span><span class="kw-2">&amp;</span>options.api_path {
-<a href=#569 id=569 data-nosnippet>569</a>        <span class="prelude-val">Some</span>(path) =&gt; Api::&lt;State, ServerError, ApiVer&gt;::from_file(path)<span class="question-mark">?</span>,
-<a href=#570 id=570 data-nosnippet>570</a>        <span class="prelude-val">None </span>=&gt; {
-<a href=#571 id=571 data-nosnippet>571</a>            <span class="kw">let </span>toml: toml::Value = toml::from_str(<span class="macro">include_str!</span>(
-<a href=#572 id=572 data-nosnippet>572</a>                <span class="string">"../../api/state_relay_server.toml"
-<a href=#573 id=573 data-nosnippet>573</a>            </span>))
-<a href=#574 id=574 data-nosnippet>574</a>            .map_err(|err| ApiError::CannotReadToml {
-<a href=#575 id=575 data-nosnippet>575</a>                reason: err.to_string(),
-<a href=#576 id=576 data-nosnippet>576</a>            })<span class="question-mark">?</span>;
-<a href=#577 id=577 data-nosnippet>577</a>            Api::&lt;State, ServerError, ApiVer&gt;::new(toml)<span class="question-mark">?
-<a href=#578 id=578 data-nosnippet>578</a>        </span>},
-<a href=#579 id=579 data-nosnippet>579</a>    };
-<a href=#580 id=580 data-nosnippet>580</a>
-<a href=#581 id=581 data-nosnippet>581</a>    api.get(<span class="string">"getlateststate"</span>, |_req, state| {
-<a href=#582 id=582 data-nosnippet>582</a>        <span class="kw">async move </span>{ state.get_latest_signature_bundle() }.boxed()
-<a href=#583 id=583 data-nosnippet>583</a>    })<span class="question-mark">?
-<a href=#584 id=584 data-nosnippet>584</a>    </span>.post(<span class="string">"poststatesignature"</span>, <span class="kw">move </span>|req, state| {
-<a href=#585 id=585 data-nosnippet>585</a>        <span class="kw">async move </span>{
-<a href=#586 id=586 data-nosnippet>586</a>            <span class="kw">if let </span><span class="prelude-val">Ok</span>(body) = req.body_auto::&lt;StateSignatureRequestBody, ApiVer&gt;(ApiVer::instance())
-<a href=#587 id=587 data-nosnippet>587</a>            {
-<a href=#588 id=588 data-nosnippet>588</a>                state.post_signature(body).<span class="kw">await
-<a href=#589 id=589 data-nosnippet>589</a>            </span>} <span class="kw">else if let </span><span class="prelude-val">Ok</span>(legacy_body) =
-<a href=#590 id=590 data-nosnippet>590</a>                req.body_auto::&lt;LegacyStateSignatureRequestBody, ApiVer&gt;(ApiVer::instance())
-<a href=#591 id=591 data-nosnippet>591</a>            {
-<a href=#592 id=592 data-nosnippet>592</a>                state.post_legacy_signature(legacy_body.into()).<span class="kw">await
-<a href=#593 id=593 data-nosnippet>593</a>            </span>} <span class="kw">else </span>{
-<a href=#594 id=594 data-nosnippet>594</a>                <span class="prelude-val">Err</span>(ServerError::catch_all(
-<a href=#595 id=595 data-nosnippet>595</a>                    StatusCode::BAD_REQUEST,
-<a href=#596 id=596 data-nosnippet>596</a>                    <span class="string">"Invalid request body"</span>.to_string(),
-<a href=#597 id=597 data-nosnippet>597</a>                ))
-<a href=#598 id=598 data-nosnippet>598</a>            }
-<a href=#599 id=599 data-nosnippet>599</a>        }
-<a href=#600 id=600 data-nosnippet>600</a>        .boxed()
-<a href=#601 id=601 data-nosnippet>601</a>    })<span class="question-mark">?
-<a href=#602 id=602 data-nosnippet>602</a>    </span>.get(<span class="string">"getlatestlegacystate"</span>, |_req, state| {
-<a href=#603 id=603 data-nosnippet>603</a>        <span class="kw">async move </span>{ state.get_latest_legacy_signature_bundle() }.boxed()
-<a href=#604 id=604 data-nosnippet>604</a>    })<span class="question-mark">?
-<a href=#605 id=605 data-nosnippet>605</a>    </span>.post(<span class="string">"postlegacystatesignature"</span>, <span class="kw">move </span>|req, state| {
-<a href=#606 id=606 data-nosnippet>606</a>        <span class="kw">async move </span>{
-<a href=#607 id=607 data-nosnippet>607</a>            <span class="kw">let </span>body = req
-<a href=#608 id=608 data-nosnippet>608</a>                .body_auto::&lt;StateSignatureRequestBody, ApiVer&gt;(ApiVer::instance())
-<a href=#609 id=609 data-nosnippet>609</a>                .map_err(ServerError::from_request_error)<span class="question-mark">?</span>;
-<a href=#610 id=610 data-nosnippet>610</a>            state.post_legacy_signature(body).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#611 id=611 data-nosnippet>611</a>            <span class="prelude-val">Ok</span>(())
-<a href=#612 id=612 data-nosnippet>612</a>        }
-<a href=#613 id=613 data-nosnippet>613</a>        .boxed()
-<a href=#614 id=614 data-nosnippet>614</a>    })<span class="question-mark">?</span>;
-<a href=#615 id=615 data-nosnippet>615</a>
-<a href=#616 id=616 data-nosnippet>616</a>    <span class="prelude-val">Ok</span>(api)
-<a href=#617 id=617 data-nosnippet>617</a>}
-<a href=#618 id=618 data-nosnippet>618</a>
-<a href=#619 id=619 data-nosnippet>619</a><span class="kw">pub async fn </span>run_relay_server&lt;ApiVer: StaticVersionType + <span class="lifetime">'static</span>&gt;(
-<a href=#620 id=620 data-nosnippet>620</a>    shutdown_listener: <span class="prelude-ty">Option</span>&lt;oneshot::Receiver&lt;()&gt;&gt;,
-<a href=#621 id=621 data-nosnippet>621</a>    sequencer_url: Url,
-<a href=#622 id=622 data-nosnippet>622</a>    url: Url,
-<a href=#623 id=623 data-nosnippet>623</a>    bind_version: ApiVer,
-<a href=#624 id=624 data-nosnippet>624</a>) -&gt; anyhow::Result&lt;()&gt; {
-<a href=#625 id=625 data-nosnippet>625</a>    <span class="kw">let </span>options = Options::default();
-<a href=#626 id=626 data-nosnippet>626</a>    <span class="kw">let </span>api = define_api(<span class="kw-2">&amp;</span>options, bind_version).unwrap();
-<a href=#627 id=627 data-nosnippet>627</a>
-<a href=#628 id=628 data-nosnippet>628</a>    <span class="kw">let </span>state = RwLock::new(
-<a href=#629 id=629 data-nosnippet>629</a>        StateRelayServerState::new(sequencer_url).with_shutdown_signal(shutdown_listener),
-<a href=#630 id=630 data-nosnippet>630</a>    );
-<a href=#631 id=631 data-nosnippet>631</a>    <span class="kw">let </span><span class="kw-2">mut </span>app = App::&lt;RwLock&lt;StateRelayServerState&gt;, ServerError&gt;::with_state(state);
-<a href=#632 id=632 data-nosnippet>632</a>
-<a href=#633 id=633 data-nosnippet>633</a>    app.register_module(<span class="string">"api"</span>, api).unwrap();
-<a href=#634 id=634 data-nosnippet>634</a>
-<a href=#635 id=635 data-nosnippet>635</a>    <span class="kw">let </span>app_future = app.serve(url.clone(), bind_version);
-<a href=#636 id=636 data-nosnippet>636</a>    app_future.<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#413 id=413 data-nosnippet>413</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(weight) = nodes.get(<span class="kw-2">&amp;</span>req.key) <span class="kw">else </span>{
+<a href=#414 id=414 data-nosnippet>414</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(ServerError::catch_all(
+<a href=#415 id=415 data-nosnippet>415</a>                StatusCode::UNAUTHORIZED,
+<a href=#416 id=416 data-nosnippet>416</a>                <span class="string">"Signature posted by nodes not on the stake table"</span>.to_owned(),
+<a href=#417 id=417 data-nosnippet>417</a>            ));
+<a href=#418 id=418 data-nosnippet>418</a>        };
+<a href=#419 id=419 data-nosnippet>419</a>
+<a href=#420 id=420 data-nosnippet>420</a>        <span class="kw">let </span>bundles_at_height = <span class="self">self</span>.bundles.entry(block_height).or_default();
+<a href=#421 id=421 data-nosnippet>421</a>        <span class="self">self</span>.queue.insert(block_height);
+<a href=#422 id=422 data-nosnippet>422</a>
+<a href=#423 id=423 data-nosnippet>423</a>        <span class="kw">let </span>bundle = bundles_at_height
+<a href=#424 id=424 data-nosnippet>424</a>            .entry(req.state)
+<a href=#425 id=425 data-nosnippet>425</a>            .or_insert(StateSignaturesBundle {
+<a href=#426 id=426 data-nosnippet>426</a>                state: req.state,
+<a href=#427 id=427 data-nosnippet>427</a>                next_stake: req.next_stake,
+<a href=#428 id=428 data-nosnippet>428</a>                signatures: Default::default(),
+<a href=#429 id=429 data-nosnippet>429</a>                accumulated_weight: U256::from(<span class="number">0</span>),
+<a href=#430 id=430 data-nosnippet>430</a>            });
+<a href=#431 id=431 data-nosnippet>431</a>        <span class="macro">tracing::debug!</span>(
+<a href=#432 id=432 data-nosnippet>432</a>            <span class="string">"Accepting new signature for block height {} from {}."</span>,
+<a href=#433 id=433 data-nosnippet>433</a>            block_height,
+<a href=#434 id=434 data-nosnippet>434</a>            req.key
+<a href=#435 id=435 data-nosnippet>435</a>        );
+<a href=#436 id=436 data-nosnippet>436</a>        <span class="kw">match </span>bundle.signatures.entry(req.key) {
+<a href=#437 id=437 data-nosnippet>437</a>            Entry::Occupied(<span class="kw">_</span>) =&gt; {
+<a href=#438 id=438 data-nosnippet>438</a>                <span class="comment">// A signature is already posted for this key with this state
+<a href=#439 id=439 data-nosnippet>439</a>                </span><span class="kw">return </span><span class="prelude-val">Err</span>(ServerError::catch_all(
+<a href=#440 id=440 data-nosnippet>440</a>                    StatusCode::BAD_REQUEST,
+<a href=#441 id=441 data-nosnippet>441</a>                    <span class="string">"A signature of this light client state is already posted at this block \
+<a href=#442 id=442 data-nosnippet>442</a>                     height for this key."
+<a href=#443 id=443 data-nosnippet>443</a>                        </span>.to_owned(),
+<a href=#444 id=444 data-nosnippet>444</a>                ));
+<a href=#445 id=445 data-nosnippet>445</a>            },
+<a href=#446 id=446 data-nosnippet>446</a>            Entry::Vacant(entry) =&gt; {
+<a href=#447 id=447 data-nosnippet>447</a>                entry.insert(req.signature);
+<a href=#448 id=448 data-nosnippet>448</a>                bundle.accumulated_weight += <span class="kw-2">*</span>weight;
+<a href=#449 id=449 data-nosnippet>449</a>            },
+<a href=#450 id=450 data-nosnippet>450</a>        }
+<a href=#451 id=451 data-nosnippet>451</a>
+<a href=#452 id=452 data-nosnippet>452</a>        <span class="kw">if </span>bundle.accumulated_weight &gt;= <span class="kw-2">*</span>threshold {
+<a href=#453 id=453 data-nosnippet>453</a>            <span class="macro">tracing::info!</span>(
+<a href=#454 id=454 data-nosnippet>454</a>                <span class="string">"State signature bundle at block height {} is ready to serve."</span>,
+<a href=#455 id=455 data-nosnippet>455</a>                block_height
+<a href=#456 id=456 data-nosnippet>456</a>            );
+<a href=#457 id=457 data-nosnippet>457</a>            <span class="self">self</span>.latest_block_height = <span class="prelude-val">Some</span>(block_height);
+<a href=#458 id=458 data-nosnippet>458</a>            <span class="self">self</span>.latest_available_bundle = <span class="prelude-val">Some</span>(bundle.clone());
+<a href=#459 id=459 data-nosnippet>459</a>
+<a href=#460 id=460 data-nosnippet>460</a>            <span class="comment">// garbage collect
+<a href=#461 id=461 data-nosnippet>461</a>            </span><span class="self">self</span>.prune(block_height);
+<a href=#462 id=462 data-nosnippet>462</a>        }
+<a href=#463 id=463 data-nosnippet>463</a>
+<a href=#464 id=464 data-nosnippet>464</a>        <span class="prelude-val">Ok</span>(())
+<a href=#465 id=465 data-nosnippet>465</a>    }
+<a href=#466 id=466 data-nosnippet>466</a>
+<a href=#467 id=467 data-nosnippet>467</a>    <span class="kw">async fn </span>post_legacy_signature(
+<a href=#468 id=468 data-nosnippet>468</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#469 id=469 data-nosnippet>469</a>        req: StateSignatureRequestBody,
+<a href=#470 id=470 data-nosnippet>470</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), ServerError&gt; {
+<a href=#471 id=471 data-nosnippet>471</a>        <span class="comment">// Initialize the stake table if not yet done
+<a href=#472 id=472 data-nosnippet>472</a>        </span><span class="kw">if </span><span class="self">self</span>.genesis_threshold.is_zero() {
+<a href=#473 id=473 data-nosnippet>473</a>            <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = <span class="self">self</span>.init_genesis_stake_table().<span class="kw">await </span>{
+<a href=#474 id=474 data-nosnippet>474</a>                <span class="macro">tracing::error!</span>(<span class="string">"Failed to initialize genesis stake table: {e}"</span>);
+<a href=#475 id=475 data-nosnippet>475</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(ServerError::catch_all(
+<a href=#476 id=476 data-nosnippet>476</a>                    StatusCode::INTERNAL_SERVER_ERROR,
+<a href=#477 id=477 data-nosnippet>477</a>                    <span class="macro">format!</span>(<span class="string">"Relay server is not ready to receive signatures: {e}"</span>),
+<a href=#478 id=478 data-nosnippet>478</a>                ));
+<a href=#479 id=479 data-nosnippet>479</a>            }
+<a href=#480 id=480 data-nosnippet>480</a>        }
+<a href=#481 id=481 data-nosnippet>481</a>        <span class="kw">let </span>block_height = req.state.block_height;
+<a href=#482 id=482 data-nosnippet>482</a>        <span class="kw">if </span>block_height &lt;= <span class="self">self</span>.latest_block_height_for_legacy.unwrap_or(<span class="number">0</span>) {
+<a href=#483 id=483 data-nosnippet>483</a>            <span class="comment">// This signature is no longer needed
+<a href=#484 id=484 data-nosnippet>484</a>            </span><span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#485 id=485 data-nosnippet>485</a>        }
+<a href=#486 id=486 data-nosnippet>486</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(weight) = <span class="self">self</span>.genesis_known_nodes.get(<span class="kw-2">&amp;</span>req.key) <span class="kw">else </span>{
+<a href=#487 id=487 data-nosnippet>487</a>            <span class="macro">tracing::warn!</span>(
+<a href=#488 id=488 data-nosnippet>488</a>                <span class="string">"Received invalid legacy signature from unknown node: {:?}"</span>,
+<a href=#489 id=489 data-nosnippet>489</a>                req
+<a href=#490 id=490 data-nosnippet>490</a>            );
+<a href=#491 id=491 data-nosnippet>491</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(ServerError::catch_all(
+<a href=#492 id=492 data-nosnippet>492</a>                StatusCode::UNAUTHORIZED,
+<a href=#493 id=493 data-nosnippet>493</a>                <span class="string">"Legacy signature posted by nodes not on the stake table"</span>.to_owned(),
+<a href=#494 id=494 data-nosnippet>494</a>            ));
+<a href=#495 id=495 data-nosnippet>495</a>        };
+<a href=#496 id=496 data-nosnippet>496</a>
+<a href=#497 id=497 data-nosnippet>497</a>        <span class="comment">// sanity check the signature validity first before adding in
+<a href=#498 id=498 data-nosnippet>498</a>        </span><span class="kw">if </span>!&lt;StateVerKey <span class="kw">as </span>LCV1StateSignatureKey&gt;::verify_state_sig(
+<a href=#499 id=499 data-nosnippet>499</a>            <span class="kw-2">&amp;</span>req.key,
+<a href=#500 id=500 data-nosnippet>500</a>            <span class="kw-2">&amp;</span>req.signature,
+<a href=#501 id=501 data-nosnippet>501</a>            <span class="kw-2">&amp;</span>req.state,
+<a href=#502 id=502 data-nosnippet>502</a>        ) {
+<a href=#503 id=503 data-nosnippet>503</a>            <span class="macro">tracing::warn!</span>(<span class="string">"Received invalid legacy signature: {:?}"</span>, req);
+<a href=#504 id=504 data-nosnippet>504</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(ServerError::catch_all(
+<a href=#505 id=505 data-nosnippet>505</a>                StatusCode::BAD_REQUEST,
+<a href=#506 id=506 data-nosnippet>506</a>                <span class="string">"The posted legacy signature is not valid."</span>.to_owned(),
+<a href=#507 id=507 data-nosnippet>507</a>            ));
+<a href=#508 id=508 data-nosnippet>508</a>        }
+<a href=#509 id=509 data-nosnippet>509</a>
+<a href=#510 id=510 data-nosnippet>510</a>        <span class="kw">let </span>bundles_at_height = <span class="self">self</span>.legacy_bundles.entry(block_height).or_default();
+<a href=#511 id=511 data-nosnippet>511</a>        <span class="self">self</span>.queue_for_legacy.insert(block_height);
+<a href=#512 id=512 data-nosnippet>512</a>
+<a href=#513 id=513 data-nosnippet>513</a>        <span class="kw">let </span>bundle = bundles_at_height
+<a href=#514 id=514 data-nosnippet>514</a>            .entry(req.state)
+<a href=#515 id=515 data-nosnippet>515</a>            .or_insert(StateSignaturesBundle {
+<a href=#516 id=516 data-nosnippet>516</a>                state: req.state,
+<a href=#517 id=517 data-nosnippet>517</a>                next_stake: req.next_stake,
+<a href=#518 id=518 data-nosnippet>518</a>                signatures: Default::default(),
+<a href=#519 id=519 data-nosnippet>519</a>                accumulated_weight: U256::from(<span class="number">0</span>),
+<a href=#520 id=520 data-nosnippet>520</a>            });
+<a href=#521 id=521 data-nosnippet>521</a>        <span class="macro">tracing::debug!</span>(
+<a href=#522 id=522 data-nosnippet>522</a>            <span class="string">"Accepting new legacy signature for block height {} from {}."</span>,
+<a href=#523 id=523 data-nosnippet>523</a>            block_height,
+<a href=#524 id=524 data-nosnippet>524</a>            req.key
+<a href=#525 id=525 data-nosnippet>525</a>        );
+<a href=#526 id=526 data-nosnippet>526</a>        <span class="kw">match </span>bundle.signatures.entry(req.key) {
+<a href=#527 id=527 data-nosnippet>527</a>            Entry::Occupied(<span class="kw">_</span>) =&gt; {
+<a href=#528 id=528 data-nosnippet>528</a>                <span class="comment">// A signature is already posted for this key with this state
+<a href=#529 id=529 data-nosnippet>529</a>                </span><span class="kw">return </span><span class="prelude-val">Err</span>(ServerError::catch_all(
+<a href=#530 id=530 data-nosnippet>530</a>                    StatusCode::BAD_REQUEST,
+<a href=#531 id=531 data-nosnippet>531</a>                    <span class="string">"A legacy signature of this light client state is already posted at this \
+<a href=#532 id=532 data-nosnippet>532</a>                     block height for this key."
+<a href=#533 id=533 data-nosnippet>533</a>                        </span>.to_owned(),
+<a href=#534 id=534 data-nosnippet>534</a>                ));
+<a href=#535 id=535 data-nosnippet>535</a>            },
+<a href=#536 id=536 data-nosnippet>536</a>            Entry::Vacant(entry) =&gt; {
+<a href=#537 id=537 data-nosnippet>537</a>                entry.insert(req.signature);
+<a href=#538 id=538 data-nosnippet>538</a>                bundle.accumulated_weight += <span class="kw-2">*</span>weight;
+<a href=#539 id=539 data-nosnippet>539</a>            },
+<a href=#540 id=540 data-nosnippet>540</a>        }
+<a href=#541 id=541 data-nosnippet>541</a>
+<a href=#542 id=542 data-nosnippet>542</a>        <span class="kw">if </span>bundle.accumulated_weight &gt;= <span class="self">self</span>.genesis_threshold {
+<a href=#543 id=543 data-nosnippet>543</a>            <span class="macro">tracing::info!</span>(
+<a href=#544 id=544 data-nosnippet>544</a>                <span class="string">"Legacy state signature bundle at block height {} is ready to serve."</span>,
+<a href=#545 id=545 data-nosnippet>545</a>                block_height
+<a href=#546 id=546 data-nosnippet>546</a>            );
+<a href=#547 id=547 data-nosnippet>547</a>            <span class="self">self</span>.latest_block_height_for_legacy = <span class="prelude-val">Some</span>(block_height);
+<a href=#548 id=548 data-nosnippet>548</a>            <span class="self">self</span>.latest_available_legacy_bundle = <span class="prelude-val">Some</span>(bundle.clone());
+<a href=#549 id=549 data-nosnippet>549</a>
+<a href=#550 id=550 data-nosnippet>550</a>            <span class="comment">// garbage collect
+<a href=#551 id=551 data-nosnippet>551</a>            </span><span class="self">self</span>.prune_for_legacy(block_height);
+<a href=#552 id=552 data-nosnippet>552</a>        }
+<a href=#553 id=553 data-nosnippet>553</a>
+<a href=#554 id=554 data-nosnippet>554</a>        <span class="prelude-val">Ok</span>(())
+<a href=#555 id=555 data-nosnippet>555</a>    }
+<a href=#556 id=556 data-nosnippet>556</a>}
+<a href=#557 id=557 data-nosnippet>557</a>
+<a href=#558 id=558 data-nosnippet>558</a><span class="doccomment">/// configurability options for the web server
+<a href=#559 id=559 data-nosnippet>559</a></span><span class="attr">#[derive(Args, Default)]
+<a href=#560 id=560 data-nosnippet>560</a></span><span class="kw">pub struct </span>Options {
+<a href=#561 id=561 data-nosnippet>561</a>    <span class="attr">#[arg(
+<a href=#562 id=562 data-nosnippet>562</a>        long = <span class="string">"state-relay-server-api-path"</span>,
+<a href=#563 id=563 data-nosnippet>563</a>        env = <span class="string">"STATE_RELAY_SERVER_API_PATH"
+<a href=#564 id=564 data-nosnippet>564</a>    </span>)]
+<a href=#565 id=565 data-nosnippet>565</a>    </span><span class="doccomment">/// path to API
+<a href=#566 id=566 data-nosnippet>566</a>    </span><span class="kw">pub </span>api_path: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+<a href=#567 id=567 data-nosnippet>567</a>}
+<a href=#568 id=568 data-nosnippet>568</a>
+<a href=#569 id=569 data-nosnippet>569</a><span class="doccomment">/// Set up APIs for relay server
+<a href=#570 id=570 data-nosnippet>570</a></span><span class="kw">fn </span>define_api&lt;State, ApiVer: StaticVersionType + <span class="lifetime">'static</span>&gt;(
+<a href=#571 id=571 data-nosnippet>571</a>    options: <span class="kw-2">&amp;</span>Options,
+<a href=#572 id=572 data-nosnippet>572</a>    <span class="kw">_</span>: ApiVer,
+<a href=#573 id=573 data-nosnippet>573</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Api&lt;State, ServerError, ApiVer&gt;, ApiError&gt;
+<a href=#574 id=574 data-nosnippet>574</a><span class="kw">where
+<a href=#575 id=575 data-nosnippet>575</a>    </span>State: <span class="lifetime">'static </span>+ Send + Sync + ReadState + WriteState,
+<a href=#576 id=576 data-nosnippet>576</a>    &lt;State <span class="kw">as </span>ReadState&gt;::State: Send + Sync + StateRelayServerDataSource,
+<a href=#577 id=577 data-nosnippet>577</a>{
+<a href=#578 id=578 data-nosnippet>578</a>    <span class="kw">let </span><span class="kw-2">mut </span>api = <span class="kw">match </span><span class="kw-2">&amp;</span>options.api_path {
+<a href=#579 id=579 data-nosnippet>579</a>        <span class="prelude-val">Some</span>(path) =&gt; Api::&lt;State, ServerError, ApiVer&gt;::from_file(path)<span class="question-mark">?</span>,
+<a href=#580 id=580 data-nosnippet>580</a>        <span class="prelude-val">None </span>=&gt; {
+<a href=#581 id=581 data-nosnippet>581</a>            <span class="kw">let </span>toml: toml::Value = toml::from_str(<span class="macro">include_str!</span>(
+<a href=#582 id=582 data-nosnippet>582</a>                <span class="string">"../../api/state_relay_server.toml"
+<a href=#583 id=583 data-nosnippet>583</a>            </span>))
+<a href=#584 id=584 data-nosnippet>584</a>            .map_err(|err| ApiError::CannotReadToml {
+<a href=#585 id=585 data-nosnippet>585</a>                reason: err.to_string(),
+<a href=#586 id=586 data-nosnippet>586</a>            })<span class="question-mark">?</span>;
+<a href=#587 id=587 data-nosnippet>587</a>            Api::&lt;State, ServerError, ApiVer&gt;::new(toml)<span class="question-mark">?
+<a href=#588 id=588 data-nosnippet>588</a>        </span>},
+<a href=#589 id=589 data-nosnippet>589</a>    };
+<a href=#590 id=590 data-nosnippet>590</a>
+<a href=#591 id=591 data-nosnippet>591</a>    api.get(<span class="string">"getlateststate"</span>, |_req, state| {
+<a href=#592 id=592 data-nosnippet>592</a>        <span class="kw">async move </span>{ state.get_latest_signature_bundle() }.boxed()
+<a href=#593 id=593 data-nosnippet>593</a>    })<span class="question-mark">?
+<a href=#594 id=594 data-nosnippet>594</a>    </span>.post(<span class="string">"poststatesignature"</span>, <span class="kw">move </span>|req, state| {
+<a href=#595 id=595 data-nosnippet>595</a>        <span class="kw">async move </span>{
+<a href=#596 id=596 data-nosnippet>596</a>            <span class="kw">if let </span><span class="prelude-val">Ok</span>(body) = req.body_auto::&lt;StateSignatureRequestBody, ApiVer&gt;(ApiVer::instance())
+<a href=#597 id=597 data-nosnippet>597</a>            {
+<a href=#598 id=598 data-nosnippet>598</a>                state.post_signature(body).<span class="kw">await
+<a href=#599 id=599 data-nosnippet>599</a>            </span>} <span class="kw">else if let </span><span class="prelude-val">Ok</span>(legacy_body) =
+<a href=#600 id=600 data-nosnippet>600</a>                req.body_auto::&lt;LegacyStateSignatureRequestBody, ApiVer&gt;(ApiVer::instance())
+<a href=#601 id=601 data-nosnippet>601</a>            {
+<a href=#602 id=602 data-nosnippet>602</a>                state.post_legacy_signature(legacy_body.into()).<span class="kw">await
+<a href=#603 id=603 data-nosnippet>603</a>            </span>} <span class="kw">else </span>{
+<a href=#604 id=604 data-nosnippet>604</a>                <span class="prelude-val">Err</span>(ServerError::catch_all(
+<a href=#605 id=605 data-nosnippet>605</a>                    StatusCode::BAD_REQUEST,
+<a href=#606 id=606 data-nosnippet>606</a>                    <span class="string">"Invalid request body"</span>.to_string(),
+<a href=#607 id=607 data-nosnippet>607</a>                ))
+<a href=#608 id=608 data-nosnippet>608</a>            }
+<a href=#609 id=609 data-nosnippet>609</a>        }
+<a href=#610 id=610 data-nosnippet>610</a>        .boxed()
+<a href=#611 id=611 data-nosnippet>611</a>    })<span class="question-mark">?
+<a href=#612 id=612 data-nosnippet>612</a>    </span>.get(<span class="string">"getlatestlegacystate"</span>, |_req, state| {
+<a href=#613 id=613 data-nosnippet>613</a>        <span class="kw">async move </span>{ state.get_latest_legacy_signature_bundle() }.boxed()
+<a href=#614 id=614 data-nosnippet>614</a>    })<span class="question-mark">?
+<a href=#615 id=615 data-nosnippet>615</a>    </span>.post(<span class="string">"postlegacystatesignature"</span>, <span class="kw">move </span>|req, state| {
+<a href=#616 id=616 data-nosnippet>616</a>        <span class="kw">async move </span>{
+<a href=#617 id=617 data-nosnippet>617</a>            <span class="kw">let </span>body = req
+<a href=#618 id=618 data-nosnippet>618</a>                .body_auto::&lt;StateSignatureRequestBody, ApiVer&gt;(ApiVer::instance())
+<a href=#619 id=619 data-nosnippet>619</a>                .map_err(ServerError::from_request_error)<span class="question-mark">?</span>;
+<a href=#620 id=620 data-nosnippet>620</a>            state.post_legacy_signature(body).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#621 id=621 data-nosnippet>621</a>            <span class="prelude-val">Ok</span>(())
+<a href=#622 id=622 data-nosnippet>622</a>        }
+<a href=#623 id=623 data-nosnippet>623</a>        .boxed()
+<a href=#624 id=624 data-nosnippet>624</a>    })<span class="question-mark">?</span>;
+<a href=#625 id=625 data-nosnippet>625</a>
+<a href=#626 id=626 data-nosnippet>626</a>    <span class="prelude-val">Ok</span>(api)
+<a href=#627 id=627 data-nosnippet>627</a>}
+<a href=#628 id=628 data-nosnippet>628</a>
+<a href=#629 id=629 data-nosnippet>629</a><span class="kw">pub async fn </span>run_relay_server&lt;ApiVer: StaticVersionType + <span class="lifetime">'static</span>&gt;(
+<a href=#630 id=630 data-nosnippet>630</a>    shutdown_listener: <span class="prelude-ty">Option</span>&lt;oneshot::Receiver&lt;()&gt;&gt;,
+<a href=#631 id=631 data-nosnippet>631</a>    sequencer_url: Url,
+<a href=#632 id=632 data-nosnippet>632</a>    url: Url,
+<a href=#633 id=633 data-nosnippet>633</a>    bind_version: ApiVer,
+<a href=#634 id=634 data-nosnippet>634</a>) -&gt; anyhow::Result&lt;()&gt; {
+<a href=#635 id=635 data-nosnippet>635</a>    <span class="kw">let </span>options = Options::default();
+<a href=#636 id=636 data-nosnippet>636</a>    <span class="kw">let </span>api = define_api(<span class="kw-2">&amp;</span>options, bind_version).unwrap();
 <a href=#637 id=637 data-nosnippet>637</a>
-<a href=#638 id=638 data-nosnippet>638</a>    <span class="macro">tracing::info!</span>(%url, <span class="string">"Relay server starts serving at "</span>);
-<a href=#639 id=639 data-nosnippet>639</a>
-<a href=#640 id=640 data-nosnippet>640</a>    <span class="prelude-val">Ok</span>(())
-<a href=#641 id=641 data-nosnippet>641</a>}
+<a href=#638 id=638 data-nosnippet>638</a>    <span class="kw">let </span>state = RwLock::new(
+<a href=#639 id=639 data-nosnippet>639</a>        StateRelayServerState::new(sequencer_url).with_shutdown_signal(shutdown_listener),
+<a href=#640 id=640 data-nosnippet>640</a>    );
+<a href=#641 id=641 data-nosnippet>641</a>    <span class="kw">let </span><span class="kw-2">mut </span>app = App::&lt;RwLock&lt;StateRelayServerState&gt;, ServerError&gt;::with_state(state);
 <a href=#642 id=642 data-nosnippet>642</a>
-<a href=#643 id=643 data-nosnippet>643</a><span class="kw">pub async fn </span>run_relay_server_with_state&lt;ApiVer: StaticVersionType + <span class="lifetime">'static</span>&gt;(
-<a href=#644 id=644 data-nosnippet>644</a>    server_url: Url,
-<a href=#645 id=645 data-nosnippet>645</a>    bind_version: ApiVer,
-<a href=#646 id=646 data-nosnippet>646</a>    state: StateRelayServerState,
-<a href=#647 id=647 data-nosnippet>647</a>) -&gt; anyhow::Result&lt;()&gt; {
-<a href=#648 id=648 data-nosnippet>648</a>    <span class="kw">let </span>options = Options::default();
-<a href=#649 id=649 data-nosnippet>649</a>    <span class="kw">let </span>api = define_api(<span class="kw-2">&amp;</span>options, bind_version).unwrap();
-<a href=#650 id=650 data-nosnippet>650</a>
-<a href=#651 id=651 data-nosnippet>651</a>    <span class="kw">let </span><span class="kw-2">mut </span>app = App::&lt;RwLock&lt;StateRelayServerState&gt;, ServerError&gt;::with_state(RwLock::new(state));
-<a href=#652 id=652 data-nosnippet>652</a>    app.register_module(<span class="string">"api"</span>, api).unwrap();
-<a href=#653 id=653 data-nosnippet>653</a>
-<a href=#654 id=654 data-nosnippet>654</a>    <span class="kw">let </span>app_future = app.serve(server_url.clone(), bind_version);
-<a href=#655 id=655 data-nosnippet>655</a>    app_future.<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#656 id=656 data-nosnippet>656</a>
-<a href=#657 id=657 data-nosnippet>657</a>    <span class="macro">tracing::info!</span>(%server_url, <span class="string">"Relay server starts serving at "</span>);
-<a href=#658 id=658 data-nosnippet>658</a>
-<a href=#659 id=659 data-nosnippet>659</a>    <span class="prelude-val">Ok</span>(())
-<a href=#660 id=660 data-nosnippet>660</a>}</code></pre></div></section></main></body></html>
+<a href=#643 id=643 data-nosnippet>643</a>    app.register_module(<span class="string">"api"</span>, api).unwrap();
+<a href=#644 id=644 data-nosnippet>644</a>
+<a href=#645 id=645 data-nosnippet>645</a>    <span class="kw">let </span>app_future = app.serve(url.clone(), bind_version);
+<a href=#646 id=646 data-nosnippet>646</a>    app_future.<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#647 id=647 data-nosnippet>647</a>
+<a href=#648 id=648 data-nosnippet>648</a>    <span class="macro">tracing::info!</span>(%url, <span class="string">"Relay server starts serving at "</span>);
+<a href=#649 id=649 data-nosnippet>649</a>
+<a href=#650 id=650 data-nosnippet>650</a>    <span class="prelude-val">Ok</span>(())
+<a href=#651 id=651 data-nosnippet>651</a>}
+<a href=#652 id=652 data-nosnippet>652</a>
+<a href=#653 id=653 data-nosnippet>653</a><span class="kw">pub async fn </span>run_relay_server_with_state&lt;ApiVer: StaticVersionType + <span class="lifetime">'static</span>&gt;(
+<a href=#654 id=654 data-nosnippet>654</a>    server_url: Url,
+<a href=#655 id=655 data-nosnippet>655</a>    bind_version: ApiVer,
+<a href=#656 id=656 data-nosnippet>656</a>    state: StateRelayServerState,
+<a href=#657 id=657 data-nosnippet>657</a>) -&gt; anyhow::Result&lt;()&gt; {
+<a href=#658 id=658 data-nosnippet>658</a>    <span class="kw">let </span>options = Options::default();
+<a href=#659 id=659 data-nosnippet>659</a>    <span class="kw">let </span>api = define_api(<span class="kw-2">&amp;</span>options, bind_version).unwrap();
+<a href=#660 id=660 data-nosnippet>660</a>
+<a href=#661 id=661 data-nosnippet>661</a>    <span class="kw">let </span><span class="kw-2">mut </span>app = App::&lt;RwLock&lt;StateRelayServerState&gt;, ServerError&gt;::with_state(RwLock::new(state));
+<a href=#662 id=662 data-nosnippet>662</a>    app.register_module(<span class="string">"api"</span>, api).unwrap();
+<a href=#663 id=663 data-nosnippet>663</a>
+<a href=#664 id=664 data-nosnippet>664</a>    <span class="kw">let </span>app_future = app.serve(server_url.clone(), bind_version);
+<a href=#665 id=665 data-nosnippet>665</a>    app_future.<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#666 id=666 data-nosnippet>666</a>
+<a href=#667 id=667 data-nosnippet>667</a>    <span class="macro">tracing::info!</span>(%server_url, <span class="string">"Relay server starts serving at "</span>);
+<a href=#668 id=668 data-nosnippet>668</a>
+<a href=#669 id=669 data-nosnippet>669</a>    <span class="prelude-val">Ok</span>(())
+<a href=#670 id=670 data-nosnippet>670</a>}</code></pre></div></section></main></body></html>

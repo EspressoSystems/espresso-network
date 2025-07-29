@@ -22,7 +22,7 @@
 <a href=#22 id=22 data-nosnippet>22</a>        block_contents::BlockHeader,
 <a href=#23 id=23 data-nosnippet>23</a>        election::Membership,
 <a href=#24 id=24 data-nosnippet>24</a>        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
-<a href=#25 id=25 data-nosnippet>25</a>        signature_key::{SignatureKey, StateSignatureKey},
+<a href=#25 id=25 data-nosnippet>25</a>        signature_key::{LCV2StateSignatureKey, SignatureKey, StateSignatureKey},
 <a href=#26 id=26 data-nosnippet>26</a>        storage::Storage,
 <a href=#27 id=27 data-nosnippet>27</a>        ValidatedState,
 <a href=#28 id=28 data-nosnippet>28</a>    },
@@ -572,7 +572,7 @@
 <a href=#572 id=572 data-nosnippet>572</a>            .commitment(stake_table_capacity)
 <a href=#573 id=573 data-nosnippet>573</a>            .wrap()
 <a href=#574 id=574 data-nosnippet>574</a>            .context(<span class="macro">error!</span>(<span class="string">"Failed to compute stake table commitment"</span>))<span class="question-mark">?</span>;
-<a href=#575 id=575 data-nosnippet>575</a>        <span class="kw">let </span>signature = &lt;TYPES::StateSignatureKey <span class="kw">as </span>StateSignatureKey&gt;::sign_state(
+<a href=#575 id=575 data-nosnippet>575</a>        <span class="kw">let </span>signature = &lt;TYPES::StateSignatureKey <span class="kw">as </span>LCV2StateSignatureKey&gt;::sign_state(
 <a href=#576 id=576 data-nosnippet>576</a>            state_private_key,
 <a href=#577 id=577 data-nosnippet>577</a>            <span class="kw-2">&amp;</span>light_client_state,
 <a href=#578 id=578 data-nosnippet>578</a>            <span class="kw-2">&amp;</span>next_stake_table_state,

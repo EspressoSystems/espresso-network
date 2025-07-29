@@ -18,7 +18,7 @@
 <a href=#18 id=18 data-nosnippet>18</a>        block_contents::BlockHeader,
 <a href=#19 id=19 data-nosnippet>19</a>        network::ConnectedNetwork,
 <a href=#20 id=20 data-nosnippet>20</a>        node_implementation::{NodeType, Versions},
-<a href=#21 id=21 data-nosnippet>21</a>        signature_key::StateSignatureKey,
+<a href=#21 id=21 data-nosnippet>21</a>        signature_key::{LCV1StateSignatureKey, LCV2StateSignatureKey},
 <a href=#22 id=22 data-nosnippet>22</a>    },
 <a href=#23 id=23 data-nosnippet>23</a>    utils::{is_ge_epoch_root, option_epoch_from_block_number},
 <a href=#24 id=24 data-nosnippet>24</a>};
@@ -218,7 +218,7 @@
 <a href=#218 id=218 data-nosnippet>218</a>        state: <span class="kw-2">&amp;</span>LightClientState,
 <a href=#219 id=219 data-nosnippet>219</a>        next_stake_table: StakeTableState,
 <a href=#220 id=220 data-nosnippet>220</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;StateSignature, SignatureError&gt; {
-<a href=#221 id=221 data-nosnippet>221</a>        <span class="kw">let </span>signature = &lt;SchnorrPubKey <span class="kw">as </span>StateSignatureKey&gt;::sign_state(
+<a href=#221 id=221 data-nosnippet>221</a>        <span class="kw">let </span>signature = &lt;SchnorrPubKey <span class="kw">as </span>LCV2StateSignatureKey&gt;::sign_state(
 <a href=#222 id=222 data-nosnippet>222</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.sign_key,
 <a href=#223 id=223 data-nosnippet>223</a>            state,
 <a href=#224 id=224 data-nosnippet>224</a>            <span class="kw-2">&amp;</span>next_stake_table,
@@ -244,7 +244,7 @@
 <a href=#244 id=244 data-nosnippet>244</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
 <a href=#245 id=245 data-nosnippet>245</a>        state: <span class="kw-2">&amp;</span>LightClientState,
 <a href=#246 id=246 data-nosnippet>246</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;StateSignature, SignatureError&gt; {
-<a href=#247 id=247 data-nosnippet>247</a>        &lt;SchnorrPubKey <span class="kw">as </span>StateSignatureKey&gt;::legacy_sign_state(<span class="kw-2">&amp;</span><span class="self">self</span>.sign_key, state)
+<a href=#247 id=247 data-nosnippet>247</a>        &lt;SchnorrPubKey <span class="kw">as </span>LCV1StateSignatureKey&gt;::sign_state(<span class="kw-2">&amp;</span><span class="self">self</span>.sign_key, state)
 <a href=#248 id=248 data-nosnippet>248</a>    }
 <a href=#249 id=249 data-nosnippet>249</a>}
 <a href=#250 id=250 data-nosnippet>250</a>

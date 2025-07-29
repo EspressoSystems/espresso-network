@@ -12,7 +12,7 @@
 <a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>clap::Parser;
 <a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>espresso_contract_deployer::network_config::fetch_epoch_config_from_sequencer;
 <a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>espresso_types::{parse_duration, v0_1::SwitchingTransport, L1ClientOptions};
-<a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>hotshot_state_prover::service::StateProverConfig;
+<a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>hotshot_state_prover::StateProverConfig;
 <a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
 <a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>sequencer_utils::logging;
 <a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>url::Url;
@@ -171,7 +171,7 @@
 <a href=#171 id=171 data-nosnippet>171</a>
 <a href=#172 id=172 data-nosnippet>172</a>    <span class="comment">// validate that the light client contract is a proxy, panics otherwise
 <a href=#173 id=173 data-nosnippet>173</a>    </span>config.validate_light_client_contract().<span class="kw">await</span>.unwrap();
-<a href=#174 id=174 data-nosnippet>174</a>    <span class="kw">let </span>is_legacy = <span class="kw">match </span>hotshot_state_prover::legacy::service::is_contract_legacy(
+<a href=#174 id=174 data-nosnippet>174</a>    <span class="kw">let </span>is_legacy = <span class="kw">match </span>hotshot_state_prover::v1::service::is_contract_legacy(
 <a href=#175 id=175 data-nosnippet>175</a>        <span class="kw-2">&amp;</span>l1_provider,
 <a href=#176 id=176 data-nosnippet>176</a>        args.light_client_address,
 <a href=#177 id=177 data-nosnippet>177</a>    )
@@ -194,9 +194,9 @@
 <a href=#194 id=194 data-nosnippet>194</a>    <span class="kw">if </span>args.daemon {
 <a href=#195 id=195 data-nosnippet>195</a>        <span class="comment">// Launching the prover service daemon
 <a href=#196 id=196 data-nosnippet>196</a>        </span><span class="kw">let </span>result = <span class="kw">if </span>is_legacy {
-<a href=#197 id=197 data-nosnippet>197</a>            hotshot_state_prover::legacy::service::run_prover_service(config, bind_version).<span class="kw">await
+<a href=#197 id=197 data-nosnippet>197</a>            hotshot_state_prover::v1::service::run_prover_service(config, bind_version).<span class="kw">await
 <a href=#198 id=198 data-nosnippet>198</a>        </span>} <span class="kw">else </span>{
-<a href=#199 id=199 data-nosnippet>199</a>            hotshot_state_prover::service::run_prover_service(config, bind_version).<span class="kw">await
+<a href=#199 id=199 data-nosnippet>199</a>            hotshot_state_prover::v2::service::run_prover_service(config, bind_version).<span class="kw">await
 <a href=#200 id=200 data-nosnippet>200</a>        </span>};
 <a href=#201 id=201 data-nosnippet>201</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = result {
 <a href=#202 id=202 data-nosnippet>202</a>            <span class="macro">tracing::error!</span>(<span class="string">"Error running prover service: {err}"</span>);
@@ -204,9 +204,9 @@
 <a href=#204 id=204 data-nosnippet>204</a>    } <span class="kw">else </span>{
 <a href=#205 id=205 data-nosnippet>205</a>        <span class="comment">// Run light client state update once
 <a href=#206 id=206 data-nosnippet>206</a>        </span><span class="kw">let </span>result = <span class="kw">if </span>is_legacy {
-<a href=#207 id=207 data-nosnippet>207</a>            hotshot_state_prover::legacy::service::run_prover_once(config, bind_version).<span class="kw">await
+<a href=#207 id=207 data-nosnippet>207</a>            hotshot_state_prover::v1::service::run_prover_once(config, bind_version).<span class="kw">await
 <a href=#208 id=208 data-nosnippet>208</a>        </span>} <span class="kw">else </span>{
-<a href=#209 id=209 data-nosnippet>209</a>            hotshot_state_prover::service::run_prover_once(config, bind_version).<span class="kw">await
+<a href=#209 id=209 data-nosnippet>209</a>            hotshot_state_prover::v2::service::run_prover_once(config, bind_version).<span class="kw">await
 <a href=#210 id=210 data-nosnippet>210</a>        </span>};
 <a href=#211 id=211 data-nosnippet>211</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = result {
 <a href=#212 id=212 data-nosnippet>212</a>            <span class="macro">tracing::error!</span>(<span class="string">"Error running prover once: {err}"</span>);

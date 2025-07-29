@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["circuit","legacy","mock_ledger","service","snark"]};
+window.SIDEBAR_ITEMS = {"enum":["ProverError"],"mod":["v1","v2","v3"],"struct":["ProverServiceState","StateProverConfig"]};

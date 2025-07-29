@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["generate_state_update_proof","preprocess"],"type":["Proof","ProvingKey","PublicInput","UniversalSrs","VerifyingKey"]};

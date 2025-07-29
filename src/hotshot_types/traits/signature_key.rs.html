@@ -26,7 +26,7 @@
 <a href=#26 id=26 data-nosnippet>26</a><span class="kw">use crate</span>::{
 <a href=#27 id=27 data-nosnippet>27</a>    bundle::Bundle,
 <a href=#28 id=28 data-nosnippet>28</a>    data::VidCommitment,
-<a href=#29 id=29 data-nosnippet>29</a>    light_client::{LightClientState, StakeTableState, ToFieldsLightClientCompat},
+<a href=#29 id=29 data-nosnippet>29</a>    light_client::{CircuitField, LightClientState, StakeTableState, ToFieldsLightClientCompat},
 <a href=#30 id=30 data-nosnippet>30</a>    traits::node_implementation::NodeType,
 <a href=#31 id=31 data-nosnippet>31</a>    utils::BuilderCommitment,
 <a href=#32 id=32 data-nosnippet>32</a>};
@@ -436,34 +436,57 @@
 <a href=#436 id=436 data-nosnippet>436</a>    <span class="doccomment">/// Type of error that can occur when signing data
 <a href=#437 id=437 data-nosnippet>437</a>    </span><span class="kw">type </span>SignError: std::error::Error + Send + Sync;
 <a href=#438 id=438 data-nosnippet>438</a>
-<a href=#439 id=439 data-nosnippet>439</a>    <span class="doccomment">/// Sign the light client state
-<a href=#440 id=440 data-nosnippet>440</a>    </span><span class="kw">fn </span>sign_state(
-<a href=#441 id=441 data-nosnippet>441</a>        private_key: <span class="kw-2">&amp;</span><span class="self">Self</span>::StatePrivateKey,
-<a href=#442 id=442 data-nosnippet>442</a>        light_client_state: <span class="kw-2">&amp;</span>LightClientState,
-<a href=#443 id=443 data-nosnippet>443</a>        next_stake_table_state: <span class="kw-2">&amp;</span>StakeTableState,
-<a href=#444 id=444 data-nosnippet>444</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::StateSignature, <span class="self">Self</span>::SignError&gt;;
-<a href=#445 id=445 data-nosnippet>445</a>
-<a href=#446 id=446 data-nosnippet>446</a>    <span class="doccomment">/// Verify the light client state signature
-<a href=#447 id=447 data-nosnippet>447</a>    </span><span class="kw">fn </span>verify_state_sig(
-<a href=#448 id=448 data-nosnippet>448</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#449 id=449 data-nosnippet>449</a>        signature: <span class="kw-2">&amp;</span><span class="self">Self</span>::StateSignature,
-<a href=#450 id=450 data-nosnippet>450</a>        light_client_state: <span class="kw-2">&amp;</span>LightClientState,
-<a href=#451 id=451 data-nosnippet>451</a>        next_stake_table_state: <span class="kw-2">&amp;</span>StakeTableState,
-<a href=#452 id=452 data-nosnippet>452</a>    ) -&gt; bool;
-<a href=#453 id=453 data-nosnippet>453</a>
-<a href=#454 id=454 data-nosnippet>454</a>    <span class="doccomment">/// Sign the state for legacy light client
-<a href=#455 id=455 data-nosnippet>455</a>    </span><span class="kw">fn </span>legacy_sign_state(
-<a href=#456 id=456 data-nosnippet>456</a>        private_key: <span class="kw-2">&amp;</span><span class="self">Self</span>::StatePrivateKey,
-<a href=#457 id=457 data-nosnippet>457</a>        light_client_state: <span class="kw-2">&amp;</span>LightClientState,
-<a href=#458 id=458 data-nosnippet>458</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::StateSignature, <span class="self">Self</span>::SignError&gt;;
-<a href=#459 id=459 data-nosnippet>459</a>
-<a href=#460 id=460 data-nosnippet>460</a>    <span class="doccomment">/// Verify the state signature for legacy light client
-<a href=#461 id=461 data-nosnippet>461</a>    </span><span class="kw">fn </span>legacy_verify_state_sig(
-<a href=#462 id=462 data-nosnippet>462</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#463 id=463 data-nosnippet>463</a>        signature: <span class="kw-2">&amp;</span><span class="self">Self</span>::StateSignature,
+<a href=#439 id=439 data-nosnippet>439</a>    <span class="doccomment">/// Generate a new key pair
+<a href=#440 id=440 data-nosnippet>440</a>    </span><span class="kw">fn </span>generated_from_seed_indexed(seed: [u8; <span class="number">32</span>], index: u64) -&gt; (<span class="self">Self</span>, <span class="self">Self</span>::StatePrivateKey);
+<a href=#441 id=441 data-nosnippet>441</a>}
+<a href=#442 id=442 data-nosnippet>442</a>
+<a href=#443 id=443 data-nosnippet>443</a><span class="doccomment">/// Light client V1 signature key functions. The replicas only sign the light client state.
+<a href=#444 id=444 data-nosnippet>444</a></span><span class="kw">pub trait </span>LCV1StateSignatureKey: StateSignatureKey {
+<a href=#445 id=445 data-nosnippet>445</a>    <span class="doccomment">/// Sign the state for legacy light client
+<a href=#446 id=446 data-nosnippet>446</a>    </span><span class="kw">fn </span>sign_state(
+<a href=#447 id=447 data-nosnippet>447</a>        private_key: <span class="kw-2">&amp;</span><span class="self">Self</span>::StatePrivateKey,
+<a href=#448 id=448 data-nosnippet>448</a>        light_client_state: <span class="kw-2">&amp;</span>LightClientState,
+<a href=#449 id=449 data-nosnippet>449</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::StateSignature, <span class="self">Self</span>::SignError&gt;;
+<a href=#450 id=450 data-nosnippet>450</a>
+<a href=#451 id=451 data-nosnippet>451</a>    <span class="doccomment">/// Verify the state signature for legacy light client
+<a href=#452 id=452 data-nosnippet>452</a>    </span><span class="kw">fn </span>verify_state_sig(
+<a href=#453 id=453 data-nosnippet>453</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#454 id=454 data-nosnippet>454</a>        signature: <span class="kw-2">&amp;</span><span class="self">Self</span>::StateSignature,
+<a href=#455 id=455 data-nosnippet>455</a>        light_client_state: <span class="kw-2">&amp;</span>LightClientState,
+<a href=#456 id=456 data-nosnippet>456</a>    ) -&gt; bool;
+<a href=#457 id=457 data-nosnippet>457</a>}
+<a href=#458 id=458 data-nosnippet>458</a>
+<a href=#459 id=459 data-nosnippet>459</a><span class="doccomment">/// Light client V2 signature key functions. The replicas sign the light client state and stake table state for the next update.
+<a href=#460 id=460 data-nosnippet>460</a></span><span class="kw">pub trait </span>LCV2StateSignatureKey: StateSignatureKey {
+<a href=#461 id=461 data-nosnippet>461</a>    <span class="doccomment">/// Sign the light client state
+<a href=#462 id=462 data-nosnippet>462</a>    </span><span class="kw">fn </span>sign_state(
+<a href=#463 id=463 data-nosnippet>463</a>        private_key: <span class="kw-2">&amp;</span><span class="self">Self</span>::StatePrivateKey,
 <a href=#464 id=464 data-nosnippet>464</a>        light_client_state: <span class="kw-2">&amp;</span>LightClientState,
-<a href=#465 id=465 data-nosnippet>465</a>    ) -&gt; bool;
-<a href=#466 id=466 data-nosnippet>466</a>
-<a href=#467 id=467 data-nosnippet>467</a>    <span class="doccomment">/// Generate a new key pair
-<a href=#468 id=468 data-nosnippet>468</a>    </span><span class="kw">fn </span>generated_from_seed_indexed(seed: [u8; <span class="number">32</span>], index: u64) -&gt; (<span class="self">Self</span>, <span class="self">Self</span>::StatePrivateKey);
-<a href=#469 id=469 data-nosnippet>469</a>}</code></pre></div></section></main></body></html>
+<a href=#465 id=465 data-nosnippet>465</a>        next_stake_table_state: <span class="kw-2">&amp;</span>StakeTableState,
+<a href=#466 id=466 data-nosnippet>466</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::StateSignature, <span class="self">Self</span>::SignError&gt;;
+<a href=#467 id=467 data-nosnippet>467</a>
+<a href=#468 id=468 data-nosnippet>468</a>    <span class="doccomment">/// Verify the light client state signature
+<a href=#469 id=469 data-nosnippet>469</a>    </span><span class="kw">fn </span>verify_state_sig(
+<a href=#470 id=470 data-nosnippet>470</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#471 id=471 data-nosnippet>471</a>        signature: <span class="kw-2">&amp;</span><span class="self">Self</span>::StateSignature,
+<a href=#472 id=472 data-nosnippet>472</a>        light_client_state: <span class="kw-2">&amp;</span>LightClientState,
+<a href=#473 id=473 data-nosnippet>473</a>        next_stake_table_state: <span class="kw-2">&amp;</span>StakeTableState,
+<a href=#474 id=474 data-nosnippet>474</a>    ) -&gt; bool;
+<a href=#475 id=475 data-nosnippet>475</a>}
+<a href=#476 id=476 data-nosnippet>476</a>
+<a href=#477 id=477 data-nosnippet>477</a><span class="doccomment">/// Light client V3 signature key functions. The replicas sign a keccak256 hash of ABI encodings of the light client state,
+<a href=#478 id=478 data-nosnippet>478</a>/// next stake table state, and the auth root.
+<a href=#479 id=479 data-nosnippet>479</a></span><span class="kw">pub trait </span>LCV3StateSignatureKey: StateSignatureKey {
+<a href=#480 id=480 data-nosnippet>480</a>    <span class="doccomment">/// Sign the light client state
+<a href=#481 id=481 data-nosnippet>481</a>    /// The input `msg` should be the keccak256 hash of ABI encodings of the light client state,
+<a href=#482 id=482 data-nosnippet>482</a>    /// next stake table state, and the auth root.
+<a href=#483 id=483 data-nosnippet>483</a>    </span><span class="kw">fn </span>sign_state(
+<a href=#484 id=484 data-nosnippet>484</a>        private_key: <span class="kw-2">&amp;</span><span class="self">Self</span>::StatePrivateKey,
+<a href=#485 id=485 data-nosnippet>485</a>        msg: CircuitField,
+<a href=#486 id=486 data-nosnippet>486</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::StateSignature, <span class="self">Self</span>::SignError&gt;;
+<a href=#487 id=487 data-nosnippet>487</a>
+<a href=#488 id=488 data-nosnippet>488</a>    <span class="doccomment">/// Verify the light client state signature
+<a href=#489 id=489 data-nosnippet>489</a>    /// The input `msg` should be the keccak256 hash of ABI encodings of the light client state,
+<a href=#490 id=490 data-nosnippet>490</a>    /// next stake table state, and the auth root.
+<a href=#491 id=491 data-nosnippet>491</a>    </span><span class="kw">fn </span>verify_state_sig(<span class="kw-2">&amp;</span><span class="self">self</span>, signature: <span class="kw-2">&amp;</span><span class="self">Self</span>::StateSignature, msg: CircuitField) -&gt; bool;
+<a href=#492 id=492 data-nosnippet>492</a>}</code></pre></div></section></main></body></html>
