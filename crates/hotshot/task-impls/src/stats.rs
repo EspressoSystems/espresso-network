@@ -207,7 +207,7 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                 // If the last view succeeded, add the metric for time between proposals
                 if proposal.data.view_change_evidence().is_none() {
                     if let Some(previous_proposal_time) = self
-                        .replica_entry(proposal.data.view_number())
+                        .replica_entry(proposal.data.view_number() - 1)
                         .proposal_recv
                     {
                         // calculate the elapsed time as milliseconds (from nanoseconds)
@@ -275,14 +275,16 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                 if self.view < *view {
                     self.view = *view;
                 }
+                let mut new_epoch = false;
                 if self.epoch < *epoch {
                     self.epoch = *epoch;
+                    new_epoch = true;
                 }
                 if *view == TYPES::View::new(0) {
                     return Ok(());
                 }
 
-                if **view % 100 == 0 {
+                if new_epoch {
                     let _ = self.dump_stats();
                     self.garbage_collect(*view - 1);
                 }
