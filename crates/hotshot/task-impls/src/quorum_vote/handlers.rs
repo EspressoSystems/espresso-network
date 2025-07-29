@@ -584,6 +584,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
             light_client_state,
             next_stake_table_state,
             signature,
+            auth_root: None,
         };
         broadcast_event(
             Arc::new(HotShotEvent::EpochRootQuorumVoteSend(EpochRootQuorumVote {

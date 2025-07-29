@@ -36,7 +36,7 @@ use crate::{
     impl_has_epoch, impl_has_none_epoch,
     message::{convert_proposal, Proposal, UpgradeLock},
     simple_certificate::{
-        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
+        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate,
         QuorumCertificate2, TimeoutCertificate, TimeoutCertificate2, UpgradeCertificate,
         ViewSyncFinalizeCertificate, ViewSyncFinalizeCertificate2,
     },
@@ -797,7 +797,7 @@ pub struct QuorumProposal2<TYPES: NodeType> {
 
     /// The light client state update certificate for the next epoch.
     /// This is required for the epoch root.
-    pub state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
+    pub state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
 }
 
 /// Wrapper around a proposal to append a block
@@ -880,7 +880,7 @@ impl<TYPES: NodeType> QuorumProposalWrapper<TYPES> {
     }
 
     /// Helper function to get the proposal's light client state update certificate
-    pub fn state_cert(&self) -> &Option<LightClientStateUpdateCertificate<TYPES>> {
+    pub fn state_cert(&self) -> &Option<LightClientStateUpdateCertificateV2<TYPES>> {
         &self.proposal.state_cert
     }
 }

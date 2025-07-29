@@ -24,7 +24,7 @@ use hotshot_types::{
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::Proposal,
     simple_certificate::{
-        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate2,
+        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
         UpgradeCertificate,
     },
     traits::metrics::Metrics,
@@ -247,14 +247,14 @@ impl SequencerPersistence for NoStorage {
 
     async fn add_state_cert(
         &self,
-        _state_cert: LightClientStateUpdateCertificate<SeqTypes>,
+        _state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
         Ok(())
     }
 
     async fn load_state_cert(
         &self,
-    ) -> anyhow::Result<Option<LightClientStateUpdateCertificate<SeqTypes>>> {
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
         Ok(None)
     }
 

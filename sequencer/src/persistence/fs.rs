@@ -33,8 +33,8 @@ use hotshot_types::{
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
-        QuorumCertificate2, UpgradeCertificate,
+        LightClientStateUpdateCertificateV2, LightClientStateUpdateCertificateV1,
+        NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
     },
     traits::{
         block_contents::{BlockHeader, BlockPayload},
@@ -551,28 +551,53 @@ impl Inner {
     fn finalized_state_cert(
         &self,
         view: ViewNumber,
-    ) -> anyhow::Result<Option<LightClientStateUpdateCertificate<SeqTypes>>> {
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
         let dir_path = self.state_cert_dir_path();
-
         let file_path = dir_path.join(view.u64().to_string()).with_extension("txt");
 
-        if file_path.exists() {
-            let bytes = fs::read(file_path)?;
-            let state_cert: LightClientStateUpdateCertificate<SeqTypes> =
-                bincode::deserialize(&bytes)?;
-            let epoch = state_cert.epoch.u64();
-            let finalized_dir_path = self.finalized_state_cert_dir_path();
-            fs::create_dir_all(&finalized_dir_path).context("creating finalized state cert dir")?;
-            let finalized_file_path = finalized_dir_path
-                .join(epoch.to_string())
-                .with_extension("txt");
-            fs::write(finalized_file_path, bytes).context(format!(
-                "finalizing light client state update certificate file for epoch {epoch:?}"
-            ))?;
-            return Ok(Some(state_cert));
+        if !file_path.exists() {
+            return Ok(None);
         }
 
-        Ok(None)
+        let bytes = fs::read(&file_path)?;
+
+        let state_cert: LightClientStateUpdateCertificateV2<SeqTypes> =
+            match bincode::deserialize(&bytes) {
+                Ok(cert) => cert,
+                Err(err) => {
+                    tracing::info!(
+                        error = %err,
+                        path = %file_path.display(),
+                        "Failed to deserialize state certificate, attempting legacy format"
+                    );
+
+                    bincode::deserialize::<LightClientStateUpdateCertificateV1<SeqTypes>>(
+                        &bytes,
+                    )
+                    .map(Into::into)
+                    .with_context(|| {
+                        format!(
+                            "Failed to deserialize with both current and legacy certificate from \
+                             file '{}'. error: {err}",
+                            file_path.display()
+                        )
+                    })?
+                },
+            };
+
+        let epoch = state_cert.epoch.u64();
+        let finalized_dir_path = self.finalized_state_cert_dir_path();
+        fs::create_dir_all(&finalized_dir_path).context("creating finalized state cert dir")?;
+
+        let finalized_file_path = finalized_dir_path
+            .join(epoch.to_string())
+            .with_extension("txt");
+
+        fs::write(&finalized_file_path, &bytes).context(format!(
+            "finalizing light client state update certificate file for epoch {epoch:?}"
+        ))?;
+
+        Ok(Some(state_cert))
     }
 }
 
@@ -1401,7 +1426,7 @@ impl SequencerPersistence for Persistence {
 
     async fn add_state_cert(
         &self,
-        state_cert: LightClientStateUpdateCertificate<SeqTypes>,
+        state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
         let inner = self.inner.write().await;
         // let epoch = state_cert.epoch;
@@ -1476,15 +1501,16 @@ impl SequencerPersistence for Persistence {
 
     async fn load_state_cert(
         &self,
-    ) -> anyhow::Result<Option<LightClientStateUpdateCertificate<SeqTypes>>> {
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
         let inner = self.inner.read().await;
         let dir_path = inner.finalized_state_cert_dir_path();
 
-        let mut result = None;
-
         if !dir_path.is_dir() {
-            return Ok(result);
+            return Ok(None);
         }
+
+        let mut result: Option<LightClientStateUpdateCertificateV2<SeqTypes>> = None;
+
         for (epoch, path) in epoch_files(dir_path)? {
             if result.as_ref().is_some_and(|cert| epoch <= cert.epoch) {
                 continue;
@@ -1493,13 +1519,32 @@ impl SequencerPersistence for Persistence {
                 "reading light client state update certificate {}",
                 path.display()
             ))?;
-            result = Some(
-                bincode::deserialize::<LightClientStateUpdateCertificate<SeqTypes>>(&bytes)
-                    .context(format!(
-                        "parsing light client state update certificate {}",
-                        path.display()
-                    ))?,
-            );
+            let cert = match bincode::deserialize::<LightClientStateUpdateCertificateV2<SeqTypes>>(
+                &bytes,
+            ) {
+                Ok(cert) => cert,
+                Err(err) => {
+                    tracing::info!(
+                        error = %err,
+                        path = %path.display(),
+                        "Failed to deserialize current certificate format, attempting legacy format"
+                    );
+
+                    bincode::deserialize::<LightClientStateUpdateCertificateV1<SeqTypes>>(
+                        &bytes,
+                    )
+                    .map(Into::into)
+                    .with_context(|| {
+                        format!(
+                            "Failed to deserialize both current and legacy formats from '{}'. \
+                             Initial error: {err}",
+                            path.display()
+                        )
+                    })?
+                },
+            };
+
+            result = Some(cert);
         }
 
         Ok(result)
@@ -2155,7 +2200,7 @@ mod test {
             let block_header =
                 Header::genesis::<TestVersions>(&instance_state, payload.clone(), &metadata);
 
-            let state_cert = LightClientStateUpdateCertificate::<SeqTypes> {
+            let state_cert = LightClientStateUpdateCertificateV2::<SeqTypes> {
                 epoch: EpochNumber::new(i),
                 light_client_state: LightClientState {
                     view_number: i,
@@ -2164,6 +2209,7 @@ mod test {
                 },
                 next_stake_table_state: Default::default(),
                 signatures: vec![], // filling arbitrary value
+                auth_root: None,
             };
             assert!(storage.add_state_cert(state_cert).await.is_ok());
 

@@ -31,7 +31,7 @@ use crate::{
     event::{HotShotAction, LeafInfo},
     message::{Proposal, UpgradeLock},
     simple_certificate::{
-        DaCertificate2, LightClientStateUpdateCertificate, NextEpochQuorumCertificate2,
+        DaCertificate2, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
         QuorumCertificate2,
     },
     simple_vote::HasEpoch,
@@ -444,7 +444,7 @@ pub struct Consensus<TYPES: NodeType> {
     /// The highest block number that we have seen
     pub highest_block: u64,
     /// The light client state update certificate
-    pub state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
+    pub state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
 }
 
 /// This struct holds a payload and its metadata
@@ -575,7 +575,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         next_epoch_high_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
         metrics: Arc<ConsensusMetricsValue>,
         epoch_height: u64,
-        state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
+        state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
         drb_difficulty: u64,
         drb_upgrade_difficulty: u64,
     ) -> Self {
@@ -698,7 +698,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     }
 
     /// Get the current light client state certificate
-    pub fn state_cert(&self) -> Option<&LightClientStateUpdateCertificate<TYPES>> {
+    pub fn state_cert(&self) -> Option<&LightClientStateUpdateCertificateV2<TYPES>> {
         self.state_cert.as_ref()
     }
 
@@ -1127,7 +1127,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     /// Can return an error when the provided state_cert is not newer than the existing entry.
     pub fn update_state_cert(
         &mut self,
-        state_cert: LightClientStateUpdateCertificate<TYPES>,
+        state_cert: LightClientStateUpdateCertificateV2<TYPES>,
     ) -> Result<()> {
         if let Some(existing_state_cert) = &self.state_cert {
             ensure!(

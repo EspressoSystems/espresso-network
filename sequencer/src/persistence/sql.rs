@@ -55,8 +55,8 @@ use hotshot_types::{
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
-        QuorumCertificate2, UpgradeCertificate,
+        LightClientStateUpdateCertificateV2, LightClientStateUpdateCertificateV1,
+        NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
     },
     traits::{
         block_contents::{BlockHeader, BlockPayload},
@@ -783,7 +783,7 @@ impl Persistence {
                 .map(|row| {
                     let data: Vec<u8> = row.get("state_cert");
                     let state_cert =
-                        bincode::deserialize::<LightClientStateUpdateCertificate<SeqTypes>>(&data)?;
+                        bincode::deserialize::<LightClientStateUpdateCertificateV2<SeqTypes>>(&data)?;
                     Ok((state_cert.epoch.u64(), state_cert))
                 })
                 .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
@@ -2061,7 +2061,7 @@ impl SequencerPersistence for Persistence {
 
     async fn add_state_cert(
         &self,
-        state_cert: LightClientStateUpdateCertificate<SeqTypes>,
+        state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
         let state_cert_bytes = bincode::serialize(&state_cert)
             .context("serializing light client state update certificate")?;
@@ -2082,7 +2082,7 @@ impl SequencerPersistence for Persistence {
 
     async fn load_state_cert(
         &self,
-    ) -> anyhow::Result<Option<LightClientStateUpdateCertificate<SeqTypes>>> {
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
         let Some(row) = self
             .db
             .read()
@@ -2095,9 +2095,30 @@ impl SequencerPersistence for Persistence {
             return Ok(None);
         };
         let bytes: Vec<u8> = row.get("state_cert");
-        bincode::deserialize(&bytes)
-            .context("deserializing light client state update certificate")
-            .map(Some)
+
+        let cert = match bincode::deserialize(&bytes) {
+            Ok(cert) => cert,
+            Err(err) => {
+                tracing::info!(
+                    error = %err,
+                    "Failed to deserialize state certificate, attempting legacy format"
+                );
+
+                let legacy_cert = bincode::deserialize::<
+                    LightClientStateUpdateCertificateV1<SeqTypes>,
+                >(&bytes)
+                .with_context(|| {
+                    format!(
+                        "Failed to deserialize using both current and legacy certificate. error: \
+                         {err}"
+                    )
+                })?;
+
+                legacy_cert.into()
+            },
+        };
+
+        Ok(Some(cert))
     }
 
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
@@ -3123,11 +3144,12 @@ mod test {
             .await
             .unwrap();
 
-            let state_cert = LightClientStateUpdateCertificate::<SeqTypes> {
+            let state_cert = LightClientStateUpdateCertificateV2::<SeqTypes> {
                 epoch: EpochNumber::new(i),
                 light_client_state: Default::default(), // filling arbitrary value
                 next_stake_table_state: Default::default(), // filling arbitrary value
                 signatures: vec![],                     // filling arbitrary value
+                auth_root: None,
             };
             // manually upsert the state cert to the finalized database
             let state_cert_bytes = bincode::serialize(&state_cert).unwrap();
@@ -3274,11 +3296,12 @@ mod test {
         );
         assert_eq!(
             storage.load_state_cert().await.unwrap().unwrap(),
-            LightClientStateUpdateCertificate::<SeqTypes> {
+            LightClientStateUpdateCertificateV2::<SeqTypes> {
                 epoch: EpochNumber::new(rows - 1),
                 light_client_state: Default::default(),
                 next_stake_table_state: Default::default(),
-                signatures: vec![]
+                signatures: vec![],
+                auth_root: None,
             },
             "Wrong light client state update certificate in the storage",
         );

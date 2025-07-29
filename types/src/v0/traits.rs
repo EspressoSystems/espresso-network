@@ -19,7 +19,7 @@ use hotshot_types::{
     event::{HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
+        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate,
         QuorumCertificate2, UpgradeCertificate,
     },
     stake_table::HSStakeTable,
@@ -472,7 +472,7 @@ pub trait SequencerPersistence:
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>>;
     async fn load_state_cert(
         &self,
-    ) -> anyhow::Result<Option<LightClientStateUpdateCertificate<SeqTypes>>>;
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>>;
 
     /// Load the latest known consensus state.
     ///
@@ -785,7 +785,7 @@ pub trait SequencerPersistence:
     ) -> anyhow::Result<()>;
     async fn add_state_cert(
         &self,
-        state_cert: LightClientStateUpdateCertificate<SeqTypes>,
+        state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()>;
 
     fn enable_metrics(&mut self, metrics: &dyn Metrics);
@@ -918,7 +918,7 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
 
     async fn update_state_cert(
         &self,
-        state_cert: LightClientStateUpdateCertificate<SeqTypes>,
+        state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
         (**self).add_state_cert(state_cert).await
     }

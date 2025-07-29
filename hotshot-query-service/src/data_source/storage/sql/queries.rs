@@ -21,7 +21,10 @@ use std::{
 use anyhow::Context;
 use derivative::Derivative;
 use hotshot_types::{
-    simple_certificate::{LightClientStateUpdateCertificate, QuorumCertificate2},
+    simple_certificate::{
+        LightClientStateUpdateCertificateV2, LightClientStateUpdateCertificateV1,
+        QuorumCertificate2,
+    },
     traits::{
         block_contents::{BlockHeader, BlockPayload},
         node_implementation::NodeType,
@@ -354,9 +357,31 @@ where
     Types: NodeType,
 {
     fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
-        let state_cert: LightClientStateUpdateCertificate<Types> =
-            bincode::deserialize(row.try_get("state_cert")?)
-                .decode_error("malformed state cert")?;
+        let state_cert: LightClientStateUpdateCertificateV2<Types> = {
+            let bytes: &[u8] = row.try_get("state_cert")?;
+            match bincode::deserialize::<LightClientStateUpdateCertificateV2<Types>>(bytes) {
+                Ok(cert) => cert,
+                Err(err) => {
+                    tracing::info!(
+                        "Falling back to legacy deserialization for \
+                         LightClientStateUpdateCertificateV2"
+                    );
+
+                    match bincode::deserialize::<LightClientStateUpdateCertificateV1<Types>>(
+                        bytes,
+                    ) {
+                        Ok(legacy) => legacy.into(),
+                        Err(err_legacy) => {
+                            tracing::error!(
+                                "Failed to deserialize state_cert with both new and legacy format \
+                                 error: {err}. Legacy error: {err_legacy}",
+                            );
+                            return Err(sqlx::Error::Decode(err_legacy));
+                        },
+                    }
+                },
+            }
+        };
         Ok(state_cert.into())
     }
 }
