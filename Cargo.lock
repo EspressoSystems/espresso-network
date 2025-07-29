@@ -5822,6 +5822,7 @@ dependencies = [
  "bincode",
  "chrono",
  "committable",
+ "csv",
  "either",
  "futures",
  "hotshot-builder-api",

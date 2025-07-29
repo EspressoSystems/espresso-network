@@ -64,3 +64,6 @@ pub mod quorum_proposal_recv;
 
 /// Task for storing and replaying all received tasks by a node
 pub mod rewind;
+
+/// Task for collecting stats
+pub mod stats;

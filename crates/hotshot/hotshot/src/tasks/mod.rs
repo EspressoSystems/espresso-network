@@ -27,13 +27,14 @@ use hotshot_task_impls::{
     network::{NetworkEventTaskState, NetworkMessageTaskState},
     request::NetworkRequestState,
     response::{run_response_task, NetworkResponseState},
+    stats::StatsTaskState,
     // transactions::TransactionTaskState,
     upgrade::UpgradeTaskState,
     vid::VidTaskState,
     view_sync::ViewSyncTaskState,
 };
 use hotshot_types::{
-    consensus::{Consensus, OuterConsensus},
+    consensus::OuterConsensus,
     constants::EVENT_CHANNEL_SIZE,
     message::{Message, UpgradeLock},
     storage_metrics::StorageMetricsValue,
@@ -260,6 +261,7 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, 
         handle.add_task(QuorumVoteTaskState::<TYPES, I, V>::create_from(handle).await);
         handle.add_task(QuorumProposalRecvTaskState::<TYPES, I, V>::create_from(handle).await);
         handle.add_task(ConsensusTaskState::<TYPES, I, V>::create_from(handle).await);
+        handle.add_task(StatsTaskState::<TYPES>::create_from(handle).await);
     }
     add_queue_len_task(handle);
     #[cfg(feature = "rewind")]
@@ -301,6 +303,7 @@ pub fn create_shutdown_event_monitor<TYPES: NodeType, I: NodeImplementation<TYPE
     .boxed()
 }
 
+#[allow(clippy::too_many_arguments)]
 #[async_trait]
 /// Trait for intercepting and modifying messages between the network and consensus layers.
 ///
@@ -319,7 +322,9 @@ where
         public_key: &TYPES::SignatureKey,
         private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
         upgrade_lock: &UpgradeLock<TYPES, V>,
-        consensus: Arc<RwLock<Consensus<TYPES>>>,
+        consensus: OuterConsensus<TYPES>,
+        membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        network: Arc<I::Network>,
     ) -> Vec<HotShotEvent<TYPES>>;
 
     #[allow(clippy::too_many_arguments)]
@@ -422,7 +427,9 @@ where
         let public_key = handle.public_key().clone();
         let private_key = handle.private_key().clone();
         let upgrade_lock = handle.hotshot.upgrade_lock.clone();
-        let consensus = Arc::clone(&handle.hotshot.consensus());
+        let consensus = OuterConsensus::new(handle.consensus());
+        let membership_coordinator = handle.membership_coordinator.clone();
+        let network = Arc::clone(&handle.network);
         let send_handle = spawn(async move {
             futures::pin_mut!(shutdown_signal);
 
@@ -454,7 +461,9 @@ where
                                     &public_key,
                                     &private_key,
                                     &upgrade_lock,
-                                    Arc::clone(&consensus)
+                                    consensus.clone(),
+                                    membership_coordinator.clone(),
+                                    Arc::clone(&network),
                                 ).await;
                                 results.reverse();
                                 while let Some(event) = results.pop() {

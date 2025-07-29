@@ -317,6 +317,11 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
             }
             self.transactions.push(txn.commit(), txn.clone());
         }
+        broadcast_event(
+            Arc::new(HotShotEvent::TransactionsRecv(transactions.clone())),
+            &event_stream,
+        )
+        .await;
         None
     }
 
