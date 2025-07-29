@@ -11,6 +11,7 @@ example-upgrade = []
 rewind = []
 
 [dependencies]
+ark-ff = { workspace = true }
 alloy = { workspace = true }
 anyhow = { workspace = true }
 async-broadcast = { workspace = true }
@@ -22,6 +23,7 @@ committable = { workspace = true }
 either = { workspace = true }
 futures = { workspace = true }
 hotshot-builder-api = { workspace = true }
+hotshot-contract-adapter = { workspace = true }
 hotshot-task = { workspace = true }
 hotshot-types = { workspace = true }
 hotshot-utils = { workspace = true }

@@ -2,7 +2,7 @@ base_version = "0.2"
 upgrade_version = "0.3"
 genesis_version = "0.2"
 # NOTE: the upgrade to PoS needs to happen within one epoch. Currently it takes about 120 blocks to
-# perform the upgrade. Therefore the epoch_height can't be set significantly lower than 150.
+# perform the upgrade. Therefore the epoch_height can"t be set significantly lower than 150.
 epoch_height = 150
 epoch_start_block = 271
 stake_table_capacity = 10
@@ -12,10 +12,10 @@ capacity = 10
 
 [chain_config]
 chain_id = 999999999
-base_fee = '1 wei'
-max_block_size = '1mb'
-fee_recipient = '0x0000000000000000000000000000000000000000'
-fee_contract = '0x8ce361602b935680e8dec218b820ff5056beb7af'
+base_fee = "1 wei"
+max_block_size = "1mb"
+fee_recipient = "0x0000000000000000000000000000000000000000"
+fee_contract = "0x8ce361602b935680e8dec218b820ff5056beb7af"
 
 [header]
 timestamp = "1970-01-01T00:00:00Z"
@@ -31,8 +31,8 @@ stop_proposing_view = 1000
 [upgrade.epoch]
 [upgrade.epoch.chain_config]
 chain_id = 999999999
-max_block_size = '1mb'
-base_fee = '1 wei'
+max_block_size = "1mb"
+base_fee = "1 wei"
 fee_recipient = "0x0000000000000000000000000000000000000000"
 fee_contract = "0x8ce361602b935680e8dec218b820ff5056beb7af"
 stake_table_contract = "0x12975173b87f7595ee45dffb2ab812ece596bf84"

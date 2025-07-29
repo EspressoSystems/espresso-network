@@ -306,6 +306,8 @@ jobs:
           - test-name: test_native_demo_base
           - test-name: test_native_demo_pos_base
           - test-name: test_native_demo_pos_upgrade
+          - test-name: test_native_demo_drb_header_upgrade
+          - test-name: test_native_demo_fee_to_drb_header_upgrade
 
       fail-fast: false
     runs-on: ubuntu-latest

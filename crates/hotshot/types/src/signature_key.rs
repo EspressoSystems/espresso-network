@@ -19,13 +19,14 @@ use rand_chacha::ChaCha20Rng;
 use tracing::instrument;
 
 use crate::{
-    light_client::{LightClientState, StakeTableState},
+    light_client::{CircuitField, LightClientState, StakeTableState},
     qc::{BitVectorQc, QcParams},
     stake_table::StakeTableEntry,
     traits::{
         qc::QuorumCertificateScheme,
         signature_key::{
-            BuilderSignatureKey, PrivateSignatureKey, SignatureKey, StateSignatureKey,
+            BuilderSignatureKey, LCV1StateSignatureKey, LCV2StateSignatureKey,
+            LCV3StateSignatureKey, PrivateSignatureKey, SignatureKey, StateSignatureKey,
         },
     },
 };
@@ -222,6 +223,36 @@ impl StateSignatureKey for SchnorrPubKey {
 
     type SignError = SignatureError;
 
+    fn generated_from_seed_indexed(seed: [u8; 32], index: u64) -> (Self, Self::StatePrivateKey) {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&seed);
+        hasher.update(&index.to_le_bytes());
+        let new_seed = *hasher.finalize().as_bytes();
+        let kp = jf_signature::schnorr::KeyPair::generate(&mut ChaCha20Rng::from_seed(new_seed));
+        (kp.ver_key(), kp.sign_key())
+    }
+}
+
+impl LCV1StateSignatureKey for SchnorrPubKey {
+    fn sign_state(
+        sk: &Self::StatePrivateKey,
+        light_client_state: &LightClientState,
+    ) -> Result<Self::StateSignature, Self::SignError> {
+        let state_msg: [_; 3] = light_client_state.into();
+        SchnorrSignatureScheme::sign(&(), sk, state_msg, &mut rand::thread_rng())
+    }
+
+    fn verify_state_sig(
+        &self,
+        signature: &Self::StateSignature,
+        light_client_state: &LightClientState,
+    ) -> bool {
+        let state_msg: [_; 3] = light_client_state.into();
+        SchnorrSignatureScheme::verify(&(), self, state_msg, signature).is_ok()
+    }
+}
+
+impl LCV2StateSignatureKey for SchnorrPubKey {
     fn sign_state(
         sk: &Self::StatePrivateKey,
         light_client_state: &LightClientState,
@@ -248,30 +279,23 @@ impl StateSignatureKey for SchnorrPubKey {
         msg.extend_from_slice(&adv_st_state_msg);
         SchnorrSignatureScheme::verify(&(), self, msg, signature).is_ok()
     }
+}
 
-    fn legacy_sign_state(
-        sk: &Self::StatePrivateKey,
-        light_client_state: &LightClientState,
+impl LCV3StateSignatureKey for SchnorrPubKey {
+    /// Sign the light client state
+    /// The input `msg` should be the keccak256 hash of ABI encodings of the light client state,
+    /// next stake table state, and the auth root.
+    fn sign_state(
+        private_key: &Self::StatePrivateKey,
+        msg: CircuitField,
     ) -> Result<Self::StateSignature, Self::SignError> {
-        let state_msg: [_; 3] = light_client_state.into();
-        SchnorrSignatureScheme::sign(&(), sk, state_msg, &mut rand::thread_rng())
+        SchnorrSignatureScheme::sign(&(), private_key, [msg], &mut rand::thread_rng())
     }
 
-    fn legacy_verify_state_sig(
-        &self,
-        signature: &Self::StateSignature,
-        light_client_state: &LightClientState,
-    ) -> bool {
-        let state_msg: [_; 3] = light_client_state.into();
-        SchnorrSignatureScheme::verify(&(), self, state_msg, signature).is_ok()
-    }
-
-    fn generated_from_seed_indexed(seed: [u8; 32], index: u64) -> (Self, Self::StatePrivateKey) {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(&seed);
-        hasher.update(&index.to_le_bytes());
-        let new_seed = *hasher.finalize().as_bytes();
-        let kp = jf_signature::schnorr::KeyPair::generate(&mut ChaCha20Rng::from_seed(new_seed));
-        (kp.ver_key(), kp.sign_key())
+    /// Verify the light client state signature
+    /// The input `msg` should be the keccak256 hash of ABI encodings of the light client state,
+    /// next stake table state, and the auth root.
+    fn verify_state_sig(&self, signature: &Self::StateSignature, msg: CircuitField) -> bool {
+        SchnorrSignatureScheme::verify(&(), self, [msg], signature).is_ok()
     }
 }
