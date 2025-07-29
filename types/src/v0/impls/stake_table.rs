@@ -2097,8 +2097,7 @@ impl Membership<SeqTypes> for EpochCommittees {
             },
             None => {
                 tracing::info!("Stake table missing for epoch {epoch}. Fetching from L1.");
-                let validators = fetcher.fetch(epoch, &block_header).await?;
-                validators
+                fetcher.fetch(epoch, &block_header).await?
             },
         };
 
