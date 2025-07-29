@@ -10,10 +10,15 @@ use std::{
     time::Instant,
 };
 
-use alloy::primitives::U256;
+use alloy::{
+    primitives::{FixedBytes, U256},
+    sol_types::SolValue,
+};
+use ark_ff::PrimeField;
 use async_broadcast::{Receiver, SendError, Sender};
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
+use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
 use hotshot_task::dependency::{Dependency, EventDependency};
 use hotshot_types::{
     consensus::OuterConsensus,
@@ -21,6 +26,7 @@ use hotshot_types::{
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType, LeafInfo},
+    light_client::{CircuitField, LightClientState, StakeTableState},
     message::{Proposal, UpgradeLock},
     request_response::ProposalRequestPayload,
     simple_certificate::{
@@ -33,7 +39,7 @@ use hotshot_types::{
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
-        signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
+        signature_key::{LCV2StateSignatureKey, SignatureKey, StakeTableEntryType},
         storage::Storage,
         BlockPayload, ValidatedState,
     },
@@ -1343,7 +1349,8 @@ pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
     for (key, sig) in state_cert.signatures.iter() {
         if let Some(stake) = state_key_map.get(key) {
             accumulated_stake += *stake;
-            if !key.verify_state_sig(
+            if !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
+                key,
                 sig,
                 &state_cert.light_client_state,
                 &state_cert.next_stake_table_state,
@@ -1463,4 +1470,23 @@ pub async fn broadcast_view_change<TYPES: NodeType>(
         sender,
     )
     .await
+}
+
+pub fn derive_signed_state_digest(
+    lc_state: &LightClientState,
+    next_stake_state: &StakeTableState,
+    auth_root: &FixedBytes<32>,
+) -> CircuitField {
+    let lc_state_sol: LightClientStateSol = (*lc_state).into();
+    let stake_st_sol: StakeTableStateSol = (*next_stake_state).into();
+
+    let res = alloy::primitives::keccak256(
+        (
+            lc_state_sol.abi_encode(),
+            stake_st_sol.abi_encode(),
+            auth_root.abi_encode(),
+        )
+            .abi_encode_packed(),
+    );
+    CircuitField::from_le_bytes_mod_order(res.as_ref())
 }

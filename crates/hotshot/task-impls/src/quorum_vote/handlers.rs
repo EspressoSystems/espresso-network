@@ -22,7 +22,7 @@ use hotshot_types::{
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
-        signature_key::{SignatureKey, StateSignatureKey},
+        signature_key::{LCV2StateSignatureKey, SignatureKey, StateSignatureKey},
         storage::Storage,
         ValidatedState,
     },
@@ -477,7 +477,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
             .commitment(stake_table_capacity)
             .wrap()
             .context(error!("Failed to compute stake table commitment"))?;
-        let signature = <TYPES::StateSignatureKey as StateSignatureKey>::sign_state(
+        let signature = <TYPES::StateSignatureKey as LCV2StateSignatureKey>::sign_state(
             state_private_key,
             &light_client_state,
             &next_stake_table_state,
