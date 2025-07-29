@@ -28,7 +28,7 @@ features (such as a JSON-RPC service in the case of an EVM application).
 - Provides a query interface for validator status and metrics
 - Integrates with HotShot to populate the persistent database
 - Generic over application types (within a leaf, the block and block commitment can be any type the application
-  specifieds)
+  specifies)
 - Transparently handles asynchronous data availability &mdash; block commitments are provided as soon as they are
   committed by consensus; block data is provided once it has disseminated from the data availability committee; missing
   data is fetched asynchronously from other nodes
