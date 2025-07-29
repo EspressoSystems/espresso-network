@@ -178,6 +178,10 @@ impl Versions for MockVersions {
     ];
     type Epochs = StaticVersion<0, 4>;
     type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
+
+    fn new() -> Self {
+        MockVersions {}
+    }
 }
 
 /// A type alias for the mock base version
