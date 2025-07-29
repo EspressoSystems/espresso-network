@@ -5791,6 +5791,7 @@ dependencies = [
  "futures",
  "hotshot-contract-adapter",
  "hotshot-query-service",
+ "hotshot-task-impls",
  "hotshot-types",
  "itertools 0.12.1",
  "jf-crhf 0.1.0",
@@ -5832,6 +5833,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
+ "ark-ff 0.4.2",
  "async-broadcast",
  "async-lock 3.4.0",
  "async-trait",
@@ -5841,6 +5843,7 @@ dependencies = [
  "either",
  "futures",
  "hotshot-builder-api",
+ "hotshot-contract-adapter",
  "hotshot-task",
  "hotshot-types",
  "hotshot-utils",

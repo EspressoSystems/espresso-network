@@ -2180,7 +2180,7 @@ impl MembershipPersistence for Persistence {
     }
 
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
-        let mut tx = self.db.write().await?;
+        let mut tx = self.db.read().await?;
 
         let rows = match query_as::<(i64, Vec<u8>, Option<Vec<u8>>)>(
             "SELECT epoch, stake, block_reward FROM epoch_drb_and_root ORDER BY epoch DESC LIMIT \
@@ -2323,7 +2323,7 @@ impl MembershipPersistence for Persistence {
         Option<EventsPersistenceRead>,
         Vec<(EventKey, StakeTableEvent)>,
     )> {
-        let mut tx = self.db.write().await?;
+        let mut tx = self.db.read().await?;
 
         // check last l1 block if there is any
         let res = query_as::<(i64,)>(
