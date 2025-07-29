@@ -870,14 +870,14 @@
 <a href=#870 id=870 data-nosnippet>870</a><span class="doccomment">/// Common logic for any Ownable contract to transfer ownership
 <a href=#871 id=871 data-nosnippet>871</a></span><span class="kw">pub async fn </span>transfer_ownership(
 <a href=#872 id=872 data-nosnippet>872</a>    provider: <span class="kw">impl </span>Provider,
-<a href=#873 id=873 data-nosnippet>873</a>    target: Contract,
-<a href=#874 id=874 data-nosnippet>874</a>    addr: Address,
+<a href=#873 id=873 data-nosnippet>873</a>    target_contract: Contract,
+<a href=#874 id=874 data-nosnippet>874</a>    target_address: Address,
 <a href=#875 id=875 data-nosnippet>875</a>    new_owner: Address,
 <a href=#876 id=876 data-nosnippet>876</a>) -&gt; <span class="prelude-ty">Result</span>&lt;TransactionReceipt&gt; {
-<a href=#877 id=877 data-nosnippet>877</a>    <span class="kw">let </span>receipt = <span class="kw">match </span>target {
+<a href=#877 id=877 data-nosnippet>877</a>    <span class="kw">let </span>receipt = <span class="kw">match </span>target_contract {
 <a href=#878 id=878 data-nosnippet>878</a>        Contract::LightClient | Contract::LightClientProxy =&gt; {
-<a href=#879 id=879 data-nosnippet>879</a>            <span class="macro">tracing::info!</span>(%addr, %new_owner, <span class="string">"Transfer LightClient ownership"</span>);
-<a href=#880 id=880 data-nosnippet>880</a>            <span class="kw">let </span>lc = LightClient::new(addr, <span class="kw-2">&amp;</span>provider);
+<a href=#879 id=879 data-nosnippet>879</a>            <span class="macro">tracing::info!</span>(%target_address, %new_owner, <span class="string">"Transfer LightClient ownership"</span>);
+<a href=#880 id=880 data-nosnippet>880</a>            <span class="kw">let </span>lc = LightClient::new(target_address, <span class="kw-2">&amp;</span>provider);
 <a href=#881 id=881 data-nosnippet>881</a>            lc.transferOwnership(new_owner)
 <a href=#882 id=882 data-nosnippet>882</a>                .send()
 <a href=#883 id=883 data-nosnippet>883</a>                .<span class="kw">await</span><span class="question-mark">?
@@ -885,8 +885,8 @@
 <a href=#885 id=885 data-nosnippet>885</a>                .<span class="kw">await</span><span class="question-mark">?
 <a href=#886 id=886 data-nosnippet>886</a>        </span>},
 <a href=#887 id=887 data-nosnippet>887</a>        Contract::FeeContract | Contract::FeeContractProxy =&gt; {
-<a href=#888 id=888 data-nosnippet>888</a>            <span class="macro">tracing::info!</span>(%addr, %new_owner, <span class="string">"Transfer FeeContract ownership"</span>);
-<a href=#889 id=889 data-nosnippet>889</a>            <span class="kw">let </span>fee = FeeContract::new(addr, <span class="kw-2">&amp;</span>provider);
+<a href=#888 id=888 data-nosnippet>888</a>            <span class="macro">tracing::info!</span>(%target_address, %new_owner, <span class="string">"Transfer FeeContract ownership"</span>);
+<a href=#889 id=889 data-nosnippet>889</a>            <span class="kw">let </span>fee = FeeContract::new(target_address, <span class="kw-2">&amp;</span>provider);
 <a href=#890 id=890 data-nosnippet>890</a>            fee.transferOwnership(new_owner)
 <a href=#891 id=891 data-nosnippet>891</a>                .send()
 <a href=#892 id=892 data-nosnippet>892</a>                .<span class="kw">await</span><span class="question-mark">?
@@ -894,8 +894,8 @@
 <a href=#894 id=894 data-nosnippet>894</a>                .<span class="kw">await</span><span class="question-mark">?
 <a href=#895 id=895 data-nosnippet>895</a>        </span>},
 <a href=#896 id=896 data-nosnippet>896</a>        Contract::EspToken | Contract::EspTokenProxy =&gt; {
-<a href=#897 id=897 data-nosnippet>897</a>            <span class="macro">tracing::info!</span>(%addr, %new_owner, <span class="string">"Transfer EspToken ownership"</span>);
-<a href=#898 id=898 data-nosnippet>898</a>            <span class="kw">let </span>token = EspToken::new(addr, <span class="kw-2">&amp;</span>provider);
+<a href=#897 id=897 data-nosnippet>897</a>            <span class="macro">tracing::info!</span>(%target_address, %new_owner, <span class="string">"Transfer EspToken ownership"</span>);
+<a href=#898 id=898 data-nosnippet>898</a>            <span class="kw">let </span>token = EspToken::new(target_address, <span class="kw-2">&amp;</span>provider);
 <a href=#899 id=899 data-nosnippet>899</a>            token
 <a href=#900 id=900 data-nosnippet>900</a>                .transferOwnership(new_owner)
 <a href=#901 id=901 data-nosnippet>901</a>                .send()
@@ -903,9 +903,9 @@
 <a href=#903 id=903 data-nosnippet>903</a>                </span>.get_receipt()
 <a href=#904 id=904 data-nosnippet>904</a>                .<span class="kw">await</span><span class="question-mark">?
 <a href=#905 id=905 data-nosnippet>905</a>        </span>},
-<a href=#906 id=906 data-nosnippet>906</a>        Contract::StakeTable | Contract::StakeTableProxy =&gt; {
-<a href=#907 id=907 data-nosnippet>907</a>            <span class="macro">tracing::info!</span>(%addr, %new_owner, <span class="string">"Transfer StakeTable ownership"</span>);
-<a href=#908 id=908 data-nosnippet>908</a>            <span class="kw">let </span>stake_table = StakeTable::new(addr, <span class="kw-2">&amp;</span>provider);
+<a href=#906 id=906 data-nosnippet>906</a>        Contract::StakeTable | Contract::StakeTableProxy | Contract::StakeTableV2 =&gt; {
+<a href=#907 id=907 data-nosnippet>907</a>            <span class="macro">tracing::info!</span>(%target_address, %new_owner, <span class="string">"Transfer StakeTable ownership"</span>);
+<a href=#908 id=908 data-nosnippet>908</a>            <span class="kw">let </span>stake_table = StakeTable::new(target_address, <span class="kw-2">&amp;</span>provider);
 <a href=#909 id=909 data-nosnippet>909</a>            stake_table
 <a href=#910 id=910 data-nosnippet>910</a>                .transferOwnership(new_owner)
 <a href=#911 id=911 data-nosnippet>911</a>                .send()
@@ -2316,7 +2316,7 @@
 <a href=#2316 id=2316 data-nosnippet>2316</a>                    mnemonic = val.to_string();
 <a href=#2317 id=2317 data-nosnippet>2317</a>                } <span class="kw">else if </span>key == <span class="string">"ESPRESSO_DEPLOYER_ACCOUNT_INDEX" </span>{
 <a href=#2318 id=2318 data-nosnippet>2318</a>                    account_index = val.parse::&lt;u32&gt;()<span class="question-mark">?</span>;
-<a href=#2319 id=2319 data-nosnippet>2319</a>                } <span class="kw">else if </span>key == <span class="string">"ESPRESSO_SEQUENCER_TIMELOCK_CONTROLLER_ADDRESS" </span>{
+<a href=#2319 id=2319 data-nosnippet>2319</a>                } <span class="kw">else if </span>key == <span class="string">"ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS" </span>{
 <a href=#2320 id=2320 data-nosnippet>2320</a>                    timelock = val.parse::&lt;Address&gt;()<span class="question-mark">?</span>;
 <a href=#2321 id=2321 data-nosnippet>2321</a>                }
 <a href=#2322 id=2322 data-nosnippet>2322</a>            }
@@ -2324,305 +2324,304 @@
 <a href=#2324 id=2324 data-nosnippet>2324</a>            <span class="kw">if </span>sepolia_rpc_url.is_empty() || multisig_admin.is_zero() || timelock.is_zero() {
 <a href=#2325 id=2325 data-nosnippet>2325</a>                <span class="macro">panic!</span>(
 <a href=#2326 id=2326 data-nosnippet>2326</a>                    <span class="string">"ESPRESSO_SEQUENCER_L1_PROVIDER, ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS, \
-<a href=#2327 id=2327 data-nosnippet>2327</a>                     ESPRESSO_SEQUENCER_TIMELOCK_CONTROLLER_ADDRESS must be set in \
-<a href=#2328 id=2328 data-nosnippet>2328</a>                     .env.deployer.rs.test"
-<a href=#2329 id=2329 data-nosnippet>2329</a>                </span>);
-<a href=#2330 id=2330 data-nosnippet>2330</a>            }
-<a href=#2331 id=2331 data-nosnippet>2331</a>        }
-<a href=#2332 id=2332 data-nosnippet>2332</a>
-<a href=#2333 id=2333 data-nosnippet>2333</a>        <span class="kw">let </span><span class="kw-2">mut </span>contracts = Contracts::new();
-<a href=#2334 id=2334 data-nosnippet>2334</a>        <span class="kw">let </span>admin_signer = MnemonicBuilder::&lt;English&gt;::default()
-<a href=#2335 id=2335 data-nosnippet>2335</a>            .phrase(mnemonic)
-<a href=#2336 id=2336 data-nosnippet>2336</a>            .index(account_index)
-<a href=#2337 id=2337 data-nosnippet>2337</a>            .expect(<span class="string">"wrong mnemonic or index"</span>)
-<a href=#2338 id=2338 data-nosnippet>2338</a>            .build()<span class="question-mark">?</span>;
-<a href=#2339 id=2339 data-nosnippet>2339</a>        <span class="kw">let </span>admin = admin_signer.address();
-<a href=#2340 id=2340 data-nosnippet>2340</a>        <span class="kw">let </span>provider = <span class="kw">if </span>!dry_run {
-<a href=#2341 id=2341 data-nosnippet>2341</a>            ProviderBuilder::new()
-<a href=#2342 id=2342 data-nosnippet>2342</a>                .wallet(admin_signer)
-<a href=#2343 id=2343 data-nosnippet>2343</a>                .connect(<span class="kw-2">&amp;</span>sepolia_rpc_url)
-<a href=#2344 id=2344 data-nosnippet>2344</a>                .<span class="kw">await</span><span class="question-mark">?
-<a href=#2345 id=2345 data-nosnippet>2345</a>        </span>} <span class="kw">else </span>{
-<a href=#2346 id=2346 data-nosnippet>2346</a>            ProviderBuilder::new()
-<a href=#2347 id=2347 data-nosnippet>2347</a>                .wallet(admin_signer)
-<a href=#2348 id=2348 data-nosnippet>2348</a>                .connect(<span class="kw-2">&amp;</span>anvil.endpoint())
-<a href=#2349 id=2349 data-nosnippet>2349</a>                .<span class="kw">await</span><span class="question-mark">?
-<a href=#2350 id=2350 data-nosnippet>2350</a>        </span>};
-<a href=#2351 id=2351 data-nosnippet>2351</a>
-<a href=#2352 id=2352 data-nosnippet>2352</a>        <span class="comment">// prepare `initialize()` input
-<a href=#2353 id=2353 data-nosnippet>2353</a>        </span><span class="kw">let </span>genesis_state = LightClientStateSol::dummy_genesis();
-<a href=#2354 id=2354 data-nosnippet>2354</a>        <span class="kw">let </span>genesis_stake = StakeTableStateSol::dummy_genesis();
-<a href=#2355 id=2355 data-nosnippet>2355</a>
-<a href=#2356 id=2356 data-nosnippet>2356</a>        <span class="kw">let </span>prover = Address::random();
-<a href=#2357 id=2357 data-nosnippet>2357</a>
-<a href=#2358 id=2358 data-nosnippet>2358</a>        <span class="comment">// deploy proxy and V1
-<a href=#2359 id=2359 data-nosnippet>2359</a>        </span><span class="kw">let </span>proxy_addr = <span class="kw">match </span>contract_type {
-<a href=#2360 id=2360 data-nosnippet>2360</a>            Contract::LightClientProxy =&gt; {
-<a href=#2361 id=2361 data-nosnippet>2361</a>                deploy_light_client_proxy(
-<a href=#2362 id=2362 data-nosnippet>2362</a>                    <span class="kw-2">&amp;</span>provider,
-<a href=#2363 id=2363 data-nosnippet>2363</a>                    <span class="kw-2">&amp;mut </span>contracts,
-<a href=#2364 id=2364 data-nosnippet>2364</a>                    <span class="bool-val">false</span>,
-<a href=#2365 id=2365 data-nosnippet>2365</a>                    genesis_state.clone(),
-<a href=#2366 id=2366 data-nosnippet>2366</a>                    genesis_stake.clone(),
-<a href=#2367 id=2367 data-nosnippet>2367</a>                    admin,
-<a href=#2368 id=2368 data-nosnippet>2368</a>                    <span class="prelude-val">Some</span>(prover),
-<a href=#2369 id=2369 data-nosnippet>2369</a>                )
-<a href=#2370 id=2370 data-nosnippet>2370</a>                .<span class="kw">await</span><span class="question-mark">?
-<a href=#2371 id=2371 data-nosnippet>2371</a>            </span>},
-<a href=#2372 id=2372 data-nosnippet>2372</a>            Contract::FeeContractProxy =&gt; {
-<a href=#2373 id=2373 data-nosnippet>2373</a>                deploy_fee_contract_proxy(<span class="kw-2">&amp;</span>provider, <span class="kw-2">&amp;mut </span>contracts, admin).<span class="kw">await</span><span class="question-mark">?
-<a href=#2374 id=2374 data-nosnippet>2374</a>            </span>},
-<a href=#2375 id=2375 data-nosnippet>2375</a>            Contract::EspTokenProxy =&gt; {
-<a href=#2376 id=2376 data-nosnippet>2376</a>                deploy_token_proxy(
-<a href=#2377 id=2377 data-nosnippet>2377</a>                    <span class="kw-2">&amp;</span>provider,
-<a href=#2378 id=2378 data-nosnippet>2378</a>                    <span class="kw-2">&amp;mut </span>contracts,
-<a href=#2379 id=2379 data-nosnippet>2379</a>                    admin,
-<a href=#2380 id=2380 data-nosnippet>2380</a>                    multisig_admin,
-<a href=#2381 id=2381 data-nosnippet>2381</a>                    U256::from(<span class="number">0u64</span>),
-<a href=#2382 id=2382 data-nosnippet>2382</a>                    <span class="string">"Test"</span>,
-<a href=#2383 id=2383 data-nosnippet>2383</a>                    <span class="string">"TEST"</span>,
-<a href=#2384 id=2384 data-nosnippet>2384</a>                )
-<a href=#2385 id=2385 data-nosnippet>2385</a>                .<span class="kw">await</span><span class="question-mark">?
-<a href=#2386 id=2386 data-nosnippet>2386</a>            </span>},
-<a href=#2387 id=2387 data-nosnippet>2387</a>            Contract::StakeTableProxy =&gt; {
-<a href=#2388 id=2388 data-nosnippet>2388</a>                <span class="kw">let </span>token_addr = deploy_token_proxy(
-<a href=#2389 id=2389 data-nosnippet>2389</a>                    <span class="kw-2">&amp;</span>provider,
-<a href=#2390 id=2390 data-nosnippet>2390</a>                    <span class="kw-2">&amp;mut </span>contracts,
+<a href=#2327 id=2327 data-nosnippet>2327</a>                     ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS must be set in .env.deployer.rs.test"
+<a href=#2328 id=2328 data-nosnippet>2328</a>                </span>);
+<a href=#2329 id=2329 data-nosnippet>2329</a>            }
+<a href=#2330 id=2330 data-nosnippet>2330</a>        }
+<a href=#2331 id=2331 data-nosnippet>2331</a>
+<a href=#2332 id=2332 data-nosnippet>2332</a>        <span class="kw">let </span><span class="kw-2">mut </span>contracts = Contracts::new();
+<a href=#2333 id=2333 data-nosnippet>2333</a>        <span class="kw">let </span>admin_signer = MnemonicBuilder::&lt;English&gt;::default()
+<a href=#2334 id=2334 data-nosnippet>2334</a>            .phrase(mnemonic)
+<a href=#2335 id=2335 data-nosnippet>2335</a>            .index(account_index)
+<a href=#2336 id=2336 data-nosnippet>2336</a>            .expect(<span class="string">"wrong mnemonic or index"</span>)
+<a href=#2337 id=2337 data-nosnippet>2337</a>            .build()<span class="question-mark">?</span>;
+<a href=#2338 id=2338 data-nosnippet>2338</a>        <span class="kw">let </span>admin = admin_signer.address();
+<a href=#2339 id=2339 data-nosnippet>2339</a>        <span class="kw">let </span>provider = <span class="kw">if </span>!dry_run {
+<a href=#2340 id=2340 data-nosnippet>2340</a>            ProviderBuilder::new()
+<a href=#2341 id=2341 data-nosnippet>2341</a>                .wallet(admin_signer)
+<a href=#2342 id=2342 data-nosnippet>2342</a>                .connect(<span class="kw-2">&amp;</span>sepolia_rpc_url)
+<a href=#2343 id=2343 data-nosnippet>2343</a>                .<span class="kw">await</span><span class="question-mark">?
+<a href=#2344 id=2344 data-nosnippet>2344</a>        </span>} <span class="kw">else </span>{
+<a href=#2345 id=2345 data-nosnippet>2345</a>            ProviderBuilder::new()
+<a href=#2346 id=2346 data-nosnippet>2346</a>                .wallet(admin_signer)
+<a href=#2347 id=2347 data-nosnippet>2347</a>                .connect(<span class="kw-2">&amp;</span>anvil.endpoint())
+<a href=#2348 id=2348 data-nosnippet>2348</a>                .<span class="kw">await</span><span class="question-mark">?
+<a href=#2349 id=2349 data-nosnippet>2349</a>        </span>};
+<a href=#2350 id=2350 data-nosnippet>2350</a>
+<a href=#2351 id=2351 data-nosnippet>2351</a>        <span class="comment">// prepare `initialize()` input
+<a href=#2352 id=2352 data-nosnippet>2352</a>        </span><span class="kw">let </span>genesis_state = LightClientStateSol::dummy_genesis();
+<a href=#2353 id=2353 data-nosnippet>2353</a>        <span class="kw">let </span>genesis_stake = StakeTableStateSol::dummy_genesis();
+<a href=#2354 id=2354 data-nosnippet>2354</a>
+<a href=#2355 id=2355 data-nosnippet>2355</a>        <span class="kw">let </span>prover = Address::random();
+<a href=#2356 id=2356 data-nosnippet>2356</a>
+<a href=#2357 id=2357 data-nosnippet>2357</a>        <span class="comment">// deploy proxy and V1
+<a href=#2358 id=2358 data-nosnippet>2358</a>        </span><span class="kw">let </span>proxy_addr = <span class="kw">match </span>contract_type {
+<a href=#2359 id=2359 data-nosnippet>2359</a>            Contract::LightClientProxy =&gt; {
+<a href=#2360 id=2360 data-nosnippet>2360</a>                deploy_light_client_proxy(
+<a href=#2361 id=2361 data-nosnippet>2361</a>                    <span class="kw-2">&amp;</span>provider,
+<a href=#2362 id=2362 data-nosnippet>2362</a>                    <span class="kw-2">&amp;mut </span>contracts,
+<a href=#2363 id=2363 data-nosnippet>2363</a>                    <span class="bool-val">false</span>,
+<a href=#2364 id=2364 data-nosnippet>2364</a>                    genesis_state.clone(),
+<a href=#2365 id=2365 data-nosnippet>2365</a>                    genesis_stake.clone(),
+<a href=#2366 id=2366 data-nosnippet>2366</a>                    admin,
+<a href=#2367 id=2367 data-nosnippet>2367</a>                    <span class="prelude-val">Some</span>(prover),
+<a href=#2368 id=2368 data-nosnippet>2368</a>                )
+<a href=#2369 id=2369 data-nosnippet>2369</a>                .<span class="kw">await</span><span class="question-mark">?
+<a href=#2370 id=2370 data-nosnippet>2370</a>            </span>},
+<a href=#2371 id=2371 data-nosnippet>2371</a>            Contract::FeeContractProxy =&gt; {
+<a href=#2372 id=2372 data-nosnippet>2372</a>                deploy_fee_contract_proxy(<span class="kw-2">&amp;</span>provider, <span class="kw-2">&amp;mut </span>contracts, admin).<span class="kw">await</span><span class="question-mark">?
+<a href=#2373 id=2373 data-nosnippet>2373</a>            </span>},
+<a href=#2374 id=2374 data-nosnippet>2374</a>            Contract::EspTokenProxy =&gt; {
+<a href=#2375 id=2375 data-nosnippet>2375</a>                deploy_token_proxy(
+<a href=#2376 id=2376 data-nosnippet>2376</a>                    <span class="kw-2">&amp;</span>provider,
+<a href=#2377 id=2377 data-nosnippet>2377</a>                    <span class="kw-2">&amp;mut </span>contracts,
+<a href=#2378 id=2378 data-nosnippet>2378</a>                    admin,
+<a href=#2379 id=2379 data-nosnippet>2379</a>                    multisig_admin,
+<a href=#2380 id=2380 data-nosnippet>2380</a>                    U256::from(<span class="number">0u64</span>),
+<a href=#2381 id=2381 data-nosnippet>2381</a>                    <span class="string">"Test"</span>,
+<a href=#2382 id=2382 data-nosnippet>2382</a>                    <span class="string">"TEST"</span>,
+<a href=#2383 id=2383 data-nosnippet>2383</a>                )
+<a href=#2384 id=2384 data-nosnippet>2384</a>                .<span class="kw">await</span><span class="question-mark">?
+<a href=#2385 id=2385 data-nosnippet>2385</a>            </span>},
+<a href=#2386 id=2386 data-nosnippet>2386</a>            Contract::StakeTableProxy =&gt; {
+<a href=#2387 id=2387 data-nosnippet>2387</a>                <span class="kw">let </span>token_addr = deploy_token_proxy(
+<a href=#2388 id=2388 data-nosnippet>2388</a>                    <span class="kw-2">&amp;</span>provider,
+<a href=#2389 id=2389 data-nosnippet>2389</a>                    <span class="kw-2">&amp;mut </span>contracts,
+<a href=#2390 id=2390 data-nosnippet>2390</a>                    admin,
 <a href=#2391 id=2391 data-nosnippet>2391</a>                    admin,
-<a href=#2392 id=2392 data-nosnippet>2392</a>                    admin,
-<a href=#2393 id=2393 data-nosnippet>2393</a>                    U256::from(<span class="number">0u64</span>),
-<a href=#2394 id=2394 data-nosnippet>2394</a>                    <span class="string">"Test"</span>,
-<a href=#2395 id=2395 data-nosnippet>2395</a>                    <span class="string">"TEST"</span>,
-<a href=#2396 id=2396 data-nosnippet>2396</a>                )
-<a href=#2397 id=2397 data-nosnippet>2397</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2398 id=2398 data-nosnippet>2398</a>                <span class="kw">let </span>light_client_addr = Address::random();
-<a href=#2399 id=2399 data-nosnippet>2399</a>                deploy_stake_table_proxy(
-<a href=#2400 id=2400 data-nosnippet>2400</a>                    <span class="kw-2">&amp;</span>provider,
-<a href=#2401 id=2401 data-nosnippet>2401</a>                    <span class="kw-2">&amp;mut </span>contracts,
-<a href=#2402 id=2402 data-nosnippet>2402</a>                    token_addr,
-<a href=#2403 id=2403 data-nosnippet>2403</a>                    light_client_addr,
-<a href=#2404 id=2404 data-nosnippet>2404</a>                    U256::from(<span class="number">0u64</span>),
-<a href=#2405 id=2405 data-nosnippet>2405</a>                    admin,
-<a href=#2406 id=2406 data-nosnippet>2406</a>                )
-<a href=#2407 id=2407 data-nosnippet>2407</a>                .<span class="kw">await</span><span class="question-mark">?
-<a href=#2408 id=2408 data-nosnippet>2408</a>            </span>},
-<a href=#2409 id=2409 data-nosnippet>2409</a>            <span class="kw">_ </span>=&gt; <span class="macro">anyhow::bail!</span>(<span class="string">"Not a proxy contract, can't transfer ownership"</span>),
-<a href=#2410 id=2410 data-nosnippet>2410</a>        };
-<a href=#2411 id=2411 data-nosnippet>2411</a>
-<a href=#2412 id=2412 data-nosnippet>2412</a>        <span class="comment">// transfer ownership to multisig
-<a href=#2413 id=2413 data-nosnippet>2413</a>        </span><span class="kw">let </span>_receipt =
-<a href=#2414 id=2414 data-nosnippet>2414</a>            transfer_ownership(<span class="kw-2">&amp;</span>provider, contract_type, proxy_addr, multisig_admin).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2415 id=2415 data-nosnippet>2415</a>        <span class="macro">assert_eq!</span>(
-<a href=#2416 id=2416 data-nosnippet>2416</a>            OwnableUpgradeable::new(proxy_addr, <span class="kw-2">&amp;</span>provider)
-<a href=#2417 id=2417 data-nosnippet>2417</a>                .owner()
-<a href=#2418 id=2418 data-nosnippet>2418</a>                .call()
-<a href=#2419 id=2419 data-nosnippet>2419</a>                .<span class="kw">await</span><span class="question-mark">?
-<a href=#2420 id=2420 data-nosnippet>2420</a>                </span>._0,
-<a href=#2421 id=2421 data-nosnippet>2421</a>            multisig_admin
-<a href=#2422 id=2422 data-nosnippet>2422</a>        );
-<a href=#2423 id=2423 data-nosnippet>2423</a>
-<a href=#2424 id=2424 data-nosnippet>2424</a>        <span class="comment">// then send transfer ownership proposal to the multisig wallet
-<a href=#2425 id=2425 data-nosnippet>2425</a>        </span><span class="kw">let </span>result = transfer_ownership_from_multisig_to_timelock(
-<a href=#2426 id=2426 data-nosnippet>2426</a>            <span class="kw-2">&amp;</span>provider,
-<a href=#2427 id=2427 data-nosnippet>2427</a>            <span class="kw-2">&amp;mut </span>contracts,
-<a href=#2428 id=2428 data-nosnippet>2428</a>            contract_type,
-<a href=#2429 id=2429 data-nosnippet>2429</a>            TransferOwnershipParams {
-<a href=#2430 id=2430 data-nosnippet>2430</a>                new_owner: timelock,
-<a href=#2431 id=2431 data-nosnippet>2431</a>                rpc_url: sepolia_rpc_url.clone(),
-<a href=#2432 id=2432 data-nosnippet>2432</a>                safe_addr: multisig_admin,
-<a href=#2433 id=2433 data-nosnippet>2433</a>                use_hardware_wallet: <span class="bool-val">false</span>,
-<a href=#2434 id=2434 data-nosnippet>2434</a>                dry_run,
-<a href=#2435 id=2435 data-nosnippet>2435</a>            },
-<a href=#2436 id=2436 data-nosnippet>2436</a>        )
-<a href=#2437 id=2437 data-nosnippet>2437</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2438 id=2438 data-nosnippet>2438</a>        <span class="macro">assert!</span>(result.status.success());
-<a href=#2439 id=2439 data-nosnippet>2439</a>        <span class="macro">tracing::info!</span>(<span class="string">"Transfer ownership output: {:?}"</span>, result);
-<a href=#2440 id=2440 data-nosnippet>2440</a>
-<a href=#2441 id=2441 data-nosnippet>2441</a>        <span class="kw">let </span>stdout = String::from_utf8_lossy(<span class="kw-2">&amp;</span>result.stdout);
-<a href=#2442 id=2442 data-nosnippet>2442</a>        <span class="kw">let </span>first_line = stdout.lines().next().unwrap();
-<a href=#2443 id=2443 data-nosnippet>2443</a>        <span class="kw">let </span>data: serde_json::Value = serde_json::from_str(first_line)<span class="question-mark">?</span>;
-<a href=#2444 id=2444 data-nosnippet>2444</a>        <span class="macro">assert_eq!</span>(data[<span class="string">"rpcUrl"</span>], sepolia_rpc_url);
-<a href=#2445 id=2445 data-nosnippet>2445</a>        <span class="macro">assert_eq!</span>(data[<span class="string">"safeAddress"</span>], multisig_admin.to_string());
-<a href=#2446 id=2446 data-nosnippet>2446</a>
-<a href=#2447 id=2447 data-nosnippet>2447</a>        <span class="kw">let </span>expected_init_data = <span class="kw">match </span>contract_type {
-<a href=#2448 id=2448 data-nosnippet>2448</a>            Contract::LightClientProxy =&gt; LightClient::new(proxy_addr, <span class="kw-2">&amp;</span>provider)
-<a href=#2449 id=2449 data-nosnippet>2449</a>                .transferOwnership(timelock)
-<a href=#2450 id=2450 data-nosnippet>2450</a>                .calldata()
-<a href=#2451 id=2451 data-nosnippet>2451</a>                .to_string(),
-<a href=#2452 id=2452 data-nosnippet>2452</a>            Contract::FeeContractProxy =&gt; FeeContract::new(proxy_addr, <span class="kw-2">&amp;</span>provider)
-<a href=#2453 id=2453 data-nosnippet>2453</a>                .transferOwnership(timelock)
-<a href=#2454 id=2454 data-nosnippet>2454</a>                .calldata()
-<a href=#2455 id=2455 data-nosnippet>2455</a>                .to_string(),
-<a href=#2456 id=2456 data-nosnippet>2456</a>            Contract::EspTokenProxy =&gt; EspToken::new(proxy_addr, <span class="kw-2">&amp;</span>provider)
-<a href=#2457 id=2457 data-nosnippet>2457</a>                .transferOwnership(timelock)
-<a href=#2458 id=2458 data-nosnippet>2458</a>                .calldata()
-<a href=#2459 id=2459 data-nosnippet>2459</a>                .to_string(),
-<a href=#2460 id=2460 data-nosnippet>2460</a>            Contract::StakeTableProxy =&gt; StakeTable::new(proxy_addr, <span class="kw-2">&amp;</span>provider)
-<a href=#2461 id=2461 data-nosnippet>2461</a>                .transferOwnership(timelock)
-<a href=#2462 id=2462 data-nosnippet>2462</a>                .calldata()
-<a href=#2463 id=2463 data-nosnippet>2463</a>                .to_string(),
-<a href=#2464 id=2464 data-nosnippet>2464</a>            <span class="kw">_ </span>=&gt; <span class="string">"0x"</span>.to_string(),
-<a href=#2465 id=2465 data-nosnippet>2465</a>        };
-<a href=#2466 id=2466 data-nosnippet>2466</a>
-<a href=#2467 id=2467 data-nosnippet>2467</a>        <span class="macro">assert_eq!</span>(data[<span class="string">"initData"</span>], expected_init_data);
-<a href=#2468 id=2468 data-nosnippet>2468</a>        <span class="macro">assert_eq!</span>(data[<span class="string">"useHardwareWallet"</span>], <span class="bool-val">false</span>);
-<a href=#2469 id=2469 data-nosnippet>2469</a>        <span class="comment">// }
-<a href=#2470 id=2470 data-nosnippet>2470</a>        // v1 state persistence cannot be tested here because the upgrade proposal is not yet executed
-<a href=#2471 id=2471 data-nosnippet>2471</a>        // One has to test that the upgrade proposal is available via the Safe UI
-<a href=#2472 id=2472 data-nosnippet>2472</a>        // and then test that the v1 state is persisted
-<a href=#2473 id=2473 data-nosnippet>2473</a>        </span><span class="prelude-val">Ok</span>(())
-<a href=#2474 id=2474 data-nosnippet>2474</a>    }
-<a href=#2475 id=2475 data-nosnippet>2475</a>
-<a href=#2476 id=2476 data-nosnippet>2476</a>    <span class="attr">#[tokio::test]
-<a href=#2477 id=2477 data-nosnippet>2477</a>    </span><span class="kw">async fn </span>test_encode_function_call() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#2478 id=2478 data-nosnippet>2478</a>        <span class="kw">let </span>function_signature = <span class="string">"transfer(address,uint256)"</span>.to_string();
-<a href=#2479 id=2479 data-nosnippet>2479</a>        <span class="kw">let </span>values = <span class="macro">vec!</span>[
-<a href=#2480 id=2480 data-nosnippet>2480</a>            <span class="string">"0x000000000000000000000000000000000000dead"</span>.to_string(),
-<a href=#2481 id=2481 data-nosnippet>2481</a>            <span class="string">"1000"</span>.to_string(),
-<a href=#2482 id=2482 data-nosnippet>2482</a>        ];
-<a href=#2483 id=2483 data-nosnippet>2483</a>        <span class="kw">let </span>expected = <span class="string">"0xa9059cbb000000000000000000000000000000000000000000000000000000000000dead00000000000000000000000000000000000000000000000000000000000003e8"</span>.parse::&lt;Bytes&gt;()<span class="question-mark">?</span>;
-<a href=#2484 id=2484 data-nosnippet>2484</a>        <span class="kw">let </span>encoded = encode_function_call(<span class="kw-2">&amp;</span>function_signature, values).expect(<span class="string">"encoding failed"</span>);
-<a href=#2485 id=2485 data-nosnippet>2485</a>
-<a href=#2486 id=2486 data-nosnippet>2486</a>        <span class="macro">assert_eq!</span>(encoded, expected);
-<a href=#2487 id=2487 data-nosnippet>2487</a>        <span class="prelude-val">Ok</span>(())
-<a href=#2488 id=2488 data-nosnippet>2488</a>    }
-<a href=#2489 id=2489 data-nosnippet>2489</a>
-<a href=#2490 id=2490 data-nosnippet>2490</a>    <span class="attr">#[tokio::test]
-<a href=#2491 id=2491 data-nosnippet>2491</a>    </span><span class="kw">async fn </span>test_encode_function_call_upgrade_to_and_call() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#2492 id=2492 data-nosnippet>2492</a>        <span class="kw">let </span>function_signature = <span class="string">"upgradeToAndCall(address,bytes)"</span>.to_string();
-<a href=#2493 id=2493 data-nosnippet>2493</a>        <span class="kw">let </span>values = <span class="macro">vec!</span>[
-<a href=#2494 id=2494 data-nosnippet>2494</a>            <span class="string">"0xe1f131b07550a689d6a11f21d9e9238a5c466996"</span>.to_string(),
-<a href=#2495 id=2495 data-nosnippet>2495</a>            <span class="string">"0x"</span>.to_string(),
-<a href=#2496 id=2496 data-nosnippet>2496</a>        ];
-<a href=#2497 id=2497 data-nosnippet>2497</a>        <span class="kw">let </span>expected = <span class="string">"0x4f1ef286000000000000000000000000e1f131b07550a689d6a11f21d9e9238a5c46699600000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000000"</span>.parse::&lt;Bytes&gt;()<span class="question-mark">?</span>;
-<a href=#2498 id=2498 data-nosnippet>2498</a>        <span class="kw">let </span>encoded = encode_function_call(<span class="kw-2">&amp;</span>function_signature, values).expect(<span class="string">"encoding failed"</span>);
-<a href=#2499 id=2499 data-nosnippet>2499</a>
-<a href=#2500 id=2500 data-nosnippet>2500</a>        <span class="macro">assert_eq!</span>(encoded, expected);
-<a href=#2501 id=2501 data-nosnippet>2501</a>        <span class="prelude-val">Ok</span>(())
-<a href=#2502 id=2502 data-nosnippet>2502</a>    }
-<a href=#2503 id=2503 data-nosnippet>2503</a>
-<a href=#2504 id=2504 data-nosnippet>2504</a>    <span class="attr">#[tokio::test]
-<a href=#2505 id=2505 data-nosnippet>2505</a>    </span><span class="kw">async fn </span>test_encode_function_call_with_bytes32() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#2506 id=2506 data-nosnippet>2506</a>        <span class="kw">let </span>function_signature = <span class="string">"setHash(bytes32)"</span>.to_string();
-<a href=#2507 id=2507 data-nosnippet>2507</a>        <span class="kw">let </span>values =
-<a href=#2508 id=2508 data-nosnippet>2508</a>            <span class="macro">vec!</span>[<span class="string">"0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"</span>.to_string()];
-<a href=#2509 id=2509 data-nosnippet>2509</a>        <span class="kw">let </span>expected = <span class="string">"0x0c4c42850123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-<a href=#2510 id=2510 data-nosnippet>2510</a>            </span>.parse::&lt;Bytes&gt;()<span class="question-mark">?</span>;
-<a href=#2511 id=2511 data-nosnippet>2511</a>        <span class="kw">let </span>encoded = encode_function_call(<span class="kw-2">&amp;</span>function_signature, values).expect(<span class="string">"encoding failed"</span>);
-<a href=#2512 id=2512 data-nosnippet>2512</a>
-<a href=#2513 id=2513 data-nosnippet>2513</a>        <span class="macro">assert_eq!</span>(encoded, expected);
-<a href=#2514 id=2514 data-nosnippet>2514</a>        <span class="prelude-val">Ok</span>(())
-<a href=#2515 id=2515 data-nosnippet>2515</a>    }
-<a href=#2516 id=2516 data-nosnippet>2516</a>
-<a href=#2517 id=2517 data-nosnippet>2517</a>    <span class="attr">#[tokio::test]
-<a href=#2518 id=2518 data-nosnippet>2518</a>    </span><span class="kw">async fn </span>test_encode_function_call_with_bytes() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#2519 id=2519 data-nosnippet>2519</a>        <span class="kw">let </span>function_signature = <span class="string">"emitData(bytes)"</span>.to_string();
-<a href=#2520 id=2520 data-nosnippet>2520</a>        <span class="kw">let </span>values = <span class="macro">vec!</span>[<span class="string">"0xdeadbeef"</span>.to_string()];
-<a href=#2521 id=2521 data-nosnippet>2521</a>        <span class="kw">let </span>expected = <span class="string">"0xd836083e00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000004deadbeef00000000000000000000000000000000000000000000000000000000"</span>.parse::&lt;Bytes&gt;()<span class="question-mark">?</span>;
-<a href=#2522 id=2522 data-nosnippet>2522</a>        <span class="kw">let </span>encoded = encode_function_call(<span class="kw-2">&amp;</span>function_signature, values).expect(<span class="string">"encoding failed"</span>);
-<a href=#2523 id=2523 data-nosnippet>2523</a>
-<a href=#2524 id=2524 data-nosnippet>2524</a>        <span class="macro">assert_eq!</span>(encoded, expected);
-<a href=#2525 id=2525 data-nosnippet>2525</a>        <span class="prelude-val">Ok</span>(())
-<a href=#2526 id=2526 data-nosnippet>2526</a>    }
-<a href=#2527 id=2527 data-nosnippet>2527</a>
-<a href=#2528 id=2528 data-nosnippet>2528</a>    <span class="attr">#[tokio::test]
-<a href=#2529 id=2529 data-nosnippet>2529</a>    </span><span class="kw">async fn </span>test_encode_function_call_with_bool() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#2530 id=2530 data-nosnippet>2530</a>        <span class="kw">let </span>function_signature = <span class="string">"setFlag(bool)"</span>.to_string();
-<a href=#2531 id=2531 data-nosnippet>2531</a>        <span class="kw">let </span><span class="kw-2">mut </span>values = <span class="macro">vec!</span>[<span class="string">"true"</span>.to_string()];
-<a href=#2532 id=2532 data-nosnippet>2532</a>        <span class="kw">let </span><span class="kw-2">mut </span>expected =
-<a href=#2533 id=2533 data-nosnippet>2533</a>            <span class="string">"0x3927f6af0000000000000000000000000000000000000000000000000000000000000001"
-<a href=#2534 id=2534 data-nosnippet>2534</a>                </span>.parse::&lt;Bytes&gt;()<span class="question-mark">?</span>;
-<a href=#2535 id=2535 data-nosnippet>2535</a>        <span class="kw">let </span><span class="kw-2">mut </span>encoded =
-<a href=#2536 id=2536 data-nosnippet>2536</a>            encode_function_call(<span class="kw-2">&amp;</span>function_signature, values).expect(<span class="string">"encoding failed"</span>);
-<a href=#2537 id=2537 data-nosnippet>2537</a>
-<a href=#2538 id=2538 data-nosnippet>2538</a>        <span class="macro">assert_eq!</span>(encoded, expected);
-<a href=#2539 id=2539 data-nosnippet>2539</a>
-<a href=#2540 id=2540 data-nosnippet>2540</a>        values = <span class="macro">vec!</span>[<span class="string">"false"</span>.to_string()];
-<a href=#2541 id=2541 data-nosnippet>2541</a>        expected = <span class="string">"0x3927f6af0000000000000000000000000000000000000000000000000000000000000000"
-<a href=#2542 id=2542 data-nosnippet>2542</a>            </span>.parse::&lt;Bytes&gt;()<span class="question-mark">?</span>;
-<a href=#2543 id=2543 data-nosnippet>2543</a>        encoded = encode_function_call(<span class="kw-2">&amp;</span>function_signature, values).expect(<span class="string">"encoding failed"</span>);
-<a href=#2544 id=2544 data-nosnippet>2544</a>
-<a href=#2545 id=2545 data-nosnippet>2545</a>        <span class="macro">assert_eq!</span>(encoded, expected);
-<a href=#2546 id=2546 data-nosnippet>2546</a>        <span class="prelude-val">Ok</span>(())
-<a href=#2547 id=2547 data-nosnippet>2547</a>    }
-<a href=#2548 id=2548 data-nosnippet>2548</a>
-<a href=#2549 id=2549 data-nosnippet>2549</a>    <span class="attr">#[tokio::test]
-<a href=#2550 id=2550 data-nosnippet>2550</a>    </span><span class="kw">async fn </span>test_encode_function_call_with_string() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#2551 id=2551 data-nosnippet>2551</a>        <span class="kw">let </span>function_signature = <span class="string">"logMessage(string)"</span>.to_string();
-<a href=#2552 id=2552 data-nosnippet>2552</a>        <span class="kw">let </span>values = <span class="macro">vec!</span>[<span class="string">"Hello, world!"</span>.to_string()];
-<a href=#2553 id=2553 data-nosnippet>2553</a>        <span class="kw">let </span>expected = <span class="string">"0x7c9900520000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000d48656c6c6f2c20776f726c642100000000000000000000000000000000000000"</span>.parse::&lt;Bytes&gt;()<span class="question-mark">?</span>;
-<a href=#2554 id=2554 data-nosnippet>2554</a>        <span class="kw">let </span>encoded = encode_function_call(<span class="kw-2">&amp;</span>function_signature, values).expect(<span class="string">"encoding failed"</span>);
-<a href=#2555 id=2555 data-nosnippet>2555</a>
-<a href=#2556 id=2556 data-nosnippet>2556</a>        <span class="macro">assert_eq!</span>(encoded, expected);
-<a href=#2557 id=2557 data-nosnippet>2557</a>        <span class="prelude-val">Ok</span>(())
-<a href=#2558 id=2558 data-nosnippet>2558</a>    }
-<a href=#2559 id=2559 data-nosnippet>2559</a>
-<a href=#2560 id=2560 data-nosnippet>2560</a>    <span class="attr">#[tokio::test]
-<a href=#2561 id=2561 data-nosnippet>2561</a>    </span><span class="kw">async fn </span>test_transfer_ownership_light_client_proxy() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#2562 id=2562 data-nosnippet>2562</a>        test_transfer_ownership_helper(
-<a href=#2563 id=2563 data-nosnippet>2563</a>            Contract::LightClientProxy,
-<a href=#2564 id=2564 data-nosnippet>2564</a>            UpgradeTestOptions {
-<a href=#2565 id=2565 data-nosnippet>2565</a>                is_mock: <span class="bool-val">false</span>,
-<a href=#2566 id=2566 data-nosnippet>2566</a>                run_mode: RunMode::DryRun,
-<a href=#2567 id=2567 data-nosnippet>2567</a>                upgrade_count: UpgradeCount::Once,
-<a href=#2568 id=2568 data-nosnippet>2568</a>            },
-<a href=#2569 id=2569 data-nosnippet>2569</a>        )
-<a href=#2570 id=2570 data-nosnippet>2570</a>        .<span class="kw">await
-<a href=#2571 id=2571 data-nosnippet>2571</a>    </span>}
-<a href=#2572 id=2572 data-nosnippet>2572</a>
-<a href=#2573 id=2573 data-nosnippet>2573</a>    <span class="attr">#[tokio::test]
-<a href=#2574 id=2574 data-nosnippet>2574</a>    </span><span class="kw">async fn </span>test_transfer_ownership_fee_contract_proxy() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#2575 id=2575 data-nosnippet>2575</a>        test_transfer_ownership_helper(
-<a href=#2576 id=2576 data-nosnippet>2576</a>            Contract::FeeContractProxy,
-<a href=#2577 id=2577 data-nosnippet>2577</a>            UpgradeTestOptions {
-<a href=#2578 id=2578 data-nosnippet>2578</a>                is_mock: <span class="bool-val">false</span>,
-<a href=#2579 id=2579 data-nosnippet>2579</a>                run_mode: RunMode::DryRun,
-<a href=#2580 id=2580 data-nosnippet>2580</a>                upgrade_count: UpgradeCount::Once,
-<a href=#2581 id=2581 data-nosnippet>2581</a>            },
-<a href=#2582 id=2582 data-nosnippet>2582</a>        )
-<a href=#2583 id=2583 data-nosnippet>2583</a>        .<span class="kw">await
-<a href=#2584 id=2584 data-nosnippet>2584</a>    </span>}
-<a href=#2585 id=2585 data-nosnippet>2585</a>
-<a href=#2586 id=2586 data-nosnippet>2586</a>    <span class="attr">#[tokio::test]
-<a href=#2587 id=2587 data-nosnippet>2587</a>    #[ignore]
-<a href=#2588 id=2588 data-nosnippet>2588</a>    </span><span class="kw">async fn </span>test_transfer_ownership_fee_contract_proxy_real_proposal() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#2589 id=2589 data-nosnippet>2589</a>        <span class="macro">println!</span>(<span class="string">"Starting test_transfer_ownership_fee_contract_proxy_real_proposal"</span>);
-<a href=#2590 id=2590 data-nosnippet>2590</a>        <span class="macro">tracing::info!</span>(<span class="string">"Starting test_transfer_ownership_fee_contract_proxy_real_proposal"</span>);
-<a href=#2591 id=2591 data-nosnippet>2591</a>
-<a href=#2592 id=2592 data-nosnippet>2592</a>        test_transfer_ownership_helper(
-<a href=#2593 id=2593 data-nosnippet>2593</a>            Contract::FeeContractProxy,
-<a href=#2594 id=2594 data-nosnippet>2594</a>            UpgradeTestOptions {
-<a href=#2595 id=2595 data-nosnippet>2595</a>                is_mock: <span class="bool-val">false</span>,
-<a href=#2596 id=2596 data-nosnippet>2596</a>                run_mode: RunMode::RealRun,
-<a href=#2597 id=2597 data-nosnippet>2597</a>                upgrade_count: UpgradeCount::Once,
-<a href=#2598 id=2598 data-nosnippet>2598</a>            },
-<a href=#2599 id=2599 data-nosnippet>2599</a>        )
-<a href=#2600 id=2600 data-nosnippet>2600</a>        .<span class="kw">await
-<a href=#2601 id=2601 data-nosnippet>2601</a>    </span>}
-<a href=#2602 id=2602 data-nosnippet>2602</a>
-<a href=#2603 id=2603 data-nosnippet>2603</a>    <span class="attr">#[tokio::test]
-<a href=#2604 id=2604 data-nosnippet>2604</a>    </span><span class="kw">async fn </span>test_transfer_ownership_esp_token_proxy() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#2605 id=2605 data-nosnippet>2605</a>        test_transfer_ownership_helper(
-<a href=#2606 id=2606 data-nosnippet>2606</a>            Contract::EspTokenProxy,
-<a href=#2607 id=2607 data-nosnippet>2607</a>            UpgradeTestOptions {
-<a href=#2608 id=2608 data-nosnippet>2608</a>                is_mock: <span class="bool-val">false</span>,
-<a href=#2609 id=2609 data-nosnippet>2609</a>                run_mode: RunMode::DryRun,
-<a href=#2610 id=2610 data-nosnippet>2610</a>                upgrade_count: UpgradeCount::Once,
-<a href=#2611 id=2611 data-nosnippet>2611</a>            },
-<a href=#2612 id=2612 data-nosnippet>2612</a>        )
-<a href=#2613 id=2613 data-nosnippet>2613</a>        .<span class="kw">await
-<a href=#2614 id=2614 data-nosnippet>2614</a>    </span>}
-<a href=#2615 id=2615 data-nosnippet>2615</a>
-<a href=#2616 id=2616 data-nosnippet>2616</a>    <span class="attr">#[tokio::test]
-<a href=#2617 id=2617 data-nosnippet>2617</a>    </span><span class="kw">async fn </span>test_transfer_ownership_stake_table_proxy() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#2618 id=2618 data-nosnippet>2618</a>        test_transfer_ownership_helper(
-<a href=#2619 id=2619 data-nosnippet>2619</a>            Contract::StakeTableProxy,
-<a href=#2620 id=2620 data-nosnippet>2620</a>            UpgradeTestOptions {
-<a href=#2621 id=2621 data-nosnippet>2621</a>                is_mock: <span class="bool-val">false</span>,
-<a href=#2622 id=2622 data-nosnippet>2622</a>                run_mode: RunMode::DryRun,
-<a href=#2623 id=2623 data-nosnippet>2623</a>                upgrade_count: UpgradeCount::Once,
-<a href=#2624 id=2624 data-nosnippet>2624</a>            },
-<a href=#2625 id=2625 data-nosnippet>2625</a>        )
-<a href=#2626 id=2626 data-nosnippet>2626</a>        .<span class="kw">await
-<a href=#2627 id=2627 data-nosnippet>2627</a>    </span>}
-<a href=#2628 id=2628 data-nosnippet>2628</a>}</code></pre></div></section></main></body></html>
+<a href=#2392 id=2392 data-nosnippet>2392</a>                    U256::from(<span class="number">0u64</span>),
+<a href=#2393 id=2393 data-nosnippet>2393</a>                    <span class="string">"Test"</span>,
+<a href=#2394 id=2394 data-nosnippet>2394</a>                    <span class="string">"TEST"</span>,
+<a href=#2395 id=2395 data-nosnippet>2395</a>                )
+<a href=#2396 id=2396 data-nosnippet>2396</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2397 id=2397 data-nosnippet>2397</a>                <span class="kw">let </span>light_client_addr = Address::random();
+<a href=#2398 id=2398 data-nosnippet>2398</a>                deploy_stake_table_proxy(
+<a href=#2399 id=2399 data-nosnippet>2399</a>                    <span class="kw-2">&amp;</span>provider,
+<a href=#2400 id=2400 data-nosnippet>2400</a>                    <span class="kw-2">&amp;mut </span>contracts,
+<a href=#2401 id=2401 data-nosnippet>2401</a>                    token_addr,
+<a href=#2402 id=2402 data-nosnippet>2402</a>                    light_client_addr,
+<a href=#2403 id=2403 data-nosnippet>2403</a>                    U256::from(<span class="number">0u64</span>),
+<a href=#2404 id=2404 data-nosnippet>2404</a>                    admin,
+<a href=#2405 id=2405 data-nosnippet>2405</a>                )
+<a href=#2406 id=2406 data-nosnippet>2406</a>                .<span class="kw">await</span><span class="question-mark">?
+<a href=#2407 id=2407 data-nosnippet>2407</a>            </span>},
+<a href=#2408 id=2408 data-nosnippet>2408</a>            <span class="kw">_ </span>=&gt; <span class="macro">anyhow::bail!</span>(<span class="string">"Not a proxy contract, can't transfer ownership"</span>),
+<a href=#2409 id=2409 data-nosnippet>2409</a>        };
+<a href=#2410 id=2410 data-nosnippet>2410</a>
+<a href=#2411 id=2411 data-nosnippet>2411</a>        <span class="comment">// transfer ownership to multisig
+<a href=#2412 id=2412 data-nosnippet>2412</a>        </span><span class="kw">let </span>_receipt =
+<a href=#2413 id=2413 data-nosnippet>2413</a>            transfer_ownership(<span class="kw-2">&amp;</span>provider, contract_type, proxy_addr, multisig_admin).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2414 id=2414 data-nosnippet>2414</a>        <span class="macro">assert_eq!</span>(
+<a href=#2415 id=2415 data-nosnippet>2415</a>            OwnableUpgradeable::new(proxy_addr, <span class="kw-2">&amp;</span>provider)
+<a href=#2416 id=2416 data-nosnippet>2416</a>                .owner()
+<a href=#2417 id=2417 data-nosnippet>2417</a>                .call()
+<a href=#2418 id=2418 data-nosnippet>2418</a>                .<span class="kw">await</span><span class="question-mark">?
+<a href=#2419 id=2419 data-nosnippet>2419</a>                </span>._0,
+<a href=#2420 id=2420 data-nosnippet>2420</a>            multisig_admin
+<a href=#2421 id=2421 data-nosnippet>2421</a>        );
+<a href=#2422 id=2422 data-nosnippet>2422</a>
+<a href=#2423 id=2423 data-nosnippet>2423</a>        <span class="comment">// then send transfer ownership proposal to the multisig wallet
+<a href=#2424 id=2424 data-nosnippet>2424</a>        </span><span class="kw">let </span>result = transfer_ownership_from_multisig_to_timelock(
+<a href=#2425 id=2425 data-nosnippet>2425</a>            <span class="kw-2">&amp;</span>provider,
+<a href=#2426 id=2426 data-nosnippet>2426</a>            <span class="kw-2">&amp;mut </span>contracts,
+<a href=#2427 id=2427 data-nosnippet>2427</a>            contract_type,
+<a href=#2428 id=2428 data-nosnippet>2428</a>            TransferOwnershipParams {
+<a href=#2429 id=2429 data-nosnippet>2429</a>                new_owner: timelock,
+<a href=#2430 id=2430 data-nosnippet>2430</a>                rpc_url: sepolia_rpc_url.clone(),
+<a href=#2431 id=2431 data-nosnippet>2431</a>                safe_addr: multisig_admin,
+<a href=#2432 id=2432 data-nosnippet>2432</a>                use_hardware_wallet: <span class="bool-val">false</span>,
+<a href=#2433 id=2433 data-nosnippet>2433</a>                dry_run,
+<a href=#2434 id=2434 data-nosnippet>2434</a>            },
+<a href=#2435 id=2435 data-nosnippet>2435</a>        )
+<a href=#2436 id=2436 data-nosnippet>2436</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2437 id=2437 data-nosnippet>2437</a>        <span class="macro">assert!</span>(result.status.success());
+<a href=#2438 id=2438 data-nosnippet>2438</a>        <span class="macro">tracing::info!</span>(<span class="string">"Transfer ownership output: {:?}"</span>, result);
+<a href=#2439 id=2439 data-nosnippet>2439</a>
+<a href=#2440 id=2440 data-nosnippet>2440</a>        <span class="kw">let </span>stdout = String::from_utf8_lossy(<span class="kw-2">&amp;</span>result.stdout);
+<a href=#2441 id=2441 data-nosnippet>2441</a>        <span class="kw">let </span>first_line = stdout.lines().next().unwrap();
+<a href=#2442 id=2442 data-nosnippet>2442</a>        <span class="kw">let </span>data: serde_json::Value = serde_json::from_str(first_line)<span class="question-mark">?</span>;
+<a href=#2443 id=2443 data-nosnippet>2443</a>        <span class="macro">assert_eq!</span>(data[<span class="string">"rpcUrl"</span>], sepolia_rpc_url);
+<a href=#2444 id=2444 data-nosnippet>2444</a>        <span class="macro">assert_eq!</span>(data[<span class="string">"safeAddress"</span>], multisig_admin.to_string());
+<a href=#2445 id=2445 data-nosnippet>2445</a>
+<a href=#2446 id=2446 data-nosnippet>2446</a>        <span class="kw">let </span>expected_init_data = <span class="kw">match </span>contract_type {
+<a href=#2447 id=2447 data-nosnippet>2447</a>            Contract::LightClientProxy =&gt; LightClient::new(proxy_addr, <span class="kw-2">&amp;</span>provider)
+<a href=#2448 id=2448 data-nosnippet>2448</a>                .transferOwnership(timelock)
+<a href=#2449 id=2449 data-nosnippet>2449</a>                .calldata()
+<a href=#2450 id=2450 data-nosnippet>2450</a>                .to_string(),
+<a href=#2451 id=2451 data-nosnippet>2451</a>            Contract::FeeContractProxy =&gt; FeeContract::new(proxy_addr, <span class="kw-2">&amp;</span>provider)
+<a href=#2452 id=2452 data-nosnippet>2452</a>                .transferOwnership(timelock)
+<a href=#2453 id=2453 data-nosnippet>2453</a>                .calldata()
+<a href=#2454 id=2454 data-nosnippet>2454</a>                .to_string(),
+<a href=#2455 id=2455 data-nosnippet>2455</a>            Contract::EspTokenProxy =&gt; EspToken::new(proxy_addr, <span class="kw-2">&amp;</span>provider)
+<a href=#2456 id=2456 data-nosnippet>2456</a>                .transferOwnership(timelock)
+<a href=#2457 id=2457 data-nosnippet>2457</a>                .calldata()
+<a href=#2458 id=2458 data-nosnippet>2458</a>                .to_string(),
+<a href=#2459 id=2459 data-nosnippet>2459</a>            Contract::StakeTableProxy =&gt; StakeTable::new(proxy_addr, <span class="kw-2">&amp;</span>provider)
+<a href=#2460 id=2460 data-nosnippet>2460</a>                .transferOwnership(timelock)
+<a href=#2461 id=2461 data-nosnippet>2461</a>                .calldata()
+<a href=#2462 id=2462 data-nosnippet>2462</a>                .to_string(),
+<a href=#2463 id=2463 data-nosnippet>2463</a>            <span class="kw">_ </span>=&gt; <span class="string">"0x"</span>.to_string(),
+<a href=#2464 id=2464 data-nosnippet>2464</a>        };
+<a href=#2465 id=2465 data-nosnippet>2465</a>
+<a href=#2466 id=2466 data-nosnippet>2466</a>        <span class="macro">assert_eq!</span>(data[<span class="string">"initData"</span>], expected_init_data);
+<a href=#2467 id=2467 data-nosnippet>2467</a>        <span class="macro">assert_eq!</span>(data[<span class="string">"useHardwareWallet"</span>], <span class="bool-val">false</span>);
+<a href=#2468 id=2468 data-nosnippet>2468</a>        <span class="comment">// }
+<a href=#2469 id=2469 data-nosnippet>2469</a>        // v1 state persistence cannot be tested here because the upgrade proposal is not yet executed
+<a href=#2470 id=2470 data-nosnippet>2470</a>        // One has to test that the upgrade proposal is available via the Safe UI
+<a href=#2471 id=2471 data-nosnippet>2471</a>        // and then test that the v1 state is persisted
+<a href=#2472 id=2472 data-nosnippet>2472</a>        </span><span class="prelude-val">Ok</span>(())
+<a href=#2473 id=2473 data-nosnippet>2473</a>    }
+<a href=#2474 id=2474 data-nosnippet>2474</a>
+<a href=#2475 id=2475 data-nosnippet>2475</a>    <span class="attr">#[tokio::test]
+<a href=#2476 id=2476 data-nosnippet>2476</a>    </span><span class="kw">async fn </span>test_encode_function_call() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#2477 id=2477 data-nosnippet>2477</a>        <span class="kw">let </span>function_signature = <span class="string">"transfer(address,uint256)"</span>.to_string();
+<a href=#2478 id=2478 data-nosnippet>2478</a>        <span class="kw">let </span>values = <span class="macro">vec!</span>[
+<a href=#2479 id=2479 data-nosnippet>2479</a>            <span class="string">"0x000000000000000000000000000000000000dead"</span>.to_string(),
+<a href=#2480 id=2480 data-nosnippet>2480</a>            <span class="string">"1000"</span>.to_string(),
+<a href=#2481 id=2481 data-nosnippet>2481</a>        ];
+<a href=#2482 id=2482 data-nosnippet>2482</a>        <span class="kw">let </span>expected = <span class="string">"0xa9059cbb000000000000000000000000000000000000000000000000000000000000dead00000000000000000000000000000000000000000000000000000000000003e8"</span>.parse::&lt;Bytes&gt;()<span class="question-mark">?</span>;
+<a href=#2483 id=2483 data-nosnippet>2483</a>        <span class="kw">let </span>encoded = encode_function_call(<span class="kw-2">&amp;</span>function_signature, values).expect(<span class="string">"encoding failed"</span>);
+<a href=#2484 id=2484 data-nosnippet>2484</a>
+<a href=#2485 id=2485 data-nosnippet>2485</a>        <span class="macro">assert_eq!</span>(encoded, expected);
+<a href=#2486 id=2486 data-nosnippet>2486</a>        <span class="prelude-val">Ok</span>(())
+<a href=#2487 id=2487 data-nosnippet>2487</a>    }
+<a href=#2488 id=2488 data-nosnippet>2488</a>
+<a href=#2489 id=2489 data-nosnippet>2489</a>    <span class="attr">#[tokio::test]
+<a href=#2490 id=2490 data-nosnippet>2490</a>    </span><span class="kw">async fn </span>test_encode_function_call_upgrade_to_and_call() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#2491 id=2491 data-nosnippet>2491</a>        <span class="kw">let </span>function_signature = <span class="string">"upgradeToAndCall(address,bytes)"</span>.to_string();
+<a href=#2492 id=2492 data-nosnippet>2492</a>        <span class="kw">let </span>values = <span class="macro">vec!</span>[
+<a href=#2493 id=2493 data-nosnippet>2493</a>            <span class="string">"0xe1f131b07550a689d6a11f21d9e9238a5c466996"</span>.to_string(),
+<a href=#2494 id=2494 data-nosnippet>2494</a>            <span class="string">"0x"</span>.to_string(),
+<a href=#2495 id=2495 data-nosnippet>2495</a>        ];
+<a href=#2496 id=2496 data-nosnippet>2496</a>        <span class="kw">let </span>expected = <span class="string">"0x4f1ef286000000000000000000000000e1f131b07550a689d6a11f21d9e9238a5c46699600000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000000"</span>.parse::&lt;Bytes&gt;()<span class="question-mark">?</span>;
+<a href=#2497 id=2497 data-nosnippet>2497</a>        <span class="kw">let </span>encoded = encode_function_call(<span class="kw-2">&amp;</span>function_signature, values).expect(<span class="string">"encoding failed"</span>);
+<a href=#2498 id=2498 data-nosnippet>2498</a>
+<a href=#2499 id=2499 data-nosnippet>2499</a>        <span class="macro">assert_eq!</span>(encoded, expected);
+<a href=#2500 id=2500 data-nosnippet>2500</a>        <span class="prelude-val">Ok</span>(())
+<a href=#2501 id=2501 data-nosnippet>2501</a>    }
+<a href=#2502 id=2502 data-nosnippet>2502</a>
+<a href=#2503 id=2503 data-nosnippet>2503</a>    <span class="attr">#[tokio::test]
+<a href=#2504 id=2504 data-nosnippet>2504</a>    </span><span class="kw">async fn </span>test_encode_function_call_with_bytes32() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#2505 id=2505 data-nosnippet>2505</a>        <span class="kw">let </span>function_signature = <span class="string">"setHash(bytes32)"</span>.to_string();
+<a href=#2506 id=2506 data-nosnippet>2506</a>        <span class="kw">let </span>values =
+<a href=#2507 id=2507 data-nosnippet>2507</a>            <span class="macro">vec!</span>[<span class="string">"0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"</span>.to_string()];
+<a href=#2508 id=2508 data-nosnippet>2508</a>        <span class="kw">let </span>expected = <span class="string">"0x0c4c42850123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+<a href=#2509 id=2509 data-nosnippet>2509</a>            </span>.parse::&lt;Bytes&gt;()<span class="question-mark">?</span>;
+<a href=#2510 id=2510 data-nosnippet>2510</a>        <span class="kw">let </span>encoded = encode_function_call(<span class="kw-2">&amp;</span>function_signature, values).expect(<span class="string">"encoding failed"</span>);
+<a href=#2511 id=2511 data-nosnippet>2511</a>
+<a href=#2512 id=2512 data-nosnippet>2512</a>        <span class="macro">assert_eq!</span>(encoded, expected);
+<a href=#2513 id=2513 data-nosnippet>2513</a>        <span class="prelude-val">Ok</span>(())
+<a href=#2514 id=2514 data-nosnippet>2514</a>    }
+<a href=#2515 id=2515 data-nosnippet>2515</a>
+<a href=#2516 id=2516 data-nosnippet>2516</a>    <span class="attr">#[tokio::test]
+<a href=#2517 id=2517 data-nosnippet>2517</a>    </span><span class="kw">async fn </span>test_encode_function_call_with_bytes() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#2518 id=2518 data-nosnippet>2518</a>        <span class="kw">let </span>function_signature = <span class="string">"emitData(bytes)"</span>.to_string();
+<a href=#2519 id=2519 data-nosnippet>2519</a>        <span class="kw">let </span>values = <span class="macro">vec!</span>[<span class="string">"0xdeadbeef"</span>.to_string()];
+<a href=#2520 id=2520 data-nosnippet>2520</a>        <span class="kw">let </span>expected = <span class="string">"0xd836083e00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000004deadbeef00000000000000000000000000000000000000000000000000000000"</span>.parse::&lt;Bytes&gt;()<span class="question-mark">?</span>;
+<a href=#2521 id=2521 data-nosnippet>2521</a>        <span class="kw">let </span>encoded = encode_function_call(<span class="kw-2">&amp;</span>function_signature, values).expect(<span class="string">"encoding failed"</span>);
+<a href=#2522 id=2522 data-nosnippet>2522</a>
+<a href=#2523 id=2523 data-nosnippet>2523</a>        <span class="macro">assert_eq!</span>(encoded, expected);
+<a href=#2524 id=2524 data-nosnippet>2524</a>        <span class="prelude-val">Ok</span>(())
+<a href=#2525 id=2525 data-nosnippet>2525</a>    }
+<a href=#2526 id=2526 data-nosnippet>2526</a>
+<a href=#2527 id=2527 data-nosnippet>2527</a>    <span class="attr">#[tokio::test]
+<a href=#2528 id=2528 data-nosnippet>2528</a>    </span><span class="kw">async fn </span>test_encode_function_call_with_bool() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#2529 id=2529 data-nosnippet>2529</a>        <span class="kw">let </span>function_signature = <span class="string">"setFlag(bool)"</span>.to_string();
+<a href=#2530 id=2530 data-nosnippet>2530</a>        <span class="kw">let </span><span class="kw-2">mut </span>values = <span class="macro">vec!</span>[<span class="string">"true"</span>.to_string()];
+<a href=#2531 id=2531 data-nosnippet>2531</a>        <span class="kw">let </span><span class="kw-2">mut </span>expected =
+<a href=#2532 id=2532 data-nosnippet>2532</a>            <span class="string">"0x3927f6af0000000000000000000000000000000000000000000000000000000000000001"
+<a href=#2533 id=2533 data-nosnippet>2533</a>                </span>.parse::&lt;Bytes&gt;()<span class="question-mark">?</span>;
+<a href=#2534 id=2534 data-nosnippet>2534</a>        <span class="kw">let </span><span class="kw-2">mut </span>encoded =
+<a href=#2535 id=2535 data-nosnippet>2535</a>            encode_function_call(<span class="kw-2">&amp;</span>function_signature, values).expect(<span class="string">"encoding failed"</span>);
+<a href=#2536 id=2536 data-nosnippet>2536</a>
+<a href=#2537 id=2537 data-nosnippet>2537</a>        <span class="macro">assert_eq!</span>(encoded, expected);
+<a href=#2538 id=2538 data-nosnippet>2538</a>
+<a href=#2539 id=2539 data-nosnippet>2539</a>        values = <span class="macro">vec!</span>[<span class="string">"false"</span>.to_string()];
+<a href=#2540 id=2540 data-nosnippet>2540</a>        expected = <span class="string">"0x3927f6af0000000000000000000000000000000000000000000000000000000000000000"
+<a href=#2541 id=2541 data-nosnippet>2541</a>            </span>.parse::&lt;Bytes&gt;()<span class="question-mark">?</span>;
+<a href=#2542 id=2542 data-nosnippet>2542</a>        encoded = encode_function_call(<span class="kw-2">&amp;</span>function_signature, values).expect(<span class="string">"encoding failed"</span>);
+<a href=#2543 id=2543 data-nosnippet>2543</a>
+<a href=#2544 id=2544 data-nosnippet>2544</a>        <span class="macro">assert_eq!</span>(encoded, expected);
+<a href=#2545 id=2545 data-nosnippet>2545</a>        <span class="prelude-val">Ok</span>(())
+<a href=#2546 id=2546 data-nosnippet>2546</a>    }
+<a href=#2547 id=2547 data-nosnippet>2547</a>
+<a href=#2548 id=2548 data-nosnippet>2548</a>    <span class="attr">#[tokio::test]
+<a href=#2549 id=2549 data-nosnippet>2549</a>    </span><span class="kw">async fn </span>test_encode_function_call_with_string() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#2550 id=2550 data-nosnippet>2550</a>        <span class="kw">let </span>function_signature = <span class="string">"logMessage(string)"</span>.to_string();
+<a href=#2551 id=2551 data-nosnippet>2551</a>        <span class="kw">let </span>values = <span class="macro">vec!</span>[<span class="string">"Hello, world!"</span>.to_string()];
+<a href=#2552 id=2552 data-nosnippet>2552</a>        <span class="kw">let </span>expected = <span class="string">"0x7c9900520000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000d48656c6c6f2c20776f726c642100000000000000000000000000000000000000"</span>.parse::&lt;Bytes&gt;()<span class="question-mark">?</span>;
+<a href=#2553 id=2553 data-nosnippet>2553</a>        <span class="kw">let </span>encoded = encode_function_call(<span class="kw-2">&amp;</span>function_signature, values).expect(<span class="string">"encoding failed"</span>);
+<a href=#2554 id=2554 data-nosnippet>2554</a>
+<a href=#2555 id=2555 data-nosnippet>2555</a>        <span class="macro">assert_eq!</span>(encoded, expected);
+<a href=#2556 id=2556 data-nosnippet>2556</a>        <span class="prelude-val">Ok</span>(())
+<a href=#2557 id=2557 data-nosnippet>2557</a>    }
+<a href=#2558 id=2558 data-nosnippet>2558</a>
+<a href=#2559 id=2559 data-nosnippet>2559</a>    <span class="attr">#[tokio::test]
+<a href=#2560 id=2560 data-nosnippet>2560</a>    </span><span class="kw">async fn </span>test_transfer_ownership_light_client_proxy() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#2561 id=2561 data-nosnippet>2561</a>        test_transfer_ownership_helper(
+<a href=#2562 id=2562 data-nosnippet>2562</a>            Contract::LightClientProxy,
+<a href=#2563 id=2563 data-nosnippet>2563</a>            UpgradeTestOptions {
+<a href=#2564 id=2564 data-nosnippet>2564</a>                is_mock: <span class="bool-val">false</span>,
+<a href=#2565 id=2565 data-nosnippet>2565</a>                run_mode: RunMode::DryRun,
+<a href=#2566 id=2566 data-nosnippet>2566</a>                upgrade_count: UpgradeCount::Once,
+<a href=#2567 id=2567 data-nosnippet>2567</a>            },
+<a href=#2568 id=2568 data-nosnippet>2568</a>        )
+<a href=#2569 id=2569 data-nosnippet>2569</a>        .<span class="kw">await
+<a href=#2570 id=2570 data-nosnippet>2570</a>    </span>}
+<a href=#2571 id=2571 data-nosnippet>2571</a>
+<a href=#2572 id=2572 data-nosnippet>2572</a>    <span class="attr">#[tokio::test]
+<a href=#2573 id=2573 data-nosnippet>2573</a>    </span><span class="kw">async fn </span>test_transfer_ownership_fee_contract_proxy() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#2574 id=2574 data-nosnippet>2574</a>        test_transfer_ownership_helper(
+<a href=#2575 id=2575 data-nosnippet>2575</a>            Contract::FeeContractProxy,
+<a href=#2576 id=2576 data-nosnippet>2576</a>            UpgradeTestOptions {
+<a href=#2577 id=2577 data-nosnippet>2577</a>                is_mock: <span class="bool-val">false</span>,
+<a href=#2578 id=2578 data-nosnippet>2578</a>                run_mode: RunMode::DryRun,
+<a href=#2579 id=2579 data-nosnippet>2579</a>                upgrade_count: UpgradeCount::Once,
+<a href=#2580 id=2580 data-nosnippet>2580</a>            },
+<a href=#2581 id=2581 data-nosnippet>2581</a>        )
+<a href=#2582 id=2582 data-nosnippet>2582</a>        .<span class="kw">await
+<a href=#2583 id=2583 data-nosnippet>2583</a>    </span>}
+<a href=#2584 id=2584 data-nosnippet>2584</a>
+<a href=#2585 id=2585 data-nosnippet>2585</a>    <span class="attr">#[tokio::test]
+<a href=#2586 id=2586 data-nosnippet>2586</a>    #[ignore]
+<a href=#2587 id=2587 data-nosnippet>2587</a>    </span><span class="kw">async fn </span>test_transfer_ownership_fee_contract_proxy_real_proposal() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#2588 id=2588 data-nosnippet>2588</a>        <span class="macro">println!</span>(<span class="string">"Starting test_transfer_ownership_fee_contract_proxy_real_proposal"</span>);
+<a href=#2589 id=2589 data-nosnippet>2589</a>        <span class="macro">tracing::info!</span>(<span class="string">"Starting test_transfer_ownership_fee_contract_proxy_real_proposal"</span>);
+<a href=#2590 id=2590 data-nosnippet>2590</a>
+<a href=#2591 id=2591 data-nosnippet>2591</a>        test_transfer_ownership_helper(
+<a href=#2592 id=2592 data-nosnippet>2592</a>            Contract::FeeContractProxy,
+<a href=#2593 id=2593 data-nosnippet>2593</a>            UpgradeTestOptions {
+<a href=#2594 id=2594 data-nosnippet>2594</a>                is_mock: <span class="bool-val">false</span>,
+<a href=#2595 id=2595 data-nosnippet>2595</a>                run_mode: RunMode::RealRun,
+<a href=#2596 id=2596 data-nosnippet>2596</a>                upgrade_count: UpgradeCount::Once,
+<a href=#2597 id=2597 data-nosnippet>2597</a>            },
+<a href=#2598 id=2598 data-nosnippet>2598</a>        )
+<a href=#2599 id=2599 data-nosnippet>2599</a>        .<span class="kw">await
+<a href=#2600 id=2600 data-nosnippet>2600</a>    </span>}
+<a href=#2601 id=2601 data-nosnippet>2601</a>
+<a href=#2602 id=2602 data-nosnippet>2602</a>    <span class="attr">#[tokio::test]
+<a href=#2603 id=2603 data-nosnippet>2603</a>    </span><span class="kw">async fn </span>test_transfer_ownership_esp_token_proxy() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#2604 id=2604 data-nosnippet>2604</a>        test_transfer_ownership_helper(
+<a href=#2605 id=2605 data-nosnippet>2605</a>            Contract::EspTokenProxy,
+<a href=#2606 id=2606 data-nosnippet>2606</a>            UpgradeTestOptions {
+<a href=#2607 id=2607 data-nosnippet>2607</a>                is_mock: <span class="bool-val">false</span>,
+<a href=#2608 id=2608 data-nosnippet>2608</a>                run_mode: RunMode::DryRun,
+<a href=#2609 id=2609 data-nosnippet>2609</a>                upgrade_count: UpgradeCount::Once,
+<a href=#2610 id=2610 data-nosnippet>2610</a>            },
+<a href=#2611 id=2611 data-nosnippet>2611</a>        )
+<a href=#2612 id=2612 data-nosnippet>2612</a>        .<span class="kw">await
+<a href=#2613 id=2613 data-nosnippet>2613</a>    </span>}
+<a href=#2614 id=2614 data-nosnippet>2614</a>
+<a href=#2615 id=2615 data-nosnippet>2615</a>    <span class="attr">#[tokio::test]
+<a href=#2616 id=2616 data-nosnippet>2616</a>    </span><span class="kw">async fn </span>test_transfer_ownership_stake_table_proxy() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#2617 id=2617 data-nosnippet>2617</a>        test_transfer_ownership_helper(
+<a href=#2618 id=2618 data-nosnippet>2618</a>            Contract::StakeTableProxy,
+<a href=#2619 id=2619 data-nosnippet>2619</a>            UpgradeTestOptions {
+<a href=#2620 id=2620 data-nosnippet>2620</a>                is_mock: <span class="bool-val">false</span>,
+<a href=#2621 id=2621 data-nosnippet>2621</a>                run_mode: RunMode::DryRun,
+<a href=#2622 id=2622 data-nosnippet>2622</a>                upgrade_count: UpgradeCount::Once,
+<a href=#2623 id=2623 data-nosnippet>2623</a>            },
+<a href=#2624 id=2624 data-nosnippet>2624</a>        )
+<a href=#2625 id=2625 data-nosnippet>2625</a>        .<span class="kw">await
+<a href=#2626 id=2626 data-nosnippet>2626</a>    </span>}
+<a href=#2627 id=2627 data-nosnippet>2627</a>}</code></pre></div></section></main></body></html>
