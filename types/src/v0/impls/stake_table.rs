@@ -2116,6 +2116,7 @@ impl Membership<SeqTypes> for EpochCommittees {
 
         let mut membership_writer = membership.write().await;
         membership_writer.insert_committee(epoch, validators.clone(), block_reward);
+        drop(membership_writer);
 
         let persistence_lock = fetcher.persistence.lock().await;
         if let Err(e) = persistence_lock
