@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -30,6 +30,8 @@ use crate::{
 type EpochMap<TYPES> =
     HashMap<<TYPES as NodeType>::Epoch, InactiveReceiver<Result<EpochMembership<TYPES>>>>;
 
+type DrbMap<TYPES> = HashSet<<TYPES as NodeType>::Epoch>;
+
 type EpochSender<TYPES> = (
     <TYPES as NodeType>::Epoch,
     Sender<Result<EpochMembership<TYPES>>>,
@@ -45,6 +47,8 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     /// alerting them the membership is ready.  The first caller for an epoch will
     /// wait for the actual catchup and allert future callers when it's done
     catchup_map: Arc<Mutex<EpochMap<TYPES>>>,
+
+    drb_calculation_map: Arc<Mutex<DrbMap<TYPES>>>,
 
     /// Number of blocks in an epoch
     pub epoch_height: u64,
@@ -65,6 +69,7 @@ impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
         Self {
             membership: Arc::clone(&self.membership),
             catchup_map: Arc::clone(&self.catchup_map),
+            drb_calculation_map: Arc::clone(&self.drb_calculation_map),
             epoch_height: self.epoch_height,
             store_drb_progress_fn: Arc::clone(&self.store_drb_progress_fn),
             load_drb_progress_fn: Arc::clone(&self.load_drb_progress_fn),
@@ -87,6 +92,7 @@ where
         Self {
             membership,
             catchup_map: Arc::default(),
+            drb_calculation_map: Arc::default(),
             epoch_height,
             store_drb_progress_fn: store_drb_progress_fn(storage.clone()),
             load_drb_progress_fn: load_drb_progress_fn(storage.clone()),
@@ -257,22 +263,41 @@ where
 
         // Iterate through the epochs we need to fetch in reverse, i.e. from the oldest to the newest
         while let Some((current_fetch_epoch, tx)) = fetch_epochs.pop() {
-            let root_leaf = match self.fetch_stake_table(current_fetch_epoch).await {
-                Ok(root_leaf) => root_leaf,
-                Err(err) => {
+            if let Err(err) = <TYPES::Membership as Membership<TYPES>>::get_epoch_drb(
+                self.membership.clone(),
+                epoch,
+            )
+            .await
+            {
+                tracing::info!(
+                    "DRB result for epoch {} missing from membership. Beginning catchup to fetch \
+                     the leaf and recalculate it. Error: {}",
+                    current_fetch_epoch,
+                    err
+                );
+
+                let root_leaf = match self.fetch_stake_table(current_fetch_epoch).await {
+                    Ok(root_leaf) => root_leaf,
+                    Err(err) => {
+                        fetch_epochs.push((current_fetch_epoch, tx));
+                        self.catchup_cleanup(epoch, fetch_epochs, err).await;
+                        return;
+                    },
+                };
+
+                if let Err(err) = self
+                    .compute_drb_result(current_fetch_epoch, root_leaf)
+                    .await
+                {
+                    tracing::info!(
+                        "DRB calculation for epoch {} failed . Error: {}",
+                        current_fetch_epoch,
+                        err
+                    );
                     fetch_epochs.push((current_fetch_epoch, tx));
                     self.catchup_cleanup(epoch, fetch_epochs, err).await;
                     return;
-                },
-            };
-
-            if let Err(err) = self
-                .fetch_or_calc_drb_results(current_fetch_epoch, root_leaf)
-                .await
-            {
-                fetch_epochs.push((current_fetch_epoch, tx));
-                self.catchup_cleanup(epoch, fetch_epochs, err).await;
-                return;
+                }
             }
 
             // Signal the other tasks about the success
@@ -401,67 +426,53 @@ where
         Ok(root_leaf)
     }
 
-    /// A helper method to the `catchup` method.
-    ///
-    /// Fetch or compute the DRB (Distributed Random Beacon) result for a given epoch.
-    ///
-    /// This method attempts to retrieve the DRB result for the specified epoch. If the DRB
-    /// result is not available, it computes the DRB using the provided root leaf and stores
-    /// the result in the membership state.
-    ///
-    /// # Arguments
-    ///
-    /// * `epoch` - The epoch for which to fetch or compute the DRB result.
-    /// * `root_leaf` - The epoch root leaf used for DRB computation if the result is not available.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` if the DRB result was successfully fetched or computed and stored.
-    /// * `Err(Error)` if the DRB result could not be fetched, computed, or stored.
-    async fn fetch_or_calc_drb_results(
+    pub async fn compute_drb_result(
         &self,
         epoch: TYPES::Epoch,
         root_leaf: Leaf2<TYPES>,
-    ) -> Result<()> {
-        let drb = if let Ok(drb) =
-            <TYPES::Membership as Membership<TYPES>>::get_epoch_drb(self.membership.clone(), epoch)
-                .await
-        {
-            drb
+    ) -> Result<DrbResult> {
+        let mut drb_calculation_map_lock = self.drb_calculation_map.lock().await;
+
+        if drb_calculation_map_lock.contains(&epoch) {
+            return Err(anytrace::warn!(
+                "DRB calculation for epoch {} already in progress",
+                epoch
+            ));
         } else {
-            let Ok(drb_seed_input_vec) = bincode::serialize(&root_leaf.justify_qc().signatures)
-            else {
-                return Err(anytrace::error!(
-                    "Failed to serialize the QC signature for leaf {root_leaf:?}"
-                ));
-            };
+            drb_calculation_map_lock.insert(epoch);
+        }
 
-            let Some(ref drb_difficulty_selector) = *self.drb_difficulty_selector.read().await
-            else {
-                return Err(anytrace::error!(
-                    "The DRB difficulty selector is missing from the epoch membership \
-                     coordinator. This node will not be able to spawn any DRB calculation tasks \
-                     from catchup."
-                ));
-            };
-
-            let drb_difficulty = drb_difficulty_selector(root_leaf.view_number()).await;
-
-            let mut drb_seed_input = [0u8; 32];
-            let len = drb_seed_input_vec.len().min(32);
-            drb_seed_input[..len].copy_from_slice(&drb_seed_input_vec[..len]);
-            let drb_input = DrbInput {
-                epoch: *epoch,
-                iteration: 0,
-                value: drb_seed_input,
-                difficulty_level: drb_difficulty,
-            };
-
-            let store_drb_progress_fn = self.store_drb_progress_fn.clone();
-            let load_drb_progress_fn = self.load_drb_progress_fn.clone();
-
-            compute_drb_result(drb_input, store_drb_progress_fn, load_drb_progress_fn).await
+        let Ok(drb_seed_input_vec) = bincode::serialize(&root_leaf.justify_qc().signatures) else {
+            return Err(anytrace::error!(
+                "Failed to serialize the QC signature for leaf {root_leaf:?}"
+            ));
         };
+
+        let Some(ref drb_difficulty_selector) = *self.drb_difficulty_selector.read().await else {
+            return Err(anytrace::error!(
+                "The DRB difficulty selector is missing from the epoch membership coordinator. \
+                 This node will not be able to spawn any DRB calculation tasks from catchup."
+            ));
+        };
+
+        let drb_difficulty = drb_difficulty_selector(root_leaf.view_number()).await;
+
+        let mut drb_seed_input = [0u8; 32];
+        let len = drb_seed_input_vec.len().min(32);
+        drb_seed_input[..len].copy_from_slice(&drb_seed_input_vec[..len]);
+        let drb_input = DrbInput {
+            epoch: *epoch,
+            iteration: 0,
+            value: drb_seed_input,
+            difficulty_level: drb_difficulty,
+        };
+
+        let store_drb_progress_fn = self.store_drb_progress_fn.clone();
+        let load_drb_progress_fn = self.load_drb_progress_fn.clone();
+
+        let drb = compute_drb_result(drb_input, store_drb_progress_fn, load_drb_progress_fn).await;
+        drb_calculation_map_lock.remove(&epoch);
+        drop(drb_calculation_map_lock);
 
         tracing::info!("Writing drb result from catchup to storage for epoch {epoch}: {drb:?}");
         if let Err(e) = (self.store_drb_result_fn)(epoch, drb).await {
@@ -469,7 +480,7 @@ where
         }
         self.membership.write().await.add_drb_result(epoch, drb);
 
-        Ok(())
+        Ok(drb)
     }
 }
 

@@ -107,7 +107,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
             proposal.block_header().block_number(),
             task_state.epoch_height,
         ) {
-            decide_from_proposal_2::<TYPES, I, V>(
+            decide_from_proposal_2::<TYPES, I>(
                 proposal,
                 OuterConsensus::new(Arc::clone(&task_state.consensus.inner_consensus)),
                 Arc::clone(&task_state.upgrade_lock.decided_upgrade_certificate),
@@ -115,23 +115,21 @@ pub(crate) async fn handle_quorum_proposal_validated<
                 version >= V::Epochs::VERSION,
                 &task_state.membership,
                 &task_state.storage,
-                &task_state.upgrade_lock,
             )
             .await
         } else {
             LeafChainTraversalOutcome::default()
         }
     } else {
-        decide_from_proposal::<TYPES, I, V>(
+        decide_from_proposal::<TYPES, I>(
             proposal,
             OuterConsensus::new(Arc::clone(&task_state.consensus.inner_consensus)),
             Arc::clone(&task_state.upgrade_lock.decided_upgrade_certificate),
             &task_state.public_key,
             version >= V::Epochs::VERSION,
-            task_state.membership.membership(),
+            &task_state.membership,
             &task_state.storage,
             task_state.epoch_height,
-            &task_state.upgrade_lock,
         )
         .await
     };
