@@ -571,7 +571,8 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for PushCdnNetwork<K> {
     /// - If we fail to receive messages. Will trigger a retry automatically.
     async fn recv_message(&self) -> Result<Vec<u8>, NetworkError> {
         // If we have a message in the internal queue, return it
-        if let Some(message) = self.internal_queue.lock().pop_front() {
+        let queued_message = self.internal_queue.lock().pop_front();
+        if let Some(message) = queued_message {
             return Ok(message);
         }
 

@@ -312,59 +312,58 @@ where
     // Print the libp2p public key
     info!("Starting Libp2p with PeerID: {libp2p_public_key}");
 
-    let (mut network_config, wait_for_orchestrator) = match (
-        persistence.load_config().await?,
-        network_params.config_peers,
-    ) {
-        (Some(config), _) => {
-            tracing::warn!("loaded network config from storage, rejoining existing network");
-            (config, false)
-        },
-        // If we were told to fetch the config from an already-started peer, do so.
-        (None, Some(peers)) => {
-            tracing::warn!(?peers, "loading network config from peers");
-            let peers = StatePeers::<SequencerApiVersion>::from_urls(
-                peers,
-                network_params.catchup_backoff,
-                &NoMetrics,
-            );
-            let config = peers.fetch_config(validator_config.clone()).await?;
+    let loaded_config = persistence.load_config().await?;
+    let (mut network_config, wait_for_orchestrator) =
+        match (loaded_config, network_params.config_peers) {
+            (Some(config), _) => {
+                tracing::warn!("loaded network config from storage, rejoining existing network");
+                (config, false)
+            },
+            // If we were told to fetch the config from an already-started peer, do so.
+            (None, Some(peers)) => {
+                tracing::warn!(?peers, "loading network config from peers");
+                let peers = StatePeers::<SequencerApiVersion>::from_urls(
+                    peers,
+                    network_params.catchup_backoff,
+                    &NoMetrics,
+                );
+                let config = peers.fetch_config(validator_config.clone()).await?;
 
-            tracing::warn!(
-                node_id = config.node_index,
-                stake_table = ?config.config.known_nodes_with_stake,
-                "loaded config",
-            );
-            persistence.save_config(&config).await?;
-            (config, false)
-        },
-        // Otherwise, this is a fresh network; load from the orchestrator.
-        (None, None) => {
-            tracing::warn!("loading network config from orchestrator");
-            tracing::warn!(
-                "waiting for other nodes to connect, DO NOT RESTART until fully connected"
-            );
-            let config = get_complete_config(
-                &orchestrator_client,
-                validator_config.clone(),
-                // Register in our Libp2p advertise address and public key so other nodes
-                // can contact us on startup
-                Some(libp2p_advertise_address),
-                Some(libp2p_public_key),
-            )
-            .await?
-            .0;
+                tracing::warn!(
+                    node_id = config.node_index,
+                    stake_table = ?config.config.known_nodes_with_stake,
+                    "loaded config",
+                );
+                persistence.save_config(&config).await?;
+                (config, false)
+            },
+            // Otherwise, this is a fresh network; load from the orchestrator.
+            (None, None) => {
+                tracing::warn!("loading network config from orchestrator");
+                tracing::warn!(
+                    "waiting for other nodes to connect, DO NOT RESTART until fully connected"
+                );
+                let config = get_complete_config(
+                    &orchestrator_client,
+                    validator_config.clone(),
+                    // Register in our Libp2p advertise address and public key so other nodes
+                    // can contact us on startup
+                    Some(libp2p_advertise_address),
+                    Some(libp2p_public_key),
+                )
+                .await?
+                .0;
 
-            tracing::warn!(
-                node_id = config.node_index,
-                stake_table = ?config.config.known_nodes_with_stake,
-                "loaded config",
-            );
-            persistence.save_config(&config).await?;
-            tracing::warn!("all nodes connected");
-            (config, true)
-        },
-    };
+                tracing::warn!(
+                    node_id = config.node_index,
+                    stake_table = ?config.config.known_nodes_with_stake,
+                    "loaded config",
+                );
+                persistence.save_config(&config).await?;
+                tracing::warn!("all nodes connected");
+                (config, true)
+            },
+        };
 
     if let Some(upgrade) = genesis.upgrades.get(&V::Upgrade::VERSION) {
         upgrade.set_hotshot_config_parameters(&mut network_config.config);
