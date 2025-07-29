@@ -1069,7 +1069,7 @@ impl Fetcher {
     /// - The initial supply is fetched from the token contract
     /// - If the supply is not present, it invokes `fetch_and_update_initial_supply` to retrieve it.
     pub async fn fetch_fixed_block_reward(&self) -> Result<RewardAmount, FetchRewardError> {
-        // deferences and drops the lock
+        // `fetch_and_update_initial_supply` needs a write lock, create temporary to drop lock
         let initial_supply = *self.initial_supply.read().await;
         let initial_supply = match initial_supply {
             Some(supply) => supply,
