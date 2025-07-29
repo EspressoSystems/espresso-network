@@ -140,3 +140,6 @@ normal = ["hotshot-testing"]
 
 [package.metadata.cargo-machete]
 ignored = ["vergen", "include_dir", "hotshot_builder_api"]
+
+[lints]
+workspace = true
