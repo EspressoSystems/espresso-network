@@ -433,7 +433,6 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                 .await?;
 
             // Verify proofs.
-            // Verify proofs.
             let mut proofs = Vec::new();
             for account in accounts {
                 let (proof, _) = RewardAccountProofLegacy::prove(&tree, (*account).into())
