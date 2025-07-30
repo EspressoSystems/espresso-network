@@ -16,8 +16,7 @@ use espresso_types::{
     parse_duration, parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
-    v0_1::RewardAmount,
-    v0_3::{EventKey, IndexedStake, StakeTableEvent},
+    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent},
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
     ValidatorMap,
 };

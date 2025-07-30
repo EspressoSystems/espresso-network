@@ -25,7 +25,9 @@ cld = { workspace = true }
 committable = { workspace = true }
 derive_more = { workspace = true }
 ethers-core = "2.0"
+either = { workspace = true }
 fluent-asserter = "0.1.9"
+sha3 = "0.10"
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
