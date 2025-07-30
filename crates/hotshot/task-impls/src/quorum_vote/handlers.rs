@@ -579,12 +579,13 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         )
         .wrap()
         .context(error!("Failed to sign the light client state"))?;
+        let auth_root = leaf.block_header().auth_root();
         let state_vote = LightClientStateUpdateVote {
             epoch: TYPES::Epoch::new(epoch_from_block_number(leaf.height(), epoch_height)),
             light_client_state,
             next_stake_table_state,
             signature,
-            auth_root: None,
+            auth_root,
         };
         broadcast_event(
             Arc::new(HotShotEvent::EpochRootQuorumVoteSend(EpochRootQuorumVote {

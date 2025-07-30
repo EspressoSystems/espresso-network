@@ -415,6 +415,10 @@ impl<
         )
     }
 
+    fn auth_root(&self) -> Option<[u8; 32]> {
+        None
+    }
+
     fn timestamp(&self) -> u64 {
         self.timestamp
     }

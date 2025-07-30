@@ -810,7 +810,7 @@ impl<TYPES: NodeType> LightClientStateUpdateCertificateV2<TYPES> {
             light_client_state: Default::default(),
             next_stake_table_state: Default::default(),
             signatures: vec![],
-            auth_root: Some([0 ; 32]),
+            auth_root: Some([0; 32]),
         }
     }
 }

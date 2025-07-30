@@ -36,7 +36,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::vid_commitment,
-    simple_certificate::{LightClientStateUpdateCertificateV2, LightClientStateUpdateCertificateV1},
+    simple_certificate::LightClientStateUpdateCertificateV1,
     traits::{signature_key::BuilderSignatureKey, BlockPayload, EncodeBytes},
     vid::{advz::advz_scheme, avidm::init_avidm_param},
 };
@@ -627,7 +627,6 @@ async fn test_state_cert_query_data_v3() {
     let state_cert = StateCertQueryData(light_client_cert.into());
     reference_test_without_committable("v3", "state_cert", &state_cert);
 }
-
 
 // #[tokio::test(flavor = "multi_thread")]
 // async fn test_state_cert_query_data_v4() {

@@ -22,7 +22,7 @@ use anyhow::Context;
 use derivative::Derivative;
 use hotshot_types::{
     simple_certificate::{
-        LightClientStateUpdateCertificateV2, LightClientStateUpdateCertificateV1,
+        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         QuorumCertificate2,
     },
     traits::{
@@ -367,9 +367,8 @@ where
                          LightClientStateUpdateCertificateV2"
                     );
 
-                    match bincode::deserialize::<LightClientStateUpdateCertificateV1<Types>>(
-                        bytes,
-                    ) {
+                    match bincode::deserialize::<LightClientStateUpdateCertificateV1<Types>>(bytes)
+                    {
                         Ok(legacy) => legacy.into(),
                         Err(err_legacy) => {
                             tracing::error!(

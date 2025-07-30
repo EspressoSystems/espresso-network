@@ -36,9 +36,10 @@ use crate::{
     impl_has_epoch, impl_has_none_epoch,
     message::{convert_proposal, Proposal, UpgradeLock},
     simple_certificate::{
-        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate,
-        QuorumCertificate2, TimeoutCertificate, TimeoutCertificate2, UpgradeCertificate,
-        ViewSyncFinalizeCertificate, ViewSyncFinalizeCertificate2,
+        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
+        NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, TimeoutCertificate,
+        TimeoutCertificate2, UpgradeCertificate, ViewSyncFinalizeCertificate,
+        ViewSyncFinalizeCertificate2,
     },
     simple_vote::{HasEpoch, QuorumData, QuorumData2, UpgradeProposalData, VersionedVoteData},
     traits::{
@@ -800,12 +801,81 @@ pub struct QuorumProposal2<TYPES: NodeType> {
     pub state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
 }
 
+/// Proposal to append a block.
+#[derive(derive_more::Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
+#[serde(bound(deserialize = ""))]
+pub struct QuorumProposal2V3<TYPES: NodeType> {
+    /// The block header to append
+    pub block_header: TYPES::BlockHeader,
+
+    /// view number for the proposal
+    pub view_number: TYPES::View,
+
+    /// The epoch number corresponding to the block number. Can be `None` for pre-epoch version.
+    pub epoch: Option<TYPES::Epoch>,
+
+    /// certificate that the proposal is chaining from
+    pub justify_qc: QuorumCertificate2<TYPES>,
+
+    /// certificate that the proposal is chaining from formed by the next epoch nodes
+    pub next_epoch_justify_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
+
+    /// Possible upgrade certificate, which the leader may optionally attach.
+    pub upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
+
+    /// Possible timeout or view sync certificate. If the `justify_qc` is not for a proposal in the immediately preceding view, then either a timeout or view sync certificate must be attached.
+    pub view_change_evidence: Option<ViewChangeEvidence2<TYPES>>,
+
+    /// The DRB result for the next epoch.
+    ///
+    /// This is required only for the last block of the epoch. Nodes will verify that it's
+    /// consistent with the result from their computations.
+    #[serde(with = "serde_bytes")]
+    pub next_drb_result: Option<DrbResult>,
+
+    /// The light client state update certificate for the next epoch.
+    /// This is required for the epoch root.
+    pub state_cert: Option<LightClientStateUpdateCertificateV1<TYPES>>,
+}
+
+impl<TYPES: NodeType> From<QuorumProposal2V3<TYPES>> for QuorumProposal2<TYPES> {
+    fn from(v3: QuorumProposal2V3<TYPES>) -> Self {
+        Self {
+            block_header: v3.block_header,
+            view_number: v3.view_number,
+            epoch: v3.epoch,
+            justify_qc: v3.justify_qc,
+            next_epoch_justify_qc: v3.next_epoch_justify_qc,
+            upgrade_certificate: v3.upgrade_certificate,
+            view_change_evidence: v3.view_change_evidence,
+            next_drb_result: v3.next_drb_result,
+            state_cert: v3.state_cert.map(Into::into),
+        }
+    }
+}
+
+/// Wrapper around a proposal to append a block
+#[derive(derive_more::Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
+#[serde(bound(deserialize = ""))]
+pub struct QuorumProposalWrapperV3<TYPES: NodeType> {
+    /// The wrapped proposal
+    pub proposal: QuorumProposal2V3<TYPES>,
+}
+
 /// Wrapper around a proposal to append a block
 #[derive(derive_more::Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
 #[serde(bound(deserialize = ""))]
 pub struct QuorumProposalWrapper<TYPES: NodeType> {
     /// The wrapped proposal
     pub proposal: QuorumProposal2<TYPES>,
+}
+
+impl<TYPES: NodeType> From<QuorumProposalWrapperV3<TYPES>> for QuorumProposalWrapper<TYPES> {
+    fn from(v3: QuorumProposalWrapperV3<TYPES>) -> Self {
+        Self {
+            proposal: v3.proposal.into(),
+        }
+    }
 }
 
 impl<TYPES: NodeType> QuorumProposal2<TYPES> {
@@ -988,7 +1058,19 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for QuorumProposal2<TYPES> {
     }
 }
 
+impl<TYPES: NodeType> HasViewNumber<TYPES> for QuorumProposal2V3<TYPES> {
+    fn view_number(&self) -> TYPES::View {
+        self.view_number
+    }
+}
+
 impl<TYPES: NodeType> HasViewNumber<TYPES> for QuorumProposalWrapper<TYPES> {
+    fn view_number(&self) -> TYPES::View {
+        self.proposal.view_number
+    }
+}
+
+impl<TYPES: NodeType> HasViewNumber<TYPES> for QuorumProposalWrapperV3<TYPES> {
     fn view_number(&self) -> TYPES::View {
         self.proposal.view_number
     }
@@ -1000,7 +1082,11 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for UpgradeProposal<TYPES> {
     }
 }
 
-impl_has_epoch!(QuorumProposal2<TYPES>, DaProposal2<TYPES>);
+impl_has_epoch!(
+    QuorumProposal2<TYPES>,
+    DaProposal2<TYPES>,
+    QuorumProposal2V3<TYPES>
+);
 
 impl_has_none_epoch!(
     QuorumProposal<TYPES>,
@@ -1010,6 +1096,14 @@ impl_has_none_epoch!(
 );
 
 impl<TYPES: NodeType> HasEpoch<TYPES> for QuorumProposalWrapper<TYPES> {
+    /// Return an underlying proposal's epoch
+    #[allow(clippy::panic)]
+    fn epoch(&self) -> Option<TYPES::Epoch> {
+        self.proposal.epoch()
+    }
+}
+
+impl<TYPES: NodeType> HasEpoch<TYPES> for QuorumProposalWrapperV3<TYPES> {
     /// Return an underlying proposal's epoch
     #[allow(clippy::panic)]
     fn epoch(&self) -> Option<TYPES::Epoch> {

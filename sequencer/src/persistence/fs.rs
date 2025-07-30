@@ -26,14 +26,14 @@ use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
 use hotshot_types::{
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
-        DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
-        QuorumProposalWrapper, VidCommitment, VidDisperseShare,
+        DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2, QuorumProposal2V3,
+        QuorumProposalWrapper, QuorumProposalWrapperV3, VidCommitment, VidDisperseShare,
     },
     drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        LightClientStateUpdateCertificateV2, LightClientStateUpdateCertificateV1,
+        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
     },
     traits::{
@@ -562,28 +562,23 @@ impl Inner {
         let bytes = fs::read(&file_path)?;
 
         let state_cert: LightClientStateUpdateCertificateV2<SeqTypes> =
-            match bincode::deserialize(&bytes) {
-                Ok(cert) => cert,
-                Err(err) => {
-                    tracing::info!(
-                        error = %err,
-                        path = %file_path.display(),
-                        "Failed to deserialize state certificate, attempting legacy format"
-                    );
+            bincode::deserialize(&bytes).or_else(|err_v2| {
+                tracing::info!(
+                    error = %err_v2,
+                    path = %file_path.display(),
+                    "Failed to deserialize state certificate, attempting with v1"
+                );
 
-                    bincode::deserialize::<LightClientStateUpdateCertificateV1<SeqTypes>>(
-                        &bytes,
-                    )
+                bincode::deserialize::<LightClientStateUpdateCertificateV1<SeqTypes>>(&bytes)
                     .map(Into::into)
                     .with_context(|| {
                         format!(
-                            "Failed to deserialize with both current and legacy certificate from \
-                             file '{}'. error: {err}",
+                            "Failed to deserialize with both v2 and v1 from file '{}'. error: \
+                             {err_v2}",
                             file_path.display()
                         )
-                    })?
-                },
-            };
+                    })
+            })?;
 
         let epoch = state_cert.epoch.u64();
         let finalized_dir_path = self.finalized_state_cert_dir_path();
@@ -938,20 +933,34 @@ impl SequencerPersistence for Persistence {
         let mut map = BTreeMap::new();
         for (view, path) in view_files(&dir_path)? {
             let proposal_bytes = fs::read(path)?;
-            let proposal: Proposal<SeqTypes, QuorumProposal2<SeqTypes>> =
-                match bincode::deserialize(&proposal_bytes) {
-                    Ok(proposal) => proposal,
-                    Err(err) => {
-                        // At this point, if the file contents are invalid, it is most likely an
-                        // error rather than a miscellaneous file somehow ending up in the
-                        // directory. However, we continue on, because it is better to collect as
-                        // many proposals as we can rather than letting one bad proposal cause the
-                        // entire operation to fail, and it is still possible that this was just
-                        // some unintended file whose name happened to match the naming convention.
-                        tracing::warn!(?view, "ignoring malformed quorum proposal file: {err:#}");
-                        continue;
-                    },
-                };
+            let Some(proposal) = bincode::deserialize::<
+                Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
+            >(&proposal_bytes)
+            .or_else(|err_v2| {
+                bincode::deserialize::<Proposal<SeqTypes, QuorumProposalWrapperV3<SeqTypes>>>(
+                    &proposal_bytes,
+                )
+                .map(convert_proposal)
+                .inspect_err(|err_v3| {
+                    // At this point, if the file contents are invalid, it is most likely an
+                    // error rather than a miscellaneous file somehow ending up in the
+                    // directory. However, we continue on, because it is better to collect as
+                    // many proposals as we can rather than letting one bad proposal cause the
+                    // entire operation to fail, and it is still possible that this was just
+                    // some unintended file whose name happened to match the naming convention.
+
+                    tracing::warn!(
+                        ?view,
+                        error_v2 = %err_v2,
+                        error_v3 = %err_v3,
+                        "ignoring malformed quorum proposal file"
+                    );
+                })
+            })
+            .ok() else {
+                continue;
+            };
+
             let proposal2 = convert_proposal(proposal);
 
             // Push to the map and we're done.
@@ -969,8 +978,19 @@ impl SequencerPersistence for Persistence {
         let dir_path = inner.quorum_proposals2_dir_path();
         let file_path = dir_path.join(view.to_string()).with_extension("txt");
         let bytes = fs::read(file_path)?;
-        let proposal = bincode::deserialize(&bytes)?;
-
+        let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
+            bincode::deserialize(&bytes).or_else(|err_v2| {
+                bincode::deserialize::<Proposal<SeqTypes, QuorumProposalWrapperV3<SeqTypes>>>(
+                    &bytes,
+                )
+                .map(convert_proposal)
+                .inspect_err(|err_v3| {
+                    tracing::error!(
+                        "Failed to deserialize quorum proposal for view {view:?}: {err_v2:#}, as \
+                         v3: {err_v3:#}"
+                    )
+                })
+            })?;
         Ok(proposal)
     }
 
@@ -1519,30 +1539,26 @@ impl SequencerPersistence for Persistence {
                 "reading light client state update certificate {}",
                 path.display()
             ))?;
-            let cert = match bincode::deserialize::<LightClientStateUpdateCertificateV2<SeqTypes>>(
+            let cert = bincode::deserialize::<LightClientStateUpdateCertificateV2<SeqTypes>>(
                 &bytes,
-            ) {
-                Ok(cert) => cert,
-                Err(err) => {
-                    tracing::info!(
-                        error = %err,
-                        path = %path.display(),
-                        "Failed to deserialize current certificate format, attempting legacy format"
-                    );
+            )
+            .or_else(|err_v2| {
+                tracing::info!(
+                    error = %err_v2,
+                    path = %path.display(),
+                    "Failed to deserialize current certificate format, attempting legacy format"
+                );
 
-                    bincode::deserialize::<LightClientStateUpdateCertificateV1<SeqTypes>>(
-                        &bytes,
-                    )
+                bincode::deserialize::<LightClientStateUpdateCertificateV1<SeqTypes>>(&bytes)
                     .map(Into::into)
                     .with_context(|| {
                         format!(
                             "Failed to deserialize both current and legacy formats from '{}'. \
-                             Initial error: {err}",
+                             Initial error: {err_v2}",
                             path.display()
                         )
-                    })?
-                },
-            };
+                    })
+            })?;
 
             result = Some(cert);
         }
