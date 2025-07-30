@@ -89,6 +89,8 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
                             },
                             Ok(Some(Err(err))) => {
                                 warn!(?err, "Error in event stream");
+                                let _ =
+                                    std::mem::replace(&mut this.connection, Right(Box::pin(fut)));
                                 continue;
                             },
                             Ok(None) => {
