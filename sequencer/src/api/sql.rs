@@ -101,7 +101,7 @@ impl CatchupStorage for SqlStorage {
         accounts: &[RewardAccountV1],
     ) -> anyhow::Result<(RewardMerkleTreeV1, Leaf2)> {
         let mut tx = self.read().await.context(format!(
-            "opening transaction to fetch legacy reward account {accounts:?}; height {height}"
+            "opening transaction to fetch v1 reward account {accounts:?}; height {height}"
         ))?;
 
         let block_height = NodeStorage::<SeqTypes>::block_height(&mut tx)
@@ -410,11 +410,11 @@ async fn load_v1_reward_accounts<Mode: TransactionMode>(
             )
             .await
             .context(format!(
-                "fetching legacy reward account {account}; height {}",
+                "fetching v1 reward account {account}; height {}",
                 header.height()
             ))?;
         match proof.proof.first().context(format!(
-            "empty proof for legacy reward account {account}; height {}",
+            "empty proof for v1 reward account {account}; height {}",
             header.height()
         ))? {
             MerkleNode::Leaf { pos, elem, .. } => {
@@ -650,7 +650,7 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
                 .0;
             ensure!(
                 state.reward_merkle_tree_v1.commitment() == expected_root,
-                "loaded legacy reward state does not match parent header"
+                "loaded v1 reward state does not match parent header"
             );
         },
         either::Either::Right(expected_root) => {

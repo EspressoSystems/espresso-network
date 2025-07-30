@@ -439,7 +439,7 @@ impl<
         reward_merkle_tree_root: RewardMerkleCommitmentV1,
         accounts: Vec<RewardAccountV1>,
     ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
-        tracing::info!("Fetching legacy reward accounts for height: {height}, view: {view}");
+        tracing::info!("Fetching v1 reward accounts for height: {height}, view: {view}");
 
         // Clone things we need in the first closure
         let accounts_clone = accounts.clone();
@@ -452,7 +452,7 @@ impl<
             async move {
                 // Make sure the response is a reward accounts response
                 let Response::RewardAccountsV1(reward_merkle_tree) = response else {
-                    return Err(anyhow::anyhow!("expected legacy reward accounts response"));
+                    return Err(anyhow::anyhow!("expected v1 reward accounts response"));
                 };
 
                 // Verify the merkle proofs
@@ -462,7 +462,7 @@ impl<
                         RewardAccountProofV1::prove(&reward_merkle_tree, account.into())
                             .with_context(|| format!("response was missing account {account}"))?;
                     proof.verify(&reward_merkle_tree_root).with_context(|| {
-                        format!("invalid proof for legacy reward account {account}")
+                        format!("invalid proof for v1 reward account {account}")
                     })?;
                     proofs.push(proof);
                 }
@@ -479,9 +479,9 @@ impl<
                 response_validation_fn,
             )
             .await
-            .with_context(|| "failed to request legacy reward accounts")?;
+            .with_context(|| "failed to request v1 reward accounts")?;
 
-        tracing::info!("Fetched legacy reward accounts for height: {height}, view: {view}");
+        tracing::info!("Fetched v1 reward accounts for height: {height}, view: {view}");
 
         Ok(response)
     }

@@ -638,7 +638,7 @@ impl RewardDistributor {
                     &RewardAccountV1(address),
                     reward,
                 )?;
-                tracing::debug!(%address, %reward, "applied legacy rewards");
+                tracing::debug!(%address, %reward, "applied v1 rewards");
             }
         } else {
             for (address, reward) in computed_rewards.all_rewards() {
@@ -647,7 +647,7 @@ impl RewardDistributor {
                     &RewardAccountV2(address),
                     reward,
                 )?;
-                tracing::debug!(%address, %reward, "applied current rewards");
+                tracing::debug!(%address, %reward, "applied v2 rewards");
             }
         }
 
@@ -875,7 +875,7 @@ pub async fn get_leader_and_fetch_missing_rewards(
                 parent_height,
                 ?parent_view,
                 ?missing_reward_accts,
-                "fetching missing legacy reward accounts from peers"
+                "fetching missing v1 reward accounts from peers"
             );
 
             let missing_account_proofs = instance_state

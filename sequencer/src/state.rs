@@ -59,21 +59,20 @@ pub(crate) async fn compute_state_update(
     );
 
     match parent_header.reward_merkle_tree_root() {
-        Either::Left(legacy_root) => {
+        Either::Left(v1_root) => {
             ensure!(
-                state.reward_merkle_tree_v1.commitment() == legacy_root,
-                "internal error! in-memory legacy reward tree {:?} does not match parent header \
-                 {:?}",
+                state.reward_merkle_tree_v1.commitment() == v1_root,
+                "internal error! in-memory v1 reward tree {:?} does not match parent header {:?}",
                 state.reward_merkle_tree_v1.commitment(),
-                legacy_root
+                v1_root
             )
         },
-        Either::Right(root) => {
+        Either::Right(v2_root) => {
             ensure!(
-                state.reward_merkle_tree_v2.commitment() == root,
-                "internal error! in-memory reward tree {:?} does not match parent header {:?}",
+                state.reward_merkle_tree_v2.commitment() == v2_root,
+                "internal error! in-memory v2 reward tree {:?} does not match parent header {:?}",
                 state.reward_merkle_tree_v2.commitment(),
-                root
+                v2_root
             )
         },
     }

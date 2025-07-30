@@ -283,8 +283,8 @@ impl Header {
         ns_table: NsTable,
         fee_merkle_tree_root: FeeMerkleCommitment,
         block_merkle_tree_root: BlockMerkleCommitment,
-        reward_merkle_tree_root_legacy: RewardMerkleCommitmentV1,
-        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+        reward_merkle_tree_root_v1: RewardMerkleCommitmentV1,
+        reward_merkle_tree_root_v2: RewardMerkleCommitmentV2,
         fee_info: Vec<FeeInfo>,
         builder_signature: Vec<BuilderSignature>,
         total_reward_distributed: Option<RewardAmount>,
@@ -339,7 +339,7 @@ impl Header {
                 fee_merkle_tree_root,
                 fee_info: fee_info[0], // NOTE this is asserted to exist above
                 builder_signature: builder_signature.first().copied(),
-                reward_merkle_tree_root: reward_merkle_tree_root_legacy,
+                reward_merkle_tree_root: reward_merkle_tree_root_v1,
             }),
             (0, 4) => Self::V4(v0_4::Header {
                 chain_config: chain_config.into(),
@@ -355,7 +355,7 @@ impl Header {
                 fee_merkle_tree_root,
                 fee_info: fee_info[0], // NOTE this is asserted to exist above
                 builder_signature: builder_signature.first().copied(),
-                reward_merkle_tree_root,
+                reward_merkle_tree_root: reward_merkle_tree_root_v2,
                 total_reward_distributed: total_reward_distributed.unwrap_or_default(),
             }),
             // This case should never occur
@@ -1228,7 +1228,7 @@ mod test_headers {
             )
             .unwrap();
 
-            let reward_account_legacy = RewardAccountV1::default();
+            let reward_account_v1 = RewardAccountV1::default();
             let reward_account = RewardAccountV2::default();
             let reward_amount = RewardAmount::default();
             let reward_merkle_tree_v2 =
@@ -1237,7 +1237,7 @@ mod test_headers {
 
             let reward_merkle_tree_v1 = RewardMerkleTreeV1::from_kv_set(
                 20,
-                Vec::from([(reward_account_legacy, reward_amount)]),
+                Vec::from([(reward_account_v1, reward_amount)]),
             )
             .unwrap();
 

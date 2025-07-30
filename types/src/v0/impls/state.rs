@@ -108,14 +108,16 @@ pub enum ProposalValidationError {
         proposal_root: FeeMerkleCommitment,
     },
     #[error(
-        "Invalid legacy Reward Root Error: expected={expected_root:?}, proposal={proposal_root:?}"
+        "Invalid v1 Reward Root Error: expected={expected_root:?}, proposal={proposal_root:?}"
     )]
-    InvalidRewardRootLegacy {
+    InvalidV1RewardRoot {
         expected_root: RewardMerkleCommitmentV1,
         proposal_root: RewardMerkleCommitmentV1,
     },
-    #[error("Invalid Reward Root Error: expected={expected_root:?}, proposal={proposal_root:?}")]
-    InvalidRewardRoot {
+    #[error(
+        "Invalid v2 Reward Root Error: expected={expected_root:?}, proposal={proposal_root:?}"
+    )]
+    InvalidV2RewardRoot {
         expected_root: RewardMerkleCommitmentV2,
         proposal_root: RewardMerkleCommitmentV2,
     },
@@ -688,7 +690,7 @@ impl<'a> ValidatedTransition<'a> {
             Either::Left(proposal_root) => {
                 let expected_root = self.state.reward_merkle_tree_v1.commitment();
                 if proposal_root != expected_root {
-                    return Err(ProposalValidationError::InvalidRewardRootLegacy {
+                    return Err(ProposalValidationError::InvalidV1RewardRoot {
                         expected_root,
                         proposal_root,
                     });
@@ -697,7 +699,7 @@ impl<'a> ValidatedTransition<'a> {
             Either::Right(proposal_root) => {
                 let expected_root = self.state.reward_merkle_tree_v2.commitment();
                 if proposal_root != expected_root {
-                    return Err(ProposalValidationError::InvalidRewardRoot {
+                    return Err(ProposalValidationError::InvalidV2RewardRoot {
                         expected_root,
                         proposal_root,
                     });
@@ -1081,21 +1083,21 @@ impl HotShotState<SeqTypes> for ValidatedState {
         let (reward_merkle_tree_v1, reward_merkle_tree_v2) = match block_header
             .reward_merkle_tree_root()
         {
-            Either::Left(reward_legacy) => {
-                let reward_merkle_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-                let reward_merkle_tree_v1 = if reward_legacy.size() == 0 {
+            Either::Left(reward_tree_v1) => {
+                let reward_merkle_tree_v2 = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+                let reward_merkle_tree_v1 = if reward_tree_v1.size() == 0 {
                     RewardMerkleTreeV1::new(REWARD_MERKLE_TREE_V1_HEIGHT)
                 } else {
-                    RewardMerkleTreeV1::from_commitment(reward_legacy)
+                    RewardMerkleTreeV1::from_commitment(reward_tree_v1)
                 };
-                (reward_merkle_tree_v1, reward_merkle_tree)
+                (reward_merkle_tree_v1, reward_merkle_tree_v2)
             },
-            Either::Right(reward) => {
+            Either::Right(reward_tree_v2) => {
                 let reward_merkle_tree_v1 = RewardMerkleTreeV1::new(REWARD_MERKLE_TREE_V1_HEIGHT);
-                let reward_merkle_tree_v2 = if reward.size() == 0 {
+                let reward_merkle_tree_v2 = if reward_tree_v2.size() == 0 {
                     RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT)
                 } else {
-                    RewardMerkleTreeV2::from_commitment(reward)
+                    RewardMerkleTreeV2::from_commitment(reward_tree_v2)
                 };
                 (reward_merkle_tree_v1, reward_merkle_tree_v2)
             },

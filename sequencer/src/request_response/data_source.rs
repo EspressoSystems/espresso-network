@@ -285,9 +285,9 @@ impl<
                             accounts,
                         )
                         .await
-                        .with_context(|| "failed to get legacy reward accounts from sql storage")?,
+                        .with_context(|| "failed to get v1 reward accounts from sql storage")?,
                     Some(Storage::Fs(_)) => {
-                        bail!("fs storage not supported for legacy reward accounts")
+                        bail!("fs storage not supported for v1 reward accounts")
                     },
                     _ => bail!("storage was not initialized"),
                 };
@@ -305,7 +305,7 @@ impl<
                 {
                     tracing::warn!(
                         ?view,
-                        "Cannot update fetched legacy reward account state: {err:#}"
+                        "Cannot update fetched v1 reward account state: {err:#}"
                     );
                 }
 

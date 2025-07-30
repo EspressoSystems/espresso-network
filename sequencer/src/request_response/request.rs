@@ -31,7 +31,7 @@ pub enum Request {
     BlocksFrontier(Height, ViewNumber),
     /// A request for the reward accounts at a given height and view
     RewardAccountsV2(Height, ViewNumber, Vec<RewardAccountV2>),
-    /// A request for the legacy reward accounts at a given height and view
+    /// A request for the v1 reward accounts at a given height and view
     RewardAccountsV1(Height, ViewNumber, Vec<RewardAccountV1>),
     /// A request for the VID share at the given block height
     VidShare(Height, RequestId),
@@ -51,7 +51,7 @@ pub enum Response {
     BlocksFrontier(BlocksFrontier),
     /// A response for the reward accounts at a given height and view
     RewardAccountsV2(RewardMerkleTreeV2),
-    /// A response for the legacy reward accounts at a given height and view
+    /// A response for the v1 reward accounts at a given height and view
     RewardAccountsV1(RewardMerkleTreeV1),
     /// A response for a VID share at the given block height
     VidShare(VidShare),
