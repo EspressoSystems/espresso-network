@@ -14,8 +14,8 @@ use espresso_types::{
     config::PublicNetworkConfig,
     retain_accounts,
     v0::traits::SequencerPersistence,
-    v0_3::{ChainConfig, RewardAccountLegacy, RewardAmount, RewardMerkleTreeLegacy},
-    v0_4::{RewardAccount, RewardMerkleTree},
+    v0_3::{ChainConfig, RewardAccountV1, RewardAmount, RewardMerkleTreeV1},
+    v0_4::{RewardAccountV2, RewardMerkleTreeV2},
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction, ValidatorMap,
 };
@@ -51,12 +51,12 @@ use tokio::time::timeout;
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
 use crate::{
     catchup::{
-        add_fee_accounts_to_state, add_reward_accounts_to_state,
-        add_reward_accounts_to_state_legacy, CatchupStorage,
+        add_fee_accounts_to_state, add_reward_accounts_to_state, add_reward_accounts_to_state_v1,
+        CatchupStorage,
     },
     context::Consensus,
     request_response::{
-        data_source::{retain_reward_accounts, retain_reward_accounts_legacy},
+        data_source::{retain_reward_accounts, retain_v1_reward_accounts},
         request::{Request, Response},
     },
     state_signature::StateSigner,
@@ -623,8 +623,8 @@ impl<
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        accounts: &[RewardAccount],
-    ) -> anyhow::Result<RewardMerkleTree> {
+        accounts: &[RewardAccountV2],
+    ) -> anyhow::Result<RewardMerkleTreeV2> {
         // Check if we have the desired state in memory.
         match self
             .as_ref()
@@ -665,17 +665,17 @@ impl<
     }
 
     #[tracing::instrument(skip(self, instance))]
-    async fn get_reward_accounts_legacy(
+    async fn get_reward_accounts_v1(
         &self,
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        accounts: &[RewardAccountLegacy],
-    ) -> anyhow::Result<RewardMerkleTreeLegacy> {
+        accounts: &[RewardAccountV1],
+    ) -> anyhow::Result<RewardMerkleTreeV1> {
         // Check if we have the desired state in memory.
         match self
             .as_ref()
-            .get_reward_accounts_legacy(instance, height, view, accounts)
+            .get_reward_accounts_v1(instance, height, view, accounts)
             .await
         {
             Ok(accounts) => return Ok(accounts),
@@ -687,7 +687,7 @@ impl<
         // Try storage.
         let (tree, leaf) = self
             .inner()
-            .get_reward_accounts_legacy(instance, height, view, accounts)
+            .get_reward_accounts_v1(instance, height, view, accounts)
             .await
             .context("accounts not in memory, and could not fetch from storage")?;
 
@@ -702,7 +702,7 @@ impl<
             .consensus()
             .clone();
         if let Err(err) =
-            add_reward_accounts_to_state_legacy::<N, V, P>(&consensus, &view, accounts, &tree, leaf)
+            add_reward_accounts_to_state_v1::<N, V, P>(&consensus, &view, accounts, &tree, leaf)
                 .await
         {
             tracing::warn!(?view, "cannot update fetched account state: {err:#}");
@@ -832,8 +832,8 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
         _instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        accounts: &[RewardAccount],
-    ) -> anyhow::Result<RewardMerkleTree> {
+        accounts: &[RewardAccountV2],
+    ) -> anyhow::Result<RewardMerkleTreeV2> {
         let state = self
             .consensus()
             .await
@@ -845,17 +845,17 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
                 "state not available for height {height}, view {view}"
             ))?;
 
-        retain_reward_accounts(&state.reward_merkle_tree, accounts.iter().copied())
+        retain_reward_accounts(&state.reward_merkle_tree_v2, accounts.iter().copied())
     }
 
     #[tracing::instrument(skip(self, _instance))]
-    async fn get_reward_accounts_legacy(
+    async fn get_reward_accounts_v1(
         &self,
         _instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        accounts: &[RewardAccountLegacy],
-    ) -> anyhow::Result<RewardMerkleTreeLegacy> {
+        accounts: &[RewardAccountV1],
+    ) -> anyhow::Result<RewardMerkleTreeV1> {
         let state = self
             .consensus()
             .await
@@ -867,7 +867,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
                 "state not available for height {height}, view {view}"
             ))?;
 
-        retain_reward_accounts_legacy(&state.reward_merkle_tree_legacy, accounts.iter().copied())
+        retain_v1_reward_accounts(&state.reward_merkle_tree_v1, accounts.iter().copied())
     }
 }
 
@@ -4611,10 +4611,10 @@ mod test {
 
             let leaves = if Ver::Base::VERSION == EpochVersion::VERSION {
                 // Use legacy tree for V3
-                state.reward_merkle_tree_legacy.num_leaves()
+                state.reward_merkle_tree_v1.num_leaves()
             } else {
                 // Use new tree for V4 and above
-                state.reward_merkle_tree.num_leaves()
+                state.reward_merkle_tree_v2.num_leaves()
             };
 
             if leaves > 0 {
@@ -4797,13 +4797,13 @@ mod test {
             .collect::<Vec<_>>();
         let reward_accounts = match Ver::Base::VERSION {
             EpochVersion::VERSION => state
-                .reward_merkle_tree_legacy
+                .reward_merkle_tree_v1
                 .clone()
                 .into_iter()
-                .map(|(acct, _)| RewardAccount::from(acct))
+                .map(|(acct, _)| RewardAccountV2::from(acct))
                 .collect::<Vec<_>>(),
             DrbAndHeaderUpgradeVersion::VERSION => state
-                .reward_merkle_tree
+                .reward_merkle_tree_v2
                 .clone()
                 .into_iter()
                 .map(|(acct, _)| acct)
@@ -4902,8 +4902,8 @@ mod test {
             EpochVersion::VERSION => {
                 for account in reward_accounts.clone() {
                     state
-                        .reward_merkle_tree_legacy
-                        .lookup(RewardAccountLegacy::from(account))
+                        .reward_merkle_tree_v1
+                        .lookup(RewardAccountV1::from(account))
                         .expect_ok()
                         .unwrap();
                 }
@@ -4911,7 +4911,7 @@ mod test {
             DrbAndHeaderUpgradeVersion::VERSION => {
                 for account in &reward_accounts {
                     state
-                        .reward_merkle_tree
+                        .reward_merkle_tree_v2
                         .lookup(account)
                         .expect_ok()
                         .unwrap();
@@ -4956,8 +4956,8 @@ mod test {
             EpochVersion::VERSION => {
                 for account in reward_accounts.clone() {
                     state
-                        .reward_merkle_tree_legacy
-                        .lookup(RewardAccountLegacy::from(account))
+                        .reward_merkle_tree_v1
+                        .lookup(RewardAccountV1::from(account))
                         .expect_ok()
                         .unwrap();
                 }
@@ -4965,7 +4965,7 @@ mod test {
             DrbAndHeaderUpgradeVersion::VERSION => {
                 for account in &reward_accounts {
                     state
-                        .reward_merkle_tree
+                        .reward_merkle_tree_v2
                         .lookup(account)
                         .expect_ok()
                         .unwrap();
@@ -5642,20 +5642,20 @@ mod test {
         let validated_state = network.server.decided_state().await;
         let version = Ver::Base::VERSION;
         if version == EpochVersion::VERSION {
-            let v3_tree = &validated_state.reward_merkle_tree_legacy;
+            let v3_tree = &validated_state.reward_merkle_tree_v1;
             assert!(v3_tree.num_leaves() > 0, "legacy reward tree tree is empty");
-            let v4_tree = &validated_state.reward_merkle_tree;
+            let v4_tree = &validated_state.reward_merkle_tree_v2;
             assert!(
                 v4_tree.num_leaves() == 0,
                 "v4 reward tree tree is not empty"
             );
         } else {
-            let v3_tree = &validated_state.reward_merkle_tree_legacy;
+            let v3_tree = &validated_state.reward_merkle_tree_v1;
             assert!(
                 v3_tree.num_leaves() == 0,
                 "legacy reward tree tree is not empty"
             );
-            let v4_tree = &validated_state.reward_merkle_tree;
+            let v4_tree = &validated_state.reward_merkle_tree_v2;
             assert!(v4_tree.num_leaves() > 0, "v4 reward tree tree is empty");
         }
 

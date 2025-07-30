@@ -38,10 +38,10 @@ use crate::{
     v0_1::{self},
     v0_2,
     v0_3::{
-        self, RewardAmount, RewardMerkleCommitmentLegacy, RewardMerkleTreeLegacy,
-        LEGACY_REWARD_MERKLE_TREE_HEIGHT,
+        self, RewardAmount, RewardMerkleCommitmentV1, RewardMerkleTreeV1,
+        REWARD_MERKLE_TREE_V1_HEIGHT,
     },
-    v0_4::{self, RewardMerkleCommitment},
+    v0_4::{self, RewardMerkleCommitmentV2},
     BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment,
     Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable, PayloadByteLen,
     SeqTypes, TimestampMillis, UpgradeType,
@@ -283,8 +283,8 @@ impl Header {
         ns_table: NsTable,
         fee_merkle_tree_root: FeeMerkleCommitment,
         block_merkle_tree_root: BlockMerkleCommitment,
-        reward_merkle_tree_root_legacy: RewardMerkleCommitmentLegacy,
-        reward_merkle_tree_root: RewardMerkleCommitment,
+        reward_merkle_tree_root_legacy: RewardMerkleCommitmentV1,
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
         fee_info: Vec<FeeInfo>,
         builder_signature: Vec<BuilderSignature>,
         total_reward_distributed: Option<RewardAmount>,
@@ -565,7 +565,7 @@ impl Header {
                 ns_table,
                 block_merkle_tree_root,
                 fee_merkle_tree_root,
-                reward_merkle_tree_root: state.reward_merkle_tree_legacy.commitment(),
+                reward_merkle_tree_root: state.reward_merkle_tree_v1.commitment(),
                 fee_info: fee_info[0],
                 builder_signature: builder_signature.first().copied(),
             }),
@@ -581,7 +581,7 @@ impl Header {
                 ns_table,
                 block_merkle_tree_root,
                 fee_merkle_tree_root,
-                reward_merkle_tree_root: state.reward_merkle_tree.commitment(),
+                reward_merkle_tree_root: state.reward_merkle_tree_v2.commitment(),
                 fee_info: fee_info[0],
                 builder_signature: builder_signature.first().copied(),
                 total_reward_distributed: reward_distributor
@@ -781,9 +781,8 @@ impl Header {
 
     pub fn reward_merkle_tree_root(
         &self,
-    ) -> Either<RewardMerkleCommitmentLegacy, RewardMerkleCommitment> {
-        let empty_reward_merkle_tree =
-            RewardMerkleTreeLegacy::new(LEGACY_REWARD_MERKLE_TREE_HEIGHT);
+    ) -> Either<RewardMerkleCommitmentV1, RewardMerkleCommitmentV2> {
+        let empty_reward_merkle_tree = RewardMerkleTreeV1::new(REWARD_MERKLE_TREE_V1_HEIGHT);
         match self {
             Self::V1(_) => Either::Left(empty_reward_merkle_tree.commitment()),
             Self::V2(_) => Either::Left(empty_reward_merkle_tree.commitment()),
@@ -1018,13 +1017,13 @@ impl BlockHeader<SeqTypes> for Header {
         let ValidatedState {
             fee_merkle_tree,
             block_merkle_tree,
-            reward_merkle_tree_legacy,
-            reward_merkle_tree,
+            reward_merkle_tree_v1,
+            reward_merkle_tree_v2,
             ..
         } = ValidatedState::genesis(instance_state).0;
         let block_merkle_tree_root = block_merkle_tree.commitment();
         let fee_merkle_tree_root = fee_merkle_tree.commitment();
-        let reward_merkle_tree_root = reward_merkle_tree.commitment();
+        let reward_merkle_tree_root = reward_merkle_tree_v2.commitment();
 
         let time = instance_state.genesis_header.timestamp;
 
@@ -1048,7 +1047,7 @@ impl BlockHeader<SeqTypes> for Header {
             metadata.clone(),
             fee_merkle_tree_root,
             block_merkle_tree_root,
-            reward_merkle_tree_legacy.commitment(),
+            reward_merkle_tree_v1.commitment(),
             reward_merkle_tree_root,
             vec![FeeInfo::genesis()],
             vec![],
@@ -1172,8 +1171,8 @@ mod test_headers {
     use crate::{
         eth_signature_key::EthKeyPair,
         mock::MockStateCatchup,
-        v0_3::{RewardAccountLegacy, RewardAmount, LEGACY_REWARD_MERKLE_TREE_HEIGHT},
-        v0_4::{RewardAccount, RewardMerkleTree, REWARD_MERKLE_TREE_HEIGHT},
+        v0_3::{RewardAccountV1, RewardAmount, REWARD_MERKLE_TREE_V1_HEIGHT},
+        v0_4::{RewardAccountV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT},
         Leaf,
     };
 
@@ -1229,14 +1228,14 @@ mod test_headers {
             )
             .unwrap();
 
-            let reward_account_legacy = RewardAccountLegacy::default();
-            let reward_account = RewardAccount::default();
+            let reward_account_legacy = RewardAccountV1::default();
+            let reward_account = RewardAccountV2::default();
             let reward_amount = RewardAmount::default();
-            let reward_merkle_tree =
-                RewardMerkleTree::from_kv_set(20, Vec::from([(reward_account, reward_amount)]))
+            let reward_merkle_tree_v2 =
+                RewardMerkleTreeV2::from_kv_set(20, Vec::from([(reward_account, reward_amount)]))
                     .unwrap();
 
-            let reward_merkle_tree_legacy = RewardMerkleTreeLegacy::from_kv_set(
+            let reward_merkle_tree_v1 = RewardMerkleTreeV1::from_kv_set(
                 20,
                 Vec::from([(reward_account_legacy, reward_amount)]),
             )
@@ -1245,8 +1244,8 @@ mod test_headers {
             let mut validated_state = ValidatedState {
                 block_merkle_tree: block_merkle_tree.clone(),
                 fee_merkle_tree,
-                reward_merkle_tree,
-                reward_merkle_tree_legacy,
+                reward_merkle_tree_v2,
+                reward_merkle_tree_v1,
                 chain_config: genesis.instance_state.chain_config.into(),
             };
 
@@ -1629,12 +1628,11 @@ mod test_headers {
             header.fee_merkle_tree_root(),
             header.block_merkle_tree_root(),
             header.reward_merkle_tree_root().left().unwrap_or_else(|| {
-                RewardMerkleTreeLegacy::new(LEGACY_REWARD_MERKLE_TREE_HEIGHT).commitment()
+                RewardMerkleTreeV1::new(REWARD_MERKLE_TREE_V1_HEIGHT).commitment()
             }),
-            header
-                .reward_merkle_tree_root()
-                .right()
-                .unwrap_or_else(|| RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT).commitment()),
+            header.reward_merkle_tree_root().right().unwrap_or_else(|| {
+                RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT).commitment()
+            }),
             vec![FeeInfo {
                 amount: 0.into(),
                 account: fee_account,
@@ -1661,12 +1659,11 @@ mod test_headers {
             header.fee_merkle_tree_root(),
             header.block_merkle_tree_root(),
             header.reward_merkle_tree_root().left().unwrap_or_else(|| {
-                RewardMerkleTreeLegacy::new(LEGACY_REWARD_MERKLE_TREE_HEIGHT).commitment()
+                RewardMerkleTreeV1::new(REWARD_MERKLE_TREE_V1_HEIGHT).commitment()
             }),
-            header
-                .reward_merkle_tree_root()
-                .right()
-                .unwrap_or_else(|| RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT).commitment()),
+            header.reward_merkle_tree_root().right().unwrap_or_else(|| {
+                RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT).commitment()
+            }),
             vec![FeeInfo {
                 amount: 0.into(),
                 account: fee_account,
@@ -1693,12 +1690,11 @@ mod test_headers {
             header.fee_merkle_tree_root(),
             header.block_merkle_tree_root(),
             header.reward_merkle_tree_root().left().unwrap_or_else(|| {
-                RewardMerkleTreeLegacy::new(LEGACY_REWARD_MERKLE_TREE_HEIGHT).commitment()
+                RewardMerkleTreeV1::new(REWARD_MERKLE_TREE_V1_HEIGHT).commitment()
             }),
-            header
-                .reward_merkle_tree_root()
-                .right()
-                .unwrap_or_else(|| RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT).commitment()),
+            header.reward_merkle_tree_root().right().unwrap_or_else(|| {
+                RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT).commitment()
+            }),
             vec![FeeInfo {
                 amount: 0.into(),
                 account: fee_account,

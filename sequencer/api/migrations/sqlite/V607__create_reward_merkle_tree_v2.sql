@@ -1,5 +1,5 @@
 
--- The new reward_merkle_tree table corresponds to `RewardMerkleTree` with keccak hashing algorithm,
+-- The new reward_merkle_tree table corresponds to `RewardMerkleTreeV2` with keccak hashing algorithm,
 -- and is used starting from protocol version V4.
 
 CREATE TABLE reward_merkle_tree_v2 (

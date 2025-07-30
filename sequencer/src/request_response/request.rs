@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use committable::Commitment;
 use espresso_types::{
-    v0_3::{ChainConfig, RewardAccountLegacy, RewardMerkleTreeLegacy},
-    v0_4::{RewardAccount, RewardMerkleTree},
+    v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
+    v0_4::{RewardAccountV2, RewardMerkleTreeV2},
     FeeAccount, FeeMerkleTree, Leaf2,
 };
 use hotshot_types::data::VidShare;
@@ -30,9 +30,9 @@ pub enum Request {
     /// A request for the blocks frontier
     BlocksFrontier(Height, ViewNumber),
     /// A request for the reward accounts at a given height and view
-    RewardAccounts(Height, ViewNumber, Vec<RewardAccount>),
+    RewardAccountsV2(Height, ViewNumber, Vec<RewardAccountV2>),
     /// A request for the legacy reward accounts at a given height and view
-    RewardAccountsLegacy(Height, ViewNumber, Vec<RewardAccountLegacy>),
+    RewardAccountsV1(Height, ViewNumber, Vec<RewardAccountV1>),
     /// A request for the VID share at the given block height
     VidShare(Height, RequestId),
 }
@@ -50,9 +50,9 @@ pub enum Response {
     /// A response for the blocks frontier
     BlocksFrontier(BlocksFrontier),
     /// A response for the reward accounts at a given height and view
-    RewardAccounts(RewardMerkleTree),
+    RewardAccountsV2(RewardMerkleTreeV2),
     /// A response for the legacy reward accounts at a given height and view
-    RewardAccountsLegacy(RewardMerkleTreeLegacy),
+    RewardAccountsV1(RewardMerkleTreeV1),
     /// A response for a VID share at the given block height
     VidShare(VidShare),
 }

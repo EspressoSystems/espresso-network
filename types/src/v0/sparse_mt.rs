@@ -8,7 +8,7 @@ use ark_serialize::{
 use jf_merkle_tree::DigestAlgorithm;
 use sha3::{Digest as _, Keccak256};
 
-use crate::{v0_3::RewardAmount, v0_4::RewardAccount};
+use crate::{v0_3::RewardAmount, v0_4::RewardAccountV2};
 
 /// Custom Keccak256 node for our merkle tree
 #[derive(Default, Eq, PartialEq, Clone, Copy, Ord, PartialOrd, Hash)]
@@ -65,7 +65,7 @@ impl Valid for KeccakNode {
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct Keccak256Hasher;
 
-impl DigestAlgorithm<RewardAmount, RewardAccount, KeccakNode> for Keccak256Hasher {
+impl DigestAlgorithm<RewardAmount, RewardAccountV2, KeccakNode> for Keccak256Hasher {
     fn digest(data: &[KeccakNode]) -> Result<KeccakNode, jf_merkle_tree::MerkleTreeError> {
         let mut hasher = Keccak256::new();
 
@@ -79,7 +79,7 @@ impl DigestAlgorithm<RewardAmount, RewardAccount, KeccakNode> for Keccak256Hashe
     }
 
     fn digest_leaf(
-        _pos: &RewardAccount,
+        _pos: &RewardAccountV2,
         elem: &RewardAmount,
     ) -> Result<KeccakNode, jf_merkle_tree::MerkleTreeError> {
         // First hash of the value

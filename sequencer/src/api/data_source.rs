@@ -8,10 +8,10 @@ use espresso_types::{
     config::PublicNetworkConfig,
     v0::traits::{PersistenceOptions, SequencerPersistence},
     v0_3::{
-        ChainConfig, RewardAccountLegacy, RewardAccountProofLegacy, RewardAccountQueryDataLegacy,
-        RewardAmount, RewardMerkleTreeLegacy, Validator,
+        ChainConfig, RewardAccountProofV1, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount,
+        RewardMerkleTreeV1, Validator,
     },
-    v0_4::{RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardMerkleTree},
+    v0_4::{RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
     FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
 };
 use futures::future::Future;
@@ -230,16 +230,16 @@ pub(crate) trait CatchupDataSource: Sync {
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        account: RewardAccount,
-    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryData>> {
+        account: RewardAccountV2,
+    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV2>> {
         async move {
             let tree = self
                 .get_reward_accounts(instance, height, view, &[account])
                 .await?;
-            let (proof, balance) = RewardAccountProof::prove(&tree, account.into()).context(
+            let (proof, balance) = RewardAccountProofV2::prove(&tree, account.into()).context(
                 format!("reward account {account} not available for height {height}, view {view}"),
             )?;
-            Ok(RewardAccountQueryData { balance, proof })
+            Ok(RewardAccountQueryDataV2 { balance, proof })
         }
     }
 
@@ -248,34 +248,34 @@ pub(crate) trait CatchupDataSource: Sync {
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        accounts: &[RewardAccount],
-    ) -> impl Send + Future<Output = anyhow::Result<RewardMerkleTree>>;
+        accounts: &[RewardAccountV2],
+    ) -> impl Send + Future<Output = anyhow::Result<RewardMerkleTreeV2>>;
 
-    fn get_reward_account_legacy(
+    fn get_reward_account_v1(
         &self,
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        account: RewardAccountLegacy,
-    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataLegacy>> {
+        account: RewardAccountV1,
+    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV1>> {
         async move {
             let tree = self
-                .get_reward_accounts_legacy(instance, height, view, &[account])
+                .get_reward_accounts_v1(instance, height, view, &[account])
                 .await?;
-            let (proof, balance) = RewardAccountProofLegacy::prove(&tree, account.into()).context(
+            let (proof, balance) = RewardAccountProofV1::prove(&tree, account.into()).context(
                 format!("reward account {account} not available for height {height}, view {view}"),
             )?;
-            Ok(RewardAccountQueryDataLegacy { balance, proof })
+            Ok(RewardAccountQueryDataV1 { balance, proof })
         }
     }
 
-    fn get_reward_accounts_legacy(
+    fn get_reward_accounts_v1(
         &self,
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        accounts: &[RewardAccountLegacy],
-    ) -> impl Send + Future<Output = anyhow::Result<RewardMerkleTreeLegacy>>;
+        accounts: &[RewardAccountV1],
+    ) -> impl Send + Future<Output = anyhow::Result<RewardMerkleTreeV1>>;
 }
 
 #[async_trait]

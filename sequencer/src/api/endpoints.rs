@@ -9,7 +9,7 @@ use std::{
 use anyhow::Result;
 use committable::Committable;
 use espresso_types::{
-    v0_1::ADVZNsProof, v0_3::RewardAccountLegacy, v0_4::RewardAccount, FeeAccount, FeeMerkleTree,
+    v0_1::ADVZNsProof, v0_3::RewardAccountV1, v0_4::RewardAccountV2, FeeAccount, FeeMerkleTree,
     NamespaceId, NsProof, PubKey, Transaction,
 };
 // re-exported here to avoid breaking changes in consumers
@@ -717,7 +717,7 @@ where
         })
     };
 
-    let parse_reward_account = |req: &RequestParams| -> Result<RewardAccount, Error> {
+    let parse_reward_account = |req: &RequestParams| -> Result<RewardAccountV2, Error> {
         let raw = req
             .string_param("address")
             .map_err(Error::from_request_error)?;
@@ -768,7 +768,7 @@ where
             let (height, view) = parse_height_view(&req)?;
             let account = parse_reward_account(&req)?;
             state
-                .get_reward_account_legacy(&state.node_state().await, height, view, account.into())
+                .get_reward_account_v1(&state.node_state().await, height, view, account.into())
                 .await
                 .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
         }
@@ -778,14 +778,14 @@ where
         async move {
             let (height, view) = parse_height_view(&req)?;
             let accounts = req
-                .body_auto::<Vec<RewardAccountLegacy>, ApiVer>(ApiVer::instance())
+                .body_auto::<Vec<RewardAccountV1>, ApiVer>(ApiVer::instance())
                 .map_err(Error::from_request_error)?;
 
             state
                 .read(|state| {
                     async move {
                         state
-                            .get_reward_accounts_legacy(
+                            .get_reward_accounts_v1(
                                 &state.node_state().await,
                                 height,
                                 view,
@@ -818,7 +818,7 @@ where
         async move {
             let (height, view) = parse_height_view(&req)?;
             let accounts = req
-                .body_auto::<Vec<RewardAccount>, ApiVer>(ApiVer::instance())
+                .body_auto::<Vec<RewardAccountV2>, ApiVer>(ApiVer::instance())
                 .map_err(Error::from_request_error)?;
 
             state

@@ -395,8 +395,8 @@ pub mod mock {
     use super::*;
     use crate::{
         retain_accounts,
-        v0_3::{RewardAccountLegacy, RewardAccountProofLegacy, RewardMerkleCommitmentLegacy},
-        v0_4::{RewardAccount, RewardAccountProof, RewardMerkleCommitment},
+        v0_3::{RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
+        v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2},
         BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
     };
 
@@ -496,21 +496,21 @@ pub mod mock {
             _instance: &NodeState,
             _height: u64,
             _view: ViewNumber,
-            _reward_merkle_tree_root: RewardMerkleCommitment,
-            _accounts: &[RewardAccount],
-        ) -> anyhow::Result<Vec<RewardAccountProof>> {
+            _reward_merkle_tree_root: RewardMerkleCommitmentV2,
+            _accounts: &[RewardAccountV2],
+        ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
             anyhow::bail!("unimplemented")
         }
 
-        async fn try_fetch_reward_accounts_legacy(
+        async fn try_fetch_reward_accounts_v1(
             &self,
             _retry: usize,
             _instance: &NodeState,
             _height: u64,
             _view: ViewNumber,
-            _reward_merkle_tree_root: RewardMerkleCommitmentLegacy,
-            _accounts: &[RewardAccountLegacy],
-        ) -> anyhow::Result<Vec<RewardAccountProofLegacy>> {
+            _reward_merkle_tree_root: RewardMerkleCommitmentV1,
+            _accounts: &[RewardAccountV1],
+        ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
             anyhow::bail!("unimplemented")
         }
 

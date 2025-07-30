@@ -8,22 +8,22 @@ use jf_merkle_tree::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const LEGACY_REWARD_MERKLE_TREE_HEIGHT: usize = 20; 
-const REWARD_MERKLE_TREE_ARITY_LEGACY: usize = 256;
+pub const REWARD_MERKLE_TREE_V1_HEIGHT: usize = 20; 
+const REWARD_MERKLE_TREE_V1_ARITY: usize = 256;
 
-pub type RewardMerkleTreeLegacy = UniversalMerkleTree<
+pub type RewardMerkleTreeV1 = UniversalMerkleTree<
     RewardAmount,
     Sha3Digest,
-    RewardAccountLegacy,
-    REWARD_MERKLE_TREE_ARITY_LEGACY,
+    RewardAccountV1,
+    REWARD_MERKLE_TREE_V1_ARITY,
     Sha3Node,
 >;
  
-pub type RewardMerkleCommitmentLegacy = <RewardMerkleTreeLegacy as MerkleTreeScheme>::Commitment;
+pub type RewardMerkleCommitmentV1 = <RewardMerkleTreeV1 as MerkleTreeScheme>::Commitment;
 
 // New Type for `Address` in order to implement `CanonicalSerialize` and
 // `CanonicalDeserialize`
-// This is the same as `RewardAccount`` but the `ToTraversal` trait implementation 
+// This is the same as `RewardAccountV2`` but the `ToTraversal` trait implementation 
 // for this type is different
 #[derive(
     Default,
@@ -42,7 +42,7 @@ pub type RewardMerkleCommitmentLegacy = <RewardMerkleTreeLegacy as MerkleTreeSch
     Into,
 )]
 #[display("{_0:x}")]
-pub struct RewardAccountLegacy(pub Address);
+pub struct RewardAccountV1(pub Address);
 
 
 // New Type for `U256` in order to implement `CanonicalSerialize` and
@@ -76,21 +76,21 @@ pub(crate) const BLOCKS_PER_YEAR: u128 = SECONDS_PER_YEAR / ASSUMED_BLOCK_TIME_S
 pub const COMMISSION_BASIS_POINTS: u16 = 10_000;
   
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RewardAccountQueryDataLegacy {
+pub struct RewardAccountQueryDataV1 {
     pub balance: U256,
-    pub proof: RewardAccountProofLegacy,
+    pub proof: RewardAccountProofV1,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct RewardAccountProofLegacy {
+pub struct RewardAccountProofV1 {
     pub account: Address,
-    pub proof: RewardMerkleProofLegacy,
+    pub proof: RewardMerkleProofV1,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum RewardMerkleProofLegacy {
-    Presence(<RewardMerkleTreeLegacy as MerkleTreeScheme>::MembershipProof),
-    Absence(<RewardMerkleTreeLegacy as UniversalMerkleTreeScheme>::NonMembershipProof),
+pub enum RewardMerkleProofV1 {
+    Presence(<RewardMerkleTreeV1 as MerkleTreeScheme>::MembershipProof),
+    Absence(<RewardMerkleTreeV1 as UniversalMerkleTreeScheme>::NonMembershipProof),
 }
 
 

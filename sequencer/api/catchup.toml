@@ -100,7 +100,7 @@ DOC = """
 Bulk version of `/:height/:view/account`. The request body should be a JSON array consisting of
 TaggedBase64-encoded reward accounts.
 
-The response is a `RewardMerkleTreeLegacy` containing sub-trees for each of the requested accounts, which is
+The response is a `RewardMerkleTreeV1` containing sub-trees for each of the requested accounts, which is
 a more condensed way to represent the union of account proofs for each requested account. Individual
 Merkle proofs for each account can be extracted from this tree.
 """
@@ -125,7 +125,7 @@ DOC = """
 Bulk version of `/:height/:view/account`. The request body should be a JSON array consisting of
 TaggedBase64-encoded reward accounts.
 
-The response is a `RewardMerkleTree` which is an improved version of `RewardMerkleTreeLegacy`
+The response is a `RewardMerkleTreeV2` which is an improved version of `RewardMerkleTreeV1`
 used after V4 upgrade
 containing sub-trees for each of the requested accounts, which is
 a more condensed way to represent the union of account proofs for each requested account. Individual

@@ -6,8 +6,8 @@ use anyhow::{bail, Context};
 use clap::Parser;
 use espresso_types::{
     v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::RewardMerkleTreeLegacy,
-    v0_4::RewardMerkleTree,
+    v0_3::RewardMerkleTreeV1,
+    v0_4::RewardMerkleTreeV2,
     BlockMerkleTree, PubKey,
 };
 use futures::{
@@ -423,8 +423,8 @@ impl Options {
             endpoints::reward::<
                 _,
                 SequencerApiVersion,
-                RewardMerkleTreeLegacy,
-                { RewardMerkleTreeLegacy::ARITY },
+                RewardMerkleTreeV1,
+                { RewardMerkleTreeV1::ARITY },
             >(ver)
             .context("failed to define reward-state api")
         })?;
@@ -434,8 +434,8 @@ impl Options {
             endpoints::reward::<
                 _,
                 SequencerApiVersion,
-                RewardMerkleTree,
-                { RewardMerkleTree::ARITY },
+                RewardMerkleTreeV2,
+                { RewardMerkleTreeV2::ARITY },
             >(ver)
             .context("failed to define reward-state api")
         })?;

@@ -16,10 +16,10 @@ use espresso_types::{
     traits::SequencerPersistence,
     v0::traits::StateCatchup,
     v0_3::{
-        ChainConfig, RewardAccountLegacy, RewardAccountProofLegacy, RewardMerkleCommitmentLegacy,
-        RewardMerkleTreeLegacy,
+        ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1,
+        RewardMerkleTreeV1,
     },
-    v0_4::{RewardAccount, RewardAccountProof, RewardMerkleCommitment, RewardMerkleTree},
+    v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2},
     BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions, ValidatedState,
 };
@@ -380,13 +380,13 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         _instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitment,
-        accounts: &[RewardAccount],
-    ) -> anyhow::Result<Vec<RewardAccountProof>> {
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+        accounts: &[RewardAccountV2],
+    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
         self.fetch(retry, |client| async move {
             let tree = client
                 .inner
-                .post::<RewardMerkleTree>(&format!(
+                .post::<RewardMerkleTreeV2>(&format!(
                     "catchup/{height}/{}/reward/accounts",
                     view.u64()
                 ))
@@ -398,7 +398,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             // Verify proofs.
             let mut proofs = Vec::new();
             for account in accounts {
-                let (proof, _) = RewardAccountProof::prove(&tree, (*account).into())
+                let (proof, _) = RewardAccountProofV2::prove(&tree, (*account).into())
                     .context(format!("response missing reward account {account}"))?;
                 proof
                     .verify(&reward_merkle_tree_root)
@@ -412,19 +412,19 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
     }
 
     #[tracing::instrument(skip(self, _instance))]
-    async fn try_fetch_reward_accounts_legacy(
+    async fn try_fetch_reward_accounts_v1(
         &self,
         retry: usize,
         _instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitmentLegacy,
-        accounts: &[RewardAccountLegacy],
-    ) -> anyhow::Result<Vec<RewardAccountProofLegacy>> {
+        reward_merkle_tree_root: RewardMerkleCommitmentV1,
+        accounts: &[RewardAccountV1],
+    ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
         self.fetch(retry, |client| async move {
             let tree = client
                 .inner
-                .post::<RewardMerkleTreeLegacy>(&format!(
+                .post::<RewardMerkleTreeV1>(&format!(
                     "catchup/{height}/{}/reward-accounts",
                     view.u64()
                 ))
@@ -435,7 +435,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             // Verify proofs.
             let mut proofs = Vec::new();
             for account in accounts {
-                let (proof, _) = RewardAccountProofLegacy::prove(&tree, (*account).into())
+                let (proof, _) = RewardAccountProofV1::prove(&tree, (*account).into())
                     .context(format!("response missing reward account {account}"))?;
                 proof
                     .verify(&reward_merkle_tree_root)
@@ -494,13 +494,13 @@ pub(crate) trait CatchupStorage: Sync {
         }
     }
 
-    fn get_reward_accounts_legacy(
+    fn get_reward_accounts_v1(
         &self,
         _instance: &NodeState,
         _height: u64,
         _view: ViewNumber,
-        _accounts: &[RewardAccountLegacy],
-    ) -> impl Send + Future<Output = anyhow::Result<(RewardMerkleTreeLegacy, Leaf2)>> {
+        _accounts: &[RewardAccountV1],
+    ) -> impl Send + Future<Output = anyhow::Result<(RewardMerkleTreeV1, Leaf2)>> {
         async {
             bail!("merklized state catchup is not supported for this data source");
         }
@@ -511,8 +511,8 @@ pub(crate) trait CatchupStorage: Sync {
         _instance: &NodeState,
         _height: u64,
         _view: ViewNumber,
-        _accounts: &[RewardAccount],
-    ) -> impl Send + Future<Output = anyhow::Result<(RewardMerkleTree, Leaf2)>> {
+        _accounts: &[RewardAccountV2],
+    ) -> impl Send + Future<Output = anyhow::Result<(RewardMerkleTreeV2, Leaf2)>> {
         async {
             bail!("merklized state catchup is not supported for this data source");
         }
@@ -582,22 +582,22 @@ where
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        accounts: &[RewardAccount],
-    ) -> anyhow::Result<(RewardMerkleTree, Leaf2)> {
+        accounts: &[RewardAccountV2],
+    ) -> anyhow::Result<(RewardMerkleTreeV2, Leaf2)> {
         self.inner()
             .get_reward_accounts(instance, height, view, accounts)
             .await
     }
 
-    async fn get_reward_accounts_legacy(
+    async fn get_reward_accounts_v1(
         &self,
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        accounts: &[RewardAccountLegacy],
-    ) -> anyhow::Result<(RewardMerkleTreeLegacy, Leaf2)> {
+        accounts: &[RewardAccountV1],
+    ) -> anyhow::Result<(RewardMerkleTreeV1, Leaf2)> {
         self.inner()
-            .get_reward_accounts_legacy(instance, height, view, accounts)
+            .get_reward_accounts_v1(instance, height, view, accounts)
             .await
     }
 
@@ -751,9 +751,9 @@ where
         instance: &NodeState,
         block_height: u64,
         view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitment,
-        accounts: &[RewardAccount],
-    ) -> anyhow::Result<Vec<RewardAccountProof>> {
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+        accounts: &[RewardAccountV2],
+    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
         // Get the accounts
         let (reward_merkle_tree_from_db, _) = self
             .db
@@ -764,7 +764,7 @@ where
         let mut proofs = Vec::new();
         for account in accounts {
             let (proof, _) =
-                RewardAccountProof::prove(&reward_merkle_tree_from_db, (*account).into())
+                RewardAccountProofV2::prove(&reward_merkle_tree_from_db, (*account).into())
                     .context(format!("response missing account {account}"))?;
             proof
                 .verify(&reward_merkle_tree_root)
@@ -776,26 +776,26 @@ where
     }
 
     #[tracing::instrument(skip(self, _retry, instance))]
-    async fn try_fetch_reward_accounts_legacy(
+    async fn try_fetch_reward_accounts_v1(
         &self,
         _retry: usize,
         instance: &NodeState,
         block_height: u64,
         view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitmentLegacy,
-        accounts: &[RewardAccountLegacy],
-    ) -> anyhow::Result<Vec<RewardAccountProofLegacy>> {
+        reward_merkle_tree_root: RewardMerkleCommitmentV1,
+        accounts: &[RewardAccountV1],
+    ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
         // Get the accounts
         let (reward_merkle_tree_from_db, _) = self
             .db
-            .get_reward_accounts_legacy(instance, block_height, view, accounts)
+            .get_reward_accounts_v1(instance, block_height, view, accounts)
             .await
             .with_context(|| "failed to get reward accounts from DB")?;
         // Verify the accounts
         let mut proofs = Vec::new();
         for account in accounts {
             let (proof, _) =
-                RewardAccountProofLegacy::prove(&reward_merkle_tree_from_db, (*account).into())
+                RewardAccountProofV1::prove(&reward_merkle_tree_from_db, (*account).into())
                     .context(format!("response missing account {account}"))?;
             proof
                 .verify(&reward_merkle_tree_root)
@@ -880,9 +880,9 @@ impl StateCatchup for NullStateCatchup {
         _instance: &NodeState,
         _height: u64,
         _view: ViewNumber,
-        _fee_merkle_tree_root: RewardMerkleCommitment,
-        _account: &[RewardAccount],
-    ) -> anyhow::Result<Vec<RewardAccountProof>> {
+        _fee_merkle_tree_root: RewardMerkleCommitmentV2,
+        _account: &[RewardAccountV2],
+    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
         bail!("state catchup is disabled");
     }
 
@@ -908,15 +908,15 @@ impl StateCatchup for NullStateCatchup {
             .context(format!("chain config {commitment} not available"))
     }
 
-    async fn try_fetch_reward_accounts_legacy(
+    async fn try_fetch_reward_accounts_v1(
         &self,
         _retry: usize,
         _instance: &NodeState,
         _height: u64,
         _view: ViewNumber,
-        _fee_merkle_tree_root: RewardMerkleCommitmentLegacy,
-        _account: &[RewardAccountLegacy],
-    ) -> anyhow::Result<Vec<RewardAccountProofLegacy>> {
+        _fee_merkle_tree_root: RewardMerkleCommitmentV1,
+        _account: &[RewardAccountV1],
+    ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
         bail!("state catchup is disabled");
     }
 
@@ -1222,9 +1222,9 @@ impl StateCatchup for ParallelStateCatchup {
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitment,
-        accounts: &[RewardAccount],
-    ) -> anyhow::Result<Vec<RewardAccountProof>> {
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+        accounts: &[RewardAccountV2],
+    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
         // Try to get the accounts on local providers first
         let accounts_vec = accounts.to_vec();
         let local_result = self
@@ -1266,22 +1266,22 @@ impl StateCatchup for ParallelStateCatchup {
         .await
     }
 
-    async fn try_fetch_reward_accounts_legacy(
+    async fn try_fetch_reward_accounts_v1(
         &self,
         retry: usize,
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitmentLegacy,
-        accounts: &[RewardAccountLegacy],
-    ) -> anyhow::Result<Vec<RewardAccountProofLegacy>> {
+        reward_merkle_tree_root: RewardMerkleCommitmentV1,
+        accounts: &[RewardAccountV1],
+    ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
         // Try to get the accounts on local providers first
         let accounts_vec = accounts.to_vec();
         let local_result = self
             .on_local_providers(clone! {(instance, accounts_vec) move |provider| {
                 clone! {(instance, accounts_vec) async move {
                     provider
-                        .try_fetch_reward_accounts_legacy(
+                        .try_fetch_reward_accounts_v1(
                             retry,
                             &instance,
                             height,
@@ -1303,7 +1303,7 @@ impl StateCatchup for ParallelStateCatchup {
         self.on_remote_providers(clone! {(instance, accounts_vec) move |provider| {
             clone!{(instance, accounts_vec) async move {
                 provider
-                .try_fetch_reward_accounts_legacy(
+                .try_fetch_reward_accounts_v1(
                     retry,
                     &instance,
                     height,
@@ -1441,9 +1441,9 @@ impl StateCatchup for ParallelStateCatchup {
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitment,
-        accounts: Vec<RewardAccount>,
-    ) -> anyhow::Result<Vec<RewardAccountProof>> {
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+        accounts: Vec<RewardAccountV2>,
+    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
         // Try to get the accounts on local providers first
         let accounts_vec = accounts.to_vec();
         let local_result = self
@@ -1484,21 +1484,21 @@ impl StateCatchup for ParallelStateCatchup {
         .await
     }
 
-    async fn fetch_reward_accounts_legacy(
+    async fn fetch_reward_accounts_v1(
         &self,
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitmentLegacy,
-        accounts: Vec<RewardAccountLegacy>,
-    ) -> anyhow::Result<Vec<RewardAccountProofLegacy>> {
+        reward_merkle_tree_root: RewardMerkleCommitmentV1,
+        accounts: Vec<RewardAccountV1>,
+    ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
         // Try to get the accounts on local providers first
         let accounts_vec = accounts.to_vec();
         let local_result = self
             .on_local_providers(clone! {(instance, accounts_vec) move |provider| {
                 clone! {(instance, accounts_vec) async move {
                     provider
-                        .try_fetch_reward_accounts_legacy(
+                        .try_fetch_reward_accounts_v1(
                             0,
                             &instance,
                             height,
@@ -1520,7 +1520,7 @@ impl StateCatchup for ParallelStateCatchup {
         self.on_remote_providers(clone! {(instance, accounts_vec) move |provider| {
             clone!{(instance, accounts_vec) async move {
                 provider
-                .fetch_reward_accounts_legacy(
+                .fetch_reward_accounts_v1(
                     &instance,
                     height,
                     view,
@@ -1669,8 +1669,8 @@ pub async fn add_reward_accounts_to_state<
 >(
     consensus: &Arc<RwLock<Consensus<SeqTypes>>>,
     view: &<SeqTypes as NodeType>::View,
-    accounts: &[RewardAccount],
-    tree: &RewardMerkleTree,
+    accounts: &[RewardAccountV2],
+    tree: &RewardMerkleTreeV2,
     leaf: Leaf2,
 ) -> anyhow::Result<()> {
     // Get the consensus handle
@@ -1684,8 +1684,8 @@ pub async fn add_reward_accounts_to_state<
 
             // Add the fetched accounts to the state.
             for account in accounts {
-                if let Some((proof, _)) = RewardAccountProof::prove(tree, (*account).into()) {
-                    if let Err(err) = proof.remember(&mut state.reward_merkle_tree) {
+                if let Some((proof, _)) = RewardAccountProofV2::prove(tree, (*account).into()) {
+                    if let Err(err) = proof.remember(&mut state.reward_merkle_tree_v2) {
                         tracing::warn!(
                             ?view,
                             %account,
@@ -1705,7 +1705,7 @@ pub async fn add_reward_accounts_to_state<
             // our state map. In this case, we must also add the leaf to the saved leaves
             // map to ensure consistency.
             let mut state = ValidatedState::from_header(leaf.block_header());
-            state.reward_merkle_tree = tree.clone();
+            state.reward_merkle_tree_v2 = tree.clone();
             (Arc::new(state), None)
         },
     };
@@ -1720,15 +1720,15 @@ pub async fn add_reward_accounts_to_state<
 /// Add accounts to the in-memory consensus state.
 /// We use this during catchup after receiving verified accounts.
 #[allow(clippy::type_complexity)]
-pub async fn add_reward_accounts_to_state_legacy<
+pub async fn add_reward_accounts_to_state_v1<
     N: ConnectedNetwork<PubKey>,
     V: Versions,
     P: SequencerPersistence,
 >(
     consensus: &Arc<RwLock<Consensus<SeqTypes>>>,
     view: &<SeqTypes as NodeType>::View,
-    accounts: &[RewardAccountLegacy],
-    tree: &RewardMerkleTreeLegacy,
+    accounts: &[RewardAccountV1],
+    tree: &RewardMerkleTreeV1,
     leaf: Leaf2,
 ) -> anyhow::Result<()> {
     // Get the consensus handle
@@ -1742,8 +1742,8 @@ pub async fn add_reward_accounts_to_state_legacy<
 
             // Add the fetched accounts to the state.
             for account in accounts {
-                if let Some((proof, _)) = RewardAccountProofLegacy::prove(tree, (*account).into()) {
-                    if let Err(err) = proof.remember(&mut state.reward_merkle_tree_legacy) {
+                if let Some((proof, _)) = RewardAccountProofV1::prove(tree, (*account).into()) {
+                    if let Err(err) = proof.remember(&mut state.reward_merkle_tree_v1) {
                         tracing::warn!(
                             ?view,
                             %account,
@@ -1763,7 +1763,7 @@ pub async fn add_reward_accounts_to_state_legacy<
             // our state map. In this case, we must also add the leaf to the saved leaves
             // map to ensure consistency.
             let mut state = ValidatedState::from_header(leaf.block_header());
-            state.reward_merkle_tree_legacy = tree.clone();
+            state.reward_merkle_tree_v1 = tree.clone();
             (Arc::new(state), None)
         },
     };

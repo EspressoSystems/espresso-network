@@ -9,8 +9,8 @@ use async_trait::async_trait;
 use espresso_types::{
     retain_accounts,
     traits::SequencerPersistence,
-    v0_3::{RewardAccountLegacy, RewardMerkleTreeLegacy},
-    v0_4::{RewardAccount, RewardMerkleTree},
+    v0_3::{RewardAccountV1, RewardMerkleTreeV1},
+    v0_4::{RewardAccountV2, RewardMerkleTreeV2},
     NodeState, PubKey, SeqTypes,
 };
 use hotshot::{traits::NodeImplementation, SystemContext};
@@ -40,8 +40,8 @@ use super::request::{Request, Response};
 use crate::{
     api::BlocksFrontier,
     catchup::{
-        add_fee_accounts_to_state, add_reward_accounts_to_state,
-        add_reward_accounts_to_state_legacy, CatchupStorage,
+        add_fee_accounts_to_state, add_reward_accounts_to_state, add_reward_accounts_to_state_v1,
+        CatchupStorage,
     },
 };
 
@@ -219,13 +219,14 @@ impl<
                     Ok(Response::BlocksFrontier(blocks_frontier_from_storage))
                 }
             },
-            Request::RewardAccounts(height, view, accounts) => {
+            Request::RewardAccountsV2(height, view, accounts) => {
                 // Try to get the reward accounts from memory first, then fall back to storage
                 if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await {
-                    if let Ok(reward_accounts) =
-                        retain_reward_accounts(&state.reward_merkle_tree, accounts.iter().copied())
-                    {
-                        return Ok(Response::RewardAccounts(reward_accounts));
+                    if let Ok(reward_accounts) = retain_reward_accounts(
+                        &state.reward_merkle_tree_v2,
+                        accounts.iter().copied(),
+                    ) {
+                        return Ok(Response::RewardAccountsV2(reward_accounts));
                     }
                 }
 
@@ -260,24 +261,24 @@ impl<
                     tracing::warn!(?view, "Cannot update fetched account state: {err:#}");
                 }
 
-                Ok(Response::RewardAccounts(merkle_tree))
+                Ok(Response::RewardAccountsV2(merkle_tree))
             },
 
-            Request::RewardAccountsLegacy(height, view, accounts) => {
+            Request::RewardAccountsV1(height, view, accounts) => {
                 // Try to get the reward accounts from memory first, then fall back to storage
                 if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await {
-                    if let Ok(reward_accounts) = retain_reward_accounts_legacy(
-                        &state.reward_merkle_tree_legacy,
+                    if let Ok(reward_accounts) = retain_v1_reward_accounts(
+                        &state.reward_merkle_tree_v1,
                         accounts.iter().copied(),
                     ) {
-                        return Ok(Response::RewardAccountsLegacy(reward_accounts));
+                        return Ok(Response::RewardAccountsV1(reward_accounts));
                     }
                 }
 
                 // Fall back to storage
                 let (merkle_tree, leaf) = match &self.storage {
                     Some(Storage::Sql(storage)) => storage
-                        .get_reward_accounts_legacy(
+                        .get_reward_accounts_v1(
                             &self.node_state,
                             *height,
                             ViewNumber::new(*view),
@@ -293,7 +294,7 @@ impl<
 
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
-                if let Err(err) = add_reward_accounts_to_state_legacy::<N, V, P>(
+                if let Err(err) = add_reward_accounts_to_state_v1::<N, V, P>(
                     &self.consensus.consensus(),
                     &ViewNumber::new(*view),
                     accounts,
@@ -308,7 +309,7 @@ impl<
                     );
                 }
 
-                Ok(Response::RewardAccountsLegacy(merkle_tree))
+                Ok(Response::RewardAccountsV1(merkle_tree))
             },
             Request::VidShare(block_number, _request_id) => {
                 // Load the VID share from storage
@@ -343,10 +344,10 @@ impl<
 ///
 /// Fails if one of the requested accounts is not represented in the original `state`.
 pub fn retain_reward_accounts(
-    state: &RewardMerkleTree,
-    accounts: impl IntoIterator<Item = RewardAccount>,
-) -> anyhow::Result<RewardMerkleTree> {
-    let mut snapshot = RewardMerkleTree::from_commitment(state.commitment());
+    state: &RewardMerkleTreeV2,
+    accounts: impl IntoIterator<Item = RewardAccountV2>,
+) -> anyhow::Result<RewardMerkleTreeV2> {
+    let mut snapshot = RewardMerkleTreeV2::from_commitment(state.commitment());
     for account in accounts {
         match state.universal_lookup(account) {
             LookupResult::Ok(elem, proof) => {
@@ -370,11 +371,11 @@ pub fn retain_reward_accounts(
 /// Get a partial snapshot of the given reward state, which contains only the specified accounts.
 ///
 /// Fails if one of the requested accounts is not represented in the original `state`.
-pub fn retain_reward_accounts_legacy(
-    state: &RewardMerkleTreeLegacy,
-    accounts: impl IntoIterator<Item = RewardAccountLegacy>,
-) -> anyhow::Result<RewardMerkleTreeLegacy> {
-    let mut snapshot = RewardMerkleTreeLegacy::from_commitment(state.commitment());
+pub fn retain_v1_reward_accounts(
+    state: &RewardMerkleTreeV1,
+    accounts: impl IntoIterator<Item = RewardAccountV1>,
+) -> anyhow::Result<RewardMerkleTreeV1> {
+    let mut snapshot = RewardMerkleTreeV1::from_commitment(state.commitment());
     for account in accounts {
         match state.universal_lookup(account) {
             LookupResult::Ok(elem, proof) => {

@@ -5,8 +5,8 @@ use anyhow::{bail, ensure, Context};
 use either::Either;
 use espresso_types::{
     traits::StateCatchup,
-    v0_3::{ChainConfig, RewardAccountLegacy, RewardMerkleTreeLegacy},
-    v0_4::{Delta, RewardAccount, RewardMerkleTree},
+    v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
+    v0_4::{Delta, RewardAccountV2, RewardMerkleTreeV2},
     BlockMerkleTree, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
 };
 use futures::{future::Future, StreamExt};
@@ -61,18 +61,18 @@ pub(crate) async fn compute_state_update(
     match parent_header.reward_merkle_tree_root() {
         Either::Left(legacy_root) => {
             ensure!(
-                state.reward_merkle_tree_legacy.commitment() == legacy_root,
+                state.reward_merkle_tree_v1.commitment() == legacy_root,
                 "internal error! in-memory legacy reward tree {:?} does not match parent header \
                  {:?}",
-                state.reward_merkle_tree_legacy.commitment(),
+                state.reward_merkle_tree_v1.commitment(),
                 legacy_root
             )
         },
         Either::Right(root) => {
             ensure!(
-                state.reward_merkle_tree.commitment() == root,
+                state.reward_merkle_tree_v2.commitment() == root,
                 "internal error! in-memory reward tree {:?} does not match parent header {:?}",
-                state.reward_merkle_tree.commitment(),
+                state.reward_merkle_tree_v2.commitment(),
                 root
             )
         },
@@ -100,8 +100,8 @@ async fn store_state_update(
     let ValidatedState {
         fee_merkle_tree,
         block_merkle_tree,
-        reward_merkle_tree,
-        reward_merkle_tree_legacy,
+        reward_merkle_tree_v2,
+        reward_merkle_tree_v1,
         ..
     } = state;
     let Delta {
@@ -157,23 +157,21 @@ async fn store_state_update(
 
     if version <= EpochVersion::version() {
         for delta in rewards_delta {
-            let proof = match reward_merkle_tree_legacy
-                .universal_lookup(RewardAccountLegacy::from(delta))
-            {
+            let proof = match reward_merkle_tree_v1.universal_lookup(RewardAccountV1::from(delta)) {
                 LookupResult::Ok(_, proof) => proof,
                 LookupResult::NotFound(proof) => proof,
                 LookupResult::NotInMemory => {
                     bail!("missing merkle path for reward account {delta}")
                 },
             };
-            let path: Vec<usize> = <RewardAccountLegacy as ToTraversalPath<
-                { RewardMerkleTreeLegacy::ARITY },
+            let path: Vec<usize> = <RewardAccountV1 as ToTraversalPath<
+                { RewardMerkleTreeV1::ARITY },
             >>::to_traversal_path(
-                &delta.into(), reward_merkle_tree_legacy.height()
+                &delta.into(), reward_merkle_tree_v1.height()
             );
 
             tracing::debug!(%delta, "inserting reward account");
-            UpdateStateData::<SeqTypes, RewardMerkleTreeLegacy, { RewardMerkleTreeLegacy::ARITY }>::insert_merkle_nodes(
+            UpdateStateData::<SeqTypes, RewardMerkleTreeV1, { RewardMerkleTreeV1::ARITY }>::insert_merkle_nodes(
             tx,
             proof,
             path,
@@ -184,21 +182,21 @@ async fn store_state_update(
         }
     } else {
         for delta in rewards_delta {
-            let proof = match reward_merkle_tree.universal_lookup(delta) {
+            let proof = match reward_merkle_tree_v2.universal_lookup(delta) {
                 LookupResult::Ok(_, proof) => proof,
                 LookupResult::NotFound(proof) => proof,
                 LookupResult::NotInMemory => {
                     bail!("missing merkle path for reward account {delta}")
                 },
             };
-            let path: Vec<usize> = <RewardAccount as ToTraversalPath<
-                { RewardMerkleTree::ARITY },
+            let path: Vec<usize> = <RewardAccountV2 as ToTraversalPath<
+                { RewardMerkleTreeV2::ARITY },
             >>::to_traversal_path(
-                &delta, reward_merkle_tree.height()
+                &delta, reward_merkle_tree_v2.height()
             );
 
             tracing::debug!(%delta, "inserting reward account");
-            UpdateStateData::<SeqTypes, RewardMerkleTree, { RewardMerkleTree::ARITY }>::insert_merkle_nodes(
+            UpdateStateData::<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>::insert_merkle_nodes(
             tx,
             proof,
             path,
@@ -439,8 +437,8 @@ pub(crate) trait SequencerStateUpdate:
     Transaction
     + UpdateStateData<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>
     + UpdateStateData<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
-    + UpdateStateData<SeqTypes, RewardMerkleTree, { RewardMerkleTree::ARITY }>
-    + UpdateStateData<SeqTypes, RewardMerkleTreeLegacy, { RewardMerkleTreeLegacy::ARITY }>
+    + UpdateStateData<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>
+    + UpdateStateData<SeqTypes, RewardMerkleTreeV1, { RewardMerkleTreeV1::ARITY }>
     + ChainConfigPersistence
 {
 }
@@ -449,8 +447,8 @@ impl<T> SequencerStateUpdate for T where
     T: Transaction
         + UpdateStateData<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>
         + UpdateStateData<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
-        + UpdateStateData<SeqTypes, RewardMerkleTree, { RewardMerkleTree::ARITY }>
-        + UpdateStateData<SeqTypes, RewardMerkleTreeLegacy, { RewardMerkleTreeLegacy::ARITY }>
+        + UpdateStateData<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>
+        + UpdateStateData<SeqTypes, RewardMerkleTreeV1, { RewardMerkleTreeV1::ARITY }>
         + ChainConfigPersistence
 {
 }
