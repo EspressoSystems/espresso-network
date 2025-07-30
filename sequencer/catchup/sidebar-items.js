@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["add_fee_accounts_to_state","add_reward_accounts_to_state"],"macro":["clone"],"struct":["Client","NullStateCatchup","ParallelStateCatchup","PeerScore","SqlStateCatchup","StatePeers"],"trait":["CatchupStorage"]};
+window.SIDEBAR_ITEMS = {"fn":["add_fee_accounts_to_state","add_v1_reward_accounts_to_state","add_v2_reward_accounts_to_state"],"macro":["clone"],"struct":["Client","NullStateCatchup","ParallelStateCatchup","PeerScore","SqlStateCatchup","StatePeers"],"trait":["CatchupStorage"]};

@@ -327,141 +327,140 @@
 <a href=#327 id=327 data-nosnippet>327</a>    }
 <a href=#328 id=328 data-nosnippet>328</a>}
 <a href=#329 id=329 data-nosnippet>329</a>
-<a href=#330 id=330 data-nosnippet>330</a><span class="attr">#[allow(dead_code)]
-<a href=#331 id=331 data-nosnippet>331</a></span><span class="kw">impl </span>FeeAccountProof {
-<a href=#332 id=332 data-nosnippet>332</a>    <span class="kw">pub fn </span>presence(
-<a href=#333 id=333 data-nosnippet>333</a>        pos: FeeAccount,
-<a href=#334 id=334 data-nosnippet>334</a>        proof: &lt;FeeMerkleTree <span class="kw">as </span>MerkleTreeScheme&gt;::MembershipProof,
-<a href=#335 id=335 data-nosnippet>335</a>    ) -&gt; <span class="self">Self </span>{
-<a href=#336 id=336 data-nosnippet>336</a>        <span class="self">Self </span>{
-<a href=#337 id=337 data-nosnippet>337</a>            account: pos.into(),
-<a href=#338 id=338 data-nosnippet>338</a>            proof: FeeMerkleProof::Presence(proof),
-<a href=#339 id=339 data-nosnippet>339</a>        }
-<a href=#340 id=340 data-nosnippet>340</a>    }
-<a href=#341 id=341 data-nosnippet>341</a>
-<a href=#342 id=342 data-nosnippet>342</a>    <span class="kw">pub fn </span>absence(
-<a href=#343 id=343 data-nosnippet>343</a>        pos: FeeAccount,
-<a href=#344 id=344 data-nosnippet>344</a>        proof: &lt;FeeMerkleTree <span class="kw">as </span>UniversalMerkleTreeScheme&gt;::NonMembershipProof,
-<a href=#345 id=345 data-nosnippet>345</a>    ) -&gt; <span class="self">Self </span>{
-<a href=#346 id=346 data-nosnippet>346</a>        <span class="self">Self </span>{
-<a href=#347 id=347 data-nosnippet>347</a>            account: pos.into(),
-<a href=#348 id=348 data-nosnippet>348</a>            proof: FeeMerkleProof::Absence(proof),
-<a href=#349 id=349 data-nosnippet>349</a>        }
-<a href=#350 id=350 data-nosnippet>350</a>    }
-<a href=#351 id=351 data-nosnippet>351</a>
-<a href=#352 id=352 data-nosnippet>352</a>    <span class="kw">pub fn </span>prove(tree: <span class="kw-2">&amp;</span>FeeMerkleTree, account: Address) -&gt; <span class="prelude-ty">Option</span>&lt;(<span class="self">Self</span>, U256)&gt; {
-<a href=#353 id=353 data-nosnippet>353</a>        <span class="kw">match </span>tree.universal_lookup(FeeAccount(account)) {
-<a href=#354 id=354 data-nosnippet>354</a>            LookupResult::Ok(balance, proof) =&gt; <span class="prelude-val">Some</span>((
-<a href=#355 id=355 data-nosnippet>355</a>                <span class="self">Self </span>{
-<a href=#356 id=356 data-nosnippet>356</a>                    account,
-<a href=#357 id=357 data-nosnippet>357</a>                    proof: FeeMerkleProof::Presence(proof),
-<a href=#358 id=358 data-nosnippet>358</a>                },
-<a href=#359 id=359 data-nosnippet>359</a>                balance.<span class="number">0</span>,
-<a href=#360 id=360 data-nosnippet>360</a>            )),
-<a href=#361 id=361 data-nosnippet>361</a>            LookupResult::NotFound(proof) =&gt; <span class="prelude-val">Some</span>((
-<a href=#362 id=362 data-nosnippet>362</a>                <span class="self">Self </span>{
-<a href=#363 id=363 data-nosnippet>363</a>                    account,
-<a href=#364 id=364 data-nosnippet>364</a>                    proof: FeeMerkleProof::Absence(proof),
-<a href=#365 id=365 data-nosnippet>365</a>                },
-<a href=#366 id=366 data-nosnippet>366</a>                U256::ZERO,
-<a href=#367 id=367 data-nosnippet>367</a>            )),
-<a href=#368 id=368 data-nosnippet>368</a>            LookupResult::NotInMemory =&gt; <span class="prelude-val">None</span>,
-<a href=#369 id=369 data-nosnippet>369</a>        }
-<a href=#370 id=370 data-nosnippet>370</a>    }
-<a href=#371 id=371 data-nosnippet>371</a>
-<a href=#372 id=372 data-nosnippet>372</a>    <span class="kw">pub fn </span>verify(<span class="kw-2">&amp;</span><span class="self">self</span>, comm: <span class="kw-2">&amp;</span>FeeMerkleCommitment) -&gt; anyhow::Result&lt;U256&gt; {
-<a href=#373 id=373 data-nosnippet>373</a>        <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.proof {
-<a href=#374 id=374 data-nosnippet>374</a>            FeeMerkleProof::Presence(proof) =&gt; {
-<a href=#375 id=375 data-nosnippet>375</a>                <span class="macro">ensure!</span>(
-<a href=#376 id=376 data-nosnippet>376</a>                    FeeMerkleTree::verify(comm.digest(), FeeAccount(<span class="self">self</span>.account), proof)<span class="question-mark">?</span>.is_ok(),
-<a href=#377 id=377 data-nosnippet>377</a>                    <span class="string">"invalid proof"
-<a href=#378 id=378 data-nosnippet>378</a>                </span>);
-<a href=#379 id=379 data-nosnippet>379</a>                <span class="prelude-val">Ok</span>(proof
-<a href=#380 id=380 data-nosnippet>380</a>                    .elem()
-<a href=#381 id=381 data-nosnippet>381</a>                    .context(<span class="string">"presence proof is missing account balance"</span>)<span class="question-mark">?
-<a href=#382 id=382 data-nosnippet>382</a>                    </span>.<span class="number">0</span>)
-<a href=#383 id=383 data-nosnippet>383</a>            },
-<a href=#384 id=384 data-nosnippet>384</a>            FeeMerkleProof::Absence(proof) =&gt; {
-<a href=#385 id=385 data-nosnippet>385</a>                <span class="kw">let </span>tree = FeeMerkleTree::from_commitment(comm);
-<a href=#386 id=386 data-nosnippet>386</a>                <span class="macro">ensure!</span>(
-<a href=#387 id=387 data-nosnippet>387</a>                    tree.non_membership_verify(FeeAccount(<span class="self">self</span>.account), proof)<span class="question-mark">?</span>,
-<a href=#388 id=388 data-nosnippet>388</a>                    <span class="string">"invalid proof"
-<a href=#389 id=389 data-nosnippet>389</a>                </span>);
-<a href=#390 id=390 data-nosnippet>390</a>                <span class="prelude-val">Ok</span>(U256::ZERO)
-<a href=#391 id=391 data-nosnippet>391</a>            },
-<a href=#392 id=392 data-nosnippet>392</a>        }
-<a href=#393 id=393 data-nosnippet>393</a>    }
-<a href=#394 id=394 data-nosnippet>394</a>
-<a href=#395 id=395 data-nosnippet>395</a>    <span class="kw">pub fn </span>remember(<span class="kw-2">&amp;</span><span class="self">self</span>, tree: <span class="kw-2">&amp;mut </span>FeeMerkleTree) -&gt; anyhow::Result&lt;()&gt; {
-<a href=#396 id=396 data-nosnippet>396</a>        <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.proof {
-<a href=#397 id=397 data-nosnippet>397</a>            FeeMerkleProof::Presence(proof) =&gt; {
-<a href=#398 id=398 data-nosnippet>398</a>                tree.remember(
-<a href=#399 id=399 data-nosnippet>399</a>                    FeeAccount(<span class="self">self</span>.account),
-<a href=#400 id=400 data-nosnippet>400</a>                    proof
-<a href=#401 id=401 data-nosnippet>401</a>                        .elem()
-<a href=#402 id=402 data-nosnippet>402</a>                        .context(<span class="string">"presence proof is missing account balance"</span>)<span class="question-mark">?</span>,
-<a href=#403 id=403 data-nosnippet>403</a>                    proof,
-<a href=#404 id=404 data-nosnippet>404</a>                )<span class="question-mark">?</span>;
-<a href=#405 id=405 data-nosnippet>405</a>                <span class="prelude-val">Ok</span>(())
-<a href=#406 id=406 data-nosnippet>406</a>            },
-<a href=#407 id=407 data-nosnippet>407</a>            FeeMerkleProof::Absence(proof) =&gt; {
-<a href=#408 id=408 data-nosnippet>408</a>                tree.non_membership_remember(FeeAccount(<span class="self">self</span>.account), proof)<span class="question-mark">?</span>;
-<a href=#409 id=409 data-nosnippet>409</a>                <span class="prelude-val">Ok</span>(())
-<a href=#410 id=410 data-nosnippet>410</a>            },
-<a href=#411 id=411 data-nosnippet>411</a>        }
-<a href=#412 id=412 data-nosnippet>412</a>    }
-<a href=#413 id=413 data-nosnippet>413</a>}
-<a href=#414 id=414 data-nosnippet>414</a>
-<a href=#415 id=415 data-nosnippet>415</a><span class="kw">impl </span>From&lt;(FeeAccountProof, U256)&gt; <span class="kw">for </span>AccountQueryData {
-<a href=#416 id=416 data-nosnippet>416</a>    <span class="kw">fn </span>from((proof, balance): (FeeAccountProof, U256)) -&gt; <span class="self">Self </span>{
-<a href=#417 id=417 data-nosnippet>417</a>        <span class="self">Self </span>{ balance, proof }
-<a href=#418 id=418 data-nosnippet>418</a>    }
-<a href=#419 id=419 data-nosnippet>419</a>}
-<a href=#420 id=420 data-nosnippet>420</a>
-<a href=#421 id=421 data-nosnippet>421</a><span class="doccomment">/// Get a partial snapshot of the given fee state, which contains only the specified accounts.
-<a href=#422 id=422 data-nosnippet>422</a>///
-<a href=#423 id=423 data-nosnippet>423</a>/// Fails if one of the requested accounts is not represented in the original `state`.
-<a href=#424 id=424 data-nosnippet>424</a></span><span class="kw">pub fn </span>retain_accounts(
-<a href=#425 id=425 data-nosnippet>425</a>    state: <span class="kw-2">&amp;</span>FeeMerkleTree,
-<a href=#426 id=426 data-nosnippet>426</a>    accounts: <span class="kw">impl </span>IntoIterator&lt;Item = FeeAccount&gt;,
-<a href=#427 id=427 data-nosnippet>427</a>) -&gt; anyhow::Result&lt;FeeMerkleTree&gt; {
-<a href=#428 id=428 data-nosnippet>428</a>    <span class="kw">let </span><span class="kw-2">mut </span>snapshot = FeeMerkleTree::from_commitment(state.commitment());
-<a href=#429 id=429 data-nosnippet>429</a>    <span class="kw">for </span>account <span class="kw">in </span>accounts {
-<a href=#430 id=430 data-nosnippet>430</a>        <span class="kw">match </span>state.universal_lookup(account) {
-<a href=#431 id=431 data-nosnippet>431</a>            LookupResult::Ok(elem, proof) =&gt; {
-<a href=#432 id=432 data-nosnippet>432</a>                <span class="comment">// This remember cannot fail, since we just constructed a valid proof, and are
-<a href=#433 id=433 data-nosnippet>433</a>                // remembering into a tree with the same commitment.
-<a href=#434 id=434 data-nosnippet>434</a>                </span>snapshot.remember(account, <span class="kw-2">*</span>elem, proof).unwrap();
-<a href=#435 id=435 data-nosnippet>435</a>            },
-<a href=#436 id=436 data-nosnippet>436</a>            LookupResult::NotFound(proof) =&gt; {
-<a href=#437 id=437 data-nosnippet>437</a>                <span class="comment">// Likewise this cannot fail.
-<a href=#438 id=438 data-nosnippet>438</a>                </span>snapshot.non_membership_remember(account, proof).unwrap()
-<a href=#439 id=439 data-nosnippet>439</a>            },
-<a href=#440 id=440 data-nosnippet>440</a>            LookupResult::NotInMemory =&gt; {
-<a href=#441 id=441 data-nosnippet>441</a>                <span class="macro">bail!</span>(<span class="string">"missing account {account}"</span>);
-<a href=#442 id=442 data-nosnippet>442</a>            },
-<a href=#443 id=443 data-nosnippet>443</a>        }
-<a href=#444 id=444 data-nosnippet>444</a>    }
-<a href=#445 id=445 data-nosnippet>445</a>
-<a href=#446 id=446 data-nosnippet>446</a>    <span class="prelude-val">Ok</span>(snapshot)
-<a href=#447 id=447 data-nosnippet>447</a>}
-<a href=#448 id=448 data-nosnippet>448</a>
-<a href=#449 id=449 data-nosnippet>449</a><span class="attr">#[cfg(test)]
-<a href=#450 id=450 data-nosnippet>450</a></span><span class="kw">mod </span>test {
-<a href=#451 id=451 data-nosnippet>451</a>    <span class="kw">use super</span>::{Address, IterableFeeInfo};
-<a href=#452 id=452 data-nosnippet>452</a>    <span class="kw">use crate</span>::{FeeAccount, FeeAmount, FeeInfo};
-<a href=#453 id=453 data-nosnippet>453</a>
-<a href=#454 id=454 data-nosnippet>454</a>    <span class="attr">#[test]
-<a href=#455 id=455 data-nosnippet>455</a>    </span><span class="kw">fn </span>test_iterable_fee_info() {
-<a href=#456 id=456 data-nosnippet>456</a>        <span class="kw">let </span>addr = Address::default();
-<a href=#457 id=457 data-nosnippet>457</a>        <span class="kw">let </span>fee = FeeInfo::new(addr, FeeAmount::from(<span class="number">1</span>));
-<a href=#458 id=458 data-nosnippet>458</a>        <span class="kw">let </span>fees = <span class="macro">vec!</span>[fee, fee, fee];
-<a href=#459 id=459 data-nosnippet>459</a>        <span class="comment">// check the sum of amounts
-<a href=#460 id=460 data-nosnippet>460</a>        </span><span class="kw">let </span>sum = fees.amount().unwrap();
-<a href=#461 id=461 data-nosnippet>461</a>        <span class="macro">assert_eq!</span>(FeeAmount::from(<span class="number">3</span>), sum);
-<a href=#462 id=462 data-nosnippet>462</a>
-<a href=#463 id=463 data-nosnippet>463</a>        <span class="comment">// check accounts collector
-<a href=#464 id=464 data-nosnippet>464</a>        </span><span class="kw">let </span>accounts = fees.accounts();
-<a href=#465 id=465 data-nosnippet>465</a>        <span class="macro">assert_eq!</span>(<span class="macro">vec!</span>[FeeAccount::from(Address::default())], accounts);
-<a href=#466 id=466 data-nosnippet>466</a>    }
-<a href=#467 id=467 data-nosnippet>467</a>}</code></pre></div></section></main></body></html>
+<a href=#330 id=330 data-nosnippet>330</a><span class="kw">impl </span>FeeAccountProof {
+<a href=#331 id=331 data-nosnippet>331</a>    <span class="kw">pub fn </span>presence(
+<a href=#332 id=332 data-nosnippet>332</a>        pos: FeeAccount,
+<a href=#333 id=333 data-nosnippet>333</a>        proof: &lt;FeeMerkleTree <span class="kw">as </span>MerkleTreeScheme&gt;::MembershipProof,
+<a href=#334 id=334 data-nosnippet>334</a>    ) -&gt; <span class="self">Self </span>{
+<a href=#335 id=335 data-nosnippet>335</a>        <span class="self">Self </span>{
+<a href=#336 id=336 data-nosnippet>336</a>            account: pos.into(),
+<a href=#337 id=337 data-nosnippet>337</a>            proof: FeeMerkleProof::Presence(proof),
+<a href=#338 id=338 data-nosnippet>338</a>        }
+<a href=#339 id=339 data-nosnippet>339</a>    }
+<a href=#340 id=340 data-nosnippet>340</a>
+<a href=#341 id=341 data-nosnippet>341</a>    <span class="kw">pub fn </span>absence(
+<a href=#342 id=342 data-nosnippet>342</a>        pos: FeeAccount,
+<a href=#343 id=343 data-nosnippet>343</a>        proof: &lt;FeeMerkleTree <span class="kw">as </span>UniversalMerkleTreeScheme&gt;::NonMembershipProof,
+<a href=#344 id=344 data-nosnippet>344</a>    ) -&gt; <span class="self">Self </span>{
+<a href=#345 id=345 data-nosnippet>345</a>        <span class="self">Self </span>{
+<a href=#346 id=346 data-nosnippet>346</a>            account: pos.into(),
+<a href=#347 id=347 data-nosnippet>347</a>            proof: FeeMerkleProof::Absence(proof),
+<a href=#348 id=348 data-nosnippet>348</a>        }
+<a href=#349 id=349 data-nosnippet>349</a>    }
+<a href=#350 id=350 data-nosnippet>350</a>
+<a href=#351 id=351 data-nosnippet>351</a>    <span class="kw">pub fn </span>prove(tree: <span class="kw-2">&amp;</span>FeeMerkleTree, account: Address) -&gt; <span class="prelude-ty">Option</span>&lt;(<span class="self">Self</span>, U256)&gt; {
+<a href=#352 id=352 data-nosnippet>352</a>        <span class="kw">match </span>tree.universal_lookup(FeeAccount(account)) {
+<a href=#353 id=353 data-nosnippet>353</a>            LookupResult::Ok(balance, proof) =&gt; <span class="prelude-val">Some</span>((
+<a href=#354 id=354 data-nosnippet>354</a>                <span class="self">Self </span>{
+<a href=#355 id=355 data-nosnippet>355</a>                    account,
+<a href=#356 id=356 data-nosnippet>356</a>                    proof: FeeMerkleProof::Presence(proof),
+<a href=#357 id=357 data-nosnippet>357</a>                },
+<a href=#358 id=358 data-nosnippet>358</a>                balance.<span class="number">0</span>,
+<a href=#359 id=359 data-nosnippet>359</a>            )),
+<a href=#360 id=360 data-nosnippet>360</a>            LookupResult::NotFound(proof) =&gt; <span class="prelude-val">Some</span>((
+<a href=#361 id=361 data-nosnippet>361</a>                <span class="self">Self </span>{
+<a href=#362 id=362 data-nosnippet>362</a>                    account,
+<a href=#363 id=363 data-nosnippet>363</a>                    proof: FeeMerkleProof::Absence(proof),
+<a href=#364 id=364 data-nosnippet>364</a>                },
+<a href=#365 id=365 data-nosnippet>365</a>                U256::ZERO,
+<a href=#366 id=366 data-nosnippet>366</a>            )),
+<a href=#367 id=367 data-nosnippet>367</a>            LookupResult::NotInMemory =&gt; <span class="prelude-val">None</span>,
+<a href=#368 id=368 data-nosnippet>368</a>        }
+<a href=#369 id=369 data-nosnippet>369</a>    }
+<a href=#370 id=370 data-nosnippet>370</a>
+<a href=#371 id=371 data-nosnippet>371</a>    <span class="kw">pub fn </span>verify(<span class="kw-2">&amp;</span><span class="self">self</span>, comm: <span class="kw-2">&amp;</span>FeeMerkleCommitment) -&gt; anyhow::Result&lt;U256&gt; {
+<a href=#372 id=372 data-nosnippet>372</a>        <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.proof {
+<a href=#373 id=373 data-nosnippet>373</a>            FeeMerkleProof::Presence(proof) =&gt; {
+<a href=#374 id=374 data-nosnippet>374</a>                <span class="macro">ensure!</span>(
+<a href=#375 id=375 data-nosnippet>375</a>                    FeeMerkleTree::verify(comm.digest(), FeeAccount(<span class="self">self</span>.account), proof)<span class="question-mark">?</span>.is_ok(),
+<a href=#376 id=376 data-nosnippet>376</a>                    <span class="string">"invalid proof"
+<a href=#377 id=377 data-nosnippet>377</a>                </span>);
+<a href=#378 id=378 data-nosnippet>378</a>                <span class="prelude-val">Ok</span>(proof
+<a href=#379 id=379 data-nosnippet>379</a>                    .elem()
+<a href=#380 id=380 data-nosnippet>380</a>                    .context(<span class="string">"presence proof is missing account balance"</span>)<span class="question-mark">?
+<a href=#381 id=381 data-nosnippet>381</a>                    </span>.<span class="number">0</span>)
+<a href=#382 id=382 data-nosnippet>382</a>            },
+<a href=#383 id=383 data-nosnippet>383</a>            FeeMerkleProof::Absence(proof) =&gt; {
+<a href=#384 id=384 data-nosnippet>384</a>                <span class="kw">let </span>tree = FeeMerkleTree::from_commitment(comm);
+<a href=#385 id=385 data-nosnippet>385</a>                <span class="macro">ensure!</span>(
+<a href=#386 id=386 data-nosnippet>386</a>                    tree.non_membership_verify(FeeAccount(<span class="self">self</span>.account), proof)<span class="question-mark">?</span>,
+<a href=#387 id=387 data-nosnippet>387</a>                    <span class="string">"invalid proof"
+<a href=#388 id=388 data-nosnippet>388</a>                </span>);
+<a href=#389 id=389 data-nosnippet>389</a>                <span class="prelude-val">Ok</span>(U256::ZERO)
+<a href=#390 id=390 data-nosnippet>390</a>            },
+<a href=#391 id=391 data-nosnippet>391</a>        }
+<a href=#392 id=392 data-nosnippet>392</a>    }
+<a href=#393 id=393 data-nosnippet>393</a>
+<a href=#394 id=394 data-nosnippet>394</a>    <span class="kw">pub fn </span>remember(<span class="kw-2">&amp;</span><span class="self">self</span>, tree: <span class="kw-2">&amp;mut </span>FeeMerkleTree) -&gt; anyhow::Result&lt;()&gt; {
+<a href=#395 id=395 data-nosnippet>395</a>        <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.proof {
+<a href=#396 id=396 data-nosnippet>396</a>            FeeMerkleProof::Presence(proof) =&gt; {
+<a href=#397 id=397 data-nosnippet>397</a>                tree.remember(
+<a href=#398 id=398 data-nosnippet>398</a>                    FeeAccount(<span class="self">self</span>.account),
+<a href=#399 id=399 data-nosnippet>399</a>                    proof
+<a href=#400 id=400 data-nosnippet>400</a>                        .elem()
+<a href=#401 id=401 data-nosnippet>401</a>                        .context(<span class="string">"presence proof is missing account balance"</span>)<span class="question-mark">?</span>,
+<a href=#402 id=402 data-nosnippet>402</a>                    proof,
+<a href=#403 id=403 data-nosnippet>403</a>                )<span class="question-mark">?</span>;
+<a href=#404 id=404 data-nosnippet>404</a>                <span class="prelude-val">Ok</span>(())
+<a href=#405 id=405 data-nosnippet>405</a>            },
+<a href=#406 id=406 data-nosnippet>406</a>            FeeMerkleProof::Absence(proof) =&gt; {
+<a href=#407 id=407 data-nosnippet>407</a>                tree.non_membership_remember(FeeAccount(<span class="self">self</span>.account), proof)<span class="question-mark">?</span>;
+<a href=#408 id=408 data-nosnippet>408</a>                <span class="prelude-val">Ok</span>(())
+<a href=#409 id=409 data-nosnippet>409</a>            },
+<a href=#410 id=410 data-nosnippet>410</a>        }
+<a href=#411 id=411 data-nosnippet>411</a>    }
+<a href=#412 id=412 data-nosnippet>412</a>}
+<a href=#413 id=413 data-nosnippet>413</a>
+<a href=#414 id=414 data-nosnippet>414</a><span class="kw">impl </span>From&lt;(FeeAccountProof, U256)&gt; <span class="kw">for </span>AccountQueryData {
+<a href=#415 id=415 data-nosnippet>415</a>    <span class="kw">fn </span>from((proof, balance): (FeeAccountProof, U256)) -&gt; <span class="self">Self </span>{
+<a href=#416 id=416 data-nosnippet>416</a>        <span class="self">Self </span>{ balance, proof }
+<a href=#417 id=417 data-nosnippet>417</a>    }
+<a href=#418 id=418 data-nosnippet>418</a>}
+<a href=#419 id=419 data-nosnippet>419</a>
+<a href=#420 id=420 data-nosnippet>420</a><span class="doccomment">/// Get a partial snapshot of the given fee state, which contains only the specified accounts.
+<a href=#421 id=421 data-nosnippet>421</a>///
+<a href=#422 id=422 data-nosnippet>422</a>/// Fails if one of the requested accounts is not represented in the original `state`.
+<a href=#423 id=423 data-nosnippet>423</a></span><span class="kw">pub fn </span>retain_accounts(
+<a href=#424 id=424 data-nosnippet>424</a>    state: <span class="kw-2">&amp;</span>FeeMerkleTree,
+<a href=#425 id=425 data-nosnippet>425</a>    accounts: <span class="kw">impl </span>IntoIterator&lt;Item = FeeAccount&gt;,
+<a href=#426 id=426 data-nosnippet>426</a>) -&gt; anyhow::Result&lt;FeeMerkleTree&gt; {
+<a href=#427 id=427 data-nosnippet>427</a>    <span class="kw">let </span><span class="kw-2">mut </span>snapshot = FeeMerkleTree::from_commitment(state.commitment());
+<a href=#428 id=428 data-nosnippet>428</a>    <span class="kw">for </span>account <span class="kw">in </span>accounts {
+<a href=#429 id=429 data-nosnippet>429</a>        <span class="kw">match </span>state.universal_lookup(account) {
+<a href=#430 id=430 data-nosnippet>430</a>            LookupResult::Ok(elem, proof) =&gt; {
+<a href=#431 id=431 data-nosnippet>431</a>                <span class="comment">// This remember cannot fail, since we just constructed a valid proof, and are
+<a href=#432 id=432 data-nosnippet>432</a>                // remembering into a tree with the same commitment.
+<a href=#433 id=433 data-nosnippet>433</a>                </span>snapshot.remember(account, <span class="kw-2">*</span>elem, proof).unwrap();
+<a href=#434 id=434 data-nosnippet>434</a>            },
+<a href=#435 id=435 data-nosnippet>435</a>            LookupResult::NotFound(proof) =&gt; {
+<a href=#436 id=436 data-nosnippet>436</a>                <span class="comment">// Likewise this cannot fail.
+<a href=#437 id=437 data-nosnippet>437</a>                </span>snapshot.non_membership_remember(account, proof).unwrap()
+<a href=#438 id=438 data-nosnippet>438</a>            },
+<a href=#439 id=439 data-nosnippet>439</a>            LookupResult::NotInMemory =&gt; {
+<a href=#440 id=440 data-nosnippet>440</a>                <span class="macro">bail!</span>(<span class="string">"missing account {account}"</span>);
+<a href=#441 id=441 data-nosnippet>441</a>            },
+<a href=#442 id=442 data-nosnippet>442</a>        }
+<a href=#443 id=443 data-nosnippet>443</a>    }
+<a href=#444 id=444 data-nosnippet>444</a>
+<a href=#445 id=445 data-nosnippet>445</a>    <span class="prelude-val">Ok</span>(snapshot)
+<a href=#446 id=446 data-nosnippet>446</a>}
+<a href=#447 id=447 data-nosnippet>447</a>
+<a href=#448 id=448 data-nosnippet>448</a><span class="attr">#[cfg(test)]
+<a href=#449 id=449 data-nosnippet>449</a></span><span class="kw">mod </span>test {
+<a href=#450 id=450 data-nosnippet>450</a>    <span class="kw">use super</span>::{Address, IterableFeeInfo};
+<a href=#451 id=451 data-nosnippet>451</a>    <span class="kw">use crate</span>::{FeeAccount, FeeAmount, FeeInfo};
+<a href=#452 id=452 data-nosnippet>452</a>
+<a href=#453 id=453 data-nosnippet>453</a>    <span class="attr">#[test]
+<a href=#454 id=454 data-nosnippet>454</a>    </span><span class="kw">fn </span>test_iterable_fee_info() {
+<a href=#455 id=455 data-nosnippet>455</a>        <span class="kw">let </span>addr = Address::default();
+<a href=#456 id=456 data-nosnippet>456</a>        <span class="kw">let </span>fee = FeeInfo::new(addr, FeeAmount::from(<span class="number">1</span>));
+<a href=#457 id=457 data-nosnippet>457</a>        <span class="kw">let </span>fees = <span class="macro">vec!</span>[fee, fee, fee];
+<a href=#458 id=458 data-nosnippet>458</a>        <span class="comment">// check the sum of amounts
+<a href=#459 id=459 data-nosnippet>459</a>        </span><span class="kw">let </span>sum = fees.amount().unwrap();
+<a href=#460 id=460 data-nosnippet>460</a>        <span class="macro">assert_eq!</span>(FeeAmount::from(<span class="number">3</span>), sum);
+<a href=#461 id=461 data-nosnippet>461</a>
+<a href=#462 id=462 data-nosnippet>462</a>        <span class="comment">// check accounts collector
+<a href=#463 id=463 data-nosnippet>463</a>        </span><span class="kw">let </span>accounts = fees.accounts();
+<a href=#464 id=464 data-nosnippet>464</a>        <span class="macro">assert_eq!</span>(<span class="macro">vec!</span>[FeeAccount::from(Address::default())], accounts);
+<a href=#465 id=465 data-nosnippet>465</a>    }
+<a href=#466 id=466 data-nosnippet>466</a>}</code></pre></div></section></main></body></html>

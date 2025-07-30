@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["VERSION"],"mod":["header"],"struct":["Header"]};
+window.SIDEBAR_ITEMS = {"constant":["REWARD_MERKLE_TREE_V2_HEIGHT","VERSION"],"enum":["RewardMerkleProofV2"],"mod":["header","state"],"struct":["Delta","Header","RewardAccountProofV2","RewardAccountQueryDataV2","RewardAccountV2"],"type":["RewardMerkleCommitmentV2","RewardMerkleTreeV2"]};
