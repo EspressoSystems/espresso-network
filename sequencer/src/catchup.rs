@@ -387,7 +387,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             let tree = client
                 .inner
                 .post::<RewardMerkleTreeV2>(&format!(
-                    "catchup/{height}/{}/reward/accounts",
+                    "catchup/{height}/{}/reward-accounts-v2",
                     view.u64()
                 ))
                 .body_binary(&accounts.to_vec())?

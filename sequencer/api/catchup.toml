@@ -108,7 +108,7 @@ Merkle proofs for each account can be extracted from this tree.
 
 
 [route.reward_account_v2]
-PATH = ["/:height/:view/reward/account/:address"]
+PATH = ["/:height/:view/reward-account-v2/:address"]
 ":height" = "Integer"
 ":view" = "Integer"
 ":address" = "Literal"
@@ -117,7 +117,7 @@ Get the reward account balance for `address`.
 """
 
 [route.reward_accounts_v2]
-PATH = ["/:height/:view/reward/accounts"]
+PATH = ["/:height/:view/reward-accounts-v2"]
 ":height" = "Integer"
 ":view" = "Integer"
 METHOD = "POST"
