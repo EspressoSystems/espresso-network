@@ -172,6 +172,7 @@ typenum = "1"
 # Builder imports
 hotshot-builder-legacy = { path = "crates/hotshot-builder/legacy" }
 hotshot-builder-shared = { path = "crates/hotshot-builder/shared" }
+hotshot-builder-refactored = { path = "crates/hotshot-builder/refactored" }
 
 # Hotshot imports
 hotshot = { path = "crates/hotshot/hotshot" }
@@ -259,7 +260,10 @@ strum = { version = "0.26", features = ["derive"] }
 surf-disco = "0.9"
 tagged-base64 = "0.4"
 tempfile = "3.10"
-test-log = { version = "0.2", features = ["color", "trace"], default-features = false }
+test-log = { version = "0.2", features = [
+    "color",
+    "trace",
+], default-features = false }
 thiserror = "1.0.69"
 tide-disco = "0.9.4"
 time = "0.3"

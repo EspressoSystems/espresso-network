@@ -10,6 +10,7 @@ default = ["fee", "pos", "drb-and-header"]
 fee = ["sequencer/fee"]
 pos = ["sequencer/pos"]
 drb-and-header = ["sequencer/drb-and-header"]
+refactored = []
 
 [dependencies]
 alloy = { workspace = true }
@@ -23,6 +24,7 @@ futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-builder-api = { workspace = true }
 hotshot-builder-legacy = { workspace = true }
+hotshot-builder-refactored = { workspace = true }
 hotshot-builder-shared = { workspace = true }
 hotshot-events-service = { workspace = true }
 hotshot-example-types = { workspace = true }
