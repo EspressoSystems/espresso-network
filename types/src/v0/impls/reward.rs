@@ -323,7 +323,6 @@ impl<const ARITY: usize> ToTraversalPath<ARITY> for RewardAccountV2 {
     }
 }
 
-#[allow(dead_code)]
 impl RewardAccountProofV2 {
     pub fn presence(
         pos: FeeAccount,
@@ -413,7 +412,6 @@ impl RewardAccountProofV2 {
     }
 }
 
-#[allow(dead_code)]
 impl RewardAccountProofV1 {
     pub fn presence(
         pos: FeeAccount,
