@@ -51,12 +51,12 @@ use tokio::time::timeout;
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
 use crate::{
     catchup::{
-        add_fee_accounts_to_state, add_reward_accounts_to_state, add_reward_accounts_to_state_v1,
-        CatchupStorage,
+        add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
+        add_v2_reward_accounts_to_state, CatchupStorage,
     },
     context::Consensus,
     request_response::{
-        data_source::{retain_reward_accounts, retain_v1_reward_accounts},
+        data_source::{retain_v1_reward_accounts, retain_v2_reward_accounts},
         request::{Request, Response},
     },
     state_signature::StateSigner,
@@ -618,7 +618,7 @@ impl<
     }
 
     #[tracing::instrument(skip(self, instance))]
-    async fn get_reward_accounts(
+    async fn get_reward_accounts_v2(
         &self,
         instance: &NodeState,
         height: u64,
@@ -628,7 +628,7 @@ impl<
         // Check if we have the desired state in memory.
         match self
             .as_ref()
-            .get_reward_accounts(instance, height, view, accounts)
+            .get_reward_accounts_v2(instance, height, view, accounts)
             .await
         {
             Ok(accounts) => return Ok(accounts),
@@ -640,7 +640,7 @@ impl<
         // Try storage.
         let (tree, leaf) = self
             .inner()
-            .get_reward_accounts(instance, height, view, accounts)
+            .get_reward_accounts_v2(instance, height, view, accounts)
             .await
             .context("accounts not in memory, and could not fetch from storage")?;
 
@@ -655,7 +655,8 @@ impl<
             .consensus()
             .clone();
         if let Err(err) =
-            add_reward_accounts_to_state::<N, V, P>(&consensus, &view, accounts, &tree, leaf).await
+            add_v2_reward_accounts_to_state::<N, V, P>(&consensus, &view, accounts, &tree, leaf)
+                .await
         {
             tracing::warn!(?view, "cannot update fetched account state: {err:#}");
         }
@@ -702,7 +703,7 @@ impl<
             .consensus()
             .clone();
         if let Err(err) =
-            add_reward_accounts_to_state_v1::<N, V, P>(&consensus, &view, accounts, &tree, leaf)
+            add_v1_reward_accounts_to_state::<N, V, P>(&consensus, &view, accounts, &tree, leaf)
                 .await
         {
             tracing::warn!(?view, "cannot update fetched account state: {err:#}");
@@ -827,7 +828,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
     }
 
     #[tracing::instrument(skip(self, _instance))]
-    async fn get_reward_accounts(
+    async fn get_reward_accounts_v2(
         &self,
         _instance: &NodeState,
         height: u64,
@@ -845,7 +846,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
                 "state not available for height {height}, view {view}"
             ))?;
 
-        retain_reward_accounts(&state.reward_merkle_tree_v2, accounts.iter().copied())
+        retain_v2_reward_accounts(&state.reward_merkle_tree_v2, accounts.iter().copied())
     }
 
     #[tracing::instrument(skip(self, _instance))]

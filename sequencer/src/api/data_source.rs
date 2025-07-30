@@ -225,7 +225,7 @@ pub(crate) trait CatchupDataSource: Sync {
     /// `height` is provided to simplify lookups for backends where data is not indexed by view.
     /// This function is intended to be used for catchup, so `view` should be no older than the last
     /// decided view.
-    fn get_reward_account(
+    fn get_reward_account_v2(
         &self,
         instance: &NodeState,
         height: u64,
@@ -234,7 +234,7 @@ pub(crate) trait CatchupDataSource: Sync {
     ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV2>> {
         async move {
             let tree = self
-                .get_reward_accounts(instance, height, view, &[account])
+                .get_reward_accounts_v2(instance, height, view, &[account])
                 .await?;
             let (proof, balance) = RewardAccountProofV2::prove(&tree, account.into()).context(
                 format!("reward account {account} not available for height {height}, view {view}"),
@@ -243,7 +243,7 @@ pub(crate) trait CatchupDataSource: Sync {
         }
     }
 
-    fn get_reward_accounts(
+    fn get_reward_accounts_v2(
         &self,
         instance: &NodeState,
         height: u64,

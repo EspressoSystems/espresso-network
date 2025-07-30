@@ -130,7 +130,7 @@ impl CatchupStorage for SqlStorage {
         }
     }
 
-    async fn get_reward_accounts(
+    async fn get_reward_accounts_v2(
         &self,
         instance: &NodeState,
         height: u64,
@@ -152,7 +152,7 @@ impl CatchupStorage for SqlStorage {
         // Check if we have the desired state snapshot. If so, we can load the desired accounts
         // directly.
         if height < block_height {
-            load_reward_accounts(&mut tx, height, accounts).await
+            load_v2_reward_accounts(&mut tx, height, accounts).await
         } else {
             // If we do not have the exact snapshot we need, we can try going back to the last
             // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
@@ -305,7 +305,7 @@ impl CatchupStorage for DataSource {
             .await
     }
 
-    async fn get_reward_accounts(
+    async fn get_reward_accounts_v2(
         &self,
         instance: &NodeState,
         height: u64,
@@ -313,7 +313,7 @@ impl CatchupStorage for DataSource {
         accounts: &[RewardAccountV2],
     ) -> anyhow::Result<(RewardMerkleTreeV2, Leaf2)> {
         self.as_ref()
-            .get_reward_accounts(instance, height, view, accounts)
+            .get_reward_accounts_v2(instance, height, view, accounts)
             .await
     }
 
@@ -433,7 +433,7 @@ async fn load_v1_reward_accounts<Mode: TransactionMode>(
 }
 
 /// Loads reward accounts for new reward merkle tree (V4).
-async fn load_reward_accounts<Mode: TransactionMode>(
+async fn load_v2_reward_accounts<Mode: TransactionMode>(
     tx: &mut Transaction<Mode>,
     height: u64,
     accounts: &[RewardAccountV2],
@@ -654,13 +654,14 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
             );
         },
         either::Either::Right(expected_root) => {
-            state.reward_merkle_tree_v2 = load_reward_accounts(tx, from_height, &reward_accounts)
-                .await
-                .context(
-                    "unable to reconstruct state because v2 reward accounts are not available at \
-                     origin",
-                )?
-                .0;
+            state.reward_merkle_tree_v2 =
+                load_v2_reward_accounts(tx, from_height, &reward_accounts)
+                    .await
+                    .context(
+                        "unable to reconstruct state because v2 reward accounts are not available \
+                         at origin",
+                    )?
+                    .0;
             ensure!(
                 state.reward_merkle_tree_v2.commitment() == expected_root,
                 "loaded reward state does not match parent header"

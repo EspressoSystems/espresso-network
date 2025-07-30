@@ -174,7 +174,7 @@ pub trait StateCatchup: Send + Sync {
     }
 
     /// Fetch the given list of reward accounts without retrying on transient errors.
-    async fn try_fetch_reward_accounts(
+    async fn try_fetch_reward_accounts_v2(
         &self,
         retry: usize,
         instance: &NodeState,
@@ -185,7 +185,7 @@ pub trait StateCatchup: Send + Sync {
     ) -> anyhow::Result<Vec<RewardAccountProofV2>>;
 
     /// Fetch the given list of reward accounts, retrying on transient errors.
-    async fn fetch_reward_accounts(
+    async fn fetch_reward_accounts_v2(
         &self,
         instance: &NodeState,
         height: u64,
@@ -198,7 +198,7 @@ pub trait StateCatchup: Send + Sync {
                 let accounts = &accounts;
                 async move {
                     provider
-                        .try_fetch_reward_accounts(
+                        .try_fetch_reward_accounts_v2(
                             retry,
                             instance,
                             height,
@@ -373,7 +373,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         (**self).fetch_chain_config(commitment).await
     }
 
-    async fn try_fetch_reward_accounts(
+    async fn try_fetch_reward_accounts_v2(
         &self,
         retry: usize,
         instance: &NodeState,
@@ -383,7 +383,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         accounts: &[RewardAccountV2],
     ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
         (**self)
-            .try_fetch_reward_accounts(
+            .try_fetch_reward_accounts_v2(
                 retry,
                 instance,
                 height,
@@ -394,7 +394,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
             .await
     }
 
-    async fn fetch_reward_accounts(
+    async fn fetch_reward_accounts_v2(
         &self,
         instance: &NodeState,
         height: u64,
@@ -403,7 +403,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         accounts: Vec<RewardAccountV2>,
     ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
         (**self)
-            .fetch_reward_accounts(instance, height, view, reward_merkle_tree_root, accounts)
+            .fetch_reward_accounts_v2(instance, height, view, reward_merkle_tree_root, accounts)
             .await
     }
 

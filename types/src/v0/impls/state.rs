@@ -249,7 +249,7 @@ impl ValidatedState {
             .collect()
     }
 
-    pub fn forgotten_reward_accounts(
+    pub fn forgotten_reward_accounts_v2(
         &self,
         accounts: impl IntoIterator<Item = RewardAccountV2>,
     ) -> Vec<RewardAccountV2> {
@@ -265,7 +265,7 @@ impl ValidatedState {
             .collect()
     }
 
-    pub fn forgotten_reward_accounts_legacy(
+    pub fn forgotten_reward_accounts_v1(
         &self,
         accounts: impl IntoIterator<Item = RewardAccountV1>,
     ) -> Vec<RewardAccountV1> {

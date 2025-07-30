@@ -40,8 +40,8 @@ use super::request::{Request, Response};
 use crate::{
     api::BlocksFrontier,
     catchup::{
-        add_fee_accounts_to_state, add_reward_accounts_to_state, add_reward_accounts_to_state_v1,
-        CatchupStorage,
+        add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
+        add_v2_reward_accounts_to_state, CatchupStorage,
     },
 };
 
@@ -222,7 +222,7 @@ impl<
             Request::RewardAccountsV2(height, view, accounts) => {
                 // Try to get the reward accounts from memory first, then fall back to storage
                 if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await {
-                    if let Ok(reward_accounts) = retain_reward_accounts(
+                    if let Ok(reward_accounts) = retain_v2_reward_accounts(
                         &state.reward_merkle_tree_v2,
                         accounts.iter().copied(),
                     ) {
@@ -233,7 +233,7 @@ impl<
                 // Fall back to storage
                 let (merkle_tree, leaf) = match &self.storage {
                     Some(Storage::Sql(storage)) => storage
-                        .get_reward_accounts(
+                        .get_reward_accounts_v2(
                             &self.node_state,
                             *height,
                             ViewNumber::new(*view),
@@ -249,7 +249,7 @@ impl<
 
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
-                if let Err(err) = add_reward_accounts_to_state::<N, V, P>(
+                if let Err(err) = add_v2_reward_accounts_to_state::<N, V, P>(
                     &self.consensus.consensus(),
                     &ViewNumber::new(*view),
                     accounts,
@@ -294,7 +294,7 @@ impl<
 
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
-                if let Err(err) = add_reward_accounts_to_state_v1::<N, V, P>(
+                if let Err(err) = add_v1_reward_accounts_to_state::<N, V, P>(
                     &self.consensus.consensus(),
                     &ViewNumber::new(*view),
                     accounts,
@@ -343,7 +343,7 @@ impl<
 /// Get a partial snapshot of the given reward state, which contains only the specified accounts.
 ///
 /// Fails if one of the requested accounts is not represented in the original `state`.
-pub fn retain_reward_accounts(
+pub fn retain_v2_reward_accounts(
     state: &RewardMerkleTreeV2,
     accounts: impl IntoIterator<Item = RewardAccountV2>,
 ) -> anyhow::Result<RewardMerkleTreeV2> {

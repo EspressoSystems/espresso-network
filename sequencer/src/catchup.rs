@@ -374,7 +374,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
     }
 
     #[tracing::instrument(skip(self, _instance))]
-    async fn try_fetch_reward_accounts(
+    async fn try_fetch_reward_accounts_v2(
         &self,
         retry: usize,
         _instance: &NodeState,
@@ -506,7 +506,7 @@ pub(crate) trait CatchupStorage: Sync {
         }
     }
 
-    fn get_reward_accounts(
+    fn get_reward_accounts_v2(
         &self,
         _instance: &NodeState,
         _height: u64,
@@ -577,7 +577,7 @@ where
             .await
     }
 
-    async fn get_reward_accounts(
+    async fn get_reward_accounts_v2(
         &self,
         instance: &NodeState,
         height: u64,
@@ -585,7 +585,7 @@ where
         accounts: &[RewardAccountV2],
     ) -> anyhow::Result<(RewardMerkleTreeV2, Leaf2)> {
         self.inner()
-            .get_reward_accounts(instance, height, view, accounts)
+            .get_reward_accounts_v2(instance, height, view, accounts)
             .await
     }
 
@@ -745,7 +745,7 @@ where
     }
 
     #[tracing::instrument(skip(self, _retry, instance))]
-    async fn try_fetch_reward_accounts(
+    async fn try_fetch_reward_accounts_v2(
         &self,
         _retry: usize,
         instance: &NodeState,
@@ -757,7 +757,7 @@ where
         // Get the accounts
         let (reward_merkle_tree_from_db, _) = self
             .db
-            .get_reward_accounts(instance, block_height, view, accounts)
+            .get_reward_accounts_v2(instance, block_height, view, accounts)
             .await
             .with_context(|| "failed to get reward accounts from DB")?;
         // Verify the accounts
@@ -874,7 +874,7 @@ impl StateCatchup for NullStateCatchup {
         bail!("state catchup is disabled");
     }
 
-    async fn try_fetch_reward_accounts(
+    async fn try_fetch_reward_accounts_v2(
         &self,
         _retry: usize,
         _instance: &NodeState,
@@ -1216,7 +1216,7 @@ impl StateCatchup for ParallelStateCatchup {
         .await
     }
 
-    async fn try_fetch_reward_accounts(
+    async fn try_fetch_reward_accounts_v2(
         &self,
         retry: usize,
         instance: &NodeState,
@@ -1231,7 +1231,7 @@ impl StateCatchup for ParallelStateCatchup {
             .on_local_providers(clone! {(instance, accounts_vec) move |provider| {
                 clone! {(instance, accounts_vec) async move {
                     provider
-                        .try_fetch_reward_accounts(
+                        .try_fetch_reward_accounts_v2(
                             retry,
                             &instance,
                             height,
@@ -1253,7 +1253,7 @@ impl StateCatchup for ParallelStateCatchup {
         self.on_remote_providers(clone! {(instance, accounts_vec) move |provider| {
             clone!{(instance, accounts_vec) async move {
                 provider
-                .try_fetch_reward_accounts(
+                .try_fetch_reward_accounts_v2(
                     retry,
                     &instance,
                     height,
@@ -1436,7 +1436,7 @@ impl StateCatchup for ParallelStateCatchup {
         .await
     }
 
-    async fn fetch_reward_accounts(
+    async fn fetch_reward_accounts_v2(
         &self,
         instance: &NodeState,
         height: u64,
@@ -1450,7 +1450,7 @@ impl StateCatchup for ParallelStateCatchup {
             .on_local_providers(clone! {(instance, accounts_vec) move |provider| {
                 clone! {(instance, accounts_vec) async move {
                     provider
-                        .try_fetch_reward_accounts(
+                        .try_fetch_reward_accounts_v2(
                             0,
                             &instance,
                             height,
@@ -1472,7 +1472,7 @@ impl StateCatchup for ParallelStateCatchup {
         self.on_remote_providers(clone! {(instance, accounts_vec) move |provider| {
             clone!{(instance, accounts_vec) async move {
                 provider
-                .fetch_reward_accounts(
+                .fetch_reward_accounts_v2(
                     &instance,
                     height,
                     view,
@@ -1662,7 +1662,7 @@ pub async fn add_fee_accounts_to_state<
 /// Add accounts to the in-memory consensus state.
 /// We use this during catchup after receiving verified accounts.
 #[allow(clippy::type_complexity)]
-pub async fn add_reward_accounts_to_state<
+pub async fn add_v2_reward_accounts_to_state<
     N: ConnectedNetwork<PubKey>,
     V: Versions,
     P: SequencerPersistence,
@@ -1720,7 +1720,7 @@ pub async fn add_reward_accounts_to_state<
 /// Add accounts to the in-memory consensus state.
 /// We use this during catchup after receiving verified accounts.
 #[allow(clippy::type_complexity)]
-pub async fn add_reward_accounts_to_state_v1<
+pub async fn add_v1_reward_accounts_to_state<
     N: ConnectedNetwork<PubKey>,
     V: Versions,
     P: SequencerPersistence,

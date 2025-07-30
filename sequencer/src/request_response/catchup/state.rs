@@ -114,7 +114,7 @@ impl<
             .with_context(|| "timed out while fetching chain config")?
     }
 
-    async fn try_fetch_reward_accounts(
+    async fn try_fetch_reward_accounts_v2(
         &self,
         _retry: usize,
         instance: &NodeState,
@@ -129,7 +129,7 @@ impl<
         // Fetch the reward accounts
         timeout(
             timeout_duration,
-            self.fetch_reward_accounts(
+            self.fetch_reward_accounts_v2(
                 instance,
                 height,
                 view,
@@ -376,7 +376,7 @@ impl<
         Ok(())
     }
 
-    async fn fetch_reward_accounts(
+    async fn fetch_reward_accounts_v2(
         &self,
         _instance: &NodeState,
         height: u64,

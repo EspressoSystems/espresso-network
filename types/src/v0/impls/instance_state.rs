@@ -490,7 +490,7 @@ pub mod mock {
             Ok(ChainConfig::default())
         }
 
-        async fn try_fetch_reward_accounts(
+        async fn try_fetch_reward_accounts_v2(
             &self,
             _retry: usize,
             _instance: &NodeState,

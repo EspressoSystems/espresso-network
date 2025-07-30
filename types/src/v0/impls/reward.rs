@@ -868,7 +868,7 @@ pub async fn get_leader_and_fetch_missing_rewards(
             .into_iter()
             .map(RewardAccountV1::from)
             .collect();
-        let missing_reward_accts = validated_state.forgotten_reward_accounts_legacy(accts);
+        let missing_reward_accts = validated_state.forgotten_reward_accounts_v1(accts);
 
         if !missing_reward_accts.is_empty() {
             tracing::warn!(
@@ -896,7 +896,7 @@ pub async fn get_leader_and_fetch_missing_rewards(
             }
         }
     } else {
-        let missing_reward_accts = validated_state.forgotten_reward_accounts(reward_accounts);
+        let missing_reward_accts = validated_state.forgotten_reward_accounts_v2(reward_accounts);
 
         if !missing_reward_accts.is_empty() {
             tracing::warn!(
@@ -908,7 +908,7 @@ pub async fn get_leader_and_fetch_missing_rewards(
 
             let missing_account_proofs = instance_state
                 .state_catchup
-                .fetch_reward_accounts(
+                .fetch_reward_accounts_v2(
                     instance_state,
                     parent_height,
                     parent_view,

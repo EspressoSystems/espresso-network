@@ -808,7 +808,7 @@ where
             let account = parse_reward_account(&req)?;
 
             state
-                .get_reward_account(&state.node_state().await, height, view, account)
+                .get_reward_account_v2(&state.node_state().await, height, view, account)
                 .await
                 .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
         }
@@ -825,7 +825,12 @@ where
                 .read(|state| {
                     async move {
                         state
-                            .get_reward_accounts(&state.node_state().await, height, view, &accounts)
+                            .get_reward_accounts_v2(
+                                &state.node_state().await,
+                                height,
+                                view,
+                                &accounts,
+                            )
                             .await
                             .map_err(|err| {
                                 Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}"))
