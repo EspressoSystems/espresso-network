@@ -5643,21 +5643,21 @@ mod test {
         let validated_state = network.server.decided_state().await;
         let version = Ver::Base::VERSION;
         if version == EpochVersion::VERSION {
-            let v3_tree = &validated_state.reward_merkle_tree_v1;
-            assert!(v3_tree.num_leaves() > 0, "legacy reward tree tree is empty");
-            let v4_tree = &validated_state.reward_merkle_tree_v2;
+            let v1_tree = &validated_state.reward_merkle_tree_v1;
+            assert!(v1_tree.num_leaves() > 0, "v1 reward tree tree is empty");
+            let v2_tree = &validated_state.reward_merkle_tree_v2;
             assert!(
-                v4_tree.num_leaves() == 0,
-                "v4 reward tree tree is not empty"
+                v2_tree.num_leaves() == 0,
+                "v2 reward tree tree is not empty"
             );
         } else {
-            let v3_tree = &validated_state.reward_merkle_tree_v1;
+            let v1_tree = &validated_state.reward_merkle_tree_v1;
             assert!(
-                v3_tree.num_leaves() == 0,
-                "legacy reward tree tree is not empty"
+                v1_tree.num_leaves() == 0,
+                "v1 reward tree tree is not empty"
             );
-            let v4_tree = &validated_state.reward_merkle_tree_v2;
-            assert!(v4_tree.num_leaves() > 0, "v4 reward tree tree is empty");
+            let v2_tree = &validated_state.reward_merkle_tree_v2;
+            assert!(v2_tree.num_leaves() > 0, "v2 reward tree tree is empty");
         }
 
         network.stop_consensus().await;
