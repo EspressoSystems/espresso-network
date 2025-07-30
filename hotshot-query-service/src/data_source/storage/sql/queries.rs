@@ -363,8 +363,7 @@ where
                 Ok(cert) => cert,
                 Err(err) => {
                     tracing::info!(
-                        "Falling back to legacy deserialization for \
-                         LightClientStateUpdateCertificateV2"
+                        "Falling back to V1 deserialization for LightClientStateUpdateCertificate"
                     );
 
                     match bincode::deserialize::<LightClientStateUpdateCertificateV1<Types>>(bytes)
@@ -372,8 +371,8 @@ where
                         Ok(legacy) => legacy.into(),
                         Err(err_legacy) => {
                             tracing::error!(
-                                "Failed to deserialize state_cert with both new and legacy format \
-                                 error: {err}. Legacy error: {err_legacy}",
+                                "Failed to deserialize state_cert with v1 and v2 v2 error: {err}. \
+                                 v1 error: {err_legacy}",
                             );
                             return Err(sqlx::Error::Decode(err_legacy));
                         },
