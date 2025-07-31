@@ -2137,7 +2137,7 @@ mod api_tests {
 
         // Get the state cert for the epoch 3
         let state_cert = client
-            .get::<StateCertQueryData<SeqTypes>>(&format!("availability/state-cert/3"))
+            .get::<StateCertQueryData<SeqTypes>>("availability/state-cert/3")
             .send()
             .await
             .unwrap()
