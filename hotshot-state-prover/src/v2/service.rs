@@ -174,6 +174,7 @@ async fn fetch_epoch_state_from_sequencer(
             sequencer_url.clone(),
         )
         .get::<StateCertQueryData<SeqTypes>>(&format!("availability/state-cert/{epoch}"))
+        .header("Accept", "application/json")
         .send()
         .await
         .map_err(|err| {

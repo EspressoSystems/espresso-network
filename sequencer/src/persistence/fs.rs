@@ -26,8 +26,8 @@ use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
 use hotshot_types::{
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
-        DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2, QuorumProposal2V3,
-        QuorumProposalWrapper, QuorumProposalWrapperV3, VidCommitment, VidDisperseShare,
+        DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper,
+        QuorumProposalWrapperV3, VidCommitment, VidDisperseShare,
     },
     drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
