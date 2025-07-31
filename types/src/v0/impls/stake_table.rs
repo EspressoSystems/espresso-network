@@ -61,11 +61,12 @@ use super::{
 };
 use crate::{
     traits::EventsPersistenceRead,
-    v0_1::{
-        L1Provider, RewardAmount, ASSUMED_BLOCK_TIME_SECONDS, BLOCKS_PER_YEAR,
-        COMMISSION_BASIS_POINTS, INFLATION_RATE, MILLISECONDS_PER_YEAR,
+    v0_1::L1Provider,
+    v0_3::{
+        EventSortingError, ExpectedStakeTableError, FetchRewardError, RewardAmount,
+        StakeTableError, ASSUMED_BLOCK_TIME_SECONDS, BLOCKS_PER_YEAR, COMMISSION_BASIS_POINTS,
+        INFLATION_RATE, MILLISECONDS_PER_YEAR,
     },
-    v0_3::{EventSortingError, ExpectedStakeTableError, FetchRewardError, StakeTableError},
     DrbAndHeaderUpgradeVersion, EpochVersion,
 };
 
@@ -629,7 +630,8 @@ impl Fetcher {
             // It keeps retrying until the chain config is upgraded
             // after a successful upgrade to an epoch version.
             let stake_contract_address = loop {
-                match chain_config.lock().await.stake_table_contract {
+                let contract = chain_config.lock().await.stake_table_contract;
+                match contract {
                     Some(addr) => break addr,
                     None => {
                         tracing::debug!(
@@ -643,7 +645,8 @@ impl Fetcher {
             // Begin the main polling loop
             loop {
                 let finalized_block = loop {
-                    if let Some(block) = state.lock().await.last_finalized {
+                    let last_finalized = state.lock().await.last_finalized;
+                    if let Some(block) = last_finalized {
                         break block;
                     }
                     tracing::debug!("Finalized block not yet available. Retrying in {l1_retry:?}",);
@@ -1067,12 +1070,13 @@ impl Fetcher {
 
     /// Calculates the fixed block reward based on the token's initial supply.
     /// - The initial supply is fetched from the token contract
-    /// - If the supply is not present, it invokes `fetch_initial_supply()` to retrieve it.
+    /// - If the supply is not present, it invokes `fetch_and_update_initial_supply` to retrieve it.
     pub async fn fetch_fixed_block_reward(&self) -> Result<RewardAmount, FetchRewardError> {
-        let initial_supply_read = *self.initial_supply.read().await;
-        let initial_supply = match initial_supply_read {
+        // `fetch_and_update_initial_supply` needs a write lock, create temporary to drop lock
+        let initial_supply = *self.initial_supply.read().await;
+        let initial_supply = match initial_supply {
             Some(supply) => supply,
-            None => self.fetch_initial_supply().await?,
+            None => self.fetch_and_update_initial_supply().await?,
         };
 
         let reward = ((initial_supply * U256::from(INFLATION_RATE)) / U256::from(BLOCKS_PER_YEAR))
@@ -1100,7 +1104,7 @@ impl Fetcher {
     /// The stake table contract is deployed after the token contract as it holds the token
     /// contract address. We use the stake table contract initialization block as a safe upper bound when scanning
     ///  backwards for the token contract initialization event
-    pub async fn fetch_initial_supply(&self) -> Result<U256, FetchRewardError> {
+    pub async fn fetch_and_update_initial_supply(&self) -> Result<U256, FetchRewardError> {
         tracing::info!("Fetching token initial supply");
         let chain_config = *self.chain_config.lock().await;
 
@@ -1511,9 +1515,10 @@ impl EpochCommittees {
 
         // Calculate total stake across all active validators
         let total_stake: U256 = validators.values().map(|v| v.stake).sum();
-        let initial_supply = match *fetcher.initial_supply.read().await {
+        let initial_supply = *fetcher.initial_supply.read().await;
+        let initial_supply = match initial_supply {
             Some(supply) => supply,
-            None => fetcher.fetch_initial_supply().await?,
+            None => fetcher.fetch_and_update_initial_supply().await?,
         };
         let total_supply = initial_supply
             .checked_add(previous_reward_distributed.0)
@@ -2104,6 +2109,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         // If we are past the DRB+Header upgrade point,
         // calculate the dynamic block reward based on validator info and block header.
         if version >= DrbAndHeaderUpgradeVersion::version() {
+            tracing::info!(?epoch, "calculating dynamic block reward");
             let reader = membership.read().await;
             let reward = reader
                 .calculate_dynamic_block_reward(&epoch, block_header, &validators)
@@ -2115,6 +2121,7 @@ impl Membership<SeqTypes> for EpochCommittees {
 
         let mut membership_writer = membership.write().await;
         membership_writer.insert_committee(epoch, validators.clone(), block_reward);
+        drop(membership_writer);
 
         let persistence_lock = fetcher.persistence.lock().await;
         if let Err(e) = persistence_lock

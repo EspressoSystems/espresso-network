@@ -306,3 +306,7 @@ opt-level = 3
 inherits = "test"
 strip = true
 debug = "none"
+
+[workspace.lints.clippy]
+# may prevent accidental deadlocks from holding guards over match statments
+significant_drop_in_scrutinee = "warn"

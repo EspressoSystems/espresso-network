@@ -89,6 +89,9 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
                             },
                             Ok(Some(Err(err))) => {
                                 warn!(?err, "Error in event stream");
+                                let fut = Self::connect_inner(this.api_url.clone());
+                                let _ =
+                                    std::mem::replace(&mut this.connection, Right(Box::pin(fut)));
                                 continue;
                             },
                             Ok(None) => {
