@@ -312,8 +312,9 @@ where
     // Print the libp2p public key
     info!("Starting Libp2p with PeerID: {libp2p_public_key}");
 
+    let loaded_network_config_from_persistence = persistence.load_config().await?;
     let (mut network_config, wait_for_orchestrator) = match (
-        persistence.load_config().await?,
+        loaded_network_config_from_persistence,
         network_params.config_peers,
     ) {
         (Some(config), _) => {

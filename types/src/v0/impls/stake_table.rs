@@ -630,7 +630,8 @@ impl Fetcher {
             // It keeps retrying until the chain config is upgraded
             // after a successful upgrade to an epoch version.
             let stake_contract_address = loop {
-                match chain_config.lock().await.stake_table_contract {
+                let contract = chain_config.lock().await.stake_table_contract;
+                match contract {
                     Some(addr) => break addr,
                     None => {
                         tracing::debug!(
@@ -644,7 +645,8 @@ impl Fetcher {
             // Begin the main polling loop
             loop {
                 let finalized_block = loop {
-                    if let Some(block) = state.lock().await.last_finalized {
+                    let last_finalized = state.lock().await.last_finalized;
+                    if let Some(block) = last_finalized {
                         break block;
                     }
                     tracing::debug!("Finalized block not yet available. Retrying in {l1_retry:?}",);
