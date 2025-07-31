@@ -139,11 +139,11 @@
 <a href=#139 id=139 data-nosnippet>139</a>            <span class="comment">// Let new VID scheme ship with Epochs upgrade.
 <a href=#140 id=140 data-nosnippet>140</a>            </span><span class="kw">let </span>block = build_block::&lt;TYPES&gt;(transactions, pub_key.clone(), priv_key.clone()).<span class="kw">await</span>;
 <a href=#141 id=141 data-nosnippet>141</a>
-<a href=#142 id=142 data-nosnippet>142</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>((hash, <span class="kw">_</span>)) = blocks
+<a href=#142 id=142 data-nosnippet>142</a>            <span class="kw">let </span>push_result = blocks
 <a href=#143 id=143 data-nosnippet>143</a>                .write()
 <a href=#144 id=144 data-nosnippet>144</a>                .<span class="kw">await
-<a href=#145 id=145 data-nosnippet>145</a>                </span>.push(block.metadata.block_hash.clone(), block)
-<a href=#146 id=146 data-nosnippet>146</a>            {
+<a href=#145 id=145 data-nosnippet>145</a>                </span>.push(block.metadata.block_hash.clone(), block);
+<a href=#146 id=146 data-nosnippet>146</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>((hash, <span class="kw">_</span>)) = push_result {
 <a href=#147 id=147 data-nosnippet>147</a>                <span class="macro">tracing::warn!</span>(<span class="string">"Block {hash} evicted"</span>);
 <a href=#148 id=148 data-nosnippet>148</a>            };
 <a href=#149 id=149 data-nosnippet>149</a>            <span class="kw">if </span>time_per_block &lt; start.elapsed() {

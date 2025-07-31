@@ -473,12 +473,12 @@
 <a href=#473 id=473 data-nosnippet>473</a>                    metadata: metadata.clone(),
 <a href=#474 id=474 data-nosnippet>474</a>                });
 <a href=#475 id=475 data-nosnippet>475</a>                <span class="comment">// Save the payload early because we might need it to calculate VID for the next epoch nodes.
-<a href=#476 id=476 data-nosnippet>476</a>                </span><span class="kw">if let </span><span class="prelude-val">Err</span>(e) = <span class="self">self
+<a href=#476 id=476 data-nosnippet>476</a>                </span><span class="kw">let </span>update_result = <span class="self">self
 <a href=#477 id=477 data-nosnippet>477</a>                    </span>.consensus
 <a href=#478 id=478 data-nosnippet>478</a>                    .write()
 <a href=#479 id=479 data-nosnippet>479</a>                    .<span class="kw">await
-<a href=#480 id=480 data-nosnippet>480</a>                    </span>.update_saved_payloads(view_number, payload_with_metadata)
-<a href=#481 id=481 data-nosnippet>481</a>                {
+<a href=#480 id=480 data-nosnippet>480</a>                    </span>.update_saved_payloads(view_number, payload_with_metadata);
+<a href=#481 id=481 data-nosnippet>481</a>                <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = update_result {
 <a href=#482 id=482 data-nosnippet>482</a>                    <span class="macro">tracing::trace!</span>(<span class="string">"{e:?}"</span>);
 <a href=#483 id=483 data-nosnippet>483</a>                }
 <a href=#484 id=484 data-nosnippet>484</a>            },
