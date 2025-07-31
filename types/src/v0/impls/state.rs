@@ -737,7 +737,7 @@ fn validate_builder_fee(proposed_header: &Header) -> Result<(), BuilderValidatio
             &signature,
             fee_info.amount().as_u64().unwrap(),
             proposed_header.metadata(),
-        ) && !fee_info
+        ) || !fee_info
             .account()
             .validate_fee_signature_with_vid_commitment(
                 &signature,
