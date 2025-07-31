@@ -579,7 +579,9 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         )
         .wrap()
         .context(error!("Failed to sign the light client state"))?;
-        let auth_root = leaf.block_header().auth_root();
+        let auth_root = leaf.block_header().auth_root().wrap().context(error!(
+            "Failed to get auth root for light client state certificate"
+        ))?;
         let state_vote = LightClientStateUpdateVote {
             epoch: TYPES::Epoch::new(epoch_from_block_number(leaf.height(), epoch_height)),
             light_client_state,

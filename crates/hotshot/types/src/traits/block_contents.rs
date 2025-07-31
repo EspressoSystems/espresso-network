@@ -208,5 +208,5 @@ pub trait BlockHeader<TYPES: NodeType>:
     /// Get the light client state
     fn get_light_client_state(&self, view: TYPES::View) -> anyhow::Result<LightClientState>;
 
-    fn auth_root(&self) -> Option<[u8; 32]>;
+    fn auth_root(&self) -> anyhow::Result<Option<[u8; 32]>>;
 }

@@ -1101,22 +1101,21 @@ impl BlockHeader<SeqTypes> for Header {
         })
     }
 
-    fn auth_root(&self) -> Option<[u8; 32]> {
+    fn auth_root(&self) -> anyhow::Result<Option<[u8; 32]>> {
         match self {
-            Header::V1(_) | Header::V2(_) | Header::V3(_) => None,
+            Header::V1(_) | Header::V2(_) | Header::V3(_) => Ok(None),
             Header::V4(header) => {
                 let mut reward_root_bytes = Vec::new();
                 header
                     .reward_merkle_tree_root
-                    .serialize_compressed(&mut reward_root_bytes)
-                    .ok()?;
+                    .serialize_compressed(&mut reward_root_bytes)?;
 
                 let mut hasher = Keccak256::new();
 
                 hasher.update(reward_root_bytes);
                 let result = hasher.finalize();
 
-                Some(result.0)
+                Ok(Some(result.0))
             },
         }
     }
