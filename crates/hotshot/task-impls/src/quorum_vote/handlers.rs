@@ -591,7 +591,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
             light_client_state,
             next_stake_table_state,
             signature,
-            auth_root,
+            auth_root, // TODO: (Chengyu) Update signature logic for protocol version V4
         };
         broadcast_event(
             Arc::new(HotShotEvent::EpochRootQuorumVoteSend(EpochRootQuorumVote {
