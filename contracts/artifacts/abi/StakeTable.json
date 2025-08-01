@@ -855,6 +855,11 @@
   },
   {
     "type": "error",
+    "name": "ExitEscrowPeriodInvalid",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "FailedInnerCall",
     "inputs": []
   },
