@@ -1212,27 +1212,6 @@ contract StakeTable_register_Test is LightClientCommonTest {
     }
 
     function test_ExitEscrowPeriodInBounds() public {
-        init();
-        address admin = makeAddr("admin");
-        address tokenGrantRecipient = makeAddr("tokenGrantRecipient");
-        string memory name = "Espresso";
-        string memory symbol = "ESP";
-        uint256 initialSupply = 3_590_000_000;
-
-        EspToken tokenImpl = new EspToken();
-        bytes memory initData = abi.encodeWithSignature(
-            "initialize(address,address,uint256,string,string)",
-            admin,
-            tokenGrantRecipient,
-            initialSupply,
-            name,
-            symbol
-        );
-        ERC1967Proxy proxy = new ERC1967Proxy(address(tokenImpl), initData);
-        EspToken token = EspToken(payable(address(proxy)));
-
-        LightClientV2 lc = new LightClientV2();
-
         uint256 minExitEscrowPeriod = lc.blocksPerEpoch() * 15;
         uint256 maxExitEscrowPeriod = 86400 * 14;
 
@@ -1240,7 +1219,7 @@ contract StakeTable_register_Test is LightClientCommonTest {
             minExitEscrowPeriod + (maxExitEscrowPeriod - minExitEscrowPeriod) / 2;
 
         S staketableImpl = new S();
-        initData = abi.encodeWithSignature(
+        bytes memory initData = abi.encodeWithSignature(
             "initialize(address,address,uint256,address)",
             address(token),
             address(lc),
