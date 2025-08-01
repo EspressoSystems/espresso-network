@@ -1507,7 +1507,7 @@ mod test {
 
         for epoch in 1..4 {
             let state_cert: StateCertQueryDataV2<MockTypes> = client
-                .get(&format!("state-cert/{epoch}"))
+                .get(&format!("state-cert-v2/{epoch}"))
                 .send()
                 .await
                 .unwrap();
