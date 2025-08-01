@@ -15,8 +15,7 @@ use clap::Parser;
 use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_1::RewardAmount,
-    v0_3::{EventKey, IndexedStake, StakeTableEvent},
+    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent},
     Leaf, Leaf2, NetworkConfig, Payload, SeqTypes, ValidatorMap,
 };
 use hotshot::InitializerEpochInfo;

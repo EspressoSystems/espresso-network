@@ -17,6 +17,7 @@ test-ci-rest *args:
   --exclude tests \
   --exclude diff-test-hotshot \
   --exclude gen-vk-contract \
+  --exclude hotshot-contract-adapter \
   --profile hotshot --lib --bins --tests --benches --workspace {{args}}
 
 # Build and run an integration test target

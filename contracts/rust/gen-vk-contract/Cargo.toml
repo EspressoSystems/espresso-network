@@ -13,3 +13,6 @@ hotshot-contract-adapter = { workspace = true }
 hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
 jf-pcs = { workspace = true }
+
+[lints]
+workspace = true

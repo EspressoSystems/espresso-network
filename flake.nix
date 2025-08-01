@@ -47,9 +47,18 @@
       # node=error: disable noisy anvil output
       RUST_LOG = "info,libp2p=off,isahc=error,surf=error,node=error";
       RUST_BACKTRACE = 1;
-      # Use a distinct target dir for builds from within nix shells.
-      CARGO_TARGET_DIR = "target/nix";
-      rustEnvVars = { inherit RUST_LOG RUST_BACKTRACE CARGO_TARGET_DIR; };
+      rustEnvVars = { inherit RUST_LOG RUST_BACKTRACE; };
+
+      rustShellHook = ''
+        # on mac os `bin/pwd -P` returns the canonical path on case insensitive file-systems
+        my_pwd=$(/bin/pwd -P 2> /dev/null || pwd)
+        
+        # Use a distinct target dir for builds from within nix shells.
+        export CARGO_TARGET_DIR="$my_pwd/target/nix"
+        
+        # Add rust binaries to PATH
+        export PATH="$CARGO_TARGET_DIR/debug:$PATH"
+      '';
 
       solhintPkg = { buildNpmPackage, fetchFromGitHub }:
         buildNpmPackage rec {
@@ -110,7 +119,7 @@
         in
         import ./cross-shell.nix
           {
-            inherit pkgs;
+            inherit pkgs rustShellHook;
             envVars = rustEnvVars;
           };
     in
@@ -247,19 +256,16 @@
             [ darwin.apple_sdk.frameworks.SystemConfiguration ]
           ++ lib.optionals (!stdenv.isDarwin) [ cargo-watch ] # broken on OSX
           ;
-          shellHook = ''
+          shellHook = rustShellHook + ''
             # Add the local scripts to the PATH
-            export PATH="$PWD/scripts:$PATH"
+            export PATH="$my_pwd/scripts:$PATH"
 
             # Add node binaries to PATH for development
-            export PATH="$PWD/node_modules/.bin:$PATH"
+            export PATH="$my_pwd/node_modules/.bin:$PATH"
 
             # Prevent cargo aliases from using programs in `~/.cargo` to avoid conflicts
             # with rustup installations.
             export CARGO_HOME=$HOME/.cargo-nix
-
-            # Add rust binaries to PATH for native demo
-            export PATH="$PWD/$CARGO_TARGET_DIR/debug:$PATH"
           '' + self.checks.${system}.pre-commit-check.shellHook;
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
           FOUNDRY_SOLC = "${solc}/bin/solc";
@@ -298,6 +304,7 @@
             protobuf # to compile libp2p-autonat
             toolchain
           ];
+          shellHook = rustShellHook;
         });
       devShells.coverage =
         let
@@ -314,7 +321,7 @@
             grcov
           ];
           CARGO_INCREMENTAL = "0";
-          shellHook = ''
+          shellHook = rustShellHook + ''
             RUSTFLAGS="$RUSTFLAGS -Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests -Cdebuginfo=2"
           '';
           RUSTDOCFLAGS = "-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests";
@@ -335,6 +342,7 @@
             protobuf # to compile libp2p-autonat
             stableToolchain
           ];
+          shellHook = rustShellHook;
         });
     });
 }

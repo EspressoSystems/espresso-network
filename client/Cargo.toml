@@ -15,3 +15,6 @@ surf-disco = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 vbs = { workspace = true }
+
+[lints]
+workspace = true

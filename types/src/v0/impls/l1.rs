@@ -325,7 +325,8 @@ impl Service<RequestPacket> for SwitchingTransport {
             }
 
             // If we've been rate limited, back off until the limit (hopefully) expires.
-            if let Some(t) = current_transport.status.read().rate_limited_until {
+            let rate_limit_until = current_transport.status.read().rate_limited_until;
+            if let Some(t) = rate_limit_until {
                 if t > Instant::now() {
                     // Return an error with a non-standard code to indicate client-side rate limit.
                     return Err(RpcError::Transport(TransportErrorKind::Custom(
@@ -468,7 +469,8 @@ impl L1Client {
     /// The L1 client will still be usable, but will stop updating until [`start`](Self::start) is
     /// called again.
     pub async fn shut_down_tasks(&self) {
-        if let Some(update_task) = self.update_task.0.lock().await.take() {
+        let update_task = self.update_task.0.lock().await.take();
+        if let Some(update_task) = update_task {
             update_task.abort();
         }
     }
