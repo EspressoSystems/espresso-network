@@ -132,7 +132,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         BN254.G1Point memory blsSig,
         bytes memory schnorrSig,
         uint16 commission
-    ) external virtual {
+    ) external virtual whenNotPaused {
         address validator = msg.sender;
 
         ensureValidatorNotRegistered(validator);
