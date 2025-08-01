@@ -2185,13 +2185,13 @@ dependencies = [
  "futures",
  "hotshot",
  "hotshot-builder-api",
- "hotshot-builder-core",
+ "hotshot-builder-legacy",
+ "hotshot-builder-shared",
  "hotshot-events-service",
  "hotshot-example-types",
  "hotshot-state-prover",
  "hotshot-types",
  "jf-signature 0.2.0",
- "marketplace-builder-shared",
  "portpicker",
  "rand 0.8.5",
  "sequencer",
@@ -5456,7 +5456,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "hotshot-builder-core"
+name = "hotshot-builder-legacy"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -5472,13 +5472,13 @@ dependencies = [
  "futures",
  "hotshot",
  "hotshot-builder-api",
+ "hotshot-builder-shared",
  "hotshot-example-types",
  "hotshot-macros",
  "hotshot-task-impls",
  "hotshot-testing",
  "hotshot-types",
  "lru 0.12.5",
- "marketplace-builder-shared",
  "num_cpus",
  "portpicker",
  "serde",
@@ -5494,7 +5494,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "hotshot-builder-core-refactored"
+name = "hotshot-builder-refactored"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -5510,6 +5510,7 @@ dependencies = [
  "futures",
  "hotshot",
  "hotshot-builder-api",
+ "hotshot-builder-shared",
  "hotshot-example-types",
  "hotshot-macros",
  "hotshot-task-impls",
@@ -5517,7 +5518,6 @@ dependencies = [
  "hotshot-types",
  "jf-vid",
  "lru 0.12.5",
- "marketplace-builder-shared",
  "num_cpus",
  "portpicker",
  "serde",
@@ -5530,6 +5530,47 @@ dependencies = [
  "tracing-test 0.1.0",
  "url",
  "vbs",
+]
+
+[[package]]
+name = "hotshot-builder-shared"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-broadcast",
+ "async-lock 3.4.0",
+ "async-trait",
+ "bincode",
+ "chrono",
+ "committable",
+ "derive_more 1.0.0",
+ "either",
+ "futures",
+ "hex",
+ "hotshot",
+ "hotshot-builder-api",
+ "hotshot-events-service",
+ "hotshot-example-types",
+ "hotshot-task-impls",
+ "hotshot-testing",
+ "hotshot-types",
+ "jf-vid",
+ "nonempty-collections",
+ "portpicker",
+ "quick_cache",
+ "rand 0.8.5",
+ "serde",
+ "sha2 0.10.9",
+ "surf-disco",
+ "thiserror 1.0.69",
+ "tide-disco",
+ "tokio",
+ "tracing",
+ "tracing-subscriber 0.3.19",
+ "tracing-test 0.1.0",
+ "url",
+ "vbs",
+ "vec1",
 ]
 
 [[package]]
@@ -7792,47 +7833,6 @@ dependencies = [
  "lazy_static",
  "pipeline",
  "regex",
-]
-
-[[package]]
-name = "marketplace-builder-shared"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-broadcast",
- "async-lock 3.4.0",
- "async-trait",
- "bincode",
- "chrono",
- "committable",
- "derive_more 1.0.0",
- "either",
- "futures",
- "hex",
- "hotshot",
- "hotshot-builder-api",
- "hotshot-events-service",
- "hotshot-example-types",
- "hotshot-task-impls",
- "hotshot-testing",
- "hotshot-types",
- "jf-vid",
- "nonempty-collections",
- "portpicker",
- "quick_cache",
- "rand 0.8.5",
- "serde",
- "sha2 0.10.9",
- "surf-disco",
- "thiserror 1.0.69",
- "tide-disco",
- "tokio",
- "tracing",
- "tracing-subscriber 0.3.19",
- "tracing-test 0.1.0",
- "url",
- "vbs",
- "vec1",
 ]
 
 [[package]]
@@ -10589,7 +10589,7 @@ dependencies = [
  "futures",
  "generic-tests",
  "hotshot",
- "hotshot-builder-core-refactored",
+ "hotshot-builder-refactored",
  "hotshot-contract-adapter",
  "hotshot-events-service",
  "hotshot-example-types",
