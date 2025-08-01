@@ -56,7 +56,7 @@ use super::{
 };
 use crate::{
     availability::{
-        BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, StateCertQueryData,
+        BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, StateCertQueryDataV2,
         VidCommonQueryData,
     },
     data_source::{
@@ -637,7 +637,7 @@ where
 
     async fn insert_state_cert(
         &mut self,
-        state_cert: StateCertQueryData<Types>,
+        state_cert: StateCertQueryDataV2<Types>,
     ) -> anyhow::Result<()> {
         let height = state_cert.height();
 

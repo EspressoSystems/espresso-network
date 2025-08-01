@@ -30,7 +30,7 @@ use hotshot_types::{
     message::{Proposal, UpgradeLock},
     request_response::ProposalRequestPayload,
     simple_certificate::{
-        DaCertificate2, LightClientStateUpdateCertificate, NextEpochQuorumCertificate2,
+        DaCertificate2, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
         QuorumCertificate2, UpgradeCertificate,
     },
     simple_vote::HasEpoch,
@@ -1289,7 +1289,7 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
 
 /// Validates the light client state update certificate
 pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
-    state_cert: &LightClientStateUpdateCertificate<TYPES>,
+    state_cert: &LightClientStateUpdateCertificateV2<TYPES>,
     membership_coordinator: &EpochMembershipCoordinator<TYPES>,
 ) -> Result<()> {
     tracing::debug!("Validating light client state update certificate");
@@ -1334,7 +1334,7 @@ pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
 
 pub(crate) fn check_qc_state_cert_correspondence<TYPES: NodeType>(
     qc: &QuorumCertificate2<TYPES>,
-    state_cert: &LightClientStateUpdateCertificate<TYPES>,
+    state_cert: &LightClientStateUpdateCertificateV2<TYPES>,
     epoch_height: u64,
 ) -> bool {
     qc.data

@@ -1,5 +1,6 @@
 use std::fmt;
 
+use alloy::primitives::Keccak256;
 use anyhow::{ensure, Context};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
@@ -1098,6 +1099,30 @@ impl BlockHeader<SeqTypes> for Header {
                 &block_comm_root_bytes,
             )?,
         })
+    }
+
+    fn auth_root(&self) -> anyhow::Result<Option<[u8; 32]>> {
+        match self {
+            Header::V1(_) | Header::V2(_) | Header::V3(_) => Ok(None),
+            Header::V4(header) => {
+                let mut reward_root_bytes = Vec::new();
+                let el_root = [0; 32];
+                let placeholder_root = [0; 32];
+                header
+                    .reward_merkle_tree_root
+                    .serialize_compressed(&mut reward_root_bytes)?;
+
+                let mut hasher = Keccak256::new();
+
+                hasher.update(reward_root_bytes);
+                hasher.update(el_root);
+                hasher.update(placeholder_root);
+
+                let result = hasher.finalize();
+
+                Ok(Some(result.0))
+            },
+        }
     }
 }
 

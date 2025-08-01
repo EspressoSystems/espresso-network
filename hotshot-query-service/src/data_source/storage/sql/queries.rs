@@ -21,7 +21,10 @@ use std::{
 use anyhow::Context;
 use derivative::Derivative;
 use hotshot_types::{
-    simple_certificate::{LightClientStateUpdateCertificate, QuorumCertificate2},
+    simple_certificate::{
+        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
+        QuorumCertificate2,
+    },
     traits::{
         block_contents::{BlockHeader, BlockPayload},
         node_implementation::NodeType,
@@ -33,7 +36,7 @@ use super::{Database, Db, Query, QueryAs, Transaction};
 use crate::{
     availability::{
         BlockId, BlockQueryData, LeafQueryData, PayloadQueryData, QueryableHeader,
-        QueryablePayload, StateCertQueryData, VidCommonQueryData,
+        QueryablePayload, StateCertQueryDataV2, VidCommonQueryData,
     },
     data_source::storage::{PayloadMetadata, VidCommonMetadata},
     Header, Leaf2, Payload, QueryError, QueryResult,
@@ -349,14 +352,34 @@ impl From<sqlx::Error> for QueryError {
 
 const STATE_CERT_COLUMNS: &str = "state_cert";
 
-impl<'r, Types> FromRow<'r, <Db as Database>::Row> for StateCertQueryData<Types>
+impl<'r, Types> FromRow<'r, <Db as Database>::Row> for StateCertQueryDataV2<Types>
 where
     Types: NodeType,
 {
     fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
-        let state_cert: LightClientStateUpdateCertificate<Types> =
-            bincode::deserialize(row.try_get("state_cert")?)
-                .decode_error("malformed state cert")?;
+        let state_cert: LightClientStateUpdateCertificateV2<Types> = {
+            let bytes: &[u8] = row.try_get("state_cert")?;
+            match bincode::deserialize::<LightClientStateUpdateCertificateV2<Types>>(bytes) {
+                Ok(cert) => cert,
+                Err(err) => {
+                    tracing::info!(
+                        "Falling back to V1 deserialization for LightClientStateUpdateCertificate"
+                    );
+
+                    match bincode::deserialize::<LightClientStateUpdateCertificateV1<Types>>(bytes)
+                    {
+                        Ok(legacy) => legacy.into(),
+                        Err(err_legacy) => {
+                            tracing::error!(
+                                "Failed to deserialize state_cert with v1 and v2 v2 error: {err}. \
+                                 v1 error: {err_legacy}",
+                            );
+                            return Err(sqlx::Error::Decode(err_legacy));
+                        },
+                    }
+                },
+            }
+        };
         Ok(state_cert.into())
     }
 }

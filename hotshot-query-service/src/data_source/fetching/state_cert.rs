@@ -20,7 +20,7 @@ use hotshot_types::traits::node_implementation::{ConsensusTime, NodeType};
 
 use super::Storable;
 use crate::{
-    availability::{QueryableHeader, QueryablePayload, StateCertQueryData},
+    availability::{QueryableHeader, QueryablePayload, StateCertQueryDataV2},
     data_source::{
         fetching::{
             AvailabilityProvider, FetchRequest, Fetchable, Fetcher, Notifiers, PassiveFetch,
@@ -38,7 +38,7 @@ use crate::{
 impl FetchRequest for StateCertRequest {}
 
 #[async_trait]
-impl<Types> Fetchable<Types> for StateCertQueryData<Types>
+impl<Types> Fetchable<Types> for StateCertQueryDataV2<Types>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
@@ -85,7 +85,7 @@ where
     }
 }
 
-impl<Types> Storable<Types> for StateCertQueryData<Types>
+impl<Types> Storable<Types> for StateCertQueryDataV2<Types>
 where
     Types: NodeType,
 {

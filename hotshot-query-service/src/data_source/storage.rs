@@ -68,7 +68,7 @@ use tagged_base64::TaggedBase64;
 use crate::{
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
-        PayloadQueryData, QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
+        PayloadQueryData, QueryableHeader, QueryablePayload, StateCertQueryDataV2, TransactionHash,
         VidCommonMetadata, VidCommonQueryData,
     },
     explorer::{
@@ -196,7 +196,7 @@ where
     /// Get the first leaf which is available in the database with height >= `from`.
     async fn first_available_leaf(&mut self, from: u64) -> QueryResult<LeafQueryData<Types>>;
 
-    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryData<Types>>;
+    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryDataV2<Types>>;
 }
 
 pub trait UpdateAvailabilityStorage<Types>
@@ -218,7 +218,7 @@ where
     ) -> impl Send + Future<Output = anyhow::Result<()>>;
     fn insert_state_cert(
         &mut self,
-        state_cert: StateCertQueryData<Types>,
+        state_cert: StateCertQueryDataV2<Types>,
     ) -> impl Send + Future<Output = anyhow::Result<()>>;
 }
 

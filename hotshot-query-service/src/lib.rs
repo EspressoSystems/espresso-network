@@ -616,7 +616,7 @@ mod test {
         availability::{
             AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
             Fetch, FetchStream, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
-            PayloadQueryData, StateCertQueryData, TransactionHash, UpdateAvailabilityData,
+            PayloadQueryData, StateCertQueryDataV2, TransactionHash, UpdateAvailabilityData,
             VidCommonMetadata, VidCommonQueryData,
         },
         metrics::PrometheusMetrics,
@@ -783,7 +783,7 @@ mod test {
         ) -> Fetch<BlockWithTransaction<MockTypes>> {
             self.hotshot_qs.get_block_containing_transaction(hash).await
         }
-        async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryData<MockTypes>> {
+        async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryDataV2<MockTypes>> {
             self.hotshot_qs.get_state_cert(epoch).await
         }
     }
