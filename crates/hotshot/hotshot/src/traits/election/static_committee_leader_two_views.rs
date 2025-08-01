@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use alloy::primitives::U256;
+use anyhow::Context;
 use hotshot_types::{
     drb::DrbResult,
     stake_table::HSStakeTable,
@@ -18,6 +19,8 @@ use hotshot_types::{
     PeerConfig,
 };
 use hotshot_utils::anytrace::Result;
+
+use crate::{Arc, RwLock};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 
@@ -39,6 +42,9 @@ pub struct StaticCommitteeLeaderForTwoViews<T: NodeType> {
 
     /// The nodes on the committee and their stake, indexed by public key
     indexed_da_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T>>,
+
+    /// `DrbResult`s indexed by epoch
+    drb_results: BTreeMap<T::Epoch, DrbResult>,
 }
 
 impl<TYPES: NodeType> Membership<TYPES> for StaticCommitteeLeaderForTwoViews<TYPES> {
@@ -94,6 +100,7 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommitteeLeaderForTwoViews<TYP
             da_stake_table: da_members.into(),
             indexed_stake_table,
             indexed_da_stake_table,
+            drb_results: BTreeMap::new(),
         }
     }
 
@@ -222,5 +229,25 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommitteeLeaderForTwoViews<TYP
         Ok(true)
     }
 
-    fn add_drb_result(&mut self, _epoch: <TYPES as NodeType>::Epoch, _drb_result: DrbResult) {}
+    fn add_drb_result(&mut self, epoch: <TYPES as NodeType>::Epoch, drb_result: DrbResult) {
+        self.drb_results.insert(epoch, drb_result);
+    }
+
+    async fn get_epoch_drb(
+        membership: Arc<RwLock<Self>>,
+        epoch: TYPES::Epoch,
+    ) -> anyhow::Result<DrbResult> {
+        let membership_reader = membership.read().await;
+
+        membership_reader
+            .drb_results
+            .get(&epoch)
+            .context("DRB result missing")
+            .copied()
+    }
+
+    fn set_first_epoch(&mut self, epoch: TYPES::Epoch, initial_drb_result: DrbResult) {
+        self.add_drb_result(epoch, initial_drb_result);
+        self.add_drb_result(epoch + 1, initial_drb_result);
+    }
 }
