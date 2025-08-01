@@ -28,7 +28,7 @@ use committable::Committable;
 use hotshot_example_types::node_types::TestVersions;
 use hotshot_query_service::{
     availability::{
-        BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, StateCertQueryData,
+        BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, StateCertQueryDataV2,
         TransactionQueryData, TransactionWithProofQueryData, VidCommonQueryData,
     },
     testing::mocks::MockVersions,
@@ -625,6 +625,6 @@ async fn test_transaction_query_data() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_state_cert_query_data_v3() {
     let light_client_cert = LightClientStateUpdateCertificateV1::<SeqTypes>::genesis();
-    let state_cert = StateCertQueryData(light_client_cert.into());
+    let state_cert = StateCertQueryDataV1(light_client_cert);
     reference_test_without_committable("v3", "state_cert", &state_cert);
 }

@@ -745,6 +745,20 @@ where
                 .with_timeout(timeout)
                 .await
                 .context(FetchStateCertSnafu { epoch })
+                .map(StateCertQueryDataV1::from)
+        }
+        .boxed()
+    })?
+    .at("get_state_cert_v2", move |req, state| {
+        async move {
+            let epoch = req.integer_param("epoch")?;
+            let fetch = state
+                .read(|state| state.get_state_cert(epoch).boxed())
+                .await;
+            fetch
+                .with_timeout(timeout)
+                .await
+                .context(FetchStateCertSnafu { epoch })
         }
         .boxed()
     })?;
@@ -1492,7 +1506,7 @@ mod test {
         }
 
         for epoch in 1..4 {
-            let state_cert: StateCertQueryData<MockTypes> = client
+            let state_cert: StateCertQueryDataV2<MockTypes> = client
                 .get(&format!("state-cert/{epoch}"))
                 .send()
                 .await

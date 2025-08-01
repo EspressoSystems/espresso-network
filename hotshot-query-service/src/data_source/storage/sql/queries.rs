@@ -36,7 +36,7 @@ use super::{Database, Db, Query, QueryAs, Transaction};
 use crate::{
     availability::{
         BlockId, BlockQueryData, LeafQueryData, PayloadQueryData, QueryableHeader,
-        QueryablePayload, StateCertQueryData, VidCommonQueryData,
+        QueryablePayload, StateCertQueryDataV2, VidCommonQueryData,
     },
     data_source::storage::{PayloadMetadata, VidCommonMetadata},
     Header, Leaf2, Payload, QueryError, QueryResult,
@@ -352,7 +352,7 @@ impl From<sqlx::Error> for QueryError {
 
 const STATE_CERT_COLUMNS: &str = "state_cert";
 
-impl<'r, Types> FromRow<'r, <Db as Database>::Row> for StateCertQueryData<Types>
+impl<'r, Types> FromRow<'r, <Db as Database>::Row> for StateCertQueryDataV2<Types>
 where
     Types: NodeType,
 {

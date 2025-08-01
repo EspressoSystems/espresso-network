@@ -1607,13 +1607,12 @@ mod api_tests {
     use data_source::testing::TestableSequencerDataSource;
     use espresso_types::{
         traits::{EventConsumer, PersistenceOptions},
-        Header, Leaf2, MockSequencerVersions, NamespaceId, NamespaceProofQueryData,
-        SequencerVersions, ValidatedState,
+        Header, Leaf2, MockSequencerVersions, NamespaceId, NamespaceProofQueryData, ValidatedState,
     };
     use futures::{future, stream::StreamExt};
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_query_service::availability::{
-        AvailabilityDataSource, BlockQueryData, StateCertQueryData, VidCommonQueryData,
+        AvailabilityDataSource, BlockQueryData, VidCommonQueryData,
     };
     use hotshot_types::{
         data::{
@@ -1623,16 +1622,12 @@ mod api_tests {
         event::LeafInfo,
         message::Proposal,
         simple_certificate::QuorumCertificate2,
-        traits::{
-            metrics::NoMetrics, node_implementation::ConsensusTime, signature_key::SignatureKey,
-            EncodeBytes,
-        },
+        traits::{node_implementation::ConsensusTime, signature_key::SignatureKey, EncodeBytes},
         utils::EpochTransitionIndicator,
         vid::avidm::{init_avidm_param, AvidMScheme},
     };
     use portpicker::pick_unused_port;
     use sequencer_utils::test_utils::setup_test;
-    use staking_cli::demo::DelegationConfig;
     use surf_disco::Client;
     use test_helpers::{
         catchup_test_helper, state_signature_test_helper, status_test_helper, submit_test_helper,
@@ -1643,7 +1638,6 @@ mod api_tests {
 
     use super::{update::ApiEventConsumer, *};
     use crate::{
-        catchup::StatePeers,
         network,
         persistence::no_storage::NoStorage,
         testing::{wait_for_decide_on_handle, TestConfigBuilder},
@@ -2072,83 +2066,6 @@ mod api_tests {
             state_cert: None,
         }
     }
-
-    #[tokio::test(flavor = "multi_thread")]
-    pub(crate) async fn test_state_cert_query<D: TestableSequencerDataSource>() {
-        setup_test();
-
-        const TEST_EPOCH_HEIGHT: u64 = 10;
-        const TEST_EPOCHS: u64 = 3;
-
-        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
-
-        let storage = D::create_storage().await;
-        let network_config = TestConfigBuilder::default()
-            .epoch_height(TEST_EPOCH_HEIGHT)
-            .build();
-
-        let api_port = pick_unused_port().expect("No ports free for query service");
-
-        let options = D::options(&storage, Options::with_port(api_port));
-
-        let config = TestNetworkConfigBuilder::default()
-            .api_config(options)
-            .network_config(network_config.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    &NoMetrics,
-                )
-            }))
-            .pos_hook::<PosVersion>(DelegationConfig::VariableAmounts, Default::default())
-            .await
-            .expect("Pos Deployment")
-            .build();
-
-        let network = TestNetwork::new(config, PosVersion::new()).await;
-        let mut events = network.server.event_stream().await;
-
-        // Wait until 3 epochs have passed.
-        loop {
-            let event = events.next().await.unwrap();
-            tracing::info!("Received event from handle: {event:?}");
-
-            if let hotshot::types::EventType::Decide { leaf_chain, .. } = event.event {
-                println!(
-                    "Decide event received: {:?}",
-                    leaf_chain.first().unwrap().leaf.height()
-                );
-                if let Some(first_leaf) = leaf_chain.first() {
-                    let height = first_leaf.leaf.height();
-                    tracing::info!("Decide event received at height: {height}");
-
-                    if height >= TEST_EPOCHS * TEST_EPOCH_HEIGHT {
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Connect client.
-        let client: Client<ServerError, StaticVersion<0, 1>> =
-            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
-        client.connect(Some(Duration::from_secs(10))).await;
-
-        // Get the state cert for the epoch 3
-        let state_cert = client
-            .get::<StateCertQueryData<SeqTypes>>("availability/state-cert/3")
-            .send()
-            .await
-            .unwrap()
-            .0;
-        tracing::info!("state_cert: {state_cert:?}");
-        assert_eq!(state_cert.epoch.u64(), 3);
-        assert_eq!(
-            state_cert.light_client_state.block_height,
-            3 * TEST_EPOCH_HEIGHT - 5
-        );
-    }
 }
 
 #[cfg(test)]
@@ -2161,9 +2078,10 @@ mod test {
     use alloy::{
         eips::BlockId,
         network::EthereumWallet,
-        primitives::U256,
+        primitives::{Keccak256, U256},
         providers::{Provider, ProviderBuilder},
     };
+    use ark_serialize::CanonicalSerialize;
     use async_lock::Mutex;
     use committable::{Commitment, Committable};
     use espresso_contract_deployer::{
@@ -2187,8 +2105,8 @@ mod test {
     use hotshot_example_types::node_types::EpochsTestVersions;
     use hotshot_query_service::{
         availability::{
-            BlockQueryData, BlockSummaryQueryData, LeafQueryData, TransactionQueryData,
-            VidCommonQueryData,
+            BlockQueryData, BlockSummaryQueryData, LeafQueryData, StateCertQueryDataV1,
+            StateCertQueryDataV2, TransactionQueryData, VidCommonQueryData,
         },
         data_source::{sql::Config, storage::SqlStorage, VersionedDataSource},
         explorer::TransactionSummariesResponse,
@@ -5681,5 +5599,137 @@ mod test {
 
         network.stop_consensus().await;
         Ok(())
+    }
+
+    #[rstest]
+    #[case(PosVersionV3::new())]
+    #[case(PosVersionV4::new())]
+    #[tokio::test(flavor = "multi_thread")]
+    pub(crate) async fn test_state_cert_query<Ver: Versions>(#[case] versions: Ver) {
+        setup_test();
+
+        const TEST_EPOCH_HEIGHT: u64 = 10;
+        const TEST_EPOCHS: u64 = 5;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(TEST_EPOCH_HEIGHT)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        tracing::info!("API PORT = {api_port}");
+        const NUM_NODES: usize = 5;
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port).catchup(Default::default()),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<Ver>(
+                DelegationConfig::MultipleDelegators,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+            )
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, versions).await;
+        let mut events = network.server.event_stream().await;
+
+        // Wait until 5 epochs have passed.
+        loop {
+            let event = events.next().await.unwrap();
+            tracing::info!("Received event from handle: {event:?}");
+
+            if let hotshot::types::EventType::Decide { leaf_chain, .. } = event.event {
+                println!(
+                    "Decide event received: {:?}",
+                    leaf_chain.first().unwrap().leaf.height()
+                );
+                if let Some(first_leaf) = leaf_chain.first() {
+                    let height = first_leaf.leaf.height();
+                    tracing::info!("Decide event received at height: {height}");
+
+                    if height >= TEST_EPOCHS * TEST_EPOCH_HEIGHT {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Connect client.
+        let client: Client<ServerError, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+        client.connect(Some(Duration::from_secs(10))).await;
+
+        // Get the state cert for the epoch 3 to 5
+        for i in 3..=TEST_EPOCHS {
+            // v2
+            let state_query_data_v2 = client
+                .get::<StateCertQueryDataV2<SeqTypes>>(&format!("availability/state-cert-v2/{i}"))
+                .send()
+                .await
+                .unwrap();
+            let state_cert_v2 = state_query_data_v2.0.clone();
+            tracing::info!("state_cert_v2: {state_cert_v2:?}");
+            assert_eq!(state_cert_v2.epoch.u64(), i);
+            assert_eq!(
+                state_cert_v2.light_client_state.block_height,
+                i * TEST_EPOCH_HEIGHT - 5
+            );
+            let block_height = state_cert_v2.light_client_state.block_height;
+
+            let header: Header = client
+                .get(&format!("availability/header/{block_height}"))
+                .send()
+                .await
+                .unwrap();
+
+            // verify auth root if the consensus version is v4
+            if header.version() == DrbAndHeaderUpgradeVersion::VERSION {
+                let auth_root = state_cert_v2.auth_root.expect("auth root is not None");
+                let reward_root = header.reward_merkle_tree_root().unwrap_right();
+
+                let mut reward_root_bytes = Vec::new();
+                reward_root
+                    .serialize_compressed(&mut reward_root_bytes)
+                    .unwrap();
+
+                let mut hasher = Keccak256::new();
+
+                hasher.update(reward_root_bytes);
+                let result = hasher.finalize().0;
+
+                assert_eq!(auth_root, result, "auth root mismatch");
+            }
+
+            // v1
+            let state_query_data_v1 = client
+                .get::<StateCertQueryDataV1<SeqTypes>>(&format!("availability/state-cert/{i}"))
+                .send()
+                .await
+                .unwrap();
+
+            let state_cert_v1 = state_query_data_v1.0.clone();
+            tracing::info!("state_cert_v1: {state_cert_v1:?}");
+            assert_eq!(state_query_data_v1, state_query_data_v2.into());
+        }
     }
 }

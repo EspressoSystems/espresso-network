@@ -15,7 +15,7 @@ use hotshot_contract_adapter::{
     field_to_u256,
     sol_types::{LightClientStateSol, LightClientV2, PlonkProofSol, StakeTableStateSol},
 };
-use hotshot_query_service::availability::StateCertQueryData;
+use hotshot_query_service::availability::StateCertQueryDataV2;
 use hotshot_types::{
     data::EpochNumber,
     light_client::{
@@ -173,14 +173,14 @@ async fn fetch_epoch_state_from_sequencer(
         surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
             sequencer_url.clone(),
         )
-        .get::<StateCertQueryData<SeqTypes>>(&format!("availability/state-cert/{epoch}"))
+        .get::<StateCertQueryDataV2<SeqTypes>>(&format!("availability/state-cert-v2/{epoch}"))
         .header("Accept", "application/json")
         .send()
         .await
         .map_err(|err| {
             ProverError::SequencerCommunicationError(
                 sequencer_url
-                    .join(&format!("availability/state-cert/{epoch}"))
+                    .join(&format!("availability/state-cert-v2/{epoch}"))
                     .unwrap(),
                 err,
             )

@@ -375,3 +375,14 @@ The light client state update certificate consists of the list of Schnorr signat
 client state at the end of the epoch. This is used to update light client state in the contract so
 that it have the new stake table information for the next epoch.
 """
+
+[route.get_state_cert_v2]
+PATH = ["state-cert-v2/:epoch"]
+":epoch" = "Integer"
+DOC = """
+Get the light client state update certificate for the given epoch.
+
+The light client state update certificate consists of the list of Schnorr signatures of the light
+client state at the end of the epoch. This is used to update light client state in the contract so
+that it have the new stake table information for the next epoch.
+"""

@@ -16,7 +16,10 @@ use committable::{Commitment, Committable};
 use derive_more::derive::From;
 use hotshot_types::{
     data::{Leaf, Leaf2, VidCommitment, VidShare},
-    simple_certificate::{LightClientStateUpdateCertificateV2, QuorumCertificate2},
+    simple_certificate::{
+        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
+        QuorumCertificate2,
+    },
     traits::{
         self,
         block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
@@ -1072,7 +1075,7 @@ where
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, From)]
 #[serde(bound = "")]
-pub struct StateCertQueryData<Types: NodeType>(pub LightClientStateUpdateCertificateV2<Types>);
+pub struct StateCertQueryDataV2<Types: NodeType>(pub LightClientStateUpdateCertificateV2<Types>);
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Limits {
@@ -1080,8 +1083,21 @@ pub struct Limits {
     pub large_object_range_limit: usize,
 }
 
-impl<Types: NodeType> HeightIndexed for StateCertQueryData<Types> {
+impl<Types: NodeType> HeightIndexed for StateCertQueryDataV2<Types> {
     fn height(&self) -> u64 {
         self.0.light_client_state.block_height
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, From)]
+#[serde(bound = "")]
+pub struct StateCertQueryDataV1<Types: NodeType>(pub LightClientStateUpdateCertificateV1<Types>);
+
+impl<Types> From<StateCertQueryDataV2<Types>> for StateCertQueryDataV1<Types>
+where
+    Types: NodeType,
+{
+    fn from(cert: StateCertQueryDataV2<Types>) -> Self {
+        Self(cert.0.into())
     }
 }

@@ -769,13 +769,26 @@ pub struct LightClientStateUpdateCertificateV1<TYPES: NodeType> {
 impl<TYPES: NodeType> From<LightClientStateUpdateCertificateV1<TYPES>>
     for LightClientStateUpdateCertificateV2<TYPES>
 {
-    fn from(legacy: LightClientStateUpdateCertificateV1<TYPES>) -> Self {
-        LightClientStateUpdateCertificateV2 {
-            epoch: legacy.epoch,
-            light_client_state: legacy.light_client_state,
-            next_stake_table_state: legacy.next_stake_table_state,
-            signatures: legacy.signatures,
+    fn from(v1: LightClientStateUpdateCertificateV1<TYPES>) -> Self {
+        Self {
+            epoch: v1.epoch,
+            light_client_state: v1.light_client_state,
+            next_stake_table_state: v1.next_stake_table_state,
+            signatures: v1.signatures,
             auth_root: None,
+        }
+    }
+}
+
+impl<TYPES: NodeType> From<LightClientStateUpdateCertificateV2<TYPES>>
+    for LightClientStateUpdateCertificateV1<TYPES>
+{
+    fn from(v2: LightClientStateUpdateCertificateV2<TYPES>) -> Self {
+        Self {
+            epoch: v2.epoch,
+            light_client_state: v2.light_client_state,
+            next_stake_table_state: v2.next_stake_table_state,
+            signatures: v2.signatures,
         }
     }
 }
