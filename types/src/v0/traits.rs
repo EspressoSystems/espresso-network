@@ -29,10 +29,7 @@ use itertools::Itertools;
 use jf_vid::VidScheme;
 use serde::{de::DeserializeOwned, Serialize};
 
-use super::{
-    impls::NodeState, utils::BackoffParams, v0_3::StakeTables, EpochCommittees, EpochVersion,
-    SequencerVersions,
-};
+use super::{impls::NodeState, utils::BackoffParams};
 use crate::{
     v0::impls::ValidatedState, v0_99::ChainConfig, BlockMerkleTree, Event, FeeAccount,
     FeeAccountProof, FeeMerkleCommitment, FeeMerkleTree, Leaf2, NetworkConfig, SeqTypes,

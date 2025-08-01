@@ -15,7 +15,6 @@ use hotshot_types::{
 };
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use static_assertions::const_assert_eq;
-use todo_by::todo_by;
 
 /// The enum for the topics we can subscribe to in the Push CDN
 #[repr(u8)]
@@ -79,10 +78,6 @@ impl<T: SignatureKey> SignatureScheme for WrappedSignatureKey<T> {
             Err(_) => return false,
         };
 
-        todo_by!(
-            "2025-3-4",
-            "Only accept the namespaced message once everyone has upgraded"
-        );
         public_key.0.validate(&signature, message)
             || public_key.0.validate(&signature, &namespaced_message)
     }
@@ -111,10 +106,6 @@ impl<TYPES: NodeType> RunDef for ProductionDef<TYPES> {
     type Topic = Topic;
 }
 
-todo_by!(
-    "2025-3-4",
-    "Remove this, switching to TCP+TLS singularly when everyone has updated"
-);
 /// The user definition for the Push CDN.
 /// Uses the Quic protocol and untrusted middleware.
 pub struct UserDefQuic<TYPES: NodeType>(PhantomData<TYPES>);

@@ -17,6 +17,7 @@ either = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
 hotshot = { workspace = true }
+serde_json = { workspace = true }
 hotshot-builder-api = { workspace = true }
 hotshot-events-service = { workspace = true }
 hotshot-example-types = { workspace = true }

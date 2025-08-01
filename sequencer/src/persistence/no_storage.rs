@@ -14,7 +14,8 @@ use hotshot_types::{
     },
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::Proposal,
-    simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate}, vid::VidSchemeType,
+    simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
+    vid::VidSchemeType,
 };
 use jf_vid::VidScheme;
 use std::collections::BTreeMap;

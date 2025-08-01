@@ -5589,7 +5589,7 @@ dependencies = [
  "httpdate",
  "itoa",
  "pin-project-lite 0.2.16",
- "socket2 0.4.10",
+ "socket2 0.5.8",
  "tokio",
  "tower-service",
  "tracing",
@@ -6591,7 +6591,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc2f4eb4bc735547cfed7c0a4922cbd04a4655978c09b54f1f7b228750664c34"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]
@@ -7298,6 +7298,7 @@ dependencies = [
  "quick_cache",
  "rand 0.8.5",
  "serde",
+ "serde_json",
  "sha2 0.10.8",
  "surf-disco",
  "thiserror 1.0.69",
@@ -10760,9 +10761,9 @@ dependencies = [
 
 [[package]]
 name = "surf-disco"
-version = "0.9.0"
+version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14e00ab9d939d04110f14281d5a1e45b6c8acdfbc42e720cbfaef33007c907e6"
+checksum = "c1758d68168ae618461f7b55a654bcafdd08b6f56eabae6f51beb5f6f4d57788"
 dependencies = [
  "async-std",
  "async-tungstenite",
@@ -11132,9 +11133,9 @@ dependencies = [
 
 [[package]]
 name = "tide-disco"
-version = "0.9.3"
+version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9819433f7ede35c0ef6dd1dc669b39663e48fdb58653712cc39db272e4589978"
+checksum = "0b288e55c99f598577a86a7b96e4b4b871cd36b5ae95ca8f923ccf081178e35c"
 dependencies = [
  "anyhow",
  "async-h1",

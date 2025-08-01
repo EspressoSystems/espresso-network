@@ -192,7 +192,7 @@ impl BuilderConfig {
         tracing::info!("Running permissionless builder against hotshot events API at {events_url}",);
 
         let event_stream =
-            EventServiceStream::<SeqTypes, SequencerApiVersion>::connect(events_url).await?;
+            EventServiceStream::<SequencerApiVersion>::connect::<SeqTypes>(events_url).await?;
 
         spawn(async move {
             let res = run_non_permissioned_standalone_builder_service::<_, SequencerApiVersion, _>(

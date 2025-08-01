@@ -184,7 +184,17 @@ where
                 anyhow::bail!("Event stream ended");
             };
 
-            hooks.handle_hotshot_event(&event).await;
+            // Handle hook event with error catching to prevent event loop from exiting
+            let hooks_clone = Arc::clone(&hooks);
+            let event_clone = event.clone();
+            if let Err(join_err) = tokio::task::spawn(async move {
+                hooks_clone.handle_hotshot_event(&event_clone).await;
+            })
+            .await
+            {
+                tracing::error!("Hook task panicked: {:?}", join_err);
+                continue;
+            }
 
             match event.event {
                 EventType::Error { error } => {

@@ -5,11 +5,14 @@ use committable::Committable;
 use derivative::Derivative;
 use derive_more::derive::{From, Into};
 use espresso_types::{
-    downgrade_leaf, parse_duration, parse_size, v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup}, BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload
+    downgrade_leaf, parse_duration, parse_size,
+    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
+    BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
 };
 use futures::stream::StreamExt;
 use hotshot_query_service::{
-    availability::LeafQueryData, data_source::{
+    availability::LeafQueryData,
+    data_source::{
         storage::{
             pruning::PrunerCfg,
             sql::{
@@ -18,10 +21,13 @@ use hotshot_query_service::{
             },
         },
         Transaction as _, VersionedDataSource,
-    }, fetching::{
+    },
+    fetching::{
         request::{LeafRequest, PayloadRequest, VidCommonRequest},
         Provider,
-    }, merklized_state::MerklizedState, VidCommitment, VidCommon
+    },
+    merklized_state::MerklizedState,
+    VidCommitment, VidCommon,
 };
 use hotshot_types::{
     data::{

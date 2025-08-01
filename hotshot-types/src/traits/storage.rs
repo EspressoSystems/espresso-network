@@ -16,7 +16,9 @@ use jf_vid::VidScheme;
 use super::node_implementation::NodeType;
 use crate::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2}, DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2, QuorumProposalWrapper
+        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
+        DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
+        QuorumProposalWrapper,
     },
     event::HotShotAction,
     message::{convert_proposal, Proposal},

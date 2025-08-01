@@ -110,7 +110,7 @@ impl BuilderConfig {
         tracing::info!("Running builder against hotshot events API at {events_api_url}",);
 
         let stream =
-            EventServiceStream::<SeqTypes, SequencerApiVersion>::connect(events_api_url).await?;
+            EventServiceStream::<SequencerApiVersion>::connect::<SeqTypes>(events_api_url).await?;
 
         spawn(async move {
             let res = global_state.start_event_loop(stream).await;

@@ -195,7 +195,7 @@ strum = { version = "0.26", features = ["derive"] }
 surf-disco = "0.9"
 sqlx = "=0.8.2"
 tagged-base64 = "0.4"
-tide-disco = "0.9.3"
+tide-disco = "0.9"
 thiserror = "1.0.69"
 tracing = "0.1"
 bytesize = "1.3"

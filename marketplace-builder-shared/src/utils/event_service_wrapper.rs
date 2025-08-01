@@ -16,24 +16,23 @@ use tracing::{error, warn};
 use url::Url;
 use vbs::version::StaticVersionType;
 
-type EventServiceConnection<Types, ApiVer> = surf_disco::socket::Connection<
-    Event<Types>,
+type EventServiceConnection<ApiVer> = surf_disco::socket::Connection<
+    serde_json::Value,
     surf_disco::socket::Unsupported,
     EventStreamError,
     ApiVer,
 >;
 
-type EventServiceReconnect<Types, ApiVer> = Pin<
-    Box<dyn Future<Output = anyhow::Result<EventServiceConnection<Types, ApiVer>>> + Send + Sync>,
->;
+type EventServiceReconnect<ApiVer> =
+    Pin<Box<dyn Future<Output = anyhow::Result<EventServiceConnection<ApiVer>>> + Send + Sync>>;
 
 /// A wrapper around event streaming API that provides auto-reconnection capability
-pub struct EventServiceStream<Types: NodeType, V: StaticVersionType> {
+pub struct EventServiceStream<V: StaticVersionType> {
     api_url: Url,
-    connection: Either<EventServiceConnection<Types, V>, EventServiceReconnect<Types, V>>,
+    connection: Either<EventServiceConnection<V>, EventServiceReconnect<V>>,
 }
 
-impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Types, ApiVer> {
+impl<ApiVer: StaticVersionType + 'static> EventServiceStream<ApiVer> {
     /// Maximum period between events, once it elapsed we assume
     /// udnerlying connection silently went down and attempt to reconnect
     const MAX_WAIT_PERIOD: Duration = Duration::from_secs(10);
@@ -44,7 +43,7 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
         url: Url,
     ) -> anyhow::Result<
         surf_disco::socket::Connection<
-            Event<Types>,
+            serde_json::Value,
             surf_disco::socket::Unsupported,
             EventStreamError,
             ApiVer,
@@ -70,12 +69,15 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
 
         Ok(client
             .socket("hotshot-events/events")
-            .subscribe::<Event<Types>>()
+            .header("Accept", "application/json") // Force it to send us JSON
+            .subscribe::<serde_json::Value>()
             .await?)
     }
 
     /// Establish initial connection to the events service at `api_url`
-    pub async fn connect(api_url: Url) -> anyhow::Result<impl Stream<Item = Event<Types>> + Unpin> {
+    pub async fn connect<Types: NodeType>(
+        api_url: Url,
+    ) -> anyhow::Result<impl Stream<Item = Event<Types>> + Unpin> {
         let connection = Self::connect_inner(api_url.clone()).await?;
 
         let this = Self {
@@ -89,6 +91,15 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
                     Left(connection) => {
                         match tokio::time::timeout(Self::MAX_WAIT_PERIOD, connection.next()).await {
                             Ok(Some(Ok(event))) => {
+                                // Deserialize the event into the correct type
+                                let event = match serde_json::from_value::<Event<Types>>(event) {
+                                    Ok(event) => event,
+                                    Err(err) => {
+                                        warn!("Error parsing event: {:?}", err);
+                                        continue;
+                                    }
+                                };
+
                                 return Some((event, this));
                             }
                             Ok(Some(Err(err))) => {
@@ -230,7 +241,7 @@ mod tests {
 
         let app_handle = run_app("hotshot-events", url.clone());
 
-        let mut stream = EventServiceStream::<TestTypes, MockVersion>::connect(url.clone())
+        let mut stream = EventServiceStream::<MockVersion>::connect::<TestTypes>(url.clone())
             .await
             .unwrap();
 
@@ -274,7 +285,7 @@ mod tests {
 
         let app_handle = run_app("hotshot-events", url.clone());
 
-        let mut stream = EventServiceStream::<TestTypes, MockVersion>::connect(url.clone())
+        let mut stream = EventServiceStream::<MockVersion>::connect::<TestTypes>(url.clone())
             .await
             .unwrap();
 
@@ -287,12 +298,12 @@ mod tests {
         // Simulate idle timeout by stopping the server and waiting
         app_handle.abort();
         tokio::time::sleep(
-            EventServiceStream::<TestTypes, MockVersion>::RETRY_PERIOD + Duration::from_millis(500),
+            EventServiceStream::<MockVersion>::RETRY_PERIOD + Duration::from_millis(500),
         )
         .await; // Wait longer than idle timeout
                 // Check whether stream returns Err(_) after idle timeout
         match timeout(
-            EventServiceStream::<TestTypes, MockVersion>::RETRY_PERIOD,
+            EventServiceStream::<MockVersion>::RETRY_PERIOD,
             stream.next(),
         )
         .await
