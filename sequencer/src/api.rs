@@ -5706,6 +5706,8 @@ mod test {
             if header.version() == DrbAndHeaderUpgradeVersion::VERSION {
                 let auth_root = state_cert_v2.auth_root.expect("auth root is not None");
                 let reward_root = header.reward_merkle_tree_root().unwrap_right();
+                let el_root = [0; 32];
+                let placeholder_root = [0; 32];
 
                 let mut reward_root_bytes = Vec::new();
                 reward_root
@@ -5715,6 +5717,8 @@ mod test {
                 let mut hasher = Keccak256::new();
 
                 hasher.update(reward_root_bytes);
+                hasher.update(el_root);
+                hasher.update(placeholder_root);
                 let result = hasher.finalize().0;
 
                 assert_eq!(auth_root, result, "auth root mismatch");
