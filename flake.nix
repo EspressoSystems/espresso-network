@@ -57,7 +57,7 @@
         export CARGO_TARGET_DIR="$my_pwd/target/nix"
         
         # Add rust binaries to PATH
-        export PATH="$my_pwd/target/debug:$PATH"
+        export PATH="$CARGO_TARGET_DIR/debug:$PATH"
       '';
 
       solhintPkg = { buildNpmPackage, fetchFromGitHub }:
