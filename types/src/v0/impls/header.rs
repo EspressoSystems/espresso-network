@@ -1106,6 +1106,8 @@ impl BlockHeader<SeqTypes> for Header {
             Header::V1(_) | Header::V2(_) | Header::V3(_) => Ok(None),
             Header::V4(header) => {
                 let mut reward_root_bytes = Vec::new();
+                let el_root = [0; 32];
+                let placeholder_root = [0; 32];
                 header
                     .reward_merkle_tree_root
                     .serialize_compressed(&mut reward_root_bytes)?;
@@ -1113,6 +1115,9 @@ impl BlockHeader<SeqTypes> for Header {
                 let mut hasher = Keccak256::new();
 
                 hasher.update(reward_root_bytes);
+                hasher.update(el_root);
+                hasher.update(placeholder_root);
+
                 let result = hasher.finalize();
 
                 Ok(Some(result.0))

@@ -747,6 +747,10 @@ pub struct LightClientStateUpdateCertificateV2<TYPES: NodeType> {
         TYPES::StateSignatureKey,
         <TYPES::StateSignatureKey as StateSignatureKey>::StateSignature,
     )>,
+    /// Present in versions >= V4.
+    ///
+    /// This field stores the Keccak-256 hash of the concatenated Merkle roots.
+    /// Currently, it includes only the Espresso reward Merkle tree root.
     pub auth_root: Option<[u8; 32]>,
 }
 
