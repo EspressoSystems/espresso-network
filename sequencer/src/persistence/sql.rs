@@ -1224,7 +1224,7 @@ impl SequencerPersistence for Persistence {
                     let view_number: ViewNumber = ViewNumber::new(view.try_into()?);
                     let bytes: Vec<u8> = row.get("data");
                     let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
-                        bincode::deserialize(&bytes).or_else(|err_v2| {
+                        bincode::deserialize(&bytes).or_else(|error| {
                             bincode::deserialize::<
                                 Proposal<SeqTypes, QuorumProposalWrapperV3<SeqTypes>>,
                             >(&bytes)
@@ -1232,7 +1232,7 @@ impl SequencerPersistence for Persistence {
                             .inspect_err(|err_v3| {
                                 tracing::warn!(
                                     ?view_number,
-                                    %err_v2,
+                                    %error,
                                     %err_v3,
                                     "ignoring malformed quorum proposal DB row"
                                 );
@@ -2144,16 +2144,16 @@ impl SequencerPersistence for Persistence {
             Err(err) => {
                 tracing::info!(
                     error = %err,
-                    "Failed to deserialize state certificate, attempting legacy format"
+                    "Failed to deserialize state certificate with v2. attempting with v1"
                 );
 
-                let legacy_cert =
+                let v1_cert =
                     bincode::deserialize::<LightClientStateUpdateCertificateV1<SeqTypes>>(&bytes)
                         .with_context(|| {
                         format!("Failed to deserialize using both v1 and v2. error: {err}")
                     })?;
 
-                legacy_cert.into()
+                v1_cert.into()
             },
         };
 

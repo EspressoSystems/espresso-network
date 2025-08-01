@@ -628,10 +628,3 @@ async fn test_state_cert_query_data_v3() {
     let state_cert = StateCertQueryData(light_client_cert.into());
     reference_test_without_committable("v3", "state_cert", &state_cert);
 }
-
-// #[tokio::test(flavor = "multi_thread")]
-// async fn test_state_cert_query_data_v4() {
-//     let light_client_cert = LightClientStateUpdateCertificateV2::<SeqTypes>::genesis();
-//     let state_cert = StateCertQueryData(light_client_cert);
-//     reference_test_without_committable("v4", "state_cert", &state_cert);
-// }

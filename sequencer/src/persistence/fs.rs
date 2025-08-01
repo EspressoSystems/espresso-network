@@ -935,7 +935,7 @@ impl SequencerPersistence for Persistence {
             let Some(proposal) = bincode::deserialize::<
                 Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
             >(&proposal_bytes)
-            .or_else(|err_v2| {
+            .or_else(|error| {
                 bincode::deserialize::<Proposal<SeqTypes, QuorumProposalWrapperV3<SeqTypes>>>(
                     &proposal_bytes,
                 )
@@ -950,7 +950,7 @@ impl SequencerPersistence for Persistence {
 
                     tracing::warn!(
                         ?view,
-                        error_v2 = %err_v2,
+                        %error,
                         error_v3 = %err_v3,
                         "ignoring malformed quorum proposal file"
                     );
@@ -978,15 +978,15 @@ impl SequencerPersistence for Persistence {
         let file_path = dir_path.join(view.to_string()).with_extension("txt");
         let bytes = fs::read(file_path)?;
         let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
-            bincode::deserialize(&bytes).or_else(|err_v2| {
+            bincode::deserialize(&bytes).or_else(|error| {
                 bincode::deserialize::<Proposal<SeqTypes, QuorumProposalWrapperV3<SeqTypes>>>(
                     &bytes,
                 )
                 .map(convert_proposal)
                 .inspect_err(|err_v3| {
                     tracing::error!(
-                        "Failed to deserialize quorum proposal for view {view:?}: {err_v2:#}, as \
-                         v3: {err_v3:#}"
+                        "Failed to deserialize quorum proposal for view {view:?}: {error}, as v3: \
+                         {err_v3}"
                     )
                 })
             })?;
@@ -1538,26 +1538,26 @@ impl SequencerPersistence for Persistence {
                 "reading light client state update certificate {}",
                 path.display()
             ))?;
-            let cert = bincode::deserialize::<LightClientStateUpdateCertificateV2<SeqTypes>>(
-                &bytes,
-            )
-            .or_else(|err_v2| {
-                tracing::info!(
-                    error = %err_v2,
-                    path = %path.display(),
-                    "Failed to deserialize current certificate format, attempting legacy format"
-                );
+            let cert =
+                bincode::deserialize::<LightClientStateUpdateCertificateV2<SeqTypes>>(&bytes)
+                    .or_else(|error| {
+                        tracing::info!(
+                            %error,
+                            path = %path.display(),
+                            "Failed to deserialize LightClientStateUpdateCertificateV2"
+                        );
 
-                bincode::deserialize::<LightClientStateUpdateCertificateV1<SeqTypes>>(&bytes)
-                    .map(Into::into)
-                    .with_context(|| {
-                        format!(
-                            "Failed to deserialize both current and legacy formats from '{}'. \
-                             Initial error: {err_v2}",
-                            path.display()
+                        bincode::deserialize::<LightClientStateUpdateCertificateV1<SeqTypes>>(
+                            &bytes,
                         )
-                    })
-            })?;
+                        .map(Into::into)
+                        .with_context(|| {
+                            format!(
+                                "Failed to deserialize with v1 and v2. path='{}'. error: {error}",
+                                path.display()
+                            )
+                        })
+                    })?;
 
             result = Some(cert);
         }
