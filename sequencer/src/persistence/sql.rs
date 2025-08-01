@@ -1255,13 +1255,13 @@ impl SequencerPersistence for Persistence {
                 .fetch_one(tx.as_mut())
                 .await?;
         let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
-            bincode::deserialize(&data).or_else(|err_v2| {
+            bincode::deserialize(&data).or_else(|error| {
                 bincode::deserialize::<Proposal<SeqTypes, QuorumProposalWrapperV3<SeqTypes>>>(&data)
                     .map(convert_proposal)
-                    .inspect_err(|err_v1| {
+                    .inspect_err(|err_legacy| {
                         tracing::error!(
-                            "Failed to deserialize quorum proposal for view {view:?} as v2: \
-                             {err_v2:#}\n- as v1: {err_v1:#}"
+                            "Failed to deserialize quorum proposal for view {view}. error={error}
+                              as QuorumProposalWrapperV3: {err_legacy}"
                         )
                     })
             })?;
