@@ -171,6 +171,7 @@ indexmap = { version = "2", features = ["serde"] }
 # Builder imports
 hotshot-builder-shared = { path = "crates/hotshot-builder/shared" }
 hotshot-builder-legacy = { path = "crates/hotshot-builder/legacy" }
+hotshot-builder-refactored = { path = "crates/hotshot-builder/refactored" }
 
 # Hotshot imports
 hotshot = { path = "crates/hotshot/hotshot" }
