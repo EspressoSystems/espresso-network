@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["setup_test"]};
+window.SIDEBAR_ITEMS = {};

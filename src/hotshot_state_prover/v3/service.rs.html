@@ -566,176 +566,171 @@
 <a href=#566 id=566 data-nosnippet>566</a>    };
 <a href=#567 id=567 data-nosnippet>567</a>    <span class="kw">use </span>hotshot_contract_adapter::sol_types::LightClientV2Mock;
 <a href=#568 id=568 data-nosnippet>568</a>    <span class="kw">use </span>jf_utils::test_rng;
-<a href=#569 id=569 data-nosnippet>569</a>    <span class="kw">use </span>sequencer_utils::test_utils::setup_test;
-<a href=#570 id=570 data-nosnippet>570</a>
-<a href=#571 id=571 data-nosnippet>571</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
-<a href=#572 id=572 data-nosnippet>572</a>    <span class="kw">use </span><span class="kw">crate</span>::v3::mock_ledger::{EPOCH_HEIGHT_FOR_TEST, EPOCH_START_BLOCK_FOR_TEST};
-<a href=#573 id=573 data-nosnippet>573</a>
-<a href=#574 id=574 data-nosnippet>574</a>    <span class="comment">// const MAX_HISTORY_SECONDS: u32 = 864000;
-<a href=#575 id=575 data-nosnippet>575</a>    // const NUM_INIT_VALIDATORS: usize = STAKE_TABLE_CAPACITY_FOR_TEST / 2;
-<a href=#576 id=576 data-nosnippet>576</a>
-<a href=#577 id=577 data-nosnippet>577</a>    </span><span class="doccomment">/// This helper function deploy LightClient V1, and its Proxy, then deploy V2 and upgrade the proxy.
-<a href=#578 id=578 data-nosnippet>578</a>    /// Returns the address of the proxy, caller can cast the address to be `LightClientV2` or `LightClientV2Mock`
-<a href=#579 id=579 data-nosnippet>579</a>    </span><span class="kw">async fn </span>deploy_and_upgrade(
-<a href=#580 id=580 data-nosnippet>580</a>        provider: <span class="kw">impl </span>Provider,
-<a href=#581 id=581 data-nosnippet>581</a>        contracts: <span class="kw-2">&amp;mut </span>Contracts,
-<a href=#582 id=582 data-nosnippet>582</a>        is_mock_v2: bool,
-<a href=#583 id=583 data-nosnippet>583</a>        genesis_state: LightClientStateSol,
-<a href=#584 id=584 data-nosnippet>584</a>        genesis_stake: StakeTableStateSol,
-<a href=#585 id=585 data-nosnippet>585</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Address&gt; {
-<a href=#586 id=586 data-nosnippet>586</a>        <span class="comment">// prepare for V1 deployment
-<a href=#587 id=587 data-nosnippet>587</a>        </span><span class="kw">let </span>admin = provider.get_accounts().<span class="kw">await</span><span class="question-mark">?</span>[<span class="number">0</span>];
-<a href=#588 id=588 data-nosnippet>588</a>        <span class="kw">let </span>prover = admin;
-<a href=#589 id=589 data-nosnippet>589</a>
-<a href=#590 id=590 data-nosnippet>590</a>        <span class="comment">// deploy V1 and proxy (and initialize V1)
-<a href=#591 id=591 data-nosnippet>591</a>        </span><span class="kw">let </span>lc_proxy_addr = deploy_light_client_proxy(
-<a href=#592 id=592 data-nosnippet>592</a>            <span class="kw-2">&amp;</span>provider,
-<a href=#593 id=593 data-nosnippet>593</a>            contracts,
-<a href=#594 id=594 data-nosnippet>594</a>            <span class="bool-val">false</span>,
-<a href=#595 id=595 data-nosnippet>595</a>            genesis_state,
-<a href=#596 id=596 data-nosnippet>596</a>            genesis_stake,
-<a href=#597 id=597 data-nosnippet>597</a>            admin,
-<a href=#598 id=598 data-nosnippet>598</a>            <span class="prelude-val">Some</span>(prover),
-<a href=#599 id=599 data-nosnippet>599</a>        )
-<a href=#600 id=600 data-nosnippet>600</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#601 id=601 data-nosnippet>601</a>
-<a href=#602 id=602 data-nosnippet>602</a>        <span class="comment">// upgrade to V2
-<a href=#603 id=603 data-nosnippet>603</a>        </span>upgrade_light_client_v2(
-<a href=#604 id=604 data-nosnippet>604</a>            <span class="kw-2">&amp;</span>provider,
-<a href=#605 id=605 data-nosnippet>605</a>            contracts,
-<a href=#606 id=606 data-nosnippet>606</a>            is_mock_v2,
-<a href=#607 id=607 data-nosnippet>607</a>            EPOCH_HEIGHT_FOR_TEST,
-<a href=#608 id=608 data-nosnippet>608</a>            EPOCH_START_BLOCK_FOR_TEST,
-<a href=#609 id=609 data-nosnippet>609</a>        )
-<a href=#610 id=610 data-nosnippet>610</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#611 id=611 data-nosnippet>611</a>
-<a href=#612 id=612 data-nosnippet>612</a>        <span class="prelude-val">Ok</span>(lc_proxy_addr)
-<a href=#613 id=613 data-nosnippet>613</a>    }
-<a href=#614 id=614 data-nosnippet>614</a>
-<a href=#615 id=615 data-nosnippet>615</a>    <span class="attr">#[tokio::test(flavor = <span class="string">"multi_thread"</span>)]
-<a href=#616 id=616 data-nosnippet>616</a>    </span><span class="kw">async fn </span>test_read_contract_state() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#617 id=617 data-nosnippet>617</a>        setup_test();
-<a href=#618 id=618 data-nosnippet>618</a>
-<a href=#619 id=619 data-nosnippet>619</a>        <span class="kw">let </span>provider = ProviderBuilder::new().on_anvil_with_wallet();
-<a href=#620 id=620 data-nosnippet>620</a>        <span class="kw">let </span><span class="kw-2">mut </span>contracts = Contracts::new();
-<a href=#621 id=621 data-nosnippet>621</a>        <span class="kw">let </span>rng = <span class="kw-2">&amp;mut </span>test_rng();
-<a href=#622 id=622 data-nosnippet>622</a>        <span class="kw">let </span>genesis_state = LightClientStateSol::dummy_genesis();
-<a href=#623 id=623 data-nosnippet>623</a>        <span class="kw">let </span>genesis_stake = StakeTableStateSol::dummy_genesis();
-<a href=#624 id=624 data-nosnippet>624</a>
-<a href=#625 id=625 data-nosnippet>625</a>        <span class="kw">let </span>lc_proxy_addr = deploy_and_upgrade(
-<a href=#626 id=626 data-nosnippet>626</a>            <span class="kw-2">&amp;</span>provider,
-<a href=#627 id=627 data-nosnippet>627</a>            <span class="kw-2">&amp;mut </span>contracts,
-<a href=#628 id=628 data-nosnippet>628</a>            <span class="bool-val">true</span>,
-<a href=#629 id=629 data-nosnippet>629</a>            genesis_state.clone(),
-<a href=#630 id=630 data-nosnippet>630</a>            genesis_stake.clone(),
-<a href=#631 id=631 data-nosnippet>631</a>        )
-<a href=#632 id=632 data-nosnippet>632</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#633 id=633 data-nosnippet>633</a>        <span class="kw">let </span>(state, st_state) = <span class="kw">super</span>::read_contract_state(<span class="kw-2">&amp;</span>provider, lc_proxy_addr).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#634 id=634 data-nosnippet>634</a>
-<a href=#635 id=635 data-nosnippet>635</a>        <span class="comment">// first test the default storage
-<a href=#636 id=636 data-nosnippet>636</a>        </span><span class="macro">assert_eq!</span>(state, genesis_state.into());
-<a href=#637 id=637 data-nosnippet>637</a>        <span class="macro">assert_eq!</span>(st_state, genesis_stake.into());
-<a href=#638 id=638 data-nosnippet>638</a>
-<a href=#639 id=639 data-nosnippet>639</a>        <span class="comment">// then manually set the `finalizedState` and `votingStakeTableState` (via mocked methods)
-<a href=#640 id=640 data-nosnippet>640</a>        </span><span class="kw">let </span>lc_v2 = LightClientV2Mock::new(lc_proxy_addr, <span class="kw-2">&amp;</span>provider);
-<a href=#641 id=641 data-nosnippet>641</a>        <span class="kw">let </span>new_state = LightClientStateSol::rand(rng);
-<a href=#642 id=642 data-nosnippet>642</a>        <span class="kw">let </span>new_stake = StakeTableStateSol::rand(rng);
-<a href=#643 id=643 data-nosnippet>643</a>        lc_v2
-<a href=#644 id=644 data-nosnippet>644</a>            .setFinalizedState(new_state.clone().into())
-<a href=#645 id=645 data-nosnippet>645</a>            .send()
-<a href=#646 id=646 data-nosnippet>646</a>            .<span class="kw">await</span><span class="question-mark">?
-<a href=#647 id=647 data-nosnippet>647</a>            </span>.watch()
-<a href=#648 id=648 data-nosnippet>648</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#649 id=649 data-nosnippet>649</a>        lc_v2
-<a href=#650 id=650 data-nosnippet>650</a>            .setVotingStakeTableState(new_stake.clone().into())
-<a href=#651 id=651 data-nosnippet>651</a>            .send()
-<a href=#652 id=652 data-nosnippet>652</a>            .<span class="kw">await</span><span class="question-mark">?
-<a href=#653 id=653 data-nosnippet>653</a>            </span>.watch()
-<a href=#654 id=654 data-nosnippet>654</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#655 id=655 data-nosnippet>655</a>
-<a href=#656 id=656 data-nosnippet>656</a>        <span class="comment">// now query again, the states read should reflect the changes
-<a href=#657 id=657 data-nosnippet>657</a>        </span><span class="kw">let </span>(state, st_state) = <span class="kw">super</span>::read_contract_state(<span class="kw-2">&amp;</span>provider, lc_proxy_addr).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#658 id=658 data-nosnippet>658</a>        <span class="macro">assert_eq!</span>(state, new_state.into());
-<a href=#659 id=659 data-nosnippet>659</a>        <span class="macro">assert_eq!</span>(st_state, new_stake.into());
+<a href=#569 id=569 data-nosnippet>569</a>
+<a href=#570 id=570 data-nosnippet>570</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#571 id=571 data-nosnippet>571</a>    <span class="kw">use </span><span class="kw">crate</span>::v3::mock_ledger::{EPOCH_HEIGHT_FOR_TEST, EPOCH_START_BLOCK_FOR_TEST};
+<a href=#572 id=572 data-nosnippet>572</a>
+<a href=#573 id=573 data-nosnippet>573</a>    <span class="comment">// const MAX_HISTORY_SECONDS: u32 = 864000;
+<a href=#574 id=574 data-nosnippet>574</a>    // const NUM_INIT_VALIDATORS: usize = STAKE_TABLE_CAPACITY_FOR_TEST / 2;
+<a href=#575 id=575 data-nosnippet>575</a>
+<a href=#576 id=576 data-nosnippet>576</a>    </span><span class="doccomment">/// This helper function deploy LightClient V1, and its Proxy, then deploy V2 and upgrade the proxy.
+<a href=#577 id=577 data-nosnippet>577</a>    /// Returns the address of the proxy, caller can cast the address to be `LightClientV2` or `LightClientV2Mock`
+<a href=#578 id=578 data-nosnippet>578</a>    </span><span class="kw">async fn </span>deploy_and_upgrade(
+<a href=#579 id=579 data-nosnippet>579</a>        provider: <span class="kw">impl </span>Provider,
+<a href=#580 id=580 data-nosnippet>580</a>        contracts: <span class="kw-2">&amp;mut </span>Contracts,
+<a href=#581 id=581 data-nosnippet>581</a>        is_mock_v2: bool,
+<a href=#582 id=582 data-nosnippet>582</a>        genesis_state: LightClientStateSol,
+<a href=#583 id=583 data-nosnippet>583</a>        genesis_stake: StakeTableStateSol,
+<a href=#584 id=584 data-nosnippet>584</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Address&gt; {
+<a href=#585 id=585 data-nosnippet>585</a>        <span class="comment">// prepare for V1 deployment
+<a href=#586 id=586 data-nosnippet>586</a>        </span><span class="kw">let </span>admin = provider.get_accounts().<span class="kw">await</span><span class="question-mark">?</span>[<span class="number">0</span>];
+<a href=#587 id=587 data-nosnippet>587</a>        <span class="kw">let </span>prover = admin;
+<a href=#588 id=588 data-nosnippet>588</a>
+<a href=#589 id=589 data-nosnippet>589</a>        <span class="comment">// deploy V1 and proxy (and initialize V1)
+<a href=#590 id=590 data-nosnippet>590</a>        </span><span class="kw">let </span>lc_proxy_addr = deploy_light_client_proxy(
+<a href=#591 id=591 data-nosnippet>591</a>            <span class="kw-2">&amp;</span>provider,
+<a href=#592 id=592 data-nosnippet>592</a>            contracts,
+<a href=#593 id=593 data-nosnippet>593</a>            <span class="bool-val">false</span>,
+<a href=#594 id=594 data-nosnippet>594</a>            genesis_state,
+<a href=#595 id=595 data-nosnippet>595</a>            genesis_stake,
+<a href=#596 id=596 data-nosnippet>596</a>            admin,
+<a href=#597 id=597 data-nosnippet>597</a>            <span class="prelude-val">Some</span>(prover),
+<a href=#598 id=598 data-nosnippet>598</a>        )
+<a href=#599 id=599 data-nosnippet>599</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#600 id=600 data-nosnippet>600</a>
+<a href=#601 id=601 data-nosnippet>601</a>        <span class="comment">// upgrade to V2
+<a href=#602 id=602 data-nosnippet>602</a>        </span>upgrade_light_client_v2(
+<a href=#603 id=603 data-nosnippet>603</a>            <span class="kw-2">&amp;</span>provider,
+<a href=#604 id=604 data-nosnippet>604</a>            contracts,
+<a href=#605 id=605 data-nosnippet>605</a>            is_mock_v2,
+<a href=#606 id=606 data-nosnippet>606</a>            EPOCH_HEIGHT_FOR_TEST,
+<a href=#607 id=607 data-nosnippet>607</a>            EPOCH_START_BLOCK_FOR_TEST,
+<a href=#608 id=608 data-nosnippet>608</a>        )
+<a href=#609 id=609 data-nosnippet>609</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#610 id=610 data-nosnippet>610</a>
+<a href=#611 id=611 data-nosnippet>611</a>        <span class="prelude-val">Ok</span>(lc_proxy_addr)
+<a href=#612 id=612 data-nosnippet>612</a>    }
+<a href=#613 id=613 data-nosnippet>613</a>
+<a href=#614 id=614 data-nosnippet>614</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#615 id=615 data-nosnippet>615</a>    </span><span class="kw">async fn </span>test_read_contract_state() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#616 id=616 data-nosnippet>616</a>        <span class="kw">let </span>provider = ProviderBuilder::new().on_anvil_with_wallet();
+<a href=#617 id=617 data-nosnippet>617</a>        <span class="kw">let </span><span class="kw-2">mut </span>contracts = Contracts::new();
+<a href=#618 id=618 data-nosnippet>618</a>        <span class="kw">let </span>rng = <span class="kw-2">&amp;mut </span>test_rng();
+<a href=#619 id=619 data-nosnippet>619</a>        <span class="kw">let </span>genesis_state = LightClientStateSol::dummy_genesis();
+<a href=#620 id=620 data-nosnippet>620</a>        <span class="kw">let </span>genesis_stake = StakeTableStateSol::dummy_genesis();
+<a href=#621 id=621 data-nosnippet>621</a>
+<a href=#622 id=622 data-nosnippet>622</a>        <span class="kw">let </span>lc_proxy_addr = deploy_and_upgrade(
+<a href=#623 id=623 data-nosnippet>623</a>            <span class="kw-2">&amp;</span>provider,
+<a href=#624 id=624 data-nosnippet>624</a>            <span class="kw-2">&amp;mut </span>contracts,
+<a href=#625 id=625 data-nosnippet>625</a>            <span class="bool-val">true</span>,
+<a href=#626 id=626 data-nosnippet>626</a>            genesis_state.clone(),
+<a href=#627 id=627 data-nosnippet>627</a>            genesis_stake.clone(),
+<a href=#628 id=628 data-nosnippet>628</a>        )
+<a href=#629 id=629 data-nosnippet>629</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#630 id=630 data-nosnippet>630</a>        <span class="kw">let </span>(state, st_state) = <span class="kw">super</span>::read_contract_state(<span class="kw-2">&amp;</span>provider, lc_proxy_addr).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#631 id=631 data-nosnippet>631</a>
+<a href=#632 id=632 data-nosnippet>632</a>        <span class="comment">// first test the default storage
+<a href=#633 id=633 data-nosnippet>633</a>        </span><span class="macro">assert_eq!</span>(state, genesis_state.into());
+<a href=#634 id=634 data-nosnippet>634</a>        <span class="macro">assert_eq!</span>(st_state, genesis_stake.into());
+<a href=#635 id=635 data-nosnippet>635</a>
+<a href=#636 id=636 data-nosnippet>636</a>        <span class="comment">// then manually set the `finalizedState` and `votingStakeTableState` (via mocked methods)
+<a href=#637 id=637 data-nosnippet>637</a>        </span><span class="kw">let </span>lc_v2 = LightClientV2Mock::new(lc_proxy_addr, <span class="kw-2">&amp;</span>provider);
+<a href=#638 id=638 data-nosnippet>638</a>        <span class="kw">let </span>new_state = LightClientStateSol::rand(rng);
+<a href=#639 id=639 data-nosnippet>639</a>        <span class="kw">let </span>new_stake = StakeTableStateSol::rand(rng);
+<a href=#640 id=640 data-nosnippet>640</a>        lc_v2
+<a href=#641 id=641 data-nosnippet>641</a>            .setFinalizedState(new_state.clone().into())
+<a href=#642 id=642 data-nosnippet>642</a>            .send()
+<a href=#643 id=643 data-nosnippet>643</a>            .<span class="kw">await</span><span class="question-mark">?
+<a href=#644 id=644 data-nosnippet>644</a>            </span>.watch()
+<a href=#645 id=645 data-nosnippet>645</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#646 id=646 data-nosnippet>646</a>        lc_v2
+<a href=#647 id=647 data-nosnippet>647</a>            .setVotingStakeTableState(new_stake.clone().into())
+<a href=#648 id=648 data-nosnippet>648</a>            .send()
+<a href=#649 id=649 data-nosnippet>649</a>            .<span class="kw">await</span><span class="question-mark">?
+<a href=#650 id=650 data-nosnippet>650</a>            </span>.watch()
+<a href=#651 id=651 data-nosnippet>651</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#652 id=652 data-nosnippet>652</a>
+<a href=#653 id=653 data-nosnippet>653</a>        <span class="comment">// now query again, the states read should reflect the changes
+<a href=#654 id=654 data-nosnippet>654</a>        </span><span class="kw">let </span>(state, st_state) = <span class="kw">super</span>::read_contract_state(<span class="kw-2">&amp;</span>provider, lc_proxy_addr).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#655 id=655 data-nosnippet>655</a>        <span class="macro">assert_eq!</span>(state, new_state.into());
+<a href=#656 id=656 data-nosnippet>656</a>        <span class="macro">assert_eq!</span>(st_state, new_stake.into());
+<a href=#657 id=657 data-nosnippet>657</a>
+<a href=#658 id=658 data-nosnippet>658</a>        <span class="prelude-val">Ok</span>(())
+<a href=#659 id=659 data-nosnippet>659</a>    }
 <a href=#660 id=660 data-nosnippet>660</a>
-<a href=#661 id=661 data-nosnippet>661</a>        <span class="prelude-val">Ok</span>(())
-<a href=#662 id=662 data-nosnippet>662</a>    }
-<a href=#663 id=663 data-nosnippet>663</a>
-<a href=#664 id=664 data-nosnippet>664</a>    <span class="attr">#[tokio::test(flavor = <span class="string">"multi_thread"</span>)]
-<a href=#665 id=665 data-nosnippet>665</a>    </span><span class="kw">async fn </span>test_submit_state_and_proof() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#666 id=666 data-nosnippet>666</a>        <span class="comment">// TODO(Chengyu): disabled because it's under development
-<a href=#667 id=667 data-nosnippet>667</a>
-<a href=#668 id=668 data-nosnippet>668</a>        // setup_test();
+<a href=#661 id=661 data-nosnippet>661</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#662 id=662 data-nosnippet>662</a>    </span><span class="kw">async fn </span>test_submit_state_and_proof() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#663 id=663 data-nosnippet>663</a>        <span class="comment">// TODO(Chengyu): disabled because it's under development
+<a href=#664 id=664 data-nosnippet>664</a>
+<a href=#665 id=665 data-nosnippet>665</a>        // let pp = MockSystemParam::init();
+<a href=#666 id=666 data-nosnippet>666</a>        // let mut ledger = MockLedger::init(pp, NUM_INIT_VALIDATORS);
+<a href=#667 id=667 data-nosnippet>667</a>        // let genesis_state: LightClientStateSol = ledger.light_client_state().into();
+<a href=#668 id=668 data-nosnippet>668</a>        // let genesis_stake: StakeTableStateSol = ledger.voting_stake_table_state().into();
 <a href=#669 id=669 data-nosnippet>669</a>
-<a href=#670 id=670 data-nosnippet>670</a>        // let pp = MockSystemParam::init();
-<a href=#671 id=671 data-nosnippet>671</a>        // let mut ledger = MockLedger::init(pp, NUM_INIT_VALIDATORS);
-<a href=#672 id=672 data-nosnippet>672</a>        // let genesis_state: LightClientStateSol = ledger.light_client_state().into();
-<a href=#673 id=673 data-nosnippet>673</a>        // let genesis_stake: StakeTableStateSol = ledger.voting_stake_table_state().into();
-<a href=#674 id=674 data-nosnippet>674</a>
-<a href=#675 id=675 data-nosnippet>675</a>        // let anvil = Anvil::new().spawn();
-<a href=#676 id=676 data-nosnippet>676</a>        // let wallet = anvil.wallet().unwrap();
-<a href=#677 id=677 data-nosnippet>677</a>        // let inner_provider = ProviderBuilder::new()
-<a href=#678 id=678 data-nosnippet>678</a>        //     .wallet(wallet)
-<a href=#679 id=679 data-nosnippet>679</a>        //     .on_http(anvil.endpoint_url());
-<a href=#680 id=680 data-nosnippet>680</a>        // // a provider that holds both anvil (to avoid accidental drop) and wallet-enabled L1 provider
-<a href=#681 id=681 data-nosnippet>681</a>        // let provider = AnvilProvider::new(inner_provider, Arc::new(anvil));
-<a href=#682 id=682 data-nosnippet>682</a>        // let mut contracts = Contracts::new();
-<a href=#683 id=683 data-nosnippet>683</a>
-<a href=#684 id=684 data-nosnippet>684</a>        // let lc_proxy_addr = deploy_and_upgrade(
-<a href=#685 id=685 data-nosnippet>685</a>        //     &amp;provider,
-<a href=#686 id=686 data-nosnippet>686</a>        //     &amp;mut contracts,
-<a href=#687 id=687 data-nosnippet>687</a>        //     true,
-<a href=#688 id=688 data-nosnippet>688</a>        //     genesis_state,
-<a href=#689 id=689 data-nosnippet>689</a>        //     genesis_stake.clone(),
-<a href=#690 id=690 data-nosnippet>690</a>        // )
-<a href=#691 id=691 data-nosnippet>691</a>        // .await?;
-<a href=#692 id=692 data-nosnippet>692</a>        // let lc_v2 = LightClientV2Mock::new(lc_proxy_addr, &amp;provider);
-<a href=#693 id=693 data-nosnippet>693</a>
-<a href=#694 id=694 data-nosnippet>694</a>        // // update first epoch root (in numerical 2nd epoch)
-<a href=#695 id=695 data-nosnippet>695</a>        // // there will be new key registration but the effect only take place on the second epoch root update
-<a href=#696 id=696 data-nosnippet>696</a>        // while ledger.light_client_state().block_height &lt; 2 * EPOCH_HEIGHT_FOR_TEST - 5 {
-<a href=#697 id=697 data-nosnippet>697</a>        //     ledger.elapse_with_block();
-<a href=#698 id=698 data-nosnippet>698</a>        // }
-<a href=#699 id=699 data-nosnippet>699</a>
-<a href=#700 id=700 data-nosnippet>700</a>        // let (pi, proof) = ledger.gen_state_proof();
-<a href=#701 id=701 data-nosnippet>701</a>        // tracing::info!("Successfully generated proof for new state.");
-<a href=#702 id=702 data-nosnippet>702</a>
-<a href=#703 id=703 data-nosnippet>703</a>        // super::submit_state_and_proof(&amp;provider, lc_proxy_addr, proof, pi).await?;
-<a href=#704 id=704 data-nosnippet>704</a>        // tracing::info!("Successfully submitted new finalized state to L1.");
-<a href=#705 id=705 data-nosnippet>705</a>
-<a href=#706 id=706 data-nosnippet>706</a>        // // second epoch root update
-<a href=#707 id=707 data-nosnippet>707</a>        // while ledger.light_client_state().block_height &lt; 3 * EPOCH_HEIGHT_FOR_TEST - 5 {
-<a href=#708 id=708 data-nosnippet>708</a>        //     ledger.elapse_with_block();
-<a href=#709 id=709 data-nosnippet>709</a>        // }
-<a href=#710 id=710 data-nosnippet>710</a>        // let (pi, proof) = ledger.gen_state_proof();
-<a href=#711 id=711 data-nosnippet>711</a>        // tracing::info!("Successfully generated proof for new state.");
-<a href=#712 id=712 data-nosnippet>712</a>
-<a href=#713 id=713 data-nosnippet>713</a>        // super::submit_state_and_proof(&amp;provider, lc_proxy_addr, proof, pi).await?;
-<a href=#714 id=714 data-nosnippet>714</a>        // tracing::info!("Successfully submitted new finalized state to L1.");
-<a href=#715 id=715 data-nosnippet>715</a>
-<a href=#716 id=716 data-nosnippet>716</a>        // // test if new state is updated in l1
-<a href=#717 id=717 data-nosnippet>717</a>        // let finalized_l1: LightClientStateSol = lc_v2.finalizedState().call().await?.into();
-<a href=#718 id=718 data-nosnippet>718</a>        // let expected: LightClientStateSol = ledger.light_client_state().into();
-<a href=#719 id=719 data-nosnippet>719</a>        // assert_eq!(
-<a href=#720 id=720 data-nosnippet>720</a>        //     finalized_l1.abi_encode_params(),
-<a href=#721 id=721 data-nosnippet>721</a>        //     expected.abi_encode_params(),
-<a href=#722 id=722 data-nosnippet>722</a>        //     "finalizedState not updated"
-<a href=#723 id=723 data-nosnippet>723</a>        // );
-<a href=#724 id=724 data-nosnippet>724</a>
-<a href=#725 id=725 data-nosnippet>725</a>        // let expected_new_stake: StakeTableStateSol = ledger.next_stake_table_state().into();
-<a href=#726 id=726 data-nosnippet>726</a>        // // make sure it's different from the genesis, i.e. use a new stake table for the next epoch
-<a href=#727 id=727 data-nosnippet>727</a>        // assert_ne!(
-<a href=#728 id=728 data-nosnippet>728</a>        //     expected_new_stake.abi_encode_params(),
-<a href=#729 id=729 data-nosnippet>729</a>        //     genesis_stake.abi_encode_params()
-<a href=#730 id=730 data-nosnippet>730</a>        // );
-<a href=#731 id=731 data-nosnippet>731</a>        // let voting_stake_l1: StakeTableStateSol =
-<a href=#732 id=732 data-nosnippet>732</a>        //     lc_v2.votingStakeTableState().call().await?.into();
-<a href=#733 id=733 data-nosnippet>733</a>        // assert_eq!(
-<a href=#734 id=734 data-nosnippet>734</a>        //     voting_stake_l1.abi_encode_params(),
-<a href=#735 id=735 data-nosnippet>735</a>        //     expected_new_stake.abi_encode_params(),
-<a href=#736 id=736 data-nosnippet>736</a>        //     "votingStakeTableState not updated"
-<a href=#737 id=737 data-nosnippet>737</a>        // );
-<a href=#738 id=738 data-nosnippet>738</a>
-<a href=#739 id=739 data-nosnippet>739</a>        </span><span class="prelude-val">Ok</span>(())
-<a href=#740 id=740 data-nosnippet>740</a>    }
-<a href=#741 id=741 data-nosnippet>741</a>}</code></pre></div></section></main></body></html>
+<a href=#670 id=670 data-nosnippet>670</a>        // let anvil = Anvil::new().spawn();
+<a href=#671 id=671 data-nosnippet>671</a>        // let wallet = anvil.wallet().unwrap();
+<a href=#672 id=672 data-nosnippet>672</a>        // let inner_provider = ProviderBuilder::new()
+<a href=#673 id=673 data-nosnippet>673</a>        //     .wallet(wallet)
+<a href=#674 id=674 data-nosnippet>674</a>        //     .on_http(anvil.endpoint_url());
+<a href=#675 id=675 data-nosnippet>675</a>        // // a provider that holds both anvil (to avoid accidental drop) and wallet-enabled L1 provider
+<a href=#676 id=676 data-nosnippet>676</a>        // let provider = AnvilProvider::new(inner_provider, Arc::new(anvil));
+<a href=#677 id=677 data-nosnippet>677</a>        // let mut contracts = Contracts::new();
+<a href=#678 id=678 data-nosnippet>678</a>
+<a href=#679 id=679 data-nosnippet>679</a>        // let lc_proxy_addr = deploy_and_upgrade(
+<a href=#680 id=680 data-nosnippet>680</a>        //     &amp;provider,
+<a href=#681 id=681 data-nosnippet>681</a>        //     &amp;mut contracts,
+<a href=#682 id=682 data-nosnippet>682</a>        //     true,
+<a href=#683 id=683 data-nosnippet>683</a>        //     genesis_state,
+<a href=#684 id=684 data-nosnippet>684</a>        //     genesis_stake.clone(),
+<a href=#685 id=685 data-nosnippet>685</a>        // )
+<a href=#686 id=686 data-nosnippet>686</a>        // .await?;
+<a href=#687 id=687 data-nosnippet>687</a>        // let lc_v2 = LightClientV2Mock::new(lc_proxy_addr, &amp;provider);
+<a href=#688 id=688 data-nosnippet>688</a>
+<a href=#689 id=689 data-nosnippet>689</a>        // // update first epoch root (in numerical 2nd epoch)
+<a href=#690 id=690 data-nosnippet>690</a>        // // there will be new key registration but the effect only take place on the second epoch root update
+<a href=#691 id=691 data-nosnippet>691</a>        // while ledger.light_client_state().block_height &lt; 2 * EPOCH_HEIGHT_FOR_TEST - 5 {
+<a href=#692 id=692 data-nosnippet>692</a>        //     ledger.elapse_with_block();
+<a href=#693 id=693 data-nosnippet>693</a>        // }
+<a href=#694 id=694 data-nosnippet>694</a>
+<a href=#695 id=695 data-nosnippet>695</a>        // let (pi, proof) = ledger.gen_state_proof();
+<a href=#696 id=696 data-nosnippet>696</a>        // tracing::info!("Successfully generated proof for new state.");
+<a href=#697 id=697 data-nosnippet>697</a>
+<a href=#698 id=698 data-nosnippet>698</a>        // super::submit_state_and_proof(&amp;provider, lc_proxy_addr, proof, pi).await?;
+<a href=#699 id=699 data-nosnippet>699</a>        // tracing::info!("Successfully submitted new finalized state to L1.");
+<a href=#700 id=700 data-nosnippet>700</a>
+<a href=#701 id=701 data-nosnippet>701</a>        // // second epoch root update
+<a href=#702 id=702 data-nosnippet>702</a>        // while ledger.light_client_state().block_height &lt; 3 * EPOCH_HEIGHT_FOR_TEST - 5 {
+<a href=#703 id=703 data-nosnippet>703</a>        //     ledger.elapse_with_block();
+<a href=#704 id=704 data-nosnippet>704</a>        // }
+<a href=#705 id=705 data-nosnippet>705</a>        // let (pi, proof) = ledger.gen_state_proof();
+<a href=#706 id=706 data-nosnippet>706</a>        // tracing::info!("Successfully generated proof for new state.");
+<a href=#707 id=707 data-nosnippet>707</a>
+<a href=#708 id=708 data-nosnippet>708</a>        // super::submit_state_and_proof(&amp;provider, lc_proxy_addr, proof, pi).await?;
+<a href=#709 id=709 data-nosnippet>709</a>        // tracing::info!("Successfully submitted new finalized state to L1.");
+<a href=#710 id=710 data-nosnippet>710</a>
+<a href=#711 id=711 data-nosnippet>711</a>        // // test if new state is updated in l1
+<a href=#712 id=712 data-nosnippet>712</a>        // let finalized_l1: LightClientStateSol = lc_v2.finalizedState().call().await?.into();
+<a href=#713 id=713 data-nosnippet>713</a>        // let expected: LightClientStateSol = ledger.light_client_state().into();
+<a href=#714 id=714 data-nosnippet>714</a>        // assert_eq!(
+<a href=#715 id=715 data-nosnippet>715</a>        //     finalized_l1.abi_encode_params(),
+<a href=#716 id=716 data-nosnippet>716</a>        //     expected.abi_encode_params(),
+<a href=#717 id=717 data-nosnippet>717</a>        //     "finalizedState not updated"
+<a href=#718 id=718 data-nosnippet>718</a>        // );
+<a href=#719 id=719 data-nosnippet>719</a>
+<a href=#720 id=720 data-nosnippet>720</a>        // let expected_new_stake: StakeTableStateSol = ledger.next_stake_table_state().into();
+<a href=#721 id=721 data-nosnippet>721</a>        // // make sure it's different from the genesis, i.e. use a new stake table for the next epoch
+<a href=#722 id=722 data-nosnippet>722</a>        // assert_ne!(
+<a href=#723 id=723 data-nosnippet>723</a>        //     expected_new_stake.abi_encode_params(),
+<a href=#724 id=724 data-nosnippet>724</a>        //     genesis_stake.abi_encode_params()
+<a href=#725 id=725 data-nosnippet>725</a>        // );
+<a href=#726 id=726 data-nosnippet>726</a>        // let voting_stake_l1: StakeTableStateSol =
+<a href=#727 id=727 data-nosnippet>727</a>        //     lc_v2.votingStakeTableState().call().await?.into();
+<a href=#728 id=728 data-nosnippet>728</a>        // assert_eq!(
+<a href=#729 id=729 data-nosnippet>729</a>        //     voting_stake_l1.abi_encode_params(),
+<a href=#730 id=730 data-nosnippet>730</a>        //     expected_new_stake.abi_encode_params(),
+<a href=#731 id=731 data-nosnippet>731</a>        //     "votingStakeTableState not updated"
+<a href=#732 id=732 data-nosnippet>732</a>        // );
+<a href=#733 id=733 data-nosnippet>733</a>
+<a href=#734 id=734 data-nosnippet>734</a>        </span><span class="prelude-val">Ok</span>(())
+<a href=#735 id=735 data-nosnippet>735</a>    }
+<a href=#736 id=736 data-nosnippet>736</a>}</code></pre></div></section></main></body></html>
