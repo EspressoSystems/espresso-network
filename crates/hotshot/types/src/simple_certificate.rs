@@ -746,7 +746,7 @@ pub struct LightClientStateUpdateCertificateV2<TYPES: NodeType> {
     pub signatures: Vec<(
         TYPES::StateSignatureKey,
         <TYPES::StateSignatureKey as StateSignatureKey>::StateSignature,
-    )>,
+    )>, // TODO (Chengyu): add lcv3 signatures type
     /// Present in versions >= V4.
     ///
     /// This field stores the Keccak-256 hash of the concatenated Merkle roots.
