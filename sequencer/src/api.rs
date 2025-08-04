@@ -1590,9 +1590,8 @@ pub mod test_helpers {
 }
 
 #[cfg(test)]
-#[espresso_macros::generic_tests]
 mod api_tests {
-    use std::fmt::Debug;
+    use std::{fmt::Debug, marker::PhantomData};
 
     use committable::Committable;
     use data_source::testing::TestableSequencerDataSource;
@@ -1633,26 +1632,42 @@ mod api_tests {
         testing::{wait_for_decide_on_handle, TestConfigBuilder},
     };
 
+    #[rstest_reuse::template]
+    #[rstest::rstest]
+    #[case(PhantomData::<crate::api::sql::DataSource>)]
+    #[case(PhantomData::<crate::api::fs::DataSource>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub(crate) async fn submit_test_with_query_module<D: TestableSequencerDataSource>() {
+    pub fn testable_sequencer_data_source<D: TestableSequencerDataSource>(
+        #[case] _d: PhantomData<D>,
+    ) {
+    }
+
+    #[rstest_reuse::apply(testable_sequencer_data_source)]
+    pub(crate) async fn submit_test_with_query_module<D: TestableSequencerDataSource>(
+        _d: PhantomData<D>,
+    ) {
         let storage = D::create_storage().await;
         submit_test_helper(|opt| D::options(&storage, opt)).await
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub(crate) async fn status_test_with_query_module<D: TestableSequencerDataSource>() {
+    #[rstest_reuse::apply(testable_sequencer_data_source)]
+    pub(crate) async fn status_test_with_query_module<D: TestableSequencerDataSource>(
+        _d: PhantomData<D>,
+    ) {
         let storage = D::create_storage().await;
         status_test_helper(|opt| D::options(&storage, opt)).await
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub(crate) async fn state_signature_test_with_query_module<D: TestableSequencerDataSource>() {
+    #[rstest_reuse::apply(testable_sequencer_data_source)]
+    pub(crate) async fn state_signature_test_with_query_module<D: TestableSequencerDataSource>(
+        _d: PhantomData<D>,
+    ) {
         let storage = D::create_storage().await;
         state_signature_test_helper(|opt| D::options(&storage, opt)).await
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub(crate) async fn test_namespace_query<D: TestableSequencerDataSource>() {
+    #[rstest_reuse::apply(testable_sequencer_data_source)]
+    pub(crate) async fn test_namespace_query<D: TestableSequencerDataSource>(_d: PhantomData<D>) {
         // Arbitrary transaction, arbitrary namespace ID
         let ns_id = NamespaceId::from(42_u32);
         let txn = Transaction::new(ns_id, vec![1, 2, 3, 4]);
@@ -1744,14 +1759,16 @@ mod api_tests {
         assert!(found_empty_block);
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub(crate) async fn catchup_test_with_query_module<D: TestableSequencerDataSource>() {
+    #[rstest_reuse::apply(testable_sequencer_data_source)]
+    pub(crate) async fn catchup_test_with_query_module<D: TestableSequencerDataSource>(
+        _d: PhantomData<D>,
+    ) {
         let storage = D::create_storage().await;
         catchup_test_helper(|opt| D::options(&storage, opt)).await
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub async fn test_non_consecutive_decide_with_failing_event_consumer<D>()
+    #[rstest_reuse::apply(testable_sequencer_data_source)]
+    pub async fn test_non_consecutive_decide_with_failing_event_consumer<D>(_d: PhantomData<D>)
     where
         D: TestableSequencerDataSource + Debug + 'static,
     {
@@ -1967,8 +1984,8 @@ mod api_tests {
             .unwrap();
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub async fn test_decide_missing_data<D>()
+    #[rstest_reuse::apply(testable_sequencer_data_source)]
+    pub async fn test_decide_missing_data<D>(_d: PhantomData<D>)
     where
         D: TestableSequencerDataSource + Debug + 'static,
     {
@@ -2053,8 +2070,8 @@ mod api_tests {
     }
 
     #[ignore]
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub(crate) async fn test_state_cert_query<D: TestableSequencerDataSource>() {
+    #[rstest_reuse::apply(testable_sequencer_data_source)]
+    pub(crate) async fn test_state_cert_query<D: TestableSequencerDataSource>(_d: PhantomData<D>) {
         const TEST_EPOCH_HEIGHT: u64 = 10;
         const TEST_EPOCHS: u64 = 3;
 
