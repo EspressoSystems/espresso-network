@@ -30,15 +30,13 @@ use tokio::time::timeout;
 // Test that the event task sends a message, and the message task receives it
 // and emits the proper event
 #[cfg(test)]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[allow(clippy::too_many_lines)]
 async fn test_network_task() {
     use std::collections::BTreeMap;
 
     use futures::StreamExt;
     use hotshot_types::epoch_membership::EpochMembershipCoordinator;
-
-    hotshot::helpers::initialize_logging();
 
     let builder: TestDescription<TestTypes, MemoryImpl, TestVersions> =
         TestDescription::default_multiple_rounds();
@@ -116,13 +114,11 @@ async fn test_network_task() {
 }
 
 #[cfg(test)]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_network_external_mnessages() {
     use hotshot::types::EventType;
     use hotshot_testing::helpers::build_system_handle_from_launcher;
     use hotshot_types::message::RecipientList;
-
-    hotshot::helpers::initialize_logging();
 
     let builder: TestDescription<TestTypes, MemoryImpl, TestVersions> =
         TestDescription::default_multiple_rounds();
@@ -208,14 +204,12 @@ async fn test_network_external_mnessages() {
 }
 
 #[cfg(test)]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_network_storage_fail() {
     use std::collections::BTreeMap;
 
     use futures::StreamExt;
     use hotshot_types::epoch_membership::EpochMembershipCoordinator;
-
-    hotshot::helpers::initialize_logging();
 
     let builder: TestDescription<TestTypes, MemoryImpl, TestVersions> =
         TestDescription::default_multiple_rounds();

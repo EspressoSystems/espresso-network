@@ -24,6 +24,7 @@ vbs = { workspace = true }
  
 [dev-dependencies]
 sequencer-utils = { version = "0.1.0", path = "../../../utils" }
+test-log = { workspace = true }
 
 [lints]
 workspace = true
