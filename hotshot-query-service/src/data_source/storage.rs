@@ -69,7 +69,7 @@ use crate::{
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
         PayloadQueryData, QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
-        TransactionQueryData, VidCommonMetadata, VidCommonQueryData,
+        VidCommonMetadata, VidCommonQueryData,
     },
     explorer::{
         query_data::{
@@ -188,10 +188,10 @@ where
     where
         R: RangeBounds<usize> + Send + 'static;
 
-    async fn get_transaction(
+    async fn get_block_with_transaction(
         &mut self,
         hash: TransactionHash<Types>,
-    ) -> QueryResult<TransactionQueryData<Types>>;
+    ) -> QueryResult<BlockQueryData<Types>>;
 
     /// Get the first leaf which is available in the database with height >= `from`.
     async fn first_available_leaf(&mut self, from: u64) -> QueryResult<LeafQueryData<Types>>;

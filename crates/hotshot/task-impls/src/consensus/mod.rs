@@ -218,11 +218,16 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     return Ok(());
                 }
 
+                let next_epoch = high_qc.data.epoch().map(|x| x + 1);
+
                 let mut consensus_writer = self.consensus.write().await;
                 let high_qc_updated = consensus_writer.update_high_qc(high_qc.clone()).is_ok();
                 let next_high_qc_updated = consensus_writer
                     .update_next_epoch_high_qc(next_epoch_high_qc.clone())
                     .is_ok();
+                if let Some(next_epoch) = next_epoch {
+                    consensus_writer.update_validator_participation_epoch(next_epoch);
+                }
                 drop(consensus_writer);
 
                 self.storage

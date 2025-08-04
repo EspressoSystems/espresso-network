@@ -312,8 +312,9 @@ where
     // Print the libp2p public key
     info!("Starting Libp2p with PeerID: {libp2p_public_key}");
 
+    let loaded_network_config_from_persistence = persistence.load_config().await?;
     let (mut network_config, wait_for_orchestrator) = match (
-        persistence.load_config().await?,
+        loaded_network_config_from_persistence,
         network_params.config_peers,
     ) {
         (Some(config), _) => {
@@ -523,13 +524,14 @@ where
         genesis.chain_config,
     );
     fetcher.spawn_update_loop().await;
-    let block_reward = fetcher.fetch_block_reward().await.ok().unwrap_or_default();
+    let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
     // Create the HotShot membership
     let mut membership = EpochCommittees::new_stake(
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
         block_reward,
         fetcher,
+        epoch_height,
     );
     membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
 
@@ -554,6 +556,7 @@ where
         state_catchup: Arc::new(state_catchup_providers.clone()),
         coordinator: coordinator.clone(),
         genesis_version: genesis.genesis_version,
+        epoch_start_block: genesis.epoch_start_block.unwrap_or_default(),
     };
 
     // Initialize the Libp2p network
@@ -1245,12 +1248,13 @@ pub mod testing {
             );
             fetcher.spawn_update_loop().await;
 
-            let block_reward = fetcher.fetch_block_reward().await.ok().unwrap_or_default();
+            let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
             let mut membership = EpochCommittees::new_stake(
                 config.known_nodes_with_stake.clone(),
                 config.known_da_nodes.clone(),
                 block_reward,
                 fetcher,
+                config.epoch_height,
             );
             membership.reload_stake(50).await;
 
@@ -1275,7 +1279,8 @@ pub mod testing {
             .with_current_version(V::Base::version())
             .with_genesis(state)
             .with_epoch_height(config.epoch_height)
-            .with_upgrades(upgrades);
+            .with_upgrades(upgrades)
+            .with_epoch_start_block(config.epoch_start_block);
 
             tracing::info!(
                 i,

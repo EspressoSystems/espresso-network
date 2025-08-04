@@ -523,8 +523,8 @@ mod test {
     use crate::{
         api::load_api,
         availability::{
-            define_api, AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch,
-            TransactionQueryData, UpdateAvailabilityData,
+            define_api, AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData,
+            BlockWithTransaction, Fetch, UpdateAvailabilityData,
         },
         data_source::{
             sql::{self, SqlDataSource},
@@ -679,7 +679,7 @@ mod test {
         // * An unknown transaction.
         fetches.push(
             data_source
-                .get_transaction(mock_transaction(vec![]).commit())
+                .get_block_containing_transaction(mock_transaction(vec![]).commit())
                 .await
                 .map(ignore),
         );
@@ -914,7 +914,7 @@ mod test {
         // * An unknown transaction.
         fetches.push(
             data_source
-                .get_transaction(mock_transaction(vec![]).commit())
+                .get_block_containing_transaction(mock_transaction(vec![]).commit())
                 .await
                 .map(ignore),
         );
@@ -1334,7 +1334,9 @@ mod test {
         // and works without a fetcher; we don't trigger fetches for transactions that we don't know
         // exist.
         let tx = mock_transaction(vec![1, 2, 3]);
-        let fut = data_source.get_transaction(tx.commit()).await;
+        let fut = data_source
+            .get_block_containing_transaction(tx.commit())
+            .await;
 
         // Sequence the transaction.
         network.submit_transaction(tx.clone()).await;
@@ -1359,13 +1361,16 @@ mod test {
         let fetched_tx = fut.await;
         assert_eq!(
             fetched_tx,
-            TransactionQueryData::with_hash(&block, tx.commit()).unwrap()
+            BlockWithTransaction::with_hash(block, tx.commit()).unwrap()
         );
 
         // Future queries for this transaction resolve immediately.
         assert_eq!(
             fetched_tx,
-            data_source.get_transaction(tx.commit()).await.await
+            data_source
+                .get_block_containing_transaction(tx.commit())
+                .await
+                .await
         );
     }
 
@@ -2154,7 +2159,7 @@ mod test {
         network.submit_transaction(tx.clone()).await;
         let tx = network
             .data_source()
-            .get_transaction(tx.commit())
+            .get_block_containing_transaction(tx.commit())
             .await
             .await;
 
@@ -2162,12 +2167,12 @@ mod test {
         {
             let leaf = network
                 .data_source()
-                .get_leaf(tx.block_height() as usize)
+                .get_leaf(tx.transaction.block_height() as usize)
                 .await
                 .await;
             let block = network
                 .data_source()
-                .get_block(tx.block_height() as usize)
+                .get_block(tx.transaction.block_height() as usize)
                 .await
                 .await;
             let mut tx = data_source.write().await.unwrap();
@@ -2178,7 +2183,13 @@ mod test {
 
         // Check that the transaction is there.
         tracing::info!("fetch success");
-        assert_eq!(tx, data_source.get_transaction(tx.hash()).await.await);
+        assert_eq!(
+            tx,
+            data_source
+                .get_block_containing_transaction(tx.transaction.hash())
+                .await
+                .await
+        );
 
         // Fetch the transaction with storage failures.
         //
@@ -2196,7 +2207,9 @@ mod test {
             .as_ref()
             .fail_one_read(FailableAction::Any)
             .await;
-        let fetch = data_source.get_transaction(tx.hash()).await;
+        let fetch = data_source
+            .get_block_containing_transaction(tx.transaction.hash())
+            .await;
 
         assert_eq!(tx, fetch.await);
     }

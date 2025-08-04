@@ -21,6 +21,7 @@ espresso-types = { path = "../types" }
 futures = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-query-service = { workspace = true }
+hotshot-task-impls = { workspace = true }
 hotshot-types = { workspace = true }
 itertools = { workspace = true }
 jf-crhf = { workspace = true }
@@ -43,11 +44,13 @@ url = { workspace = true }
 vbs = { workspace = true }
 
 [dev-dependencies]
-hotshot-types = { workspace = true }
 sequencer-utils = { path = "../utils", features = ["testing"] }
 
 [features]
 default = ["parallel"]
 std = ["ark-std/std", "ark-ff/std"]
 parallel = ["jf-signature/parallel", "jf-utils/parallel", "ark-ff/parallel"]
+
+[lints]
+workspace = true
 

@@ -74,7 +74,7 @@ processes:
       - L1_PROVIDER=http://localhost:$ESPRESSO_SEQUENCER_L1_PORT
       - L1_POLLING_INTERVAL=$ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
       - ESPRESSO_PROVIDER=http://localhost:$ESPRESSO_SEQUENCER1_API_PORT
-      - CONTRACT_ADDRESS=0xa15bb66138824a1c7167f5e85b957d04dd34e468
+      - CONTRACT_ADDRESS=$ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
       - MNEMONIC=$ESPRESSO_BUILDER_ETH_MNEMONIC
       - ACCOUNT_INDEX=$ESPRESSO_BUILDER_ETH_ACCOUNT_INDEX
       - AMOUNT=1000000000000000000
@@ -153,7 +153,7 @@ processes:
     availability: *run-forever
 
   sequencer0:
-    command: sequencer -- storage-sql -- http -- query -- submit -- hotshot-events -- config
+    command: sequencer -- storage-sql -- http -- query -- submit -- hotshot-events -- config -- catchup
     environment:
       - ESPRESSO_SEQUENCER_API_PORT=$ESPRESSO_SEQUENCER_API_PORT
       - ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS=0.0.0.0:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_0
@@ -207,7 +207,7 @@ processes:
       failure_threshold: 100
 
   sequencer1:
-    command: sequencer -- storage-sql -- http -- query -- explorer
+    command: sequencer -- storage-sql -- http -- query -- explorer -- catchup
     environment:
       - ESPRESSO_SEQUENCER_API_PORT=$ESPRESSO_SEQUENCER1_API_PORT
       - ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS=0.0.0.0:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_1

@@ -16,7 +16,7 @@ use espresso_types::{
     parse_duration, parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
-    v0_3::{EventKey, IndexedStake, StakeTableEvent},
+    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent},
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
     ValidatorMap,
 };
@@ -2150,30 +2150,41 @@ impl SequencerPersistence for Persistence {
 
 #[async_trait]
 impl MembershipPersistence for Persistence {
-    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<ValidatorMap>> {
+    async fn load_stake(
+        &self,
+        epoch: EpochNumber,
+    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>)>> {
         let result = self
             .db
             .read()
             .await?
             .fetch_optional(
-                query("SELECT stake FROM epoch_drb_and_root WHERE epoch = $1")
+                query("SELECT stake, block_reward FROM epoch_drb_and_root WHERE epoch = $1")
                     .bind(epoch.u64() as i64),
             )
             .await?;
 
         result
             .map(|row| {
-                let bytes: Vec<u8> = row.get("stake");
-                bincode::deserialize(&bytes).context("deserializing stake table")
+                let stake_table_bytes: Vec<u8> = row.get("stake");
+                let reward_bytes: Option<Vec<u8>> = row.get("block_reward");
+                let stake_table = bincode::deserialize(&stake_table_bytes)
+                    .context("deserializing stake table")?;
+                let reward: Option<RewardAmount> = reward_bytes
+                    .map(|b| bincode::deserialize(&b).context("deserializing block_reward"))
+                    .transpose()?;
+
+                Ok((stake_table, reward))
             })
             .transpose()
     }
 
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
-        let mut tx = self.db.write().await?;
+        let mut tx = self.db.read().await?;
 
-        let rows = match query_as::<(i64, Vec<u8>)>(
-            "SELECT epoch, stake FROM epoch_drb_and_root ORDER BY epoch DESC LIMIT $1",
+        let rows = match query_as::<(i64, Vec<u8>, Option<Vec<u8>>)>(
+            "SELECT epoch, stake, block_reward FROM epoch_drb_and_root ORDER BY epoch DESC LIMIT \
+             $1",
         )
         .bind(limit as i64)
         .fetch_all(tx.as_mut())
@@ -2186,24 +2197,41 @@ impl MembershipPersistence for Persistence {
             },
         };
 
-        rows.into_iter()
-            .map(|(id, bytes)| -> anyhow::Result<_> {
-                let st = bincode::deserialize(&bytes).context("deserializing stake table")?;
-                Ok(Some((EpochNumber::new(id as u64), st)))
+        let stakes: anyhow::Result<Vec<IndexedStake>> = rows
+            .into_iter()
+            .map(|(id, stake_bytes, reward_bytes_opt)| {
+                let stake_table: ValidatorMap =
+                    bincode::deserialize(&stake_bytes).context("deserializing stake table")?;
+
+                let block_reward: Option<RewardAmount> = reward_bytes_opt
+                    .map(|b| bincode::deserialize(&b).context("deserializing block_reward"))
+                    .transpose()?;
+
+                Ok((EpochNumber::new(id as u64), (stake_table, block_reward)))
             })
-            .collect()
+            .collect();
+
+        Ok(Some(stakes?))
     }
 
-    async fn store_stake(&self, epoch: EpochNumber, stake: ValidatorMap) -> anyhow::Result<()> {
+    async fn store_stake(
+        &self,
+        epoch: EpochNumber,
+        stake: ValidatorMap,
+        block_reward: Option<RewardAmount>,
+    ) -> anyhow::Result<()> {
         let mut tx = self.db.write().await?;
 
-        let stake_table_bytes = bincode::serialize(&stake).context("serializing stake table")?;
-
+        let stake_table_bytes =
+            bincode::serialize(&(stake, block_reward)).context("serializing stake table")?;
+        let reward_bytes = block_reward
+            .map(|r| bincode::serialize(&r).context("serializing block reward"))
+            .transpose()?;
         tx.upsert(
             "epoch_drb_and_root",
-            ["epoch", "stake"],
+            ["epoch", "stake", "block_reward"],
             ["epoch"],
-            [(epoch.u64() as i64, stake_table_bytes)],
+            [(epoch.u64() as i64, stake_table_bytes, reward_bytes)],
         )
         .await?;
         tx.commit().await
@@ -2295,7 +2323,7 @@ impl MembershipPersistence for Persistence {
         Option<EventsPersistenceRead>,
         Vec<(EventKey, StakeTableEvent)>,
     )> {
-        let mut tx = self.db.write().await?;
+        let mut tx = self.db.read().await?;
 
         // check last l1 block if there is any
         let res = query_as::<(i64,)>(

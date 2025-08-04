@@ -139,11 +139,11 @@ impl<TYPES: NodeType<Transaction = TestTransaction>> RandomBuilderTask<TYPES> {
             // Let new VID scheme ship with Epochs upgrade.
             let block = build_block::<TYPES>(transactions, pub_key.clone(), priv_key.clone()).await;
 
-            if let Some((hash, _)) = blocks
+            let push_result = blocks
                 .write()
                 .await
-                .push(block.metadata.block_hash.clone(), block)
-            {
+                .push(block.metadata.block_hash.clone(), block);
+            if let Some((hash, _)) = push_result {
                 tracing::warn!("Block {hash} evicted");
             };
             if time_per_block < start.elapsed() {

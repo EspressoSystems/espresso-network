@@ -36,12 +36,16 @@ use serde::{de::DeserializeOwned, Serialize};
 use super::{
     impls::NodeState,
     utils::BackoffParams,
-    v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment},
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
 use crate::{
-    v0::impls::ValidatedState, v0_3::ChainConfig, BlockMerkleTree, Event, FeeAccount,
-    FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig, SeqTypes, ValidatorMap,
+    v0::impls::ValidatedState,
+    v0_3::{
+        ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount, RewardMerkleCommitmentV1,
+    },
+    v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2},
+    BlockMerkleTree, Event, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig,
+    SeqTypes, ValidatorMap,
 };
 
 #[async_trait]
@@ -170,31 +174,31 @@ pub trait StateCatchup: Send + Sync {
     }
 
     /// Fetch the given list of reward accounts without retrying on transient errors.
-    async fn try_fetch_reward_accounts(
+    async fn try_fetch_reward_accounts_v2(
         &self,
         retry: usize,
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitment,
-        accounts: &[RewardAccount],
-    ) -> anyhow::Result<Vec<RewardAccountProof>>;
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+        accounts: &[RewardAccountV2],
+    ) -> anyhow::Result<Vec<RewardAccountProofV2>>;
 
     /// Fetch the given list of reward accounts, retrying on transient errors.
-    async fn fetch_reward_accounts(
+    async fn fetch_reward_accounts_v2(
         &self,
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitment,
-        accounts: Vec<RewardAccount>,
-    ) -> anyhow::Result<Vec<RewardAccountProof>> {
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+        accounts: Vec<RewardAccountV2>,
+    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
         self.backoff()
             .retry(self, |provider, retry| {
                 let accounts = &accounts;
                 async move {
                     provider
-                        .try_fetch_reward_accounts(
+                        .try_fetch_reward_accounts_v2(
                             retry,
                             instance,
                             height,
@@ -206,6 +210,52 @@ pub trait StateCatchup: Send + Sync {
                         .map_err(|err| {
                             err.context(format!(
                                 "fetching reward accounts {accounts:?}, height {height}, view \
+                                 {view}"
+                            ))
+                        })
+                }
+                .boxed()
+            })
+            .await
+    }
+
+    /// Fetch the given list of reward accounts without retrying on transient errors.
+    async fn try_fetch_reward_accounts_v1(
+        &self,
+        retry: usize,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitmentV1,
+        accounts: &[RewardAccountV1],
+    ) -> anyhow::Result<Vec<RewardAccountProofV1>>;
+
+    /// Fetch the given list of reward accounts, retrying on transient errors.
+    async fn fetch_reward_accounts_v1(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitmentV1,
+        accounts: Vec<RewardAccountV1>,
+    ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
+        self.backoff()
+            .retry(self, |provider, retry| {
+                let accounts = &accounts;
+                async move {
+                    provider
+                        .try_fetch_reward_accounts_v1(
+                            retry,
+                            instance,
+                            height,
+                            view,
+                            reward_merkle_tree_root,
+                            accounts,
+                        )
+                        .await
+                        .map_err(|err| {
+                            err.context(format!(
+                                "fetching v1 reward accounts {accounts:?}, height {height}, view \
                                  {view}"
                             ))
                         })
@@ -323,17 +373,17 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         (**self).fetch_chain_config(commitment).await
     }
 
-    async fn try_fetch_reward_accounts(
+    async fn try_fetch_reward_accounts_v2(
         &self,
         retry: usize,
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitment,
-        accounts: &[RewardAccount],
-    ) -> anyhow::Result<Vec<RewardAccountProof>> {
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+        accounts: &[RewardAccountV2],
+    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
         (**self)
-            .try_fetch_reward_accounts(
+            .try_fetch_reward_accounts_v2(
                 retry,
                 instance,
                 height,
@@ -344,16 +394,50 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
             .await
     }
 
-    async fn fetch_reward_accounts(
+    async fn fetch_reward_accounts_v2(
         &self,
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitment,
-        accounts: Vec<RewardAccount>,
-    ) -> anyhow::Result<Vec<RewardAccountProof>> {
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+        accounts: Vec<RewardAccountV2>,
+    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
         (**self)
-            .fetch_reward_accounts(instance, height, view, reward_merkle_tree_root, accounts)
+            .fetch_reward_accounts_v2(instance, height, view, reward_merkle_tree_root, accounts)
+            .await
+    }
+
+    async fn try_fetch_reward_accounts_v1(
+        &self,
+        retry: usize,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitmentV1,
+        accounts: &[RewardAccountV1],
+    ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
+        (**self)
+            .try_fetch_reward_accounts_v1(
+                retry,
+                instance,
+                height,
+                view,
+                reward_merkle_tree_root,
+                accounts,
+            )
+            .await
+    }
+
+    async fn fetch_reward_accounts_v1(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitmentV1,
+        accounts: Vec<RewardAccountV1>,
+    ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
+        (**self)
+            .fetch_reward_accounts_v1(instance, height, view, reward_merkle_tree_root, accounts)
             .await
     }
 
@@ -391,13 +475,21 @@ pub enum EventsPersistenceRead {
 /// Trait used by `Memberships` implementations to interact with persistence layer.
 pub trait MembershipPersistence: Send + Sync + 'static {
     /// Load stake table for epoch from storage
-    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<ValidatorMap>>;
+    async fn load_stake(
+        &self,
+        epoch: EpochNumber,
+    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>)>>;
 
     /// Load stake tables for storage for latest `n` known epochs
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
 
     /// Store stake table at `epoch` in the persistence layer
-    async fn store_stake(&self, epoch: EpochNumber, stake: ValidatorMap) -> anyhow::Result<()>;
+    async fn store_stake(
+        &self,
+        epoch: EpochNumber,
+        stake: ValidatorMap,
+        block_reward: Option<RewardAmount>,
+    ) -> anyhow::Result<()>;
 
     async fn store_events(
         &self,

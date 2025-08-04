@@ -25,7 +25,7 @@ use hotshot_contract_adapter::{
     },
     stake_table::StakeTableContractVersion,
 };
-use hotshot_state_prover::mock_ledger::STAKE_TABLE_CAPACITY_FOR_TEST;
+use hotshot_state_prover::v3::mock_ledger::STAKE_TABLE_CAPACITY_FOR_TEST;
 use hotshot_types::light_client::StateKeyPair;
 use rand::{rngs::StdRng, CryptoRng, Rng as _, RngCore, SeedableRng as _};
 use url::Url;
@@ -110,6 +110,7 @@ impl TestSystem {
             .safe_exit_timelock_admin(signer.address())
             .safe_exit_timelock_proposers(vec![signer.address()])
             .safe_exit_timelock_executors(vec![signer.address()])
+            .use_timelock_owner(false)
             .build()
             .unwrap();
 
