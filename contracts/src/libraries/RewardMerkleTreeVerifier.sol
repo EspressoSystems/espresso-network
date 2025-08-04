@@ -28,7 +28,16 @@ library RewardMerkleTreeVerifier {
     }
 
     function _hashInternal(bytes32 left, bytes32 right) internal pure returns (bytes32) {
-        return keccak256(abi.encodePacked(left, right));
+        // keccak256(abi.encodePacked(left, right)) in assembly saves about 10%
+        // gas for the entire proof verification.
+        bytes32 hash;
+        assembly {
+            let ptr := mload(0x40) // Get free memory pointer
+            mstore(ptr, left) // Store left (32 bytes)
+            mstore(add(ptr, 0x20), right) // Store right (32 bytes)
+            hash := keccak256(ptr, 0x40) // Hash 64 bytes
+        }
+        return hash;
     }
 
     /**
