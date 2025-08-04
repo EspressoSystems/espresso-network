@@ -201,11 +201,9 @@ impl TestData {
         quote! {
             #[cfg(test)]
             #slow_attribute
-            #[tokio::test(flavor = "multi_thread")]
+            #[test_log::test(tokio::test(flavor = "multi_thread"))]
             #[tracing::instrument]
             async fn #test_name() {
-                hotshot::helpers::initialize_logging();
-
                 hotshot_testing::test_builder::TestDescription::<#ty, #imply, #version>::gen_launcher((#metadata)).launch().run_test::<#builder_impl>().await;
             }
         }

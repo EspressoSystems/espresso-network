@@ -33,6 +33,7 @@ hotshot-testing = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = "0.8.5"
 reqwest = { workspace = true }
+test-log = { workspace = true }
 
 # Enable "testing" feature when running tests
 sequencer = { path = ".", features = ["testing"] }
@@ -67,9 +68,9 @@ csv = "1"
 derivative = "2.2"
 derive_more = { workspace = true }
 dotenvy = { workspace = true }
+either = { workspace = true }
 espresso-contract-deployer = { path = "../contracts/rust/deployer" }
 espresso-types = { path = "../types" }
-either = { workspace = true }
 futures = { workspace = true }
 generic-tests = "0.1.3"
 

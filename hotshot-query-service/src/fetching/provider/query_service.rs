@@ -542,7 +542,7 @@ mod test {
         testing::{
             consensus::{MockDataSource, MockNetwork},
             mocks::{mock_transaction, MockBase, MockTypes, MockVersions},
-            setup_test, sleep,
+            sleep,
         },
         types::HeightIndexed,
         ApiState,
@@ -575,10 +575,8 @@ mod test {
         builder(db, provider).await.build().await.unwrap()
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_on_request() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
@@ -809,8 +807,6 @@ mod test {
         // specifically focused on epoch version transitions
         tracing::info!("Starting test_fetch_on_request_epoch_version");
 
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, EpochsTestVersions>::init().await;
 
@@ -1038,10 +1034,8 @@ mod test {
         tracing::info!("Test completed successfully!");
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_block_and_leaf_concurrently() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
@@ -1101,10 +1095,8 @@ mod test {
         assert_eq!(leaf.header(), block.header());
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_different_blocks_same_payload() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
@@ -1168,10 +1160,8 @@ mod test {
         assert_eq!(block2.header(), leaves[1].header());
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_stream() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
@@ -1232,10 +1222,8 @@ mod test {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_range_start() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
@@ -1293,10 +1281,8 @@ mod test {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn fetch_transaction() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
@@ -1374,10 +1360,8 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_retry() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
@@ -1496,10 +1480,8 @@ mod test {
             .ok();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_from_malicious_server() {
-        setup_test();
-
         let port = pick_unused_port().unwrap();
         let _server = BackgroundTask::spawn("malicious server", malicious_server(port));
 
@@ -1524,10 +1506,8 @@ mod test {
         assert_eq!(res, None);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_archive_recovery() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
@@ -1699,8 +1679,6 @@ mod test {
     }
 
     async fn test_fetch_storage_failure_helper(failure: FailureType) {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
@@ -1787,24 +1765,22 @@ mod test {
         assert_eq!(leaves[0], fetch.try_resolve().ok().unwrap());
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_storage_failure_on_begin() {
         test_fetch_storage_failure_helper(FailureType::Begin).await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_storage_failure_on_write() {
         test_fetch_storage_failure_helper(FailureType::Write).await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_storage_failure_on_commit() {
         test_fetch_storage_failure_helper(FailureType::Commit).await;
     }
 
     async fn test_fetch_storage_failure_retry_helper(failure: FailureType) {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
@@ -1883,25 +1859,23 @@ mod test {
         assert_eq!(leaves[0], tx.get_leaf(1.into()).await.unwrap());
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_storage_failure_retry_on_begin() {
         test_fetch_storage_failure_retry_helper(FailureType::Begin).await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_storage_failure_retry_on_write() {
         test_fetch_storage_failure_retry_helper(FailureType::Write).await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_storage_failure_retry_on_commit() {
         test_fetch_storage_failure_retry_helper(FailureType::Commit).await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_on_decide() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
@@ -1967,10 +1941,8 @@ mod test {
         assert_eq!(vid.block_hash(), leaf.block_hash());
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_begin_failure() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
@@ -2030,10 +2002,8 @@ mod test {
         assert_eq!(leaves[0], data_source.get_leaf(1).await.await);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_load_failure_block() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
@@ -2111,10 +2081,8 @@ mod test {
         assert_eq!(block.hash(), leaf.block_hash());
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_load_failure_tx() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
@@ -2214,10 +2182,8 @@ mod test {
         assert_eq!(tx, fetch.await);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_stream_begin_failure() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
@@ -2286,10 +2252,8 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_stream_load_failure() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
@@ -2365,8 +2329,6 @@ mod test {
     }
 
     async fn test_metadata_stream_begin_failure_helper(stream: MetadataType) {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
@@ -2465,12 +2427,12 @@ mod test {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_metadata_stream_begin_failure_payload() {
         test_metadata_stream_begin_failure_helper(MetadataType::Payload).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_metadata_stream_begin_failure_vid() {
         test_metadata_stream_begin_failure_helper(MetadataType::Vid).await
     }
@@ -2586,10 +2548,8 @@ mod test {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fallback_deserialization_for_fetch_requests_v0() {
-        setup_test();
-
         let port = pick_unused_port().unwrap();
 
         // This run will call v0 availalbilty api for fetch requests.
@@ -2600,9 +2560,8 @@ mod test {
         run_fallback_deserialization_test_helper::<MockVersions>(port, "v0").await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fallback_deserialization_for_fetch_requests_v1() {
-        setup_test();
         let port = pick_unused_port().unwrap();
 
         // Fetch from the v1 availability API using MockVersions.
@@ -2611,19 +2570,16 @@ mod test {
         run_fallback_deserialization_test_helper::<MockVersions>(port, "v1").await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fallback_deserialization_for_fetch_requests_pos() {
-        setup_test();
         let port = pick_unused_port().unwrap();
 
         // Fetch Proof of Stake (PoS) data using the v1 availability API
         // with proof of stake version
         run_fallback_deserialization_test_helper::<EpochsTestVersions>(port, "v1").await;
     }
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fallback_deserialization_for_fetch_requests_v0_pos() {
-        setup_test();
-
         // Run with the PoS version against a v0 provider.
         // Fetch requests are expected to fail because PoS commitments differ from the legacy commitments
         // returned by the v0 provider.

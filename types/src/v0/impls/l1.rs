@@ -1119,7 +1119,6 @@ mod test {
     };
     use espresso_contract_deployer::{deploy_fee_contract_proxy, Contracts};
     use portpicker::pick_unused_port;
-    use sequencer_utils::test_utils::setup_test;
     use time::OffsetDateTime;
 
     use super::*;
@@ -1153,9 +1152,8 @@ mod test {
         .await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_get_finalized_deposits() -> anyhow::Result<()> {
-        setup_test();
         let num_deposits = 5;
 
         let anvil = Anvil::new().spawn();
@@ -1250,8 +1248,6 @@ mod test {
     }
 
     async fn test_wait_for_finalized_block_helper(ws: bool) {
-        setup_test();
-
         let anvil = Arc::new(Anvil::new().block_time_f64(0.1).spawn());
         let l1_client = new_l1_client(&anvil, ws).await;
         let provider = &l1_client.provider;
@@ -1276,19 +1272,17 @@ mod test {
         assert_eq!(block.hash, true_block.header.hash);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wait_for_finalized_block_ws() {
         test_wait_for_finalized_block_helper(true).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wait_for_finalized_block_http() {
         test_wait_for_finalized_block_helper(false).await
     }
 
     async fn test_wait_for_old_finalized_block_helper(ws: bool) {
-        setup_test();
-
         let anvil = Arc::new(Anvil::new().block_time_f64(0.2).spawn());
         let l1_client = new_l1_client_opt(&anvil, |opt| {
             if ws {
@@ -1310,19 +1304,17 @@ mod test {
         assert_eq!(block.hash, true_block.header.hash);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wait_for_old_finalized_block_ws() {
         test_wait_for_old_finalized_block_helper(true).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wait_for_old_finalized_block_http() {
         test_wait_for_old_finalized_block_helper(false).await
     }
 
     async fn test_wait_for_finalized_block_by_timestamp_helper(ws: bool) {
-        setup_test();
-
         let anvil = Arc::new(Anvil::new().block_time_f64(0.2).spawn());
         let l1_client = new_l1_client(&anvil, ws).await;
         let provider = &l1_client.provider;
@@ -1363,19 +1355,17 @@ mod test {
         assert_eq!(block.hash, true_block.header.hash);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wait_for_finalized_block_by_timestamp_ws() {
         test_wait_for_finalized_block_by_timestamp_helper(true).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wait_for_finalized_block_by_timestamp_http() {
         test_wait_for_finalized_block_by_timestamp_helper(false).await
     }
 
     async fn test_wait_for_old_finalized_block_by_timestamp_helper(ws: bool) {
-        setup_test();
-
         let anvil = Arc::new(Anvil::new().block_time_f64(0.2).spawn());
         let l1_client = new_l1_client(&anvil, ws).await;
 
@@ -1393,19 +1383,17 @@ mod test {
         assert_eq!(block, true_block);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wait_for_old_finalized_block_by_timestamp_ws() {
         test_wait_for_old_finalized_block_by_timestamp_helper(true).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wait_for_old_finalized_block_by_timestamp_http() {
         test_wait_for_old_finalized_block_by_timestamp_helper(false).await
     }
 
     async fn test_wait_for_block_helper(ws: bool) {
-        setup_test();
-
         let anvil = Arc::new(Anvil::new().block_time_f64(0.1).spawn());
         let l1_client = new_l1_client(&anvil, ws).await;
         let provider = &l1_client.provider;
@@ -1422,19 +1410,17 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wait_for_block_ws() {
         test_wait_for_block_helper(true).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wait_for_block_http() {
         test_wait_for_block_helper(false).await
     }
 
     async fn test_reconnect_update_task_helper(ws: bool) {
-        setup_test();
-
         let port = pick_unused_port().unwrap();
         let anvil = Arc::new(Anvil::new().block_time(1).port(port).spawn());
         let client = new_l1_client(&anvil, ws).await;
@@ -1488,19 +1474,18 @@ mod test {
         tracing::info!(?final_state, "state updated");
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_reconnect_update_task_ws() {
         test_reconnect_update_task_helper(true).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_reconnect_update_task_http() {
         test_reconnect_update_task_helper(false).await
     }
 
-    // #[tokio::test]
+    // #[test_log::test(tokio::test(flavor = "multi_thread"))]
     // async fn test_fetch_stake_table() -> anyhow::Result<()> {
-    //     setup_test();
 
     //     let anvil = Anvil::new().spawn();
     //     let wallet = anvil.wallet().unwrap();
@@ -1544,8 +1529,6 @@ mod test {
     }
 
     async fn test_failover_update_task_helper(ws: bool) {
-        setup_test();
-
         let anvil = Anvil::new().block_time(1).spawn();
 
         // Create an L1 client with fake providers, and check that the state is still updated after
@@ -1592,20 +1575,18 @@ mod test {
         tracing::info!(?updated_state, "state updated");
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_failover_update_task_ws() {
         test_failover_update_task_helper(true).await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_failover_update_task_http() {
         test_failover_update_task_helper(false).await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_failover_consecutive_failures() {
-        setup_test();
-
         let anvil = Anvil::new().block_time(1).spawn();
 
         let l1_options = L1ClientOptions {
@@ -1636,10 +1617,8 @@ mod test {
         provider.get_block_number().await.unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_failover_frequent_failures() {
-        setup_test();
-
         let anvil = Anvil::new().block_time(1).spawn();
         let provider = L1ClientOptions {
             l1_polling_interval: Duration::from_secs(1),
@@ -1670,10 +1649,8 @@ mod test {
         assert!(get_failover_index(&provider) == 1);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_failover_revert() {
-        setup_test();
-
         let anvil = Anvil::new().block_time(1).spawn();
         let provider = L1ClientOptions {
             l1_polling_interval: Duration::from_secs(1),
@@ -1702,9 +1679,8 @@ mod test {
     // Checks that the L1 client initialized the state on startup even
     // if the L1 is not currently mining blocks. It's useful for testing that we
     // don't require an L1 that is continuously mining blocks.
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_update_loop_initializes_l1_state() {
-        setup_test();
         let anvil = Arc::new(Anvil::new().port(9988u16).spawn());
         let l1_client = new_l1_client(&anvil, true).await;
 

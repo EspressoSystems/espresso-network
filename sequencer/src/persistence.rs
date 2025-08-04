@@ -79,7 +79,6 @@ mod tests {
     };
     use indexmap::IndexMap;
     use portpicker::pick_unused_port;
-    use sequencer_utils::test_utils::setup_test;
     use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
     use surf_disco::Client;
     use tide_disco::error::ServerError;
@@ -112,7 +111,7 @@ mod tests {
     #[rstest::rstest]
     #[case(PhantomData::<crate::persistence::sql::Persistence>)]
     #[case(PhantomData::<crate::persistence::fs::Persistence>)]
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub fn persistence_types<P: TestablePersistence>(#[case] _p: PhantomData<P>) {}
 
     #[derive(Clone, Debug, Default)]
@@ -144,10 +143,8 @@ mod tests {
         }
     }
 
-    #[rstest_reuse::apply(persistence_types)]
+    #[test_log::test(rstest_reuse::apply(persistence_types))]
     pub async fn test_voted_view<P: TestablePersistence>(_p: PhantomData<P>) {
-        setup_test();
-
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
 
@@ -187,10 +184,8 @@ mod tests {
         );
     }
 
-    #[rstest_reuse::apply(persistence_types)]
+    #[test_log::test(rstest_reuse::apply(persistence_types))]
     pub async fn test_restart_view<P: TestablePersistence>(_p: PhantomData<P>) {
-        setup_test();
-
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
 
@@ -250,10 +245,9 @@ mod tests {
         );
     }
 
-    #[rstest_reuse::apply(persistence_types)]
+    #[test_log::test(rstest_reuse::apply(persistence_types))]
     pub async fn test_store_drb_input<P: TestablePersistence>(_p: PhantomData<P>) {
         use hotshot_types::drb::DrbInput;
-        setup_test();
 
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
@@ -300,9 +294,8 @@ mod tests {
         assert_eq!(storage.load_drb_input(10).await.unwrap(), drb_input_3);
     }
 
-    #[rstest_reuse::apply(persistence_types)]
+    #[test_log::test(rstest_reuse::apply(persistence_types))]
     pub async fn test_epoch_info<P: TestablePersistence>(_p: PhantomData<P>) {
-        setup_test();
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
 
@@ -413,10 +406,8 @@ mod tests {
         }
     }
 
-    #[rstest_reuse::apply(persistence_types)]
+    #[test_log::test(rstest_reuse::apply(persistence_types))]
     pub async fn test_append_and_decide<P: TestablePersistence>(_p: PhantomData<P>) {
-        setup_test();
-
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
 
@@ -794,10 +785,8 @@ mod tests {
         );
     }
 
-    #[rstest_reuse::apply(persistence_types)]
+    #[test_log::test(rstest_reuse::apply(persistence_types))]
     pub async fn test_upgrade_certificate<P: TestablePersistence>(_p: PhantomData<P>) {
-        setup_test();
-
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
 
@@ -843,10 +832,8 @@ mod tests {
         assert_eq!(view_number, new_view_number_for_certificate);
     }
 
-    #[rstest_reuse::apply(persistence_types)]
+    #[test_log::test(rstest_reuse::apply(persistence_types))]
     pub async fn test_next_epoch_quorum_certificate<P: TestablePersistence>(_p: PhantomData<P>) {
-        setup_test();
-
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
 
@@ -905,7 +892,7 @@ mod tests {
         assert_eq!(view_number, new_view_number_for_qc);
     }
 
-    #[rstest_reuse::apply(persistence_types)]
+    #[test_log::test(rstest_reuse::apply(persistence_types))]
     pub async fn test_decide_with_failing_event_consumer<P: TestablePersistence>(
         _p: PhantomData<P>,
     ) {
@@ -918,8 +905,6 @@ mod tests {
                 bail!("mock error injection");
             }
         }
-
-        setup_test();
 
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
@@ -1126,10 +1111,8 @@ mod tests {
         }
     }
 
-    #[rstest_reuse::apply(persistence_types)]
+    #[test_log::test(rstest_reuse::apply(persistence_types))]
     pub async fn test_pruning<P: TestablePersistence>(_p: PhantomData<P>) {
-        setup_test();
-
         let tmp = P::tmp_storage().await;
 
         let mut options = P::options(&tmp);
@@ -1307,14 +1290,12 @@ mod tests {
 
     // test for validating stake table event fetching from persistence,
     // ensuring that persisted data matches the on-chain events and that event fetcher work correctly.
-    #[rstest_reuse::apply(persistence_types)]
+    #[test_log::test(rstest_reuse::apply(persistence_types))]
     pub async fn test_stake_table_fetching_from_persistence<P: TestablePersistence>(
         #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
         stake_table_version: StakeTableContractVersion,
         _p: PhantomData<P>,
     ) -> anyhow::Result<()> {
-        setup_test();
-
         let epoch_height = 20;
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
@@ -1435,7 +1416,7 @@ mod tests {
         Ok(())
     }
 
-    #[rstest_reuse::apply(persistence_types)]
+    #[test_log::test(rstest_reuse::apply(persistence_types))]
     pub async fn test_stake_table_background_fetching<P: TestablePersistence>(
         #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
         stake_table_version: StakeTableContractVersion,
@@ -1443,8 +1424,6 @@ mod tests {
     ) -> anyhow::Result<()> {
         use espresso_types::v0_3::ChainConfig;
         use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
-
-        setup_test();
 
         let blocks_per_epoch = 10;
 
@@ -1598,12 +1577,10 @@ mod tests {
         Ok(())
     }
 
-    #[rstest_reuse::apply(persistence_types)]
+    #[test_log::test(rstest_reuse::apply(persistence_types))]
     pub async fn test_membership_persistence<P: TestablePersistence>(
         _p: PhantomData<P>,
     ) -> anyhow::Result<()> {
-        setup_test();
-
         let tmp = P::tmp_storage().await;
         let mut opt = P::options(&tmp);
 

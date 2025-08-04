@@ -296,11 +296,9 @@ mod test {
     use tokio::time::timeout;
 
     use super::*;
-    use crate::testing::setup_test;
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_notify_drop() {
-        setup_test();
         let n = Notifier::new();
 
         // Create two subscribers with different predicates.
@@ -324,9 +322,8 @@ mod test {
         assert!(active[0].is_closed());
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_notify_active() {
-        setup_test();
         let n = Notifier::new();
 
         // Create two subscribers.
@@ -359,9 +356,8 @@ mod test {
         assert_eq!(s1.await.unwrap(), 1);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_pending_dropped() {
-        setup_test();
         let n = Notifier::new();
 
         // Create and immediately drop a pending subscriber.
@@ -372,10 +368,8 @@ mod test {
         assert_eq!(n.active.lock().await.len(), 0);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_notifier_dropped() {
-        setup_test();
-
         let n = Notifier::new();
 
         // Create an active subscriber.
