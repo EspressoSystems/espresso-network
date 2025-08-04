@@ -1633,25 +1633,25 @@ mod api_tests {
         testing::{wait_for_decide_on_handle, TestConfigBuilder},
     };
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub(crate) async fn submit_test_with_query_module<D: TestableSequencerDataSource>() {
         let storage = D::create_storage().await;
         submit_test_helper(|opt| D::options(&storage, opt)).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub(crate) async fn status_test_with_query_module<D: TestableSequencerDataSource>() {
         let storage = D::create_storage().await;
         status_test_helper(|opt| D::options(&storage, opt)).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub(crate) async fn state_signature_test_with_query_module<D: TestableSequencerDataSource>() {
         let storage = D::create_storage().await;
         state_signature_test_helper(|opt| D::options(&storage, opt)).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub(crate) async fn test_namespace_query<D: TestableSequencerDataSource>() {
         // Arbitrary transaction, arbitrary namespace ID
         let ns_id = NamespaceId::from(42_u32);
@@ -1744,13 +1744,13 @@ mod api_tests {
         assert!(found_empty_block);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub(crate) async fn catchup_test_with_query_module<D: TestableSequencerDataSource>() {
         let storage = D::create_storage().await;
         catchup_test_helper(|opt| D::options(&storage, opt)).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_non_consecutive_decide_with_failing_event_consumer<D>()
     where
         D: TestableSequencerDataSource + Debug + 'static,
@@ -1967,7 +1967,7 @@ mod api_tests {
             .unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_decide_missing_data<D>()
     where
         D: TestableSequencerDataSource + Debug + 'static,
@@ -2053,7 +2053,7 @@ mod api_tests {
     }
 
     #[ignore]
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub(crate) async fn test_state_cert_query<D: TestableSequencerDataSource>() {
         const TEST_EPOCH_HEIGHT: u64 = 10;
         const TEST_EPOCHS: u64 = 3;
@@ -2198,7 +2198,7 @@ mod test {
     type PosVersionV3 = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
     type PosVersionV4 = SequencerVersions<StaticVersion<0, 4>, StaticVersion<0, 0>>;
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_healthcheck() {
         let port = pick_unused_port().expect("No ports free");
         let url = format!("http://localhost:{port}").parse().unwrap();
@@ -2216,27 +2216,27 @@ mod test {
         assert_eq!(health.status, HealthStatus::Available);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn status_test_without_query_module() {
         status_test_helper(|opt| opt).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn submit_test_without_query_module() {
         submit_test_helper(|opt| opt).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn state_signature_test_without_query_module() {
         state_signature_test_helper(|opt| opt).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn catchup_test_without_query_module() {
         catchup_test_helper(|opt| opt).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn slow_test_merklized_state_api() {
         let port = pick_unused_port().expect("No ports free");
 
@@ -2312,7 +2312,7 @@ mod test {
         assert_eq!(expected, amount.0);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_leaf_only_data_source() {
         let port = pick_unused_port().expect("No ports free");
 
@@ -2499,22 +2499,22 @@ mod test {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_catchup() {
         run_catchup_test("").await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_catchup_v0() {
         run_catchup_test("/v0").await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_catchup_v1() {
         run_catchup_test("/v1").await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_catchup_no_state_peers() {
         // Start a sequencer network, using the query service for catchup.
         let port = pick_unused_port().expect("No ports free");
@@ -2600,7 +2600,7 @@ mod test {
     }
 
     #[ignore]
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_catchup_epochs_no_state_peers() {
         // Start a sequencer network, using the query service for catchup.
         let port = pick_unused_port().expect("No ports free");
@@ -2692,7 +2692,7 @@ mod test {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_chain_config_from_instance() {
         // This test uses a ValidatedState which only has the default chain config commitment.
         // The NodeState has the full chain config.
@@ -2744,7 +2744,7 @@ mod test {
         drop(network);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_chain_config_catchup() {
         // This test uses a ValidatedState with a non-default chain config
         // so it will be different from the NodeState chain config used by the TestNetwork.
@@ -2815,7 +2815,7 @@ mod test {
         drop(network);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_pos_upgrade_view_based() {
         type PosUpgrade = SequencerVersions<FeeVersion, EpochVersion>;
         test_upgrade_helper::<PosUpgrade>(PosUpgrade::new()).await;
@@ -2910,7 +2910,7 @@ mod test {
         network.server.shut_down().await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub(crate) async fn test_restart() {
         const NUM_NODES: usize = 5;
         // Initialize nodes.
@@ -3037,7 +3037,7 @@ mod test {
         assert_eq!(chain, new_chain);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_config() {
         let port = pick_unused_port().expect("No ports free");
         let url: surf_disco::Url = format!("http://localhost:{port}").parse().unwrap();
@@ -3124,24 +3124,24 @@ mod test {
         assert_eq!(receive_count, total_count + 1);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_hotshot_event_streaming_v0() {
         run_hotshot_event_streaming_test("/v0").await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_hotshot_event_streaming_v1() {
         run_hotshot_event_streaming_test("/v1").await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_hotshot_event_streaming() {
         run_hotshot_event_streaming_test("").await;
     }
 
     // TODO when `EpochVersion` becomes base version we can merge this
     // w/ above test.
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_hotshot_event_streaming_epoch_progression() {
         let epoch_height = 35;
         let wanted_epochs = 4;
@@ -3224,7 +3224,7 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_pos_rewards_basic() -> anyhow::Result<()> {
         // Basic PoS rewards test:
         // - Sets up a single validator and a single delegator (the node itself).
@@ -3322,7 +3322,7 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_cumulative_pos_rewards() -> anyhow::Result<()> {
         // This test registers 5 validators and multiple delegators for each validator.
         // One of the delegators is also a validator.
@@ -3445,7 +3445,7 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_stake_table_duplicate_events_from_contract() -> anyhow::Result<()> {
         // TODO(abdul): This test currently uses TestNetwork only for contract deployment and for L1 block number.
         // Once the stake table deployment logic is refactored and isolated, TestNetwork here will be unnecessary
@@ -3553,7 +3553,7 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_rewards_v3() -> anyhow::Result<()> {
         // The test registers multiple delegators for each validator
         // It verifies that no rewards are distributed in the first two epochs
@@ -3774,7 +3774,7 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_rewards_v4() -> anyhow::Result<()> {
         // This test verifies PoS reward distribution logic for multiple delegators per validator.
         //
@@ -4046,7 +4046,7 @@ mod test {
     #[rstest]
     #[case(PosVersionV3::new())]
     #[case(PosVersionV4::new())]
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
 
     async fn test_node_stake_table_api<Ver: Versions>(#[case] ver: Ver) {
         let epoch_height = 20;
@@ -4120,7 +4120,7 @@ mod test {
     #[rstest]
     #[case(PosVersionV3::new())]
     #[case(PosVersionV4::new())]
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
 
     async fn test_epoch_stake_table_catchup<Ver: Versions>(#[case] ver: Ver) {
         const EPOCH_HEIGHT: u64 = 10;
@@ -4252,7 +4252,7 @@ mod test {
     #[rstest]
     #[case(PosVersionV3::new())]
     #[case(PosVersionV4::new())]
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
 
     async fn test_epoch_stake_table_catchup_stress<Ver: Versions>(#[case] versions: Ver) {
         const EPOCH_HEIGHT: u64 = 10;
@@ -4397,7 +4397,7 @@ mod test {
     #[rstest]
     #[case(PosVersionV3::new())]
     #[case(PosVersionV4::new())]
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_merklized_state_catchup_on_restart<Ver: Versions>(
         #[case] versions: Ver,
     ) -> anyhow::Result<()> {
@@ -4619,7 +4619,7 @@ mod test {
     #[rstest]
     #[case(PosVersionV3::new())]
     #[case(PosVersionV4::new())]
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_state_reconstruction<Ver: Versions>(
         #[case] pos_version: Ver,
     ) -> anyhow::Result<()> {
@@ -4956,7 +4956,7 @@ mod test {
     #[rstest]
     #[case(PosVersionV3::new())]
     #[case(PosVersionV4::new())]
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_block_reward_api<Ver: Versions>(#[case] versions: Ver) -> anyhow::Result<()> {
         let epoch_height = 10;
 
@@ -5022,7 +5022,7 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_scanning_token_contract_initialized_event() -> anyhow::Result<()> {
         use espresso_types::v0_3::ChainConfig;
 
@@ -5143,7 +5143,7 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_tx_metadata() {
         let port = pick_unused_port().expect("No ports free");
 
@@ -5223,7 +5223,7 @@ mod test {
 
     use rand::thread_rng;
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_aggregator_namespace_endpoints() {
         let mut rng = thread_rng();
 
@@ -5397,7 +5397,7 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_stream_transactions_endpoint() {
         // This test submits transactions to a sequencer for multiple namespaces,
         // waits for them to be decided, and then verifies that:
@@ -5519,7 +5519,7 @@ mod test {
     #[rstest]
     #[case(PosVersionV3::new())]
     #[case(PosVersionV4::new())]
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_v3_and_v4_reward_tree_updates<Ver: Versions>(
         #[case] versions: Ver,
     ) -> anyhow::Result<()> {
