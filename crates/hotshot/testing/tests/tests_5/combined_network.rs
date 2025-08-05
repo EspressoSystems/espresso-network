@@ -19,12 +19,10 @@ use tracing::instrument;
 
 /// A run with both the CDN and libp2p functioning properly
 #[cfg(test)]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn test_combined_network() {
     use hotshot_testing::block_builder::SimpleBuilderImplementation;
-
-    hotshot::helpers::initialize_logging();
 
     let mut metadata: TestDescription<TestTypes, CombinedImpl, TestVersions> = TestDescription {
         timing_data: TimingData {
@@ -54,10 +52,9 @@ async fn test_combined_network() {
 
 // A run where the CDN crashes part-way through
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn test_combined_network_cdn_crash() {
-    hotshot::helpers::initialize_logging();
 
     let mut metadata: TestDescription<TestTypes, CombinedImpl, TestVersions> = TestDescription {
         timing_data: TimingData {
@@ -100,10 +97,9 @@ async fn test_combined_network_cdn_crash() {
 // A run where the CDN crashes partway through
 // and then comes back up
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn test_combined_network_reup() {
-    hotshot::helpers::initialize_logging();
 
     let mut metadata: TestDescription<TestTypes, CombinedImpl, TestVersions> = TestDescription {
         timing_data: TimingData {
@@ -151,10 +147,9 @@ async fn test_combined_network_reup() {
 
 // A run where half of the nodes disconnect from the CDN
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn test_combined_network_half_dc() {
-    hotshot::helpers::initialize_logging();
 
     let mut metadata: TestDescription<TestTypes, CombinedImpl, TestVersions> = TestDescription {
         timing_data: TimingData {
@@ -224,11 +219,10 @@ fn generate_random_node_changes(
 
 // A fuzz test, where random network events take place on all nodes
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 #[ignore]
 async fn test_stress_combined_network_fuzzy() {
-    hotshot::helpers::initialize_logging();
 
     let mut metadata: TestDescription<TestTypes, CombinedImpl, TestVersions> = TestDescription {
         timing_data: TimingData {

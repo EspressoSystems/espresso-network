@@ -1989,7 +1989,6 @@ mod test {
         vid::advz::advz_scheme,
     };
     use jf_vid::VidScheme;
-    use sequencer_utils::test_utils::setup_test;
     use serde_json::json;
     use tempfile::TempDir;
     use vbs::version::StaticVersionType;
@@ -2116,9 +2115,8 @@ mod test {
         assert_eq!(migrate_network_config(before.clone()).unwrap(), before);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_consensus_migration() {
-        setup_test();
         let rows = 300;
         let tmp = Persistence::tmp_storage().await;
         let mut opt = Persistence::options(&tmp);
@@ -2356,10 +2354,8 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_load_quorum_proposals_invalid_extension() {
-        setup_test();
-
         let tmp = Persistence::tmp_storage().await;
         let storage = Persistence::connect(&tmp).await;
 
@@ -2419,10 +2415,8 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_load_quorum_proposals_malformed_data() {
-        setup_test();
-
         let tmp = Persistence::tmp_storage().await;
         let storage = Persistence::connect(&tmp).await;
 

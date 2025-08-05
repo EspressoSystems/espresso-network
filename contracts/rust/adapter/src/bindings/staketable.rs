@@ -1409,7 +1409,7 @@ interface StakeTable {
       {
         "name": "",
         "type": "address",
-        "internalType": "contract LightClientV2"
+        "internalType": "contract ILightClient"
       }
     ],
     "stateMutability": "view"
