@@ -467,6 +467,7 @@ pub async fn deploy_light_client_proxy(
 /// - the proxy is already deployed.
 /// - the proxy is owned by a regular EOA, not a multisig.
 /// - the proxy is not yet initialized for V2
+/// Returns the receipt of the upgrade transaction.
 pub async fn upgrade_light_client_v2(
     provider: impl Provider,
     contracts: &mut Contracts,
@@ -571,7 +572,15 @@ pub async fn upgrade_light_client_v2(
                     U256::from(provider.get_block_number().await?)
                 );
 
-                tracing::info!(%lcv2_addr, "LightClientProxy successfully upgrade to: ")
+                tracing::info!(%lcv2_addr, "LightClientProxy successfully upgrade to: ");
+                tracing::info!(
+                    "blocksPerEpoch: {}",
+                    proxy_as_v2.blocksPerEpoch().call().await?._0
+                );
+                tracing::info!(
+                    "epochStartBlock: {}",
+                    proxy_as_v2.epochStartBlock().call().await?._0
+                );
             } else {
                 tracing::error!("LightClientProxy upgrade failed: {:?}", receipt);
             }
@@ -1696,8 +1705,32 @@ mod tests {
         )
         .await?;
 
-        // deploy light client
-        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+        // deploy light client proxy
+        let lc_proxy_addr = deploy_light_client_proxy(
+            &provider,
+            &mut contracts,
+            false,
+            LightClientStateSol::dummy_genesis(),
+            StakeTableStateSol::dummy_genesis(),
+            init_recipient,
+            Some(init_recipient),
+        )
+        .await?;
+        // upgrade to v2
+        let blocks_per_epoch = 50;
+        let epoch_start_block = 50;
+        upgrade_light_client_v2(
+            &provider,
+            &mut contracts,
+            false,
+            blocks_per_epoch,
+            epoch_start_block,
+        )
+        .await?;
+        let lc_v2 = LightClientV2::new(lc_proxy_addr, &provider);
+        assert_eq!(lc_v2.getVersion().call().await?.majorVersion, 2);
+        assert_eq!(lc_v2.blocksPerEpoch().call().await?._0, blocks_per_epoch);
+        assert_eq!(lc_v2.epochStartBlock().call().await?._0, epoch_start_block);
 
         // deploy stake table
         let exit_escrow_period = U256::from(1000);
@@ -1706,7 +1739,7 @@ mod tests {
             &provider,
             &mut contracts,
             token_addr,
-            lc_addr,
+            lc_proxy_addr,
             exit_escrow_period,
             owner,
         )
@@ -1719,7 +1752,7 @@ mod tests {
         );
         assert_eq!(stake_table.owner().call().await?._0, owner);
         assert_eq!(stake_table.token().call().await?._0, token_addr);
-        assert_eq!(stake_table.lightClient().call().await?._0, lc_addr);
+        assert_eq!(stake_table.lightClient().call().await?._0, lc_proxy_addr);
         Ok(())
     }
 
@@ -1745,8 +1778,32 @@ mod tests {
         )
         .await?;
 
-        // deploy light client
-        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+        // deploy light client proxy
+        let lc_proxy_addr = deploy_light_client_proxy(
+            &provider,
+            &mut contracts,
+            false,
+            LightClientStateSol::dummy_genesis(),
+            StakeTableStateSol::dummy_genesis(),
+            init_recipient,
+            Some(init_recipient),
+        )
+        .await?;
+        // upgrade to v2
+        let blocks_per_epoch = 50;
+        let epoch_start_block = 50;
+        upgrade_light_client_v2(
+            &provider,
+            &mut contracts,
+            false,
+            blocks_per_epoch,
+            epoch_start_block,
+        )
+        .await?;
+        let lc_v2 = LightClientV2::new(lc_proxy_addr, &provider);
+        assert_eq!(lc_v2.getVersion().call().await?.majorVersion, 2);
+        assert_eq!(lc_v2.blocksPerEpoch().call().await?._0, blocks_per_epoch);
+        assert_eq!(lc_v2.epochStartBlock().call().await?._0, epoch_start_block);
 
         // deploy stake table
         let exit_escrow_period = U256::from(1000);
@@ -1755,7 +1812,7 @@ mod tests {
             &provider,
             &mut contracts,
             token_addr,
-            lc_addr,
+            lc_proxy_addr,
             exit_escrow_period,
             owner,
         )
@@ -1772,7 +1829,7 @@ mod tests {
         assert_eq!(stake_table_v2.getVersion().call().await?, (2, 0, 0).into());
         assert_eq!(stake_table_v2.owner().call().await?._0, owner);
         assert_eq!(stake_table_v2.token().call().await?._0, token_addr);
-        assert_eq!(stake_table_v2.lightClient().call().await?._0, lc_addr);
+        assert_eq!(stake_table_v2.lightClient().call().await?._0, lc_proxy_addr);
 
         // get pauser role
         let pauser_role = stake_table_v2.PAUSER_ROLE().call().await?._0;
@@ -1831,14 +1888,40 @@ mod tests {
             "ESP",
         )
         .await?;
-        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+        // deploy light client proxy
+        let lc_proxy_addr = deploy_light_client_proxy(
+            &provider,
+            &mut contracts,
+            false,
+            LightClientStateSol::dummy_genesis(),
+            StakeTableStateSol::dummy_genesis(),
+            init_recipient,
+            Some(init_recipient),
+        )
+        .await?;
+        // upgrade to v2
+        let blocks_per_epoch = 50;
+        let epoch_start_block = 50;
+        upgrade_light_client_v2(
+            &provider,
+            &mut contracts,
+            false,
+            blocks_per_epoch,
+            epoch_start_block,
+        )
+        .await?;
+        let lc_v2 = LightClientV2::new(lc_proxy_addr, &provider);
+        assert_eq!(lc_v2.getVersion().call().await?.majorVersion, 2);
+        assert_eq!(lc_v2.blocksPerEpoch().call().await?._0, blocks_per_epoch);
+        assert_eq!(lc_v2.epochStartBlock().call().await?._0, epoch_start_block);
+
         let exit_escrow_period = U256::from(1000);
         let owner = init_recipient;
         let stake_table_proxy_addr = deploy_stake_table_proxy(
             &provider,
             &mut contracts,
             token_addr,
-            lc_addr,
+            lc_proxy_addr,
             exit_escrow_period,
             owner,
         )
@@ -2377,13 +2460,40 @@ mod tests {
                     "TEST",
                 )
                 .await?;
-                let light_client_addr = Address::random();
+                let initial_admin = provider.get_accounts().await?[0];
+                // deploy light client proxy
+                let lc_proxy_addr = deploy_light_client_proxy(
+                    &provider,
+                    &mut contracts,
+                    false,
+                    LightClientStateSol::dummy_genesis(),
+                    StakeTableStateSol::dummy_genesis(),
+                    initial_admin,
+                    Some(prover),
+                )
+                .await?;
+                // upgrade to v2
+                let blocks_per_epoch = 50;
+                let epoch_start_block = 50;
+                upgrade_light_client_v2(
+                    &provider,
+                    &mut contracts,
+                    false,
+                    blocks_per_epoch,
+                    epoch_start_block,
+                )
+                .await?;
+                let lc_v2 = LightClientV2::new(lc_proxy_addr, &provider);
+                assert_eq!(lc_v2.getVersion().call().await?.majorVersion, 2);
+                assert_eq!(lc_v2.blocksPerEpoch().call().await?._0, blocks_per_epoch);
+                assert_eq!(lc_v2.epochStartBlock().call().await?._0, epoch_start_block);
+
                 deploy_stake_table_proxy(
                     &provider,
                     &mut contracts,
                     token_addr,
-                    light_client_addr,
-                    U256::from(0u64),
+                    lc_proxy_addr,
+                    U256::from(1000u64),
                     admin,
                 )
                 .await?
