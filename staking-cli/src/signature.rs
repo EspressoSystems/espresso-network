@@ -156,7 +156,7 @@ impl From<NodeSignatures> for NodeSignaturesSol {
             bls_vk: payload.bls_vk.to_affine().into(),
             bls_signature: payload.bls_signature.into(),
             schnorr_vk: payload.schnorr_vk.into(),
-            schnorr_signature: StateSignatureSol::from(payload.schnorr_signature).into(),
+            schnorr_signature: payload.schnorr_signature.into(),
         }
     }
 }
@@ -614,7 +614,6 @@ mod tests {
         };
         let result = NodeSignatureDestination::try_from(args);
 
-        assert!(result.is_err());
         assert!(result
             .unwrap_err()
             .to_string()
@@ -628,13 +627,10 @@ mod tests {
 
         let result = NodeSignatureSource::parse(temp_file.path().to_path_buf(), None);
 
-        assert!(result.is_err());
-        let error_msg = result.unwrap_err().to_string();
-        assert!(
-            error_msg.contains("Unsupported extension"),
-            "Got error: {}",
-            error_msg
-        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Unsupported extension"));
         Ok(())
     }
 
@@ -657,7 +653,6 @@ mod tests {
     fn test_serialization_format_from_path_invalid(#[case] filename: &str) {
         let path = PathBuf::from(filename);
         let result = SerializationFormat::try_from(path.as_path());
-        assert!(result.is_err());
         assert!(result
             .unwrap_err()
             .to_string()
