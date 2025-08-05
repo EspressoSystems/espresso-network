@@ -330,7 +330,6 @@ mod test {
     use espresso_types::v0_3::Validator;
     use hotshot_types::signature_key::BLSPubKey;
     use rand::rngs::StdRng;
-    use sequencer_utils::test_utils::setup_test;
 
     use super::*;
     use crate::{deploy::TestSystem, info::stake_table_info};
@@ -338,7 +337,6 @@ mod test {
     async fn shared_setup(
         config: DelegationConfig,
     ) -> Result<(Validator<BLSPubKey>, Validator<BLSPubKey>)> {
-        setup_test();
         let system = TestSystem::deploy().await?;
 
         let mut rng = StdRng::from_seed([42u8; 32]);
@@ -370,7 +368,7 @@ mod test {
         Ok((val1, val2))
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_stake_for_demo_equal_amounts() -> Result<()> {
         let (val1, val2) = shared_setup(DelegationConfig::EqualAmounts).await?;
 
@@ -388,7 +386,7 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_stake_for_demo_variable_amounts() -> Result<()> {
         let (val1, val2) = shared_setup(DelegationConfig::VariableAmounts).await?;
 
@@ -406,7 +404,7 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_stake_for_demo_multiple_delegators() -> Result<()> {
         let (val1, val2) = shared_setup(DelegationConfig::MultipleDelegators).await?;
 
