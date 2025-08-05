@@ -102,6 +102,8 @@ processes:
         condition: process_completed
       deploy-prover-contracts:
         condition: process_completed
+      deploy-staking-contracts:
+        condition: process_completed
       sequencer1:
         condition: process_healthy
     availability: *exit-ok
@@ -119,6 +121,8 @@ processes:
       deploy-sequencer-contracts:
         condition: process_completed
       deploy-prover-contracts:
+        condition: process_completed
+      deploy-staking-contracts:
         condition: process_completed
       sequencer1:
         condition: process_healthy

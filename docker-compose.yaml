@@ -119,6 +119,8 @@ services:
         condition: service_completed_successfully
       deploy-prover-contracts:
         condition: service_completed_successfully
+      deploy-staking-contracts:
+        condition: service_completed_successfully
       sequencer1:
         condition: service_healthy
 
@@ -147,6 +149,8 @@ services:
       deploy-sequencer-contracts:
         condition: service_completed_successfully
       deploy-prover-contracts:
+        condition: service_completed_successfully
+      deploy-staking-contracts:
         condition: service_completed_successfully
       sequencer1:
         condition: service_healthy
