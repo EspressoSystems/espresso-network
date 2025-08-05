@@ -185,6 +185,12 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     fn first_epoch(&self) -> Option<TYPES::Epoch> {
         None
     }
+
+    /// Returns the commitment of the stake table for the given epoch,
+    /// Errors if the stake table is not available for the given epoch
+    fn stake_table_commit(&self, _epoch: TYPES::Epoch) -> anyhow::Result<U256> {
+        Ok(U256::ZERO)
+    }
 }
 
 pub fn membership_spawn_add_epoch_root<TYPES: NodeType>(
