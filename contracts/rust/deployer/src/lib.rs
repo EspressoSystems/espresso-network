@@ -467,6 +467,7 @@ pub async fn deploy_light_client_proxy(
 /// - the proxy is already deployed.
 /// - the proxy is owned by a regular EOA, not a multisig.
 /// - the proxy is not yet initialized for V2
+///
 /// Returns the receipt of the upgrade transaction.
 pub async fn upgrade_light_client_v2(
     provider: impl Provider,
