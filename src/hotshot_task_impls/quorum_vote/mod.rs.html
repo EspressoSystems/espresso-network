@@ -132,7 +132,7 @@
 <a href=#132 id=132 data-nosnippet>132</a>{
 <a href=#133 id=133 data-nosnippet>133</a>    <span class="kw">fn </span>print_vote_events(<span class="kw-2">&amp;</span><span class="self">self</span>, res: <span class="kw-2">&amp;</span>[Arc&lt;HotShotEvent&lt;TYPES&gt;&gt;]) {
 <a href=#134 id=134 data-nosnippet>134</a>        <span class="kw">let </span>events: Vec&lt;<span class="kw">_</span>&gt; = res.iter().map(Arc::as_ref).collect();
-<a href=#135 id=135 data-nosnippet>135</a>        <span class="macro">tracing::warn!</span>(<span class="string">"Failed to vote, events: {:#?}"</span>, events);
+<a href=#135 id=135 data-nosnippet>135</a>        <span class="macro">tracing::warn!</span>(<span class="string">"Failed to vote, events: {:?}"</span>, events);
 <a href=#136 id=136 data-nosnippet>136</a>    }
 <a href=#137 id=137 data-nosnippet>137</a>
 <a href=#138 id=138 data-nosnippet>138</a>    <span class="kw">async fn </span>handle_vote_deps(<span class="kw-2">&amp;</span><span class="self">self</span>, res: <span class="kw-2">&amp;</span>[Arc&lt;HotShotEvent&lt;TYPES&gt;&gt;]) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
@@ -542,7 +542,7 @@
 <a href=#542 id=542 data-nosnippet>542</a>
 <a href=#543 id=543 data-nosnippet>543</a>    <span class="doccomment">/// Create and store an [`AndDependency`] combining [`EventDependency`]s associated with the
 <a href=#544 id=544 data-nosnippet>544</a>    /// given view number if it doesn't exist.
-<a href=#545 id=545 data-nosnippet>545</a>    </span><span class="attr">#[instrument(skip_all, fields(id = <span class="self">self</span>.id, latest_voted_view = <span class="kw-2">*</span><span class="self">self</span>.latest_voted_view), name = <span class="string">"Quorum vote crete dependency task if new"</span>, level = <span class="string">"error"</span>)]
+<a href=#545 id=545 data-nosnippet>545</a>    </span><span class="attr">#[instrument(skip_all, fields(id = <span class="self">self</span>.id, latest_voted_view = <span class="kw-2">*</span><span class="self">self</span>.latest_voted_view), name = <span class="string">"Quorum vote create dependency task if new"</span>, level = <span class="string">"error"</span>)]
 <a href=#546 id=546 data-nosnippet>546</a>    </span><span class="kw">fn </span>create_dependency_task_if_new(
 <a href=#547 id=547 data-nosnippet>547</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
 <a href=#548 id=548 data-nosnippet>548</a>        view_number: TYPES::View,
