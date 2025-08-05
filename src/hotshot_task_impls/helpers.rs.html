@@ -909,7 +909,7 @@
 <a href=#909 id=909 data-nosnippet>909</a>/// If any validation or state update fails.
 <a href=#910 id=910 data-nosnippet>910</a></span><span class="attr">#[allow(clippy::too_many_lines)]
 <a href=#911 id=911 data-nosnippet>911</a>#[instrument(skip_all, fields(id = validation_info.id, view = <span class="kw-2">*</span>proposal.data.view_number()))]
-<a href=#912 id=912 data-nosnippet>912</a></span><span class="kw">pub async fn </span>validate_proposal_safety_and_liveness&lt;
+<a href=#912 id=912 data-nosnippet>912</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>validate_proposal_safety_and_liveness&lt;
 <a href=#913 id=913 data-nosnippet>913</a>    TYPES: NodeType,
 <a href=#914 id=914 data-nosnippet>914</a>    I: NodeImplementation&lt;TYPES&gt;,
 <a href=#915 id=915 data-nosnippet>915</a>    V: Versions,
