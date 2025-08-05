@@ -173,12 +173,9 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
         };
 
         let encoded_payload = payload.encode();
-        let encoded_txns: Vec<u8> = encoded_payload.to_vec();
-        let block_size: u64 = encoded_txns.len() as u64;
-        let offered_fee: u64 = self.base_fee * block_size;
-
+        const FEE_AMOUNT: u64 = 0;
         let Some(signature_over_fee_info) =
-            TYPES::BuilderSignatureKey::sign_fee(&self.builder_private_key, offered_fee, &metadata)
+            TYPES::BuilderSignatureKey::sign_fee(&self.builder_private_key, FEE_AMOUNT, &metadata)
                 .ok()
         else {
             tracing::error!("Failed to sign fee, sending empty block");
@@ -194,7 +191,7 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
             return None;
         };
         let builder_fee = BuilderFee {
-            fee_amount: offered_fee,
+            fee_amount: FEE_AMOUNT,
             fee_account: self.builder_public_key.clone(),
             fee_signature: signature_over_fee_info,
         };
