@@ -269,11 +269,11 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             Contract::LightClientV2 => {
                 assert!(
                     self.blocks_per_epoch.is_some(),
-                    "forget to specify blocks_per_epoch()"
+                    "forgot to specify blocks_per_epoch()"
                 );
                 assert!(
                     self.epoch_start_block.is_some(),
-                    "forget to specify epoch_start_block()"
+                    "forgot to specify epoch_start_block()"
                 );
 
                 let use_mock = self.mock_light_client;
