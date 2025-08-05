@@ -567,7 +567,6 @@ mod test {
     };
     use hotshot_contract_adapter::sol_types::LightClientV2Mock;
     use jf_utils::test_rng;
-    use sequencer_utils::test_utils::setup_test;
 
     use super::*;
     use crate::v3::mock_ledger::{EPOCH_HEIGHT_FOR_TEST, EPOCH_START_BLOCK_FOR_TEST};
@@ -613,10 +612,8 @@ mod test {
         Ok(lc_proxy_addr)
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_read_contract_state() -> Result<()> {
-        setup_test();
-
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let rng = &mut test_rng();
@@ -662,11 +659,9 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_submit_state_and_proof() -> Result<()> {
         // TODO(Chengyu): disabled because it's under development
-
-        // setup_test();
 
         // let pp = MockSystemParam::init();
         // let mut ledger = MockLedger::init(pp, NUM_INIT_VALIDATORS);

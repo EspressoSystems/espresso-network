@@ -47,7 +47,7 @@ use jf_merkle_tree::MerkleTreeScheme;
 use jf_vid::VidScheme;
 use pretty_assertions::assert_eq;
 use rand::{Rng, RngCore};
-use sequencer_utils::{commitment_to_u256, test_utils::setup_test};
+use sequencer_utils::commitment_to_u256;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use tagged_base64::TaggedBase64;
@@ -264,8 +264,6 @@ fn reference_test_without_committable<T: Serialize + DeserializeOwned + Eq + Deb
     name: &str,
     reference: &T,
 ) {
-    setup_test();
-
     // Load the expected serialization from the repo.
     let data_dir = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
         .join("../data")
@@ -369,8 +367,6 @@ fn reference_test<T: Committable + Serialize + DeserializeOwned + Eq + Debug>(
     reference: T,
     commitment: &str,
 ) {
-    setup_test();
-
     reference_test_without_committable(version, name, &reference);
 
     // Print information about the commitment that might be useful in generating tests for other
@@ -398,12 +394,12 @@ Actual: {actual}
     );
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_reference_payload() {
     reference_test_without_committable("v1", "payload", &reference_payload().await);
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_reference_ns_table() {
     reference_test(
         "v1",
@@ -413,7 +409,7 @@ async fn test_reference_ns_table() {
     );
 }
 
-#[test]
+#[test_log::test]
 fn test_reference_l1_block() {
     reference_test(
         "v1",
@@ -423,7 +419,7 @@ fn test_reference_l1_block() {
     );
 }
 
-#[test]
+#[test_log::test]
 fn test_reference_v1_chain_config() {
     reference_test(
         "v1",
@@ -433,7 +429,7 @@ fn test_reference_v1_chain_config() {
     );
 }
 
-#[test]
+#[test_log::test]
 fn test_reference_v2_chain_config() {
     reference_test(
         "v2",
@@ -443,7 +439,7 @@ fn test_reference_v2_chain_config() {
     );
 }
 
-#[test]
+#[test_log::test]
 fn test_reference_v3_chain_config() {
     reference_test(
         "v3",
@@ -453,7 +449,7 @@ fn test_reference_v3_chain_config() {
     );
 }
 
-#[test]
+#[test_log::test]
 fn test_reference_fee_info() {
     reference_test(
         "v1",
@@ -463,7 +459,7 @@ fn test_reference_fee_info() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_reference_header_v1() {
     reference_test(
         "v1",
@@ -473,7 +469,7 @@ async fn test_reference_header_v1() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_reference_header_v2() {
     reference_test(
         "v2",
@@ -483,7 +479,7 @@ async fn test_reference_header_v2() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_reference_header_v3() {
     reference_test(
         "v3",
@@ -493,7 +489,7 @@ async fn test_reference_header_v3() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_reference_header_v4() {
     reference_test(
         "v4",
@@ -503,7 +499,7 @@ async fn test_reference_header_v4() {
     );
 }
 
-#[test]
+#[test_log::test]
 fn test_reference_transaction() {
     reference_test(
         "v1",
@@ -514,25 +510,25 @@ fn test_reference_transaction() {
 }
 
 // "legacy" refers to the proof type used before it was an enum.
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_reference_ns_proof_legacy() {
     reference_test_without_committable("v1", "ns_proof_legacy", &reference_ns_proof_legacy().await);
 }
 
 // "V0" does not refer to the version scheme used in this crate but to the NSProof::VO variant.
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_reference_ns_proof_enum_advz() {
     reference_test_without_committable("v3", "ns_proof_V0", &reference_ns_proof_enum_advz().await);
 }
 
 // "V1" does not refer to the version scheme used in this crate but to the NSProof::V1 variant.
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_reference_ns_proof_enum_avidm() {
     reference_test_without_committable("v3", "ns_proof_V1", &reference_ns_proof_enum_avidm().await);
 }
 
 // Legacy leaf query data
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_leaf_query_data_legacy_v1() {
     let validated_state = ValidatedState::default();
     let instance_state = NodeState::default();
@@ -542,7 +538,7 @@ async fn test_leaf_query_data_legacy_v1() {
     reference_test_without_committable("v1", "leaf_query_data_legacy", &leaf);
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_leaf_query_data_legacy_v2() {
     let validated_state = ValidatedState::default();
     let instance_state = NodeState::default();
@@ -553,7 +549,7 @@ async fn test_leaf_query_data_legacy_v2() {
 }
 
 // new leaf2 query data
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_leaf_query_data_v3() {
     let validated_state = ValidatedState::default();
     let instance_state = NodeState::default();
@@ -562,13 +558,13 @@ async fn test_leaf_query_data_v3() {
     reference_test_without_committable("v3", "leaf_query_data", &leaf);
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_block_query_data() {
     let block = reference_block().await;
     reference_test_without_committable("v1", "block_query_data", &block);
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_payload_query_data() {
     let block = reference_block().await;
     let payload = PayloadQueryData::from(block);
@@ -576,7 +572,7 @@ async fn test_payload_query_data() {
 }
 
 // v0 is the `VidCommon`` v0 variant
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_vid_common_v0_query_data() {
     let header = reference_header(Version { major: 0, minor: 1 }).await;
     let payload = reference_payload().await;
@@ -590,7 +586,7 @@ async fn test_vid_common_v0_query_data() {
 }
 
 // v1 is the `VidCommon`` v1 variant
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_vid_common_v1_query_data() {
     let header = reference_header(Version { major: 0, minor: 1 }).await;
     let avid_m_param = init_avidm_param(10).unwrap();
@@ -600,7 +596,7 @@ async fn test_vid_common_v1_query_data() {
 }
 
 // Transaction query data
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_transaction_query_data() {
     let block = reference_block().await;
 
@@ -625,7 +621,7 @@ async fn test_transaction_query_data() {
 }
 
 // State certificate
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_state_cert_query_data_v3() {
     let light_client_cert = LightClientStateUpdateCertificateV1::<SeqTypes>::genesis();
     let state_cert = StateCertQueryDataV1(light_client_cert);

@@ -10,6 +10,7 @@ testing = ["espresso-types/testing", "hotshot-query-service/testing"]
 
 [dev-dependencies]
 node-metrics = { path = ".", features = [ "testing" ] }
+test-log = { workspace = true }
 
 [dependencies]
 alloy = { workspace = true }

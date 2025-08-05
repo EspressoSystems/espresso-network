@@ -27,5 +27,8 @@ toml = { workspace = true }
 tracing = "0.1.37"
 url = "2.3.1"
 
+[dev-dependencies]
+test-log = { workspace = true }
+
 [lints]
 workspace = true

@@ -32,11 +32,9 @@ use hotshot_types::{
 use vbs::version::StaticVersionType;
 use vec1::vec1;
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_vid_task() {
     use hotshot_types::message::Proposal;
-
-    hotshot::helpers::initialize_logging();
 
     // Build the API for node 2.
     let handle = build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2)

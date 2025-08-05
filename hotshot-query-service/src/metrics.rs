@@ -450,12 +450,9 @@ mod test {
     use tide_disco::metrics::Metrics as _;
 
     use super::*;
-    use crate::testing::setup_test;
 
-    #[test]
+    #[test_log::test]
     fn test_prometheus_metrics() {
-        setup_test();
-
         let metrics = PrometheusMetrics::default();
 
         // Register one metric of each type.
@@ -505,10 +502,8 @@ mod test {
         assert!(lines.contains(&"text 1"));
     }
 
-    #[test]
+    #[test_log::test]
     fn test_namespace() {
-        setup_test();
-
         let metrics = PrometheusMetrics::default();
         let subgroup1 = metrics.subgroup("subgroup1".into());
         let subgroup2 = subgroup1.subgroup("subgroup2".into());
@@ -575,10 +570,8 @@ mod test {
             .contains(&"subgroup1_subgroup2_text 1"));
     }
 
-    #[test]
+    #[test_log::test]
     fn test_labels() {
-        setup_test();
-
         let metrics = PrometheusMetrics::default();
 
         let http_count = metrics.counter_family("http".into(), vec!["method".into()]);

@@ -2421,14 +2421,12 @@ mod tests {
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use pretty_assertions::assert_matches;
     use rstest::rstest;
-    use sequencer_utils::test_utils::setup_test;
 
     use super::*;
     use crate::{v0::impls::testing::*, L1ClientOptions};
 
-    #[test]
+    #[test_log::test]
     fn test_from_l1_events() -> anyhow::Result<()> {
-        setup_test();
         // Build a stake table with one DA node and one consensus node.
         let val_1 = TestValidator::random();
         let val_1_new_keys = val_1.randomize_keys();
@@ -2905,10 +2903,8 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_decaf_stake_table() {
-        setup_test();
-
         // The following commented-out block demonstrates how the `decaf_stake_table_events.json`
         // and `decaf_stake_table.json` files were originally generated.
 
@@ -2965,11 +2961,9 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     #[should_panic]
     async fn test_large_max_events_range_panic() {
-        setup_test();
-
         // decaf stake table contract address
         let contract_address = "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037";
 
@@ -2995,10 +2989,8 @@ mod tests {
         .await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn sanity_check_block_reward_v3() {
-        setup_test();
-
         // 10b tokens
         let initial_supply = U256::from_str("10000000000000000000000000000").unwrap();
 

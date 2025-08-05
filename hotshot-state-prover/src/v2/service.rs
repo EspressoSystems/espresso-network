@@ -596,7 +596,6 @@ mod test {
     };
     use hotshot_contract_adapter::sol_types::LightClientV2Mock;
     use jf_utils::test_rng;
-    use sequencer_utils::test_utils::setup_test;
 
     use super::*;
     use crate::v2::mock_ledger::{
@@ -645,10 +644,8 @@ mod test {
         Ok(lc_proxy_addr)
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_read_contract_state() -> Result<()> {
-        setup_test();
-
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let rng = &mut test_rng();
@@ -695,10 +692,8 @@ mod test {
     }
 
     // This test is temporarily ignored. We are unifying the contract deployment in #1071.
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_submit_state_and_proof() -> Result<()> {
-        setup_test();
-
         let pp = MockSystemParam::init();
         let mut ledger = MockLedger::init(pp, NUM_INIT_VALIDATORS);
         let genesis_state: LightClientStateSol = ledger.light_client_state().into();
