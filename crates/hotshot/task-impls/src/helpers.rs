@@ -909,7 +909,7 @@ pub(crate) async fn validate_epoch_transition_qc<
 /// If any validation or state update fails.
 #[allow(clippy::too_many_lines)]
 #[instrument(skip_all, fields(id = validation_info.id, view = *proposal.data.view_number()))]
-pub async fn validate_proposal_safety_and_liveness<
+pub(crate) async fn validate_proposal_safety_and_liveness<
     TYPES: NodeType,
     I: NodeImplementation<TYPES>,
     V: Versions,
