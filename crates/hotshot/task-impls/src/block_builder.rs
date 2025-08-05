@@ -328,11 +328,11 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
         match event.as_ref() {
             HotShotEvent::TransactionsRecv(transactions) => {
                 self.handle_transactions(transactions).await;
-                broadcast_event(
-                    Arc::new(HotShotEvent::TransactionsRecv(transactions.clone())),
-                    &sender,
-                )
-                .await;
+                // broadcast_event(
+                //     Arc::new(HotShotEvent::TransactionsRecv(transactions.clone())),
+                //     &sender,
+                // )
+                // .await;
             },
             HotShotEvent::ViewChange(view, epoch) => {
                 let view = TYPES::View::new(std::cmp::max(1, **view));
