@@ -15,15 +15,12 @@ services:
 
   deploy-sequencer-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
-    command: deploy --deploy-ops-timelock --deploy-safe-exit-timelock --deploy-fee --deploy-esp-token --deploy-stake-table --upgrade-stake-table-v2
+    command: deploy --deploy-ops-timelock --deploy-safe-exit-timelock --deploy-fee --deploy-esp-token
     environment:
       - ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
       - ESPRESSO_SEQUENCER_L1_PROVIDER
       - ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
       - ESPRESSO_DEPLOYER_ACCOUNT_INDEX
-      - ESPRESSO_SEQUENCER_STAKE_TABLE_EXIT_ESCROW_PERIOD
-      - ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS
-      - ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS
       - ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS
       - ESP_TOKEN_INITIAL_SUPPLY
       - ESP_TOKEN_NAME
@@ -36,6 +33,7 @@ services:
       - ESPRESSO_SAFE_EXIT_TIMELOCK_DELAY
       - ESPRESSO_SAFE_EXIT_TIMELOCK_EXECUTORS
       - ESPRESSO_SAFE_EXIT_TIMELOCK_PROPOSERS
+      - ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS
       - RUST_LOG
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
@@ -69,6 +67,37 @@ services:
         condition: service_healthy
       # Make sure this doesn't start until the other contracts have been deployed, since we use the same mnemonic.
       deploy-sequencer-contracts:
+        condition: service_completed_successfully
+
+  deploy-staking-contracts:
+    image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
+    command: deploy --deploy-stake-table --upgrade-stake-table-v2
+    environment:
+      - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL
+      - ESPRESSO_SEQUENCER_L1_PROVIDER
+      - ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
+      - ESPRESSO_SEQUENCER_URL
+      - ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY
+      - ESPRESSO_SEQUENCER_PERMISSIONED_PROVER
+      - ESPRESSO_DEPLOYER_ACCOUNT_INDEX
+      - ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
+      - ESPRESSO_SEQUENCER_STAKE_TABLE_EXIT_ESCROW_PERIOD
+      - ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS
+      - ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS
+      - ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS
+      - ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
+      - RUST_LOG
+      - RUST_LOG_FORMAT
+      - ASYNC_STD_THREAD_COUNT
+    depends_on:
+      demo-l1-network:
+        condition: service_healthy
+      sequencer0:
+        condition: service_healthy
+      # Make sure this doesn't start until the other contracts have been deployed, since we use the same mnemonic.
+      deploy-sequencer-contracts:
+        condition: service_completed_successfully
+      deploy-prover-contracts:
         condition: service_completed_successfully
 
   fund-builder:
