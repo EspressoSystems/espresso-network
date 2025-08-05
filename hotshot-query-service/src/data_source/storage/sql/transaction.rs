@@ -246,7 +246,9 @@ impl<Mode: TransactionMode> update::Transaction for Transaction<Mode> {
     }
     fn revert(mut self) -> impl Future + Send {
         async move {
-            self.inner.rollback().await.unwrap();
+            if let Err(err) = self.inner.rollback().await {
+                tracing::error!("Failed to rollback transaction: {err:#}");
+            }
             self.metrics.set_closed(CloseType::Revert);
         }
     }
