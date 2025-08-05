@@ -29,7 +29,7 @@ use espresso_types::{
 };
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
-use hotshot_state_prover::service::{run_prover_service, StateProverConfig};
+use hotshot_state_prover::{v2::service::run_prover_service, StateProverConfig};
 use hotshot_types::{
     stake_table::{one_honest_threshold, HSStakeTable},
     utils::epoch_from_block_number,
@@ -941,7 +941,6 @@ mod tests {
     use portpicker::pick_unused_port;
     use rand::Rng;
     use sequencer::SequencerApiVersion;
-    use sequencer_utils::test_utils::setup_test;
     use surf_disco::Client;
     use tide_disco::error::ServerError;
     use tokio::time::sleep;
@@ -966,10 +965,8 @@ mod tests {
     // and open a PR.
     // - APIs update
     // - Types (like `Header`) update
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn slow_dev_node_test() {
-        setup_test();
-
         let builder_port = pick_unused_port().unwrap();
         let api_port = pick_unused_port().unwrap();
         let dev_node_port = pick_unused_port().unwrap();
@@ -1036,7 +1033,7 @@ mod tests {
 
         let mut tx_result = api_client
             .get::<TransactionQueryData<SeqTypes>>(&format!(
-                "availability/transaction/hash/{tx_hash}",
+                "availability/transaction/hash/{tx_hash}/noproof",
             ))
             .send()
             .await;
@@ -1046,7 +1043,7 @@ mod tests {
 
             tx_result = api_client
                 .get::<TransactionQueryData<SeqTypes>>(&format!(
-                    "availability/transaction/hash/{tx_hash}"
+                    "availability/transaction/hash/{tx_hash}/noproof"
                 ))
                 .send()
                 .await;
@@ -1085,7 +1082,7 @@ mod tests {
 
         let mut tx_result = api_client
             .get::<TransactionQueryData<SeqTypes>>(&format!(
-                "availability/transaction/hash/{tx_hash}",
+                "availability/transaction/hash/{tx_hash}/noproof",
             ))
             .send()
             .await;
@@ -1095,7 +1092,7 @@ mod tests {
 
             tx_result = api_client
                 .get::<TransactionQueryData<SeqTypes>>(&format!(
-                    "availability/transaction/hash/{tx_hash}"
+                    "availability/transaction/hash/{tx_hash}/noproof"
                 ))
                 .send()
                 .await;
@@ -1124,7 +1121,7 @@ mod tests {
 
             let mut result = api_client
                 .get::<TransactionQueryData<SeqTypes>>(&format!(
-                    "availability/transaction/hash/{tx_hash}",
+                    "availability/transaction/hash/{tx_hash}/noproof",
                 ))
                 .send()
                 .await;
@@ -1133,7 +1130,7 @@ mod tests {
 
                 result = api_client
                     .get::<TransactionQueryData<SeqTypes>>(&format!(
-                        "availability/transaction/hash/{tx_hash}"
+                        "availability/transaction/hash/{tx_hash}/noproof"
                     ))
                     .send()
                     .await;
@@ -1287,10 +1284,8 @@ mod tests {
         (providers, urls)
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn slow_dev_node_multiple_lc_providers_test() {
-        setup_test();
-
         let builder_port = pick_unused_port().unwrap();
         let api_port = pick_unused_port().unwrap();
         let dev_node_port = pick_unused_port().unwrap();

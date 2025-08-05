@@ -23,7 +23,7 @@ pub type Proof = jf_plonk::proof_system::structs::Proof<Bn254>;
 /// Universal SRS
 pub type UniversalSrs = jf_plonk::proof_system::structs::UniversalSrs<Bn254>;
 /// Public input to the light client state prover service
-pub type PublicInput = crate::circuit::GenericPublicInput<CircuitField>;
+pub type PublicInput = super::circuit::GenericPublicInput<CircuitField>;
 
 /// Given a SRS, returns the proving key and verifying key for state update
 /// # Errors
@@ -33,7 +33,7 @@ pub fn preprocess(
     srs: &UniversalSrs,
     stake_table_capacity: usize,
 ) -> Result<(ProvingKey, VerifyingKey), PlonkError> {
-    let (circuit, _) = crate::circuit::build_for_preprocessing::<CircuitField, EdwardsConfig>(
+    let (circuit, _) = super::circuit::build_for_preprocessing::<CircuitField, EdwardsConfig>(
         stake_table_capacity,
     )?;
     PlonkKzgSnark::preprocess(srs, &circuit)
@@ -89,7 +89,7 @@ where
         }
     });
 
-    let (circuit, public_inputs) = crate::circuit::build(
+    let (circuit, public_inputs) = super::circuit::build(
         stake_table_entries,
         signer_bit_vec,
         signatures,
@@ -116,7 +116,7 @@ mod tests {
     };
     use hotshot_types::{
         light_client::LightClientState, signature_key::SchnorrPubKey,
-        traits::signature_key::StateSignatureKey,
+        traits::signature_key::LCV2StateSignatureKey,
     };
     use jf_plonk::{
         proof_system::{PlonkKzgSnark, UniversalSNARK},
@@ -128,8 +128,8 @@ mod tests {
 
     use super::{generate_state_update_proof, preprocess, CircuitField, UniversalSrs};
     use crate::{
-        circuit::build_for_preprocessing,
         test_utils::{key_pairs_for_testing, stake_table_for_testing},
+        v2::circuit::build_for_preprocessing,
     };
 
     const ST_CAPACITY: usize = 20;
@@ -220,7 +220,7 @@ mod tests {
         let sigs: Vec<_> = schnorr_keys
             .iter()
             .map(|(key, _)| {
-                <SchnorrPubKey as StateSignatureKey>::sign_state(
+                <SchnorrPubKey as LCV2StateSignatureKey>::sign_state(
                     key,
                     &lightclient_state,
                     &next_st_state,

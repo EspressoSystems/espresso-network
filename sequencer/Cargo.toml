@@ -33,6 +33,7 @@ hotshot-testing = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = "0.8.5"
 reqwest = { workspace = true }
+test-log = { workspace = true }
 
 # Enable "testing" feature when running tests
 sequencer = { path = ".", features = ["testing"] }
@@ -67,6 +68,7 @@ csv = "1"
 derivative = "2.2"
 derive_more = { workspace = true }
 dotenvy = { workspace = true }
+either = { workspace = true }
 espresso-contract-deployer = { path = "../contracts/rust/deployer" }
 espresso-types = { path = "../types" }
 futures = { workspace = true }
@@ -140,3 +142,6 @@ normal = ["hotshot-testing"]
 
 [package.metadata.cargo-machete]
 ignored = ["vergen", "include_dir", "hotshot_builder_api"]
+
+[lints]
+workspace = true

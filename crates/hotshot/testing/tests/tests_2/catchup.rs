@@ -19,7 +19,7 @@ use hotshot_testing::{
 };
 
 #[cfg(test)]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_catchup() {
     use std::time::Duration;
 
@@ -31,8 +31,6 @@ async fn test_catchup() {
         spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
         test_builder::{TestDescription, TimingData},
     };
-
-    hotshot::helpers::initialize_logging();
 
     let timing_data = TimingData {
         next_view_timeout: 2000,
@@ -77,7 +75,7 @@ async fn test_catchup() {
 }
 
 #[cfg(test)]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_catchup_cdn() {
     use std::time::Duration;
 
@@ -89,8 +87,6 @@ async fn test_catchup_cdn() {
         spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
         test_builder::{TestDescription, TimingData},
     };
-
-    hotshot::helpers::initialize_logging();
 
     let timing_data = TimingData {
         next_view_timeout: 2000,
@@ -129,7 +125,7 @@ async fn test_catchup_cdn() {
 
 /// Test that one node catches up and has successful views after coming back
 #[cfg(test)]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_catchup_one_node() {
     use std::time::Duration;
 
@@ -141,7 +137,6 @@ async fn test_catchup_one_node() {
         spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
         test_builder::{TestDescription, TimingData},
     };
-    hotshot::helpers::initialize_logging();
 
     let timing_data = TimingData {
         next_view_timeout: 2000,
@@ -182,7 +177,7 @@ async fn test_catchup_one_node() {
 
 /// Same as `test_catchup` except we start the nodes after their leadership so they join during view sync
 #[cfg(test)]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_catchup_in_view_sync() {
     use std::time::Duration;
 
@@ -194,7 +189,6 @@ async fn test_catchup_in_view_sync() {
         spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
         test_builder::{TestDescription, TimingData},
     };
-    hotshot::helpers::initialize_logging();
 
     let timing_data = TimingData {
         next_view_timeout: 2000,
@@ -242,7 +236,7 @@ async fn test_catchup_in_view_sync() {
 // Almost the same as `test_catchup`, but with catchup nodes reloaded from anchor leaf rather than
 // initialized from genesis.
 #[cfg(test)]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_catchup_reload() {
     use std::time::Duration;
 
@@ -254,8 +248,6 @@ async fn test_catchup_reload() {
         spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
         test_builder::{TestDescription, TimingData},
     };
-
-    hotshot::helpers::initialize_logging();
 
     let timing_data = TimingData {
         next_view_timeout: 2000,

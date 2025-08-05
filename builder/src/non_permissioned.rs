@@ -1,14 +1,11 @@
 use std::{collections::VecDeque, num::NonZeroUsize, sync::Arc, time::Duration};
 
-use alloy::primitives::U256;
 use anyhow::Context;
 use async_broadcast::broadcast;
 use async_lock::{Mutex, RwLock};
 use espresso_types::{
-    eth_signature_key::EthKeyPair,
-    v0_1::{NoStorage, RewardAmount},
-    v0_3::Fetcher,
-    EpochCommittees, FeeAmount, NodeState, Payload, SeqTypes, ValidatedState,
+    eth_signature_key::EthKeyPair, v0_1::NoStorage, v0_3::Fetcher, EpochCommittees, FeeAmount,
+    NodeState, Payload, SeqTypes, ValidatedState,
 };
 use hotshot::traits::BlockPayload;
 use hotshot_builder_core::{
@@ -70,10 +67,11 @@ pub fn build_instance_state<V: Versions>(
         Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
             vec![],
-            RewardAmount(U256::ZERO),
+            None,
             fetcher,
+            genesis.epoch_height.unwrap_or_default(),
         ))),
-        100,
+        genesis.epoch_height.unwrap_or_default(),
         &Arc::new(sequencer::persistence::no_storage::NoStorage),
     );
 
@@ -258,7 +256,6 @@ mod test {
         persistence,
         testing::TestConfigBuilder,
     };
-    use sequencer_utils::test_utils::setup_test;
     use surf_disco::Client;
     use tempfile::TempDir;
 
@@ -268,10 +265,8 @@ mod test {
     /// Test the non-permissioned builder core
     /// It creates a memory hotshot network and launches the hotshot event streaming api
     /// Builder subscrived to this api, and server the hotshot client request and the private mempool tx submission
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_non_permissioned_builder() {
-        setup_test();
-
         let query_port = pick_unused_port().expect("No ports free");
 
         let event_port = pick_unused_port().expect("No ports free");
