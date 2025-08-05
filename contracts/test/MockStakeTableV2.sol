@@ -2,7 +2,6 @@
 pragma solidity ^0.8.0;
 
 import { StakeTableV2 } from "../src/StakeTableV2.sol";
-import { StakeTable } from "../src/StakeTable.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { EdOnBN254 } from "../src/libraries/EdOnBn254.sol";
 
@@ -29,22 +28,5 @@ contract MockStakeTableV2 is StakeTableV2 {
         validators[validator] = Validator({ status: ValidatorStatus.Active, delegatedAmount: 0 });
 
         emit ValidatorRegisteredV2(validator, blsVK, schnorrVK, commission, blsSig, schnorrSig);
-    }
-
-    function updateConsensusKeysV2(
-        BN254.G2Point memory blsVK,
-        EdOnBN254.EdOnBN254Point memory schnorrVK,
-        BN254.G1Point memory blsSig,
-        bytes memory schnorrSig
-    ) public override whenNotPaused {
-        address validator = msg.sender;
-
-        ensureValidatorActive(validator);
-        ensureNonZeroSchnorrKey(schnorrVK);
-        ensureNewKey(blsVK);
-
-        blsKeys[_hashBlsKey(blsVK)] = true;
-
-        emit ConsensusKeysUpdatedV2(validator, blsVK, schnorrVK, blsSig, schnorrSig);
     }
 }
