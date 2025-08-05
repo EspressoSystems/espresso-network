@@ -1111,6 +1111,12 @@ impl BlockHeader<SeqTypes> for Header {
                 header
                     .reward_merkle_tree_root
                     .serialize_compressed(&mut reward_root_bytes)?;
+                // The number of reward root bytes produced by `serialize_compressed()` is 48.
+                ensure!(
+                    reward_root_bytes.len() == 48,
+                    "unexpected reward root byte length: expected 48, got {}",
+                    reward_root_bytes.len()
+                );
 
                 let mut hasher = Keccak256::new();
 

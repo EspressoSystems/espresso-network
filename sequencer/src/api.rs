@@ -5561,10 +5561,9 @@ mod test {
     #[rstest]
     #[case(PosVersionV3::new())]
     #[case(PosVersionV4::new())]
-    #[tokio::test(flavor = "multi_thread")]
-    pub(crate) async fn test_state_cert_query<Ver: Versions>(#[case] versions: Ver) {
-        setup_test();
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
 
+    pub(crate) async fn test_state_cert_query<Ver: Versions>(#[case] versions: Ver) {
         const TEST_EPOCH_HEIGHT: u64 = 10;
         const TEST_EPOCHS: u64 = 5;
 
