@@ -22,3 +22,6 @@ surf-disco = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 vbs = { workspace = true }
+
+[lints]
+workspace = true

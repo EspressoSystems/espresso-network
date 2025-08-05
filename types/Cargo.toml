@@ -16,14 +16,15 @@ async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
 base64-bytes = { workspace = true }
+bigdecimal = "0.4.8"
 bincode = { workspace = true }
 blake3 = { workspace = true }
 bytesize = { workspace = true }
-bigdecimal = "0.4.8"
 clap = { workspace = true }
 cld = { workspace = true }
 committable = { workspace = true }
 derive_more = { workspace = true }
+either = { workspace = true }
 ethers-core = "2.0"
 fluent-asserter = "0.1.9"
 futures = { workspace = true }
@@ -49,6 +50,7 @@ sequencer-utils = { path = "../utils" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }                                                         # TODO temporary, used only for VID, should be set in hotshot
+sha3 = "0.10"
 static_assertions = { workspace = true }
 surf-disco = { workspace = true }
 tagged-base64 = { workspace = true }
@@ -69,6 +71,10 @@ espresso-types = { path = ".", features = [ "testing" ] }
 portpicker = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }
+test-log = { workspace = true }
 
 [package.metadata.cargo-machete]
 ignored = ["base64_bytes", "hotshot_testing"]
+
+[lints]
+workspace = true
