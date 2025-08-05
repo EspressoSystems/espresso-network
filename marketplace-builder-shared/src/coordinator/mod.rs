@@ -177,7 +177,6 @@ where
     ///
     /// </div>
     #[tracing::instrument(skip_all, fields(transaction = %transaction.commit))]
-    #[must_use]
     pub async fn handle_transaction(
         &self,
         transaction: ReceivedTransaction<Types>,
