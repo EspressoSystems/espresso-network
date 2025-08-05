@@ -12,16 +12,15 @@ use espresso_types::{
     v0_4::REWARD_MERKLE_TREE_V2_HEIGHT,
 };
 use hotshot_contract_adapter::{sol_types::RewardClaimPrototypeMock, ToSol, TryToSol};
-use hotshot_query_service::testing::setup_test;
 use jf_merkle_tree::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
 use rand::Rng as _;
 
-#[tokio::test]
+#[test_log::test(tokio::test)]
 async fn test_single_key_tree() -> Result<()> {
     test_tree_helper(1).await
 }
 
-#[tokio::test]
+#[test_log::test(tokio::test)]
 async fn test_large_tree() -> Result<()> {
     test_tree_helper(1000).await
 }
@@ -31,8 +30,6 @@ async fn test_large_tree() -> Result<()> {
 /// Show that we maintain overall compatibility with jellyfish with reasonable
 /// gas cost as we develop reward claims.
 async fn test_tree_helper(num_keys: usize) -> Result<()> {
-    setup_test();
-
     // Start Anvil
     let anvil = Anvil::new().try_spawn()?;
 
