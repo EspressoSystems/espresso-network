@@ -5,7 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 #[cfg(test)]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_timeout() {
     use std::time::Duration;
 
@@ -17,7 +17,6 @@ async fn test_timeout() {
         spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
         test_builder::{TestDescription, TimingData},
     };
-    hotshot::helpers::initialize_logging();
 
     let timing_data = TimingData {
         next_view_timeout: 2000,
@@ -61,7 +60,7 @@ async fn test_timeout() {
 }
 
 #[cfg(test)]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[ignore]
 async fn test_timeout_libp2p() {
     use std::time::Duration;
@@ -74,8 +73,6 @@ async fn test_timeout_libp2p() {
         spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
         test_builder::{TestDescription, TimingData},
     };
-
-    hotshot::helpers::initialize_logging();
 
     let timing_data = TimingData {
         next_view_timeout: 2000,

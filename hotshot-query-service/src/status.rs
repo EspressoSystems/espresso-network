@@ -126,15 +126,13 @@ mod test {
         testing::{
             consensus::{MockDataSource, MockNetwork},
             mocks::{MockBase, MockVersions},
-            setup_test, sleep,
+            sleep,
         },
         ApiState, Error,
     };
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_api() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
@@ -207,10 +205,8 @@ mod test {
         network.shut_down().await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_extensions() {
-        setup_test();
-
         let dir = TempDir::with_prefix("test_status_extensions").unwrap();
         let data_source = ExtensibleDataSource::new(
             MockDataSource::create(dir.path(), Default::default())

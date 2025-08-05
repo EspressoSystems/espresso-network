@@ -45,6 +45,7 @@ vbs = { workspace = true }
 
 [dev-dependencies]
 sequencer-utils = { path = "../utils", features = ["testing"] }
+test-log = { workspace = true }
 
 [features]
 default = ["parallel"]

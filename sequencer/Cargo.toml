@@ -33,6 +33,7 @@ hotshot-testing = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = "0.8.5"
 reqwest = { workspace = true }
+test-log = { workspace = true }
 
 # Enable "testing" feature when running tests
 sequencer = { path = ".", features = ["testing"] }
