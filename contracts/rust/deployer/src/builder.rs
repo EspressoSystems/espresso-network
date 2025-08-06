@@ -279,8 +279,12 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 let use_mock = self.mock_light_client;
                 let dry_run = self.dry_run;
                 let use_multisig = self.use_multisig;
-                let mut blocks_per_epoch = self.blocks_per_epoch.unwrap();
-                let epoch_start_block = self.epoch_start_block.unwrap();
+                let mut blocks_per_epoch = self
+                    .blocks_per_epoch
+                    .ok_or_else(|| anyhow!("blocks_per_epoch was not set in the builder"))?;
+                let epoch_start_block = self
+                    .epoch_start_block
+                    .ok_or_else(|| anyhow!("epoch_start_block was not set in the builder"))?;
                 let rpc_url = self.rpc_url.clone();
 
                 // TEST-ONLY: if this config is not yet set, we use a large default value
