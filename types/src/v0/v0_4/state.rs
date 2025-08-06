@@ -1,18 +1,20 @@
 use std::collections::HashSet;
 
-use alloy::primitives::{Address, U256}; 
-use derive_more::{ Display, From, Into, };
+use alloy::primitives::{Address, U256};
+use derive_more::{Display, From, Into};
 use jf_merkle_tree::{
-    universal_merkle_tree::UniversalMerkleTree,
-    MerkleTreeScheme, UniversalMerkleTreeScheme,
+    universal_merkle_tree::UniversalMerkleTree, MerkleTreeScheme, UniversalMerkleTreeScheme,
 };
 use serde::{Deserialize, Serialize};
 
-use super::{FeeAccount};
-use crate::{v0::sparse_mt::{Keccak256Hasher, KeccakNode}, v0_3::{RewardAccountV1, RewardAmount}};
+use super::FeeAccount;
+use crate::{
+    v0::sparse_mt::{Keccak256Hasher, KeccakNode},
+    v0_3::{RewardAccountV1, RewardAmount},
+};
 
-pub const REWARD_MERKLE_TREE_V2_HEIGHT: usize = 160; 
-const REWARD_MERKLE_TREE_V2_ARITY: usize = 2; 
+pub const REWARD_MERKLE_TREE_V2_HEIGHT: usize = 160;
+pub const REWARD_MERKLE_TREE_V2_ARITY: usize = 2;
 
 pub type RewardMerkleCommitmentV2 = <RewardMerkleTreeV2 as MerkleTreeScheme>::Commitment;
 
@@ -25,7 +27,7 @@ pub type RewardMerkleTreeV2 = UniversalMerkleTree<
 >;
 // New Type for `Address` in order to implement `CanonicalSerialize` and
 // `CanonicalDeserialize`
-// This is the same as `RewardAccountV1` but the `ToTraversal` trait implementation 
+// This is the same as `RewardAccountV1` but the `ToTraversal` trait implementation
 // for this type is different
 #[derive(
     Default,
@@ -43,7 +45,7 @@ pub type RewardMerkleTreeV2 = UniversalMerkleTree<
     From,
     Into,
 )]
-#[display("{_0:x}")]
+#[display("{_0}")]
 pub struct RewardAccountV2(pub Address);
 
 impl From<RewardAccountV2> for RewardAccountV1 {
@@ -80,7 +82,7 @@ pub struct RewardAccountQueryDataV2 {
     pub proof: RewardAccountProofV2,
 }
 
- #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Delta {
     pub fees_delta: HashSet<FeeAccount>,
     pub rewards_delta: HashSet<RewardAccountV2>,
