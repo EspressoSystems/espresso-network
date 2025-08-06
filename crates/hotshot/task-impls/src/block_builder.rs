@@ -146,30 +146,34 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
         receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
         version: Version,
     ) -> Option<HotShotTaskCompleted> {
-        let proposal = if let Some(proposal) = self
+        let mut proposal = self
             .consensus
             .read()
             .await
             .last_proposals()
             .get(&view)
-            .cloned()
-        {
-            proposal
-        } else {
-            let Some(proposal) = self.wait_for_proposal(view, epoch, receiver).await else {
-                tracing::error!("No proposal found for view {view}, sending empty block");
-                send_empty_block::<TYPES, V>(
-                    &self.consensus,
-                    &self.membership_coordinator,
-                    &event_stream,
-                    view,
-                    epoch,
-                    version,
-                )
-                .await;
-                return None;
+            .cloned();
+        if proposal.is_none() {
+            proposal = {
+                let Some(proposal) = self.wait_for_proposal(view, epoch, receiver).await else {
+                    tracing::error!("No proposal found for view {view}, sending empty block");
+                    send_empty_block::<TYPES, V>(
+                        &self.consensus,
+                        &self.membership_coordinator,
+                        &event_stream,
+                        view,
+                        epoch,
+                        version,
+                    )
+                    .await;
+                    return None;
+                };
+                Some(proposal)
             };
-            proposal
+        }
+
+        let Some(proposal) = proposal else {
+            return None;
         };
 
         let leaf = Leaf2::from_quorum_proposal(&proposal.data);
