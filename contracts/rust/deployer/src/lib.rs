@@ -870,14 +870,14 @@ async fn upgrade_stake_table_v2(
 /// Common logic for any Ownable contract to transfer ownership
 pub async fn transfer_ownership(
     provider: impl Provider,
-    target: Contract,
-    addr: Address,
+    target_contract: Contract,
+    target_address: Address,
     new_owner: Address,
 ) -> Result<TransactionReceipt> {
-    let receipt = match target {
+    let receipt = match target_contract {
         Contract::LightClient | Contract::LightClientProxy => {
-            tracing::info!(%addr, %new_owner, "Transfer LightClient ownership");
-            let lc = LightClient::new(addr, &provider);
+            tracing::info!(%target_address, %new_owner, "Transfer LightClient ownership");
+            let lc = LightClient::new(target_address, &provider);
             lc.transferOwnership(new_owner)
                 .send()
                 .await?
@@ -885,8 +885,8 @@ pub async fn transfer_ownership(
                 .await?
         },
         Contract::FeeContract | Contract::FeeContractProxy => {
-            tracing::info!(%addr, %new_owner, "Transfer FeeContract ownership");
-            let fee = FeeContract::new(addr, &provider);
+            tracing::info!(%target_address, %new_owner, "Transfer FeeContract ownership");
+            let fee = FeeContract::new(target_address, &provider);
             fee.transferOwnership(new_owner)
                 .send()
                 .await?
@@ -894,8 +894,8 @@ pub async fn transfer_ownership(
                 .await?
         },
         Contract::EspToken | Contract::EspTokenProxy => {
-            tracing::info!(%addr, %new_owner, "Transfer EspToken ownership");
-            let token = EspToken::new(addr, &provider);
+            tracing::info!(%target_address, %new_owner, "Transfer EspToken ownership");
+            let token = EspToken::new(target_address, &provider);
             token
                 .transferOwnership(new_owner)
                 .send()
@@ -903,9 +903,9 @@ pub async fn transfer_ownership(
                 .get_receipt()
                 .await?
         },
-        Contract::StakeTable | Contract::StakeTableProxy => {
-            tracing::info!(%addr, %new_owner, "Transfer StakeTable ownership");
-            let stake_table = StakeTable::new(addr, &provider);
+        Contract::StakeTable | Contract::StakeTableProxy | Contract::StakeTableV2 => {
+            tracing::info!(%target_address, %new_owner, "Transfer StakeTable ownership");
+            let stake_table = StakeTable::new(target_address, &provider);
             stake_table
                 .transferOwnership(new_owner)
                 .send()
@@ -1152,7 +1152,6 @@ mod tests {
         node_bindings::Anvil, primitives::utils::parse_ether, providers::ProviderBuilder,
         sol_types::SolValue,
     };
-    use sequencer_utils::test_utils::setup_test;
 
     use super::*;
     use crate::proposals::{
@@ -1167,9 +1166,8 @@ mod tests {
         },
     };
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_is_contract() -> Result<(), anyhow::Error> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
 
         // test with zero address returns false
@@ -1188,9 +1186,8 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_is_proxy_contract() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let deployer = provider.get_accounts().await?[0];
 
@@ -1203,9 +1200,8 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_deploy_light_client() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -1221,9 +1217,8 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_deploy_mock_light_client_proxy() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -1271,9 +1266,8 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_deploy_light_client_proxy() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -1324,9 +1318,8 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_deploy_fee_contract_proxy() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let admin = provider.get_accounts().await?[0];
@@ -1359,7 +1352,6 @@ mod tests {
     }
 
     async fn test_upgrade_light_client_to_v2_helper(is_mock: bool) -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let blocks_per_epoch = 10; // for test
@@ -1439,15 +1431,13 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_upgrade_light_client_to_v2() -> Result<()> {
-        setup_test();
         test_upgrade_light_client_to_v2_helper(false).await
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_upgrade_mock_light_client_v2() -> Result<()> {
-        setup_test();
         test_upgrade_light_client_to_v2_helper(true).await
     }
     #[derive(Debug, Clone, Copy)]
@@ -1613,7 +1603,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_upgrade_light_client_to_v2_multisig_owner_dry_run() -> Result<()> {
         test_upgrade_light_client_to_v2_multisig_owner_helper(UpgradeTestOptions {
             is_mock: false,
@@ -1624,7 +1614,7 @@ mod tests {
     }
 
     // We expect no init data for the second upgrade because the proxy was already initialized
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_upgrade_light_client_to_v2_twice_multisig_owner_dry_run() -> Result<()> {
         test_upgrade_light_client_to_v2_multisig_owner_helper(UpgradeTestOptions {
             is_mock: false,
@@ -1634,7 +1624,7 @@ mod tests {
         .await
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     #[ignore]
     async fn test_upgrade_light_client_to_v2_multisig_owner_live_eth_network() -> Result<()> {
         test_upgrade_light_client_to_v2_multisig_owner_helper(UpgradeTestOptions {
@@ -1645,9 +1635,8 @@ mod tests {
         .await
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_deploy_token_proxy() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -1685,9 +1674,8 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_deploy_stake_table_proxy() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -1735,9 +1723,8 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_upgrade_stake_table_v2() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -1889,14 +1876,13 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_upgrade_stake_table_to_v2_multisig_owner_dry_run() -> Result<()> {
         test_upgrade_stake_table_to_v2_multisig_owner_helper(true).await
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_deploy_ops_timelock() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -1949,9 +1935,8 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_deploy_safe_exit_timelock() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -2004,9 +1989,8 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_upgrade_esp_token_v2() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -2060,7 +2044,7 @@ mod tests {
     }
 
     // We expect no init data for the upgrade because there is no reinitializer for v2
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_upgrade_esp_token_v2_multisig_owner_dry_run() -> Result<()> {
         test_upgrade_esp_token_v2_multisig_owner_helper(UpgradeTestOptions {
             is_mock: false,
@@ -2189,9 +2173,8 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_schedule_and_execute_timelock_operation() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let delay = U256::from(0);
@@ -2316,7 +2299,7 @@ mod tests {
                     mnemonic = val.to_string();
                 } else if key == "ESPRESSO_DEPLOYER_ACCOUNT_INDEX" {
                     account_index = val.parse::<u32>()?;
-                } else if key == "ESPRESSO_SEQUENCER_TIMELOCK_CONTROLLER_ADDRESS" {
+                } else if key == "ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS" {
                     timelock = val.parse::<Address>()?;
                 }
             }
@@ -2324,8 +2307,7 @@ mod tests {
             if sepolia_rpc_url.is_empty() || multisig_admin.is_zero() || timelock.is_zero() {
                 panic!(
                     "ESPRESSO_SEQUENCER_L1_PROVIDER, ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS, \
-                     ESPRESSO_SEQUENCER_TIMELOCK_CONTROLLER_ADDRESS must be set in \
-                     .env.deployer.rs.test"
+                     ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS must be set in .env.deployer.rs.test"
                 );
             }
         }
@@ -2473,7 +2455,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_encode_function_call() -> Result<()> {
         let function_signature = "transfer(address,uint256)".to_string();
         let values = vec![
@@ -2487,7 +2469,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_encode_function_call_upgrade_to_and_call() -> Result<()> {
         let function_signature = "upgradeToAndCall(address,bytes)".to_string();
         let values = vec![
@@ -2501,7 +2483,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_encode_function_call_with_bytes32() -> Result<()> {
         let function_signature = "setHash(bytes32)".to_string();
         let values =
@@ -2514,7 +2496,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_encode_function_call_with_bytes() -> Result<()> {
         let function_signature = "emitData(bytes)".to_string();
         let values = vec!["0xdeadbeef".to_string()];
@@ -2525,7 +2507,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_encode_function_call_with_bool() -> Result<()> {
         let function_signature = "setFlag(bool)".to_string();
         let mut values = vec!["true".to_string()];
@@ -2546,7 +2528,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_encode_function_call_with_string() -> Result<()> {
         let function_signature = "logMessage(string)".to_string();
         let values = vec!["Hello, world!".to_string()];
@@ -2557,7 +2539,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_transfer_ownership_light_client_proxy() -> Result<()> {
         test_transfer_ownership_helper(
             Contract::LightClientProxy,
@@ -2570,7 +2552,7 @@ mod tests {
         .await
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_transfer_ownership_fee_contract_proxy() -> Result<()> {
         test_transfer_ownership_helper(
             Contract::FeeContractProxy,
@@ -2583,7 +2565,7 @@ mod tests {
         .await
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     #[ignore]
     async fn test_transfer_ownership_fee_contract_proxy_real_proposal() -> Result<()> {
         println!("Starting test_transfer_ownership_fee_contract_proxy_real_proposal");
@@ -2600,7 +2582,7 @@ mod tests {
         .await
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_transfer_ownership_esp_token_proxy() -> Result<()> {
         test_transfer_ownership_helper(
             Contract::EspTokenProxy,
@@ -2613,7 +2595,7 @@ mod tests {
         .await
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_transfer_ownership_stake_table_proxy() -> Result<()> {
         test_transfer_ownership_helper(
             Contract::StakeTableProxy,

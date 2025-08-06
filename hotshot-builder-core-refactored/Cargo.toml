@@ -39,5 +39,9 @@ hotshot-task-impls = { workspace = true }
 hotshot-testing = { workspace = true }
 num_cpus = { workspace = true }
 portpicker = { workspace = true }
+test-log = { workspace = true }
 tracing-test = { workspace = true }
 url = { workspace = true }
+
+[lints]
+workspace = true

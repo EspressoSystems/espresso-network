@@ -13,6 +13,7 @@ rewind = []
 [dependencies]
 alloy = { workspace = true }
 anyhow = { workspace = true }
+ark-ff = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
@@ -22,6 +23,7 @@ committable = { workspace = true }
 either = { workspace = true }
 futures = { workspace = true }
 hotshot-builder-api = { workspace = true }
+hotshot-contract-adapter = { workspace = true }
 hotshot-task = { workspace = true }
 hotshot-types = { workspace = true }
 hotshot-utils = { workspace = true }
@@ -40,3 +42,6 @@ url = { workspace = true }
 vbs = { workspace = true }
 vec1 = { workspace = true }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[lints]
+workspace = true

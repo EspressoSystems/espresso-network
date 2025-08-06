@@ -115,7 +115,7 @@ mod tests {
     };
     use hotshot_types::{
         light_client::LightClientState, signature_key::SchnorrPubKey,
-        traits::signature_key::StateSignatureKey,
+        traits::signature_key::LCV1StateSignatureKey,
     };
     use jf_plonk::{
         proof_system::{PlonkKzgSnark, UniversalSNARK},
@@ -127,8 +127,8 @@ mod tests {
 
     use super::{generate_state_update_proof, preprocess, CircuitField, UniversalSrs};
     use crate::{
-        legacy::circuit::build_for_preprocessing,
         test_utils::{key_pairs_for_testing, stake_table_for_testing},
+        v1::circuit::build_for_preprocessing,
     };
 
     const ST_CAPACITY: usize = 20;
@@ -218,7 +218,7 @@ mod tests {
         let sigs: Vec<_> = schnorr_keys
             .iter()
             .map(|(key, _)| {
-                <SchnorrPubKey as StateSignatureKey>::legacy_sign_state(key, &lightclient_state)
+                <SchnorrPubKey as LCV1StateSignatureKey>::sign_state(key, &lightclient_state)
                     .unwrap()
             })
             .collect();

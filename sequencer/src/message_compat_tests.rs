@@ -64,6 +64,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
     let signature = PubKey::sign(&priv_key, &[]).unwrap();
     let committee = vec![PeerConfig::default()]; /* one committee member, necessary to generate a VID share */
     let storage = TestStorage::default();
+    let epoch_height = 10;
 
     let membership = EpochMembershipCoordinator::new(
         Arc::new(RwLock::new(EpochCommittees::new_stake(
@@ -71,9 +72,9 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
             committee,
             None,
             Fetcher::mock(),
-            10,
+            epoch_height,
         ))),
-        10,
+        epoch_height,
         &storage,
     );
     let upgrade_data = UpgradeProposalData {

@@ -1,24 +1,24 @@
-use std::{collections::HashSet, iter::once, str::FromStr};
+use std::{borrow::Borrow, collections::HashSet, iter::once, str::FromStr};
 
 use alloy::primitives::{
     utils::{parse_units, ParseUnits},
-    Address, U256,
+    Address, B256, U256,
 };
 use anyhow::{bail, ensure, Context};
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
-use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot::types::BLSPubKey;
+use hotshot_contract_adapter::sol_types::AccruedRewardsProofSol;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     traits::{election::Membership, node_implementation::ConsensusTime},
     utils::epoch_from_block_number,
 };
 use jf_merkle_tree::{
-    ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
-    MerkleCommitment, MerkleTreeScheme, PersistentUniversalMerkleTreeScheme, ToTraversalPath,
-    UniversalMerkleTreeScheme,
+    prelude::MerkleNode, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
+    LookupResult, MerkleCommitment, MerkleTreeScheme, PersistentUniversalMerkleTreeScheme,
+    ToTraversalPath, UniversalMerkleTreeScheme,
 };
 use num_traits::CheckedSub;
 use sequencer_utils::{
@@ -27,28 +27,22 @@ use sequencer_utils::{
 use vbs::version::StaticVersionType;
 
 use super::{
-    v0_1::{
-        RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardAmount, RewardInfo,
-        RewardMerkleCommitment, RewardMerkleProof, RewardMerkleTree, COMMISSION_BASIS_POINTS,
+    v0_3::{RewardAmount, Validator, COMMISSION_BASIS_POINTS},
+    v0_4::{
+        RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleCommitmentV2,
+        RewardMerkleProofV2, RewardMerkleTreeV2,
     },
-    v0_3::Validator,
     Leaf2, NodeState, ValidatedState,
 };
 use crate::{
-    eth_signature_key::EthKeyPair, Delta, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount,
+    eth_signature_key::EthKeyPair,
+    v0_3::{
+        RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1, RewardMerkleProofV1,
+        RewardMerkleTreeV1,
+    },
+    v0_4::{Delta, REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT},
+    DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount,
 };
-
-impl Committable for RewardInfo {
-    fn commit(&self) -> Commitment<Self> {
-        RawCommitmentBuilder::new(&Self::tag())
-            .fixed_size_field("account", &self.account.to_fixed_bytes())
-            .fixed_size_field("amount", &self.amount.to_fixed_bytes())
-            .finalize()
-    }
-    fn tag() -> String {
-        "REWARD_INFO".into()
-    }
-}
 
 impl_serde_from_string_or_integer!(RewardAmount);
 impl_to_fixed_bytes!(RewardAmount, U256);
@@ -120,7 +114,31 @@ impl RewardAmount {
         }
     }
 }
-impl RewardAccount {
+
+impl From<[u8; 20]> for RewardAccountV1 {
+    fn from(bytes: [u8; 20]) -> Self {
+        Self(Address::from(bytes))
+    }
+}
+
+impl AsRef<[u8]> for RewardAccountV1 {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+}
+
+impl<const ARITY: usize> ToTraversalPath<ARITY> for RewardAccountV1 {
+    fn to_traversal_path(&self, height: usize) -> Vec<usize> {
+        self.0
+            .as_slice()
+            .iter()
+            .take(height)
+            .map(|i| *i as usize)
+            .collect()
+    }
+}
+
+impl RewardAccountV2 {
     /// Return inner `Address`
     pub fn address(&self) -> Address {
         self.0
@@ -142,7 +160,37 @@ impl RewardAccount {
     }
 }
 
-impl FromStr for RewardAccount {
+impl RewardAccountV1 {
+    /// Return inner `Address`
+    pub fn address(&self) -> Address {
+        self.0
+    }
+    /// Return byte slice representation of inner `Address` type
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+    /// Return array containing underlying bytes of inner `Address` type
+    pub fn to_fixed_bytes(self) -> [u8; 20] {
+        self.0.into_array()
+    }
+    pub fn test_key_pair() -> EthKeyPair {
+        EthKeyPair::from_mnemonic(
+            "test test test test test test test test test test test junk",
+            0u32,
+        )
+        .unwrap()
+    }
+}
+
+impl FromStr for RewardAccountV2 {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(s.parse()?))
+    }
+}
+
+impl FromStr for RewardAccountV1 {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -156,7 +204,13 @@ impl Valid for RewardAmount {
     }
 }
 
-impl Valid for RewardAccount {
+impl Valid for RewardAccountV2 {
+    fn check(&self) -> Result<(), SerializationError> {
+        Ok(())
+    }
+}
+
+impl Valid for RewardAccountV1 {
     fn check(&self) -> Result<(), SerializationError> {
         Ok(())
     }
@@ -187,7 +241,8 @@ impl CanonicalDeserialize for RewardAmount {
         Ok(Self(value))
     }
 }
-impl CanonicalSerialize for RewardAccount {
+
+impl CanonicalSerialize for RewardAccountV2 {
     fn serialize_with_mode<W: std::io::prelude::Write>(
         &self,
         mut writer: W,
@@ -200,7 +255,7 @@ impl CanonicalSerialize for RewardAccount {
         core::mem::size_of::<Address>()
     }
 }
-impl CanonicalDeserialize for RewardAccount {
+impl CanonicalDeserialize for RewardAccountV2 {
     fn deserialize_with_mode<R: Read>(
         mut reader: R,
         _compress: Compress,
@@ -213,52 +268,96 @@ impl CanonicalDeserialize for RewardAccount {
     }
 }
 
-impl ToTraversalPath<256> for RewardAccount {
-    fn to_traversal_path(&self, height: usize) -> Vec<usize> {
-        self.0
-            .as_slice()
-            .iter()
-            .take(height)
-            .map(|i| *i as usize)
-            .collect()
+impl CanonicalSerialize for RewardAccountV1 {
+    fn serialize_with_mode<W: std::io::prelude::Write>(
+        &self,
+        mut writer: W,
+        _compress: Compress,
+    ) -> Result<(), SerializationError> {
+        Ok(writer.write_all(self.0.as_slice())?)
+    }
+
+    fn serialized_size(&self, _compress: Compress) -> usize {
+        core::mem::size_of::<Address>()
+    }
+}
+impl CanonicalDeserialize for RewardAccountV1 {
+    fn deserialize_with_mode<R: Read>(
+        mut reader: R,
+        _compress: Compress,
+        _validate: Validate,
+    ) -> Result<Self, SerializationError> {
+        let mut bytes = [0u8; core::mem::size_of::<Address>()];
+        reader.read_exact(&mut bytes)?;
+        let value = Address::from_slice(&bytes);
+        Ok(Self(value))
     }
 }
 
-#[allow(dead_code)]
-impl RewardAccountProof {
+impl From<[u8; 20]> for RewardAccountV2 {
+    fn from(bytes: [u8; 20]) -> Self {
+        Self(Address::from(bytes))
+    }
+}
+
+impl AsRef<[u8]> for RewardAccountV2 {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+}
+
+impl<const ARITY: usize> ToTraversalPath<ARITY> for RewardAccountV2 {
+    fn to_traversal_path(&self, height: usize) -> Vec<usize> {
+        let mut result = vec![0; height];
+
+        // Convert 20-byte address to U256
+        let mut value = U256::from_be_slice(self.0.as_slice());
+
+        // Extract digits using modulo and division (LSB first)
+        for item in result.iter_mut().take(height) {
+            let digit = (value % U256::from(ARITY)).to::<usize>();
+            *item = digit;
+            value /= U256::from(ARITY);
+        }
+
+        result
+    }
+}
+
+impl RewardAccountProofV2 {
     pub fn presence(
         pos: FeeAccount,
-        proof: <RewardMerkleTree as MerkleTreeScheme>::MembershipProof,
+        proof: <RewardMerkleTreeV2 as MerkleTreeScheme>::MembershipProof,
     ) -> Self {
         Self {
             account: pos.into(),
-            proof: RewardMerkleProof::Presence(proof),
+            proof: RewardMerkleProofV2::Presence(proof),
         }
     }
 
     pub fn absence(
-        pos: RewardAccount,
-        proof: <RewardMerkleTree as UniversalMerkleTreeScheme>::NonMembershipProof,
+        pos: RewardAccountV2,
+        proof: <RewardMerkleTreeV2 as UniversalMerkleTreeScheme>::NonMembershipProof,
     ) -> Self {
         Self {
             account: pos.into(),
-            proof: RewardMerkleProof::Absence(proof),
+            proof: RewardMerkleProofV2::Absence(proof),
         }
     }
 
-    pub fn prove(tree: &RewardMerkleTree, account: Address) -> Option<(Self, U256)> {
-        match tree.universal_lookup(RewardAccount(account)) {
+    pub fn prove(tree: &RewardMerkleTreeV2, account: Address) -> Option<(Self, U256)> {
+        match tree.universal_lookup(RewardAccountV2(account)) {
             LookupResult::Ok(balance, proof) => Some((
                 Self {
                     account,
-                    proof: RewardMerkleProof::Presence(proof),
+                    proof: RewardMerkleProofV2::Presence(proof),
                 },
                 balance.0,
             )),
             LookupResult::NotFound(proof) => Some((
                 Self {
                     account,
-                    proof: RewardMerkleProof::Absence(proof),
+                    proof: RewardMerkleProofV2::Absence(proof),
                 },
                 U256::ZERO,
             )),
@@ -266,12 +365,16 @@ impl RewardAccountProof {
         }
     }
 
-    pub fn verify(&self, comm: &RewardMerkleCommitment) -> anyhow::Result<U256> {
+    pub fn verify(&self, comm: &RewardMerkleCommitmentV2) -> anyhow::Result<U256> {
         match &self.proof {
-            RewardMerkleProof::Presence(proof) => {
+            RewardMerkleProofV2::Presence(proof) => {
                 ensure!(
-                    RewardMerkleTree::verify(comm.digest(), RewardAccount(self.account), proof)?
-                        .is_ok(),
+                    RewardMerkleTreeV2::verify(
+                        comm.digest(),
+                        RewardAccountV2(self.account),
+                        proof
+                    )?
+                    .is_ok(),
                     "invalid proof"
                 );
                 Ok(proof
@@ -279,10 +382,10 @@ impl RewardAccountProof {
                     .context("presence proof is missing account balance")?
                     .0)
             },
-            RewardMerkleProof::Absence(proof) => {
-                let tree = RewardMerkleTree::from_commitment(comm);
+            RewardMerkleProofV2::Absence(proof) => {
+                let tree = RewardMerkleTreeV2::from_commitment(comm);
                 ensure!(
-                    tree.non_membership_verify(RewardAccount(self.account), proof)?,
+                    tree.non_membership_verify(RewardAccountV2(self.account), proof)?,
                     "invalid proof"
                 );
                 Ok(U256::ZERO)
@@ -290,11 +393,11 @@ impl RewardAccountProof {
         }
     }
 
-    pub fn remember(&self, tree: &mut RewardMerkleTree) -> anyhow::Result<()> {
+    pub fn remember(&self, tree: &mut RewardMerkleTreeV2) -> anyhow::Result<()> {
         match &self.proof {
-            RewardMerkleProof::Presence(proof) => {
+            RewardMerkleProofV2::Presence(proof) => {
                 tree.remember(
-                    RewardAccount(self.account),
+                    RewardAccountV2(self.account),
                     proof
                         .elem()
                         .context("presence proof is missing account balance")?,
@@ -302,16 +405,175 @@ impl RewardAccountProof {
                 )?;
                 Ok(())
             },
-            RewardMerkleProof::Absence(proof) => {
-                tree.non_membership_remember(RewardAccount(self.account), proof)?;
+            RewardMerkleProofV2::Absence(proof) => {
+                tree.non_membership_remember(RewardAccountV2(self.account), proof)?;
                 Ok(())
             },
         }
     }
 }
 
-impl From<(RewardAccountProof, U256)> for RewardAccountQueryData {
-    fn from((proof, balance): (RewardAccountProof, U256)) -> Self {
+impl TryInto<AccruedRewardsProofSol> for RewardAccountProofV2 {
+    type Error = anyhow::Error;
+
+    /// Generate a Solidity-compatible proof for this account
+    ///
+    /// The proof is returned without leaf value. The caller is expected to
+    /// obtain the leaf value from the jellyfish proof (Self).
+    ///
+    /// TODO: review error handling / panics
+    fn try_into(self) -> anyhow::Result<AccruedRewardsProofSol> {
+        // NOTE: rustfmt fails to format this file if the nesting is too deep.
+        let proof = if let RewardMerkleProofV2::Presence(proof) = &self.proof {
+            proof
+        } else {
+            bail!("only presence proofs supported")
+        };
+
+        let path = ToTraversalPath::<REWARD_MERKLE_TREE_V2_ARITY>::to_traversal_path(
+            &RewardAccountV2(self.account),
+            REWARD_MERKLE_TREE_V2_HEIGHT,
+        );
+
+        if path.len() != REWARD_MERKLE_TREE_V2_HEIGHT {
+            bail!("Invalid proof: unexpected path length: {}", path.len());
+        };
+
+        let siblings: Vec<B256> = proof
+            .proof
+            .iter()
+            .enumerate()
+            .skip(1) // Skip the leaf node (first element)
+            .filter_map(|(level_idx, node)| match node {
+                MerkleNode::Branch { children, .. } => {
+                    // Use the path to determine which sibling we need
+                    let path_direction = path
+                        .get(level_idx - 1)
+                        .copied()
+                        .expect("exists");
+                    let sibling_idx = if path_direction == 0 { 1 } else { 0 };
+                    if sibling_idx >= children.len() {
+                        panic!(
+                            "Invalid proof: index={sibling_idx} length={}",
+                            children.len()
+                        );
+                    };
+
+                    match children[sibling_idx].as_ref() {
+                        MerkleNode::Empty => Some(B256::ZERO),
+                        MerkleNode::Leaf { value, .. } => {
+                            let bytes = value.as_ref();
+                            Some(B256::from_slice(bytes))
+                        }
+                        MerkleNode::Branch { value, .. } => {
+                            let bytes = value.as_ref();
+                            Some(B256::from_slice(bytes))
+                        }
+                        MerkleNode::ForgettenSubtree { value } => {
+                            let bytes = value.as_ref();
+                            Some(B256::from_slice(bytes))
+                        }
+                    }
+                }
+                _ => None,
+            })
+            .collect();
+
+        Ok(AccruedRewardsProofSol { siblings })
+    }
+}
+
+impl RewardAccountProofV1 {
+    pub fn presence(
+        pos: FeeAccount,
+        proof: <RewardMerkleTreeV1 as MerkleTreeScheme>::MembershipProof,
+    ) -> Self {
+        Self {
+            account: pos.into(),
+            proof: RewardMerkleProofV1::Presence(proof),
+        }
+    }
+
+    pub fn absence(
+        pos: RewardAccountV1,
+        proof: <RewardMerkleTreeV1 as UniversalMerkleTreeScheme>::NonMembershipProof,
+    ) -> Self {
+        Self {
+            account: pos.into(),
+            proof: RewardMerkleProofV1::Absence(proof),
+        }
+    }
+
+    pub fn prove(tree: &RewardMerkleTreeV1, account: Address) -> Option<(Self, U256)> {
+        match tree.universal_lookup(RewardAccountV1(account)) {
+            LookupResult::Ok(balance, proof) => Some((
+                Self {
+                    account,
+                    proof: RewardMerkleProofV1::Presence(proof),
+                },
+                balance.0,
+            )),
+            LookupResult::NotFound(proof) => Some((
+                Self {
+                    account,
+                    proof: RewardMerkleProofV1::Absence(proof),
+                },
+                U256::ZERO,
+            )),
+            LookupResult::NotInMemory => None,
+        }
+    }
+
+    pub fn verify(&self, comm: &RewardMerkleCommitmentV1) -> anyhow::Result<U256> {
+        match &self.proof {
+            RewardMerkleProofV1::Presence(proof) => {
+                ensure!(
+                    RewardMerkleTreeV1::verify(
+                        comm.digest(),
+                        RewardAccountV1(self.account),
+                        proof
+                    )?
+                    .is_ok(),
+                    "invalid proof"
+                );
+                Ok(proof
+                    .elem()
+                    .context("presence proof is missing account balance")?
+                    .0)
+            },
+            RewardMerkleProofV1::Absence(proof) => {
+                let tree = RewardMerkleTreeV1::from_commitment(comm);
+                ensure!(
+                    tree.non_membership_verify(RewardAccountV1(self.account), proof)?,
+                    "invalid proof"
+                );
+                Ok(U256::ZERO)
+            },
+        }
+    }
+
+    pub fn remember(&self, tree: &mut RewardMerkleTreeV1) -> anyhow::Result<()> {
+        match &self.proof {
+            RewardMerkleProofV1::Presence(proof) => {
+                tree.remember(
+                    RewardAccountV1(self.account),
+                    proof
+                        .elem()
+                        .context("presence proof is missing account balance")?,
+                    proof,
+                )?;
+                Ok(())
+            },
+            RewardMerkleProofV1::Absence(proof) => {
+                tree.non_membership_remember(RewardAccountV1(self.account), proof)?;
+                Ok(())
+            },
+        }
+    }
+}
+
+impl From<(RewardAccountProofV2, U256)> for RewardAccountQueryDataV2 {
+    fn from((proof, balance): (RewardAccountProofV2, U256)) -> Self {
         Self { balance, proof }
     }
 }
@@ -390,49 +652,77 @@ impl RewardDistributor {
         // Update delta rewards
         delta
             .rewards_delta
-            .insert(RewardAccount(self.validator().account));
+            .insert(RewardAccountV2(self.validator().account));
         delta.rewards_delta.extend(
             self.validator()
                 .delegators
                 .keys()
-                .map(|d| RewardAccount(*d)),
+                .map(|d| RewardAccountV2(*d)),
         );
+
+        Ok(())
+    }
+
+    fn update_reward_balance<P>(
+        tree: &mut P,
+        account: &P::Index,
+        amount: P::Element,
+    ) -> anyhow::Result<()>
+    where
+        P: PersistentUniversalMerkleTreeScheme,
+        P: MerkleTreeScheme<Element = RewardAmount>,
+        P::Index: Borrow<<P as MerkleTreeScheme>::Index> + std::fmt::Display,
+    {
+        let mut err = None;
+        *tree = tree.persistent_update_with(account.clone(), |balance| {
+            let balance = balance.copied();
+            match balance.unwrap_or_default().0.checked_add(amount.0) {
+                Some(updated) => Some(updated.into()),
+                None => {
+                    err = Some(format!("overflowed reward balance for account {account}"));
+                    balance
+                },
+            }
+        })?;
+
+        if let Some(error) = err {
+            tracing::warn!(error);
+            bail!(error)
+        }
 
         Ok(())
     }
 
     pub fn apply_rewards(
         &mut self,
-        mut reward_state: RewardMerkleTree,
-    ) -> anyhow::Result<RewardMerkleTree> {
-        let mut update_balance = |account: &RewardAccount, amount: RewardAmount| {
-            let mut err = None;
-            reward_state = reward_state.persistent_update_with(account, |balance| {
-                let balance = balance.copied();
-                match balance.unwrap_or_default().0.checked_add(amount.0) {
-                    Some(updated) => Some(updated.into()),
-                    None => {
-                        err = Some(format!("overflowed reward balance for account {account}"));
-                        balance
-                    },
-                }
-            })?;
-
-            if let Some(error) = err {
-                tracing::warn!(error);
-                bail!(error)
-            }
-            Ok::<(), anyhow::Error>(())
-        };
+        version: vbs::version::Version,
+        state: &mut ValidatedState,
+    ) -> anyhow::Result<()> {
         let computed_rewards = self.compute_rewards()?;
-        for (address, reward) in computed_rewards.all_rewards() {
-            update_balance(&RewardAccount(address), reward)?;
-            tracing::debug!("applied rewards address={address} reward={reward}",);
+
+        if version <= EpochVersion::version() {
+            for (address, reward) in computed_rewards.all_rewards() {
+                Self::update_reward_balance(
+                    &mut state.reward_merkle_tree_v1,
+                    &RewardAccountV1(address),
+                    reward,
+                )?;
+                tracing::debug!(%address, %reward, "applied v1 rewards");
+            }
+        } else {
+            for (address, reward) in computed_rewards.all_rewards() {
+                Self::update_reward_balance(
+                    &mut state.reward_merkle_tree_v2,
+                    &RewardAccountV2(address),
+                    reward,
+                )?;
+                tracing::debug!(%address, %reward, "applied v2 rewards");
+            }
         }
 
         self.total_distributed += self.block_reward();
 
-        Ok(reward_state)
+        Ok(())
     }
 
     /// Computes the reward in a block for the validator and its delegators
@@ -492,7 +782,9 @@ impl RewardDistributor {
 /// Distributes the block reward for a given block height
 ///
 /// Rewards are only distributed if the block belongs to an epoch beyond the second epoch.
-/// The function also calculates the appropriate reward (fixed or dynamic) based on the protocol version.
+///
+/// The function also calculates the appropriate reward (fixed or dynamic) based
+/// on the protocol version.
 pub async fn distribute_block_reward(
     instance_state: &NodeState,
     validated_state: &mut ValidatedState,
@@ -522,7 +814,8 @@ pub async fn distribute_block_reward(
         return Ok(None);
     }
 
-    // Determine who the block leader is for this view and ensure missing block rewards are fetched from peers if needed.
+    // Determine who the block leader is for this view and ensure missing block
+    // rewards are fetched from peers if needed.
 
     let leader = get_leader_and_fetch_missing_rewards(
         instance_state,
@@ -584,12 +877,15 @@ pub async fn distribute_block_reward(
             .with_context(|| format!("fixed block reward is None for epoch {epoch}"))?
     };
 
+    if block_reward.0.is_zero() {
+        tracing::info!("block reward is zero. height={height}. epoch={epoch}");
+        return Ok(None);
+    }
+
     let mut reward_distributor =
         RewardDistributor::new(leader, block_reward, previously_distributed);
 
-    let reward_state =
-        reward_distributor.apply_rewards(validated_state.reward_merkle_tree.clone())?;
-    validated_state.reward_merkle_tree = reward_state;
+    reward_distributor.apply_rewards(version, validated_state)?;
 
     Ok(Some(reward_distributor))
 }
@@ -633,36 +929,74 @@ pub async fn get_leader_and_fetch_missing_rewards(
         .keys()
         .cloned()
         .map(|a| a.into())
-        .collect::<Vec<RewardAccount>>();
+        .collect::<Vec<RewardAccountV2>>();
 
     reward_accounts.extend(delegators.clone());
-    let missing_reward_accts = validated_state.forgotten_reward_accounts(reward_accounts);
 
-    if !missing_reward_accts.is_empty() {
-        tracing::warn!(
-            parent_height,
-            ?parent_view,
-            ?missing_reward_accts,
-            "fetching missing reward accounts from peers"
-        );
+    let parent_header = parent_leaf.block_header();
 
-        let missing_account_proofs = instance_state
-            .state_catchup
-            .fetch_reward_accounts(
-                instance_state,
+    if parent_header.version() <= EpochVersion::version() {
+        let accts: HashSet<_> = reward_accounts
+            .into_iter()
+            .map(RewardAccountV1::from)
+            .collect();
+        let missing_reward_accts = validated_state.forgotten_reward_accounts_v1(accts);
+
+        if !missing_reward_accts.is_empty() {
+            tracing::warn!(
                 parent_height,
-                parent_view,
-                validated_state.reward_merkle_tree.commitment(),
-                missing_reward_accts,
-            )
-            .await?;
+                ?parent_view,
+                ?missing_reward_accts,
+                "fetching missing v1 reward accounts from peers"
+            );
 
-        for proof in missing_account_proofs.iter() {
-            proof
-                .remember(&mut validated_state.reward_merkle_tree)
-                .expect("proof previously verified");
+            let missing_account_proofs = instance_state
+                .state_catchup
+                .fetch_reward_accounts_v1(
+                    instance_state,
+                    parent_height,
+                    parent_view,
+                    validated_state.reward_merkle_tree_v1.commitment(),
+                    missing_reward_accts,
+                )
+                .await?;
+
+            for proof in missing_account_proofs.iter() {
+                proof
+                    .remember(&mut validated_state.reward_merkle_tree_v1)
+                    .expect("proof previously verified");
+            }
+        }
+    } else {
+        let missing_reward_accts = validated_state.forgotten_reward_accounts_v2(reward_accounts);
+
+        if !missing_reward_accts.is_empty() {
+            tracing::warn!(
+                parent_height,
+                ?parent_view,
+                ?missing_reward_accts,
+                "fetching missing reward accounts from peers"
+            );
+
+            let missing_account_proofs = instance_state
+                .state_catchup
+                .fetch_reward_accounts_v2(
+                    instance_state,
+                    parent_height,
+                    parent_view,
+                    validated_state.reward_merkle_tree_v2.commitment(),
+                    missing_reward_accts,
+                )
+                .await?;
+
+            for proof in missing_account_proofs.iter() {
+                proof
+                    .remember(&mut validated_state.reward_merkle_tree_v2)
+                    .expect("proof previously verified");
+            }
         }
     }
+
     Ok(validator)
 }
 
@@ -692,15 +1026,15 @@ pub mod tests {
                 .iter()
                 .fold(U256::ZERO, |acc, (_, r)| acc + r.0)
         };
-        assert_eq!(total(rewards.clone()), distributor.block_reward.into());
+        assert_eq!(total(rewards.clone()), distributor.block_reward.0);
 
         distributor.validator.commission = 0;
         let rewards = distributor.compute_rewards().unwrap();
-        assert_eq!(total(rewards.clone()), distributor.block_reward.into());
+        assert_eq!(total(rewards.clone()), distributor.block_reward.0);
 
         distributor.validator.commission = 10000;
         let rewards = distributor.compute_rewards().unwrap();
-        assert_eq!(total(rewards.clone()), distributor.block_reward.into());
+        assert_eq!(total(rewards.clone()), distributor.block_reward.0);
         let leader_commission = rewards.leader_commission();
         assert_eq!(*leader_commission, distributor.block_reward);
 
