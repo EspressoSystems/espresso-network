@@ -1,15 +1,19 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use alloy::primitives::map::HashSet;
-use async_broadcast::{Receiver, Sender};
+use async_broadcast::{broadcast, Receiver, Sender};
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
-use hotshot_task::task::TaskState;
+use hotshot_task::{
+    dependency::{Dependency, EventDependency},
+    task::TaskState,
+};
 use hotshot_types::{
     consensus::{Consensus, OuterConsensus},
-    data::{Leaf2, PackedBundle},
+    data::{Leaf2, PackedBundle, QuorumProposalWrapper},
     epoch_membership::EpochMembershipCoordinator,
-    message::UpgradeLock,
+    message::{Proposal, UpgradeLock},
+    simple_vote::HasEpoch,
     traits::{
         block_contents::{BlockHeader, BuilderFee},
         node_implementation::{ConsensusTime, NodeType, Versions},
@@ -101,32 +105,71 @@ async fn collect_txns<TYPES: NodeType>(
 }
 
 impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
+    async fn wait_for_proposal(
+        &self,
+        view: TYPES::View,
+        epoch: Option<TYPES::Epoch>,
+        receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
+    ) -> Option<Proposal<TYPES, QuorumProposalWrapper<TYPES>>> {
+        let (_, cancel) = broadcast(1);
+        let proposal_dep = EventDependency::new(
+            receiver,
+            cancel,
+            "Proposal".to_string(),
+            Box::new(move |event| {
+                let HotShotEvent::QuorumProposalValidated(proposal, _) = event.as_ref() else {
+                    return false;
+                };
+                proposal.data.view_number() == view && proposal.data.epoch() == epoch
+            }),
+        );
+        let event =
+            match tokio::time::timeout(Duration::from_secs(6), proposal_dep.completed()).await {
+                Ok(Some(proposal)) => proposal,
+                Ok(None) => return None,
+                Err(_) => {
+                    tracing::error!("Proposal timed out");
+                    return None;
+                },
+            };
+        if let HotShotEvent::QuorumProposalValidated(proposal, _) = event.as_ref() {
+            Some(proposal.clone())
+        } else {
+            None
+        }
+    }
     pub async fn build_block(
         &mut self,
         view: TYPES::View,
         epoch: Option<TYPES::Epoch>,
         event_stream: Sender<Arc<HotShotEvent<TYPES>>>,
+        receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
         version: Version,
     ) -> Option<HotShotTaskCompleted> {
-        let Some(proposal) = self
+        let proposal = if let Some(proposal) = self
             .consensus
             .read()
             .await
             .last_proposals()
             .get(&view)
             .cloned()
-        else {
-            tracing::error!("No proposal found for view {view}, sending empty block");
-            send_empty_block::<TYPES, V>(
-                &self.consensus,
-                &self.membership_coordinator,
-                &event_stream,
-                view,
-                epoch,
-                version,
-            )
-            .await;
-            return None;
+        {
+            proposal
+        } else {
+            let Some(proposal) = self.wait_for_proposal(view, epoch, receiver).await else {
+                tracing::error!("No proposal found for view {view}, sending empty block");
+                send_empty_block::<TYPES, V>(
+                    &self.consensus,
+                    &self.membership_coordinator,
+                    &event_stream,
+                    view,
+                    epoch,
+                    version,
+                )
+                .await;
+                return None;
+            };
+            proposal
         };
 
         let leaf = Leaf2::from_quorum_proposal(&proposal.data);
@@ -215,6 +258,7 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
         view: TYPES::View,
         epoch: Option<TYPES::Epoch>,
         event_stream: Sender<Arc<HotShotEvent<TYPES>>>,
+        receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Option<HotShotTaskCompleted> {
         let version = match self.upgrade_lock.version(view).await {
             Ok(v) => v,
@@ -299,7 +343,8 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
                 }
             }
         }
-        self.build_block(view, epoch, event_stream, version).await;
+        self.build_block(view, epoch, event_stream, receiver, version)
+            .await;
         None
     }
 
@@ -321,6 +366,7 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
         &mut self,
         event: Arc<HotShotEvent<TYPES>>,
         sender: Sender<Arc<HotShotEvent<TYPES>>>,
+        receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Result<()> {
         match event.as_ref() {
             HotShotEvent::TransactionsRecv(transactions) => {
@@ -351,7 +397,8 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
                     .leader(view)
                     .await?;
                 if leader == self.public_key {
-                    self.handle_view_change(view, *epoch, sender.clone()).await;
+                    self.handle_view_change(view, *epoch, sender.clone(), receiver.clone())
+                        .await;
                     return Ok(());
                 }
             },
@@ -377,9 +424,9 @@ impl<TYPES: NodeType, V: Versions> TaskState for BlockBuilderTaskState<TYPES, V>
         &mut self,
         event: Arc<Self::Event>,
         sender: &Sender<Arc<Self::Event>>,
-        _receiver: &Receiver<Arc<Self::Event>>,
+        receiver: &Receiver<Arc<Self::Event>>,
     ) -> Result<()> {
-        self.handle(event, sender.clone()).await
+        self.handle(event, sender.clone(), receiver.clone()).await
     }
 
     fn cancel_subtasks(&mut self) {}
