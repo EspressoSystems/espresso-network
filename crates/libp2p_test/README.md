@@ -17,7 +17,7 @@ The round trip time is reported in the logs.
 `docker network create libp2p_test_network`
 
 4. Run docker containers (wait 10 seconds for receivers to exit):
-`for i in $(ls crates/libp2p_test/config); do docker run -d --network libp2p_network -v $PWD/crates/libp2p_test/config/$i/libp2p_test.toml:/libp2p_test.toml --name $i libp2p_test; done`
+`for i in $(ls crates/libp2p_test/config); do docker run -d --network libp2p_network -v $PWD/crates/libp2p_test/config/$i/libp2p_test.toml:/app_config/libp2p_test.toml --name $i libp2p_test; done`
 
 5. Grab the logs for analysis:
 `for i in $(ls crates/libp2p_test/config/); do docker logs $i &> $i; done`

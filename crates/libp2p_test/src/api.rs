@@ -26,41 +26,37 @@ pub async fn run_sender<T: NodeType>(config: AppConfig) -> Result<()> {
     info!("Starting as sender");
     let (handle, mut receiver) = spawn_simple_node::<T>(&config).await?;
     let msg = config.message.clone().unwrap_or_default().into_bytes();
-    let mut roundtrips = Vec::new();
-    sleep(Duration::from_secs(1)).await;
-    for (peer_id, addr) in config.peers {
-        info!("Sending request to {}", addr.to_string());
-        let start = Instant::now();
-        if let Err(e) = handle.direct_request_no_serialize(peer_id, msg.clone()) {
-            error!("Failed to send request to {}: {}", peer_id, e);
-        }
-        loop {
-            match timeout(REPLY_TIMEOUT, receiver.recv()).await {
-                Ok(Ok(NetworkEvent::DirectResponse(resp, pid))) if pid == peer_id => {
-                    let elapsed = start.elapsed();
-                    let sender = String::from_utf8_lossy(&resp).to_string();
-                    roundtrips.push((sender.clone(), elapsed));
-                    info!("Reply from {}: {} in {:?}", peer_id, sender, elapsed);
-                    break;
-                },
-                Ok(Ok(ev)) => {
-                    info!("Sender received unexpected event: {ev:?}");
-                },
-                Ok(Err(e)) => {
-                    error!("Receiver error: {:?}", e);
-                    break;
-                },
-                Err(_) => {
-                    error!("Timeout waiting for replies");
-                    break;
-                },
+    loop {
+        sleep(Duration::from_secs(1)).await;
+        let mut roundtrips = Vec::new();
+        for (peer_id, addr) in config.peers.iter() {
+            info!("Sending request to {}", addr.to_string());
+            let start = Instant::now();
+            if let Err(e) = handle.direct_request_no_serialize(peer_id.clone(), msg.clone()) {
+                error!("Failed to send request to {}: {}", peer_id, e);
+            }
+            loop {
+                match receiver.recv().await {
+                    Ok(NetworkEvent::DirectResponse(_, pid)) if &pid == peer_id => {
+                        let elapsed = start.elapsed();
+                        roundtrips.push((addr.to_string(), elapsed));
+                        info!("Reply from {}: {} in {:?}", peer_id, addr.to_string(), elapsed);
+                        break;
+                    },
+                    Ok(ev) => {
+                        info!("Sender received unexpected event: {ev:?}");
+                    },
+                    Err(e) => {
+                        error!("Receiver error: {:?}", e);
+                        break;
+                    },
+                }
             }
         }
+        for (sender, elapsed) in roundtrips {
+            println!("Reply from {sender}: {elapsed:?}");
+        }
     }
-    for (sender, elapsed) in roundtrips {
-        println!("Reply from {sender}: {elapsed:?}");
-    }
-    Ok(())
 }
 
 pub async fn run_receiver<T: NodeType>(config: AppConfig) -> Result<()> {

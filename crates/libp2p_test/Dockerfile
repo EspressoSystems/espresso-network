@@ -8,4 +8,4 @@ RUN chmod +x /bin/libp2p-test
 
 ENV RUST_LOG=trace
 
-CMD ["/bin/libp2p-test"]
+CMD ["sh", "-c", "while [ ! -f /app_config/libp2p_test.toml ]; do echo 'Waiting for config...'; sleep 2; done && exec /bin/libp2p-test"]

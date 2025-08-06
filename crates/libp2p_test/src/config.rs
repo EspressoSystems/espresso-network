@@ -16,7 +16,7 @@ pub struct AppConfig {
 
 impl AppConfig {
     pub fn from_file() -> Result<Self> {
-        let s = fs::read_to_string("libp2p_test.toml")?;
+        let s = fs::read_to_string("/app_config/libp2p_test.toml")?;
         Ok(toml::from_str(&s)?)
     }
 }

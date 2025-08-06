@@ -21,6 +21,6 @@ async fn main() -> Result<()> {
     if config.send_mode {
         api::run_sender::<TestTypes>(config).await
     } else {
-        timeout(REPLY_TIMEOUT, api::run_receiver::<TestTypes>(config)).await?
+        api::run_receiver::<TestTypes>(config).await
     }
 }
