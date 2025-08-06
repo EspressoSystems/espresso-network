@@ -478,7 +478,7 @@ async fn main() -> anyhow::Result<()> {
                         let config = resp.hotshot_config();
                         args_builder.blocks_per_epoch(config.blocks_per_epoch());
                         args_builder.epoch_start_block(config.epoch_start_block());
-                        break; // only break on success
+                        break;
                     },
                     Err(e) => {
                         tracing::error!("Failed to fetch the network config: {e}");
