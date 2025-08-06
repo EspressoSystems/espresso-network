@@ -279,20 +279,15 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 let use_mock = self.mock_light_client;
                 let dry_run = self.dry_run;
                 let use_multisig = self.use_multisig;
-                let mut blocks_per_epoch = self
-                    .blocks_per_epoch
-                    .ok_or_else(|| anyhow!("blocks_per_epoch was not set in the builder"))?;
-                let epoch_start_block = self
-                    .epoch_start_block
-                    .ok_or_else(|| anyhow!("epoch_start_block was not set in the builder"))?;
+                let mut blocks_per_epoch = self.blocks_per_epoch.unwrap();
+                let epoch_start_block = self.epoch_start_block.unwrap();
                 let rpc_url = self.rpc_url.clone();
 
-                // TEST-ONLY: if this config is not yet set, we use a large default value
+                // TEST-ONLY: if this config is not yet set, we use a reasonable default value
                 // to avoid contract complaining about invalid zero-valued blocks_per_epoch.
-                // This large value will act as if we are always in epoch 1, which won't conflict
-                // with the effective purpose of the real `PublicNetworkConfig`.
+                // This value will allow tests to proceed with realistic epoch behavior.
                 if use_mock && blocks_per_epoch == 0 {
-                    blocks_per_epoch = u64::MAX;
+                    blocks_per_epoch = 10;
                 }
                 tracing::info!(%blocks_per_epoch, ?dry_run, ?use_multisig, "Upgrading LightClientV2 with ");
                 if use_multisig {
