@@ -4,15 +4,10 @@ mod api;
 mod config;
 mod types;
 
-use std::time::Duration;
-
 use anyhow::Result;
 use hotshot_example_types::node_types::TestTypes;
-use tokio::time::timeout;
 
 use crate::config::AppConfig;
-
-const REPLY_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::main]
 async fn main() -> Result<()> {

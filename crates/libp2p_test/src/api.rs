@@ -14,12 +14,11 @@ use hotshot_libp2p_networking::network::{
 use hotshot_types::{signature_key::BLSPrivKey, traits::node_implementation::NodeType};
 use libp2p_identity::{ed25519, ed25519::SecretKey, Keypair};
 use parking_lot::Mutex;
-use tokio::time::{sleep, timeout};
+use tokio::time::sleep;
 use tracing::{error, info};
 
 use crate::config::AppConfig;
 
-const REPLY_TIMEOUT: Duration = Duration::from_secs(10);
 pub const NODE_ID: usize = 0;
 
 pub async fn run_sender<T: NodeType>(config: AppConfig) -> Result<()> {
@@ -32,7 +31,7 @@ pub async fn run_sender<T: NodeType>(config: AppConfig) -> Result<()> {
         for (peer_id, addr) in config.peers.iter() {
             info!("Sending request to {}", addr.to_string());
             let start = Instant::now();
-            if let Err(e) = handle.direct_request_no_serialize(peer_id.clone(), msg.clone()) {
+            if let Err(e) = handle.direct_request_no_serialize(*peer_id, msg.clone()) {
                 error!("Failed to send request to {}: {}", peer_id, e);
             }
             loop {
@@ -40,7 +39,12 @@ pub async fn run_sender<T: NodeType>(config: AppConfig) -> Result<()> {
                     Ok(NetworkEvent::DirectResponse(_, pid)) if &pid == peer_id => {
                         let elapsed = start.elapsed();
                         roundtrips.push((addr.to_string(), elapsed));
-                        info!("Reply from {}: {} in {:?}", peer_id, addr.to_string(), elapsed);
+                        info!(
+                            "Reply from {}: {} in {:?}",
+                            peer_id,
+                            addr.to_string(),
+                            elapsed
+                        );
                         break;
                     },
                     Ok(ev) => {

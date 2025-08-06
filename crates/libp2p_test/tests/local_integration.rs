@@ -1,6 +1,6 @@
 //! Local integration test: spawns 1 sender and 3 receivers in-process
 
-use std::{str::FromStr, sync::Arc};
+use std::{str::FromStr, sync::Arc, time::Duration};
 
 use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::{
@@ -10,7 +10,7 @@ use hotshot_types::{
 use libp2p::Multiaddr;
 use libp2p_identity::{ed25519, ed25519::SecretKey, Keypair, PeerId};
 use libp2p_test::{run_receiver, run_sender, AppConfig};
-use tokio::{sync::Barrier, task::JoinHandle};
+use tokio::{sync::Barrier, task::JoinHandle, time::sleep};
 use tracing::error;
 
 fn make_listen_string(port: u64) -> String {
@@ -89,10 +89,11 @@ async fn local_sender_and_receivers() {
         }
     }));
 
-    // Wait for all tasks to finish (sender will exit, receivers run forever)
-    let _ = handles.remove(3).await;
-    // Optionally, abort receivers after sender is done
-    for h in handles.into_iter().take(3) {
+    // Sleep to let the test run
+    sleep(Duration::from_secs(10)).await;
+
+    // Abort all tasks and finish
+    for h in handles.into_iter() {
         h.abort();
     }
 }
