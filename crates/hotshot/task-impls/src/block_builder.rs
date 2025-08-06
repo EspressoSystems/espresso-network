@@ -13,7 +13,6 @@ use hotshot_types::{
     data::{Leaf2, PackedBundle, QuorumProposalWrapper},
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal, UpgradeLock},
-    simple_vote::HasEpoch,
     traits::{
         block_contents::{BlockHeader, BuilderFee},
         node_implementation::{ConsensusTime, NodeType, Versions},
@@ -108,7 +107,6 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
     async fn wait_for_proposal(
         &self,
         view: TYPES::View,
-        epoch: Option<TYPES::Epoch>,
         receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Option<Proposal<TYPES, QuorumProposalWrapper<TYPES>>> {
         let (_, cancel) = broadcast(1);
@@ -120,7 +118,7 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
                 let HotShotEvent::QuorumProposalValidated(proposal, _) = event.as_ref() else {
                     return false;
                 };
-                proposal.data.view_number() == view && proposal.data.epoch() == epoch
+                proposal.data.view_number() == view
             }),
         );
         let event =
@@ -151,11 +149,11 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
             .read()
             .await
             .last_proposals()
-            .get(&view - 1)
+            .get(&(view - 1))
             .cloned();
         if proposal.is_none() {
             proposal = {
-                let Some(proposal) = self.wait_for_proposal(view - 1, epoch, receiver).await else {
+                let Some(proposal) = self.wait_for_proposal(view - 1, receiver).await else {
                     tracing::error!("No proposal found for view {view}, sending empty block");
                     send_empty_block::<TYPES, V>(
                         &self.consensus,
@@ -172,9 +170,7 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
             };
         }
 
-        let Some(proposal) = proposal else {
-            return None;
-        };
+        let proposal = proposal?;
 
         let leaf = Leaf2::from_quorum_proposal(&proposal.data);
         let consensus_reader = self.consensus.read().await;
