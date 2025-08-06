@@ -6,7 +6,7 @@
 
 //! The election trait, used to decide which node is the leader and determine if a vote is valid.
 use std::{collections::BTreeSet, fmt::Debug, sync::Arc};
-
+use crate::traits::node_implementation::NodeImplementation;
 use alloy::primitives::U256;
 use async_lock::RwLock;
 use hotshot_utils::anytrace::Result;
@@ -22,11 +22,14 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// The error type returned by methods like `lookup_leader`.
     type Error: std::fmt::Display;
     /// Create a committee
-    fn new(
+    fn new<I: NodeImplementation<TYPES>>(
         // Note: eligible_leaders is currently a hack because the DA leader == the quorum leader
         // but they should not have voting power.
         stake_committee_members: Vec<PeerConfig<TYPES>>,
         da_committee_members: Vec<PeerConfig<TYPES>>,
+        storage: I::Storage,
+        network: Arc<<I as NodeImplementation<TYPES>>::Network>,
+        public_key: TYPES::SignatureKey,
     ) -> Self;
 
     fn total_stake(&self, epoch: Option<TYPES::Epoch>) -> U256 {

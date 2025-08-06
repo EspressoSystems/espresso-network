@@ -24,3 +24,5 @@ pub mod two_static_committees;
 
 /// general helpers
 pub mod helpers;
+
+pub mod fetcher;

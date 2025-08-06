@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet};use std::sync::Arc;
 
 use alloy::primitives::U256;
 use hotshot_types::{
@@ -12,12 +12,14 @@ use hotshot_types::{
     stake_table::HSStakeTable,
     traits::{
         election::Membership,
-        node_implementation::NodeType,
+        node_implementation::{NodeImplementation, NodeType},
         signature_key::{SignatureKey, StakeTableEntryType},
     },
     PeerConfig,
 };
 use hotshot_utils::anytrace::*;
+
+use crate::storage_types::TestStorage;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 /// The static committee election
@@ -66,7 +68,13 @@ impl<TYPES: NodeType> StaticCommittee<TYPES> {
 impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
     type Error = hotshot_utils::anytrace::Error;
     /// Create a new election
-    fn new(committee_members: Vec<PeerConfig<TYPES>>, da_members: Vec<PeerConfig<TYPES>>) -> Self {
+    fn new<I: NodeImplementation<TYPES>>(
+        committee_members: Vec<PeerConfig<TYPES>>,
+        da_members: Vec<PeerConfig<TYPES>>,
+        _storage: Self::Storage,
+        _network: Arc<<I as NodeImplementation<TYPES>>::Network>,
+        _public_key: TYPES::SignatureKey,
+    ) -> Self {
         // For each eligible leader, get the stake table entry
         let eligible_leaders: Vec<PeerConfig<TYPES>> = committee_members
             .clone()

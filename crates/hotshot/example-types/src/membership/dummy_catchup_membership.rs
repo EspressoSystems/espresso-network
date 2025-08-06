@@ -14,6 +14,8 @@ use hotshot_types::{
     },
     PeerConfig,
 };
+use crate::storage_types::TestStorage;
+use hotshot_types::traits::node_implementation::NodeImplementation;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DummyCatchupCommittee<TYPES: NodeType, V: Versions, InnerTypes: NodeType> {
@@ -81,11 +83,14 @@ where
 {
     type Error = <InnerTypes::Membership as Membership<InnerTypes>>::Error;
 
-    fn new(
+    fn new<I: NodeImplementation<TYPES>>(
         // Note: eligible_leaders is currently a haMemck because the DA leader == the quorum leader
         // but they should not have voting power.
         stake_committee_members: Vec<hotshot_types::PeerConfig<TYPES>>,
         da_committee_members: Vec<hotshot_types::PeerConfig<TYPES>>,
+        storage: Self::Storage,
+        network: Arc<<I as NodeImplementation<TYPES>>::Network>,
+        public_key: TYPES::SignatureKey,
     ) -> Self {
         Self {
             inner: Membership::new(
@@ -97,6 +102,9 @@ where
                     .into_iter()
                     .map(Self::convert_peer_config)
                     .collect(),
+                    storage,
+                    network,
+                    public_key
             ),
             epochs: HashSet::new(),
             drbs: HashSet::new(),

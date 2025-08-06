@@ -10,11 +10,10 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use hotshot::traits::{
-    election::static_committee::StaticCommittee, implementations::MemoryNetwork, NodeImplementation,
-};
+use hotshot::traits::{implementations::MemoryNetwork, NodeImplementation};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
+    membership::static_committee::StaticCommittee,
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
 };

@@ -8,10 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use alloy::primitives::U256;
 use hotshot_types::{
-    drb::{
-        election::{generate_stake_cdf, select_randomized_leader, RandomizedCommittee},
-        DrbResult,
-    },
+    drb::DrbResult,
     stake_table::HSStakeTable,
     traits::{
         election::Membership,
@@ -20,33 +17,33 @@ use hotshot_types::{
     },
     PeerConfig,
 };
-use hotshot_utils::anytrace::*;
+use hotshot_utils::anytrace::Result;
+use crate::storage_types::TestStorage;
+use hotshot_types::traits::node_implementation::NodeImplementation;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 
 /// The static committee election
-pub struct Committee<T: NodeType> {
+pub struct StaticCommitteeLeaderForTwoViews<T: NodeType> {
+    /// The nodes eligible for leadership.
+    /// NOTE: This is currently a hack because the DA leader needs to be the quorum
+    /// leader but without voting rights.
+    eligible_leaders: Vec<PeerConfig<T>>,
+
     /// The nodes on the committee and their stake
     stake_table: HSStakeTable<T>,
 
     /// The nodes on the committee and their stake
     da_stake_table: HSStakeTable<T>,
 
-    /// Stake tables randomized with the DRB, used (only) for leader election
-    randomized_committee: RandomizedCommittee<<T::SignatureKey as SignatureKey>::StakeTableEntry>,
-
     /// The nodes on the committee and their stake, indexed by public key
     indexed_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T>>,
 
     /// The nodes on the committee and their stake, indexed by public key
     indexed_da_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T>>,
-
-    /// The first epoch which will be encountered. For testing, will panic if an epoch-carrying function is called
-    /// when first_epoch is None or is Some greater than that epoch.
-    first_epoch: Option<T::Epoch>,
 }
 
-impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
+impl<TYPES: NodeType> Membership<TYPES> for StaticCommitteeLeaderForTwoViews<TYPES> {
     type Error = hotshot_utils::anytrace::Error;
     /// Create a new election
     fn new(committee_members: Vec<PeerConfig<TYPES>>, da_members: Vec<PeerConfig<TYPES>>) -> Self {
@@ -74,10 +71,10 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
         // Index the stake table by public key
         let indexed_stake_table: BTreeMap<TYPES::SignatureKey, PeerConfig<TYPES>> = members
             .iter()
-            .map(|config| {
+            .map(|member| {
                 (
-                    TYPES::SignatureKey::public_key(&config.stake_table_entry),
-                    config.clone(),
+                    TYPES::SignatureKey::public_key(&member.stake_table_entry),
+                    member.clone(),
                 )
             })
             .collect();
@@ -85,31 +82,20 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
         // Index the stake table by public key
         let indexed_da_stake_table: BTreeMap<TYPES::SignatureKey, PeerConfig<TYPES>> = da_members
             .iter()
-            .map(|config| {
+            .map(|member| {
                 (
-                    TYPES::SignatureKey::public_key(&config.stake_table_entry),
-                    config.clone(),
+                    TYPES::SignatureKey::public_key(&member.stake_table_entry),
+                    member.clone(),
                 )
             })
             .collect();
 
-        // We use a constant value of `[0u8; 32]` for the drb, since this is just meant to be used in tests
-        let randomized_committee = generate_stake_cdf(
-            eligible_leaders
-                .clone()
-                .into_iter()
-                .map(|leader| leader.stake_table_entry)
-                .collect::<Vec<_>>(),
-            [0u8; 32],
-        );
-
         Self {
+            eligible_leaders,
             stake_table: members.into(),
             da_stake_table: da_members.into(),
-            randomized_committee,
             indexed_stake_table,
             indexed_da_stake_table,
-            first_epoch: None,
         }
     }
 
@@ -131,7 +117,7 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
     ) -> BTreeSet<<TYPES as NodeType>::SignatureKey> {
         self.stake_table
             .iter()
-            .map(|x| TYPES::SignatureKey::public_key(&x.stake_table_entry))
+            .map(|sc| TYPES::SignatureKey::public_key(&sc.stake_table_entry))
             .collect()
     }
 
@@ -143,7 +129,7 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
     ) -> BTreeSet<<TYPES as NodeType>::SignatureKey> {
         self.da_stake_table
             .iter()
-            .map(|x| TYPES::SignatureKey::public_key(&x.stake_table_entry))
+            .map(|da| TYPES::SignatureKey::public_key(&da.stake_table_entry))
             .collect()
     }
 
@@ -157,7 +143,7 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
         self.indexed_stake_table.get(pub_key).cloned()
     }
 
-    /// Get the stake table entry for a public key
+    /// Get DA the stake table entry for a public key
     fn da_stake(
         &self,
         pub_key: &<TYPES as NodeType>::SignatureKey,
@@ -195,44 +181,42 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
         view_number: <TYPES as NodeType>::View,
         _epoch: Option<<TYPES as NodeType>::Epoch>,
     ) -> Result<TYPES::SignatureKey> {
-        let res = select_randomized_leader(&self.randomized_committee, *view_number);
+        let index =
+            usize::try_from((*view_number / 2) % self.eligible_leaders.len() as u64).unwrap();
+        let res = self.eligible_leaders[index].clone();
 
-        Ok(TYPES::SignatureKey::public_key(&res))
+        Ok(TYPES::SignatureKey::public_key(&res.stake_table_entry))
     }
 
     /// Get the total number of nodes in the committee
     fn total_nodes(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> usize {
         self.stake_table.len()
     }
-    /// Get the total number of nodes in the committee
+
+    /// Get the total number of DA nodes in the committee
     fn da_total_nodes(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> usize {
         self.da_stake_table.len()
     }
+
     /// Get the voting success threshold for the committee
-    fn success_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
-        ((self.total_stake(epoch) * U256::from(2)) / U256::from(3)) + U256::from(1)
+    fn success_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
+        U256::from(((self.stake_table.len() as u64 * 2) / 3) + 1)
     }
 
     /// Get the voting success threshold for the committee
-    fn da_success_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
-        ((self.total_da_stake(epoch) * U256::from(2)) / U256::from(3)) + U256::from(1)
+    fn da_success_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
+        U256::from(((self.da_stake_table.len() as u64 * 2) / 3) + 1)
     }
 
     /// Get the voting failure threshold for the committee
-    fn failure_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
-        (self.total_stake(epoch) / U256::from(3)) + U256::from(1)
+    fn failure_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
+        U256::from(((self.stake_table.len() as u64) / 3) + 1)
     }
 
     /// Get the voting upgrade threshold for the committee
-    fn upgrade_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
-        let len = self.total_stake(epoch);
-
-        U256::max(
-            (len * U256::from(9)) / U256::from(10),
-            ((len * U256::from(2)) / U256::from(3)) + U256::from(1),
-        )
+    fn upgrade_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
+        U256::from(((self.stake_table.len() as u64 * 9) / 10) + 1)
     }
-
     fn has_stake_table(&self, _epoch: TYPES::Epoch) -> bool {
         true
     }
@@ -241,12 +225,4 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
     }
 
     fn add_drb_result(&mut self, _epoch: <TYPES as NodeType>::Epoch, _drb_result: DrbResult) {}
-
-    fn set_first_epoch(&mut self, epoch: TYPES::Epoch, _initial_drb_result: DrbResult) {
-        self.first_epoch = Some(epoch);
-    }
-
-    fn first_epoch(&self) -> Option<TYPES::Epoch> {
-        self.first_epoch
-    }
 }

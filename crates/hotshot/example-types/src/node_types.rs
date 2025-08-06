@@ -6,17 +6,17 @@
 
 use std::{hash::Hash, marker::PhantomData};
 
-pub use hotshot::traits::election::helpers::{
+pub use crate::membership::helpers::{
     RandomOverlapQuorumFilterConfig, StableQuorumFilterConfig,
 };
-use hotshot::traits::{
-    election::{
+use crate::membership::{
         dummy_catchup_membership::DummyCatchupCommittee, helpers::QuorumFilterConfig,
         randomized_committee::Committee, randomized_committee_members::RandomizedCommitteeMembers,
         static_committee::StaticCommittee,
         static_committee_leader_two_views::StaticCommitteeLeaderForTwoViews,
         two_static_committees::TwoStaticCommittees,
-    },
+    };
+use hotshot::traits::{
     implementations::{CombinedNetworks, Libp2pNetwork, MemoryNetwork, PushCdnNetwork},
     NodeImplementation,
 };

@@ -9,7 +9,6 @@ use std::{sync::Arc, time::Duration};
 
 use hotshot::{
     traits::{
-        election::static_committee::StaticCommittee,
         implementations::{MasterMap, MemoryNetwork},
         NodeImplementation,
     },
@@ -17,6 +16,7 @@ use hotshot::{
 };
 use hotshot_example_types::{
     
+        membership::static_committee::StaticCommittee,
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
     node_types::TestVersions,
     state_types::{TestInstanceState, TestValidatedState},

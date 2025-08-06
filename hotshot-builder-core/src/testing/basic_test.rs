@@ -1,5 +1,5 @@
 pub use async_broadcast::broadcast;
-pub use hotshot::traits::election::static_committee::StaticCommittee;
+pub use hotshot_example_types::membership::static_committee::StaticCommittee;
 pub use hotshot_types::{
     data::{EpochNumber, Leaf, ViewNumber},
     message::Proposal,

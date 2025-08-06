@@ -21,6 +21,8 @@ use hotshot_types::{
     PeerConfig,
 };
 use hotshot_utils::anytrace::Result;
+use crate::storage_types::TestStorage;
+use hotshot_types::traits::node_implementation::NodeImplementation;
 
 /// Tuple type for eligible leaders
 type EligibleLeaders<T> = (Vec<PeerConfig<T>>, Vec<PeerConfig<T>>);

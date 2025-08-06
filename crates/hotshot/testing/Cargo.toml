@@ -20,6 +20,7 @@ async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
 automod = "1.0.14"
+bincode = { workspace = true }
 bitvec = { workspace = true }
 committable = { workspace = true }
 either = { workspace = true }

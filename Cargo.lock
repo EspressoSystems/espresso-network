@@ -5589,13 +5589,16 @@ dependencies = [
 name = "hotshot-example-types"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "anyhow",
  "async-lock 3.4.0",
  "async-trait",
+ "bincode",
  "committable",
  "hotshot",
  "hotshot-task-impls",
  "hotshot-types",
+ "hotshot-utils",
  "jf-vid",
  "rand 0.8.5",
  "reqwest 0.12.18",
@@ -5605,6 +5608,7 @@ dependencies = [
  "thiserror 1.0.69",
  "time 0.3.41",
  "tokio",
+ "tracing",
  "url",
  "vbs",
  "workspace-hack",
@@ -5874,6 +5878,7 @@ dependencies = [
  "async-lock 3.4.0",
  "async-trait",
  "automod",
+ "bincode",
  "bitvec",
  "committable",
  "either",

@@ -23,7 +23,9 @@ use hotshot_utils::anytrace::Result;
 use rand::{rngs::StdRng, Rng};
 use tracing::error;
 
-use crate::traits::election::helpers::QuorumFilterConfig;
+use crate::membership::helpers::QuorumFilterConfig;
+use crate::storage_types::TestStorage;
+use hotshot_types::traits::node_implementation::NodeImplementation;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 /// The static committee election
