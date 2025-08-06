@@ -71,7 +71,7 @@ pub struct BlockBuilderTaskState<TYPES: NodeType, V: Versions> {
     pub decided_not_seen_txns: HashSet<Commitment<<TYPES as NodeType>::Transaction>>,
 }
 
-async fn collect_txns<TYPES: NodeType>(
+fn collect_txns<TYPES: NodeType>(
     proposed_leaf: &Leaf2<TYPES>,
     consensus: &Consensus<TYPES>,
 ) -> HashMap<Commitment<<TYPES as NodeType>::Transaction>, TYPES::Transaction> {
@@ -144,13 +144,9 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
         receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
         version: Version,
     ) -> Option<HotShotTaskCompleted> {
-        let mut proposal = self
-            .consensus
-            .read()
-            .await
-            .last_proposals()
-            .get(&(view - 1))
-            .cloned();
+        let consensus_reader = self.consensus.read().await;
+        let mut proposal = consensus_reader.last_proposals().get(&(view - 1)).cloned();
+        drop(consensus_reader);
         if proposal.is_none() {
             proposal = {
                 let Some(proposal) = self.wait_for_proposal(view - 1, receiver).await else {
@@ -174,7 +170,8 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
 
         let leaf = Leaf2::from_quorum_proposal(&proposal.data);
         let consensus_reader = self.consensus.read().await;
-        let in_flight_txns = collect_txns(&leaf, &*consensus_reader).await;
+        let in_flight_txns = collect_txns(&leaf, &*consensus_reader);
+        drop(consensus_reader);
 
         let mut block = vec![];
         for (txn_hash, txn) in self.transactions.iter().rev() {
@@ -189,6 +186,7 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
             Some(view) => view.state().cloned(),
             None => None,
         };
+        drop(consensus_reader);
 
         let validated_state = maybe_validated_state
             .unwrap_or_else(|| Arc::new(TYPES::ValidatedState::from_header(leaf.block_header())));
