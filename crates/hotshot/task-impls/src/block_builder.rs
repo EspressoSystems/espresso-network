@@ -151,11 +151,11 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
             .read()
             .await
             .last_proposals()
-            .get(&view)
+            .get(&view - 1)
             .cloned();
         if proposal.is_none() {
             proposal = {
-                let Some(proposal) = self.wait_for_proposal(view, epoch, receiver).await else {
+                let Some(proposal) = self.wait_for_proposal(view - 1, epoch, receiver).await else {
                     tracing::error!("No proposal found for view {view}, sending empty block");
                     send_empty_block::<TYPES, V>(
                         &self.consensus,
