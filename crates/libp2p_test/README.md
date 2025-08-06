@@ -33,3 +33,43 @@ The round trip time is reported in the logs.
 
 8. (Optionally) Remove the internal docker network:
 `docker network rm libp2p_test_network`
+
+### Usage with terraform and AWS
+
+Terraform assumes access to the AWS devnet profile.
+Terraform assumes an existing S3 bucket with the name `cuiuwzcvojq6cywlii8s2kjqwi5hapibgwbp5wnnldxxjzb1n9` in us-east-2 region.
+
+## Terraform plan
+
+Terraform executes several steps:
+1. Deploys a load balancer in each region. This is required so that the libp2p_test app can peer with known addresses.
+2. Generates a config file for each libp2p_test instance in each region.
+3. Uploads the config files to S3.
+4. Deploys libp2p_test instances in each region.
+5. Deploys tcptraceroute instances in each region. These are treated as baseline measurements.
+
+## Adding new regions
+
+Adding a new region requires the following steps:
+1. Add a new entry to `regions_config` in `variables.tf`
+2. Add a new entry to `load_balancer_dns_mapping` in `main.tf`
+3. Add a new `load_balancer` module call in `main.tf`
+4. Add a new `ecs_base` module call in `main.tf`
+5. Add a new aws provider with an alias in `main.tf`
+
+## Running terraform
+
+1. Initialize terraform:
+`terraform init`
+
+2. Plan the deployment:
+`terraform plan -out libp2p_test`
+
+3. Apply the deployment:
+`terraform apply "libp2p_test"`
+
+4. Plan the destruction:
+`terraform plan -destroy -out libp2p_test_destroy`
+
+5. Destroy the deployment:
+`terraform destroy "libp2p_test_destroy"`
