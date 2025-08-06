@@ -408,7 +408,6 @@ mod test {
         testing::{
             consensus::{MockNetwork, MockSqlDataSource},
             mocks::{mock_transaction, MockBase, MockTypes, MockVersions},
-            setup_test,
         },
         ApiState, Error,
     };
@@ -849,7 +848,7 @@ mod test {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_api() {
         test_api_helper().await;
     }
@@ -863,8 +862,6 @@ mod test {
     }
 
     async fn test_api_helper() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockSqlDataSource, MockVersions>::init().await;
         network.start().await;

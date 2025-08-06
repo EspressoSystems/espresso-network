@@ -312,8 +312,9 @@ where
     // Print the libp2p public key
     info!("Starting Libp2p with PeerID: {libp2p_public_key}");
 
+    let loaded_network_config_from_persistence = persistence.load_config().await?;
     let (mut network_config, wait_for_orchestrator) = match (
-        persistence.load_config().await?,
+        loaded_network_config_from_persistence,
         network_params.config_peers,
     ) {
         (Some(config), _) => {
@@ -1369,15 +1370,13 @@ mod test {
         event::LeafInfo,
         traits::block_contents::{BlockHeader, BlockPayload},
     };
-    use sequencer_utils::test_utils::setup_test;
     use testing::{wait_for_decide_on_handle, TestConfigBuilder};
 
     use self::testing::run_test_builder;
     use super::*;
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_skeleton_instantiation() {
-        setup_test();
         // Assign `config` so it isn't dropped early.
         let anvil = Anvil::new().spawn();
         let url = anvil.endpoint_url();
@@ -1414,10 +1413,8 @@ mod test {
         wait_for_decide_on_handle(&mut events, &txn).await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_header_invariants() {
-        setup_test();
-
         let success_height = 30;
         // Assign `config` so it isn't dropped early.
         let anvil = Anvil::new().spawn();

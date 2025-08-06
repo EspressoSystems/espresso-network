@@ -30,3 +30,6 @@ tagged-base64 = { workspace = true }
 # We need this for the target `aarch64-unknown-linux-gnu` in CI.
 # This can be removed if we figure out this build issue.
 openssl = { version = "0.10", features = ["vendored"] }
+
+[lints]
+workspace = true

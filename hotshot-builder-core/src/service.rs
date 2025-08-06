@@ -840,7 +840,8 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
         if let Some((vid_trigger, block_payload, metadata)) = extracted_block_info_option {
             tracing::info!("Trying sending vid trigger info for {block_id}",);
 
-            if let Some(trigger_writer) = vid_trigger.write().await.take() {
+            let trigger_writer = vid_trigger.write().await.take();
+            if let Some(trigger_writer) = trigger_writer {
                 tracing::info!("Sending vid trigger for {block_id}");
                 let _ = trigger_writer.send(TriggerStatus::Start);
                 tracing::info!("Sent vid trigger for {block_id}");

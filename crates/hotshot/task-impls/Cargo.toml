@@ -11,9 +11,9 @@ example-upgrade = []
 rewind = []
 
 [dependencies]
-ark-ff = { workspace = true }
 alloy = { workspace = true }
 anyhow = { workspace = true }
+ark-ff = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
@@ -42,3 +42,6 @@ url = { workspace = true }
 vbs = { workspace = true }
 vec1 = { workspace = true }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[lints]
+workspace = true

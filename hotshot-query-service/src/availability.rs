@@ -833,7 +833,6 @@ mod test {
         testing::{
             consensus::{MockDataSource, MockNetwork, MockSqlDataSource},
             mocks::{mock_transaction, MockBase, MockHeader, MockPayload, MockTypes, MockVersions},
-            setup_test,
         },
         types::HeightIndexed,
         ApiState, Error, Header,
@@ -1118,10 +1117,8 @@ mod test {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_api() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
         network.start().await;
@@ -1438,10 +1435,8 @@ mod test {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_api_epochs() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, EpochsTestVersions>::init().await;
         let epoch_height = network.epoch_height();
@@ -1504,10 +1499,8 @@ mod test {
         network.shut_down().await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_old_api() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
         network.start().await;
@@ -1601,11 +1594,9 @@ mod test {
         network.shut_down().await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_extensions() {
         use hotshot_example_types::node_types::TestVersions;
-
-        setup_test();
 
         let dir = TempDir::with_prefix("test_availability_extensions").unwrap();
         let data_source = ExtensibleDataSource::new(
@@ -1705,10 +1696,8 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_range_limit() {
-        setup_test();
-
         let large_object_range_limit = 2;
         let small_object_range_limit = 3;
 
@@ -1800,10 +1789,8 @@ mod test {
         network.shut_down().await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_header_endpoint() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockSqlDataSource, MockVersions>::init().await;
         network.start().await;
@@ -1842,10 +1829,8 @@ mod test {
         network.shut_down().await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_leaf_only_ds() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockSqlDataSource, MockVersions>::init_with_leaf_ds().await;
         network.start().await;

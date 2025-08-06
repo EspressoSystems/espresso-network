@@ -16,8 +16,7 @@ use espresso_types::{
     parse_duration, parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
-    v0_1::RewardAmount,
-    v0_3::{EventKey, IndexedStake, StakeTableEvent},
+    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent},
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
     ValidatorMap,
 };
@@ -2658,16 +2657,13 @@ mod test {
         },
     };
     use jf_vid::VidScheme;
-    use sequencer_utils::test_utils::setup_test;
     use vbs::version::StaticVersionType;
 
     use super::*;
     use crate::{persistence::tests::TestablePersistence as _, BLSPubKey, PubKey};
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_quorum_proposals_leaf_hash_migration() {
-        setup_test();
-
         // Create some quorum proposals to test with.
         let leaf: Leaf2 =
             Leaf::genesis::<TestVersions>(&ValidatedState::default(), &NodeState::mock())
@@ -2745,10 +2741,8 @@ mod test {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetching_providers() {
-        setup_test();
-
         let tmp = Persistence::tmp_storage().await;
         let storage = Persistence::connect(&tmp).await;
 
@@ -2888,8 +2882,6 @@ mod test {
     /// different configurations that can achieve this behavior, such that the data is retained and
     /// then pruned due to different logic and code paths.
     async fn test_pruning_helper(pruning_opt: ConsensusPruningOptions) {
-        setup_test();
-
         let tmp = Persistence::tmp_storage().await;
         let mut opt = Persistence::options(&tmp);
         opt.consensus_pruning = pruning_opt;
@@ -3010,7 +3002,7 @@ mod test {
         storage.load_quorum_proposal(data_view).await.unwrap_err();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_pruning_minimum_retention() {
         test_pruning_helper(ConsensusPruningOptions {
             // Use a very low target usage, to show that we still retain data up to the minimum
@@ -3024,7 +3016,7 @@ mod test {
         .await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_pruning_target_retention() {
         test_pruning_helper(ConsensusPruningOptions {
             target_retention: 1,
@@ -3038,10 +3030,8 @@ mod test {
         .await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_consensus_migration() {
-        setup_test();
-
         let tmp = Persistence::tmp_storage().await;
         let mut opt = Persistence::options(&tmp);
 
@@ -3305,14 +3295,11 @@ mod postgres_tests {
             EncodeBytes,
         },
     };
-    use sequencer_utils::test_utils::setup_test;
 
     use super::*;
     use crate::persistence::tests::TestablePersistence as _;
 
     async fn test_postgres_read_ns_table(instance_state: NodeState) {
-        setup_test();
-
         instance_state
             .coordinator
             .membership()
@@ -3411,17 +3398,17 @@ mod postgres_tests {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_postgres_read_ns_table_v0_1() {
         test_postgres_read_ns_table(NodeState::mock()).await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_postgres_read_ns_table_v0_2() {
         test_postgres_read_ns_table(NodeState::mock_v2()).await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_postgres_read_ns_table_v0_3() {
         test_postgres_read_ns_table(NodeState::mock_v3().with_epoch_height(0)).await;
     }

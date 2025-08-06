@@ -46,3 +46,6 @@ parallel = ["ark-ff/parallel", "jf-utils/parallel", "p3-maybe-rayon/parallel"]
 print-trace = ["ark-std/print-trace"]
 sha256 = []
 keccak256 = []
+
+[lints]
+workspace = true

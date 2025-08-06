@@ -150,7 +150,7 @@ build-docker-images:
     scripts/build-docker-images-native
 
 # generate rust bindings for contracts
-REGEXP := "^LightClient(V\\d+)?$|^LightClientArbitrum(V\\d+)?$|^FeeContract$|PlonkVerifier(V\\d+)?$|^ERC1967Proxy$|^LightClient(V\\d+)?Mock$|^StakeTable$|^StakeTableV2$|^EspToken$|^EspTokenV2$|^OpsTimelock$|^SafeExitTimelock$|^OwnableUpgradeable$"
+REGEXP := "^LightClient(V\\d+)?$|^LightClientArbitrum(V\\d+)?$|^FeeContract$|PlonkVerifier(V\\d+)?$|^ERC1967Proxy$|^LightClient(V\\d+)?Mock$|^StakeTable$|^StakeTableV2$|^EspToken$|^EspTokenV2$|^OpsTimelock$|^SafeExitTimelock$|^OwnableUpgradeable$|^RewardClaimPrototypeMock$"
 gen-bindings:
     # Update the git submodules
     git submodule update --init --recursive
@@ -235,3 +235,15 @@ test-go:
     #!/usr/bin/env bash
     export LD_LIBRARY_PATH=$PWD/sdks/go/verification/target/lib:$LD_LIBRARY_PATH
     cd sdks/go && go test -v ./...
+
+contracts-test-echidna *args:
+    nix develop .#echidna -c echidna contracts/test/StakeTableV2.echidna.sol --contract StakeTableV2EchidnaTest --config contracts/echidna.yaml {{args}}
+
+contracts-test-forge *args='-vv':
+    forge test --no-match-test "testFuzz_|invariant_" {{args}}
+
+contracts-test-fuzz *args='-vv':
+    forge test --match-test testFuzz {{args}}
+
+contracts-test-invariant *args='-vv':
+    forge test --match-test invariant_ {{args}}

@@ -266,12 +266,9 @@ mod test {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::testing::setup_test;
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_ledger_log_creation() {
-        setup_test();
-
         let dir = TempDir::with_prefix("test_ledger_log").unwrap();
 
         // Create and populuate a log.
@@ -298,10 +295,8 @@ mod test {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_ledger_log_insert() {
-        setup_test();
-
         let dir = TempDir::with_prefix("test_ledger_log").unwrap();
         let mut loader = AtomicStoreLoader::create(dir.path(), "test_ledger_log").unwrap();
         let mut log = LedgerLog::<u64>::create(&mut loader, "ledger", 3).unwrap();
@@ -342,10 +337,8 @@ mod test {
         // See https://github.com/EspressoSystems/hotshot-query-service/issues/16
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_ledger_log_iter() {
-        setup_test();
-
         let dir = TempDir::with_prefix("test_ledger_log").unwrap();
         let mut loader = AtomicStoreLoader::create(dir.path(), "test_ledger_log").unwrap();
         let mut log = LedgerLog::<u64>::create(&mut loader, "ledger", 3).unwrap();

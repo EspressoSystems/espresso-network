@@ -941,7 +941,6 @@ mod tests {
     use portpicker::pick_unused_port;
     use rand::Rng;
     use sequencer::SequencerApiVersion;
-    use sequencer_utils::test_utils::setup_test;
     use surf_disco::Client;
     use tide_disco::error::ServerError;
     use tokio::time::sleep;
@@ -966,10 +965,8 @@ mod tests {
     // and open a PR.
     // - APIs update
     // - Types (like `Header`) update
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn slow_dev_node_test() {
-        setup_test();
-
         let builder_port = pick_unused_port().unwrap();
         let api_port = pick_unused_port().unwrap();
         let dev_node_port = pick_unused_port().unwrap();
@@ -1287,10 +1284,8 @@ mod tests {
         (providers, urls)
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn slow_dev_node_multiple_lc_providers_test() {
-        setup_test();
-
         let builder_port = pick_unused_port().unwrap();
         let api_port = pick_unused_port().unwrap();
         let dev_node_port = pick_unused_port().unwrap();

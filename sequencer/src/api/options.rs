@@ -6,6 +6,8 @@ use anyhow::{bail, Context};
 use clap::Parser;
 use espresso_types::{
     v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence},
+    v0_3::RewardMerkleTreeV1,
+    v0_4::RewardMerkleTreeV2,
     BlockMerkleTree, PubKey,
 };
 use futures::{
@@ -24,6 +26,7 @@ use hotshot_types::traits::{
     network::ConnectedNetwork,
     node_implementation::Versions,
 };
+use jf_merkle_tree::MerkleTreeScheme;
 use tide_disco::{listener::RateLimitListener, method::ReadState, Api, App, Url};
 use vbs::version::StaticVersionType;
 
@@ -417,8 +420,24 @@ impl Options {
         })?;
 
         register_api("reward-state", &mut app, move |ver| {
-            endpoints::reward::<_, SequencerApiVersion>(ver)
-                .context("failed to define reward-state api")
+            endpoints::reward::<
+                _,
+                SequencerApiVersion,
+                RewardMerkleTreeV1,
+                { RewardMerkleTreeV1::ARITY },
+            >(ver)
+            .context("failed to define reward-state api")
+        })?;
+
+        // register new api for new reward merkle tree
+        register_api("reward-state-v2", &mut app, move |ver| {
+            endpoints::reward::<
+                _,
+                SequencerApiVersion,
+                RewardMerkleTreeV2,
+                { RewardMerkleTreeV2::ARITY },
+            >(ver)
+            .context("failed to define reward-state api")
         })?;
 
         let get_node_state = {

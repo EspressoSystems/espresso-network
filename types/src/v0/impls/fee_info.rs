@@ -327,7 +327,6 @@ impl ToTraversalPath<256> for FeeAccount {
     }
 }
 
-#[allow(dead_code)]
 impl FeeAccountProof {
     pub fn presence(
         pos: FeeAccount,

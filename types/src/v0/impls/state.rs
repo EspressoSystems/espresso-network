@@ -3,6 +3,7 @@ use std::ops::Add;
 use alloy::primitives::{Address, U256};
 use anyhow::{bail, Context};
 use committable::{Commitment, Committable};
+use either::Either;
 use hotshot_query_service::merklized_state::MerklizedState;
 use hotshot_types::{
     data::{BlockError, ViewNumber},
@@ -25,19 +26,24 @@ use time::OffsetDateTime;
 use vbs::version::{StaticVersionType, Version};
 
 use super::{
-    fee_info::FeeError,
-    instance_state::NodeState,
-    v0_1::{
-        IterableFeeInfo, RewardAccount, RewardAmount, RewardMerkleCommitment, RewardMerkleTree,
-        REWARD_MERKLE_TREE_HEIGHT,
-    },
-    BlockMerkleCommitment, BlockSize, EpochVersion, FeeMerkleCommitment, L1Client,
+    fee_info::FeeError, instance_state::NodeState, v0_1::IterableFeeInfo, BlockMerkleCommitment,
+    BlockSize, EpochVersion, FeeMerkleCommitment, L1Client,
 };
 use crate::{
     traits::StateCatchup,
-    v0::impls::distribute_block_reward,
-    v0_3::{ChainConfig, ResolvableChainConfig},
-    BlockMerkleTree, Delta, FeeAccount, FeeAmount, FeeInfo, FeeMerkleTree, Header, Leaf2,
+    v0::{
+        impls::distribute_block_reward,
+        sparse_mt::{Keccak256Hasher, KeccakNode},
+    },
+    v0_3::{
+        ChainConfig, ResolvableChainConfig, RewardAccountV1, RewardAmount,
+        RewardMerkleCommitmentV1, RewardMerkleTreeV1, REWARD_MERKLE_TREE_V1_HEIGHT,
+    },
+    v0_4::{
+        Delta, RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2,
+        REWARD_MERKLE_TREE_V2_HEIGHT,
+    },
+    BlockMerkleTree, FeeAccount, FeeAmount, FeeInfo, FeeMerkleTree, Header, Leaf2,
     NsTableValidationError, PayloadByteLen, SeqTypes, UpgradeType, BLOCK_MERKLE_TREE_HEIGHT,
     FEE_MERKLE_TREE_HEIGHT,
 };
@@ -101,10 +107,19 @@ pub enum ProposalValidationError {
         expected_root: FeeMerkleCommitment,
         proposal_root: FeeMerkleCommitment,
     },
-    #[error("Invalid Reward Root Error: expected={expected_root:?}, proposal={proposal_root:?}")]
-    InvalidRewardRoot {
-        expected_root: RewardMerkleCommitment,
-        proposal_root: RewardMerkleCommitment,
+    #[error(
+        "Invalid v1 Reward Root Error: expected={expected_root:?}, proposal={proposal_root:?}"
+    )]
+    InvalidV1RewardRoot {
+        expected_root: RewardMerkleCommitmentV1,
+        proposal_root: RewardMerkleCommitmentV1,
+    },
+    #[error(
+        "Invalid v2 Reward Root Error: expected={expected_root:?}, proposal={proposal_root:?}"
+    )]
+    InvalidV2RewardRoot {
+        expected_root: RewardMerkleCommitmentV2,
+        proposal_root: RewardMerkleCommitmentV2,
     },
     #[error("Invalid namespace table: {0}")]
     InvalidNsTable(NsTableValidationError),
@@ -155,7 +170,8 @@ pub struct ValidatedState {
     pub block_merkle_tree: BlockMerkleTree,
     /// Frontier of [`FeeMerkleTree`]
     pub fee_merkle_tree: FeeMerkleTree,
-    pub reward_merkle_tree: RewardMerkleTree,
+    pub reward_merkle_tree_v1: RewardMerkleTreeV1,
+    pub reward_merkle_tree_v2: RewardMerkleTreeV2,
     /// Configuration [`Header`] proposals will be validated against.
     pub chain_config: ResolvableChainConfig,
 }
@@ -177,9 +193,15 @@ impl Default for ValidatedState {
         )
         .unwrap();
 
-        let reward_merkle_tree = RewardMerkleTree::from_kv_set(
-            REWARD_MERKLE_TREE_HEIGHT,
-            Vec::<(RewardAccount, RewardAmount)>::new(),
+        let reward_merkle_tree_v1 = RewardMerkleTreeV1::from_kv_set(
+            REWARD_MERKLE_TREE_V1_HEIGHT,
+            Vec::<(RewardAccountV1, RewardAmount)>::new(),
+        )
+        .unwrap();
+
+        let reward_merkle_tree_v2 = RewardMerkleTreeV2::from_kv_set(
+            REWARD_MERKLE_TREE_V2_HEIGHT,
+            Vec::<(RewardAccountV2, RewardAmount)>::new(),
         )
         .unwrap();
 
@@ -188,7 +210,8 @@ impl Default for ValidatedState {
         Self {
             block_merkle_tree,
             fee_merkle_tree,
-            reward_merkle_tree,
+            reward_merkle_tree_v1,
+            reward_merkle_tree_v2,
             chain_config,
         }
     }
@@ -228,15 +251,31 @@ impl ValidatedState {
             .collect()
     }
 
-    pub fn forgotten_reward_accounts(
+    pub fn forgotten_reward_accounts_v2(
         &self,
-        accounts: impl IntoIterator<Item = RewardAccount>,
-    ) -> Vec<RewardAccount> {
+        accounts: impl IntoIterator<Item = RewardAccountV2>,
+    ) -> Vec<RewardAccountV2> {
         accounts
             .into_iter()
             .unique()
             .filter(|account| {
-                self.reward_merkle_tree
+                self.reward_merkle_tree_v2
+                    .lookup(*account)
+                    .expect_not_in_memory()
+                    .is_ok()
+            })
+            .collect()
+    }
+
+    pub fn forgotten_reward_accounts_v1(
+        &self,
+        accounts: impl IntoIterator<Item = RewardAccountV1>,
+    ) -> Vec<RewardAccountV1> {
+        accounts
+            .into_iter()
+            .unique()
+            .filter(|account| {
+                self.reward_merkle_tree_v1
                     .lookup(*account)
                     .expect_not_in_memory()
                     .is_ok()
@@ -644,15 +683,28 @@ impl<'a> ValidatedTransition<'a> {
         Ok(())
     }
 
-    /// Validate [`RewardMerkleTree`] by comparing proposed commitment
+    /// Validate [`RewardMerkleTreeV2`] by comparing proposed commitment
     /// against that stored in [`ValidatedState`].
     fn validate_reward_merkle_tree(&self) -> Result<(), ProposalValidationError> {
-        let reward_merkle_tree_root = self.state.reward_merkle_tree.commitment();
-        if self.proposal.header.reward_merkle_tree_root() != reward_merkle_tree_root {
-            return Err(ProposalValidationError::InvalidRewardRoot {
-                expected_root: reward_merkle_tree_root,
-                proposal_root: self.proposal.header.reward_merkle_tree_root(),
-            });
+        match self.proposal.header.reward_merkle_tree_root() {
+            Either::Left(proposal_root) => {
+                let expected_root = self.state.reward_merkle_tree_v1.commitment();
+                if proposal_root != expected_root {
+                    return Err(ProposalValidationError::InvalidV1RewardRoot {
+                        expected_root,
+                        proposal_root,
+                    });
+                }
+            },
+            Either::Right(proposal_root) => {
+                let expected_root = self.state.reward_merkle_tree_v2.commitment();
+                if proposal_root != expected_root {
+                    return Err(ProposalValidationError::InvalidV2RewardRoot {
+                        expected_root,
+                        proposal_root,
+                    });
+                }
+            },
         }
 
         Ok(())
@@ -690,8 +742,11 @@ impl ValidatedState {
             block_merkle_tree: BlockMerkleTree::from_commitment(
                 self.block_merkle_tree.commitment(),
             ),
-            reward_merkle_tree: RewardMerkleTree::from_commitment(
-                self.reward_merkle_tree.commitment(),
+            reward_merkle_tree_v2: RewardMerkleTreeV2::from_commitment(
+                self.reward_merkle_tree_v2.commitment(),
+            ),
+            reward_merkle_tree_v1: RewardMerkleTreeV1::from_commitment(
+                self.reward_merkle_tree_v1.commitment(),
             ),
             chain_config: ResolvableChainConfig::from(self.chain_config.commit()),
         }
@@ -1025,16 +1080,34 @@ impl HotShotState<SeqTypes> for ValidatedState {
             BlockMerkleTree::from_commitment(block_header.block_merkle_tree_root())
         };
 
-        let reward_merkle_tree = if block_header.reward_merkle_tree_root().size() == 0 {
-            RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT)
-        } else {
-            RewardMerkleTree::from_commitment(block_header.reward_merkle_tree_root())
+        let (reward_merkle_tree_v1, reward_merkle_tree_v2) = match block_header
+            .reward_merkle_tree_root()
+        {
+            Either::Left(reward_tree_v1) => {
+                let reward_merkle_tree_v2 = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+                let reward_merkle_tree_v1 = if reward_tree_v1.size() == 0 {
+                    RewardMerkleTreeV1::new(REWARD_MERKLE_TREE_V1_HEIGHT)
+                } else {
+                    RewardMerkleTreeV1::from_commitment(reward_tree_v1)
+                };
+                (reward_merkle_tree_v1, reward_merkle_tree_v2)
+            },
+            Either::Right(reward_tree_v2) => {
+                let reward_merkle_tree_v1 = RewardMerkleTreeV1::new(REWARD_MERKLE_TREE_V1_HEIGHT);
+                let reward_merkle_tree_v2 = if reward_tree_v2.size() == 0 {
+                    RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT)
+                } else {
+                    RewardMerkleTreeV2::from_commitment(reward_tree_v2)
+                };
+                (reward_merkle_tree_v1, reward_merkle_tree_v2)
+            },
         };
 
         Self {
             fee_merkle_tree,
             block_merkle_tree,
-            reward_merkle_tree,
+            reward_merkle_tree_v2,
+            reward_merkle_tree_v1,
             chain_config: block_header.chain_config(),
         }
     }
@@ -1127,7 +1200,39 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for FeeMerkleTree {
     }
 }
 
-impl MerklizedState<SeqTypes, { Self::ARITY }> for RewardMerkleTree {
+impl MerklizedState<SeqTypes, { Self::ARITY }> for RewardMerkleTreeV2 {
+    type Key = Self::Index;
+    type Entry = Self::Element;
+    type T = KeccakNode;
+    type Commit = Self::Commitment;
+    type Digest = Keccak256Hasher;
+
+    fn state_type() -> &'static str {
+        "reward_merkle_tree_v2"
+    }
+
+    fn header_state_commitment_field() -> &'static str {
+        "reward_merkle_tree_root"
+    }
+
+    fn tree_height() -> usize {
+        REWARD_MERKLE_TREE_V2_HEIGHT
+    }
+
+    fn insert_path(
+        &mut self,
+        key: Self::Key,
+        proof: &MerkleProof<Self::Entry, Self::Key, Self::T, { Self::ARITY }>,
+    ) -> anyhow::Result<()> {
+        match proof.elem() {
+            Some(elem) => self.remember(key, elem, proof)?,
+            None => self.non_membership_remember(key, proof)?,
+        }
+        Ok(())
+    }
+}
+
+impl MerklizedState<SeqTypes, { Self::ARITY }> for RewardMerkleTreeV1 {
     type Key = Self::Index;
     type Entry = Self::Element;
     type T = Sha3Node;
@@ -1143,7 +1248,7 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for RewardMerkleTree {
     }
 
     fn tree_height() -> usize {
-        REWARD_MERKLE_TREE_HEIGHT
+        REWARD_MERKLE_TREE_V1_HEIGHT
     }
 
     fn insert_path(
@@ -1161,7 +1266,7 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for RewardMerkleTree {
 
 #[cfg(test)]
 mod test {
-    use hotshot::{helpers::initialize_logging, traits::BlockPayload};
+    use hotshot::traits::BlockPayload;
     use hotshot_query_service::{testing::mocks::MockVersions, Resolvable};
     use hotshot_types::traits::signature_key::BuilderSignatureKey;
     use sequencer_utils::ser::FromStringOrInteger;
@@ -1296,10 +1401,8 @@ mod test {
         }
     }
 
-    #[test]
+    #[test_log::test]
     fn test_fee_proofs() {
-        initialize_logging();
-
         let mut tree = ValidatedState::default().fee_merkle_tree;
         let account1 = Address::random();
         let account2 = Address::default();
@@ -1334,10 +1437,8 @@ mod test {
         FeeAccountProof::prove(&tree, account2).unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_l1_head() {
-        initialize_logging();
-
         // Setup.
         let tx = Transaction::of_size(10);
         let (header, block_size) = tx.into_mock_header().await;
@@ -1356,10 +1457,8 @@ mod test {
         assert_eq!(ProposalValidationError::DecrementingL1Head, err);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_builder_fee() {
-        initialize_logging();
-
         // Setup.
         let instance = NodeState::mock();
         let tx = Transaction::of_size(20);
@@ -1387,10 +1486,8 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_chain_config() {
-        initialize_logging();
-
         // Setup.
         let instance = NodeState::mock();
         let tx = Transaction::of_size(20);
@@ -1423,9 +1520,8 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_max_block_size() {
-        initialize_logging();
         const MAX_BLOCK_SIZE: usize = 10;
 
         // Setup.
@@ -1460,9 +1556,8 @@ mod test {
             .unwrap()
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_base_fee() {
-        initialize_logging();
         // Setup
         let tx = Transaction::of_size(20);
         let (header, block_size) = tx.into_mock_header().await;
@@ -1489,9 +1584,8 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_height() {
-        initialize_logging();
         // Setup
         let instance = NodeState::mock_v2();
         let tx = Transaction::of_size(10);
@@ -1522,9 +1616,8 @@ mod test {
             .unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_timestamp_non_dec() {
-        initialize_logging();
         let tx = Transaction::of_size(10);
         let (parent, block_size) = tx.into_mock_header().await;
 
@@ -1548,9 +1641,8 @@ mod test {
         proposal.validate_timestamp_non_dec(0).unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_timestamp_drift() {
-        initialize_logging();
         // Setup
         let instance = NodeState::mock_v2();
         let (parent, block_size) = Transaction::of_size(10).into_mock_header().await;
@@ -1610,9 +1702,8 @@ mod test {
         proposal.validate_timestamp_drift(timestamp).unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_fee_root() {
-        initialize_logging();
         // Setup
         let instance = NodeState::mock_v2();
         let (header, block_size) = Transaction::of_size(10).into_mock_header().await;
@@ -1645,9 +1736,8 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_block_root() {
-        initialize_logging();
         // Setup.
         let instance = NodeState::mock_v2();
         let (header, block_size) = Transaction::of_size(10).into_mock_header().await;
@@ -1680,11 +1770,9 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_ns_table() {
         use NsTableValidationError::InvalidFinalOffset;
-
-        initialize_logging();
         // Setup.
         let tx = Transaction::of_size(10);
         let (header, block_size) = tx.into_mock_header().await;
@@ -1709,9 +1797,8 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_log::test]
     fn test_charge_fee() {
-        initialize_logging();
         let src = FeeAccount::generated_from_seed_indexed([0; 32], 0).0;
         let dst = FeeAccount::generated_from_seed_indexed([0; 32], 1).0;
         let amt = FeeAmount::from(1);
@@ -1812,9 +1899,8 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validate_builder_fee() {
-        initialize_logging();
         let max_block_size = 10;
 
         let validated_state = ValidatedState::default();

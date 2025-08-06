@@ -1,6 +1,6 @@
 # A simplest nix shell file with the project dependencies and
 # a cross-compilation support.
-{ pkgs, envVars }:
+{ pkgs, envVars, rustShellHook }:
 pkgs.mkShell (envVars // {
   # Native project dependencies like build utilities and additional routines
   # like container building, linters, etc.
@@ -25,4 +25,5 @@ pkgs.mkShell (envVars // {
     rustCrossHook
   ];
 
+  shellHook = rustShellHook;
 })
