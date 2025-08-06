@@ -20,6 +20,7 @@ pub mod r#ownableupgradeable;
 pub mod r#plonkverifier;
 pub mod r#plonkverifierv2;
 pub mod r#plonkverifierv3;
+pub mod r#rewardclaim;
 pub mod r#rewardclaimprototypemock;
 pub mod r#safeexittimelock;
 pub mod r#staketable;
