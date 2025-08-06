@@ -666,11 +666,11 @@ async fn main() -> anyhow::Result<()> {
         // manually fill up the relay server state
         let state = StateRelayServerState::new(
             Url::parse(&format!("http://localhost:{sequencer_api_port}")).unwrap(),
-        )
-        .with_blocks_per_epoch(blocks_per_epoch)
-        .with_epoch_start_block(epoch_start_block)
-        .with_thresholds(thresholds)
-        .with_known_nodes(known_nodes);
+        );
+        // .with_blocks_per_epoch(blocks_per_epoch)
+        // .with_epoch_start_block(epoch_start_block)
+        // .with_thresholds(thresholds)
+        // .with_known_nodes(known_nodes);
 
         let _ = run_relay_server_with_state(
             format!("http://localhost:{relay_server_port}")

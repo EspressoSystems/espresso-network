@@ -22,7 +22,7 @@ use hotshot_task_impls::helpers::derive_signed_state_digest;
 use hotshot_types::{
     data::EpochNumber,
     light_client::{
-        CircuitField, LightClientState, StakeTableState, StateSignature, StateSignaturesBundle,
+        CircuitField, LCV2StateSignaturesBundle, LightClientState, StakeTableState, StateSignature,
         StateVerKey,
     },
     simple_certificate::LightClientStateUpdateCertificate,
@@ -88,10 +88,10 @@ pub fn load_proving_key(stake_table_capacity: usize) -> ProvingKey {
 /// Get the latest LightClientState and signature bundle from Sequencer network
 pub async fn fetch_latest_state<ApiVer: StaticVersionType>(
     client: &Client<ServerError, ApiVer>,
-) -> Result<StateSignaturesBundle, ProverError> {
+) -> Result<LCV2StateSignaturesBundle, ProverError> {
     tracing::info!("Fetching the latest state signatures bundle from relay server.");
     client
-        .get::<StateSignaturesBundle>("/api/state")
+        .get::<LCV2StateSignaturesBundle>("/api/state")
         .send()
         .await
         .map_err(ProverError::RelayServerError)

@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use alloy::primitives::U256;
+use alloy::primitives::{FixedBytes, U256};
 use ark_ed_on_bn254::EdwardsConfig as Config;
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -46,9 +46,20 @@ pub type StateSignKey = schnorr::SignKey<ark_ed_on_bn254::Fr>;
 #[derive(Debug, Default, Clone)]
 pub struct StateKeyPair(pub schnorr::KeyPair<Config>);
 
-/// Request body to send to the state relay server
+/// The request body for light client V1 to send to the state relay server
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize, Serialize, Deserialize)]
-pub struct StateSignatureRequestBody {
+pub struct LCV1StateSignatureRequestBody {
+    /// The public key associated with this request
+    pub key: StateVerKey,
+    /// The associated light client state
+    pub state: LightClientState,
+    /// The associated signature of the light client state
+    pub signature: StateSignature,
+}
+
+/// The request body for light client V2 to send to the state relay server
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize, Serialize, Deserialize)]
+pub struct LCV2StateSignatureRequestBody {
     /// The public key associated with this request
     pub key: StateVerKey,
     /// The associated light client state
@@ -59,19 +70,26 @@ pub struct StateSignatureRequestBody {
     pub signature: StateSignature,
 }
 
-/// Legacy struct to work with the old sequencer
-#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize, Serialize, Deserialize)]
-pub struct LegacyStateSignatureRequestBody {
+/// The request body for light client V3 to send to the state relay server
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LCV3StateSignatureRequestBody {
     /// The public key associated with this request
     pub key: StateVerKey,
     /// The associated light client state
     pub state: LightClientState,
+    /// The stake table used for the next HotShot block
+    pub next_stake: StakeTableState,
+    /// The auth root
+    // TODO(Chengyu): FixedBytes doesn't implement Canonical(De)Serialize. Is it a problem?
+    pub auth_root: FixedBytes<32>,
     /// The associated signature of the light client state
     pub signature: StateSignature,
+    /// The associated signature of the light client state for LCV2
+    pub v2_signature: StateSignature,
 }
 
-impl From<LegacyStateSignatureRequestBody> for StateSignatureRequestBody {
-    fn from(value: LegacyStateSignatureRequestBody) -> Self {
+impl From<LCV1StateSignatureRequestBody> for LCV2StateSignatureRequestBody {
+    fn from(value: LCV1StateSignatureRequestBody) -> Self {
         Self {
             key: value.key,
             state: value.state,
@@ -82,13 +100,60 @@ impl From<LegacyStateSignatureRequestBody> for StateSignatureRequestBody {
     }
 }
 
-/// The state signatures bundle is a light client state and its signatures collected
+impl From<LCV2StateSignatureRequestBody> for LCV1StateSignatureRequestBody {
+    fn from(value: LCV2StateSignatureRequestBody) -> Self {
+        Self {
+            key: value.key,
+            state: value.state,
+            signature: value.signature,
+        }
+    }
+}
+
+impl From<LCV3StateSignatureRequestBody> for LCV2StateSignatureRequestBody {
+    fn from(value: LCV3StateSignatureRequestBody) -> Self {
+        Self {
+            key: value.key,
+            state: value.state,
+            next_stake: value.next_stake,
+            signature: value.v2_signature,
+        }
+    }
+}
+
+/// The state signatures bundle is a light client V1 state and its signatures collected
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct StateSignaturesBundle {
+pub struct LCV1StateSignaturesBundle {
+    /// The state for this signatures bundle
+    pub state: LightClientState,
+    /// The collected signatures
+    pub signatures: HashMap<StateVerKey, StateSignature>,
+    /// Total stakes associated with the signer
+    pub accumulated_weight: U256,
+}
+
+/// The state signatures bundle is a light client V2 state and its signatures collected
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LCV2StateSignaturesBundle {
     /// The state for this signatures bundle
     pub state: LightClientState,
     /// The stake table used in the next block (only different from voting_stake_table at the last block of every epoch)
     pub next_stake: StakeTableState,
+    /// The collected signatures
+    pub signatures: HashMap<StateVerKey, StateSignature>,
+    /// Total stakes associated with the signer
+    pub accumulated_weight: U256,
+}
+
+/// The state signatures bundle is a light client V3 state and its signatures collected
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LCV3StateSignaturesBundle {
+    /// The state for this signatures bundle
+    pub state: LightClientState,
+    /// The stake table used in the next block (only different from voting_stake_table at the last block of every epoch)
+    pub next_stake: StakeTableState,
+    /// The auth root
+    pub auth_root: FixedBytes<32>,
     /// The collected signatures
     pub signatures: HashMap<StateVerKey, StateSignature>,
     /// Total stakes associated with the signer

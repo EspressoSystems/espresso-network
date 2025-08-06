@@ -80,6 +80,7 @@ hotshot-libp2p-networking = { workspace = true }
 hotshot-orchestrator = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-state-prover = { workspace = true }
+hotshot-task-impls = { workspace = true }
 # Dependencies for feature `testing`
 hotshot-testing = { workspace = true, optional = true }
 hotshot-types = { workspace = true }
