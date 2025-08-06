@@ -7640,6 +7640,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "libp2p_test"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bimap",
+ "blake3",
+ "hotshot-example-types",
+ "hotshot-libp2p-networking",
+ "hotshot-types",
+ "libp2p",
+ "libp2p-identity",
+ "parking_lot",
+ "serde",
+ "tagged-base64",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber 0.3.19",
+]
+
+[[package]]
 name = "libredox"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12231,6 +12252,7 @@ dependencies = [
  "mio",
  "parking_lot",
  "pin-project-lite 0.2.16",
+ "signal-hook-registry",
  "slab",
  "socket2 0.6.0",
  "tokio-macros",
