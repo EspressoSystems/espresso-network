@@ -952,15 +952,15 @@ pub mod tests {
                 .iter()
                 .fold(U256::ZERO, |acc, (_, r)| acc + r.0)
         };
-        assert_eq!(total(rewards.clone()), distributor.block_reward.into());
+        assert_eq!(total(rewards.clone()), distributor.block_reward.0);
 
         distributor.validator.commission = 0;
         let rewards = distributor.compute_rewards().unwrap();
-        assert_eq!(total(rewards.clone()), distributor.block_reward.into());
+        assert_eq!(total(rewards.clone()), distributor.block_reward.0);
 
         distributor.validator.commission = 10000;
         let rewards = distributor.compute_rewards().unwrap();
-        assert_eq!(total(rewards.clone()), distributor.block_reward.into());
+        assert_eq!(total(rewards.clone()), distributor.block_reward.0);
         let leader_commission = rewards.leader_commission();
         assert_eq!(*leader_commission, distributor.block_reward);
 
