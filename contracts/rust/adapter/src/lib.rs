@@ -25,17 +25,3 @@ pub fn u256_to_field<F: PrimeField>(x: U256) -> F {
     let bytes: [u8; 32] = x.to_le_bytes();
     F::from_le_bytes_mod_order(&bytes)
 }
-
-/// Fallible type conversion from native rust types to Solidity-compatible types
-pub trait TryToSol<T>: Sized {
-    type Error;
-
-    /// Convert to a Solidity-compatible representation
-    fn try_to_sol(&self) -> Result<T, Self::Error>;
-}
-
-/// Infallible type conversion from native rust types to Solidity-compatible types
-pub trait ToSol<T>: Sized {
-    /// Convert to a Solidity-compatible representation
-    fn to_sol(&self) -> T;
-}

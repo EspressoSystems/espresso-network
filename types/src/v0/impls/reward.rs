@@ -9,7 +9,7 @@ use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
 use hotshot::types::BLSPubKey;
-use hotshot_contract_adapter::{sol_types::AccruedRewardsProofSol, ToSol, TryToSol};
+use hotshot_contract_adapter::sol_types::AccruedRewardsProofSol;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     traits::{election::Membership, node_implementation::ConsensusTime},
@@ -112,18 +112,6 @@ impl RewardAmount {
         } else {
             None
         }
-    }
-}
-
-impl ToSol<U256> for RewardAmount {
-    fn to_sol(&self) -> U256 {
-        self.0
-    }
-}
-
-impl ToSol<Address> for RewardAccountV2 {
-    fn to_sol(&self) -> Address {
-        self.0
     }
 }
 
@@ -425,7 +413,7 @@ impl RewardAccountProofV2 {
     }
 }
 
-impl TryToSol<AccruedRewardsProofSol> for RewardAccountProofV2 {
+impl TryInto<AccruedRewardsProofSol> for RewardAccountProofV2 {
     type Error = anyhow::Error;
 
     /// Generate a Solidity-compatible proof for this account
@@ -434,7 +422,7 @@ impl TryToSol<AccruedRewardsProofSol> for RewardAccountProofV2 {
     /// obtain the leaf value from the jellyfish proof (Self).
     ///
     /// TODO: review error handling / panics
-    fn try_to_sol(&self) -> anyhow::Result<AccruedRewardsProofSol> {
+    fn try_into(self) -> anyhow::Result<AccruedRewardsProofSol> {
         // NOTE: rustfmt fails to format this file if the nesting is too deep.
         let proof = if let RewardMerkleProofV2::Presence(proof) = &self.proof {
             proof

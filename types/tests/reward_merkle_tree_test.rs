@@ -11,7 +11,7 @@ use espresso_types::{
     v0_3::RewardAmount,
     v0_4::REWARD_MERKLE_TREE_V2_HEIGHT,
 };
-use hotshot_contract_adapter::{sol_types::RewardClaimPrototypeMock, ToSol, TryToSol};
+use hotshot_contract_adapter::sol_types::{AccruedRewardsProofSol, RewardClaimPrototypeMock};
 use jf_merkle_tree::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
 use rand::Rng as _;
 
@@ -65,12 +65,12 @@ async fn test_tree_helper(num_keys: usize) -> Result<()> {
     // Get the tree root
     let commitment = tree.commitment();
     let root_bytes: [u8; 32] = commitment.digest().as_ref().try_into().unwrap();
-    // TODO: ToSol impl for the root
+    // TODO: a saner way to convert commitments to FixedBytes
     let root = FixedBytes::from(root_bytes);
     println!("Tree root: {root}");
 
-    let test_account = &test_data[0].0;
-    let test_amount = &test_data[0].1;
+    let test_account = test_data[0].0;
+    let test_amount = test_data[0].1;
 
     println!("Generating proof for account: {test_account}");
 
@@ -78,10 +78,8 @@ async fn test_tree_helper(num_keys: usize) -> Result<()> {
         RewardAccountProofV2::prove(&tree, test_account.0).expect("can generate proof");
     assert_eq!(amount, test_amount.0);
 
-    // Convert proof to Solidity format
-    let proof_sol = proof.try_to_sol()?;
-    // Convert account and amount to Solidity format using ToSol trait
-    let account_sol = test_account.to_sol();
+    let proof_sol: AccruedRewardsProofSol = proof.try_into()?;
+    let account_sol = test_account.into();
 
     // Verify membership using Solidity contract
     let is_valid = contract
@@ -98,7 +96,6 @@ async fn test_tree_helper(num_keys: usize) -> Result<()> {
 
     assert!(!is_valid._0, "Membership proof should be invalid");
 
-    // Check gas usage
     let gas_used = contract
         .verifyRewardClaim(root, account_sol, amount, proof_sol)
         .estimate_gas()
