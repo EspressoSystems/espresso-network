@@ -804,7 +804,7 @@ pub struct QuorumProposal2<TYPES: NodeType> {
 /// Proposal to append a block.
 #[derive(derive_more::Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
 #[serde(bound(deserialize = ""))]
-pub struct QuorumProposalV3<TYPES: NodeType> {
+pub struct QuorumProposal2Legacy<TYPES: NodeType> {
     /// The block header to append
     pub block_header: TYPES::BlockHeader,
 
@@ -838,8 +838,8 @@ pub struct QuorumProposalV3<TYPES: NodeType> {
     pub state_cert: Option<LightClientStateUpdateCertificateV1<TYPES>>,
 }
 
-impl<TYPES: NodeType> From<QuorumProposalV3<TYPES>> for QuorumProposal2<TYPES> {
-    fn from(v3: QuorumProposalV3<TYPES>) -> Self {
+impl<TYPES: NodeType> From<QuorumProposal2Legacy<TYPES>> for QuorumProposal2<TYPES> {
+    fn from(v3: QuorumProposal2Legacy<TYPES>) -> Self {
         Self {
             block_header: v3.block_header,
             view_number: v3.view_number,
@@ -859,7 +859,7 @@ impl<TYPES: NodeType> From<QuorumProposalV3<TYPES>> for QuorumProposal2<TYPES> {
 #[serde(bound(deserialize = ""))]
 pub struct QuorumProposalWrapperV3<TYPES: NodeType> {
     /// The wrapped proposal
-    pub proposal: QuorumProposalV3<TYPES>,
+    pub proposal: QuorumProposal2Legacy<TYPES>,
 }
 
 /// Wrapper around a proposal to append a block
@@ -1058,7 +1058,7 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for QuorumProposal2<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> HasViewNumber<TYPES> for QuorumProposalV3<TYPES> {
+impl<TYPES: NodeType> HasViewNumber<TYPES> for QuorumProposal2Legacy<TYPES> {
     fn view_number(&self) -> TYPES::View {
         self.view_number
     }
@@ -1085,7 +1085,7 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for UpgradeProposal<TYPES> {
 impl_has_epoch!(
     QuorumProposal2<TYPES>,
     DaProposal2<TYPES>,
-    QuorumProposalV3<TYPES>
+    QuorumProposal2Legacy<TYPES>
 );
 
 impl_has_none_epoch!(
