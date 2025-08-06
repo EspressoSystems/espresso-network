@@ -147,6 +147,8 @@ where
         },
     };
 
+    api.with_version(api_ver.clone());
+
     api.post("postlegacystatesignature", move |req, state| {
         async move {
             let req = match req.body_auto::<LCV1StateSignatureRequestBody, BindVer>(bind_version) {
@@ -237,21 +239,12 @@ pub async fn run_relay_server<BindVer: StaticVersionType + 'static>(
     );
     let mut app = App::<RwLock<StateRelayServerState>, ServerError>::with_state(state);
 
-    app.register_module(
-        "api",
-        define_api(&options, bind_version, "1.0.0".parse().unwrap()).unwrap(),
-    )
-    .unwrap();
-    app.register_module(
-        "api",
-        define_api(&options, bind_version, "2.0.0".parse().unwrap()).unwrap(),
-    )
-    .unwrap();
-    app.register_module(
-        "api",
-        define_api(&options, bind_version, "3.0.0".parse().unwrap()).unwrap(),
-    )
-    .unwrap();
+    let v1_api = define_api(&options, bind_version, "1.0.0".parse().unwrap()).unwrap();
+    let v2_api = define_api(&options, bind_version, "2.0.0".parse().unwrap()).unwrap();
+    let v3_api = define_api(&options, bind_version, "3.0.0".parse().unwrap()).unwrap();
+    app.register_module("api", v1_api)?
+        .register_module("api", v2_api)?
+        .register_module("api", v3_api)?;
 
     let app_future = app.serve(url.clone(), bind_version);
     app_future.await?;
