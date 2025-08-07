@@ -11529,6 +11529,7 @@ name = "stats"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "clap 4.5.39",
  "csv",
  "espresso-types",
  "hotshot-task-impls",

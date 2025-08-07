@@ -13,3 +13,4 @@ chrono = { workspace = true }
 hotshot-task-impls = { workspace = true }
 hotshot-types = { workspace = true}
 espresso-types = { path = "../types" }
+clap = { workspace = true }

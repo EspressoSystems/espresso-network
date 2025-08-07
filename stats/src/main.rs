@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
+use clap::Parser;
 use espresso_types::SeqTypes;
 use hotshot_task_impls::stats::{LeaderViewStats, ReplicaViewStats};
 use hotshot_types::data::ViewNumber;
@@ -8,15 +9,26 @@ use plotly::{
     layout::{self, Axis, GridPattern, LayoutGrid},
     Bar, Layout, Plot, Scatter,
 };
+#[derive(Parser)]
+struct Command {
+    /// Path to the replica stats CSV file
+    #[arg(long, default_value = "replica_stats.csv")]
+    replica_path: String,
+
+    /// Path to the leader stats CSV file
+    #[arg(long, default_value = "leader_stats.csv")]
+    leader_path: String,
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let replica_view_stats = read_replica_view_stats("replica_stats.csv")?;
+    let command = Command::parse();
 
+    let replica_view_stats = read_replica_view_stats(&command.replica_path)?;
     plot_replica_stats(&replica_view_stats)?;
     let stats = generate_replica_stats(&replica_view_stats);
     print_replica_stats(&stats);
 
-    let leader_view_stats = read_leader_view_stats("leader_stats.csv")?;
+    let leader_view_stats = read_leader_view_stats(&command.leader_path)?;
     plot_leader_stats(&leader_view_stats)?;
 
     Ok(())
