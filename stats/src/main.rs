@@ -113,7 +113,7 @@ fn plot_replica_stats(
             .map(|(i, (name, _))| format!("{}. {}", i + 1, name))
             .collect::<Vec<_>>()
             .join("<br>");
-        let hover = format!("View: {}<br>Events:<br>{}", view, ordered_events);
+        let hover = format!("View: {view}<br>Events:<br>{ordered_events}");
 
         if record.timeout_triggered.is_some() {
             x_views_timeout.push(view);
@@ -215,7 +215,7 @@ fn plot_replica_stats(
             )
             .x_axis(Axis::new().title("View"))
             .y_axis(Axis::new().title("Proposal Received Timestamp (s)"))
-            .x_axis2(Axis::new().title("Event").domain(&vec![0.0, 0.5]))
+            .x_axis2(Axis::new().title("Event").domain(&[0.0, 0.5]))
             .y_axis2(Axis::new().title("First Event Count"))
             .x_axis3(Axis::new().title("View"))
             .y_axis3(Axis::new().title("DAC, VID, Proposal Timestamps (s)"))
@@ -238,50 +238,41 @@ fn generate_replica_stats(
     let mut proposal_vs_dac_order_stats = HashMap::new();
 
     for record in replica_view_stats.values() {
-        match (record.vid_share_recv, record.da_certificate_recv) {
-            (Some(vid), Some(dac)) => {
-                let key = if vid < dac {
-                    "VID received before DAC"
-                } else if dac < vid {
-                    "DAC received before VID"
-                } else {
-                    "VID and DAC received at the same time"
-                };
-                *vid_vs_dac_order_stats.entry(key.to_string()).or_insert(0) += 1;
-            },
-            _ => (),
+        if let (Some(vid), Some(dac)) = (record.vid_share_recv, record.da_certificate_recv) {
+            let key = if vid < dac {
+                "VID received before DAC"
+            } else if dac < vid {
+                "DAC received before VID"
+            } else {
+                "VID and DAC received at the same time"
+            };
+            *vid_vs_dac_order_stats.entry(key.to_string()).or_insert(0) += 1;
         }
 
-        match (record.proposal_recv, record.vid_share_recv) {
-            (Some(p), Some(v)) => {
-                let key = if p < v {
-                    "Proposal received before VID"
-                } else if v < p {
-                    "VID received before Proposal"
-                } else {
-                    "Proposal and VID received at the same time"
-                };
-                *proposal_vs_vid_order_stats
-                    .entry(key.to_string())
-                    .or_insert(0) += 1;
-            },
-            _ => (),
+        if let (Some(p), Some(v)) = (record.proposal_recv, record.vid_share_recv) {
+            let key = if p < v {
+                "Proposal received before VID"
+            } else if v < p {
+                "VID received before Proposal"
+            } else {
+                "Proposal and VID received at the same time"
+            };
+            *proposal_vs_vid_order_stats
+                .entry(key.to_string())
+                .or_insert(0) += 1;
         }
 
-        match (record.proposal_recv, record.da_certificate_recv) {
-            (Some(p), Some(d)) => {
-                let key = if p < d {
-                    "Proposal received before DAC"
-                } else if d < p {
-                    "DAC received before Proposal"
-                } else {
-                    "Proposal and DAC received at the same time"
-                };
-                *proposal_vs_dac_order_stats
-                    .entry(key.to_string())
-                    .or_insert(0) += 1;
-            },
-            _ => (),
+        if let (Some(p), Some(d)) = (record.proposal_recv, record.da_certificate_recv) {
+            let key = if p < d {
+                "Proposal received before DAC"
+            } else if d < p {
+                "DAC received before Proposal"
+            } else {
+                "Proposal and DAC received at the same time"
+            };
+            *proposal_vs_dac_order_stats
+                .entry(key.to_string())
+                .or_insert(0) += 1;
         }
     }
 
@@ -354,17 +345,14 @@ fn plot_leader_stats(
         views.push(view);
 
         // Track relative ordering
-        match (record.da_cert_send, record.vid_disperse_send) {
-            (Some(da), Some(vid)) => {
-                if da < vid {
-                    da_before_vid += 1;
-                } else if vid < da {
-                    vid_before_da += 1;
-                } else {
-                    da_eq_vid += 1;
-                }
-            },
-            _ => (),
+        if let (Some(da), Some(vid)) = (record.da_cert_send, record.vid_disperse_send) {
+            if da < vid {
+                da_before_vid += 1;
+            } else if vid < da {
+                vid_before_da += 1;
+            } else {
+                da_eq_vid += 1;
+            }
         }
 
         // Deltas for current view
@@ -406,7 +394,7 @@ fn plot_leader_stats(
 
     let trace_qc_formed_deltas = Scatter::new(views.clone(), qc_formed_deltas.clone())
         .mode(Mode::Markers)
-        .name("QC Formed (v+1) Δ (ms)")
+        .name("QC Formed Δ (ms)")
         .marker(
             Marker::new()
                 .symbol(MarkerSymbol::Circle)
@@ -421,7 +409,7 @@ fn plot_leader_stats(
 
     plot.set_layout(
         Layout::new()
-            .title("Leader ReplicaStats")
+            .title("Leader Stats")
             .grid(
                 LayoutGrid::new()
                     .rows(1)
@@ -461,7 +449,7 @@ fn print_delta_stats(label: &str, values: &[f64]) {
 
     println!("\n-{label}");
     println!("Count: {}", values.len());
-    println!("Min: {:.2} ms", min);
-    println!("Max: {:.2} ms", max);
-    println!("Avg: {:.2} ms", avg);
+    println!("Min: {min:.2} ms");
+    println!("Max: {max:.2} ms");
+    println!("Avg: {avg:.2} ms");
 }
