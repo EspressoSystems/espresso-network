@@ -360,11 +360,9 @@ fn plot_leader_stats(
         vid_disperse_deltas.push((vid - block_built) as f64 / 1000.0);
 
         // Delta for QC formed at view+1
-        let next_view = view + 1;
-        let qc_formed_next = leader_view_stats.get(&next_view).and_then(|r| r.qc_formed);
 
-        if let Some(qc_formed_next) = qc_formed_next {
-            qc_formed_deltas.push((qc_formed_next - block_built) as f64 / 1000.0);
+        if let Some(qc_formed) = record.qc_formed {
+            qc_formed_deltas.push((qc_formed - block_built) as f64 / 1000.0);
         }
     }
 
