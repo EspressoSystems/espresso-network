@@ -173,6 +173,7 @@ where
     .post("poststatesignature", move |req, state| {
         async move {
             if let Ok(req) = req.body_auto::<LCV3StateSignatureRequestBody, BindVer>(bind_version) {
+                tracing::debug!("Received LCV3 state signature: {req}");
                 if let Err(e) =
                     LCV2StateRelayServerDataSource::post_signature(state, req.clone().into()).await
                 {
@@ -182,6 +183,7 @@ where
             } else if let Ok(req) =
                 req.body_auto::<LCV2StateSignatureRequestBody, BindVer>(bind_version)
             {
+                tracing::debug!("Received LCV2 state signature: {req}");
                 if LCV1StateSignatureKey::verify_state_sig(&req.key, &req.signature, &req.state) {
                     LCV1StateRelayServerDataSource::post_signature(state, req.into()).await
                 } else {
@@ -190,6 +192,7 @@ where
             } else if let Ok(req) =
                 req.body_auto::<LCV1StateSignatureRequestBody, BindVer>(bind_version)
             {
+                tracing::debug!("Received LCV1 state signature: {req}");
                 LCV1StateRelayServerDataSource::post_signature(state, req).await
             } else {
                 Err(ServerError::catch_all(

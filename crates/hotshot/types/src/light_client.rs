@@ -57,6 +57,16 @@ pub struct LCV1StateSignatureRequestBody {
     pub signature: StateSignature,
 }
 
+impl std::fmt::Display for LCV1StateSignatureRequestBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "LCV1StateSignatureRequestBody {{ key: {}, state: {}, signature: {} }}",
+            self.key, self.state, self.signature
+        )
+    }
+}
+
 /// The request body for light client V2 to send to the state relay server
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize, Serialize, Deserialize)]
 pub struct LCV2StateSignatureRequestBody {
@@ -68,6 +78,16 @@ pub struct LCV2StateSignatureRequestBody {
     pub next_stake: StakeTableState,
     /// The associated signature of the light client state
     pub signature: StateSignature,
+}
+
+impl std::fmt::Display for LCV2StateSignatureRequestBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "LCV2StateSignatureRequestBody {{ key: {}, state: {}, next_stake: {}, signature: {} }}",
+            self.key, self.state, self.next_stake, self.signature
+        )
+    }
 }
 
 /// The request body for light client V3 to send to the state relay server
@@ -86,6 +106,16 @@ pub struct LCV3StateSignatureRequestBody {
     pub signature: StateSignature,
     /// The associated signature of the light client state for LCV2
     pub v2_signature: StateSignature,
+}
+
+impl std::fmt::Display for LCV3StateSignatureRequestBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "LCV3StateSignatureRequestBody {{ key: {}, state: {}, next_stake: {}, auth_root: {}, signature: {}, v2_signature: {} }}",
+            self.key, self.state, self.next_stake, self.auth_root, self.signature, self.v2_signature
+        )
+    }
 }
 
 impl From<LCV1StateSignatureRequestBody> for LCV2StateSignatureRequestBody {
