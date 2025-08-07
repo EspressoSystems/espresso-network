@@ -27,7 +27,7 @@ use thiserror::Error;
 use super::v0_1::IterableFeeInfo;
 use crate::{
     eth_signature_key::EthKeyPair, AccountQueryData, FeeAccount, FeeAccountProof, FeeAmount,
-    FeeInfo, FeeMerkleCommitment, FeeMerkleProof, FeeMerkleTree, SeqTypes,
+    FeeInfo, FeeMerkleCommitment, FeeMerkleProof, FeeMerkleTree, SeqTypes, FEE_MERKLE_TREE_HEIGHT,
 };
 
 /// Possible charge fee failures
@@ -371,6 +371,7 @@ impl FeeAccountProof {
     pub fn verify(&self, comm: &FeeMerkleCommitment) -> anyhow::Result<U256> {
         match &self.proof {
             FeeMerkleProof::Presence(proof) => {
+                ensure!(proof.proof.len() == FEE_MERKLE_TREE_HEIGHT, "invalid proof");
                 ensure!(
                     FeeMerkleTree::verify(comm.digest(), FeeAccount(self.account), proof)?.is_ok(),
                     "invalid proof"
@@ -381,6 +382,7 @@ impl FeeAccountProof {
                     .0)
             },
             FeeMerkleProof::Absence(proof) => {
+                ensure!(proof.proof.len() == FEE_MERKLE_TREE_HEIGHT, "invalid proof");
                 let tree = FeeMerkleTree::from_commitment(comm);
                 ensure!(
                     tree.non_membership_verify(FeeAccount(self.account), proof)?,

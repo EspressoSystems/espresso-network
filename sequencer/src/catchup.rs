@@ -22,6 +22,7 @@ use espresso_types::{
     v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2},
     BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions, ValidatedState,
+    BLOCK_MERKLE_TREE_HEIGHT,
 };
 use futures::{
     future::{Future, FutureExt, TryFuture, TryFutureExt},
@@ -313,6 +314,10 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                     let elem = frontier
                         .elem()
                         .context("provided frontier is missing leaf element")?;
+                    ensure!(
+                        frontier.proof.len() == BLOCK_MERKLE_TREE_HEIGHT,
+                        "invalid proof"
+                    );
                     mt.remember(mt.num_leaves() - 1, *elem, &frontier)
                         .context("verifying block proof")?;
                     anyhow::Ok(mt)

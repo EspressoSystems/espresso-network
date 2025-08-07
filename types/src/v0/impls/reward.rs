@@ -38,7 +38,7 @@ use crate::{
     eth_signature_key::EthKeyPair,
     v0_3::{
         RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1, RewardMerkleProofV1,
-        RewardMerkleTreeV1,
+        RewardMerkleTreeV1, REWARD_MERKLE_TREE_V1_HEIGHT,
     },
     v0_4::{Delta, REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT},
     DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount,
@@ -369,6 +369,10 @@ impl RewardAccountProofV2 {
         match &self.proof {
             RewardMerkleProofV2::Presence(proof) => {
                 ensure!(
+                    proof.proof.len() == REWARD_MERKLE_TREE_V2_HEIGHT,
+                    "invalid proof"
+                );
+                ensure!(
                     RewardMerkleTreeV2::verify(
                         comm.digest(),
                         RewardAccountV2(self.account),
@@ -383,6 +387,10 @@ impl RewardAccountProofV2 {
                     .0)
             },
             RewardMerkleProofV2::Absence(proof) => {
+                ensure!(
+                    proof.proof.len() == REWARD_MERKLE_TREE_V2_HEIGHT,
+                    "invalid proof"
+                );
                 let tree = RewardMerkleTreeV2::from_commitment(comm);
                 ensure!(
                     tree.non_membership_verify(RewardAccountV2(self.account), proof)?,
@@ -528,6 +536,10 @@ impl RewardAccountProofV1 {
         match &self.proof {
             RewardMerkleProofV1::Presence(proof) => {
                 ensure!(
+                    proof.proof.len() == REWARD_MERKLE_TREE_V1_HEIGHT,
+                    "invalid proof"
+                );
+                ensure!(
                     RewardMerkleTreeV1::verify(
                         comm.digest(),
                         RewardAccountV1(self.account),
@@ -542,6 +554,10 @@ impl RewardAccountProofV1 {
                     .0)
             },
             RewardMerkleProofV1::Absence(proof) => {
+                ensure!(
+                    proof.proof.len() == REWARD_MERKLE_TREE_V1_HEIGHT,
+                    "invalid proof"
+                );
                 let tree = RewardMerkleTreeV1::from_commitment(comm);
                 ensure!(
                     tree.non_membership_verify(RewardAccountV1(self.account), proof)?,

@@ -386,7 +386,7 @@ pub mod mock {
     use std::collections::HashMap;
 
     use alloy::primitives::U256;
-    use anyhow::Context;
+    use anyhow::{ensure, Context};
     use async_trait::async_trait;
     use committable::Commitment;
     use hotshot_types::{data::ViewNumber, stake_table::HSStakeTable};
@@ -398,6 +398,7 @@ pub mod mock {
         v0_3::{RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
         v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2},
         BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
+        BLOCK_MERKLE_TREE_HEIGHT,
     };
 
     #[derive(Debug, Clone, Default)]
@@ -476,6 +477,12 @@ pub mod mock {
 
             let index = src.num_leaves() - 1;
             let (elem, proof) = src.lookup(index).expect_ok().unwrap();
+            // NOTE: Proof length check strictly speaking not needed, height is
+            // determined by `mt`.
+            ensure!(
+                proof.proof.len() == BLOCK_MERKLE_TREE_HEIGHT,
+                "invalid proof"
+            );
             mt.remember(index, elem, proof.clone())
                 .expect("Proof verifies");
 
