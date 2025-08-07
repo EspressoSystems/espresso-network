@@ -26,3 +26,7 @@ pub mod two_static_committees;
 pub mod helpers;
 
 pub mod fetcher;
+
+pub mod stake_table;
+
+pub mod strict_membership;
