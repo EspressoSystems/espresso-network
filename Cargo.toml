@@ -42,6 +42,7 @@ members = [
     "types",
     "utils",
     "vid",
+    "stats"
 ]
 
 # All crates except sequencer-sqlite, to avoid turning on embedded-db feature
@@ -80,6 +81,7 @@ default-members = [
     "types",
     "utils",
     "vid",
+    "stats"
 ]
 
 exclude = ["sequencer-sqlite"]

@@ -1,0 +1,15 @@
+[package]
+authors = { workspace = true }
+name = "stats"
+version = { workspace = true }
+edition = { workspace = true }
+license = "MIT"
+
+[dependencies]
+csv = "1"
+serde = { workspace = true }
+plotly = "0.13.5"
+chrono = { workspace = true }
+hotshot-task-impls = { workspace = true }
+hotshot-types = { workspace = true}
+espresso-types = { path = "../types" }

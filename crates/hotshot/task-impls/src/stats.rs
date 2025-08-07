@@ -14,39 +14,39 @@ use hotshot_utils::{
     anytrace::{Error, Level, Result},
     line_info, warn,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::events::HotShotEvent;
 
-#[derive(Serialize)]
-struct LeaderViewStats<TYPES: NodeType> {
-    view: TYPES::View,
-    proposal_send: Option<i128>,
-    vote_recv: Option<i128>,
-    da_proposal_send: Option<i128>,
-    builder_start: Option<i128>,
-    block_built: Option<i128>,
-    vid_disperse_send: Option<i128>,
-    timeout_certificate_formed: Option<i128>,
-    qc_formed: Option<i128>,
-    da_cert_send: Option<i128>,
+#[derive(Serialize, Deserialize)]
+pub struct LeaderViewStats<TYPES: NodeType> {
+    pub view: TYPES::View,
+    pub proposal_send: Option<i128>,
+    pub vote_recv: Option<i128>,
+    pub da_proposal_send: Option<i128>,
+    pub builder_start: Option<i128>,
+    pub block_built: Option<i128>,
+    pub vid_disperse_send: Option<i128>,
+    pub timeout_certificate_formed: Option<i128>,
+    pub qc_formed: Option<i128>,
+    pub da_cert_send: Option<i128>,
 }
 
-#[derive(Serialize)]
-struct ReplicaViewStats<TYPES: NodeType> {
-    view: TYPES::View,
-    proposal_recv: Option<i128>,
-    vote_send: Option<i128>,
-    timeout_vote_send: Option<i128>,
-    da_proposal_received: Option<i128>,
-    da_proposal_validated: Option<i128>,
-    da_certificate_recv: Option<i128>,
-    proposal_prelim_validated: Option<i128>,
-    proposal_validated: Option<i128>,
-    timeout_triggered: Option<i128>,
-    vid_share_validated: Option<i128>,
-    vid_share_recv: Option<i128>,
+#[derive(Serialize, Deserialize)]
+pub struct ReplicaViewStats<TYPES: NodeType> {
+    pub view: TYPES::View,
+    pub proposal_recv: Option<i128>,
+    pub vote_send: Option<i128>,
+    pub timeout_vote_send: Option<i128>,
+    pub da_proposal_received: Option<i128>,
+    pub da_proposal_validated: Option<i128>,
+    pub da_certificate_recv: Option<i128>,
+    pub proposal_prelim_validated: Option<i128>,
+    pub proposal_validated: Option<i128>,
+    pub timeout_triggered: Option<i128>,
+    pub vid_share_validated: Option<i128>,
+    pub vid_share_recv: Option<i128>,
 }
 
 impl<TYPES: NodeType> LeaderViewStats<TYPES> {
@@ -127,6 +127,7 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
         self.leader_stats = self.leader_stats.split_off(&view);
         self.replica_stats = self.replica_stats.split_off(&view);
     }
+
     fn dump_stats(&self) -> Result<()> {
         let mut writer = csv::Writer::from_writer(vec![]);
         for (_, leader_stats) in self.leader_stats.iter() {
