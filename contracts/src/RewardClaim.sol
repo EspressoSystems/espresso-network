@@ -16,8 +16,12 @@ contract RewardClaim is Initializable, OwnableUpgradeable, UUPSUpgradeable {
     EspTokenV2 public espToken;
     LightClientV3 public lightClient;
 
-    mapping(address => uint256) public claimedRewards;
+    mapping(address claimer => uint256 claimed) public claimedRewards;
 
+    /// @notice upgrade event when the proxy updates the implementation it's pointing to
+    event Upgrade(address implementation);
+
+    /// @notice User claimed rewards
     event RewardClaimed(address indexed user, uint256 amount);
 
     error InvalidProof();
@@ -38,22 +42,39 @@ contract RewardClaim is Initializable, OwnableUpgradeable, UUPSUpgradeable {
         lightClient = LightClientV3(_lightClient);
     }
 
-    function _authorizeUpgrade(address newImplementation) internal override onlyOwner { }
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {
+        emit Upgrade(newImplementation);
+    }
 
     function claimRewards(
-        uint256 rewardAmount,
+        uint256 accruedReward,
         RewardMerkleTreeVerifier.AccruedRewardsProof calldata proof,
-        bytes32 rewardMerkleRoot, // TODO authenticate against LC contract
-        bytes calldata remainingAuthRootData
+        bytes32[5] calldata authRootInputs
     ) external {
-        // TODO: Implement function body
-        // 1. Verify the user hasn't already claimed this amount
-        // 2. Verify the merkle proof against the reward merkle root
-        // 3. Reconstruct the authRoot from rewardMerkleRoot + remainingAuthRootData
-        // 4. Verify the reconstructed authRoot matches lightClient.authRoot()
-        // 5. Mint tokens to the user
-        // 6. Update claimedRewards mapping
-        revert("Not implemented");
+        require(accruedReward != 0, InvalidRewardAmount());
+        require(claimedRewards[msg.sender] < accruedReward, AlreadyClaimed());
+
+        bytes32 rewardCommitment =
+            RewardMerkleTreeVerifier.computeAuthRootCommitment(msg.sender, accruedReward, proof);
+        bytes32 authRoot = keccak256(
+            abi.encodePacked(
+                rewardCommitment,
+                authRootInputs[0],
+                authRootInputs[1],
+                authRootInputs[2],
+                authRootInputs[3],
+                authRootInputs[4]
+            )
+        );
+
+        require(uint256(authRoot) == lightClient.authRoot(), InvalidProof());
+
+        uint256 newClaimAmount = accruedReward - claimedRewards[msg.sender];
+        claimedRewards[msg.sender] = accruedReward;
+
+        espToken.mint(msg.sender, newClaimAmount);
+
+        emit RewardClaimed(msg.sender, newClaimAmount);
     }
 
     function getVersion()

@@ -41,19 +41,17 @@ library RewardMerkleTreeVerifier {
     }
 
     /**
-     * @dev Verify membership proof for a key-value pair
-     * @param root The merkle root to verify against
+     * @dev Compute reward commitment from a key-value pair and proof
      * @param key The key being proven - Ethereum address
      * @param value The value associated with the key - reward amount
-     * @param proof The membership proof containing sibling hashes
-     * @return true if the proof is valid
+     * @param proof The membership proof containing sibling hashes and numLeaves
+     * @return The computed reward commitment
      */
-    function verifyMembership(
-        bytes32 root,
+    function computeAuthRootCommitment(
         address key,
         uint256 value,
         AccruedRewardsProof calldata proof
-    ) internal pure returns (bool) {
+    ) internal pure returns (bytes32) {
         // NOTE: using memory instead of calldata for proof or siblings
         //       increases gas cost by 20%
         // NOTE: *not* defining siblings here increases gas cost by 20%
@@ -85,6 +83,6 @@ library RewardMerkleTreeVerifier {
             }
         }
 
-        return currentHash == root;
+        return currentHash;
     }
 }
