@@ -112,8 +112,14 @@ impl std::fmt::Display for LCV3StateSignatureRequestBody {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "LCV3StateSignatureRequestBody {{ key: {}, state: {}, next_stake: {}, auth_root: {}, signature: {}, v2_signature: {} }}",
-            self.key, self.state, self.next_stake, self.auth_root, self.signature, self.v2_signature
+            "LCV3StateSignatureRequestBody {{ key: {}, state: {}, next_stake: {}, auth_root: {}, \
+             signature: {}, v2_signature: {} }}",
+            self.key,
+            self.state,
+            self.next_stake,
+            self.auth_root,
+            self.signature,
+            self.v2_signature
         )
     }
 }

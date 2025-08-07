@@ -111,37 +111,38 @@ impl StakeTableTracker {
 
         tracing::trace!("Acquire read lock for stake table info");
         let read_guard = self.inner.read().await;
-        let (blocks_per_epoch, epoch_start_block) = if let Some(blocks_per_epoch) =
-            read_guard.blocks_per_epoch
-        {
-            let epoch_start_block = read_guard.epoch_start_block.unwrap();
-            tracing::trace!("Drop read lock for stake table info");
-            drop(read_guard);
-            (blocks_per_epoch, epoch_start_block)
-        } else {
-            tracing::trace!("Drop read lock for stake table info");
-            drop(read_guard);
-            tracing::trace!("Acquire write lock for stake table info");
-            let mut write_guard = self.inner.write().await;
-            if let Some(blocks_per_epoch) = write_guard.blocks_per_epoch {
-                (blocks_per_epoch, write_guard.epoch_start_block.unwrap())
-            } else {
-                tracing::debug!("Fetching epoch config from sequencer");
-                let (blocks_per_epoch, epoch_start_block) =
-                    fetch_epoch_config_from_sequencer(&write_guard.sequencer_url).await?;
-                write_guard.blocks_per_epoch.get_or_insert(blocks_per_epoch);
-                write_guard
-                    .epoch_start_block
-                    .get_or_insert(epoch_start_block);
-                tracing::debug!(
-                    "Fetched epoch config from sequencer: blocks_per_epoch: {}, epoch_start_block: {}",
-                    blocks_per_epoch, epoch_start_block
-                );
-                tracing::trace!("Drop write lock for stake table info");
-                drop(write_guard);
+        let (blocks_per_epoch, epoch_start_block) =
+            if let Some(blocks_per_epoch) = read_guard.blocks_per_epoch {
+                let epoch_start_block = read_guard.epoch_start_block.unwrap();
+                tracing::trace!("Drop read lock for stake table info");
+                drop(read_guard);
                 (blocks_per_epoch, epoch_start_block)
-            }
-        };
+            } else {
+                tracing::trace!("Drop read lock for stake table info");
+                drop(read_guard);
+                tracing::trace!("Acquire write lock for stake table info");
+                let mut write_guard = self.inner.write().await;
+                if let Some(blocks_per_epoch) = write_guard.blocks_per_epoch {
+                    (blocks_per_epoch, write_guard.epoch_start_block.unwrap())
+                } else {
+                    tracing::debug!("Fetching epoch config from sequencer");
+                    let (blocks_per_epoch, epoch_start_block) =
+                        fetch_epoch_config_from_sequencer(&write_guard.sequencer_url).await?;
+                    write_guard.blocks_per_epoch.get_or_insert(blocks_per_epoch);
+                    write_guard
+                        .epoch_start_block
+                        .get_or_insert(epoch_start_block);
+                    tracing::debug!(
+                        "Fetched epoch config from sequencer: blocks_per_epoch: {}, \
+                         epoch_start_block: {}",
+                        blocks_per_epoch,
+                        epoch_start_block
+                    );
+                    tracing::trace!("Drop write lock for stake table info");
+                    drop(write_guard);
+                    (blocks_per_epoch, epoch_start_block)
+                }
+            };
         if block_height <= epoch_start_block || blocks_per_epoch == 0 {
             return self.get_genesis_stake_table_info().await;
         }
