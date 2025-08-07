@@ -14,9 +14,8 @@ use hotshot_types::{
 use vbs::version::StaticVersionType;
 
 #[cfg(test)]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_transaction_task_leader_two_views_in_a_row() {
-    hotshot::helpers::initialize_logging();
 
     // Build the API for node 2.
     let node_id = 2;

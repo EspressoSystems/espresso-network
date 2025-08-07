@@ -256,7 +256,6 @@ mod test {
         persistence,
         testing::TestConfigBuilder,
     };
-    use sequencer_utils::test_utils::setup_test;
     use surf_disco::Client;
     use tempfile::TempDir;
 
@@ -266,10 +265,8 @@ mod test {
     /// Test the non-permissioned builder core
     /// It creates a memory hotshot network and launches the hotshot event streaming api
     /// Builder subscrived to this api, and server the hotshot client request and the private mempool tx submission
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_non_permissioned_builder() {
-        setup_test();
-
         let query_port = pick_unused_port().expect("No ports free");
 
         let event_port = pick_unused_port().expect("No ports free");

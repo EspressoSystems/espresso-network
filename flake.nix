@@ -344,5 +344,24 @@
           ];
           shellHook = rustShellHook;
         });
+
+      # A separate dev-shell due to large size of dependencies (incl. ghc)
+      devShells.echidna =
+        let
+          solc = pkgs.solc-bin."0.8.28";
+        in
+        mkShell {
+          buildInputs = [
+            # Foundry tools
+            foundry-bin
+            solc
+
+            # Security analysis tools
+            slither-analyzer
+            echidna
+            python3.pkgs.crytic-compile
+          ];
+          FOUNDRY_SOLC = "${solc}/bin/solc";
+        };
     });
 }

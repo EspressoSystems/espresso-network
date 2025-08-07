@@ -8,9 +8,6 @@ edition = { workspace = true }
 [features]
 testing = ["espresso-types/testing", "hotshot-query-service/testing"]
 
-[dev-dependencies]
-node-metrics = { path = ".", features = [ "testing" ] }
-
 [dependencies]
 alloy = { workspace = true }
 async-lock = { workspace = true }
@@ -40,6 +37,10 @@ toml = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
+
+[dev-dependencies]
+node-metrics = { path = ".", features = [ "testing" ] }
+test-log = { workspace = true }
 
 [lints]
 workspace = true

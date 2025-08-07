@@ -5,6 +5,11 @@ version = { workspace = true }
 authors = { workspace = true }
 edition = { workspace = true }
 
+[features]
+default = ["parallel"]
+std = ["ark-std/std", "ark-ff/std"]
+parallel = ["jf-signature/parallel", "jf-utils/parallel", "ark-ff/parallel"]
+
 [dependencies]
 alloy = { workspace = true }
 anyhow = { workspace = true }
@@ -45,11 +50,7 @@ vbs = { workspace = true }
 
 [dev-dependencies]
 sequencer-utils = { path = "../utils", features = ["testing"] }
-
-[features]
-default = ["parallel"]
-std = ["ark-std/std", "ark-ff/std"]
-parallel = ["jf-signature/parallel", "jf-utils/parallel", "ark-ff/parallel"]
+test-log = { workspace = true }
 
 [lints]
 workspace = true

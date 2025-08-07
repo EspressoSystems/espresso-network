@@ -44,6 +44,7 @@ vec1 = { workspace = true }
 jf-signature = { workspace = true, features = ["bls"] }
 sequencer = { path = "../../sequencer", features = ["testing"] }
 tempfile = { workspace = true }
+test-log = { workspace = true }
 
 [lints]
 workspace = true

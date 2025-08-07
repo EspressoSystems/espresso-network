@@ -44,6 +44,10 @@ pub use crate::bindings::{
     plonkverifier::PlonkVerifier,
     plonkverifierv2::PlonkVerifierV2,
     plonkverifierv3::PlonkVerifierV3,
+    rewardclaimprototypemock::{
+        RewardClaimPrototypeMock,
+        RewardMerkleTreeVerifier::AccruedRewardsProof as AccruedRewardsProofSol,
+    },
     safeexittimelock::SafeExitTimelock,
     staketable::StakeTable,
     staketablev2::{
