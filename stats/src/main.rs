@@ -80,37 +80,37 @@ fn plot_replica_stats(
 
         let mut events_with_ts = Vec::new();
         if let Some(ts) = record.proposal_recv {
-            events_with_ts.push(("proposal_recv", ts / 1000));
+            events_with_ts.push(("proposal_recv", ts / 1000_000));
         }
         if let Some(ts) = record.vote_send {
-            events_with_ts.push(("vote_send", ts / 1000));
+            events_with_ts.push(("vote_send", ts / 1000_000));
         }
         if let Some(ts) = record.timeout_vote_send {
-            events_with_ts.push(("timeout_vote_send", ts / 1000));
+            events_with_ts.push(("timeout_vote_send", ts / 1000_000));
         }
         if let Some(ts) = record.da_proposal_received {
-            events_with_ts.push(("da_proposal_received", ts / 1000));
+            events_with_ts.push(("da_proposal_received", ts / 1000_000));
         }
         if let Some(ts) = record.da_proposal_validated {
-            events_with_ts.push(("da_proposal_validated", ts / 1000));
+            events_with_ts.push(("da_proposal_validated", ts / 1000_000));
         }
         if let Some(ts) = record.da_certificate_recv {
-            events_with_ts.push(("da_certificate_recv", ts / 1000));
+            events_with_ts.push(("da_certificate_recv", ts / 1000_000));
         }
         if let Some(ts) = record.proposal_prelim_validated {
-            events_with_ts.push(("proposal_prelim_validated", ts / 1000));
+            events_with_ts.push(("proposal_prelim_validated", ts / 1000_000));
         }
         if let Some(ts) = record.proposal_validated {
-            events_with_ts.push(("proposal_validated", ts / 1000));
+            events_with_ts.push(("proposal_validated", ts / 1000_000));
         }
         if let Some(ts) = record.timeout_triggered {
-            events_with_ts.push(("timeout_triggered", ts / 1000));
+            events_with_ts.push(("timeout_triggered", ts / 1000_000));
         }
         if let Some(ts) = record.vid_share_validated {
-            events_with_ts.push(("vid_share_validated", ts / 1000));
+            events_with_ts.push(("vid_share_validated", ts / 1000_000));
         }
         if let Some(ts) = record.vid_share_recv {
-            events_with_ts.push(("vid_share_recv", ts / 1000));
+            events_with_ts.push(("vid_share_recv", ts / 1000_000));
         }
 
         if let Some((first_event, _)) = events_with_ts.clone().into_iter().min_by_key(|(_, ts)| *ts)
@@ -129,11 +129,11 @@ fn plot_replica_stats(
 
         if record.timeout_triggered.is_some() {
             x_views_timeout.push(view);
-            y_timestamps_timeout.push((proposal_ts as f64) / 1_000_000.0);
+            y_timestamps_timeout.push((proposal_ts as f64) / 1_000_000_000.0);
             hover_texts_timeout.push(hover);
         } else {
             x_views_normal.push(view);
-            y_timestamps_normal.push((proposal_ts as f64) / 1_000_000.0);
+            y_timestamps_normal.push((proposal_ts as f64) / 1_000_000_000.0);
             hover_texts_normal.push(hover);
         }
 
@@ -368,13 +368,12 @@ fn plot_leader_stats(
         }
 
         // Deltas for current view
-        da_cert_deltas.push((da - block_built) as f64 / 1000.0);
-        vid_disperse_deltas.push((vid - block_built) as f64 / 1000.0);
+        da_cert_deltas.push((da - block_built) as f64 / 1000_000.0);
+        vid_disperse_deltas.push((vid - block_built) as f64 / 1000_000.0);
 
         // Delta for QC formed at view+1
-
         if let Some(qc_formed) = record.qc_formed {
-            qc_formed_deltas.push((qc_formed - block_built) as f64 / 1000.0);
+            qc_formed_deltas.push((qc_formed - block_built) as f64 / 1000_000.0);
         }
     }
 
