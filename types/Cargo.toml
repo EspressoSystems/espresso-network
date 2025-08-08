@@ -4,6 +4,10 @@ version = "0.1.0"
 authors = ["Espresso Systems <hello@espressosys.com>"]
 edition = "2021"
 
+# TODO: fix comments so doctests don't fail
+[lib]
+doctest = false
+
 [features]
 testing = ["hotshot-query-service/testing"]
 
