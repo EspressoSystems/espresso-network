@@ -432,6 +432,8 @@ where
     )
     .with_context(|| format!("Failed to create CDN network {node_index}"))?;
 
+    tracing::debug!("Connected to CDN");
+
     // Configure gossipsub based on the command line options
     let gossip_config = GossipConfig {
         heartbeat_interval: network_params.libp2p_heartbeat_interval,
@@ -467,9 +469,17 @@ where
         .with_metrics(metrics)
         .connect(l1_params.urls)
         .with_context(|| "failed to create L1 client")?;
+
+    tracing::debug!("L1 client created");
+
     genesis.validate_fee_contract(&l1_client).await?;
 
+    tracing::debug!("Fee contract validated");
+
     l1_client.spawn_tasks().await;
+
+    tracing::debug!("L1 client tasks spawned");
+
     let l1_genesis = match genesis.l1_finalized {
         L1Finalized::Block(b) => b,
         L1Finalized::Number { number } => l1_client.wait_for_finalized_block(number).await,
@@ -479,6 +489,8 @@ where
                 .await
         },
     };
+
+    tracing::debug!("L1 genesis block set: {:?}", l1_genesis);
 
     let mut genesis_state = ValidatedState {
         chain_config: genesis.chain_config.into(),
@@ -560,7 +572,10 @@ where
     };
 
     // Initialize the Libp2p network
+
     let network = {
+        tracing::debug!("Initializing the libp2p network");
+
         let p2p_network = Libp2pNetwork::from_config(
             network_config.clone(),
             persistence.clone(),
@@ -600,6 +615,7 @@ where
         ))
     };
 
+    tracing::debug!("Initializing SequencerContext");
     let mut ctx = SequencerContext::init(
         network_config,
         validator_config,
