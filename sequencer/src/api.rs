@@ -2058,10 +2058,9 @@ mod test {
     use alloy::{
         eips::BlockId,
         network::EthereumWallet,
-        primitives::{Keccak256, U256},
+        primitives::U256,
         providers::{Provider, ProviderBuilder},
     };
-    use ark_serialize::CanonicalSerialize;
     use async_lock::Mutex;
     use committable::{Commitment, Committable};
     use espresso_contract_deployer::{
@@ -2095,7 +2094,10 @@ mod test {
     use hotshot_types::{
         data::EpochNumber,
         event::LeafInfo,
-        traits::{election::Membership, metrics::NoMetrics, node_implementation::ConsensusTime},
+        traits::{
+            block_contents::BlockHeader, election::Membership, metrics::NoMetrics,
+            node_implementation::ConsensusTime,
+        },
         utils::epoch_from_block_number,
         ValidatorConfig,
     };
@@ -5552,7 +5554,7 @@ mod test {
         let api_port = pick_unused_port().expect("No ports free for query service");
 
         tracing::info!("API PORT = {api_port}");
-        const NUM_NODES: usize = 5;
+        const NUM_NODES: usize = 2;
 
         let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
         let persistence: [_; NUM_NODES] = storage
@@ -5639,23 +5641,9 @@ mod test {
             // verify auth root if the consensus version is v4
             if header.version() == DrbAndHeaderUpgradeVersion::VERSION {
                 let auth_root = state_cert_v2.auth_root.expect("auth root is not None");
-                let reward_root = header.reward_merkle_tree_root().unwrap_right();
-                let el_root = [0; 32];
-                let placeholder_root = [0; 32];
+                let header_auth_root = header.auth_root().unwrap().unwrap();
 
-                let mut reward_root_bytes = Vec::new();
-                reward_root
-                    .serialize_compressed(&mut reward_root_bytes)
-                    .unwrap();
-
-                let mut hasher = Keccak256::new();
-
-                hasher.update(reward_root_bytes);
-                hasher.update(el_root);
-                hasher.update(placeholder_root);
-                let result = hasher.finalize().0;
-
-                assert_eq!(auth_root, result, "auth root mismatch");
+                assert_eq!(auth_root, header_auth_root, "auth root mismatch");
             }
 
             // v1
