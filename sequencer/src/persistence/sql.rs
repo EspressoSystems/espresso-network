@@ -48,7 +48,7 @@ use hotshot_types::{
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper,
-        QuorumProposalWrapperV3, VidCommitment, VidDisperseShare,
+        QuorumProposalWrapperLegacy, VidCommitment, VidDisperseShare,
     },
     drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
@@ -1226,7 +1226,7 @@ impl SequencerPersistence for Persistence {
                     let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
                         bincode::deserialize(&bytes).or_else(|error| {
                             bincode::deserialize::<
-                                Proposal<SeqTypes, QuorumProposalWrapperV3<SeqTypes>>,
+                                Proposal<SeqTypes, QuorumProposalWrapperLegacy<SeqTypes>>,
                             >(&bytes)
                             .map(convert_proposal)
                             .inspect_err(|err_v3| {
@@ -1256,14 +1256,16 @@ impl SequencerPersistence for Persistence {
                 .await?;
         let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
             bincode::deserialize(&data).or_else(|error| {
-                bincode::deserialize::<Proposal<SeqTypes, QuorumProposalWrapperV3<SeqTypes>>>(&data)
-                    .map(convert_proposal)
-                    .inspect_err(|err_legacy| {
-                        tracing::error!(
-                            "Failed to deserialize quorum proposal for view {view}. error={error}
-                              as QuorumProposalWrapperV3: {err_legacy}"
-                        )
-                    })
+                bincode::deserialize::<Proposal<SeqTypes, QuorumProposalWrapperLegacy<SeqTypes>>>(
+                    &data,
+                )
+                .map(convert_proposal)
+                .inspect_err(|err_legacy| {
+                    tracing::error!(
+                        "Failed to deserialize quorum proposal for view {view}. error={error}
+                              as QuorumProposalWrapperLegacy: {err_legacy}"
+                    )
+                })
             })?;
 
         Ok(proposal)

@@ -1073,6 +1073,14 @@ where
     }
 }
 
+/// A wrapper around `LightClientStateUpdateCertificateV2`.
+///
+/// The V2 certificate includes additional fields compared to earlier versions:
+/// - Light client v3 signatures
+/// - `auth_root` — used by the reward claim contract to verify that its
+///   calculated `auth_root` matches the one in the Light Client contract.
+///
+/// This struct is returned by the `state-cert-v2` API.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, From)]
 #[serde(bound = "")]
 pub struct StateCertQueryDataV2<Types: NodeType>(pub LightClientStateUpdateCertificateV2<Types>);

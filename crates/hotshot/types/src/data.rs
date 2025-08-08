@@ -801,7 +801,14 @@ pub struct QuorumProposal2<TYPES: NodeType> {
     pub state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
 }
 
-/// Proposal to append a block.
+/// Legacy version of `QuorumProposal2` corresponding to consensus protocol version V3.
+///
+/// In V4 binary, `QuorumProposal2` updated the `state_cert` field to use
+/// `LightClientStateUpdateCertificateV2`.  
+/// This legacy version still uses the older `LightClientStateUpdateCertificateV1`
+/// format for backward compatibility.
+///
+/// It is used only for deserializing previously stored quorum proposals.
 #[derive(derive_more::Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
 #[serde(bound(deserialize = ""))]
 pub struct QuorumProposal2Legacy<TYPES: NodeType> {
@@ -835,6 +842,7 @@ pub struct QuorumProposal2Legacy<TYPES: NodeType> {
 
     /// The light client state update certificate for the next epoch.
     /// This is required for the epoch root.
+    /// Uses the legacy V1 certificate format.
     pub state_cert: Option<LightClientStateUpdateCertificateV1<TYPES>>,
 }
 
@@ -854,10 +862,14 @@ impl<TYPES: NodeType> From<QuorumProposal2Legacy<TYPES>> for QuorumProposal2<TYP
     }
 }
 
-/// Wrapper around a proposal to append a block
+/// Wrapper type for a legacy quorum proposal.
+///
+/// This is used to encapsulate a [`QuorumProposal2Legacy`] when working with
+/// data from older consensus protocol versions (e.g., V3).  
+/// Primarily used for deserialization of legacy proposals
 #[derive(derive_more::Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
 #[serde(bound(deserialize = ""))]
-pub struct QuorumProposalWrapperV3<TYPES: NodeType> {
+pub struct QuorumProposalWrapperLegacy<TYPES: NodeType> {
     /// The wrapped proposal
     pub proposal: QuorumProposal2Legacy<TYPES>,
 }
@@ -870,8 +882,8 @@ pub struct QuorumProposalWrapper<TYPES: NodeType> {
     pub proposal: QuorumProposal2<TYPES>,
 }
 
-impl<TYPES: NodeType> From<QuorumProposalWrapperV3<TYPES>> for QuorumProposalWrapper<TYPES> {
-    fn from(v3: QuorumProposalWrapperV3<TYPES>) -> Self {
+impl<TYPES: NodeType> From<QuorumProposalWrapperLegacy<TYPES>> for QuorumProposalWrapper<TYPES> {
+    fn from(v3: QuorumProposalWrapperLegacy<TYPES>) -> Self {
         Self {
             proposal: v3.proposal.into(),
         }
@@ -1070,7 +1082,7 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for QuorumProposalWrapper<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> HasViewNumber<TYPES> for QuorumProposalWrapperV3<TYPES> {
+impl<TYPES: NodeType> HasViewNumber<TYPES> for QuorumProposalWrapperLegacy<TYPES> {
     fn view_number(&self) -> TYPES::View {
         self.proposal.view_number
     }
@@ -1103,7 +1115,7 @@ impl<TYPES: NodeType> HasEpoch<TYPES> for QuorumProposalWrapper<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> HasEpoch<TYPES> for QuorumProposalWrapperV3<TYPES> {
+impl<TYPES: NodeType> HasEpoch<TYPES> for QuorumProposalWrapperLegacy<TYPES> {
     /// Return an underlying proposal's epoch
     #[allow(clippy::panic)]
     fn epoch(&self) -> Option<TYPES::Epoch> {

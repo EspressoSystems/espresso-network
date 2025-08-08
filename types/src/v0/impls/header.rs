@@ -17,7 +17,7 @@ use hotshot_types::{
     },
     utils::BuilderCommitment,
 };
-use jf_merkle_tree::{AppendableMerkleTreeScheme, MerkleTreeScheme};
+use jf_merkle_tree::{AppendableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme};
 use serde::{
     de::{self, MapAccess, SeqAccess, Visitor},
     Deserialize, Deserializer, Serialize, Serializer,
@@ -1105,24 +1105,20 @@ impl BlockHeader<SeqTypes> for Header {
         match self {
             Header::V1(_) | Header::V2(_) | Header::V3(_) => Ok(None),
             Header::V4(header) => {
-                let mut reward_root_bytes = Vec::new();
-                let el_root = [0; 32];
-                let placeholder_root = [0; 32];
-                header
-                    .reward_merkle_tree_root
-                    .serialize_compressed(&mut reward_root_bytes)?;
-                // The number of reward root bytes produced by `serialize_compressed()` is 48.
-                ensure!(
-                    reward_root_bytes.len() == 48,
-                    "unexpected reward root byte length: expected 48, got {}",
-                    reward_root_bytes.len()
-                );
+                // Temporary placeholder values for future fields
+                let placeholder_1 = [0; 32];
+                let placeholder_2 = [0; 32];
+                let placeholder_3 = [0; 32];
 
                 let mut hasher = Keccak256::new();
 
-                hasher.update(reward_root_bytes);
-                hasher.update(el_root);
-                hasher.update(placeholder_root);
+                // Start with the reward Merkle tree root digest as the base input
+
+                let digest = header.reward_merkle_tree_root.digest();
+                hasher.update(digest.0);
+                hasher.update(placeholder_1);
+                hasher.update(placeholder_2);
+                hasher.update(placeholder_3);
 
                 let result = hasher.finalize();
 

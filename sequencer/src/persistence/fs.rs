@@ -26,7 +26,7 @@ use hotshot_types::{
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper,
-        QuorumProposalWrapperV3, VidCommitment, VidDisperseShare,
+        QuorumProposalWrapperLegacy, VidCommitment, VidDisperseShare,
     },
     drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
@@ -936,7 +936,7 @@ impl SequencerPersistence for Persistence {
                 Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
             >(&proposal_bytes)
             .or_else(|error| {
-                bincode::deserialize::<Proposal<SeqTypes, QuorumProposalWrapperV3<SeqTypes>>>(
+                bincode::deserialize::<Proposal<SeqTypes, QuorumProposalWrapperLegacy<SeqTypes>>>(
                     &proposal_bytes,
                 )
                 .map(convert_proposal)
@@ -979,7 +979,7 @@ impl SequencerPersistence for Persistence {
         let bytes = fs::read(file_path)?;
         let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
             bincode::deserialize(&bytes).or_else(|error| {
-                bincode::deserialize::<Proposal<SeqTypes, QuorumProposalWrapperV3<SeqTypes>>>(
+                bincode::deserialize::<Proposal<SeqTypes, QuorumProposalWrapperLegacy<SeqTypes>>>(
                     &bytes,
                 )
                 .map(convert_proposal)
