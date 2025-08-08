@@ -101,7 +101,7 @@ impl<T: Serialize + DeserializeOwned + Clone> LedgerLog<T> {
         })
     }
 
-    pub(crate) fn iter(&self) -> Iter<T> {
+    pub(crate) fn iter(&self) -> Iter<'_, T> {
         Iter {
             index: 0,
             cache_start: self.cache_start,
