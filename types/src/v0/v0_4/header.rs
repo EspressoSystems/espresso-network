@@ -9,6 +9,8 @@ use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot_types::{data::VidCommitment, utils::BuilderCommitment};
 use serde::{Deserialize, Serialize};
 
+pub type StakeTableHash = [u8; 32];
+
 /// A header is like a [`Block`] with the body replaced by a digest.
 #[derive(Clone, Debug, Deserialize, Serialize, Hash, PartialEq, Eq)]
 pub struct Header {
@@ -27,7 +29,8 @@ pub struct Header {
     pub(crate) fee_info: FeeInfo,
     pub(crate) builder_signature: Option<BuilderSignature>,
     pub(crate) reward_merkle_tree_root: RewardMerkleCommitmentV2,
-    pub(crate) total_reward_distributed: RewardAmount
+    pub(crate) total_reward_distributed: RewardAmount,
+    pub(crate) next_stake_table_hash: Option<StakeTableHash>,
 }
 
 impl Committable for Header {
@@ -46,7 +49,7 @@ impl Committable for Header {
             .serialize_with_mode(&mut rwd_bytes, ark_serialize::Compress::Yes)
             .unwrap();
 
-        RawCommitmentBuilder::new(&Self::tag())
+        let mut cb = RawCommitmentBuilder::new(&Self::tag())
             .field("chain_config", self.chain_config.commit())
             .u64_field("height", self.height)
             .u64_field("timestamp", self.timestamp)
@@ -62,8 +65,13 @@ impl Committable for Header {
             .var_size_field("fee_merkle_tree_root", &fmt_bytes)
             .field("fee_info", self.fee_info.commit())
             .var_size_field("reward_merkle_tree_root", &rwd_bytes)
-            .var_size_field("total_reward_distributed", &self.total_reward_distributed.to_fixed_bytes())
-            .finalize()
+            .var_size_field("total_reward_distributed", &self.total_reward_distributed.to_fixed_bytes());
+
+        if let Some(next_stake_table_hash) = self.next_stake_table_hash {
+            cb = cb.constant_str("next_stake_table_hash").fixed_size_bytes(&next_stake_table_hash);
+        }
+
+        cb.finalize()
     }
 
     fn tag() -> String {

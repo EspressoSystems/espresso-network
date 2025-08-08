@@ -35,6 +35,8 @@ type EpochSender<TYPES> = (
     Sender<Result<EpochMembership<TYPES>>>,
 );
 
+pub type StakeTableHash = [u8; 32];
+
 /// Struct to Coordinate membership catchup
 pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     /// The underlying membhersip
@@ -755,5 +757,12 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
                 .await
                 .add_drb_result(epoch, drb_result);
         }
+    }
+    pub async fn stake_table_hash(&self) -> Option<StakeTableHash> {
+        self.coordinator
+            .membership
+            .read()
+            .await
+            .stake_table_hash(self.epoch?)
     }
 }

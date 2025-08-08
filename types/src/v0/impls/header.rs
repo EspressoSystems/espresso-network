@@ -6,7 +6,7 @@ use committable::{Commitment, Committable, RawCommitmentBuilder};
 use either::Either;
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
 use hotshot_types::{
-    data::{vid_commitment, VidCommitment, ViewNumber},
+    data::{vid_commitment, EpochNumber, VidCommitment, ViewNumber},
     light_client::LightClientState,
     traits::{
         block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
@@ -14,7 +14,7 @@ use hotshot_types::{
         signature_key::BuilderSignatureKey,
         BlockPayload, EncodeBytes, ValidatedState as _,
     },
-    utils::BuilderCommitment,
+    utils::{epoch_from_block_number, is_epoch_transition, BuilderCommitment},
 };
 use jf_merkle_tree::{AppendableMerkleTreeScheme, MerkleTreeScheme};
 use serde::{
@@ -41,10 +41,10 @@ use crate::{
         self, RewardAmount, RewardMerkleCommitmentV1, RewardMerkleTreeV1,
         REWARD_MERKLE_TREE_V1_HEIGHT,
     },
-    v0_4::{self, RewardMerkleCommitmentV2},
-    BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment,
-    Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable, PayloadByteLen,
-    SeqTypes, TimestampMillis, UpgradeType,
+    v0_4::{self, RewardMerkleCommitmentV2, StakeTableHash},
+    BlockMerkleCommitment, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeAmount,
+    FeeInfo, FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex,
+    NsTable, PayloadByteLen, SeqTypes, TimestampMillis, UpgradeType,
 };
 
 impl v0_1::Header {
@@ -289,6 +289,7 @@ impl Header {
         builder_signature: Vec<BuilderSignature>,
         total_reward_distributed: Option<RewardAmount>,
         version: Version,
+        next_stake_table_hash: Option<StakeTableHash>,
     ) -> Self {
         // Ensure FeeInfo contains at least 1 element
         assert!(!fee_info.is_empty(), "Invalid fee_info length: 0");
@@ -357,6 +358,7 @@ impl Header {
                 builder_signature: builder_signature.first().copied(),
                 reward_merkle_tree_root: reward_merkle_tree_root_v2,
                 total_reward_distributed: total_reward_distributed.unwrap_or_default(),
+                next_stake_table_hash,
             }),
             // This case should never occur
             // but if it does, we must panic
@@ -405,6 +407,7 @@ impl Header {
         chain_config: ChainConfig,
         version: Version,
         reward_distributor: Option<RewardDistributor>,
+        next_stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<Self> {
         ensure!(
             version.major == 0,
@@ -587,6 +590,7 @@ impl Header {
                 total_reward_distributed: reward_distributor
                     .map(|r| r.total_distributed())
                     .unwrap_or_default(),
+                next_stake_table_hash,
             }),
             // This case should never occur
             // but if it does, we must panic
@@ -975,6 +979,34 @@ impl BlockHeader<SeqTypes> for Header {
             .await?;
         };
 
+        let mut next_stake_table_hash = None;
+        if version >= DrbAndHeaderUpgradeVersion::version()
+            && is_epoch_transition(
+                height + 1,
+                instance_state
+                    .epoch_height
+                    .context("epoch height not in instance state")?,
+            )
+        {
+            let epoch = EpochNumber::new(epoch_from_block_number(
+                height + 1,
+                instance_state
+                    .epoch_height
+                    .context("epoch height not in instance state")?,
+            ));
+            let coordinator = instance_state.coordinator.clone();
+            let epoch_membership = coordinator
+                .membership_for_epoch(Some(epoch + 1))
+                .await
+                .map_err(|e| anyhow::anyhow!("failed to get epoch membership: {e}"))?;
+            next_stake_table_hash = Some(
+                epoch_membership
+                    .stake_table_hash()
+                    .await
+                    .context("failed to get next stake table hash")?,
+            );
+        }
+
         let now = OffsetDateTime::now_utc();
 
         let timestamp = now.unix_timestamp() as u64;
@@ -994,6 +1026,7 @@ impl BlockHeader<SeqTypes> for Header {
             chain_config,
             version,
             rewards,
+            next_stake_table_hash,
         )?)
     }
 
@@ -1053,6 +1086,7 @@ impl BlockHeader<SeqTypes> for Header {
             vec![],
             None,
             instance_state.current_version,
+            None,
         )
     }
 
@@ -1274,6 +1308,7 @@ mod test_headers {
                 validated_state.clone(),
                 genesis.instance_state.chain_config,
                 Version { major: 0, minor: 1 },
+                None,
                 None,
             )
             .unwrap();
@@ -1640,6 +1675,7 @@ mod test_headers {
             Default::default(),
             None,
             Version { major: 0, minor: 1 },
+            None,
         );
 
         let serialized = serde_json::to_string(&v1_header).unwrap();
@@ -1671,6 +1707,7 @@ mod test_headers {
             Default::default(),
             None,
             Version { major: 0, minor: 2 },
+            None,
         );
 
         let serialized = serde_json::to_string(&v2_header).unwrap();
@@ -1702,6 +1739,7 @@ mod test_headers {
             Default::default(),
             None,
             Version { major: 0, minor: 3 },
+            None,
         );
 
         let serialized = serde_json::to_string(&v3_header).unwrap();

@@ -237,6 +237,7 @@ async fn reference_header(version: Version) -> Header {
         vec![builder_signature],
         None,
         version,
+        None,
     )
 }
 
