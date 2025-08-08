@@ -9,6 +9,7 @@ resolver = "2"
 
 members = [
     "alloy-compat",
+    "benchmark-stats",
     "builder",
     "client",
     "contracts/rust/adapter",
@@ -41,14 +42,14 @@ members = [
     "tests",
     "types",
     "utils",
-    "vid",
-]
+    "vid"]
 
 # All crates except sequencer-sqlite, to avoid turning on embedded-db feature
 # for the whole workspace by default.
 default-members = [
     "alloy-compat",
     "builder",
+     "benchmark-stats",
     "client",
     "contracts/rust/adapter",
     "contracts/rust/deployer",
@@ -79,7 +80,7 @@ default-members = [
     "tests",
     "types",
     "utils",
-    "vid",
+    "vid"
 ]
 
 exclude = ["sequencer-sqlite"]
