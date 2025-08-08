@@ -366,6 +366,13 @@ impl Header {
             _ => panic!("invalid version: {version}"),
         }
     }
+
+    pub fn next_stake_table_hash(&self) -> Option<StakeTableHash> {
+        match self {
+            Self::V4(fields) => fields.next_stake_table_hash,
+            _ => None,
+        }
+    }
 }
 
 // Getter for a field which is the same across all versions.
