@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 use espresso_types::SeqTypes;
 use hotshot_task_impls::stats::{LeaderViewStats, ReplicaViewStats};
 use hotshot_types::data::ViewNumber;
@@ -10,30 +10,41 @@ use plotly::{
     Bar, Layout, Plot, Scatter,
 };
 #[derive(Parser)]
+#[command(group(
+    ArgGroup::new("input")
+        .args(["replica_path", "leader_path"])
+        .required(true)
+         .multiple(true)
+))]
 struct Command {
     /// Path to the replica stats CSV file
-    #[arg(long, default_value = "replica_stats.csv")]
-    replica_path: String,
+    #[arg(long)]
+    replica_path: Option<String>,
 
     /// Path to the leader stats CSV file
-    #[arg(long, default_value = "leader_stats.csv")]
-    leader_path: String,
+    #[arg(long)]
+    leader_path: Option<String>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let command = Command::parse();
 
-    let replica_view_stats = read_replica_view_stats(&command.replica_path)?;
-    plot_replica_stats(&replica_view_stats)?;
-    let stats = generate_replica_stats(&replica_view_stats);
-    print_replica_stats(&stats);
+    // Process replica stats if provided
+    if let Some(replica_path) = command.replica_path {
+        let replica_view_stats = read_replica_view_stats(&replica_path)?;
+        plot_replica_stats(&replica_view_stats)?;
+        let stats = generate_replica_stats(&replica_view_stats);
+        print_replica_stats(&stats);
+    }
 
-    let leader_view_stats = read_leader_view_stats(&command.leader_path)?;
-    plot_leader_stats(&leader_view_stats)?;
+    // Process leader stats if provided
+    if let Some(leader_path) = command.leader_path {
+        let leader_view_stats = read_leader_view_stats(&leader_path)?;
+        plot_leader_stats(&leader_view_stats)?;
+    }
 
     Ok(())
 }
-
 struct ReplicaStats {
     pub vid_deltas_from_vc: Vec<f64>,
     pub dac_deltas_from_vc: Vec<f64>,
