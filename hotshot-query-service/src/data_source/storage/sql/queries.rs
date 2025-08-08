@@ -365,7 +365,7 @@ impl<Mode> Transaction<Mode> {
     /// Load a header from storage.
     ///
     /// This function is similar to `AvailabilityStorage::get_header`, but
-    /// * does not require the `QueryablePayload<Types>` bound that that trait impl does
+    /// * does not require the `QueryablePayload<Types>` bound that trait impl does
     /// * makes it easier to specify types since the type parameter is on the function and not on a
     ///   trait impl
     /// * allows type conversions for the `id` parameter
