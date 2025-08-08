@@ -100,7 +100,6 @@ pub struct LCV3StateSignatureRequestBody {
     /// The stake table used for the next HotShot block
     pub next_stake: StakeTableState,
     /// The auth root
-    // TODO(Chengyu): FixedBytes doesn't implement Canonical(De)Serialize. Is it a problem?
     pub auth_root: FixedBytes<32>,
     /// The associated signature of the light client state
     pub signature: StateSignature,
