@@ -28,15 +28,18 @@ use committable::Committable;
 use hotshot_example_types::node_types::TestVersions;
 use hotshot_query_service::{
     availability::{
-        BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, StateCertQueryData,
-        TransactionQueryData, TransactionWithProofQueryData, VidCommonQueryData,
+        BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, StateCertQueryDataV1,
+        StateCertQueryDataV2, TransactionQueryData, TransactionWithProofQueryData,
+        VidCommonQueryData,
     },
     testing::mocks::MockVersions,
     VidCommon,
 };
 use hotshot_types::{
     data::vid_commitment,
-    simple_certificate::LightClientStateUpdateCertificate,
+    simple_certificate::{
+        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
+    },
     traits::{signature_key::BuilderSignatureKey, BlockPayload, EncodeBytes},
     vid::{advz::advz_scheme, avidm::init_avidm_param},
 };
@@ -620,7 +623,15 @@ async fn test_transaction_query_data() {
 // State certificate
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_state_cert_query_data_v3() {
-    let light_client_cert = LightClientStateUpdateCertificate::<SeqTypes>::genesis();
-    let state_cert = StateCertQueryData(light_client_cert);
+    let light_client_cert = LightClientStateUpdateCertificateV1::<SeqTypes>::genesis();
+    let state_cert = StateCertQueryDataV1(light_client_cert);
     reference_test_without_committable("v3", "state_cert", &state_cert);
+}
+
+// State certificate
+#[tokio::test(flavor = "multi_thread")]
+async fn test_state_cert_query_data_v4() {
+    let light_client_cert = LightClientStateUpdateCertificateV2::<SeqTypes>::genesis();
+    let state_cert = StateCertQueryDataV2(light_client_cert);
+    reference_test_without_committable("v4", "state_cert", &state_cert);
 }

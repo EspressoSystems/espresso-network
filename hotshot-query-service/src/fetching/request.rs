@@ -18,7 +18,7 @@ use derive_more::{From, Into};
 use hotshot_types::{data::VidCommitment, traits::node_implementation::NodeType};
 
 use crate::{
-    availability::{LeafHash, LeafQueryData, QcHash, StateCertQueryData},
+    availability::{LeafHash, LeafQueryData, QcHash, StateCertQueryDataV2},
     Payload, VidCommon,
 };
 
@@ -74,5 +74,5 @@ impl<Types: NodeType> Request<Types> for LeafRequest<Types> {
 pub struct StateCertRequest(pub u64);
 
 impl<Types: NodeType> Request<Types> for StateCertRequest {
-    type Response = StateCertQueryData<Types>;
+    type Response = StateCertQueryDataV2<Types>;
 }

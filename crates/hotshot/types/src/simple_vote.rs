@@ -951,7 +951,9 @@ pub struct LightClientStateUpdateVote<TYPES: NodeType> {
     /// The next stake table state
     pub next_stake_table_state: StakeTableState,
     /// The signature to the light client state
+    // TODO (Chengyu): add lcv3 signature type
     pub signature: <TYPES::StateSignatureKey as StateSignatureKey>::StateSignature,
+    pub auth_root: Option<[u8; 32]>,
 }
 
 impl<TYPES: NodeType> HasViewNumber<TYPES> for LightClientStateUpdateVote<TYPES> {

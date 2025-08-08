@@ -207,4 +207,13 @@ pub trait BlockHeader<TYPES: NodeType>:
 
     /// Get the light client state
     fn get_light_client_state(&self, view: TYPES::View) -> anyhow::Result<LightClientState>;
+
+    /// Returns the `auth_root` value for versions >= V4 (`DrbAndHeaderUpgrade`).
+    ///
+    /// For versions < V4, this will return `None`.
+    ///
+    /// The `auth_root` is a 32-byte hash calculated using the reward Merkle tree
+    /// digest and other values.  
+    /// It is used by the reward claim contract to verify the reward claim
+    fn auth_root(&self) -> anyhow::Result<Option<[u8; 32]>>;
 }

@@ -28,7 +28,7 @@ use super::{
 use crate::{
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceInfo, NamespaceMap,
-        PayloadQueryData, QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
+        PayloadQueryData, QueryableHeader, QueryablePayload, StateCertQueryDataV2, TransactionHash,
         VidCommonQueryData,
     },
     data_source::storage::{
@@ -385,14 +385,14 @@ where
         Ok(leaf)
     }
 
-    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryData<Types>> {
+    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryDataV2<Types>> {
         let row = query(&format!(
             "SELECT {STATE_CERT_COLUMNS} FROM finalized_state_cert WHERE epoch = $1 LIMIT 1"
         ))
         .bind(epoch as i64)
         .fetch_one(self.as_mut())
         .await?;
-        Ok(StateCertQueryData::from_row(&row)?)
+        Ok(StateCertQueryDataV2::from_row(&row)?)
     }
 }
 
