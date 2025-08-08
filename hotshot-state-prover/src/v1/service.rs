@@ -16,7 +16,7 @@ use hotshot_contract_adapter::{
 };
 use hotshot_types::{
     light_client::{
-        CircuitField, LightClientState, StakeTableState, StateSignature, StateSignaturesBundle,
+        CircuitField, LCV2StateSignaturesBundle, LightClientState, StakeTableState, StateSignature,
         StateVerKey,
     },
     traits::signature_key::LCV1StateSignatureKey,
@@ -228,10 +228,10 @@ async fn generate_proof(
 /// Get the latest LightClientState and signature bundle from Sequencer network
 pub async fn fetch_latest_legacy_state<ApiVer: StaticVersionType>(
     client: &Client<ServerError, ApiVer>,
-) -> Result<StateSignaturesBundle, ProverError> {
+) -> Result<LCV2StateSignaturesBundle, ProverError> {
     tracing::info!("Fetching the latest state signatures bundle from relay server.");
     client
-        .get::<StateSignaturesBundle>("/api/legacy-state")
+        .get::<LCV2StateSignaturesBundle>("/api/legacy-state")
         .send()
         .await
         .map_err(ProverError::RelayServerError)
