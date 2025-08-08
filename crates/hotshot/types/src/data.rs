@@ -803,9 +803,9 @@ pub struct QuorumProposal2<TYPES: NodeType> {
 
 /// Legacy version of `QuorumProposal2` corresponding to consensus protocol version V3.
 ///
-/// In V4 binary, `QuorumProposal2` updated the `state_cert` field to use
+/// `QuorumProposal2` state_cert field was updated to use new
 /// `LightClientStateUpdateCertificateV2`.  
-/// This legacy version still uses the older `LightClientStateUpdateCertificateV1`
+/// This legacy version uses the older `LightClientStateUpdateCertificateV1`
 /// format for backward compatibility.
 ///
 /// It is used only for deserializing previously stored quorum proposals.
