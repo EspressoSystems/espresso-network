@@ -44,6 +44,7 @@ pub use crate::bindings::{
     plonkverifier::PlonkVerifier,
     plonkverifierv2::PlonkVerifierV2,
     plonkverifierv3::PlonkVerifierV3,
+    rewardclaim::RewardClaim,
     rewardclaimprototypemock::{
         RewardClaimPrototypeMock,
         RewardMerkleTreeVerifier::AccruedRewardsProof as AccruedRewardsProofSol,

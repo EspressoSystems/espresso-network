@@ -367,7 +367,7 @@ library RewardMerkleTreeVerifier {
 interface RewardClaimPrototypeMock {
     error InvalidProofLength();
 
-    function verifyRewardClaim(bytes32 root, address account, uint256 amount, RewardMerkleTreeVerifier.AccruedRewardsProof memory proof) external pure returns (bool);
+    function verifyAuthRootCommitment(bytes32 commitment, address account, uint256 amount, RewardMerkleTreeVerifier.AccruedRewardsProof memory proof) external pure returns (bool);
 }
 ```
 
@@ -376,10 +376,10 @@ interface RewardClaimPrototypeMock {
 [
   {
     "type": "function",
-    "name": "verifyRewardClaim",
+    "name": "verifyAuthRootCommitment",
     "inputs": [
       {
-        "name": "root",
+        "name": "commitment",
         "type": "bytes32",
         "internalType": "bytes32"
       },
@@ -435,22 +435,22 @@ pub mod RewardClaimPrototypeMock {
     /// The creation / init bytecode of the contract.
     ///
     /// ```text
-    ///0x6080604052348015600e575f5ffd5b506102468061001c5f395ff3fe608060405234801561000f575f5ffd5b5060043610610029575f3560e01c80634c6d20d21461002d575b5f5ffd5b61004061003b36600461016a565b610054565b604051901515815260200160405180910390f35b5f6100618585858561006a565b95945050505050565b5f368161007784806101d8565b909250905060a0811461009d576040516313717da960e21b815260040160405180910390fd5b5f6100a78661011e565b90505f5b60a0811015610110575f8484838181106100c7576100c7610225565b6020029190910135915050600189831c1680156100f4576040805183815260208101869052209350610106565b60408051858152602081018490522093505b50506001016100ab565b509096149695505050505050565b5f5f8260405160200161013391815260200190565b60408051808303601f1901815282825280516020918201208184015281518084038201815292820190915281519101209392505050565b5f5f5f5f6080858703121561017d575f5ffd5b8435935060208501356001600160a01b038116811461019a575f5ffd5b925060408501359150606085013567ffffffffffffffff8111156101bc575f5ffd5b8501602081880312156101cd575f5ffd5b939692955090935050565b5f5f8335601e198436030181126101ed575f5ffd5b83018035915067ffffffffffffffff821115610207575f5ffd5b6020019150600581901b360382131561021e575f5ffd5b9250929050565b634e487b7160e01b5f52603260045260245ffdfea164736f6c634300081c000a
+    ///0x6080604052348015600e575f5ffd5b506102448061001c5f395ff3fe608060405234801561000f575f5ffd5b5060043610610029575f3560e01c8063178d28261461002d575b5f5ffd5b61004061003b366004610168565b610054565b604051901515815260200160405180910390f35b5f8461006185858561006b565b1495945050505050565b5f368161007884806101d6565b909250905060a0811461009e576040516313717da960e21b815260040160405180910390fd5b5f6100a88661011c565b90505f5b60a0811015610111575f8484838181106100c8576100c8610223565b6020029190910135915050600189831c1680156100f5576040805183815260208101869052209350610107565b60408051858152602081018490522093505b50506001016100ac565b509695505050505050565b5f5f8260405160200161013191815260200190565b60408051808303601f1901815282825280516020918201208184015281518084038201815292820190915281519101209392505050565b5f5f5f5f6080858703121561017b575f5ffd5b8435935060208501356001600160a01b0381168114610198575f5ffd5b925060408501359150606085013567ffffffffffffffff8111156101ba575f5ffd5b8501602081880312156101cb575f5ffd5b939692955090935050565b5f5f8335601e198436030181126101eb575f5ffd5b83018035915067ffffffffffffffff821115610205575f5ffd5b6020019150600581901b360382131561021c575f5ffd5b9250929050565b634e487b7160e01b5f52603260045260245ffdfea164736f6c634300081c000a
     /// ```
     #[rustfmt::skip]
     #[allow(clippy::all)]
     pub static BYTECODE: alloy_sol_types::private::Bytes = alloy_sol_types::private::Bytes::from_static(
-        b"`\x80`@R4\x80\x15`\x0EW__\xFD[Pa\x02F\x80a\0\x1C_9_\xF3\xFE`\x80`@R4\x80\x15a\0\x0FW__\xFD[P`\x046\x10a\0)W_5`\xE0\x1C\x80cLm \xD2\x14a\0-W[__\xFD[a\0@a\0;6`\x04a\x01jV[a\0TV[`@Q\x90\x15\x15\x81R` \x01`@Q\x80\x91\x03\x90\xF3[_a\0a\x85\x85\x85\x85a\0jV[\x95\x94PPPPPV[_6\x81a\0w\x84\x80a\x01\xD8V[\x90\x92P\x90P`\xA0\x81\x14a\0\x9DW`@Qc\x13q}\xA9`\xE2\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[_a\0\xA7\x86a\x01\x1EV[\x90P_[`\xA0\x81\x10\x15a\x01\x10W_\x84\x84\x83\x81\x81\x10a\0\xC7Wa\0\xC7a\x02%V[` \x02\x91\x90\x91\x015\x91PP`\x01\x89\x83\x1C\x16\x80\x15a\0\xF4W`@\x80Q\x83\x81R` \x81\x01\x86\x90R \x93Pa\x01\x06V[`@\x80Q\x85\x81R` \x81\x01\x84\x90R \x93P[PP`\x01\x01a\0\xABV[P\x90\x96\x14\x96\x95PPPPPPV[__\x82`@Q` \x01a\x013\x91\x81R` \x01\x90V[`@\x80Q\x80\x83\x03`\x1F\x19\x01\x81R\x82\x82R\x80Q` \x91\x82\x01 \x81\x84\x01R\x81Q\x80\x84\x03\x82\x01\x81R\x92\x82\x01\x90\x91R\x81Q\x91\x01 \x93\x92PPPV[____`\x80\x85\x87\x03\x12\x15a\x01}W__\xFD[\x845\x93P` \x85\x015`\x01`\x01`\xA0\x1B\x03\x81\x16\x81\x14a\x01\x9AW__\xFD[\x92P`@\x85\x015\x91P``\x85\x015g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x15a\x01\xBCW__\xFD[\x85\x01` \x81\x88\x03\x12\x15a\x01\xCDW__\xFD[\x93\x96\x92\x95P\x90\x93PPV[__\x835`\x1E\x19\x846\x03\x01\x81\x12a\x01\xEDW__\xFD[\x83\x01\x805\x91Pg\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x82\x11\x15a\x02\x07W__\xFD[` \x01\x91P`\x05\x81\x90\x1B6\x03\x82\x13\x15a\x02\x1EW__\xFD[\x92P\x92\x90PV[cNH{q`\xE0\x1B_R`2`\x04R`$_\xFD\xFE\xA1dsolcC\0\x08\x1C\0\n",
+        b"`\x80`@R4\x80\x15`\x0EW__\xFD[Pa\x02D\x80a\0\x1C_9_\xF3\xFE`\x80`@R4\x80\x15a\0\x0FW__\xFD[P`\x046\x10a\0)W_5`\xE0\x1C\x80c\x17\x8D(&\x14a\0-W[__\xFD[a\0@a\0;6`\x04a\x01hV[a\0TV[`@Q\x90\x15\x15\x81R` \x01`@Q\x80\x91\x03\x90\xF3[_\x84a\0a\x85\x85\x85a\0kV[\x14\x95\x94PPPPPV[_6\x81a\0x\x84\x80a\x01\xD6V[\x90\x92P\x90P`\xA0\x81\x14a\0\x9EW`@Qc\x13q}\xA9`\xE2\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[_a\0\xA8\x86a\x01\x1CV[\x90P_[`\xA0\x81\x10\x15a\x01\x11W_\x84\x84\x83\x81\x81\x10a\0\xC8Wa\0\xC8a\x02#V[` \x02\x91\x90\x91\x015\x91PP`\x01\x89\x83\x1C\x16\x80\x15a\0\xF5W`@\x80Q\x83\x81R` \x81\x01\x86\x90R \x93Pa\x01\x07V[`@\x80Q\x85\x81R` \x81\x01\x84\x90R \x93P[PP`\x01\x01a\0\xACV[P\x96\x95PPPPPPV[__\x82`@Q` \x01a\x011\x91\x81R` \x01\x90V[`@\x80Q\x80\x83\x03`\x1F\x19\x01\x81R\x82\x82R\x80Q` \x91\x82\x01 \x81\x84\x01R\x81Q\x80\x84\x03\x82\x01\x81R\x92\x82\x01\x90\x91R\x81Q\x91\x01 \x93\x92PPPV[____`\x80\x85\x87\x03\x12\x15a\x01{W__\xFD[\x845\x93P` \x85\x015`\x01`\x01`\xA0\x1B\x03\x81\x16\x81\x14a\x01\x98W__\xFD[\x92P`@\x85\x015\x91P``\x85\x015g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x15a\x01\xBAW__\xFD[\x85\x01` \x81\x88\x03\x12\x15a\x01\xCBW__\xFD[\x93\x96\x92\x95P\x90\x93PPV[__\x835`\x1E\x19\x846\x03\x01\x81\x12a\x01\xEBW__\xFD[\x83\x01\x805\x91Pg\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x82\x11\x15a\x02\x05W__\xFD[` \x01\x91P`\x05\x81\x90\x1B6\x03\x82\x13\x15a\x02\x1CW__\xFD[\x92P\x92\x90PV[cNH{q`\xE0\x1B_R`2`\x04R`$_\xFD\xFE\xA1dsolcC\0\x08\x1C\0\n",
     );
     /// The runtime bytecode of the contract, as deployed on the network.
     ///
     /// ```text
-    ///0x608060405234801561000f575f5ffd5b5060043610610029575f3560e01c80634c6d20d21461002d575b5f5ffd5b61004061003b36600461016a565b610054565b604051901515815260200160405180910390f35b5f6100618585858561006a565b95945050505050565b5f368161007784806101d8565b909250905060a0811461009d576040516313717da960e21b815260040160405180910390fd5b5f6100a78661011e565b90505f5b60a0811015610110575f8484838181106100c7576100c7610225565b6020029190910135915050600189831c1680156100f4576040805183815260208101869052209350610106565b60408051858152602081018490522093505b50506001016100ab565b509096149695505050505050565b5f5f8260405160200161013391815260200190565b60408051808303601f1901815282825280516020918201208184015281518084038201815292820190915281519101209392505050565b5f5f5f5f6080858703121561017d575f5ffd5b8435935060208501356001600160a01b038116811461019a575f5ffd5b925060408501359150606085013567ffffffffffffffff8111156101bc575f5ffd5b8501602081880312156101cd575f5ffd5b939692955090935050565b5f5f8335601e198436030181126101ed575f5ffd5b83018035915067ffffffffffffffff821115610207575f5ffd5b6020019150600581901b360382131561021e575f5ffd5b9250929050565b634e487b7160e01b5f52603260045260245ffdfea164736f6c634300081c000a
+    ///0x608060405234801561000f575f5ffd5b5060043610610029575f3560e01c8063178d28261461002d575b5f5ffd5b61004061003b366004610168565b610054565b604051901515815260200160405180910390f35b5f8461006185858561006b565b1495945050505050565b5f368161007884806101d6565b909250905060a0811461009e576040516313717da960e21b815260040160405180910390fd5b5f6100a88661011c565b90505f5b60a0811015610111575f8484838181106100c8576100c8610223565b6020029190910135915050600189831c1680156100f5576040805183815260208101869052209350610107565b60408051858152602081018490522093505b50506001016100ac565b509695505050505050565b5f5f8260405160200161013191815260200190565b60408051808303601f1901815282825280516020918201208184015281518084038201815292820190915281519101209392505050565b5f5f5f5f6080858703121561017b575f5ffd5b8435935060208501356001600160a01b0381168114610198575f5ffd5b925060408501359150606085013567ffffffffffffffff8111156101ba575f5ffd5b8501602081880312156101cb575f5ffd5b939692955090935050565b5f5f8335601e198436030181126101eb575f5ffd5b83018035915067ffffffffffffffff821115610205575f5ffd5b6020019150600581901b360382131561021c575f5ffd5b9250929050565b634e487b7160e01b5f52603260045260245ffdfea164736f6c634300081c000a
     /// ```
     #[rustfmt::skip]
     #[allow(clippy::all)]
     pub static DEPLOYED_BYTECODE: alloy_sol_types::private::Bytes = alloy_sol_types::private::Bytes::from_static(
-        b"`\x80`@R4\x80\x15a\0\x0FW__\xFD[P`\x046\x10a\0)W_5`\xE0\x1C\x80cLm \xD2\x14a\0-W[__\xFD[a\0@a\0;6`\x04a\x01jV[a\0TV[`@Q\x90\x15\x15\x81R` \x01`@Q\x80\x91\x03\x90\xF3[_a\0a\x85\x85\x85\x85a\0jV[\x95\x94PPPPPV[_6\x81a\0w\x84\x80a\x01\xD8V[\x90\x92P\x90P`\xA0\x81\x14a\0\x9DW`@Qc\x13q}\xA9`\xE2\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[_a\0\xA7\x86a\x01\x1EV[\x90P_[`\xA0\x81\x10\x15a\x01\x10W_\x84\x84\x83\x81\x81\x10a\0\xC7Wa\0\xC7a\x02%V[` \x02\x91\x90\x91\x015\x91PP`\x01\x89\x83\x1C\x16\x80\x15a\0\xF4W`@\x80Q\x83\x81R` \x81\x01\x86\x90R \x93Pa\x01\x06V[`@\x80Q\x85\x81R` \x81\x01\x84\x90R \x93P[PP`\x01\x01a\0\xABV[P\x90\x96\x14\x96\x95PPPPPPV[__\x82`@Q` \x01a\x013\x91\x81R` \x01\x90V[`@\x80Q\x80\x83\x03`\x1F\x19\x01\x81R\x82\x82R\x80Q` \x91\x82\x01 \x81\x84\x01R\x81Q\x80\x84\x03\x82\x01\x81R\x92\x82\x01\x90\x91R\x81Q\x91\x01 \x93\x92PPPV[____`\x80\x85\x87\x03\x12\x15a\x01}W__\xFD[\x845\x93P` \x85\x015`\x01`\x01`\xA0\x1B\x03\x81\x16\x81\x14a\x01\x9AW__\xFD[\x92P`@\x85\x015\x91P``\x85\x015g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x15a\x01\xBCW__\xFD[\x85\x01` \x81\x88\x03\x12\x15a\x01\xCDW__\xFD[\x93\x96\x92\x95P\x90\x93PPV[__\x835`\x1E\x19\x846\x03\x01\x81\x12a\x01\xEDW__\xFD[\x83\x01\x805\x91Pg\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x82\x11\x15a\x02\x07W__\xFD[` \x01\x91P`\x05\x81\x90\x1B6\x03\x82\x13\x15a\x02\x1EW__\xFD[\x92P\x92\x90PV[cNH{q`\xE0\x1B_R`2`\x04R`$_\xFD\xFE\xA1dsolcC\0\x08\x1C\0\n",
+        b"`\x80`@R4\x80\x15a\0\x0FW__\xFD[P`\x046\x10a\0)W_5`\xE0\x1C\x80c\x17\x8D(&\x14a\0-W[__\xFD[a\0@a\0;6`\x04a\x01hV[a\0TV[`@Q\x90\x15\x15\x81R` \x01`@Q\x80\x91\x03\x90\xF3[_\x84a\0a\x85\x85\x85a\0kV[\x14\x95\x94PPPPPV[_6\x81a\0x\x84\x80a\x01\xD6V[\x90\x92P\x90P`\xA0\x81\x14a\0\x9EW`@Qc\x13q}\xA9`\xE2\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[_a\0\xA8\x86a\x01\x1CV[\x90P_[`\xA0\x81\x10\x15a\x01\x11W_\x84\x84\x83\x81\x81\x10a\0\xC8Wa\0\xC8a\x02#V[` \x02\x91\x90\x91\x015\x91PP`\x01\x89\x83\x1C\x16\x80\x15a\0\xF5W`@\x80Q\x83\x81R` \x81\x01\x86\x90R \x93Pa\x01\x07V[`@\x80Q\x85\x81R` \x81\x01\x84\x90R \x93P[PP`\x01\x01a\0\xACV[P\x96\x95PPPPPPV[__\x82`@Q` \x01a\x011\x91\x81R` \x01\x90V[`@\x80Q\x80\x83\x03`\x1F\x19\x01\x81R\x82\x82R\x80Q` \x91\x82\x01 \x81\x84\x01R\x81Q\x80\x84\x03\x82\x01\x81R\x92\x82\x01\x90\x91R\x81Q\x91\x01 \x93\x92PPPV[____`\x80\x85\x87\x03\x12\x15a\x01{W__\xFD[\x845\x93P` \x85\x015`\x01`\x01`\xA0\x1B\x03\x81\x16\x81\x14a\x01\x98W__\xFD[\x92P`@\x85\x015\x91P``\x85\x015g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x15a\x01\xBAW__\xFD[\x85\x01` \x81\x88\x03\x12\x15a\x01\xCBW__\xFD[\x93\x96\x92\x95P\x90\x93PPV[__\x835`\x1E\x19\x846\x03\x01\x81\x12a\x01\xEBW__\xFD[\x83\x01\x805\x91Pg\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x82\x11\x15a\x02\x05W__\xFD[` \x01\x91P`\x05\x81\x90\x1B6\x03\x82\x13\x15a\x02\x1CW__\xFD[\x92P\x92\x90PV[cNH{q`\xE0\x1B_R`2`\x04R`$_\xFD\xFE\xA1dsolcC\0\x08\x1C\0\n",
     );
     #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `InvalidProofLength()` and selector `0x4dc5f6a4`.
@@ -518,15 +518,15 @@ error InvalidProofLength();
         }
     };
     #[derive(Default, Debug, PartialEq, Eq, Hash)]
-    /**Function with signature `verifyRewardClaim(bytes32,address,uint256,(bytes32[]))` and selector `0x4c6d20d2`.
+    /**Function with signature `verifyAuthRootCommitment(bytes32,address,uint256,(bytes32[]))` and selector `0x178d2826`.
 ```solidity
-function verifyRewardClaim(bytes32 root, address account, uint256 amount, RewardMerkleTreeVerifier.AccruedRewardsProof memory proof) external pure returns (bool);
+function verifyAuthRootCommitment(bytes32 commitment, address account, uint256 amount, RewardMerkleTreeVerifier.AccruedRewardsProof memory proof) external pure returns (bool);
 ```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
-    pub struct verifyRewardClaimCall {
+    pub struct verifyAuthRootCommitmentCall {
         #[allow(missing_docs)]
-        pub root: alloy::sol_types::private::FixedBytes<32>,
+        pub commitment: alloy::sol_types::private::FixedBytes<32>,
         #[allow(missing_docs)]
         pub account: alloy::sol_types::private::Address,
         #[allow(missing_docs)]
@@ -535,10 +535,10 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
         pub proof: <RewardMerkleTreeVerifier::AccruedRewardsProof as alloy::sol_types::SolType>::RustType,
     }
     #[derive(Default, Debug, PartialEq, Eq, Hash)]
-    ///Container type for the return parameters of the [`verifyRewardClaim(bytes32,address,uint256,(bytes32[]))`](verifyRewardClaimCall) function.
+    ///Container type for the return parameters of the [`verifyAuthRootCommitment(bytes32,address,uint256,(bytes32[]))`](verifyAuthRootCommitmentCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
-    pub struct verifyRewardClaimReturn {
+    pub struct verifyAuthRootCommitmentReturn {
         #[allow(missing_docs)]
         pub _0: bool,
     }
@@ -578,19 +578,19 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
             }
             #[automatically_derived]
             #[doc(hidden)]
-            impl ::core::convert::From<verifyRewardClaimCall>
+            impl ::core::convert::From<verifyAuthRootCommitmentCall>
             for UnderlyingRustTuple<'_> {
-                fn from(value: verifyRewardClaimCall) -> Self {
-                    (value.root, value.account, value.amount, value.proof)
+                fn from(value: verifyAuthRootCommitmentCall) -> Self {
+                    (value.commitment, value.account, value.amount, value.proof)
                 }
             }
             #[automatically_derived]
             #[doc(hidden)]
             impl ::core::convert::From<UnderlyingRustTuple<'_>>
-            for verifyRewardClaimCall {
+            for verifyAuthRootCommitmentCall {
                 fn from(tuple: UnderlyingRustTuple<'_>) -> Self {
                     Self {
-                        root: tuple.0,
+                        commitment: tuple.0,
                         account: tuple.1,
                         amount: tuple.2,
                         proof: tuple.3,
@@ -616,23 +616,23 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
             }
             #[automatically_derived]
             #[doc(hidden)]
-            impl ::core::convert::From<verifyRewardClaimReturn>
+            impl ::core::convert::From<verifyAuthRootCommitmentReturn>
             for UnderlyingRustTuple<'_> {
-                fn from(value: verifyRewardClaimReturn) -> Self {
+                fn from(value: verifyAuthRootCommitmentReturn) -> Self {
                     (value._0,)
                 }
             }
             #[automatically_derived]
             #[doc(hidden)]
             impl ::core::convert::From<UnderlyingRustTuple<'_>>
-            for verifyRewardClaimReturn {
+            for verifyAuthRootCommitmentReturn {
                 fn from(tuple: UnderlyingRustTuple<'_>) -> Self {
                     Self { _0: tuple.0 }
                 }
             }
         }
         #[automatically_derived]
-        impl alloy_sol_types::SolCall for verifyRewardClaimCall {
+        impl alloy_sol_types::SolCall for verifyAuthRootCommitmentCall {
             type Parameters<'a> = (
                 alloy::sol_types::sol_data::FixedBytes<32>,
                 alloy::sol_types::sol_data::Address,
@@ -642,13 +642,13 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
             type Token<'a> = <Self::Parameters<
                 'a,
             > as alloy_sol_types::SolType>::Token<'a>;
-            type Return = verifyRewardClaimReturn;
+            type Return = verifyAuthRootCommitmentReturn;
             type ReturnTuple<'a> = (alloy::sol_types::sol_data::Bool,);
             type ReturnToken<'a> = <Self::ReturnTuple<
                 'a,
             > as alloy_sol_types::SolType>::Token<'a>;
-            const SIGNATURE: &'static str = "verifyRewardClaim(bytes32,address,uint256,(bytes32[]))";
-            const SELECTOR: [u8; 4] = [76u8, 109u8, 32u8, 210u8];
+            const SIGNATURE: &'static str = "verifyAuthRootCommitment(bytes32,address,uint256,(bytes32[]))";
+            const SELECTOR: [u8; 4] = [23u8, 141u8, 40u8, 38u8];
             #[inline]
             fn new<'a>(
                 tuple: <Self::Parameters<'a> as alloy_sol_types::SolType>::RustType,
@@ -660,7 +660,7 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
                 (
                     <alloy::sol_types::sol_data::FixedBytes<
                         32,
-                    > as alloy_sol_types::SolType>::tokenize(&self.root),
+                    > as alloy_sol_types::SolType>::tokenize(&self.commitment),
                     <alloy::sol_types::sol_data::Address as alloy_sol_types::SolType>::tokenize(
                         &self.account,
                     ),
@@ -688,7 +688,7 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
     #[derive()]
     pub enum RewardClaimPrototypeMockCalls {
         #[allow(missing_docs)]
-        verifyRewardClaim(verifyRewardClaimCall),
+        verifyAuthRootCommitment(verifyAuthRootCommitmentCall),
     }
     #[automatically_derived]
     impl RewardClaimPrototypeMockCalls {
@@ -698,7 +698,7 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
         /// No guarantees are made about the order of the selectors.
         ///
         /// Prefer using `SolInterface` methods instead.
-        pub const SELECTORS: &'static [[u8; 4usize]] = &[[76u8, 109u8, 32u8, 210u8]];
+        pub const SELECTORS: &'static [[u8; 4usize]] = &[[23u8, 141u8, 40u8, 38u8]];
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for RewardClaimPrototypeMockCalls {
@@ -708,8 +708,8 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
         #[inline]
         fn selector(&self) -> [u8; 4] {
             match self {
-                Self::verifyRewardClaim(_) => {
-                    <verifyRewardClaimCall as alloy_sol_types::SolCall>::SELECTOR
+                Self::verifyAuthRootCommitment(_) => {
+                    <verifyAuthRootCommitmentCall as alloy_sol_types::SolCall>::SELECTOR
                 }
             }
         }
@@ -733,17 +733,17 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
                 bool,
             ) -> alloy_sol_types::Result<RewardClaimPrototypeMockCalls>] = &[
                 {
-                    fn verifyRewardClaim(
+                    fn verifyAuthRootCommitment(
                         data: &[u8],
                         validate: bool,
                     ) -> alloy_sol_types::Result<RewardClaimPrototypeMockCalls> {
-                        <verifyRewardClaimCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <verifyAuthRootCommitmentCall as alloy_sol_types::SolCall>::abi_decode_raw(
                                 data,
                                 validate,
                             )
-                            .map(RewardClaimPrototypeMockCalls::verifyRewardClaim)
+                            .map(RewardClaimPrototypeMockCalls::verifyAuthRootCommitment)
                     }
-                    verifyRewardClaim
+                    verifyAuthRootCommitment
                 },
             ];
             let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
@@ -759,8 +759,8 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
         #[inline]
         fn abi_encoded_size(&self) -> usize {
             match self {
-                Self::verifyRewardClaim(inner) => {
-                    <verifyRewardClaimCall as alloy_sol_types::SolCall>::abi_encoded_size(
+                Self::verifyAuthRootCommitment(inner) => {
+                    <verifyAuthRootCommitmentCall as alloy_sol_types::SolCall>::abi_encoded_size(
                         inner,
                     )
                 }
@@ -769,8 +769,8 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
         #[inline]
         fn abi_encode_raw(&self, out: &mut alloy_sol_types::private::Vec<u8>) {
             match self {
-                Self::verifyRewardClaim(inner) => {
-                    <verifyRewardClaimCall as alloy_sol_types::SolCall>::abi_encode_raw(
+                Self::verifyAuthRootCommitment(inner) => {
+                    <verifyAuthRootCommitmentCall as alloy_sol_types::SolCall>::abi_encode_raw(
                         inner,
                         out,
                     )
@@ -1042,17 +1042,17 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         ) -> alloy_contract::SolCallBuilder<T, &P, C, N> {
             alloy_contract::SolCallBuilder::new_sol(&self.provider, &self.address, call)
         }
-        ///Creates a new call builder for the [`verifyRewardClaim`] function.
-        pub fn verifyRewardClaim(
+        ///Creates a new call builder for the [`verifyAuthRootCommitment`] function.
+        pub fn verifyAuthRootCommitment(
             &self,
-            root: alloy::sol_types::private::FixedBytes<32>,
+            commitment: alloy::sol_types::private::FixedBytes<32>,
             account: alloy::sol_types::private::Address,
             amount: alloy::sol_types::private::primitives::aliases::U256,
             proof: <RewardMerkleTreeVerifier::AccruedRewardsProof as alloy::sol_types::SolType>::RustType,
-        ) -> alloy_contract::SolCallBuilder<T, &P, verifyRewardClaimCall, N> {
+        ) -> alloy_contract::SolCallBuilder<T, &P, verifyAuthRootCommitmentCall, N> {
             self.call_builder(
-                &verifyRewardClaimCall {
-                    root,
+                &verifyAuthRootCommitmentCall {
+                    commitment,
                     account,
                     amount,
                     proof,

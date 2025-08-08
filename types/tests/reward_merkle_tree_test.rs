@@ -83,21 +83,21 @@ async fn test_tree_helper(num_keys: usize) -> Result<()> {
 
     // Verify membership using Solidity contract
     let is_valid = contract
-        .verifyRewardClaim(root, account_sol, amount, proof_sol.clone())
+        .verifyAuthRootCommitment(root, account_sol, amount, proof_sol.clone())
         .call()
         .await?;
 
     assert!(is_valid._0, "Membership proof invalid");
 
     let is_valid = contract
-        .verifyRewardClaim(root, account_sol, amount + U256::from(1), proof_sol.clone())
+        .verifyAuthRootCommitment(root, account_sol, amount + U256::from(1), proof_sol.clone())
         .call()
         .await?;
 
     assert!(!is_valid._0, "Membership proof should be invalid");
 
     let gas_used = contract
-        .verifyRewardClaim(root, account_sol, amount, proof_sol)
+        .verifyAuthRootCommitment(root, account_sol, amount, proof_sol)
         .estimate_gas()
         .await?;
     println!("Gas used for membership verification: {gas_used}");
