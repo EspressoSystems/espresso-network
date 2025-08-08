@@ -77,28 +77,6 @@ pub type BlocksFrontier = <BlockMerkleTree as MerkleTreeScheme>::MembershipProof
 type BoxLazy<T> = Pin<Arc<Lazy<T, BoxFuture<'static, T>>>>;
 
 #[derive(Derivative)]
-#[derivative(Debug(bound = ""))]
-struct ConsensusState {
-    state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
-    event_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
-    node_state: NodeState,
-    network_config: NetworkConfig<SeqTypes>,
-}
-
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions>
-    From<&SequencerContext<N, P, V>> for ConsensusState
-{
-    fn from(ctx: &SequencerContext<N, P, V>) -> Self {
-        Self {
-            state_signer: ctx.state_signer(),
-            event_streamer: ctx.event_streamer(),
-            node_state: ctx.node_state(),
-            network_config: ctx.network_config(),
-        }
-    }
-}
-
-#[derive(Derivative)]
 #[derivative(Clone(bound = ""), Debug(bound = ""))]
 struct ApiState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> {
     // The consensus state is initialized lazily so we can start the API (and healthcheck endpoints)
