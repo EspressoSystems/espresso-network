@@ -6,11 +6,11 @@ edition = { workspace = true }
 license = "MIT"
 
 [dependencies]
-csv = "1"
-serde = { workspace = true }
-plotly = "0.13.5"
 chrono = { workspace = true }
-hotshot-task-impls = { workspace = true }
-hotshot-types = { workspace = true}
-espresso-types = { path = "../types" }
 clap = { workspace = true }
+csv = "1"
+espresso-types = { path = "../types" }
+hotshot-task-impls = { workspace = true }
+hotshot-types = { workspace = true }
+plotly = "0.13.5"
+serde = { workspace = true }

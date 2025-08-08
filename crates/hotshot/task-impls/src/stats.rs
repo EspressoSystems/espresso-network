@@ -277,11 +277,9 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                     .da_cert_send = Some(now);
             },
             HotShotEvent::ViewChange(view, epoch) => {
-
                 // Record the timestamp of the first observed view change
-// This can happen when transitioning to the next view, either due to voting
-// or receiving a proposal, but we only store the first one
-
+                // This can happen when transitioning to the next view, either due to voting
+                // or receiving a proposal, but we only store the first one
                 if self.replica_entry(*view + 1).view_change.is_none() {
                     self.replica_entry(*view + 1).view_change = Some(now);
                 }
