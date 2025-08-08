@@ -10,6 +10,7 @@ set -e
 # Default script path
 DEFAULT_SCRIPT="upgradeProxy.ts"
 SCRIPT_NAME=${1:-$DEFAULT_SCRIPT}
+shift || true
 
 docker_path=/app/contracts/script/multisigTransactionProposals/safeSDK/$SCRIPT_NAME
 
