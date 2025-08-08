@@ -41,12 +41,8 @@ testing = [
     "rand",
     "tempfile",
     "sql-data-source",
-    "file-system-data-source"
+    "file-system-data-source",
 ]
-
-[[example]]
-name = "simple-server"
-required-features = ["sql-data-source", "testing"]
 
 [dependencies]
 alloy = { workspace = true }
@@ -140,6 +136,10 @@ rand = "0.8"
 reqwest = "0.12.3"
 tempfile = "3.10"
 test-log = { workspace = true }
+
+[[example]]
+name = "simple-server"
+required-features = ["sql-data-source", "testing"]
 
 [lints]
 workspace = true

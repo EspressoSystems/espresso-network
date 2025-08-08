@@ -12,6 +12,14 @@ use hotshot_builder_api::v0_1::{
     builder::BuildError,
     data_source::{AcceptsTxnSubmits, BuilderDataSource},
 };
+use hotshot_builder_shared::{
+    block::{BuilderStateId, ParentBlockReferences},
+    testing::constants::{
+        TEST_CHANNEL_BUFFER_SIZE, TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM,
+        TEST_NUM_CONSENSUS_RETRIES, TEST_NUM_NODES_IN_VID_COMPUTATION,
+        TEST_PROTOCOL_MAX_BLOCK_SIZE,
+    },
+};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TestTypes, TestVersions},
@@ -27,14 +35,6 @@ use hotshot_types::{
         EncodeBytes,
     },
     utils::{BuilderCommitment, EpochTransitionIndicator},
-};
-use marketplace_builder_shared::{
-    block::{BuilderStateId, ParentBlockReferences},
-    testing::constants::{
-        TEST_CHANNEL_BUFFER_SIZE, TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM,
-        TEST_NUM_CONSENSUS_RETRIES, TEST_NUM_NODES_IN_VID_COMPUTATION,
-        TEST_PROTOCOL_MAX_BLOCK_SIZE,
-    },
 };
 use sha2::{Digest, Sha256};
 use vbs::version::StaticVersionType;

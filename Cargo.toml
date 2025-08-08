@@ -1,7 +1,3 @@
-[workspace.package]
-version = "0.1.0"
-authors = ["Espresso Systems <hello@espressosys.com>"]
-edition = "2021"
 
 [workspace]
 
@@ -9,12 +5,14 @@ resolver = "2"
 
 members = [
     "alloy-compat",
-    "builder",
     "client",
     "contracts/rust/adapter",
     "contracts/rust/deployer",
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
+    "crates/builder",
+    "crates/hotshot-builder/legacy",
+    "crates/hotshot-builder/refactored",
     "crates/hotshot/builder-api",
     "crates/hotshot/example-types",
     "crates/hotshot/examples",
@@ -27,8 +25,6 @@ members = [
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
-    "hotshot-builder-core",
-    "hotshot-builder-core-refactored",
     "hotshot-events-service",
     "hotshot-query-service",
     "hotshot-state-prover",
@@ -48,12 +44,12 @@ members = [
 # for the whole workspace by default.
 default-members = [
     "alloy-compat",
-    "builder",
     "client",
     "contracts/rust/adapter",
     "contracts/rust/deployer",
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
+    "crates/builder",
     "crates/hotshot/builder-api",
     "crates/hotshot/example-types",
     "crates/hotshot/examples",
@@ -66,8 +62,8 @@ default-members = [
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
-    "hotshot-builder-core",
-    "hotshot-builder-core-refactored",
+    "crates/hotshot-builder/legacy",
+    "crates/hotshot-builder/refactored",
     "hotshot-events-service",
     "hotshot-query-service",
     "hotshot-state-prover",
@@ -83,6 +79,10 @@ default-members = [
 ]
 
 exclude = ["sequencer-sqlite"]
+[workspace.package]
+version = "0.1.0"
+authors = ["Espresso Systems <hello@espressosys.com>"]
+edition = "2021"
 
 [workspace.dependencies]
 # The --alloy-version in the justfile gen-bindings recipe should match the version here.
@@ -109,7 +109,6 @@ alloy = { version = "0.13", default-features = false, features = [
     "getrandom",
 ] }
 anyhow = "^1.0"
-ark-std = "0.4"
 ark-bls12-381 = "0.4"
 ark-bn254 = "0.4"
 ark-ec = "0.4"
@@ -118,6 +117,7 @@ ark-ff = "0.4"
 ark-poly = "0.4"
 ark-serialize = "0.4"
 ark-srs = "0.3.1"
+ark-std = "0.4"
 async-broadcast = "0.7.0"
 async-channel = "2"
 async-lock = "3"
@@ -128,97 +128,101 @@ base64-bytes = "0.1"
 bincode = "1.3.3"
 bitvec = { version = "1", features = ["serde"] }
 blake3 = "1.5"
+cbor4ii = { version = "1.0", features = ["serde1"] }
+chrono = { version = "0.4", features = ["serde"] }
 circular-buffer = "0.1.9"
 clap = { version = "4.4", features = ["derive", "env", "string"] }
 cld = "0.5"
-chrono = { version = "0.4", features = ["serde"] }
-diff-test-bn254 = { git = "https://github.com/EspressoSystems/solidity-bn254.git", tag = "v0.2.0" }
-either = "1"
-hex = "0.4"
-sha2 = "0.10"
+dashmap = "6"
+derive_builder = "0.20"
 derive_more = { version = "2.0", features = ["full"] }
-es-version = { git = "https://github.com/EspressoSystems/es-version.git", branch = "main" }
+diff-test-bn254 = { git = "https://github.com/EspressoSystems/solidity-bn254.git", tag = "v0.2.0" }
+digest = "0.10"
 dotenvy = "0.15"
+either = "1"
+es-version = { git = "https://github.com/EspressoSystems/es-version.git", branch = "main" }
 ethers = { version = "2.0", features = ["solc", "ws"] }
 futures = "0.3"
-tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
+hex = "0.4"
+indexmap = { version = "2", features = ["serde"] }
+lazy_static = "1"
+libp2p-identity = "0.2"
+libp2p-swarm-derive = { version = "0.35" }
+memoize = { version = "0.4", features = ["full"] }
+multiaddr = { version = "0.18" }
+num_cpus = "1"
+parking_lot = { version = "0.12", features = ["send_guard"] }
+semver = "1"
+serde-inline-default = "0.2"
+serde_bytes = { version = "0.11" }
+sha2 = "0.10"
 tokio = { version = "1", default-features = false, features = [
     "rt-multi-thread",
     "macros",
     "parking_lot",
     "sync",
 ] }
-libp2p-identity = "0.2"
+tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
 tower-service = { version = "0.3", default-features = false }
 tracing-subscriber = "0.3"
 tracing-test = "0.1"
-lazy_static = "1"
-multiaddr = { version = "0.18" }
-serde-inline-default = "0.2"
-digest = "0.10"
-libp2p-swarm-derive = { version = "0.35" }
 typenum = "1"
-cbor4ii = { version = "1.0", features = ["serde1"] }
-serde_bytes = { version = "0.11" }
-semver = "1"
-num_cpus = "1"
-dashmap = "6"
-memoize = { version = "0.4", features = ["full"] }
-derive_builder = "0.20"
-parking_lot = { version = "0.12", features = ["send_guard"] }
-indexmap = { version = "2", features = ["serde"] }
 
 # Builder imports
-marketplace-builder-shared = { path = "marketplace-builder-shared" }
-hotshot-builder-core = { path = "hotshot-builder-core" }
+hotshot-builder-legacy = { path = "crates/hotshot-builder/legacy" }
+hotshot-builder-shared = { path = "crates/hotshot-builder/shared" }
 
 # Hotshot imports
 hotshot = { path = "crates/hotshot/hotshot" }
 hotshot-builder-api = { path = "crates/hotshot/builder-api" }
-hotshot-task-impls = { path = "crates/hotshot/task-impls" }
-hotshot-macros = { path = "crates/hotshot/macros" }
+hotshot-contract-adapter = { path = "contracts/rust/adapter" }
 hotshot-events-service = { path = "hotshot-events-service" }
-hotshot-utils = { path = "crates/hotshot/utils" }
+# Temporary, used to pull in the mock auction results provider
+hotshot-example-types = { path = "crates/hotshot/example-types" }
+hotshot-libp2p-networking = { path = "crates/hotshot/libp2p-networking" }
+hotshot-macros = { path = "crates/hotshot/macros" }
 hotshot-orchestrator = { path = "crates/hotshot/orchestrator" }
 hotshot-query-service = { path = "hotshot-query-service" }
 hotshot-state-prover = { version = "0.1.0", path = "hotshot-state-prover" }
 hotshot-task = { path = "crates/hotshot/task" }
+hotshot-task-impls = { path = "crates/hotshot/task-impls" }
 hotshot-testing = { path = "crates/hotshot/testing" }
 hotshot-types = { path = "crates/hotshot/types" }
-hotshot-libp2p-networking = { path = "crates/hotshot/libp2p-networking" }
-hotshot-contract-adapter = { path = "contracts/rust/adapter" }
-# Temporary, used to pull in the mock auction results provider
-hotshot-example-types = { path = "crates/hotshot/example-types" }
+hotshot-utils = { path = "crates/hotshot/utils" }
 
 # VID import
 vid = { path = "vid", features = ["parallel", "keccak256"] }
 
-jf-plonk = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-plonk-v0.5.1", features = [
-    "test-apis",
-] }
+bytesize = "1.3"
+committable = "0.2"
+derivative = "2.2"
+itertools = "0.12"
 jf-crhf = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5" }
 jf-merkle-tree = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5", features = [
-    "std",
-] }
-jf-signature = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-signature-v0.2.0", features = [
     "std",
 ] }
 jf-pcs = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5", features = [
     "std",
     "parallel",
 ] }
-jf-vid = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5", features = [
+jf-plonk = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-plonk-v0.5.1", features = [
+    "test-apis",
+] }
+jf-relation = { git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5", features = [
     "std",
-    "parallel",
 ] }
 jf-rescue = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5", features = [
     "std",
     "parallel",
 ] }
-jf-relation = { git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5", features = [
+jf-signature = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-signature-v0.2.0", features = [
     "std",
 ] }
 jf-utils = { git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5" }
+jf-vid = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5", features = [
+    "std",
+    "parallel",
+] }
 libp2p = { package = "libp2p", version = "0.54", default-features = false, features = [
     "macros",
     "autonat",
@@ -234,42 +238,42 @@ libp2p = { package = "libp2p", version = "0.54", default-features = false, featu
 ] }
 log-panics = { version = "2.0", features = ["with-backtrace"] }
 lru = "0.12"
-strum = { version = "0.26", features = ["derive"] }
-surf-disco = "0.9"
-sqlx = "=0.8.3"
-tagged-base64 = "0.4"
-tide-disco = "0.9.4"
-thiserror = "1.0.69"
-tracing = "0.1"
-bytesize = "1.3"
-itertools = "0.12"
+num-traits = "0.2"
+paste = "1.0"
+portpicker = "0.1.1"
+pretty_assertions = { version = "1.4", features = ["unstable"] }
 priority-queue = "2"
+rand = "0.8.5"
 rand_chacha = "0.3"
 rand_distr = "0.4"
 reqwest = "0.12"
+rstest = "0.25.0"
+rstest_reuse = "0.7.0"
 serde = { version = "1.0.195", features = ["derive"] }
 serde_json = "^1.0.113"
+sqlx = "=0.8.3"
 staking-cli = { path = "./staking-cli" }
+static_assertions = "1.1"
+strum = { version = "0.26", features = ["derive"] }
+surf-disco = "0.9"
+tagged-base64 = "0.4"
 tempfile = "3.10"
 test-log = { version = "0.2", features = ["color", "trace"], default-features = false }
+thiserror = "1.0.69"
+tide-disco = "0.9.4"
+time = "0.3"
 toml = "0.8"
+tracing = "0.1"
+trait-set = "0.3.0"
 url = { version = "2.3", features = ["serde"] }
 vbs = "0.1"
 vec1 = { version = "1", features = ["serde"] }
 vergen = { version = "8.3", features = ["git", "gitcl"] }
 zeroize = "1.7"
-committable = "0.2"
-portpicker = "0.1.1"
-pretty_assertions = { version = "1.4", features = ["unstable"] }
-static_assertions = "1.1"
-num-traits = "0.2"
-derivative = "2.2"
-paste = "1.0"
-rand = "0.8.5"
-time = "0.3"
-trait-set = "0.3.0"
-rstest = "0.25.0"
-rstest_reuse = "0.7.0"
+
+[workspace.lints.clippy]
+# may prevent accidental deadlocks from holding guards over match statments
+significant_drop_in_scrutinee = "warn"
 
 # NOTE: when making changes here also update sequencer-sqlite/Cargo.toml.
 [profile.dev]
@@ -307,7 +311,3 @@ opt-level = 3
 inherits = "test"
 strip = true
 debug = "none"
-
-[workspace.lints.clippy]
-# may prevent accidental deadlocks from holding guards over match statments
-significant_drop_in_scrutinee = "warn"

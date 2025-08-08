@@ -1,5 +1,5 @@
 [package]
-name = "hotshot-builder-core-refactored"
+name = "hotshot-builder-refactored"
 version = { workspace = true }
 edition = { workspace = true }
 license = "MIT"
@@ -19,10 +19,10 @@ derive_more = { workspace = true, features = ["deref", "deref_mut", "debug"] }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-builder-api = { workspace = true }
+hotshot-builder-shared = { workspace = true }
 hotshot-types = { workspace = true }
 jf-vid = { workspace = true }
 lru = { workspace = true }
-marketplace-builder-shared = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 sha2 = { workspace = true }
 tagged-base64 = { workspace = true }

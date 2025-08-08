@@ -7,6 +7,12 @@ use hotshot::{
     traits::BlockPayload,
     types::{BLSPubKey, SignatureKey},
 };
+use hotshot_builder_shared::{
+    block::{BuilderStateId, ParentBlockReferences},
+    testing::constants::{
+        TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM, TEST_PROTOCOL_MAX_BLOCK_SIZE,
+    },
+};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TestTypes, TestVersions},
@@ -24,12 +30,6 @@ use hotshot_types::{
         EncodeBytes,
     },
     utils::{BuilderCommitment, EpochTransitionIndicator},
-};
-use marketplace_builder_shared::{
-    block::{BuilderStateId, ParentBlockReferences},
-    testing::constants::{
-        TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM, TEST_PROTOCOL_MAX_BLOCK_SIZE,
-    },
 };
 use sha2::{Digest, Sha256};
 use vbs::version::StaticVersionType;

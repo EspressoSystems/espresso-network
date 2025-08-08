@@ -21,6 +21,7 @@ use hotshot_builder_api::{
     },
     v0_2::builder::TransactionStatus,
 };
+use hotshot_builder_shared::block::{BlockId, BuilderStateId, ParentBlockReferences};
 use hotshot_types::{
     data::{DaProposal2, Leaf2, QuorumProposalWrapper, VidCommitment},
     event::EventType,
@@ -33,7 +34,6 @@ use hotshot_types::{
     utils::BuilderCommitment,
 };
 use lru::LruCache;
-use marketplace_builder_shared::block::{BlockId, BuilderStateId, ParentBlockReferences};
 use sha2::{Digest, Sha256};
 use tagged_base64::TaggedBase64;
 use tide_disco::method::ReadState;
@@ -1539,6 +1539,13 @@ mod test {
         v0_1::data_source::AcceptsTxnSubmits,
         v0_2::{block_info::AvailableBlockInfo, builder::TransactionStatus},
     };
+    use hotshot_builder_shared::{
+        block::{BlockId, BuilderStateId, ParentBlockReferences},
+        testing::constants::{
+            TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM,
+            TEST_NUM_NODES_IN_VID_COMPUTATION, TEST_PROTOCOL_MAX_BLOCK_SIZE,
+        },
+    };
     use hotshot_example_types::{
         block_types::{TestBlockPayload, TestMetadata, TestTransaction},
         node_types::{TestTypes, TestVersions},
@@ -1557,13 +1564,6 @@ mod test {
             signature_key::BuilderSignatureKey,
         },
         utils::{BuilderCommitment, EpochTransitionIndicator},
-    };
-    use marketplace_builder_shared::{
-        block::{BlockId, BuilderStateId, ParentBlockReferences},
-        testing::constants::{
-            TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM,
-            TEST_NUM_NODES_IN_VID_COMPUTATION, TEST_PROTOCOL_MAX_BLOCK_SIZE,
-        },
     };
     use sha2::{Digest, Sha256};
     use tokio::{

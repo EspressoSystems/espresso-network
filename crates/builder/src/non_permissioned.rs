@@ -8,13 +8,14 @@ use espresso_types::{
     NodeState, Payload, SeqTypes, ValidatedState,
 };
 use hotshot::traits::BlockPayload;
-use hotshot_builder_core::{
+use hotshot_builder_legacy::{
     builder_state::{BuilderState, MessageType},
     service::{
         run_non_permissioned_standalone_builder_service, GlobalState, ProxyGlobalState,
         ReceivedTransaction,
     },
 };
+use hotshot_builder_shared::{block::ParentBlockReferences, utils::EventServiceStream};
 use hotshot_types::{
     data::{fake_commitment, vid_commitment, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
@@ -23,7 +24,6 @@ use hotshot_types::{
         node_implementation::Versions, EncodeBytes,
     },
 };
-use marketplace_builder_shared::{block::ParentBlockReferences, utils::EventServiceStream};
 use sequencer::{catchup::StatePeers, L1Params, SequencerApiVersion};
 use tide_disco::Url;
 use tokio::spawn;

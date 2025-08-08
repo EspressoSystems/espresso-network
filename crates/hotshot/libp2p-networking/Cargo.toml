@@ -10,9 +10,6 @@ authors = { workspace = true }
 default = ["webui"]
 webui = []
 
-[dev-dependencies]
-hotshot-example-types = { workspace = true }
-
 [dependencies]
 alloy = { workspace = true }
 anyhow = { workspace = true }
@@ -39,6 +36,9 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[dev-dependencies]
+hotshot-example-types = { workspace = true }
 
 [lints]
 workspace = true
