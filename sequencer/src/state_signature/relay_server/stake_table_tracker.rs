@@ -38,14 +38,17 @@ pub struct StakeTableTrackerInner {
     epoch_start_block: Option<u64>,
 
     /// Stake table info for each epoch
-    stake_table_infos: HashMap<u64, StakeTableInfo>,
+    stake_table_infos: HashMap<u64, Arc<StakeTableInfo>>,
 
     /// Genesis stake table info
-    genesis_stake_table_info: Option<StakeTableInfo>,
+    genesis_stake_table_info: Option<Arc<StakeTableInfo>>,
 
     /// Queue for garbage collection
     gc_queue: BTreeSet<u64>,
 }
+
+/// Number of epochs to keep the stake table info
+const PRUNE_GAP: u64 = 2;
 
 /// Tracks the stake table info for each epoch
 pub struct StakeTableTracker {
@@ -67,7 +70,7 @@ impl StakeTableTracker {
     }
 
     /// Return the genesis stake table info
-    pub async fn genesis_stake_table_info(&self) -> anyhow::Result<StakeTableInfo> {
+    pub async fn genesis_stake_table_info(&self) -> anyhow::Result<Arc<StakeTableInfo>> {
         tracing::trace!("Acquire read lock for genesis stake table info");
         let read_guard = self.inner.read().await;
         if let Some(stake_table_info) = &read_guard.genesis_stake_table_info {
@@ -77,22 +80,23 @@ impl StakeTableTracker {
         drop(read_guard);
         tracing::trace!("Acquire write lock for genesis stake table info");
         let mut write_guard = self.inner.write().await;
-        let genesis_stake_table =
-            fetch_stake_table_from_sequencer(&write_guard.sequencer_url, None).await?;
-        let genesis_total_stake = genesis_stake_table.total_stakes();
 
         if let Some(stake_table_info) = &write_guard.genesis_stake_table_info {
             return Ok(stake_table_info.clone());
         }
 
+        let genesis_stake_table =
+            fetch_stake_table_from_sequencer(&write_guard.sequencer_url, None).await?;
+        let genesis_total_stake = genesis_stake_table.total_stakes();
+
         tracing::debug!("Fetching genesis stake table from sequencer");
-        let genesis_stake_table_info = StakeTableInfo {
+        let genesis_stake_table_info = Arc::new(StakeTableInfo {
             threshold: one_honest_threshold(genesis_total_stake),
             known_nodes: genesis_stake_table
                 .into_iter()
                 .map(|entry| (entry.state_ver_key, entry.stake_table_entry.stake()))
                 .collect(),
-        };
+        });
         tracing::debug!("Genesis stake table info updated");
 
         write_guard.genesis_stake_table_info = Some(genesis_stake_table_info.clone());
@@ -106,7 +110,7 @@ impl StakeTableTracker {
     pub async fn stake_table_info_for_block(
         &self,
         block_height: u64,
-    ) -> anyhow::Result<StakeTableInfo> {
+    ) -> anyhow::Result<Arc<StakeTableInfo>> {
         tracing::debug!("Fetch stake table for block {block_height}");
 
         tracing::trace!("Acquire read lock for stake table info");
@@ -169,13 +173,13 @@ impl StakeTableTracker {
         .await?;
         let total_stake = stake_table.total_stakes();
 
-        let stake_table_info = StakeTableInfo {
+        let stake_table_info = Arc::new(StakeTableInfo {
             threshold: one_honest_threshold(total_stake),
             known_nodes: stake_table
                 .into_iter()
                 .map(|entry| (entry.state_ver_key, entry.stake_table_entry.stake()))
                 .collect(),
-        };
+        });
 
         write_guard
             .stake_table_infos
@@ -184,7 +188,7 @@ impl StakeTableTracker {
         tracing::debug!("Stake table info for epoch {} updated", epoch);
         // Remove the stake table info if it's older than 2 epochs
         while let Some(&old_epoch) = write_guard.gc_queue.first() {
-            if old_epoch >= epoch - 2 {
+            if epoch < PRUNE_GAP || old_epoch >= epoch - PRUNE_GAP {
                 break;
             }
             write_guard.stake_table_infos.remove(&old_epoch);
