@@ -227,7 +227,7 @@ jobs:
       - name: Install nextest
         uses: taiki-e/install-action@nextest
       - name: Download archive
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: nextest-archive-postgres
 
@@ -261,7 +261,7 @@ jobs:
       - name: Install nextest
         uses: taiki-e/install-action@nextest
       - name: Download archive
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: nextest-archive-sqlite
 
@@ -327,7 +327,7 @@ jobs:
       - uses: taiki-e/install-action@nextest
 
       - name: Download archive
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
 
       - name: Move files
         run: |
@@ -377,7 +377,7 @@ jobs:
         # TODO: this downloads all (available) artifacts, which is a bit wasteful but artifact
         # downloads always fail if I try to select a subset.
       - name: Download archive
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
 
       - name: Move files
         run: |
