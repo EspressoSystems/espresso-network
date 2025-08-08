@@ -22,7 +22,7 @@
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>hotshot_types::{
 <a href=#23 id=23 data-nosnippet>23</a>    data::EpochNumber,
 <a href=#24 id=24 data-nosnippet>24</a>    light_client::{
-<a href=#25 id=25 data-nosnippet>25</a>        CircuitField, LightClientState, StakeTableState, StateSignature, StateSignaturesBundle,
+<a href=#25 id=25 data-nosnippet>25</a>        CircuitField, LCV2StateSignaturesBundle, LightClientState, StakeTableState, StateSignature,
 <a href=#26 id=26 data-nosnippet>26</a>        StateVerKey,
 <a href=#27 id=27 data-nosnippet>27</a>    },
 <a href=#28 id=28 data-nosnippet>28</a>    simple_certificate::LightClientStateUpdateCertificate,
@@ -88,10 +88,10 @@
 <a href=#88 id=88 data-nosnippet>88</a></span><span class="doccomment">/// Get the latest LightClientState and signature bundle from Sequencer network
 <a href=#89 id=89 data-nosnippet>89</a></span><span class="kw">pub async fn </span>fetch_latest_state&lt;ApiVer: StaticVersionType&gt;(
 <a href=#90 id=90 data-nosnippet>90</a>    client: <span class="kw-2">&amp;</span>Client&lt;ServerError, ApiVer&gt;,
-<a href=#91 id=91 data-nosnippet>91</a>) -&gt; <span class="prelude-ty">Result</span>&lt;StateSignaturesBundle, ProverError&gt; {
+<a href=#91 id=91 data-nosnippet>91</a>) -&gt; <span class="prelude-ty">Result</span>&lt;LCV2StateSignaturesBundle, ProverError&gt; {
 <a href=#92 id=92 data-nosnippet>92</a>    <span class="macro">tracing::info!</span>(<span class="string">"Fetching the latest state signatures bundle from relay server."</span>);
 <a href=#93 id=93 data-nosnippet>93</a>    client
-<a href=#94 id=94 data-nosnippet>94</a>        .get::&lt;StateSignaturesBundle&gt;(<span class="string">"/api/state"</span>)
+<a href=#94 id=94 data-nosnippet>94</a>        .get::&lt;LCV2StateSignaturesBundle&gt;(<span class="string">"/api/state"</span>)
 <a href=#95 id=95 data-nosnippet>95</a>        .send()
 <a href=#96 id=96 data-nosnippet>96</a>        .<span class="kw">await
 <a href=#97 id=97 data-nosnippet>97</a>        </span>.map_err(ProverError::RelayServerError)
