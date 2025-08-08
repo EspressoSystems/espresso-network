@@ -331,11 +331,13 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 .unwrap()
                 .with_behaviour(|_| network)
                 .unwrap()
+                .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(10)))
                 .build()
         };
         for (peer, addr) in &config.to_connect_addrs {
             if peer != swarm.local_peer_id() {
                 swarm.behaviour_mut().add_address(peer, addr.clone());
+                swarm.add_peer_address(*peer, addr.clone());
             }
         }
 
