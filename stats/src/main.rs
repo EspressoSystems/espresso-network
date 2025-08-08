@@ -35,9 +35,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 struct ReplicaStats {
-    vid_vs_dac: HashMap<String, usize>,
-    proposal_vs_vid: HashMap<String, usize>,
-    proposal_vs_dac: HashMap<String, usize>,
+    pub vid_deltas_from_vc: Vec<f64>,
+    pub dac_deltas_from_vc: Vec<f64>,
+    pub proposal_deltas_from_vc: Vec<f64>,
 }
 
 fn read_replica_view_stats(
@@ -245,73 +245,41 @@ fn plot_replica_stats(
 fn generate_replica_stats(
     replica_view_stats: &BTreeMap<ViewNumber, ReplicaViewStats<SeqTypes>>,
 ) -> ReplicaStats {
-    let mut vid_vs_dac_order_stats = HashMap::new();
-    let mut proposal_vs_vid_order_stats = HashMap::new();
-    let mut proposal_vs_dac_order_stats = HashMap::new();
+    let mut vid_deltas_from_vc = Vec::new();
+    let mut dac_deltas_from_vc = Vec::new();
+    let mut proposal_deltas_from_vc = Vec::new();
 
     for record in replica_view_stats.values() {
-        if let (Some(vid), Some(dac)) = (record.vid_share_recv, record.da_certificate_recv) {
-            let key = if vid < dac {
-                "VID received before DAC"
-            } else if dac < vid {
-                "DAC received before VID"
-            } else {
-                "VID and DAC received at the same time"
-            };
-            *vid_vs_dac_order_stats.entry(key.to_string()).or_insert(0) += 1;
-        }
+        if let Some(vc) = record.view_change {
+            if let Some(vid) = record.vid_share_recv {
+                let delta_ms = (vid as i128 - vc as i128) as f64 / 1_000_000.0;
+                vid_deltas_from_vc.push(delta_ms);
+            }
 
-        if let (Some(p), Some(v)) = (record.proposal_recv, record.vid_share_recv) {
-            let key = if p < v {
-                "Proposal received before VID"
-            } else if v < p {
-                "VID received before Proposal"
-            } else {
-                "Proposal and VID received at the same time"
-            };
-            *proposal_vs_vid_order_stats
-                .entry(key.to_string())
-                .or_insert(0) += 1;
-        }
+            if let Some(dac) = record.da_certificate_recv {
+                let delta_ms = (dac as i128 - vc as i128) as f64 / 1_000_000.0;
+                dac_deltas_from_vc.push(delta_ms);
+            }
 
-        if let (Some(p), Some(d)) = (record.proposal_recv, record.da_certificate_recv) {
-            let key = if p < d {
-                "Proposal received before DAC"
-            } else if d < p {
-                "DAC received before Proposal"
-            } else {
-                "Proposal and DAC received at the same time"
-            };
-            *proposal_vs_dac_order_stats
-                .entry(key.to_string())
-                .or_insert(0) += 1;
+            if let Some(prop) = record.proposal_recv {
+                let delta_ms = (prop as i128 - vc as i128) as f64 / 1_000_000.0;
+                proposal_deltas_from_vc.push(delta_ms);
+            }
         }
     }
 
     ReplicaStats {
-        vid_vs_dac: vid_vs_dac_order_stats,
-        proposal_vs_vid: proposal_vs_vid_order_stats,
-        proposal_vs_dac: proposal_vs_dac_order_stats,
+        vid_deltas_from_vc,
+        dac_deltas_from_vc,
+        proposal_deltas_from_vc,
     }
 }
 
 fn print_replica_stats(stats: &ReplicaStats) {
-    println!("\n-VID vs DAC:");
-    let mut v = stats.vid_vs_dac.iter().collect::<Vec<_>>();
-    v.sort_by(|a, b| b.1.cmp(a.1));
-    for (k, v) in v {
-        println!("{k}: {v} times");
-    }
-
-    println!("\n-Proposal vs VID:");
-    for (k, v) in &stats.proposal_vs_vid {
-        println!("{k}: {v} times");
-    }
-
-    println!("\n-Proposal vs DAC:");
-    for (k, v) in &stats.proposal_vs_dac {
-        println!("{k}: {v} times");
-    }
+    println!("Deltas calculated from view change time:");
+    print_delta_stats("DA Cert:", &stats.dac_deltas_from_vc);
+    print_delta_stats("VID Disperse:", &stats.vid_deltas_from_vc);
+    print_delta_stats("Proposal Received:", &stats.proposal_deltas_from_vc);
 }
 
 fn read_leader_view_stats(
@@ -336,6 +304,7 @@ fn plot_leader_stats(
     let mut da_cert_deltas = Vec::new();
     let mut vid_disperse_deltas = Vec::new();
     let mut qc_formed_deltas = Vec::new();
+    let mut block_built_prev_prop_deltas = Vec::new();
 
     // For stats
     let mut da_before_vid = 0;
@@ -370,6 +339,10 @@ fn plot_leader_stats(
         // Deltas for current view
         da_cert_deltas.push((da - block_built) as f64 / 1000_000.0);
         vid_disperse_deltas.push((vid - block_built) as f64 / 1000_000.0);
+
+        if let Some(prev_prop) = record.prev_proposal_send {
+            block_built_prev_prop_deltas.push((block_built - prev_prop) as f64 / 1_000_000.0);
+        }
 
         // Delta for QC formed at view+1
         if let Some(qc_formed) = record.qc_formed {
@@ -436,9 +409,13 @@ fn plot_leader_stats(
     println!("VID sent before DA cert: {vid_before_da} times");
     println!("DA and VID sent at same time: {da_eq_vid} times");
 
+    println!("\n Deltas calculated from block built:");
     print_delta_stats("DA Cert:", &da_cert_deltas);
     print_delta_stats("VID Disperse:", &vid_disperse_deltas);
     print_delta_stats("QC Formed:", &qc_formed_deltas);
+
+    println!("\n Deltas calculated from previous proposal:");
+    print_delta_stats("Block built:", &block_built_prev_prop_deltas);
 
     plot.write_html("leader_stats.html");
     println!("Plot saved to leader_stats.html");

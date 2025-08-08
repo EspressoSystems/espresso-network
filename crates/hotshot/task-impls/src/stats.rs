@@ -22,6 +22,7 @@ use crate::events::HotShotEvent;
 #[derive(Serialize, Deserialize)]
 pub struct LeaderViewStats<TYPES: NodeType> {
     pub view: TYPES::View,
+    pub prev_proposal_send: Option<i128>,
     pub proposal_send: Option<i128>,
     pub vote_recv: Option<i128>,
     pub da_proposal_send: Option<i128>,
@@ -36,6 +37,7 @@ pub struct LeaderViewStats<TYPES: NodeType> {
 #[derive(Serialize, Deserialize)]
 pub struct ReplicaViewStats<TYPES: NodeType> {
     pub view: TYPES::View,
+    pub view_change: Option<i128>,
     pub proposal_recv: Option<i128>,
     pub vote_send: Option<i128>,
     pub timeout_vote_send: Option<i128>,
@@ -53,6 +55,7 @@ impl<TYPES: NodeType> LeaderViewStats<TYPES> {
     fn new(view: TYPES::View) -> Self {
         Self {
             view,
+            prev_proposal_send: None,
             proposal_send: None,
             vote_recv: None,
             da_proposal_send: None,
@@ -70,6 +73,7 @@ impl<TYPES: NodeType> ReplicaViewStats<TYPES> {
     fn new(view: TYPES::View) -> Self {
         Self {
             view,
+            view_change: None,
             proposal_recv: None,
             vote_send: None,
             timeout_vote_send: None,
@@ -211,6 +215,9 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                         .replica_entry(proposal.data.view_number() - 1)
                         .proposal_recv
                     {
+                        self.leader_entry(proposal.data.view_number())
+                            .prev_proposal_send = Some(previous_proposal_time);
+
                         // calculate the elapsed time as milliseconds (from nanoseconds)
                         let elapsed_time = (now - previous_proposal_time) / 1_000_000;
                         if elapsed_time > 0 {
@@ -270,6 +277,15 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                     .da_cert_send = Some(now);
             },
             HotShotEvent::ViewChange(view, epoch) => {
+
+                // Record the timestamp of the first observed view change
+// This can happen when transitioning to the next view, either due to voting
+// or receiving a proposal, but we only store the first one
+
+                if self.replica_entry(*view + 1).view_change.is_none() {
+                    self.replica_entry(*view + 1).view_change = Some(now);
+                }
+
                 if *epoch <= self.epoch && *view <= self.view {
                     return Ok(());
                 }
