@@ -263,7 +263,7 @@
 <a href=#263 id=263 data-nosnippet>263</a>            </span><span class="macro">assert!</span>(BitVectorQc::&lt;<span class="macro-nonterminal">$aggsig</span>&gt;::assemble(
 <a href=#264 id=264 data-nosnippet>264</a>                <span class="kw-2">&amp;</span>qc_pp,
 <a href=#265 id=265 data-nosnippet>265</a>                signers.as_bitslice(),
-<a href=#266 id=266 data-nosnippet>266</a>                <span class="kw-2">&amp;</span>[sig2.clone()]
+<a href=#266 id=266 data-nosnippet>266</a>                std::slice::from_ref(<span class="kw-2">&amp;</span>sig2)
 <a href=#267 id=267 data-nosnippet>267</a>            )
 <a href=#268 id=268 data-nosnippet>268</a>            .is_err());
 <a href=#269 id=269 data-nosnippet>269</a>            <span class="comment">// total weight under threshold
