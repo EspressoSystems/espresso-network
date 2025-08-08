@@ -3,7 +3,6 @@
 
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
-
 use std::{
     collections::{BTreeMap, HashMap},
     marker::PhantomData,
@@ -11,7 +10,9 @@ use std::{
     sync::Arc,
 };
 
+use alloy::transports::BoxFuture;
 use anyhow::Context;
+use async_trait::async_trait;
 use hotshot::traits::{NodeImplementation, TestableNodeImplementation};
 use hotshot_types::{
     data::Leaf2,
@@ -26,15 +27,79 @@ use tokio::task::JoinHandle;
 
 use crate::storage_types::TestStorage;
 
-pub struct Leaf2Fetcher<TYPES: NodeType, I: TestableNodeImplementation<TYPES>> {
-    network: Arc<<I as NodeImplementation<TYPES>>::Network>,
+pub struct Leaf2Fetcher<TYPES: NodeType> {
+    network_functions: NetworkFunctions<TYPES>,
     storage: TestStorage<TYPES>,
     listener: JoinHandle<()>,
     public_key: TYPES::SignatureKey,
 }
 
-impl<TYPES: NodeType, I: TestableNodeImplementation<TYPES>> Leaf2Fetcher<TYPES, I> {
-    pub fn new(
+pub type RecvMessageFn =
+    std::sync::Arc<dyn Fn() -> BoxFuture<'static, anyhow::Result<Vec<u8>>> + Send + Sync>;
+
+pub type DirectMessageFn<TYPES> = std::sync::Arc<
+    dyn Fn(Vec<u8>, <TYPES as NodeType>::SignatureKey) -> BoxFuture<'static, anyhow::Result<()>>
+        + Send
+        + Sync,
+>;
+
+pub struct NetworkFunctions<TYPES: NodeType> {
+    recv_message: RecvMessageFn,
+    direct_message: DirectMessageFn<TYPES>,
+}
+
+pub async fn recv_message_impl<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+    network: Arc<<I as NodeImplementation<TYPES>>::Network>,
+) -> anyhow::Result<Vec<u8>> {
+    network
+        .recv_message()
+        .await
+        .context("Failed to receive message from network")
+}
+
+pub fn recv_message_fn<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+    network: Arc<<I as NodeImplementation<TYPES>>::Network>,
+) -> RecvMessageFn {
+    Arc::new(move || {
+        let network = network.clone();
+        Box::pin(recv_message_impl::<TYPES, I>(network))
+    })
+}
+
+pub async fn direct_message_impl<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+    network: Arc<<I as NodeImplementation<TYPES>>::Network>,
+    message: Vec<u8>,
+    recipient: <TYPES as NodeType>::SignatureKey,
+) -> anyhow::Result<()> {
+    network
+        .direct_message(message, recipient.clone())
+        .await
+        .context(format!("Failed to send message to recipient {}", recipient))
+}
+
+pub fn direct_message_fn<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+    network: Arc<<I as NodeImplementation<TYPES>>::Network>,
+) -> DirectMessageFn<TYPES> {
+    Arc::new(move |message, recipient| {
+        let network = network.clone();
+        Box::pin(direct_message_impl::<TYPES, I>(network, message, recipient))
+    })
+}
+
+pub fn network_functions<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+    network: Arc<<I as NodeImplementation<TYPES>>::Network>,
+) -> NetworkFunctions<TYPES> {
+    let recv_message = recv_message_fn::<TYPES, I>(network.clone());
+    let direct_message = direct_message_fn::<TYPES, I>(network.clone());
+
+    NetworkFunctions {
+        recv_message,
+        direct_message,
+    }
+}
+
+impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
+    pub fn new<I: NodeImplementation<TYPES>>(
         network: Arc<<I as NodeImplementation<TYPES>>::Network>,
         storage: TestStorage<TYPES>,
         public_key: TYPES::SignatureKey,
@@ -74,14 +139,13 @@ impl<TYPES: NodeType, I: TestableNodeImplementation<TYPES>> Leaf2Fetcher<TYPES, 
 
                 let serialized_leaf = bincode::serialize(&leaf).expect("Failed to serialized leaf");
 
-                network_clone
-                    .direct_message(serialized_leaf, requester)
-                    .await;
+                network_clone.direct_message(serialized_leaf, requester).await;
             }
         });
 
+        let network_functions: NetworkFunctions<TYPES> = network_functions::<TYPES, I>(network);
         Self {
-            network,
+            network_functions,
             storage,
             listener,
             public_key,
@@ -96,12 +160,10 @@ impl<TYPES: NodeType, I: TestableNodeImplementation<TYPES>> Leaf2Fetcher<TYPES, 
         let leaf_request = (height, self.public_key.clone());
         let serialized_leaf_request =
             bincode::serialize(&leaf_request).expect("Failed to serialize leaf request");
-        self.network
-            .direct_message(serialized_leaf_request, source)
-            .await;
+        (self.network_functions.direct_message)(serialized_leaf_request, source).await;
 
         tokio::time::timeout(std::time::Duration::from_secs(6), async {
-            while let Ok(message) = self.network.recv_message().await {
+            while let Ok(message) = (self.network_functions.recv_message)().await {
                 // Deserialize the message
                 let leaf: Leaf2<TYPES> = match bincode::deserialize(&message) {
                     Ok(message) => message,

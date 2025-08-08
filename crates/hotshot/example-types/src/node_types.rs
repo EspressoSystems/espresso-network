@@ -6,16 +6,6 @@
 
 use std::{hash::Hash, marker::PhantomData};
 
-pub use crate::membership::helpers::{
-    RandomOverlapQuorumFilterConfig, StableQuorumFilterConfig,
-};
-use crate::membership::{
-        dummy_catchup_membership::DummyCatchupCommittee, helpers::QuorumFilterConfig,
-        randomized_committee::Committee, randomized_committee_members::RandomizedCommitteeMembers,
-        static_committee::StaticCommittee,
-        static_committee_leader_two_views::StaticCommitteeLeaderForTwoViews,
-        two_static_committees::TwoStaticCommittees,
-    };
 use hotshot::traits::{
     implementations::{CombinedNetworks, Libp2pNetwork, MemoryNetwork, PushCdnNetwork},
     NodeImplementation,
@@ -33,8 +23,16 @@ use hotshot_types::{
 use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersion;
 
+pub use crate::membership::helpers::{RandomOverlapQuorumFilterConfig, StableQuorumFilterConfig};
 use crate::{
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
+    membership::{
+        helpers::QuorumFilterConfig,
+        randomized_committee::Committee, randomized_committee_members::RandomizedCommitteeMembers,
+        static_committee::StaticStakeTable,
+        static_committee_leader_two_views::StaticCommitteeLeaderForTwoViews,
+        strict_membership::StrictMembership, two_static_committees::TwoStaticCommittees,
+    },
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
 };
@@ -66,7 +64,13 @@ impl NodeType for TestTypes {
     type Transaction = TestTransaction;
     type ValidatedState = TestValidatedState;
     type InstanceState = TestInstanceState;
-    type Membership = StaticCommittee<TestTypes>;
+    type Membership = StrictMembership<
+        TestTypes,
+        StaticStakeTable<
+            <TestTypes as NodeType>::SignatureKey,
+            <TestTypes as NodeType>::StateSignatureKey,
+        >,
+    >;
     type BuilderSignatureKey = BuilderKey;
     type StateSignatureKey = SchnorrPubKey;
 }
@@ -279,9 +283,6 @@ pub struct WebImpl;
 /// Combined Network implementation (libp2p + web server)
 #[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
 pub struct CombinedImpl;
-
-/// static committee type alias
-pub type StaticMembership = StaticCommittee<TestTypes>;
 
 impl<TYPES: NodeType> NodeImplementation<TYPES> for PushCdnImpl {
     type Network = PushCdnNetwork<TYPES::SignatureKey>;

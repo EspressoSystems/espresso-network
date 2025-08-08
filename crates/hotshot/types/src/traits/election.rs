@@ -6,28 +6,33 @@
 
 //! The election trait, used to decide which node is the leader and determine if a vote is valid.
 use std::{collections::BTreeSet, fmt::Debug, sync::Arc};
-use crate::traits::node_implementation::NodeImplementation;
+
 use alloy::primitives::U256;
 use async_lock::RwLock;
 use hotshot_utils::anytrace::Result;
 
 use super::node_implementation::NodeType;
 use crate::{
-    data::Leaf2, drb::DrbResult, stake_table::HSStakeTable,
-    traits::signature_key::StakeTableEntryType, PeerConfig,
+    data::Leaf2,
+    drb::DrbResult,
+    stake_table::HSStakeTable,
+    traits::{node_implementation::NodeImplementation, signature_key::StakeTableEntryType},
+    PeerConfig,
 };
 
 /// A protocol for determining membership in and participating in a committee.
 pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// The error type returned by methods like `lookup_leader`.
     type Error: std::fmt::Display;
+    /// Storage type used by the underlying fetcher
+    type Storage;
     /// Create a committee
     fn new<I: NodeImplementation<TYPES>>(
         // Note: eligible_leaders is currently a hack because the DA leader == the quorum leader
         // but they should not have voting power.
         stake_committee_members: Vec<PeerConfig<TYPES>>,
         da_committee_members: Vec<PeerConfig<TYPES>>,
-        storage: I::Storage,
+        storage: Self::Storage,
         network: Arc<<I as NodeImplementation<TYPES>>::Network>,
         public_key: TYPES::SignatureKey,
     ) -> Self;
@@ -129,16 +134,56 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     fn da_total_nodes(&self, epoch: Option<TYPES::Epoch>) -> usize;
 
     /// Returns the threshold for a specific `Membership` implementation
-    fn success_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256;
+    fn success_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
+        let total_stake = self.total_stake(epoch);
+        let one = U256::ONE;
+        let two = U256::from(2);
+        let three = U256::from(3);
+        if total_stake < U256::MAX / two {
+            ((total_stake * two) / three) + one
+        } else {
+            ((total_stake / three) * two) + two
+        }
+    }
 
     /// Returns the DA threshold for a specific `Membership` implementation
-    fn da_success_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256;
+    fn da_success_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
+        let total_stake = self.total_da_stake(epoch);
+        let one = U256::ONE;
+        let two = U256::from(2);
+        let three = U256::from(3);
+
+        if total_stake < U256::MAX / two {
+            ((total_stake * two) / three) + one
+        } else {
+            ((total_stake / three) * two) + two
+        }
+    }
 
     /// Returns the threshold for a specific `Membership` implementation
-    fn failure_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256;
+    fn failure_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
+        let total_stake = self.total_stake(epoch);
+        let one = U256::ONE;
+        let three = U256::from(3);
+
+        (total_stake / three) + one
+    }
 
     /// Returns the threshold required to upgrade the network protocol
-    fn upgrade_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256;
+    fn upgrade_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
+        let total_stake = self.total_stake(epoch);
+        let nine = U256::from(9);
+        let ten = U256::from(10);
+
+        let normal_threshold = self.success_threshold(epoch);
+        let higher_threshold = if total_stake < U256::MAX / nine {
+            (total_stake * nine) / ten
+        } else {
+            (total_stake / ten) * nine
+        };
+
+        std::cmp::max(higher_threshold, normal_threshold)
+    }
 
     /// Returns if the stake table is available for the given epoch
     fn has_stake_table(&self, epoch: TYPES::Epoch) -> bool;

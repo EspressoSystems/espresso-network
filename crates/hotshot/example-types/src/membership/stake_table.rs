@@ -1,4 +1,6 @@
 use std::fmt::Debug;
+
+use alloy::primitives::U256;
 use hotshot_types::{
     drb::DrbResult,
     traits::{
@@ -11,6 +13,7 @@ use hotshot_types::{
     PeerConfig,
 };
 
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct TestStakeTableEntry<
     PubKey: SignatureKey,
     StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
@@ -32,9 +35,12 @@ impl<TYPES: NodeType> From<PeerConfig<TYPES>>
     }
 }
 
-impl<TYPES: NodeType> From<TestStakeTableEntry<TYPES::SignatureKey, TYPES::StateSignatureKey>> for PeerConfig<TYPES>
+impl<TYPES: NodeType> From<TestStakeTableEntry<TYPES::SignatureKey, TYPES::StateSignatureKey>>
+    for PeerConfig<TYPES>
 {
-    fn from(test_stake_table_entry: TestStakeTableEntry<TYPES::SignatureKey, TYPES::StateSignatureKey>) -> Self {
+    fn from(
+        test_stake_table_entry: TestStakeTableEntry<TYPES::SignatureKey, TYPES::StateSignatureKey>,
+    ) -> Self {
         PeerConfig {
             stake_table_entry: test_stake_table_entry.stake_table_entry,
             state_ver_key: test_stake_table_entry.state_ver_key,
@@ -55,6 +61,20 @@ pub trait TestStakeTable<
     fn stake_table(&self, epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>>;
 
     fn da_stake_table(&self, epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>>;
+
+    fn stake(
+        &self,
+        pub_key: PubKey,
+        epoch: Option<u64>,
+    ) -> Option<TestStakeTableEntry<PubKey, StatePubKey>>;
+
+    fn da_stake(
+        &self,
+        pub_key: PubKey,
+        epoch: Option<u64>,
+    ) -> Option<TestStakeTableEntry<PubKey, StatePubKey>>;
+
+    fn total_stake(&self, epoch: Option<u64>) -> U256;
 
     fn lookup_leader(&self, view_number: u64, epoch: Option<u64>) -> anyhow::Result<PubKey>;
 
