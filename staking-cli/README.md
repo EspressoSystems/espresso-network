@@ -224,7 +224,7 @@ This section covers commands for node operators.
 
         staking-cli register-validator --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY> --commission 4.99
 
-    To avoid specifying the the keys on the command line they can be set via env vars
+    To avoid specifying the keys on the command line they can be set via env vars
 
     ```
     CONSENSUS_PRIVATE_KEY=BLS_SIGNING_KEY~...
@@ -255,7 +255,7 @@ it.
 
     The new keys will become active in the 3rd epoch after the command is run.
 
-    To avoid specifying the the keys on the command line they can be set via env vars
+    To avoid specifying the keys on the command line they can be set via env vars
 
     ```
     CONSENSUS_PRIVATE_KEY=BLS_SIGNING_KEY~...

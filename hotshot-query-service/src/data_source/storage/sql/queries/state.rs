@@ -724,7 +724,7 @@ mod test {
             .await
             .unwrap();
         tx.commit().await.unwrap();
-        // the path from the db and and tree should match
+        // the path from the db and tree should match
         let merkle_path = storage
             .read()
             .await
