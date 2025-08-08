@@ -138,8 +138,7 @@ impl NumTxs {
 }
 
 impl NsPayloadByteLen {
-    // TODO restrict visibility?
-    pub fn from_usize(n: usize) -> Self {
+    pub(crate) fn from_usize(n: usize) -> Self {
         Self(n)
     }
 }
