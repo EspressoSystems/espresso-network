@@ -69,7 +69,7 @@ impl LCV1StateRelayServerDataSource for LCV1StateRelayServerState {
         }
         let stake_table = self
             .stake_table_tracker
-            .get_genesis_stake_table_info()
+            .genesis_stake_table_info()
             .await
             .map_err(|e| {
                 ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())

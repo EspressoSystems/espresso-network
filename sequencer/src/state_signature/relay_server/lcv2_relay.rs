@@ -69,7 +69,7 @@ impl LCV2StateRelayServerDataSource for LCV2StateRelayServerState {
         }
         let stake_table = self
             .stake_table_tracker
-            .get_stake_table_info_for_block(block_height)
+            .stake_table_info_for_block(block_height)
             .await
             .map_err(|e| {
                 ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())

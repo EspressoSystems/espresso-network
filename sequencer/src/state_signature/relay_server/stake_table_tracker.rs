@@ -67,7 +67,7 @@ impl StakeTableTracker {
     }
 
     /// Return the genesis stake table info
-    pub async fn get_genesis_stake_table_info(&self) -> anyhow::Result<StakeTableInfo> {
+    pub async fn genesis_stake_table_info(&self) -> anyhow::Result<StakeTableInfo> {
         tracing::trace!("Acquire read lock for genesis stake table info");
         let read_guard = self.inner.read().await;
         if let Some(stake_table_info) = &read_guard.genesis_stake_table_info {
@@ -103,7 +103,7 @@ impl StakeTableTracker {
 
     /// Return the stake table info for the given block height
     /// If the block height is older than the epoch start block, return the genesis stake table info
-    pub async fn get_stake_table_info_for_block(
+    pub async fn stake_table_info_for_block(
         &self,
         block_height: u64,
     ) -> anyhow::Result<StakeTableInfo> {
@@ -144,7 +144,7 @@ impl StakeTableTracker {
                 }
             };
         if block_height <= epoch_start_block || blocks_per_epoch == 0 {
-            return self.get_genesis_stake_table_info().await;
+            return self.genesis_stake_table_info().await;
         }
 
         let epoch = epoch_from_block_number(block_height, blocks_per_epoch);
