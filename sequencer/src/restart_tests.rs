@@ -342,7 +342,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         }
     }
 
-    fn stop(&mut self) -> BoxFuture<()> {
+    fn stop(&mut self) -> BoxFuture<'_, ()> {
         async {
             if let Some(mut context) = self.context.take() {
                 tracing::info!(node_id = context.node_id(), "stopping node");
@@ -352,7 +352,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         .boxed()
     }
 
-    fn start(&mut self) -> BoxFuture<()>
+    fn start(&mut self) -> BoxFuture<'_, ()>
     where
         S::Storage: Send,
     {
@@ -397,7 +397,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         .boxed()
     }
 
-    async fn event_stream(&self) -> Option<BoxStream<Event<SeqTypes>>> {
+    async fn event_stream(&self) -> Option<BoxStream<'_, Event<SeqTypes>>> {
         if let Some(ctx) = &self.context {
             Some(ctx.event_stream().await.boxed())
         } else {
@@ -412,7 +412,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         Some(context.node_id())
     }
 
-    fn check_progress_with_timeout(&self) -> BoxFuture<anyhow::Result<()>> {
+    fn check_progress_with_timeout(&self) -> BoxFuture<'_, anyhow::Result<()>> {
         async {
             let Some(context) = &self.context else {
                 tracing::info!("skipping progress check on stopped node");

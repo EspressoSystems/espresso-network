@@ -32,7 +32,7 @@ use hotshot_query_service::{
 use hotshot_types::{
     data::{EpochNumber, VidCommitment, VidShare, ViewNumber},
     event::{Event, LegacyEvent},
-    light_client::StateSignatureRequestBody,
+    light_client::LCV2StateSignatureRequestBody,
     network::NetworkConfig,
     traits::{
         network::ConnectedNetwork,
@@ -75,28 +75,6 @@ pub use options::Options;
 pub type BlocksFrontier = <BlockMerkleTree as MerkleTreeScheme>::MembershipProof;
 
 type BoxLazy<T> = Pin<Arc<Lazy<T, BoxFuture<'static, T>>>>;
-
-#[derive(Derivative)]
-#[derivative(Debug(bound = ""))]
-struct ConsensusState {
-    state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
-    event_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
-    node_state: NodeState,
-    network_config: NetworkConfig<SeqTypes>,
-}
-
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions>
-    From<&SequencerContext<N, P, V>> for ConsensusState
-{
-    fn from(ctx: &SequencerContext<N, P, V>) -> Self {
-        Self {
-            state_signer: ctx.state_signer(),
-            event_streamer: ctx.event_streamer(),
-            node_state: ctx.node_state(),
-            network_config: ctx.network_config(),
-        }
-    }
-}
 
 #[derive(Derivative)]
 #[derivative(Clone(bound = ""), Debug(bound = ""))]
@@ -892,7 +870,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> HotShotC
 impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     StateSignatureDataSource<N> for StorageState<N, P, D, V>
 {
-    async fn get_state_signature(&self, height: u64) -> Option<StateSignatureRequestBody> {
+    async fn get_state_signature(&self, height: u64) -> Option<LCV2StateSignatureRequestBody> {
         self.as_ref().get_state_signature(height).await
     }
 }
@@ -901,7 +879,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSignatureDataSource<N>
     for ApiState<N, P, V>
 {
-    async fn get_state_signature(&self, height: u64) -> Option<StateSignatureRequestBody> {
+    async fn get_state_signature(&self, height: u64) -> Option<LCV2StateSignatureRequestBody> {
         self.state_signer()
             .await
             .read()
@@ -1427,7 +1405,7 @@ pub mod test_helpers {
         }
         // we cannot verify the signature now, because we don't know the stake table
         client
-            .get::<StateSignatureRequestBody>(&format!("state-signature/block/{height}"))
+            .get::<LCV2StateSignatureRequestBody>(&format!("state-signature/block/{height}"))
             .send()
             .await
             .unwrap();
