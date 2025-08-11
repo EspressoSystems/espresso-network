@@ -91,37 +91,37 @@ fn plot_replica_stats(
 
         let mut events_with_ts = Vec::new();
         if let Some(ts) = record.proposal_recv {
-            events_with_ts.push(("proposal_recv", ts / 1000_000));
+            events_with_ts.push(("proposal_recv", ts / 1_000_000));
         }
         if let Some(ts) = record.vote_send {
-            events_with_ts.push(("vote_send", ts / 1000_000));
+            events_with_ts.push(("vote_send", ts / 1_000_000));
         }
         if let Some(ts) = record.timeout_vote_send {
-            events_with_ts.push(("timeout_vote_send", ts / 1000_000));
+            events_with_ts.push(("timeout_vote_send", ts / 1_000_000));
         }
         if let Some(ts) = record.da_proposal_received {
-            events_with_ts.push(("da_proposal_received", ts / 1000_000));
+            events_with_ts.push(("da_proposal_received", ts / 1_000_000));
         }
         if let Some(ts) = record.da_proposal_validated {
-            events_with_ts.push(("da_proposal_validated", ts / 1000_000));
+            events_with_ts.push(("da_proposal_validated", ts / 1_000_000));
         }
         if let Some(ts) = record.da_certificate_recv {
-            events_with_ts.push(("da_certificate_recv", ts / 1000_000));
+            events_with_ts.push(("da_certificate_recv", ts / 1_000_000));
         }
         if let Some(ts) = record.proposal_prelim_validated {
-            events_with_ts.push(("proposal_prelim_validated", ts / 1000_000));
+            events_with_ts.push(("proposal_prelim_validated", ts / 1_000_000));
         }
         if let Some(ts) = record.proposal_validated {
-            events_with_ts.push(("proposal_validated", ts / 1000_000));
+            events_with_ts.push(("proposal_validated", ts / 1_000_000));
         }
         if let Some(ts) = record.timeout_triggered {
-            events_with_ts.push(("timeout_triggered", ts / 1000_000));
+            events_with_ts.push(("timeout_triggered", ts / 1_000_000));
         }
         if let Some(ts) = record.vid_share_validated {
-            events_with_ts.push(("vid_share_validated", ts / 1000_000));
+            events_with_ts.push(("vid_share_validated", ts / 1_000_000));
         }
         if let Some(ts) = record.vid_share_recv {
-            events_with_ts.push(("vid_share_recv", ts / 1000_000));
+            events_with_ts.push(("vid_share_recv", ts / 1_000_000));
         }
 
         if let Some((first_event, _)) = events_with_ts.clone().into_iter().min_by_key(|(_, ts)| *ts)
@@ -263,17 +263,17 @@ fn generate_replica_stats(
     for record in replica_view_stats.values() {
         if let Some(vc) = record.view_change {
             if let Some(vid) = record.vid_share_recv {
-                let delta_ms = (vid as i128 - vc as i128) as f64 / 1_000_000.0;
+                let delta_ms = (vid - vc) as f64 / 1_000_000.0;
                 vid_deltas_from_vc.push(delta_ms);
             }
 
             if let Some(dac) = record.da_certificate_recv {
-                let delta_ms = (dac as i128 - vc as i128) as f64 / 1_000_000.0;
+                let delta_ms = (dac - vc) as f64 / 1_000_000.0;
                 dac_deltas_from_vc.push(delta_ms);
             }
 
             if let Some(prop) = record.proposal_recv {
-                let delta_ms = (prop as i128 - vc as i128) as f64 / 1_000_000.0;
+                let delta_ms = (prop - vc) as f64 / 1_000_000.0;
                 proposal_deltas_from_vc.push(delta_ms);
             }
         }
@@ -348,8 +348,8 @@ fn plot_leader_stats(
         }
 
         // Deltas for current view
-        da_cert_deltas.push((da - block_built) as f64 / 1000_000.0);
-        vid_disperse_deltas.push((vid - block_built) as f64 / 1000_000.0);
+        da_cert_deltas.push((da - block_built) as f64 / 1_000_000.0);
+        vid_disperse_deltas.push((vid - block_built) as f64 / 1_000_000.0);
 
         if let Some(prev_prop) = record.prev_proposal_send {
             block_built_prev_prop_deltas.push((block_built - prev_prop) as f64 / 1_000_000.0);
@@ -357,7 +357,7 @@ fn plot_leader_stats(
 
         // Delta for QC formed at view+1
         if let Some(qc_formed) = record.qc_formed {
-            qc_formed_deltas.push((qc_formed - block_built) as f64 / 1000_000.0);
+            qc_formed_deltas.push((qc_formed - block_built) as f64 / 1_000_000.0);
         }
     }
 
