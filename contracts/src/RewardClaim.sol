@@ -49,7 +49,7 @@ contract RewardClaim is Initializable, OwnableUpgradeable, UUPSUpgradeable {
     function claimRewards(
         uint256 accruedReward,
         RewardMerkleTreeVerifier.AccruedRewardsProof calldata proof,
-        bytes32[5] calldata authRootInputs
+        bytes32[7] calldata authRootInputs
     ) external {
         require(accruedReward != 0, InvalidRewardAmount());
         require(claimedRewards[msg.sender] < accruedReward, AlreadyClaimed());
@@ -63,7 +63,9 @@ contract RewardClaim is Initializable, OwnableUpgradeable, UUPSUpgradeable {
                 authRootInputs[1],
                 authRootInputs[2],
                 authRootInputs[3],
-                authRootInputs[4]
+                authRootInputs[4],
+                authRootInputs[5],
+                authRootInputs[6]
             )
         );
 

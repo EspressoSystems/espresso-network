@@ -16,6 +16,7 @@
 
 use alloy::sol;
 
+use crate::bindings::rewardclaim;
 /// # What to re-export, what to hide?
 /// - export contract struct itself, but try to avoid export instance type (instead, use ::new() to get a handle)
 /// - avoid exporting `xxCall` and `xxReturn` types, they usually can be converted/transmuted from existing struct
@@ -223,6 +224,12 @@ impl From<StakeTableStateSol> for lightclientv3::LightClient::StakeTableState {
 
 impl From<PlonkProofSol> for lightclientv3::IPlonkVerifier::PlonkProof {
     fn from(v: PlonkProofSol) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<AccruedRewardsProofSol> for rewardclaim::RewardMerkleTreeVerifier::AccruedRewardsProof {
+    fn from(v: AccruedRewardsProofSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }

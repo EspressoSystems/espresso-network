@@ -3,7 +3,7 @@ use std::{collections::HashMap, time::Duration};
 use alloy::{
     network::EthereumWallet,
     node_bindings::Anvil,
-    primitives::{Bytes, FixedBytes, U256},
+    primitives::{FixedBytes, U256},
     providers::{ProviderBuilder, WalletProvider},
     rpc::client::RpcClient,
     signers::local::{coins_bip39::English, MnemonicBuilder},
@@ -258,11 +258,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
 
     let relay_state = StateRelayServerState::new(
         Url::parse(&format!("http://localhost:{sequencer_api_port}")).unwrap(),
-    )
-    .with_blocks_per_epoch(blocks_per_epoch)
-    .with_epoch_start_block(epoch_start_block)
-    .with_thresholds(thresholds)
-    .with_known_nodes(known_nodes);
+    );
 
     println!("Starting relay server on port {}...", relay_server_port);
     let relay_server_handle = spawn(run_relay_server_with_state(
@@ -378,30 +374,25 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     println!("  Relay server port: {}", relay_server_port);
     println!("  Prover port: {}", prover_port);
 
-    // Now perform a reward claim
-    println!("Performing reward claim...");
-
-    // Get the current block height from the sequencer using SequencerClient
-    let sequencer_url_str = format!("http://localhost:{sequencer_api_port}");
-    let sequencer_url: Url = sequencer_url_str.parse().unwrap();
-    let sequencer_client = SequencerClient::new(sequencer_url);
+    let sequencer_url: Url = format!("http://localhost:{sequencer_api_port}")
+        .parse()
+        .unwrap();
+    let sequencer_client = SequencerClient::new(sequencer_url.clone());
     let current_height = sequencer_client.get_height().await?;
     println!("Current block height: {}", current_height);
 
-    // Get current view number - using block height as approximation
+    // TODO: get the actual view number
     let view_number = current_height;
 
-    // Use the first validator address as the reward account to test
     let reward_account = format!("0x{:x}", first_validator_address);
     println!(
         "Testing reward claim for validator account: {}",
         reward_account
     );
 
-    // Get reward account proof from the catchup API
     let reward_proof_url = format!(
         "{}/catchup/{}/{}/reward-account-v2/{}",
-        sequencer_url_str, current_height, view_number, reward_account
+        sequencer_url, current_height, view_number, reward_account
     );
     println!("Fetching reward proof from: {}", reward_proof_url);
 
@@ -418,7 +409,6 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         reward_data.balance, reward_data.proof.account
     );
 
-    // Verify the reward balance is non-zero
     if reward_data.balance == U256::ZERO {
         panic!(
             "Reward balance is zero for validator account {}. Expected non-zero rewards after 3 \
@@ -431,43 +421,24 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         reward_data.balance
     );
 
-    // Convert proof to contract-compatible format
-    let accrued_proof_sol: AccruedRewardsProofSol = reward_data.proof.try_into().unwrap();
-    // Both AccruedRewardsProofSol and the RewardClaim contract's AccruedRewardsProof
-    // have identical structure (Vec<FixedBytes<32>>), but are from different modules
-    // We use unsafe transmute since they have the same memory layout
-    let sol_proof =
-        unsafe { std::mem::transmute::<AccruedRewardsProofSol, _>(accrued_proof_sol.clone()) };
-    println!(
-        "Converted to Solidity proof format with {} siblings",
-        accrued_proof_sol.siblings.len()
-    );
-
-    // Get RewardClaim contract instance
+    let proof_sol: AccruedRewardsProofSol = reward_data.proof.try_into().unwrap();
     let reward_claim_contract = RewardClaim::new(reward_claim_proxy_addr, &provider);
-
-    // Get ESP Token contract instance to check balance
     let esp_token_contract = EspTokenV2::new(token_proxy_addr, &provider);
 
-    // Get balance before claiming rewards
     let balance_before = esp_token_contract.balanceOf(admin).call().await?._0;
     println!(
         "ESP token balance before claim: {} for account: {}",
         balance_before, admin
     );
 
-    // TODO: Get actual reward merkle root and remaining auth root data
-    // For now, use placeholder values
-    let reward_merkle_root = FixedBytes::default(); // placeholder
-    let remaining_auth_root_data = Bytes::default(); // placeholder
+    let auth_root_inputs = [FixedBytes::default(); 7];
 
     println!("Attempting to claim rewards...");
     reward_claim_contract
         .claimRewards(
-            reward_data.balance,      // rewardAmount
-            sol_proof,                // proof
-            reward_merkle_root,       // rewardMerkleRoot (placeholder)
-            remaining_auth_root_data, // remainingAuthRootData (placeholder)
+            reward_data.balance.into(),
+            proof_sol.into(),
+            auth_root_inputs,
         )
         .send()
         .await?
@@ -489,12 +460,6 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         );
     }
 
-    println!(
-        "✓ ESP token balance increased correctly by {} tokens",
-        reward_data.balance
-    );
-
-    // Clean up (cancel background tasks)
     relay_server_handle.abort();
     prover_handle.abort();
     drop(network);
