@@ -104,6 +104,48 @@ fn collect_txns<TYPES: NodeType>(
 }
 
 impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
+    async fn wait_for_transactions(
+        &mut self,
+        mut receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
+    ) -> Vec<TYPES::Transaction> {
+        let mut transactions = vec![];
+        while let Ok(event) = receiver.try_recv() {
+            if let HotShotEvent::TransactionsRecv(txns) = event.as_ref() {
+                for txn in txns {
+                    if !self.transactions.contains(&txn.commit())
+                        && !self.decided_not_seen_txns.contains(&txn.commit())
+                    {
+                        transactions.push(txn.clone());
+                    }
+                }
+            }
+        }
+
+        let start = std::time::Instant::now();
+
+        while let Ok(Ok(event)) =
+            tokio::time::timeout(Duration::from_millis(100), receiver.recv()).await
+        {
+            if let HotShotEvent::TransactionsRecv(txns) = event.as_ref() {
+                for txn in txns {
+                    if !self.transactions.contains(&txn.commit())
+                        && !self.decided_not_seen_txns.contains(&txn.commit())
+                    {
+                        transactions.push(txn.clone());
+                    }
+                }
+                if !transactions.is_empty() {
+                    break;
+                }
+            }
+            if std::time::Instant::now().duration_since(start) > Duration::from_millis(100) {
+                break;
+            }
+        }
+
+        transactions
+    }
+
     async fn wait_for_proposal(
         &self,
         view: TYPES::View,
@@ -149,7 +191,8 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
         drop(consensus_reader);
         if proposal.is_none() {
             proposal = {
-                let Some(proposal) = self.wait_for_proposal(view - 1, receiver).await else {
+                let Some(proposal) = self.wait_for_proposal(view - 1, receiver.clone()).await
+                else {
                     tracing::error!("No proposal found for view {view}, sending empty block");
                     send_empty_block::<TYPES, V>(
                         &self.consensus,
@@ -178,6 +221,10 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
             if !in_flight_txns.contains_key(txn_hash) {
                 block.push(txn.clone());
             }
+        }
+
+        if block.is_empty() {
+            block = self.wait_for_transactions(receiver.clone()).await;
         }
 
         let consensus_reader = self.consensus.read().await;
@@ -368,12 +415,19 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
     ) -> Result<()> {
         match event.as_ref() {
             HotShotEvent::TransactionsRecv(transactions) => {
+                for txn in transactions {
+                    let commit = txn.commit();
+                    if !self.transactions.contains(&commit)
+                        && !self.decided_not_seen_txns.contains(&commit)
+                    {
+                        broadcast_event(
+                            Arc::new(HotShotEvent::TransactionsRecv(transactions.clone())),
+                            &sender,
+                        )
+                        .await;
+                    }
+                }
                 self.handle_transactions(transactions).await;
-                // broadcast_event(
-                //     Arc::new(HotShotEvent::TransactionsRecv(transactions.clone())),
-                //     &sender,
-                // )
-                // .await;
             },
             HotShotEvent::ViewChange(view, epoch) => {
                 let view = TYPES::View::new(std::cmp::max(1, **view));
