@@ -29,7 +29,7 @@
 <a href=#29 id=29 data-nosnippet>29</a>    event::Event,
 <a href=#30 id=30 data-nosnippet>30</a>    message::convert_proposal,
 <a href=#31 id=31 data-nosnippet>31</a>    simple_certificate::{
-<a href=#32 id=32 data-nosnippet>32</a>        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate2,
+<a href=#32 id=32 data-nosnippet>32</a>        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
 <a href=#33 id=33 data-nosnippet>33</a>    },
 <a href=#34 id=34 data-nosnippet>34</a>    traits::{
 <a href=#35 id=35 data-nosnippet>35</a>        network::{AsyncGenerator, ConnectedNetwork},
@@ -85,7 +85,7 @@
 <a href=#85 id=85 data-nosnippet>85</a>    <span class="doccomment">/// Generate network channel for restart nodes
 <a href=#86 id=86 data-nosnippet>86</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) channel_generator: AsyncGenerator&lt;Network&lt;TYPES, I&gt;&gt;,
 <a href=#87 id=87 data-nosnippet>87</a>    <span class="doccomment">/// The light client state update certificate
-<a href=#88 id=88 data-nosnippet>88</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) state_cert: <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificate&lt;TYPES&gt;&gt;,
+<a href=#88 id=88 data-nosnippet>88</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) state_cert: <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificateV2&lt;TYPES&gt;&gt;,
 <a href=#89 id=89 data-nosnippet>89</a>    <span class="doccomment">/// Node stakes
 <a href=#90 id=90 data-nosnippet>90</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) node_stakes: TestNodeStakes,
 <a href=#91 id=91 data-nosnippet>91</a>}

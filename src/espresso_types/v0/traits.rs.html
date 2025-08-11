@@ -19,7 +19,7 @@
 <a href=#19 id=19 data-nosnippet>19</a>    event::{HotShotAction, LeafInfo},
 <a href=#20 id=20 data-nosnippet>20</a>    message::{convert_proposal, Proposal},
 <a href=#21 id=21 data-nosnippet>21</a>    simple_certificate::{
-<a href=#22 id=22 data-nosnippet>22</a>        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
+<a href=#22 id=22 data-nosnippet>22</a>        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate,
 <a href=#23 id=23 data-nosnippet>23</a>        QuorumCertificate2, UpgradeCertificate,
 <a href=#24 id=24 data-nosnippet>24</a>    },
 <a href=#25 id=25 data-nosnippet>25</a>    stake_table::HSStakeTable,
@@ -556,7 +556,7 @@
 <a href=#556 id=556 data-nosnippet>556</a>    <span class="kw">async fn </span>load_start_epoch_info(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; anyhow::Result&lt;Vec&lt;InitializerEpochInfo&lt;SeqTypes&gt;&gt;&gt;;
 <a href=#557 id=557 data-nosnippet>557</a>    <span class="kw">async fn </span>load_state_cert(
 <a href=#558 id=558 data-nosnippet>558</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#559 id=559 data-nosnippet>559</a>    ) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificate&lt;SeqTypes&gt;&gt;&gt;;
+<a href=#559 id=559 data-nosnippet>559</a>    ) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificateV2&lt;SeqTypes&gt;&gt;&gt;;
 <a href=#560 id=560 data-nosnippet>560</a>
 <a href=#561 id=561 data-nosnippet>561</a>    <span class="doccomment">/// Load the latest known consensus state.
 <a href=#562 id=562 data-nosnippet>562</a>    ///
@@ -869,7 +869,7 @@
 <a href=#869 id=869 data-nosnippet>869</a>    ) -&gt; anyhow::Result&lt;()&gt;;
 <a href=#870 id=870 data-nosnippet>870</a>    <span class="kw">async fn </span>add_state_cert(
 <a href=#871 id=871 data-nosnippet>871</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#872 id=872 data-nosnippet>872</a>        state_cert: LightClientStateUpdateCertificate&lt;SeqTypes&gt;,
+<a href=#872 id=872 data-nosnippet>872</a>        state_cert: LightClientStateUpdateCertificateV2&lt;SeqTypes&gt;,
 <a href=#873 id=873 data-nosnippet>873</a>    ) -&gt; anyhow::Result&lt;()&gt;;
 <a href=#874 id=874 data-nosnippet>874</a>
 <a href=#875 id=875 data-nosnippet>875</a>    <span class="kw">fn </span>enable_metrics(<span class="kw-2">&amp;mut </span><span class="self">self</span>, metrics: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Metrics);
@@ -1002,7 +1002,7 @@
 <a href=#1002 id=1002 data-nosnippet>1002</a>
 <a href=#1003 id=1003 data-nosnippet>1003</a>    <span class="kw">async fn </span>update_state_cert(
 <a href=#1004 id=1004 data-nosnippet>1004</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#1005 id=1005 data-nosnippet>1005</a>        state_cert: LightClientStateUpdateCertificate&lt;SeqTypes&gt;,
+<a href=#1005 id=1005 data-nosnippet>1005</a>        state_cert: LightClientStateUpdateCertificateV2&lt;SeqTypes&gt;,
 <a href=#1006 id=1006 data-nosnippet>1006</a>    ) -&gt; anyhow::Result&lt;()&gt; {
 <a href=#1007 id=1007 data-nosnippet>1007</a>        (<span class="kw-2">**</span><span class="self">self</span>).add_state_cert(state_cert).<span class="kw">await
 <a href=#1008 id=1008 data-nosnippet>1008</a>    </span>}

@@ -22,7 +22,7 @@
 <a href=#22 id=22 data-nosnippet>22</a>    epoch_membership::EpochMembership,
 <a href=#23 id=23 data-nosnippet>23</a>    message::Proposal,
 <a href=#24 id=24 data-nosnippet>24</a>    simple_certificate::{
-<a href=#25 id=25 data-nosnippet>25</a>        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate2,
+<a href=#25 id=25 data-nosnippet>25</a>        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
 <a href=#26 id=26 data-nosnippet>26</a>        UpgradeCertificate,
 <a href=#27 id=27 data-nosnippet>27</a>    },
 <a href=#28 id=28 data-nosnippet>28</a>    traits::{
@@ -133,7 +133,7 @@
 <a href=#133 id=133 data-nosnippet>133</a>    ) -&gt; <span class="prelude-ty">Option</span>&lt;(
 <a href=#134 id=134 data-nosnippet>134</a>        QuorumCertificate2&lt;TYPES&gt;,
 <a href=#135 id=135 data-nosnippet>135</a>        <span class="prelude-ty">Option</span>&lt;NextEpochQuorumCertificate2&lt;TYPES&gt;&gt;,
-<a href=#136 id=136 data-nosnippet>136</a>        <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificate&lt;TYPES&gt;&gt;,
+<a href=#136 id=136 data-nosnippet>136</a>        <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificateV2&lt;TYPES&gt;&gt;,
 <a href=#137 id=137 data-nosnippet>137</a>    )&gt; {
 <a href=#138 id=138 data-nosnippet>138</a>        <span class="kw">while let </span><span class="prelude-val">Ok</span>(event) = rx.recv_direct().<span class="kw">await </span>{
 <a href=#139 id=139 data-nosnippet>139</a>            <span class="kw">let </span>(qc, maybe_next_epoch_qc, <span class="kw-2">mut </span>maybe_state_cert) = <span class="kw">match </span>event.as_ref() {
@@ -298,7 +298,7 @@
 <a href=#298 id=298 data-nosnippet>298</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(
 <a href=#299 id=299 data-nosnippet>299</a>        QuorumCertificate2&lt;TYPES&gt;,
 <a href=#300 id=300 data-nosnippet>300</a>        <span class="prelude-ty">Option</span>&lt;NextEpochQuorumCertificate2&lt;TYPES&gt;&gt;,
-<a href=#301 id=301 data-nosnippet>301</a>        <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificate&lt;TYPES&gt;&gt;,
+<a href=#301 id=301 data-nosnippet>301</a>        <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificateV2&lt;TYPES&gt;&gt;,
 <a href=#302 id=302 data-nosnippet>302</a>    )&gt; {
 <a href=#303 id=303 data-nosnippet>303</a>        <span class="macro">tracing::debug!</span>(<span class="string">"waiting for QC"</span>);
 <a href=#304 id=304 data-nosnippet>304</a>        <span class="comment">// If we haven't upgraded to Hotstuff 2 just return the high qc right away
@@ -447,7 +447,7 @@
 <a href=#447 id=447 data-nosnippet>447</a>        formed_upgrade_certificate: <span class="prelude-ty">Option</span>&lt;UpgradeCertificate&lt;TYPES&gt;&gt;,
 <a href=#448 id=448 data-nosnippet>448</a>        parent_qc: QuorumCertificate2&lt;TYPES&gt;,
 <a href=#449 id=449 data-nosnippet>449</a>        maybe_next_epoch_qc: <span class="prelude-ty">Option</span>&lt;NextEpochQuorumCertificate2&lt;TYPES&gt;&gt;,
-<a href=#450 id=450 data-nosnippet>450</a>        maybe_state_cert: <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificate&lt;TYPES&gt;&gt;,
+<a href=#450 id=450 data-nosnippet>450</a>        maybe_state_cert: <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificateV2&lt;TYPES&gt;&gt;,
 <a href=#451 id=451 data-nosnippet>451</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#452 id=452 data-nosnippet>452</a>        <span class="kw">let </span>(parent_leaf, state) = parent_leaf_and_state(
 <a href=#453 id=453 data-nosnippet>453</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.sender,

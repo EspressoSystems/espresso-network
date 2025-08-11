@@ -51,7 +51,7 @@
 <a href=#51 id=51 data-nosnippet>51</a>            BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadQueryData, QueryableHeader,
 <a href=#52 id=52 data-nosnippet>52</a>            QueryablePayload, TransactionHash, VidCommonQueryData,
 <a href=#53 id=53 data-nosnippet>53</a>        },
-<a href=#54 id=54 data-nosnippet>54</a>        NamespaceId, StateCertQueryData,
+<a href=#54 id=54 data-nosnippet>54</a>        NamespaceId, StateCertQueryDataV2,
 <a href=#55 id=55 data-nosnippet>55</a>    },
 <a href=#56 id=56 data-nosnippet>56</a>    data_source::{update, VersionedDataSource},
 <a href=#57 id=57 data-nosnippet>57</a>    metrics::PrometheusMetrics,
@@ -85,7 +85,7 @@
 <a href=#85 id=85 data-nosnippet>85</a>    leaf_storage: LedgerLog&lt;LeafQueryData&lt;Types&gt;&gt;,
 <a href=#86 id=86 data-nosnippet>86</a>    block_storage: LedgerLog&lt;BlockQueryData&lt;Types&gt;&gt;,
 <a href=#87 id=87 data-nosnippet>87</a>    vid_storage: LedgerLog&lt;(VidCommonQueryData&lt;Types&gt;, <span class="prelude-ty">Option</span>&lt;VidShare&gt;)&gt;,
-<a href=#88 id=88 data-nosnippet>88</a>    state_cert_storage: LedgerLog&lt;StateCertQueryData&lt;Types&gt;&gt;,
+<a href=#88 id=88 data-nosnippet>88</a>    state_cert_storage: LedgerLog&lt;StateCertQueryDataV2&lt;Types&gt;&gt;,
 <a href=#89 id=89 data-nosnippet>89</a>}
 <a href=#90 id=90 data-nosnippet>90</a>
 <a href=#91 id=91 data-nosnippet>91</a><span class="kw">impl</span>&lt;Types&gt; FileSystemStorageInner&lt;Types&gt;
@@ -245,7 +245,7 @@
 <a href=#245 id=245 data-nosnippet>245</a>            <span class="string">"vid_common"</span>,
 <a href=#246 id=246 data-nosnippet>246</a>            CACHED_VID_COMMON_COUNT,
 <a href=#247 id=247 data-nosnippet>247</a>        )<span class="question-mark">?</span>;
-<a href=#248 id=248 data-nosnippet>248</a>        <span class="kw">let </span>state_cert_storage = LedgerLog::&lt;StateCertQueryData&lt;Types&gt;&gt;::open(
+<a href=#248 id=248 data-nosnippet>248</a>        <span class="kw">let </span>state_cert_storage = LedgerLog::&lt;StateCertQueryDataV2&lt;Types&gt;&gt;::open(
 <a href=#249 id=249 data-nosnippet>249</a>            loader,
 <a href=#250 id=250 data-nosnippet>250</a>            <span class="string">"state_cert"</span>,
 <a href=#251 id=251 data-nosnippet>251</a>            CACHED_STATE_CERT_COUNT,
@@ -649,7 +649,7 @@
 <a href=#649 id=649 data-nosnippet>649</a>        </span><span class="self">self</span>.get_leaf((from <span class="kw">as </span>usize).into()).<span class="kw">await
 <a href=#650 id=650 data-nosnippet>650</a>    </span>}
 <a href=#651 id=651 data-nosnippet>651</a>
-<a href=#652 id=652 data-nosnippet>652</a>    <span class="kw">async fn </span>get_state_cert(<span class="kw-2">&amp;mut </span><span class="self">self</span>, epoch: u64) -&gt; QueryResult&lt;StateCertQueryData&lt;Types&gt;&gt; {
+<a href=#652 id=652 data-nosnippet>652</a>    <span class="kw">async fn </span>get_state_cert(<span class="kw-2">&amp;mut </span><span class="self">self</span>, epoch: u64) -&gt; QueryResult&lt;StateCertQueryDataV2&lt;Types&gt;&gt; {
 <a href=#653 id=653 data-nosnippet>653</a>        <span class="self">self</span>.inner
 <a href=#654 id=654 data-nosnippet>654</a>            .state_cert_storage
 <a href=#655 id=655 data-nosnippet>655</a>            .iter()
@@ -724,7 +724,7 @@
 <a href=#724 id=724 data-nosnippet>724</a>
 <a href=#725 id=725 data-nosnippet>725</a>    <span class="kw">async fn </span>insert_state_cert(
 <a href=#726 id=726 data-nosnippet>726</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#727 id=727 data-nosnippet>727</a>        state_cert: StateCertQueryData&lt;Types&gt;,
+<a href=#727 id=727 data-nosnippet>727</a>        state_cert: StateCertQueryDataV2&lt;Types&gt;,
 <a href=#728 id=728 data-nosnippet>728</a>    ) -&gt; anyhow::Result&lt;()&gt; {
 <a href=#729 id=729 data-nosnippet>729</a>        <span class="self">self</span>.inner
 <a href=#730 id=730 data-nosnippet>730</a>            .state_cert_storage

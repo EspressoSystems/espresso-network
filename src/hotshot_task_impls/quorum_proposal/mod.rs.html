@@ -19,8 +19,8 @@
 <a href=#19 id=19 data-nosnippet>19</a>    epoch_membership::EpochMembershipCoordinator,
 <a href=#20 id=20 data-nosnippet>20</a>    message::UpgradeLock,
 <a href=#21 id=21 data-nosnippet>21</a>    simple_certificate::{
-<a href=#22 id=22 data-nosnippet>22</a>        EpochRootQuorumCertificate, LightClientStateUpdateCertificate, NextEpochQuorumCertificate2,
-<a href=#23 id=23 data-nosnippet>23</a>        QuorumCertificate2, UpgradeCertificate,
+<a href=#22 id=22 data-nosnippet>22</a>        EpochRootQuorumCertificate, LightClientStateUpdateCertificateV2,
+<a href=#23 id=23 data-nosnippet>23</a>        NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
 <a href=#24 id=24 data-nosnippet>24</a>    },
 <a href=#25 id=25 data-nosnippet>25</a>    stake_table::StakeTableEntries,
 <a href=#26 id=26 data-nosnippet>26</a>    traits::{
@@ -99,7 +99,7 @@
 <a href=#99 id=99 data-nosnippet>99</a>    </span><span class="kw">pub </span>epoch_height: u64,
 <a href=#100 id=100 data-nosnippet>100</a>
 <a href=#101 id=101 data-nosnippet>101</a>    <span class="doccomment">/// Formed light client state update certificates
-<a href=#102 id=102 data-nosnippet>102</a>    </span><span class="kw">pub </span>formed_state_cert: BTreeMap&lt;TYPES::Epoch, LightClientStateUpdateCertificate&lt;TYPES&gt;&gt;,
+<a href=#102 id=102 data-nosnippet>102</a>    </span><span class="kw">pub </span>formed_state_cert: BTreeMap&lt;TYPES::Epoch, LightClientStateUpdateCertificateV2&lt;TYPES&gt;&gt;,
 <a href=#103 id=103 data-nosnippet>103</a>
 <a href=#104 id=104 data-nosnippet>104</a>    <span class="doccomment">/// First view in which epoch version takes effect
 <a href=#105 id=105 data-nosnippet>105</a>    </span><span class="kw">pub </span>first_epoch: <span class="prelude-ty">Option</span>&lt;(TYPES::View, TYPES::Epoch)&gt;,

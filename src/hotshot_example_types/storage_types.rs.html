@@ -25,7 +25,7 @@
 <a href=#25 id=25 data-nosnippet>25</a>    event::HotShotAction,
 <a href=#26 id=26 data-nosnippet>26</a>    message::{convert_proposal, Proposal},
 <a href=#27 id=27 data-nosnippet>27</a>    simple_certificate::{
-<a href=#28 id=28 data-nosnippet>28</a>        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate2,
+<a href=#28 id=28 data-nosnippet>28</a>        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
 <a href=#29 id=29 data-nosnippet>29</a>        UpgradeCertificate,
 <a href=#30 id=30 data-nosnippet>30</a>    },
 <a href=#31 id=31 data-nosnippet>31</a>    traits::{
@@ -61,7 +61,7 @@
 <a href=#61 id=61 data-nosnippet>61</a>        <span class="prelude-ty">Option</span>&lt;hotshot_types::simple_certificate::NextEpochQuorumCertificate2&lt;TYPES&gt;&gt;,
 <a href=#62 id=62 data-nosnippet>62</a>    action: TYPES::View,
 <a href=#63 id=63 data-nosnippet>63</a>    epoch: <span class="prelude-ty">Option</span>&lt;TYPES::Epoch&gt;,
-<a href=#64 id=64 data-nosnippet>64</a>    state_certs: BTreeMap&lt;TYPES::Epoch, LightClientStateUpdateCertificate&lt;TYPES&gt;&gt;,
+<a href=#64 id=64 data-nosnippet>64</a>    state_certs: BTreeMap&lt;TYPES::Epoch, LightClientStateUpdateCertificateV2&lt;TYPES&gt;&gt;,
 <a href=#65 id=65 data-nosnippet>65</a>    drb_results: BTreeMap&lt;TYPES::Epoch, DrbResult&gt;,
 <a href=#66 id=66 data-nosnippet>66</a>    drb_inputs: BTreeMap&lt;u64, DrbInput&gt;,
 <a href=#67 id=67 data-nosnippet>67</a>    epoch_roots: BTreeMap&lt;TYPES::Epoch, TYPES::BlockHeader&gt;,
@@ -156,7 +156,7 @@
 <a href=#156 id=156 data-nosnippet>156</a>        <span class="self">self</span>.inner.read().<span class="kw">await</span>.vid2.clone()
 <a href=#157 id=157 data-nosnippet>157</a>    }
 <a href=#158 id=158 data-nosnippet>158</a>
-<a href=#159 id=159 data-nosnippet>159</a>    <span class="kw">pub async fn </span>state_cert_cloned(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificate&lt;TYPES&gt;&gt; {
+<a href=#159 id=159 data-nosnippet>159</a>    <span class="kw">pub async fn </span>state_cert_cloned(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificateV2&lt;TYPES&gt;&gt; {
 <a href=#160 id=160 data-nosnippet>160</a>        <span class="self">self</span>.inner
 <a href=#161 id=161 data-nosnippet>161</a>            .read()
 <a href=#162 id=162 data-nosnippet>162</a>            .<span class="kw">await
@@ -345,7 +345,7 @@
 <a href=#345 id=345 data-nosnippet>345</a>
 <a href=#346 id=346 data-nosnippet>346</a>    <span class="kw">async fn </span>update_state_cert(
 <a href=#347 id=347 data-nosnippet>347</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#348 id=348 data-nosnippet>348</a>        state_cert: LightClientStateUpdateCertificate&lt;TYPES&gt;,
+<a href=#348 id=348 data-nosnippet>348</a>        state_cert: LightClientStateUpdateCertificateV2&lt;TYPES&gt;,
 <a href=#349 id=349 data-nosnippet>349</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#350 id=350 data-nosnippet>350</a>        <span class="kw">if </span><span class="self">self</span>.should_return_err.load(Ordering::Relaxed) {
 <a href=#351 id=351 data-nosnippet>351</a>            <span class="macro">bail!</span>(<span class="string">"Failed to update state_cert to storage"</span>);

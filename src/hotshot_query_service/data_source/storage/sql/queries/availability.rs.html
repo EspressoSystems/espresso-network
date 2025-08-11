@@ -28,7 +28,7 @@
 <a href=#28 id=28 data-nosnippet>28</a><span class="kw">use crate</span>::{
 <a href=#29 id=29 data-nosnippet>29</a>    availability::{
 <a href=#30 id=30 data-nosnippet>30</a>        BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceInfo, NamespaceMap,
-<a href=#31 id=31 data-nosnippet>31</a>        PayloadQueryData, QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
+<a href=#31 id=31 data-nosnippet>31</a>        PayloadQueryData, QueryableHeader, QueryablePayload, StateCertQueryDataV2, TransactionHash,
 <a href=#32 id=32 data-nosnippet>32</a>        VidCommonQueryData,
 <a href=#33 id=33 data-nosnippet>33</a>    },
 <a href=#34 id=34 data-nosnippet>34</a>    data_source::storage::{
@@ -385,14 +385,14 @@
 <a href=#385 id=385 data-nosnippet>385</a>        <span class="prelude-val">Ok</span>(leaf)
 <a href=#386 id=386 data-nosnippet>386</a>    }
 <a href=#387 id=387 data-nosnippet>387</a>
-<a href=#388 id=388 data-nosnippet>388</a>    <span class="kw">async fn </span>get_state_cert(<span class="kw-2">&amp;mut </span><span class="self">self</span>, epoch: u64) -&gt; QueryResult&lt;StateCertQueryData&lt;Types&gt;&gt; {
+<a href=#388 id=388 data-nosnippet>388</a>    <span class="kw">async fn </span>get_state_cert(<span class="kw-2">&amp;mut </span><span class="self">self</span>, epoch: u64) -&gt; QueryResult&lt;StateCertQueryDataV2&lt;Types&gt;&gt; {
 <a href=#389 id=389 data-nosnippet>389</a>        <span class="kw">let </span>row = query(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
 <a href=#390 id=390 data-nosnippet>390</a>            <span class="string">"SELECT {STATE_CERT_COLUMNS} FROM finalized_state_cert WHERE epoch = $1 LIMIT 1"
 <a href=#391 id=391 data-nosnippet>391</a>        </span>))
 <a href=#392 id=392 data-nosnippet>392</a>        .bind(epoch <span class="kw">as </span>i64)
 <a href=#393 id=393 data-nosnippet>393</a>        .fetch_one(<span class="self">self</span>.as_mut())
 <a href=#394 id=394 data-nosnippet>394</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#395 id=395 data-nosnippet>395</a>        <span class="prelude-val">Ok</span>(StateCertQueryData::from_row(<span class="kw-2">&amp;</span>row)<span class="question-mark">?</span>)
+<a href=#395 id=395 data-nosnippet>395</a>        <span class="prelude-val">Ok</span>(StateCertQueryDataV2::from_row(<span class="kw-2">&amp;</span>row)<span class="question-mark">?</span>)
 <a href=#396 id=396 data-nosnippet>396</a>    }
 <a href=#397 id=397 data-nosnippet>397</a>}
 <a href=#398 id=398 data-nosnippet>398</a>

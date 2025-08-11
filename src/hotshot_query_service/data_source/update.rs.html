@@ -34,7 +34,7 @@
 <a href=#34 id=34 data-nosnippet>34</a><span class="kw">use crate</span>::{
 <a href=#35 id=35 data-nosnippet>35</a>    availability::{
 <a href=#36 id=36 data-nosnippet>36</a>        BlockInfo, BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload,
-<a href=#37 id=37 data-nosnippet>37</a>        StateCertQueryData, UpdateAvailabilityData, VidCommonQueryData,
+<a href=#37 id=37 data-nosnippet>37</a>        StateCertQueryDataV2, UpdateAvailabilityData, VidCommonQueryData,
 <a href=#38 id=38 data-nosnippet>38</a>    },
 <a href=#39 id=39 data-nosnippet>39</a>    Header, Payload, VidCommon,
 <a href=#40 id=40 data-nosnippet>40</a>};
@@ -165,7 +165,7 @@
 <a href=#165 id=165 data-nosnippet>165</a>                        block_data,
 <a href=#166 id=166 data-nosnippet>166</a>                        vid_common,
 <a href=#167 id=167 data-nosnippet>167</a>                        vid_share,
-<a href=#168 id=168 data-nosnippet>168</a>                        state_cert.clone().map(StateCertQueryData),
+<a href=#168 id=168 data-nosnippet>168</a>                        state_cert.clone().map(StateCertQueryDataV2),
 <a href=#169 id=169 data-nosnippet>169</a>                    ))
 <a href=#170 id=170 data-nosnippet>170</a>                    .<span class="kw">await
 <a href=#171 id=171 data-nosnippet>171</a>                </span>{

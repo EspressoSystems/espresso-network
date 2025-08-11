@@ -951,36 +951,38 @@
 <a href=#951 id=951 data-nosnippet>951</a>    <span class="doccomment">/// The next stake table state
 <a href=#952 id=952 data-nosnippet>952</a>    </span><span class="kw">pub </span>next_stake_table_state: StakeTableState,
 <a href=#953 id=953 data-nosnippet>953</a>    <span class="doccomment">/// The signature to the light client state
-<a href=#954 id=954 data-nosnippet>954</a>    </span><span class="kw">pub </span>signature: &lt;TYPES::StateSignatureKey <span class="kw">as </span>StateSignatureKey&gt;::StateSignature,
-<a href=#955 id=955 data-nosnippet>955</a>}
-<a href=#956 id=956 data-nosnippet>956</a>
-<a href=#957 id=957 data-nosnippet>957</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; HasViewNumber&lt;TYPES&gt; <span class="kw">for </span>LightClientStateUpdateVote&lt;TYPES&gt; {
-<a href=#958 id=958 data-nosnippet>958</a>    <span class="kw">fn </span>view_number(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; TYPES::View {
-<a href=#959 id=959 data-nosnippet>959</a>        TYPES::View::new(<span class="self">self</span>.light_client_state.view_number)
-<a href=#960 id=960 data-nosnippet>960</a>    }
-<a href=#961 id=961 data-nosnippet>961</a>}
-<a href=#962 id=962 data-nosnippet>962</a>
-<a href=#963 id=963 data-nosnippet>963</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; HasEpoch&lt;TYPES&gt; <span class="kw">for </span>LightClientStateUpdateVote&lt;TYPES&gt; {
-<a href=#964 id=964 data-nosnippet>964</a>    <span class="kw">fn </span>epoch(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;TYPES::Epoch&gt; {
-<a href=#965 id=965 data-nosnippet>965</a>        <span class="prelude-val">Some</span>(<span class="self">self</span>.epoch)
-<a href=#966 id=966 data-nosnippet>966</a>    }
-<a href=#967 id=967 data-nosnippet>967</a>}
-<a href=#968 id=968 data-nosnippet>968</a>
-<a href=#969 id=969 data-nosnippet>969</a><span class="attr">#[derive(Serialize, Deserialize, Eq, Hash, PartialEq, Debug, Clone)]
-<a href=#970 id=970 data-nosnippet>970</a>#[serde(bound(deserialize = <span class="string">"QuorumVote2&lt;TYPES&gt;:for&lt;'a&gt; Deserialize&lt;'a&gt;"</span>))]
-<a href=#971 id=971 data-nosnippet>971</a></span><span class="kw">pub struct </span>EpochRootQuorumVote&lt;TYPES: NodeType&gt; {
-<a href=#972 id=972 data-nosnippet>972</a>    <span class="kw">pub </span>vote: QuorumVote2&lt;TYPES&gt;,
-<a href=#973 id=973 data-nosnippet>973</a>    <span class="kw">pub </span>state_vote: LightClientStateUpdateVote&lt;TYPES&gt;,
-<a href=#974 id=974 data-nosnippet>974</a>}
-<a href=#975 id=975 data-nosnippet>975</a>
-<a href=#976 id=976 data-nosnippet>976</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; HasViewNumber&lt;TYPES&gt; <span class="kw">for </span>EpochRootQuorumVote&lt;TYPES&gt; {
-<a href=#977 id=977 data-nosnippet>977</a>    <span class="kw">fn </span>view_number(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; TYPES::View {
-<a href=#978 id=978 data-nosnippet>978</a>        <span class="self">self</span>.vote.view_number()
-<a href=#979 id=979 data-nosnippet>979</a>    }
-<a href=#980 id=980 data-nosnippet>980</a>}
-<a href=#981 id=981 data-nosnippet>981</a>
-<a href=#982 id=982 data-nosnippet>982</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; HasEpoch&lt;TYPES&gt; <span class="kw">for </span>EpochRootQuorumVote&lt;TYPES&gt; {
-<a href=#983 id=983 data-nosnippet>983</a>    <span class="kw">fn </span>epoch(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;TYPES::Epoch&gt; {
-<a href=#984 id=984 data-nosnippet>984</a>        <span class="self">self</span>.vote.epoch()
-<a href=#985 id=985 data-nosnippet>985</a>    }
-<a href=#986 id=986 data-nosnippet>986</a>}</code></pre></div></section></main></body></html>
+<a href=#954 id=954 data-nosnippet>954</a>    </span><span class="comment">// TODO (Chengyu): add lcv3 signature type
+<a href=#955 id=955 data-nosnippet>955</a>    </span><span class="kw">pub </span>signature: &lt;TYPES::StateSignatureKey <span class="kw">as </span>StateSignatureKey&gt;::StateSignature,
+<a href=#956 id=956 data-nosnippet>956</a>    <span class="kw">pub </span>auth_root: <span class="prelude-ty">Option</span>&lt;[u8; <span class="number">32</span>]&gt;,
+<a href=#957 id=957 data-nosnippet>957</a>}
+<a href=#958 id=958 data-nosnippet>958</a>
+<a href=#959 id=959 data-nosnippet>959</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; HasViewNumber&lt;TYPES&gt; <span class="kw">for </span>LightClientStateUpdateVote&lt;TYPES&gt; {
+<a href=#960 id=960 data-nosnippet>960</a>    <span class="kw">fn </span>view_number(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; TYPES::View {
+<a href=#961 id=961 data-nosnippet>961</a>        TYPES::View::new(<span class="self">self</span>.light_client_state.view_number)
+<a href=#962 id=962 data-nosnippet>962</a>    }
+<a href=#963 id=963 data-nosnippet>963</a>}
+<a href=#964 id=964 data-nosnippet>964</a>
+<a href=#965 id=965 data-nosnippet>965</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; HasEpoch&lt;TYPES&gt; <span class="kw">for </span>LightClientStateUpdateVote&lt;TYPES&gt; {
+<a href=#966 id=966 data-nosnippet>966</a>    <span class="kw">fn </span>epoch(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;TYPES::Epoch&gt; {
+<a href=#967 id=967 data-nosnippet>967</a>        <span class="prelude-val">Some</span>(<span class="self">self</span>.epoch)
+<a href=#968 id=968 data-nosnippet>968</a>    }
+<a href=#969 id=969 data-nosnippet>969</a>}
+<a href=#970 id=970 data-nosnippet>970</a>
+<a href=#971 id=971 data-nosnippet>971</a><span class="attr">#[derive(Serialize, Deserialize, Eq, Hash, PartialEq, Debug, Clone)]
+<a href=#972 id=972 data-nosnippet>972</a>#[serde(bound(deserialize = <span class="string">"QuorumVote2&lt;TYPES&gt;:for&lt;'a&gt; Deserialize&lt;'a&gt;"</span>))]
+<a href=#973 id=973 data-nosnippet>973</a></span><span class="kw">pub struct </span>EpochRootQuorumVote&lt;TYPES: NodeType&gt; {
+<a href=#974 id=974 data-nosnippet>974</a>    <span class="kw">pub </span>vote: QuorumVote2&lt;TYPES&gt;,
+<a href=#975 id=975 data-nosnippet>975</a>    <span class="kw">pub </span>state_vote: LightClientStateUpdateVote&lt;TYPES&gt;,
+<a href=#976 id=976 data-nosnippet>976</a>}
+<a href=#977 id=977 data-nosnippet>977</a>
+<a href=#978 id=978 data-nosnippet>978</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; HasViewNumber&lt;TYPES&gt; <span class="kw">for </span>EpochRootQuorumVote&lt;TYPES&gt; {
+<a href=#979 id=979 data-nosnippet>979</a>    <span class="kw">fn </span>view_number(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; TYPES::View {
+<a href=#980 id=980 data-nosnippet>980</a>        <span class="self">self</span>.vote.view_number()
+<a href=#981 id=981 data-nosnippet>981</a>    }
+<a href=#982 id=982 data-nosnippet>982</a>}
+<a href=#983 id=983 data-nosnippet>983</a>
+<a href=#984 id=984 data-nosnippet>984</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; HasEpoch&lt;TYPES&gt; <span class="kw">for </span>EpochRootQuorumVote&lt;TYPES&gt; {
+<a href=#985 id=985 data-nosnippet>985</a>    <span class="kw">fn </span>epoch(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;TYPES::Epoch&gt; {
+<a href=#986 id=986 data-nosnippet>986</a>        <span class="self">self</span>.vote.epoch()
+<a href=#987 id=987 data-nosnippet>987</a>    }
+<a href=#988 id=988 data-nosnippet>988</a>}</code></pre></div></section></main></body></html>

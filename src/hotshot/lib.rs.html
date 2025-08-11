@@ -16,7 +16,7 @@
 <a href=#16 id=16 data-nosnippet>16</a>    drb::{drb_difficulty_selector, DrbResult, INITIAL_DRB_RESULT},
 <a href=#17 id=17 data-nosnippet>17</a>    epoch_membership::EpochMembershipCoordinator,
 <a href=#18 id=18 data-nosnippet>18</a>    message::UpgradeLock,
-<a href=#19 id=19 data-nosnippet>19</a>    simple_certificate::LightClientStateUpdateCertificate,
+<a href=#19 id=19 data-nosnippet>19</a>    simple_certificate::LightClientStateUpdateCertificateV2,
 <a href=#20 id=20 data-nosnippet>20</a>    traits::{
 <a href=#21 id=21 data-nosnippet>21</a>        block_contents::BlockHeader, election::Membership, network::BroadcastDelay,
 <a href=#22 id=22 data-nosnippet>22</a>        node_implementation::Versions, signature_key::StateSignatureKey, storage::Storage,
@@ -1111,7 +1111,7 @@
 <a href=#1111 id=1111 data-nosnippet>1111</a>    </span><span class="kw">pub </span>saved_vid_shares: VidShares&lt;TYPES&gt;,
 <a href=#1112 id=1112 data-nosnippet>1112</a>
 <a href=#1113 id=1113 data-nosnippet>1113</a>    <span class="doccomment">/// The last formed light client state update certificate if there's any
-<a href=#1114 id=1114 data-nosnippet>1114</a>    </span><span class="kw">pub </span>state_cert: <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificate&lt;TYPES&gt;&gt;,
+<a href=#1114 id=1114 data-nosnippet>1114</a>    </span><span class="kw">pub </span>state_cert: <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificateV2&lt;TYPES&gt;&gt;,
 <a href=#1115 id=1115 data-nosnippet>1115</a>
 <a href=#1116 id=1116 data-nosnippet>1116</a>    <span class="doccomment">/// Saved epoch information. This must be sorted ascending by epoch.
 <a href=#1117 id=1117 data-nosnippet>1117</a>    </span><span class="kw">pub </span>start_epoch_info: Vec&lt;InitializerEpochInfo&lt;TYPES&gt;&gt;,
@@ -1212,7 +1212,7 @@
 <a href=#1212 id=1212 data-nosnippet>1212</a>        saved_proposals: BTreeMap&lt;TYPES::View, Proposal&lt;TYPES, QuorumProposalWrapper&lt;TYPES&gt;&gt;&gt;,
 <a href=#1213 id=1213 data-nosnippet>1213</a>        saved_vid_shares: VidShares&lt;TYPES&gt;,
 <a href=#1214 id=1214 data-nosnippet>1214</a>        decided_upgrade_certificate: <span class="prelude-ty">Option</span>&lt;UpgradeCertificate&lt;TYPES&gt;&gt;,
-<a href=#1215 id=1215 data-nosnippet>1215</a>        state_cert: <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificate&lt;TYPES&gt;&gt;,
+<a href=#1215 id=1215 data-nosnippet>1215</a>        state_cert: <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificateV2&lt;TYPES&gt;&gt;,
 <a href=#1216 id=1216 data-nosnippet>1216</a>    ) -&gt; <span class="self">Self </span>{
 <a href=#1217 id=1217 data-nosnippet>1217</a>        <span class="kw">let </span>anchor_state = Arc::new(TYPES::ValidatedState::from_header(
 <a href=#1218 id=1218 data-nosnippet>1218</a>            anchor_leaf.block_header(),

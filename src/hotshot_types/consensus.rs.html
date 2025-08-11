@@ -30,7 +30,7 @@
 <a href=#30 id=30 data-nosnippet>30</a>    event::{HotShotAction, LeafInfo},
 <a href=#31 id=31 data-nosnippet>31</a>    message::{Proposal, UpgradeLock},
 <a href=#32 id=32 data-nosnippet>32</a>    simple_certificate::{
-<a href=#33 id=33 data-nosnippet>33</a>        DaCertificate2, LightClientStateUpdateCertificate, NextEpochQuorumCertificate2,
+<a href=#33 id=33 data-nosnippet>33</a>        DaCertificate2, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
 <a href=#34 id=34 data-nosnippet>34</a>        QuorumCertificate2,
 <a href=#35 id=35 data-nosnippet>35</a>    },
 <a href=#36 id=36 data-nosnippet>36</a>    simple_vote::HasEpoch,
@@ -440,7 +440,7 @@
 <a href=#440 id=440 data-nosnippet>440</a>    <span class="doccomment">/// The highest block number that we have seen
 <a href=#441 id=441 data-nosnippet>441</a>    </span><span class="kw">pub </span>highest_block: u64,
 <a href=#442 id=442 data-nosnippet>442</a>    <span class="doccomment">/// The light client state update certificate
-<a href=#443 id=443 data-nosnippet>443</a>    </span><span class="kw">pub </span>state_cert: <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificate&lt;TYPES&gt;&gt;,
+<a href=#443 id=443 data-nosnippet>443</a>    </span><span class="kw">pub </span>state_cert: <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificateV2&lt;TYPES&gt;&gt;,
 <a href=#444 id=444 data-nosnippet>444</a>}
 <a href=#445 id=445 data-nosnippet>445</a>
 <a href=#446 id=446 data-nosnippet>446</a><span class="doccomment">/// This struct holds a payload and its metadata
@@ -571,7 +571,7 @@
 <a href=#571 id=571 data-nosnippet>571</a>        next_epoch_high_qc: <span class="prelude-ty">Option</span>&lt;NextEpochQuorumCertificate2&lt;TYPES&gt;&gt;,
 <a href=#572 id=572 data-nosnippet>572</a>        metrics: Arc&lt;ConsensusMetricsValue&gt;,
 <a href=#573 id=573 data-nosnippet>573</a>        epoch_height: u64,
-<a href=#574 id=574 data-nosnippet>574</a>        state_cert: <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificate&lt;TYPES&gt;&gt;,
+<a href=#574 id=574 data-nosnippet>574</a>        state_cert: <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificateV2&lt;TYPES&gt;&gt;,
 <a href=#575 id=575 data-nosnippet>575</a>        drb_difficulty: u64,
 <a href=#576 id=576 data-nosnippet>576</a>        drb_upgrade_difficulty: u64,
 <a href=#577 id=577 data-nosnippet>577</a>    ) -&gt; <span class="self">Self </span>{
@@ -693,7 +693,7 @@
 <a href=#693 id=693 data-nosnippet>693</a>    }
 <a href=#694 id=694 data-nosnippet>694</a>
 <a href=#695 id=695 data-nosnippet>695</a>    <span class="doccomment">/// Get the current light client state certificate
-<a href=#696 id=696 data-nosnippet>696</a>    </span><span class="kw">pub fn </span>state_cert(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>LightClientStateUpdateCertificate&lt;TYPES&gt;&gt; {
+<a href=#696 id=696 data-nosnippet>696</a>    </span><span class="kw">pub fn </span>state_cert(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>LightClientStateUpdateCertificateV2&lt;TYPES&gt;&gt; {
 <a href=#697 id=697 data-nosnippet>697</a>        <span class="self">self</span>.state_cert.as_ref()
 <a href=#698 id=698 data-nosnippet>698</a>    }
 <a href=#699 id=699 data-nosnippet>699</a>
@@ -1122,7 +1122,7 @@
 <a href=#1122 id=1122 data-nosnippet>1122</a>    /// Can return an error when the provided state_cert is not newer than the existing entry.
 <a href=#1123 id=1123 data-nosnippet>1123</a>    </span><span class="kw">pub fn </span>update_state_cert(
 <a href=#1124 id=1124 data-nosnippet>1124</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#1125 id=1125 data-nosnippet>1125</a>        state_cert: LightClientStateUpdateCertificate&lt;TYPES&gt;,
+<a href=#1125 id=1125 data-nosnippet>1125</a>        state_cert: LightClientStateUpdateCertificateV2&lt;TYPES&gt;,
 <a href=#1126 id=1126 data-nosnippet>1126</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#1127 id=1127 data-nosnippet>1127</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(existing_state_cert) = <span class="kw-2">&amp;</span><span class="self">self</span>.state_cert {
 <a href=#1128 id=1128 data-nosnippet>1128</a>            <span class="macro">ensure!</span>(

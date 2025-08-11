@@ -56,7 +56,7 @@
 <a href=#56 id=56 data-nosnippet>56</a>};
 <a href=#57 id=57 data-nosnippet>57</a><span class="kw">use crate</span>::{
 <a href=#58 id=58 data-nosnippet>58</a>    availability::{
-<a href=#59 id=59 data-nosnippet>59</a>        BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, StateCertQueryData,
+<a href=#59 id=59 data-nosnippet>59</a>        BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, StateCertQueryDataV2,
 <a href=#60 id=60 data-nosnippet>60</a>        VidCommonQueryData,
 <a href=#61 id=61 data-nosnippet>61</a>    },
 <a href=#62 id=62 data-nosnippet>62</a>    data_source::{
@@ -637,7 +637,7 @@
 <a href=#637 id=637 data-nosnippet>637</a>
 <a href=#638 id=638 data-nosnippet>638</a>    <span class="kw">async fn </span>insert_state_cert(
 <a href=#639 id=639 data-nosnippet>639</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#640 id=640 data-nosnippet>640</a>        state_cert: StateCertQueryData&lt;Types&gt;,
+<a href=#640 id=640 data-nosnippet>640</a>        state_cert: StateCertQueryDataV2&lt;Types&gt;,
 <a href=#641 id=641 data-nosnippet>641</a>    ) -&gt; anyhow::Result&lt;()&gt; {
 <a href=#642 id=642 data-nosnippet>642</a>        <span class="kw">let </span>height = state_cert.height();
 <a href=#643 id=643 data-nosnippet>643</a>

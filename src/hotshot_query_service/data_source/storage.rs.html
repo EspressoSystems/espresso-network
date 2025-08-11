@@ -68,7 +68,7 @@
 <a href=#68 id=68 data-nosnippet>68</a><span class="kw">use crate</span>::{
 <a href=#69 id=69 data-nosnippet>69</a>    availability::{
 <a href=#70 id=70 data-nosnippet>70</a>        BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
-<a href=#71 id=71 data-nosnippet>71</a>        PayloadQueryData, QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
+<a href=#71 id=71 data-nosnippet>71</a>        PayloadQueryData, QueryableHeader, QueryablePayload, StateCertQueryDataV2, TransactionHash,
 <a href=#72 id=72 data-nosnippet>72</a>        VidCommonMetadata, VidCommonQueryData,
 <a href=#73 id=73 data-nosnippet>73</a>    },
 <a href=#74 id=74 data-nosnippet>74</a>    explorer::{
@@ -196,7 +196,7 @@
 <a href=#196 id=196 data-nosnippet>196</a>    <span class="doccomment">/// Get the first leaf which is available in the database with height &gt;= `from`.
 <a href=#197 id=197 data-nosnippet>197</a>    </span><span class="kw">async fn </span>first_available_leaf(<span class="kw-2">&amp;mut </span><span class="self">self</span>, from: u64) -&gt; QueryResult&lt;LeafQueryData&lt;Types&gt;&gt;;
 <a href=#198 id=198 data-nosnippet>198</a>
-<a href=#199 id=199 data-nosnippet>199</a>    <span class="kw">async fn </span>get_state_cert(<span class="kw-2">&amp;mut </span><span class="self">self</span>, epoch: u64) -&gt; QueryResult&lt;StateCertQueryData&lt;Types&gt;&gt;;
+<a href=#199 id=199 data-nosnippet>199</a>    <span class="kw">async fn </span>get_state_cert(<span class="kw-2">&amp;mut </span><span class="self">self</span>, epoch: u64) -&gt; QueryResult&lt;StateCertQueryDataV2&lt;Types&gt;&gt;;
 <a href=#200 id=200 data-nosnippet>200</a>}
 <a href=#201 id=201 data-nosnippet>201</a>
 <a href=#202 id=202 data-nosnippet>202</a><span class="kw">pub trait </span>UpdateAvailabilityStorage&lt;Types&gt;
@@ -218,7 +218,7 @@
 <a href=#218 id=218 data-nosnippet>218</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;()&gt;&gt;;
 <a href=#219 id=219 data-nosnippet>219</a>    <span class="kw">fn </span>insert_state_cert(
 <a href=#220 id=220 data-nosnippet>220</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#221 id=221 data-nosnippet>221</a>        state_cert: StateCertQueryData&lt;Types&gt;,
+<a href=#221 id=221 data-nosnippet>221</a>        state_cert: StateCertQueryDataV2&lt;Types&gt;,
 <a href=#222 id=222 data-nosnippet>222</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;()&gt;&gt;;
 <a href=#223 id=223 data-nosnippet>223</a>}
 <a href=#224 id=224 data-nosnippet>224</a>

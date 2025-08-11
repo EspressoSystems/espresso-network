@@ -33,7 +33,7 @@
 <a href=#33 id=33 data-nosnippet>33</a>        BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadMetadata, PayloadQueryData,
 <a href=#34 id=34 data-nosnippet>34</a>        QueryableHeader, QueryablePayload, TransactionHash, VidCommonMetadata, VidCommonQueryData,
 <a href=#35 id=35 data-nosnippet>35</a>    },
-<a href=#36 id=36 data-nosnippet>36</a>    BlockWithTransaction, StateCertQueryData,
+<a href=#36 id=36 data-nosnippet>36</a>    BlockWithTransaction, StateCertQueryDataV2,
 <a href=#37 id=37 data-nosnippet>37</a>};
 <a href=#38 id=38 data-nosnippet>38</a><span class="kw">use crate</span>::{types::HeightIndexed, Header, Payload};
 <a href=#39 id=39 data-nosnippet>39</a>
@@ -233,7 +233,7 @@
 <a href=#233 id=233 data-nosnippet>233</a>        h: TransactionHash&lt;Types&gt;,
 <a href=#234 id=234 data-nosnippet>234</a>    ) -&gt; Fetch&lt;BlockWithTransaction&lt;Types&gt;&gt;;
 <a href=#235 id=235 data-nosnippet>235</a>
-<a href=#236 id=236 data-nosnippet>236</a>    <span class="kw">async fn </span>get_state_cert(<span class="kw-2">&amp;</span><span class="self">self</span>, epoch: u64) -&gt; Fetch&lt;StateCertQueryData&lt;Types&gt;&gt;;
+<a href=#236 id=236 data-nosnippet>236</a>    <span class="kw">async fn </span>get_state_cert(<span class="kw-2">&amp;</span><span class="self">self</span>, epoch: u64) -&gt; Fetch&lt;StateCertQueryDataV2&lt;Types&gt;&gt;;
 <a href=#237 id=237 data-nosnippet>237</a>
 <a href=#238 id=238 data-nosnippet>238</a>    <span class="kw">async fn </span>subscribe_blocks(<span class="kw-2">&amp;</span><span class="self">self</span>, from: usize) -&gt; BoxStream&lt;<span class="lifetime">'static</span>, BlockQueryData&lt;Types&gt;&gt; {
 <a href=#239 id=239 data-nosnippet>239</a>        <span class="self">self</span>.get_block_range(from..)
@@ -308,7 +308,7 @@
 <a href=#308 id=308 data-nosnippet>308</a>    <span class="kw">pub </span>block: <span class="prelude-ty">Option</span>&lt;BlockQueryData&lt;Types&gt;&gt;,
 <a href=#309 id=309 data-nosnippet>309</a>    <span class="kw">pub </span>vid_common: <span class="prelude-ty">Option</span>&lt;VidCommonQueryData&lt;Types&gt;&gt;,
 <a href=#310 id=310 data-nosnippet>310</a>    <span class="kw">pub </span>vid_share: <span class="prelude-ty">Option</span>&lt;VidShare&gt;,
-<a href=#311 id=311 data-nosnippet>311</a>    <span class="kw">pub </span>state_cert: <span class="prelude-ty">Option</span>&lt;StateCertQueryData&lt;Types&gt;&gt;,
+<a href=#311 id=311 data-nosnippet>311</a>    <span class="kw">pub </span>state_cert: <span class="prelude-ty">Option</span>&lt;StateCertQueryDataV2&lt;Types&gt;&gt;,
 <a href=#312 id=312 data-nosnippet>312</a>}
 <a href=#313 id=313 data-nosnippet>313</a>
 <a href=#314 id=314 data-nosnippet>314</a><span class="kw">impl</span>&lt;Types: NodeType&gt; From&lt;LeafQueryData&lt;Types&gt;&gt; <span class="kw">for </span>BlockInfo&lt;Types&gt; {
@@ -329,7 +329,7 @@
 <a href=#329 id=329 data-nosnippet>329</a>        block: <span class="prelude-ty">Option</span>&lt;BlockQueryData&lt;Types&gt;&gt;,
 <a href=#330 id=330 data-nosnippet>330</a>        vid_common: <span class="prelude-ty">Option</span>&lt;VidCommonQueryData&lt;Types&gt;&gt;,
 <a href=#331 id=331 data-nosnippet>331</a>        vid_share: <span class="prelude-ty">Option</span>&lt;VidShare&gt;,
-<a href=#332 id=332 data-nosnippet>332</a>        state_cert: <span class="prelude-ty">Option</span>&lt;StateCertQueryData&lt;Types&gt;&gt;,
+<a href=#332 id=332 data-nosnippet>332</a>        state_cert: <span class="prelude-ty">Option</span>&lt;StateCertQueryDataV2&lt;Types&gt;&gt;,
 <a href=#333 id=333 data-nosnippet>333</a>    ) -&gt; <span class="self">Self </span>{
 <a href=#334 id=334 data-nosnippet>334</a>        <span class="self">Self </span>{
 <a href=#335 id=335 data-nosnippet>335</a>            leaf,

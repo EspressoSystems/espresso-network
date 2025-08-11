@@ -23,7 +23,7 @@
 <a href=#23 id=23 data-nosnippet>23</a>    event::{Event, EventType, HotShotAction, LeafInfo},
 <a href=#24 id=24 data-nosnippet>24</a>    message::Proposal,
 <a href=#25 id=25 data-nosnippet>25</a>    simple_certificate::{
-<a href=#26 id=26 data-nosnippet>26</a>        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate2,
+<a href=#26 id=26 data-nosnippet>26</a>        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
 <a href=#27 id=27 data-nosnippet>27</a>        UpgradeCertificate,
 <a href=#28 id=28 data-nosnippet>28</a>    },
 <a href=#29 id=29 data-nosnippet>29</a>    traits::metrics::Metrics,
@@ -246,14 +246,14 @@
 <a href=#246 id=246 data-nosnippet>246</a>
 <a href=#247 id=247 data-nosnippet>247</a>    <span class="kw">async fn </span>add_state_cert(
 <a href=#248 id=248 data-nosnippet>248</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#249 id=249 data-nosnippet>249</a>        _state_cert: LightClientStateUpdateCertificate&lt;SeqTypes&gt;,
+<a href=#249 id=249 data-nosnippet>249</a>        _state_cert: LightClientStateUpdateCertificateV2&lt;SeqTypes&gt;,
 <a href=#250 id=250 data-nosnippet>250</a>    ) -&gt; anyhow::Result&lt;()&gt; {
 <a href=#251 id=251 data-nosnippet>251</a>        <span class="prelude-val">Ok</span>(())
 <a href=#252 id=252 data-nosnippet>252</a>    }
 <a href=#253 id=253 data-nosnippet>253</a>
 <a href=#254 id=254 data-nosnippet>254</a>    <span class="kw">async fn </span>load_state_cert(
 <a href=#255 id=255 data-nosnippet>255</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#256 id=256 data-nosnippet>256</a>    ) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificate&lt;SeqTypes&gt;&gt;&gt; {
+<a href=#256 id=256 data-nosnippet>256</a>    ) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificateV2&lt;SeqTypes&gt;&gt;&gt; {
 <a href=#257 id=257 data-nosnippet>257</a>        <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>)
 <a href=#258 id=258 data-nosnippet>258</a>    }
 <a href=#259 id=259 data-nosnippet>259</a>

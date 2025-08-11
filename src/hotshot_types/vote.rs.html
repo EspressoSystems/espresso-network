@@ -22,7 +22,7 @@
 <a href=#22 id=22 data-nosnippet>22</a>    epoch_membership::EpochMembership,
 <a href=#23 id=23 data-nosnippet>23</a>    light_client::{LightClientState, StakeTableState},
 <a href=#24 id=24 data-nosnippet>24</a>    message::UpgradeLock,
-<a href=#25 id=25 data-nosnippet>25</a>    simple_certificate::{LightClientStateUpdateCertificate, Threshold},
+<a href=#25 id=25 data-nosnippet>25</a>    simple_certificate::{LightClientStateUpdateCertificateV2, Threshold},
 <a href=#26 id=26 data-nosnippet>26</a>    simple_vote::{LightClientStateUpdateVote, VersionedVoteData, Voteable},
 <a href=#27 id=27 data-nosnippet>27</a>    stake_table::{HSStakeTable, StakeTableEntries},
 <a href=#28 id=28 data-nosnippet>28</a>    traits::{
@@ -270,7 +270,7 @@
 <a href=#270 id=270 data-nosnippet>270</a>        key: <span class="kw-2">&amp;</span>TYPES::SignatureKey,
 <a href=#271 id=271 data-nosnippet>271</a>        vote: <span class="kw-2">&amp;</span>LightClientStateUpdateVote&lt;TYPES&gt;,
 <a href=#272 id=272 data-nosnippet>272</a>        membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;,
-<a href=#273 id=273 data-nosnippet>273</a>    ) -&gt; <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificate&lt;TYPES&gt;&gt; {
+<a href=#273 id=273 data-nosnippet>273</a>    ) -&gt; <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificateV2&lt;TYPES&gt;&gt; {
 <a href=#274 id=274 data-nosnippet>274</a>        <span class="kw">let </span>epoch = membership.epoch()<span class="question-mark">?</span>;
 <a href=#275 id=275 data-nosnippet>275</a>        <span class="kw">let </span>threshold = membership.success_threshold().<span class="kw">await</span>;
 <a href=#276 id=276 data-nosnippet>276</a>        <span class="kw">let </span>PeerConfig {
@@ -302,13 +302,14 @@
 <a href=#302 id=302 data-nosnippet>302</a>        vote_map.insert(state_ver_key.clone(), vote.signature.clone());
 <a href=#303 id=303 data-nosnippet>303</a>
 <a href=#304 id=304 data-nosnippet>304</a>        <span class="kw">if </span><span class="kw-2">*</span>total_stake_casted &gt;= threshold {
-<a href=#305 id=305 data-nosnippet>305</a>            <span class="kw">return </span><span class="prelude-val">Some</span>(LightClientStateUpdateCertificate {
+<a href=#305 id=305 data-nosnippet>305</a>            <span class="kw">return </span><span class="prelude-val">Some</span>(LightClientStateUpdateCertificateV2 {
 <a href=#306 id=306 data-nosnippet>306</a>                epoch,
 <a href=#307 id=307 data-nosnippet>307</a>                light_client_state: vote.light_client_state,
 <a href=#308 id=308 data-nosnippet>308</a>                next_stake_table_state: vote.next_stake_table_state,
 <a href=#309 id=309 data-nosnippet>309</a>                signatures: Vec::from_iter(vote_map.iter().map(|(k, v)| (k.clone(), v.clone()))),
-<a href=#310 id=310 data-nosnippet>310</a>            });
-<a href=#311 id=311 data-nosnippet>311</a>        }
-<a href=#312 id=312 data-nosnippet>312</a>        <span class="prelude-val">None
-<a href=#313 id=313 data-nosnippet>313</a>    </span>}
-<a href=#314 id=314 data-nosnippet>314</a>}</code></pre></div></section></main></body></html>
+<a href=#310 id=310 data-nosnippet>310</a>                auth_root: vote.auth_root,
+<a href=#311 id=311 data-nosnippet>311</a>            });
+<a href=#312 id=312 data-nosnippet>312</a>        }
+<a href=#313 id=313 data-nosnippet>313</a>        <span class="prelude-val">None
+<a href=#314 id=314 data-nosnippet>314</a>    </span>}
+<a href=#315 id=315 data-nosnippet>315</a>}</code></pre></div></section></main></body></html>

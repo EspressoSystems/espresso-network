@@ -22,7 +22,7 @@
 <a href=#22 id=22 data-nosnippet>22</a>    availability::{
 <a href=#23 id=23 data-nosnippet>23</a>        AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction, Fetch,
 <a href=#24 id=24 data-nosnippet>24</a>        FetchStream, LeafId, LeafQueryData, NamespaceId, PayloadMetadata, PayloadQueryData,
-<a href=#25 id=25 data-nosnippet>25</a>        QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
+<a href=#25 id=25 data-nosnippet>25</a>        QueryableHeader, QueryablePayload, StateCertQueryDataV2, TransactionHash,
 <a href=#26 id=26 data-nosnippet>26</a>        UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
 <a href=#27 id=27 data-nosnippet>27</a>    },
 <a href=#28 id=28 data-nosnippet>28</a>    data_source::storage::pruning::PrunedHeightDataSource,
@@ -304,7 +304,7 @@
 <a href=#304 id=304 data-nosnippet>304</a>    ) -&gt; Fetch&lt;BlockWithTransaction&lt;Types&gt;&gt; {
 <a href=#305 id=305 data-nosnippet>305</a>        <span class="self">self</span>.data_source.get_block_containing_transaction(h).<span class="kw">await
 <a href=#306 id=306 data-nosnippet>306</a>    </span>}
-<a href=#307 id=307 data-nosnippet>307</a>    <span class="kw">async fn </span>get_state_cert(<span class="kw-2">&amp;</span><span class="self">self</span>, epoch: u64) -&gt; Fetch&lt;StateCertQueryData&lt;Types&gt;&gt; {
+<a href=#307 id=307 data-nosnippet>307</a>    <span class="kw">async fn </span>get_state_cert(<span class="kw-2">&amp;</span><span class="self">self</span>, epoch: u64) -&gt; Fetch&lt;StateCertQueryDataV2&lt;Types&gt;&gt; {
 <a href=#308 id=308 data-nosnippet>308</a>        <span class="self">self</span>.data_source.get_state_cert(epoch).<span class="kw">await
 <a href=#309 id=309 data-nosnippet>309</a>    </span>}
 <a href=#310 id=310 data-nosnippet>310</a>}

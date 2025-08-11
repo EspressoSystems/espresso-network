@@ -19,7 +19,7 @@
 <a href=#19 id=19 data-nosnippet>19</a>    error::HotShotError,
 <a href=#20 id=20 data-nosnippet>20</a>    message::{convert_proposal, Proposal},
 <a href=#21 id=21 data-nosnippet>21</a>    simple_certificate::{
-<a href=#22 id=22 data-nosnippet>22</a>        LightClientStateUpdateCertificate, QuorumCertificate, QuorumCertificate2,
+<a href=#22 id=22 data-nosnippet>22</a>        LightClientStateUpdateCertificateV2, QuorumCertificate, QuorumCertificate2,
 <a href=#23 id=23 data-nosnippet>23</a>    },
 <a href=#24 id=24 data-nosnippet>24</a>    traits::{node_implementation::NodeType, ValidatedState},
 <a href=#25 id=25 data-nosnippet>25</a>};
@@ -69,7 +69,7 @@
 <a href=#69 id=69 data-nosnippet>69</a>    <span class="doccomment">/// Optional VID share data.
 <a href=#70 id=70 data-nosnippet>70</a>    </span><span class="kw">pub </span>vid_share: <span class="prelude-ty">Option</span>&lt;VidDisperseShare&lt;TYPES&gt;&gt;,
 <a href=#71 id=71 data-nosnippet>71</a>    <span class="doccomment">/// Optional light client state update certificate.
-<a href=#72 id=72 data-nosnippet>72</a>    </span><span class="kw">pub </span>state_cert: <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificate&lt;TYPES&gt;&gt;,
+<a href=#72 id=72 data-nosnippet>72</a>    </span><span class="kw">pub </span>state_cert: <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificateV2&lt;TYPES&gt;&gt;,
 <a href=#73 id=73 data-nosnippet>73</a>}
 <a href=#74 id=74 data-nosnippet>74</a>
 <a href=#75 id=75 data-nosnippet>75</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; LeafInfo&lt;TYPES&gt; {
@@ -79,7 +79,7 @@
 <a href=#79 id=79 data-nosnippet>79</a>        state: Arc&lt;&lt;TYPES <span class="kw">as </span>NodeType&gt;::ValidatedState&gt;,
 <a href=#80 id=80 data-nosnippet>80</a>        delta: <span class="prelude-ty">Option</span>&lt;Arc&lt;&lt;&lt;TYPES <span class="kw">as </span>NodeType&gt;::ValidatedState <span class="kw">as </span>ValidatedState&lt;TYPES&gt;&gt;::Delta&gt;&gt;,
 <a href=#81 id=81 data-nosnippet>81</a>        vid_share: <span class="prelude-ty">Option</span>&lt;VidDisperseShare&lt;TYPES&gt;&gt;,
-<a href=#82 id=82 data-nosnippet>82</a>        state_cert: <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificate&lt;TYPES&gt;&gt;,
+<a href=#82 id=82 data-nosnippet>82</a>        state_cert: <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificateV2&lt;TYPES&gt;&gt;,
 <a href=#83 id=83 data-nosnippet>83</a>    ) -&gt; <span class="self">Self </span>{
 <a href=#84 id=84 data-nosnippet>84</a>        <span class="self">Self </span>{
 <a href=#85 id=85 data-nosnippet>85</a>            leaf,
