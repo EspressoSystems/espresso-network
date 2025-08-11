@@ -769,7 +769,15 @@ impl Persistence {
                 .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
 
             // Collect state certs for the decide event.
-            let state_certs = Self::load_state_certs(&mut tx, from_view, to_view).await?;
+            let state_certs = Self::load_state_certs(&mut tx, from_view, to_view)
+                .await
+                .inspect_err(|err| {
+                    tracing::error!(
+                        ?from_view,
+                        ?to_view,
+                        "failed to load state certificates. error={err:#}"
+                    );
+                })?;
             drop(tx);
 
             // Collate all the information by view number and construct a chain of leaves.
@@ -924,12 +932,10 @@ impl Persistence {
                 .or_else(|err_v2| {
                 bincode::deserialize::<LightClientStateUpdateCertificateV1<SeqTypes>>(&data)
                     .map(Into::into)
-                    .inspect_err(|err_v1| {
-                        tracing::error!(
-                            "Failed to deserialize LightClientStateUpdateCertificate: as V2: \
-                             {err_v2}, as V1: {err_v1}"
-                        )
-                    })
+                    .context(format!(
+                        "Failed to deserialize LightClientStateUpdateCertificate: with v1 and v2. \
+                         error: {err_v2}"
+                    ))
             })?;
 
             result.insert(cert.epoch.u64(), cert);
@@ -1260,12 +1266,9 @@ impl SequencerPersistence for Persistence {
                     &data,
                 )
                 .map(convert_proposal)
-                .inspect_err(|err_legacy| {
-                    tracing::error!(
-                        "Failed to deserialize quorum proposal for view {view}. error={error}
-                              as QuorumProposalWrapperLegacy: {err_legacy}"
-                    )
-                })
+                .context(format!(
+                    "Failed to deserialize quorum proposal for view {view}. error={error}"
+                ))
             })?;
 
         Ok(proposal)

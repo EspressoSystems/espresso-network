@@ -983,12 +983,9 @@ impl SequencerPersistence for Persistence {
                     &bytes,
                 )
                 .map(convert_proposal)
-                .inspect_err(|err_v3| {
-                    tracing::error!(
-                        "Failed to deserialize quorum proposal for view {view:?}: {error}, as v3: \
-                         {err_v3}"
-                    )
-                })
+                .context(format!(
+                    "Failed to deserialize quorum proposal for view {view:?}: {error}."
+                ))
             })?;
         Ok(proposal)
     }

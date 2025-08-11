@@ -1109,16 +1109,23 @@ impl BlockHeader<SeqTypes> for Header {
                 let placeholder_1 = [0; 32];
                 let placeholder_2 = [0; 32];
                 let placeholder_3 = [0; 32];
+                let placeholder_4 = [0; 32];
+                let placeholder_5 = [0; 32];
+                let placeholder_6 = [0; 32];
+                let placeholder_7 = [0; 32];
 
                 let mut hasher = Keccak256::new();
 
                 // Start with the reward Merkle tree root digest as the base input
-
                 let digest = header.reward_merkle_tree_root.digest();
                 hasher.update(digest.0);
                 hasher.update(placeholder_1);
                 hasher.update(placeholder_2);
                 hasher.update(placeholder_3);
+                hasher.update(placeholder_4);
+                hasher.update(placeholder_5);
+                hasher.update(placeholder_6);
+                hasher.update(placeholder_7);
 
                 let result = hasher.finalize();
 
