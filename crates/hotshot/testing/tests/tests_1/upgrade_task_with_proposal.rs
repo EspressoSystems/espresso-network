@@ -46,14 +46,12 @@ use vec1::vec1;
 
 const TIMEOUT: Duration = Duration::from_millis(35);
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 /// Test that we correctly form and include an `UpgradeCertificate` when receiving votes.
 async fn test_upgrade_task_with_proposal() {
     use std::sync::Arc;
 
     use hotshot_testing::helpers::build_system_handle;
-
-    hotshot::helpers::initialize_logging();
 
     let (handle, _, _, node_key_map) =
         build_system_handle::<TestTypes, MemoryImpl, TestVersions>(3).await;

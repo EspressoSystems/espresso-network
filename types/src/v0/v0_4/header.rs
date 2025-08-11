@@ -1,4 +1,4 @@
-use crate::{v0_1::RewardMerkleCommitment, NsTable, TimestampMillis};
+use crate::{v0_3::RewardAmount, v0_4::RewardMerkleCommitmentV2, NsTable, TimestampMillis};
 
 use super::{
     BlockMerkleCommitment, BuilderSignature, FeeInfo, FeeMerkleCommitment, L1BlockInfo,
@@ -26,7 +26,8 @@ pub struct Header {
     pub(crate) fee_merkle_tree_root: FeeMerkleCommitment,
     pub(crate) fee_info: FeeInfo,
     pub(crate) builder_signature: Option<BuilderSignature>,
-    pub(crate) reward_merkle_tree_root: RewardMerkleCommitment,
+    pub(crate) reward_merkle_tree_root: RewardMerkleCommitmentV2,
+    pub(crate) total_reward_distributed: RewardAmount
 }
 
 impl Committable for Header {
@@ -61,6 +62,7 @@ impl Committable for Header {
             .var_size_field("fee_merkle_tree_root", &fmt_bytes)
             .field("fee_info", self.fee_info.commit())
             .var_size_field("reward_merkle_tree_root", &rwd_bytes)
+            .var_size_field("total_reward_distributed", &self.total_reward_distributed.to_fixed_bytes())
             .finalize()
     }
 

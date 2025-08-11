@@ -334,7 +334,7 @@ mod test {
     use espresso_types::{
         L1BlockInfo, TimeBasedUpgrade, Timestamp, UpgradeMode, UpgradeType, ViewBasedUpgrade,
     };
-    use sequencer_utils::{ser::FromStringOrInteger, test_utils::setup_test};
+    use sequencer_utils::ser::FromStringOrInteger;
     use toml::toml;
 
     use super::*;
@@ -533,10 +533,8 @@ mod test {
     // deploying of the fee contract behind proxy, and this function is being unit tested there.
     // Here, we primarily focus on testing the config and validation logic, not deployment logic.
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_genesis_fee_contract_is_a_proxy() -> anyhow::Result<()> {
-        setup_test();
-
         let anvil = Arc::new(Anvil::new().spawn());
         let wallet = anvil.wallet().unwrap();
         let admin = wallet.default_signer().address();
@@ -588,10 +586,8 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_genesis_fee_contract_is_a_proxy_with_upgrades() -> anyhow::Result<()> {
-        setup_test();
-
         let anvil = Arc::new(Anvil::new().spawn());
         let wallet = anvil.wallet().unwrap();
         let admin = wallet.default_signer().address();
@@ -658,7 +654,7 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_genesis_missing_fee_contract_with_upgrades() {
         let toml = toml! {
             base_version = "0.1"
@@ -728,7 +724,7 @@ mod test {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_genesis_upgrade_fee_contract_address_is_zero() {
         let toml = toml! {
             base_version = "0.1"
@@ -787,10 +783,8 @@ mod test {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_genesis_fee_contract_l1_failover() -> anyhow::Result<()> {
-        setup_test();
-
         let anvil = Arc::new(Anvil::new().spawn());
         let wallet = anvil.wallet().unwrap();
         let admin = wallet.default_signer().address();

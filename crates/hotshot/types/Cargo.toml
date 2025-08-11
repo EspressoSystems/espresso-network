@@ -68,3 +68,6 @@ test-srs = ["jf-vid/test-srs"]
 [[bin]]
 name = "mnemonic"
 path = "bin/mnemonic.rs"
+
+[lints]
+workspace = true

@@ -100,7 +100,34 @@ DOC = """
 Bulk version of `/:height/:view/account`. The request body should be a JSON array consisting of
 TaggedBase64-encoded reward accounts.
 
-The response is a `RewardMErkleTree` containing sub-trees for each of the requested accounts, which is
+The response is a `RewardMerkleTreeV1` containing sub-trees for each of the requested accounts, which is
+a more condensed way to represent the union of account proofs for each requested account. Individual
+Merkle proofs for each account can be extracted from this tree.
+"""
+
+
+
+[route.reward_account_v2]
+PATH = ["/:height/:view/reward-account-v2/:address"]
+":height" = "Integer"
+":view" = "Integer"
+":address" = "Literal"
+DOC = """
+Get the reward account balance for `address`.
+"""
+
+[route.reward_accounts_v2]
+PATH = ["/:height/:view/reward-accounts-v2"]
+":height" = "Integer"
+":view" = "Integer"
+METHOD = "POST"
+DOC = """
+Bulk version of `/:height/:view/account`. The request body should be a JSON array consisting of
+TaggedBase64-encoded reward accounts.
+
+The response is a `RewardMerkleTreeV2` which is an improved version of `RewardMerkleTreeV1`
+used after V4 upgrade
+containing sub-trees for each of the requested accounts, which is
 a more condensed way to represent the union of account proofs for each requested account. Individual
 Merkle proofs for each account can be extracted from this tree.
 """

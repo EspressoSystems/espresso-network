@@ -22,12 +22,14 @@ use crate::{
     epoch_membership::EpochMembership,
     light_client::{LightClientState, StakeTableState},
     message::UpgradeLock,
-    simple_certificate::{LightClientStateUpdateCertificate, Threshold},
+    simple_certificate::{LightClientStateUpdateCertificateV2, Threshold},
     simple_vote::{LightClientStateUpdateVote, VersionedVoteData, Voteable},
     stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
         node_implementation::{NodeType, Versions},
-        signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
+        signature_key::{
+            LCV2StateSignatureKey, SignatureKey, StakeTableEntryType, StateSignatureKey,
+        },
     },
     PeerConfig,
 };
@@ -268,7 +270,7 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
         key: &TYPES::SignatureKey,
         vote: &LightClientStateUpdateVote<TYPES>,
         membership: &EpochMembership<TYPES>,
-    ) -> Option<LightClientStateUpdateCertificate<TYPES>> {
+    ) -> Option<LightClientStateUpdateCertificateV2<TYPES>> {
         let epoch = membership.epoch()?;
         let threshold = membership.success_threshold().await;
         let PeerConfig {
@@ -276,7 +278,8 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
             state_ver_key,
         } = membership.stake(key).await?;
 
-        if !state_ver_key.verify_state_sig(
+        if !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
+            &state_ver_key,
             &vote.signature,
             &vote.light_client_state,
             &vote.next_stake_table_state,
@@ -299,11 +302,12 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
         vote_map.insert(state_ver_key.clone(), vote.signature.clone());
 
         if *total_stake_casted >= threshold {
-            return Some(LightClientStateUpdateCertificate {
+            return Some(LightClientStateUpdateCertificateV2 {
                 epoch,
                 light_client_state: vote.light_client_state,
                 next_stake_table_state: vote.next_stake_table_state,
                 signatures: Vec::from_iter(vote_map.iter().map(|(k, v)| (k.clone(), v.clone()))),
+                auth_root: vote.auth_root,
             });
         }
         None

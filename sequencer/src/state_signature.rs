@@ -11,14 +11,14 @@ use hotshot::types::{Event, EventType, SchnorrPubKey};
 use hotshot_types::{
     event::LeafInfo,
     light_client::{
-        LightClientState, StakeTableState, StateSignKey, StateSignature, StateSignatureRequestBody,
-        StateVerKey,
+        LCV2StateSignatureRequestBody, LightClientState, StakeTableState, StateSignKey,
+        StateSignature, StateVerKey,
     },
     traits::{
         block_contents::BlockHeader,
         network::ConnectedNetwork,
         node_implementation::{NodeType, Versions},
-        signature_key::StateSignatureKey,
+        signature_key::{LCV1StateSignatureKey, LCV2StateSignatureKey},
     },
     utils::{is_ge_epoch_root, option_epoch_from_block_number},
 };
@@ -156,7 +156,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 };
 
                 if let Some(client) = &self.relay_server_client {
-                    let request_body = StateSignatureRequestBody {
+                    let request_body = LCV2StateSignatureRequestBody {
                         key: self.ver_key.clone(),
                         state,
                         next_stake: self.voting_stake_table,
@@ -178,7 +178,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                             tracing::error!("Failed to sign new state for legacy light client");
                             return;
                         };
-                        let request_body = StateSignatureRequestBody {
+                        let request_body = LCV2StateSignatureRequestBody {
                             key: self.ver_key.clone(),
                             state,
                             next_stake: StakeTableState::default(),
@@ -207,7 +207,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
     }
 
     /// Return a signature of a light client state at given height.
-    pub async fn get_state_signature(&self, height: u64) -> Option<StateSignatureRequestBody> {
+    pub async fn get_state_signature(&self, height: u64) -> Option<LCV2StateSignatureRequestBody> {
         let pool_guard = self.signatures.read().await;
         pool_guard.get_signature(height)
     }
@@ -218,7 +218,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         state: &LightClientState,
         next_stake_table: StakeTableState,
     ) -> Result<StateSignature, SignatureError> {
-        let signature = <SchnorrPubKey as StateSignatureKey>::sign_state(
+        let signature = <SchnorrPubKey as LCV2StateSignatureKey>::sign_state(
             &self.sign_key,
             state,
             &next_stake_table,
@@ -226,7 +226,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         let mut pool_guard = self.signatures.write().await;
         pool_guard.push(
             state.block_height,
-            StateSignatureRequestBody {
+            LCV2StateSignatureRequestBody {
                 key: self.ver_key.clone(),
                 state: *state,
                 next_stake: next_stake_table,
@@ -244,19 +244,19 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         &self,
         state: &LightClientState,
     ) -> Result<StateSignature, SignatureError> {
-        <SchnorrPubKey as StateSignatureKey>::legacy_sign_state(&self.sign_key, state)
+        <SchnorrPubKey as LCV1StateSignatureKey>::sign_state(&self.sign_key, state)
     }
 }
 
 /// A rolling in-memory storage for the most recent light client state signatures.
 #[derive(Debug, Default)]
 pub struct StateSignatureMemStorage {
-    pool: HashMap<u64, StateSignatureRequestBody>,
+    pool: HashMap<u64, LCV2StateSignatureRequestBody>,
     deque: VecDeque<u64>,
 }
 
 impl StateSignatureMemStorage {
-    pub fn push(&mut self, height: u64, signature: StateSignatureRequestBody) {
+    pub fn push(&mut self, height: u64, signature: LCV2StateSignatureRequestBody) {
         self.pool.insert(height, signature);
         self.deque.push_back(height);
         if self.pool.len() > SIGNATURE_STORAGE_CAPACITY {
@@ -264,7 +264,7 @@ impl StateSignatureMemStorage {
         }
     }
 
-    pub fn get_signature(&self, height: u64) -> Option<StateSignatureRequestBody> {
+    pub fn get_signature(&self, height: u64) -> Option<LCV2StateSignatureRequestBody> {
         self.pool.get(&height).cloned()
     }
 }
