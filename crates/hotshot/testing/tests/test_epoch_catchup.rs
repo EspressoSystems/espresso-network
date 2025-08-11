@@ -6,10 +6,16 @@
 
 use std::time::Duration;
 
-use hotshot_example_types::node_types::{
-    EpochsTestVersions, PushCdnImpl, RandomOverlapQuorumFilterConfig, TestTwoStakeTablesTypes,
-    TestTypes, TestTypesEpochCatchupTypes, TestTypesRandomizedCommitteeMembers,
-    TestTypesRandomizedLeader,
+use hotshot_example_types::{
+    membership::{
+        randomized_committee::RandomizedStakeTable,
+        randomized_committee_members::RandomizedCommitteeMembers,
+        static_committee::StaticStakeTable, two_static_committees::TwoStakeTables,
+    },
+    node_types::{
+        EpochsTestVersions, PushCdnImpl, RandomOverlapQuorumFilterConfig, TestTwoStakeTablesTypes,
+        TestTypes, TestTypesEpochCatchupTypes, TestTypesRandomizedLeader,
+    },
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
@@ -19,12 +25,13 @@ use hotshot_testing::{
     spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
     test_builder::{TestDescription, TimingData},
 };
+use hotshot_types::signature_key::{BLSPubKey, BuilderKey, SchnorrPubKey};
 
 cross_tests!(
     TestName: test_catchup_epochs,
     Impls: [PushCdnImpl],
     Types: [
-        TestTypesEpochCatchupTypes<EpochsTestVersions, TestTypes>,
+        TestTypesEpochCatchupTypes<StaticStakeTable<BLSPubKey,SchnorrPubKey>>
     ],
     Versions: [EpochsTestVersions],
     Ignore: false,
@@ -73,7 +80,7 @@ cross_tests!(
     TestName: test_two_stake_tables_catchup_epochs,
     Impls: [PushCdnImpl],
     Types: [
-        TestTypesEpochCatchupTypes<EpochsTestVersions, TestTwoStakeTablesTypes>,
+        TestTypesEpochCatchupTypes<TwoStakeTables<BLSPubKey, SchnorrPubKey>>,
     ],
     Versions: [EpochsTestVersions],
     Ignore: false,
@@ -122,7 +129,7 @@ cross_tests!(
     TestName: test_randomized_leader_catchup_epochs,
     Impls: [PushCdnImpl],
     Types: [
-        TestTypesEpochCatchupTypes<EpochsTestVersions, TestTypesRandomizedLeader>,
+        TestTypesEpochCatchupTypes<RandomizedStakeTable<BLSPubKey,SchnorrPubKey>>
     ],
     Versions: [EpochsTestVersions],
     Ignore: false,
@@ -171,7 +178,7 @@ cross_tests!(
     TestName: test_randomized_committee_catchup_epochs,
     Impls: [PushCdnImpl],
     Types: [
-        TestTypesEpochCatchupTypes<EpochsTestVersions, TestTypesRandomizedCommitteeMembers<RandomOverlapQuorumFilterConfig<123, 8, 10, 2, 5>, RandomOverlapQuorumFilterConfig<123, 3, 4, 1, 2>>>,
+        TestTypesEpochCatchupTypes<RandomizedCommitteeMembers<BLSPubKey, SchnorrPubKey, RandomOverlapQuorumFilterConfig<123, 8, 10, 2, 5>, RandomOverlapQuorumFilterConfig<123, 3, 4, 1, 2>>>,
     ],
     Versions: [EpochsTestVersions],
     Ignore: false,

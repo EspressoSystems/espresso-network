@@ -1,17 +1,19 @@
 use std::{collections::HashSet, fmt, fmt::Debug, sync::Arc};
-use crate::membership::fetcher::Leaf2Fetcher;
-use crate::storage_types::TestStorage;
+
 use alloy::primitives::U256;
 use hotshot_types::{
     stake_table::HSStakeTable,
     traits::{
         election::Membership,
         node_implementation::{NodeImplementation, NodeType},
-        signature_key::{ StakeTableEntryType},
+        signature_key::StakeTableEntryType,
     },
 };
 
-use crate::membership::stake_table::TestStakeTable;
+use crate::{
+    membership::{fetcher::Leaf2Fetcher, stake_table::TestStakeTable},
+    storage_types::TestStorage,
+};
 
 #[derive(Clone)]
 pub struct StrictMembership<
@@ -24,16 +26,17 @@ pub struct StrictMembership<
     fetcher: Arc<Leaf2Fetcher<TYPES>>,
 }
 
-impl<TYPES, StakeTable> Debug for StrictMembership<TYPES, StakeTable> where
+impl<TYPES, StakeTable> Debug for StrictMembership<TYPES, StakeTable>
+where
     TYPES: NodeType,
     StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::StateSignatureKey>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         f.debug_struct("StrictMembership")
-         .field("inner", &self.inner)
-         .field("epochs", &self.epochs)
-         .field("drbs", &self.drbs)
-         .finish()
+            .field("inner", &self.inner)
+            .field("epochs", &self.epochs)
+            .field("drbs", &self.drbs)
+            .finish()
     }
 }
 

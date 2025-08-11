@@ -29,7 +29,7 @@ use crate::{
     storage_types::TestStorage,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct TwoStakeTables<
     PubKey: SignatureKey,
     StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,

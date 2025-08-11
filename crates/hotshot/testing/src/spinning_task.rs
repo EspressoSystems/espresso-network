@@ -32,6 +32,7 @@ use hotshot_types::{
         LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate2,
     },
     traits::{
+        election::Membership,
         network::{AsyncGenerator, ConnectedNetwork},
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
     },
@@ -104,6 +105,7 @@ impl<
 where
     I: TestableNodeImplementation<TYPES>,
     I: NodeImplementation<TYPES, Network = N, Storage = TestStorage<TYPES>>,
+    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
 {
     type Event = Event<TYPES>;
     type Error = Error;

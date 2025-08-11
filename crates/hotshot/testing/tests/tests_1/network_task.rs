@@ -58,9 +58,12 @@ async fn test_network_task() {
 
     let all_nodes = config.known_nodes_with_stake.clone();
 
-    let membership = Arc::new(RwLock::new(<TestTypes as NodeType>::Membership::new(
+    let membership = Arc::new(RwLock::new(<TestTypes as NodeType>::Membership::new::<MemoryImpl>(
         all_nodes.clone(),
         all_nodes,
+        storage.clone(),
+        network.clone(),
+        public_key.clone(),
     )));
     let coordinator = EpochMembershipCoordinator::new(membership, config.epoch_height, &storage.clone());
     let network_state: NetworkEventTaskState<TestTypes, TestVersions, MemoryNetwork<_>, _> =
@@ -235,9 +238,12 @@ async fn test_network_storage_fail() {
     let all_nodes = config.known_nodes_with_stake.clone();
     let upgrade_lock = UpgradeLock::<TestTypes, TestVersions>::new();
 
-    let membership = Arc::new(RwLock::new(<TestTypes as NodeType>::Membership::new(
+    let membership = Arc::new(RwLock::new(<TestTypes as NodeType>::Membership::new::<MemoryImpl>(
         all_nodes.clone(),
         all_nodes,
+        storage.clone(),
+        network.clone(),
+        public_key.clone(),
     )));
     let coordinator = EpochMembershipCoordinator::new(membership, config.epoch_height, &storage.clone());
     let network_state: NetworkEventTaskState<TestTypes, TestVersions, MemoryNetwork<_>, _> =
