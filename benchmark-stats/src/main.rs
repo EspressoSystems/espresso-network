@@ -400,18 +400,29 @@ fn plot_leader_stats(
     plot.add_trace(trace_vid_disperse_deltas);
     plot.add_trace(trace_qc_formed_deltas);
 
+    let trace_block_built_prev_prop =
+        Scatter::new(views.clone(), block_built_prev_prop_deltas.clone())
+            .mode(Mode::Markers)
+            .name("Block Built Δ from previous proposal (ms)")
+            .x_axis("x2")
+            .y_axis("y2")
+            .marker(Marker::new().symbol(MarkerSymbol::Circle));
+    plot.add_trace(trace_block_built_prev_prop);
+
     plot.set_layout(
         Layout::new()
             .title("Leader Stats")
             .grid(
                 LayoutGrid::new()
-                    .rows(1)
+                    .rows(2)
                     .columns(1)
                     .pattern(GridPattern::Independent),
             )
-            .height(1000)
+            .height(1500)
             .x_axis(Axis::new().title("View"))
             .y_axis(Axis::new().title("Δ from Block Built (ms)"))
+            .x_axis2(Axis::new().title("View"))
+            .y_axis2(Axis::new().title("Δ from previous proposal (ms)"))
             .margin(layout::Margin::new().left(130)),
     );
 
