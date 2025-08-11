@@ -132,7 +132,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
 {
     fn print_vote_events(&self, res: &[Arc<HotShotEvent<TYPES>>]) {
         let events: Vec<_> = res.iter().map(Arc::as_ref).collect();
-        tracing::warn!("Failed to vote, events: {:#?}", events);
+        tracing::warn!("Failed to vote, events: {:?}", events);
     }
 
     async fn handle_vote_deps(&self, res: &[Arc<HotShotEvent<TYPES>>]) -> Result<()> {
@@ -346,7 +346,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
         }
 
         // Update internal state
-        update_shared_state::<TYPES, I, V>(
+        update_shared_state::<TYPES, V>(
             OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus)),
             self.sender.clone(),
             self.receiver.clone(),
@@ -542,7 +542,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
 
     /// Create and store an [`AndDependency`] combining [`EventDependency`]s associated with the
     /// given view number if it doesn't exist.
-    #[instrument(skip_all, fields(id = self.id, latest_voted_view = *self.latest_voted_view), name = "Quorum vote crete dependency task if new", level = "error")]
+    #[instrument(skip_all, fields(id = self.id, latest_voted_view = *self.latest_voted_view), name = "Quorum vote create dependency task if new", level = "error")]
     fn create_dependency_task_if_new(
         &mut self,
         view_number: TYPES::View,

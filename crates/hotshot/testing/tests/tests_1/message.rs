@@ -61,7 +61,7 @@ fn version_number_at_start_of_serialization() {
 }
 
 #[cfg(test)]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_certificate2_validity() {
     use futures::StreamExt;
     use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
@@ -71,8 +71,6 @@ async fn test_certificate2_validity() {
         stake_table::StakeTableEntries,
         vote::Certificate,
     };
-
-    hotshot::helpers::initialize_logging();
 
     let node_id = 1;
 

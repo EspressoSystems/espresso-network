@@ -10,7 +10,6 @@ use alloy::primitives::{
 use anyhow::Result;
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use rand::{rngs::StdRng, SeedableRng as _};
-use sequencer_utils::test_utils::setup_test;
 use staking_cli::{demo::DelegationConfig, deploy, deploy::Signer, Config};
 
 use crate::deploy::TestSystem;
@@ -95,16 +94,14 @@ fn base_cmd() -> Command {
     Command::new(path)
 }
 
-#[test]
+#[test_log::test]
 fn test_cli_version() -> Result<()> {
-    setup_test();
     base_cmd().arg("version").output()?.assert_success();
     Ok(())
 }
 
-#[test]
+#[test_log::test]
 fn test_cli_create_and_remove_config_file_mnemonic() -> anyhow::Result<()> {
-    setup_test();
     let tmpdir = tempfile::tempdir()?;
     let config_path = tmpdir.path().join("config.toml");
 
@@ -165,9 +162,8 @@ fn test_cli_create_file_ledger() -> anyhow::Result<()> {
 }
 
 // TODO: ideally we would test that the decoding works for all the commands
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_contract_revert(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
     let mut cmd = base_cmd();
     system.args(&mut cmd, Signer::Mnemonic);
@@ -186,13 +182,12 @@ async fn test_cli_contract_revert(#[case] version: StakeTableContractVersion) ->
 }
 
 #[rstest::rstest]
-#[tokio::test]
+#[test_log::test(tokio::test)]
 async fn test_cli_register_validator(
     #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
     version: StakeTableContractVersion,
     #[values(Signer::Mnemonic, Signer::BrokeMnemonic)] signer: Signer,
 ) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
     let mut cmd = base_cmd();
     system.args(&mut cmd, signer);
@@ -251,9 +246,8 @@ async fn test_cli_update_consensus_keys(#[case] version: StakeTableContractVersi
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_delegate(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
     system.register_validator().await?;
 
@@ -269,9 +263,8 @@ async fn test_cli_delegate(#[case] version: StakeTableContractVersion) -> Result
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_deregister_validator(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
     system.register_validator().await?;
 
@@ -281,9 +274,8 @@ async fn test_cli_deregister_validator(#[case] version: StakeTableContractVersio
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_undelegate(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
     system.register_validator().await?;
     let amount = "123";
@@ -301,9 +293,8 @@ async fn test_cli_undelegate(#[case] version: StakeTableContractVersion) -> Resu
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_claim_withdrawal(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
     let amount = U256::from(123);
     system.register_validator().await?;
@@ -321,9 +312,8 @@ async fn test_cli_claim_withdrawal(#[case] version: StakeTableContractVersion) -
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_claim_validator_exit(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
     let amount = U256::from(123);
     system.register_validator().await?;
@@ -341,11 +331,10 @@ async fn test_cli_claim_validator_exit(#[case] version: StakeTableContractVersio
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_stake_for_demo_default_num_validators(
     #[case] version: StakeTableContractVersion,
 ) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
 
     let mut cmd = base_cmd();
@@ -354,11 +343,10 @@ async fn test_cli_stake_for_demo_default_num_validators(
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_stake_for_demo_three_validators(
     #[case] version: StakeTableContractVersion,
 ) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
 
     let mut cmd = base_cmd();
@@ -372,7 +360,7 @@ async fn test_cli_stake_for_demo_three_validators(
 }
 
 #[rstest::rstest]
-#[tokio::test]
+#[test_log::test(tokio::test)]
 async fn stake_for_demo_delegation_config_helper(
     #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
     version: StakeTableContractVersion,
@@ -383,7 +371,6 @@ async fn stake_for_demo_delegation_config_helper(
     )]
     config: DelegationConfig,
 ) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
 
     let mut cmd = base_cmd();
@@ -396,9 +383,8 @@ async fn stake_for_demo_delegation_config_helper(
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_approve(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
     let amount = "123";
 
@@ -415,9 +401,8 @@ async fn test_cli_approve(#[case] version: StakeTableContractVersion) -> Result<
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_balance(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
 
     // Check balance of account owner
@@ -450,9 +435,8 @@ async fn test_cli_balance(#[case] version: StakeTableContractVersion) -> Result<
 }
 
 // This test can be remove when the deprecated argument is removed
-#[tokio::test]
+#[test_log::test(tokio::test)]
 async fn test_deprecated_token_address_cli_arg() -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy().await?;
 
     let mut cmd = base_cmd();
@@ -463,9 +447,8 @@ async fn test_deprecated_token_address_cli_arg() -> Result<()> {
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_allowance(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
 
     // Check allowance of account owner
@@ -494,9 +477,8 @@ async fn test_cli_allowance(#[case] version: StakeTableContractVersion) -> Resul
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_transfer(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
     let addr = "0x1111111111111111111111111111111111111111".parse::<Address>()?;
     let amount = parse_ether("0.123")?;
@@ -515,9 +497,8 @@ async fn test_cli_transfer(#[case] version: StakeTableContractVersion) -> Result
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_stake_table_full(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
     system.register_validator().await?;
 
@@ -538,9 +519,8 @@ async fn test_cli_stake_table_full(#[case] version: StakeTableContractVersion) -
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_stake_table_compact(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
     system.register_validator().await?;
 
@@ -593,9 +573,8 @@ async fn address_from_cli(system: &TestSystem) -> Result<Address> {
 /// This test requires a ledger device to be connected and unlocked.
 /// cargo test -p staking-cli -- --ignored --nocapture transfer_ledger
 #[ignore]
-#[tokio::test]
+#[test_log::test(tokio::test)]
 async fn test_cli_transfer_ledger() -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy().await?;
     let address = address_from_cli(&system).await?;
 
@@ -635,9 +614,8 @@ async fn test_cli_transfer_ledger() -> Result<()> {
 /// This test requires a ledger device to be connected and unlocked.
 /// cargo test -p staking-cli -- --ignored --nocapture delegate_ledger
 #[ignore]
-#[tokio::test]
+#[test_log::test(tokio::test)]
 async fn test_cli_delegate_ledger() -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy().await?;
     system.register_validator().await?;
     let address = address_from_cli(&system).await?;
