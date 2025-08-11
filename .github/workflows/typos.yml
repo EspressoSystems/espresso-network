@@ -24,4 +24,4 @@ jobs:
         name: Checkout Repository
 
       - name: typos-action
-        uses: crate-ci/typos@v1.32.0
+        uses: crate-ci/typos@v1.35.3
