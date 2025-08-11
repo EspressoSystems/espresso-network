@@ -1,5 +1,6 @@
 use std::fmt;
 
+use alloy::primitives::Keccak256;
 use anyhow::{ensure, Context};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
@@ -16,7 +17,7 @@ use hotshot_types::{
     },
     utils::BuilderCommitment,
 };
-use jf_merkle_tree::{AppendableMerkleTreeScheme, MerkleTreeScheme};
+use jf_merkle_tree::{AppendableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme};
 use serde::{
     de::{self, MapAccess, SeqAccess, Visitor},
     Deserialize, Deserializer, Serialize, Serializer,
@@ -1098,6 +1099,39 @@ impl BlockHeader<SeqTypes> for Header {
                 &block_comm_root_bytes,
             )?,
         })
+    }
+
+    fn auth_root(&self) -> anyhow::Result<Option<[u8; 32]>> {
+        match self {
+            Header::V1(_) | Header::V2(_) | Header::V3(_) => Ok(None),
+            Header::V4(header) => {
+                // Temporary placeholder values for future fields
+                let placeholder_1 = [0; 32];
+                let placeholder_2 = [0; 32];
+                let placeholder_3 = [0; 32];
+                let placeholder_4 = [0; 32];
+                let placeholder_5 = [0; 32];
+                let placeholder_6 = [0; 32];
+                let placeholder_7 = [0; 32];
+
+                let mut hasher = Keccak256::new();
+
+                // Start with the reward Merkle tree root digest as the base input
+                let digest = header.reward_merkle_tree_root.digest();
+                hasher.update(digest.0);
+                hasher.update(placeholder_1);
+                hasher.update(placeholder_2);
+                hasher.update(placeholder_3);
+                hasher.update(placeholder_4);
+                hasher.update(placeholder_5);
+                hasher.update(placeholder_6);
+                hasher.update(placeholder_7);
+
+                let result = hasher.finalize();
+
+                Ok(Some(result.0))
+            },
+        }
     }
 }
 

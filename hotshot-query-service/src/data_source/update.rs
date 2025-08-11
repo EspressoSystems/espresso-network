@@ -34,7 +34,7 @@ use jf_vid::VidScheme;
 use crate::{
     availability::{
         BlockInfo, BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload,
-        StateCertQueryData, UpdateAvailabilityData, VidCommonQueryData,
+        StateCertQueryDataV2, UpdateAvailabilityData, VidCommonQueryData,
     },
     Header, Payload, VidCommon,
 };
@@ -165,7 +165,7 @@ where
                         block_data,
                         vid_common,
                         vid_share,
-                        state_cert.clone().map(StateCertQueryData),
+                        state_cert.clone().map(StateCertQueryDataV2),
                     ))
                     .await
                 {
