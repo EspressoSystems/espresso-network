@@ -139,6 +139,7 @@ portpicker = "0.1"
 rand = "0.8"
 reqwest = "0.12.3"
 tempfile = "3.10"
+test-log = { workspace = true }
 
 [lints]
 workspace = true

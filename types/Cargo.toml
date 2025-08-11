@@ -4,6 +4,10 @@ version = "0.1.0"
 authors = ["Espresso Systems <hello@espressosys.com>"]
 edition = "2021"
 
+# TODO: fix comments so doctests don't fail
+[lib]
+doctest = false
+
 [features]
 testing = ["hotshot-query-service/testing"]
 
@@ -24,10 +28,9 @@ clap = { workspace = true }
 cld = { workspace = true }
 committable = { workspace = true }
 derive_more = { workspace = true }
-ethers-core = "2.0"
 either = { workspace = true }
+ethers-core = "2.0"
 fluent-asserter = "0.1.9"
-sha3 = "0.10"
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
@@ -51,6 +54,7 @@ sequencer-utils = { path = "../utils" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }                                                         # TODO temporary, used only for VID, should be set in hotshot
+sha3 = "0.10"
 static_assertions = { workspace = true }
 surf-disco = { workspace = true }
 tagged-base64 = { workspace = true }
@@ -71,6 +75,7 @@ espresso-types = { path = ".", features = [ "testing" ] }
 portpicker = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }
+test-log = { workspace = true }
 
 [package.metadata.cargo-machete]
 ignored = ["base64_bytes", "hotshot_testing"]

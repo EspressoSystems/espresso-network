@@ -15,14 +15,14 @@ use hotshot_contract_adapter::{
     field_to_u256,
     sol_types::{LightClientStateSol, LightClientV2, PlonkProofSol, StakeTableStateSol},
 };
-use hotshot_query_service::availability::StateCertQueryData;
+use hotshot_query_service::availability::StateCertQueryDataV2;
 use hotshot_types::{
     data::EpochNumber,
     light_client::{
-        CircuitField, LightClientState, StakeTableState, StateSignature, StateSignaturesBundle,
+        CircuitField, LCV2StateSignaturesBundle, LightClientState, StakeTableState, StateSignature,
         StateVerKey,
     },
-    simple_certificate::LightClientStateUpdateCertificate,
+    simple_certificate::LightClientStateUpdateCertificateV2,
     traits::{
         node_implementation::{ConsensusTime, NodeType},
         signature_key::LCV2StateSignatureKey,
@@ -85,10 +85,10 @@ pub fn load_proving_key(stake_table_capacity: usize) -> ProvingKey {
 /// Get the latest LightClientState and signature bundle from Sequencer network
 pub async fn fetch_latest_state<ApiVer: StaticVersionType>(
     client: &Client<ServerError, ApiVer>,
-) -> Result<StateSignaturesBundle, ProverError> {
+) -> Result<LCV2StateSignaturesBundle, ProverError> {
     tracing::info!("Fetching the latest state signatures bundle from relay server.");
     client
-        .get::<StateSignaturesBundle>("/api/state")
+        .get::<LCV2StateSignaturesBundle>("/api/state")
         .send()
         .await
         .map_err(ProverError::RelayServerError)
@@ -168,18 +168,19 @@ pub async fn submit_state_and_proof(
 async fn fetch_epoch_state_from_sequencer(
     sequencer_url: &Url,
     epoch: u64,
-) -> Result<LightClientStateUpdateCertificate<SeqTypes>, ProverError> {
+) -> Result<LightClientStateUpdateCertificateV2<SeqTypes>, ProverError> {
     let state_cert =
         surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
             sequencer_url.clone(),
         )
-        .get::<StateCertQueryData<SeqTypes>>(&format!("availability/state-cert/{epoch}"))
+        .get::<StateCertQueryDataV2<SeqTypes>>(&format!("availability/state-cert-v2/{epoch}"))
+        .header("Accept", "application/json")
         .send()
         .await
         .map_err(|err| {
             ProverError::SequencerCommunicationError(
                 sequencer_url
-                    .join(&format!("availability/state-cert/{epoch}"))
+                    .join(&format!("availability/state-cert-v2/{epoch}"))
                     .unwrap(),
                 err,
             )
@@ -595,7 +596,6 @@ mod test {
     };
     use hotshot_contract_adapter::sol_types::LightClientV2Mock;
     use jf_utils::test_rng;
-    use sequencer_utils::test_utils::setup_test;
 
     use super::*;
     use crate::v2::mock_ledger::{
@@ -644,10 +644,8 @@ mod test {
         Ok(lc_proxy_addr)
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_read_contract_state() -> Result<()> {
-        setup_test();
-
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let rng = &mut test_rng();
@@ -694,10 +692,8 @@ mod test {
     }
 
     // This test is temporarily ignored. We are unifying the contract deployment in #1071.
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_submit_state_and_proof() -> Result<()> {
-        setup_test();
-
         let pp = MockSystemParam::init();
         let mut ledger = MockLedger::init(pp, NUM_INIT_VALIDATORS);
         let genesis_state: LightClientStateSol = ledger.light_client_state().into();

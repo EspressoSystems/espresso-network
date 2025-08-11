@@ -1315,7 +1315,7 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for RewardMerkleTreeV1 {
 
 #[cfg(test)]
 mod test {
-    use hotshot::{helpers::initialize_logging, traits::BlockPayload};
+    use hotshot::traits::BlockPayload;
     use hotshot_query_service::{testing::mocks::MockVersions, Resolvable};
     use hotshot_types::traits::signature_key::BuilderSignatureKey;
     use sequencer_utils::ser::FromStringOrInteger;
@@ -1450,10 +1450,8 @@ mod test {
         }
     }
 
-    #[test]
+    #[test_log::test]
     fn test_fee_proofs() {
-        initialize_logging();
-
         let mut tree = ValidatedState::default().fee_merkle_tree;
         let account1 = Address::random();
         let account2 = Address::default();
@@ -1488,10 +1486,8 @@ mod test {
         FeeAccountProof::prove(&tree, account2).unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_l1_head() {
-        initialize_logging();
-
         // Setup.
         let tx = Transaction::of_size(10);
         let (header, block_size) = tx.into_mock_header().await;
@@ -1510,10 +1506,8 @@ mod test {
         assert_eq!(ProposalValidationError::DecrementingL1Head, err);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_builder_fee() {
-        initialize_logging();
-
         // Setup.
         let instance = NodeState::mock();
         let tx = Transaction::of_size(20);
@@ -1541,10 +1535,8 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_chain_config() {
-        initialize_logging();
-
         // Setup.
         let instance = NodeState::mock();
         let tx = Transaction::of_size(20);
@@ -1577,9 +1569,8 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_max_block_size() {
-        initialize_logging();
         const MAX_BLOCK_SIZE: usize = 10;
 
         // Setup.
@@ -1614,9 +1605,8 @@ mod test {
             .unwrap()
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_base_fee() {
-        initialize_logging();
         // Setup
         let tx = Transaction::of_size(20);
         let (header, block_size) = tx.into_mock_header().await;
@@ -1643,9 +1633,8 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_height() {
-        initialize_logging();
         // Setup
         let instance = NodeState::mock_v2();
         let tx = Transaction::of_size(10);
@@ -1676,9 +1665,8 @@ mod test {
             .unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_timestamp_non_dec() {
-        initialize_logging();
         let tx = Transaction::of_size(10);
         let (parent, block_size) = tx.into_mock_header().await;
 
@@ -1702,9 +1690,8 @@ mod test {
         proposal.validate_timestamp_non_dec(0).unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_timestamp_drift() {
-        initialize_logging();
         // Setup
         let instance = NodeState::mock_v2();
         let (parent, block_size) = Transaction::of_size(10).into_mock_header().await;
@@ -1764,9 +1751,8 @@ mod test {
         proposal.validate_timestamp_drift(timestamp).unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_fee_root() {
-        initialize_logging();
         // Setup
         let instance = NodeState::mock_v2();
         let (header, block_size) = Transaction::of_size(10).into_mock_header().await;
@@ -1799,9 +1785,8 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_block_root() {
-        initialize_logging();
         // Setup.
         let instance = NodeState::mock_v2();
         let (header, block_size) = Transaction::of_size(10).into_mock_header().await;
@@ -1834,11 +1819,9 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_ns_table() {
         use NsTableValidationError::InvalidFinalOffset;
-
-        initialize_logging();
         // Setup.
         let tx = Transaction::of_size(10);
         let (header, block_size) = tx.into_mock_header().await;
@@ -1863,9 +1846,8 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_log::test]
     fn test_charge_fee() {
-        initialize_logging();
         let src = FeeAccount::generated_from_seed_indexed([0; 32], 0).0;
         let dst = FeeAccount::generated_from_seed_indexed([0; 32], 1).0;
         let amt = FeeAmount::from(1);
@@ -1966,9 +1948,8 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validate_builder_fee() {
-        initialize_logging();
         let max_block_size = 10;
 
         let validated_state = ValidatedState::default();

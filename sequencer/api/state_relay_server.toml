@@ -10,10 +10,19 @@ DOC = """
 Post a light client state and its signature for a given block height.
 """
 
+[route.lateststate]
+PATH = ["lateststate"]
+METHOD = "GET"
+DOC = """
+Fetch the latest light client state who has enough corresponding Schnorr signatures collected,
+as well as a list of those signatures.
+"""
+
 [route.getlateststate]
 PATH = ["state"]
 METHOD = "GET"
 DOC = """
+DEPRECATED!
 Fetch the latest light client state who has enough corresponding Schnorr signatures collected,
 as well as a list of those signatures.
 """
@@ -23,6 +32,7 @@ as well as a list of those signatures.
 PATH = ["legacy-state"]
 METHOD = "POST"
 DOC = """
+DEPRECATED!
 Post a state and its signature for the legacy light client.
 """
 
@@ -30,5 +40,6 @@ Post a state and its signature for the legacy light client.
 PATH = ["legacy-state"]
 METHOD = "GET"
 DOC = """
+DEPRECATED!
 Fetch the latest state for the legacy light client.
 """

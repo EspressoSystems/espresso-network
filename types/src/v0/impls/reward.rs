@@ -2,22 +2,23 @@ use std::{borrow::Borrow, collections::HashSet, iter::once, str::FromStr};
 
 use alloy::primitives::{
     utils::{parse_units, ParseUnits},
-    Address, U256,
+    Address, B256, U256,
 };
 use anyhow::{bail, ensure, Context};
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
 use hotshot::types::BLSPubKey;
+use hotshot_contract_adapter::sol_types::AccruedRewardsProofSol;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     traits::{election::Membership, node_implementation::ConsensusTime},
     utils::epoch_from_block_number,
 };
 use jf_merkle_tree::{
-    ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
-    MerkleCommitment, MerkleTreeScheme, PersistentUniversalMerkleTreeScheme, ToTraversalPath,
-    UniversalMerkleTreeScheme,
+    prelude::MerkleNode, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
+    LookupResult, MerkleCommitment, MerkleTreeScheme, PersistentUniversalMerkleTreeScheme,
+    ToTraversalPath, UniversalMerkleTreeScheme,
 };
 use num_traits::CheckedSub;
 use sequencer_utils::{
@@ -39,7 +40,7 @@ use crate::{
         RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1, RewardMerkleProofV1,
         RewardMerkleTreeV1,
     },
-    v0_4::Delta,
+    v0_4::{Delta, REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT},
     DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount,
 };
 
@@ -412,6 +413,76 @@ impl RewardAccountProofV2 {
     }
 }
 
+impl TryInto<AccruedRewardsProofSol> for RewardAccountProofV2 {
+    type Error = anyhow::Error;
+
+    /// Generate a Solidity-compatible proof for this account
+    ///
+    /// The proof is returned without leaf value. The caller is expected to
+    /// obtain the leaf value from the jellyfish proof (Self).
+    ///
+    /// TODO: review error handling / panics
+    fn try_into(self) -> anyhow::Result<AccruedRewardsProofSol> {
+        // NOTE: rustfmt fails to format this file if the nesting is too deep.
+        let proof = if let RewardMerkleProofV2::Presence(proof) = &self.proof {
+            proof
+        } else {
+            bail!("only presence proofs supported")
+        };
+
+        let path = ToTraversalPath::<REWARD_MERKLE_TREE_V2_ARITY>::to_traversal_path(
+            &RewardAccountV2(self.account),
+            REWARD_MERKLE_TREE_V2_HEIGHT,
+        );
+
+        if path.len() != REWARD_MERKLE_TREE_V2_HEIGHT {
+            bail!("Invalid proof: unexpected path length: {}", path.len());
+        };
+
+        let siblings: Vec<B256> = proof
+            .proof
+            .iter()
+            .enumerate()
+            .skip(1) // Skip the leaf node (first element)
+            .filter_map(|(level_idx, node)| match node {
+                MerkleNode::Branch { children, .. } => {
+                    // Use the path to determine which sibling we need
+                    let path_direction = path
+                        .get(level_idx - 1)
+                        .copied()
+                        .expect("exists");
+                    let sibling_idx = if path_direction == 0 { 1 } else { 0 };
+                    if sibling_idx >= children.len() {
+                        panic!(
+                            "Invalid proof: index={sibling_idx} length={}",
+                            children.len()
+                        );
+                    };
+
+                    match children[sibling_idx].as_ref() {
+                        MerkleNode::Empty => Some(B256::ZERO),
+                        MerkleNode::Leaf { value, .. } => {
+                            let bytes = value.as_ref();
+                            Some(B256::from_slice(bytes))
+                        }
+                        MerkleNode::Branch { value, .. } => {
+                            let bytes = value.as_ref();
+                            Some(B256::from_slice(bytes))
+                        }
+                        MerkleNode::ForgettenSubtree { value } => {
+                            let bytes = value.as_ref();
+                            Some(B256::from_slice(bytes))
+                        }
+                    }
+                }
+                _ => None,
+            })
+            .collect();
+
+        Ok(AccruedRewardsProofSol { siblings })
+    }
+}
+
 impl RewardAccountProofV1 {
     pub fn presence(
         pos: FeeAccount,
@@ -711,7 +782,9 @@ impl RewardDistributor {
 /// Distributes the block reward for a given block height
 ///
 /// Rewards are only distributed if the block belongs to an epoch beyond the second epoch.
-/// The function also calculates the appropriate reward (fixed or dynamic) based on the protocol version.
+///
+/// The function also calculates the appropriate reward (fixed or dynamic) based
+/// on the protocol version.
 pub async fn distribute_block_reward(
     instance_state: &NodeState,
     validated_state: &mut ValidatedState,
@@ -741,7 +814,8 @@ pub async fn distribute_block_reward(
         return Ok(None);
     }
 
-    // Determine who the block leader is for this view and ensure missing block rewards are fetched from peers if needed.
+    // Determine who the block leader is for this view and ensure missing block
+    // rewards are fetched from peers if needed.
 
     let leader = get_leader_and_fetch_missing_rewards(
         instance_state,
@@ -952,15 +1026,15 @@ pub mod tests {
                 .iter()
                 .fold(U256::ZERO, |acc, (_, r)| acc + r.0)
         };
-        assert_eq!(total(rewards.clone()), distributor.block_reward.into());
+        assert_eq!(total(rewards.clone()), distributor.block_reward.0);
 
         distributor.validator.commission = 0;
         let rewards = distributor.compute_rewards().unwrap();
-        assert_eq!(total(rewards.clone()), distributor.block_reward.into());
+        assert_eq!(total(rewards.clone()), distributor.block_reward.0);
 
         distributor.validator.commission = 10000;
         let rewards = distributor.compute_rewards().unwrap();
-        assert_eq!(total(rewards.clone()), distributor.block_reward.into());
+        assert_eq!(total(rewards.clone()), distributor.block_reward.0);
         let leader_commission = rewards.leader_commission();
         assert_eq!(*leader_commission, distributor.block_reward);
 

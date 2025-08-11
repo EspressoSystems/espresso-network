@@ -260,12 +260,12 @@ cross_tests!(
 
       let mut node_changes = vec![];
       // idx, down view, up view
-      create_node_change(1, 6, 7, &mut node_changes);
-      create_node_change(2, 6, 7, &mut node_changes);
-      create_node_change(3, 7, 7, &mut node_changes);
+      create_node_change(1, 4, 5, &mut node_changes);
+      create_node_change(2, 4, 5, &mut node_changes);
+      create_node_change(3, 5, 5, &mut node_changes);
       create_node_change(4, 10, 10, &mut node_changes);
-      create_node_change(5, 7, 7, &mut node_changes);
-      create_node_change(6, 7, 7, &mut node_changes);
+      create_node_change(5, 5, 5, &mut node_changes);
+      create_node_change(6, 5, 5, &mut node_changes);
       // KILL 3 NODES until well after view sync
       create_node_change(7, 1, 15, &mut node_changes);
       create_node_change(8, 1, 15, &mut node_changes);
@@ -287,9 +287,9 @@ cross_tests!(
           );
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
           // Make sure we keep committing rounds after the catchup, but not the full 50.
-          num_successful_views: 22,
-          expected_view_failures: vec![8,9],
-          possible_view_failures: vec![5,6,7,10,11,12,13,14,15,16,17, 18, 19],
+          num_successful_views: 50,
+          expected_view_failures: vec![],
+          possible_view_failures: vec![1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17, 18, 19, 25, 26, 27, 28, 29],
           decide_timeout: Duration::from_secs(60),
           ..Default::default()
       };

@@ -32,7 +32,7 @@ use hotshot_query_service::{
 use hotshot_types::{
     data::{EpochNumber, VidCommitment, VidShare, ViewNumber},
     event::{Event, LegacyEvent},
-    light_client::StateSignatureRequestBody,
+    light_client::LCV2StateSignatureRequestBody,
     network::NetworkConfig,
     traits::{
         network::ConnectedNetwork,
@@ -75,28 +75,6 @@ pub use options::Options;
 pub type BlocksFrontier = <BlockMerkleTree as MerkleTreeScheme>::MembershipProof;
 
 type BoxLazy<T> = Pin<Arc<Lazy<T, BoxFuture<'static, T>>>>;
-
-#[derive(Derivative)]
-#[derivative(Debug(bound = ""))]
-struct ConsensusState {
-    state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
-    event_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
-    node_state: NodeState,
-    network_config: NetworkConfig<SeqTypes>,
-}
-
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions>
-    From<&SequencerContext<N, P, V>> for ConsensusState
-{
-    fn from(ctx: &SequencerContext<N, P, V>) -> Self {
-        Self {
-            state_signer: ctx.state_signer(),
-            event_streamer: ctx.event_streamer(),
-            node_state: ctx.node_state(),
-            network_config: ctx.network_config(),
-        }
-    }
-}
 
 #[derive(Derivative)]
 #[derivative(Clone(bound = ""), Debug(bound = ""))]
@@ -892,7 +870,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> HotShotC
 impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     StateSignatureDataSource<N> for StorageState<N, P, D, V>
 {
-    async fn get_state_signature(&self, height: u64) -> Option<StateSignatureRequestBody> {
+    async fn get_state_signature(&self, height: u64) -> Option<LCV2StateSignatureRequestBody> {
         self.as_ref().get_state_signature(height).await
     }
 }
@@ -901,7 +879,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSignatureDataSource<N>
     for ApiState<N, P, V>
 {
-    async fn get_state_signature(&self, height: u64) -> Option<StateSignatureRequestBody> {
+    async fn get_state_signature(&self, height: u64) -> Option<LCV2StateSignatureRequestBody> {
         self.state_signer()
             .await
             .read()
@@ -942,7 +920,6 @@ pub mod test_helpers {
     use itertools::izip;
     use jf_merkle_tree::{MerkleCommitment, MerkleTreeScheme};
     use portpicker::pick_unused_port;
-    use sequencer_utils::test_utils::setup_test;
     use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
     use surf_disco::Client;
     use tempfile::TempDir;
@@ -1324,8 +1301,6 @@ pub mod test_helpers {
     /// to test a different initialization path) but should not remove or modify the existing
     /// functionality (e.g. removing the status module or changing the port).
     pub async fn status_test_helper(opt: impl FnOnce(Options) -> Options) {
-        setup_test();
-
         let port = pick_unused_port().expect("No ports free");
         let url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
@@ -1371,8 +1346,6 @@ pub mod test_helpers {
     /// to test a different initialization path) but should not remove or modify the existing
     /// functionality (e.g. removing the submit module or changing the port).
     pub async fn submit_test_helper(opt: impl FnOnce(Options) -> Options) {
-        setup_test();
-
         let txn = Transaction::new(NamespaceId::from(1_u32), vec![1, 2, 3, 4]);
 
         let port = pick_unused_port().expect("No ports free");
@@ -1406,8 +1379,6 @@ pub mod test_helpers {
 
     /// Test the state signature API.
     pub async fn state_signature_test_helper(opt: impl FnOnce(Options) -> Options) {
-        setup_test();
-
         let port = pick_unused_port().expect("No ports free");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
@@ -1434,7 +1405,7 @@ pub mod test_helpers {
         }
         // we cannot verify the signature now, because we don't know the stake table
         client
-            .get::<StateSignatureRequestBody>(&format!("state-signature/block/{height}"))
+            .get::<LCV2StateSignatureRequestBody>(&format!("state-signature/block/{height}"))
             .send()
             .await
             .unwrap();
@@ -1448,8 +1419,6 @@ pub mod test_helpers {
     /// to test a different initialization path) but should not remove or modify the existing
     /// functionality (e.g. removing the catchup module or changing the port).
     pub async fn catchup_test_helper(opt: impl FnOnce(Options) -> Options) {
-        setup_test();
-
         let port = pick_unused_port().expect("No ports free");
         let url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
@@ -1599,9 +1568,8 @@ pub mod test_helpers {
 }
 
 #[cfg(test)]
-#[espresso_macros::generic_tests]
 mod api_tests {
-    use std::fmt::Debug;
+    use std::{fmt::Debug, marker::PhantomData};
 
     use committable::Committable;
     use data_source::testing::TestableSequencerDataSource;
@@ -1610,9 +1578,9 @@ mod api_tests {
         Header, Leaf2, MockSequencerVersions, NamespaceId, NamespaceProofQueryData, ValidatedState,
     };
     use futures::{future, stream::StreamExt};
-    use hotshot_example_types::node_types::{EpochsTestVersions, TestVersions};
+    use hotshot_example_types::node_types::TestVersions;
     use hotshot_query_service::availability::{
-        AvailabilityDataSource, BlockQueryData, StateCertQueryData, VidCommonQueryData,
+        AvailabilityDataSource, BlockQueryData, VidCommonQueryData,
     };
     use hotshot_types::{
         data::{
@@ -1627,7 +1595,6 @@ mod api_tests {
         vid::avidm::{init_avidm_param, AvidMScheme},
     };
     use portpicker::pick_unused_port;
-    use sequencer_utils::test_utils::setup_test;
     use surf_disco::Client;
     use test_helpers::{
         catchup_test_helper, state_signature_test_helper, status_test_helper, submit_test_helper,
@@ -1643,28 +1610,42 @@ mod api_tests {
         testing::{wait_for_decide_on_handle, TestConfigBuilder},
     };
 
-    #[tokio::test(flavor = "multi_thread")]
-    pub(crate) async fn submit_test_with_query_module<D: TestableSequencerDataSource>() {
+    #[rstest_reuse::template]
+    #[rstest::rstest]
+    #[case(PhantomData::<crate::api::sql::DataSource>)]
+    #[case(PhantomData::<crate::api::fs::DataSource>)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub fn testable_sequencer_data_source<D: TestableSequencerDataSource>(
+        #[case] _d: PhantomData<D>,
+    ) {
+    }
+
+    #[rstest_reuse::apply(testable_sequencer_data_source)]
+    pub(crate) async fn submit_test_with_query_module<D: TestableSequencerDataSource>(
+        _d: PhantomData<D>,
+    ) {
         let storage = D::create_storage().await;
         submit_test_helper(|opt| D::options(&storage, opt)).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    pub(crate) async fn status_test_with_query_module<D: TestableSequencerDataSource>() {
+    #[rstest_reuse::apply(testable_sequencer_data_source)]
+    pub(crate) async fn status_test_with_query_module<D: TestableSequencerDataSource>(
+        _d: PhantomData<D>,
+    ) {
         let storage = D::create_storage().await;
         status_test_helper(|opt| D::options(&storage, opt)).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    pub(crate) async fn state_signature_test_with_query_module<D: TestableSequencerDataSource>() {
+    #[rstest_reuse::apply(testable_sequencer_data_source)]
+    pub(crate) async fn state_signature_test_with_query_module<D: TestableSequencerDataSource>(
+        _d: PhantomData<D>,
+    ) {
         let storage = D::create_storage().await;
         state_signature_test_helper(|opt| D::options(&storage, opt)).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    pub(crate) async fn test_namespace_query<D: TestableSequencerDataSource>() {
-        setup_test();
-
+    #[rstest_reuse::apply(testable_sequencer_data_source)]
+    pub(crate) async fn test_namespace_query<D: TestableSequencerDataSource>(_d: PhantomData<D>) {
         // Arbitrary transaction, arbitrary namespace ID
         let ns_id = NamespaceId::from(42_u32);
         let txn = Transaction::new(ns_id, vec![1, 2, 3, 4]);
@@ -1756,14 +1737,16 @@ mod api_tests {
         assert!(found_empty_block);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    pub(crate) async fn catchup_test_with_query_module<D: TestableSequencerDataSource>() {
+    #[rstest_reuse::apply(testable_sequencer_data_source)]
+    pub(crate) async fn catchup_test_with_query_module<D: TestableSequencerDataSource>(
+        _d: PhantomData<D>,
+    ) {
         let storage = D::create_storage().await;
         catchup_test_helper(|opt| D::options(&storage, opt)).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    pub async fn test_non_consecutive_decide_with_failing_event_consumer<D>()
+    #[rstest_reuse::apply(testable_sequencer_data_source)]
+    pub async fn test_non_consecutive_decide_with_failing_event_consumer<D>(_d: PhantomData<D>)
     where
         D: TestableSequencerDataSource + Debug + 'static,
     {
@@ -1777,7 +1760,6 @@ mod api_tests {
             }
         }
 
-        setup_test();
         let (pubkey, privkey) = PubKey::generated_from_seed_indexed([0; 32], 1);
 
         let storage = D::create_storage().await;
@@ -1980,13 +1962,11 @@ mod api_tests {
             .unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    pub async fn test_decide_missing_data<D>()
+    #[rstest_reuse::apply(testable_sequencer_data_source)]
+    pub async fn test_decide_missing_data<D>(_d: PhantomData<D>)
     where
         D: TestableSequencerDataSource + Debug + 'static,
     {
-        setup_test();
-
         let storage = D::create_storage().await;
         let persistence = D::persistence_options(&storage).create().await.unwrap();
         let data_source: Arc<StorageState<network::Memory, NoStorage, _, MockSequencerVersions>> =
@@ -2066,70 +2046,6 @@ mod api_tests {
             state_cert: None,
         }
     }
-
-    #[ignore]
-    #[tokio::test(flavor = "multi_thread")]
-    pub(crate) async fn test_state_cert_query<D: TestableSequencerDataSource>() {
-        setup_test();
-
-        const TEST_EPOCH_HEIGHT: u64 = 10;
-        const TEST_EPOCHS: u64 = 3;
-
-        // Start query service.
-        let port = pick_unused_port().expect("No ports free");
-        let storage = D::create_storage().await;
-        let network_config = TestConfigBuilder::default()
-            .epoch_height(TEST_EPOCH_HEIGHT)
-            .build();
-        let config = TestNetworkConfigBuilder::default()
-            .api_config(D::options(&storage, Options::with_port(port)).submit(Default::default()))
-            .network_config(network_config)
-            .build();
-        let network = TestNetwork::new(config, EpochsTestVersions {}).await;
-        let mut events = network.server.event_stream().await;
-
-        // Wait until 3 epochs have passed.
-        loop {
-            let event = events.next().await.unwrap();
-            tracing::info!("Received event from handle: {event:?}");
-
-            if let hotshot::types::EventType::Decide { leaf_chain, .. } = event.event {
-                println!(
-                    "Decide event received: {:?}",
-                    leaf_chain.first().unwrap().leaf.height()
-                );
-                if leaf_chain
-                    .first()
-                    .is_some_and(|leaf| leaf.leaf.height() >= TEST_EPOCHS * TEST_EPOCH_HEIGHT)
-                {
-                    break;
-                } else {
-                    // Keep waiting
-                }
-            }
-        }
-
-        // Connect client.
-        let client: Client<ServerError, StaticVersion<0, 1>> =
-            Client::new(format!("http://localhost:{port}").parse().unwrap());
-        client.connect(None).await;
-
-        // Get the state cert for the 3rd epoch.
-        for i in 0..TEST_EPOCHS {
-            let state_cert = client
-                .get::<StateCertQueryData<SeqTypes>>(&format!("availability/state-cert/{i}"))
-                .send()
-                .await
-                .unwrap()
-                .0;
-            tracing::info!("state_cert: {state_cert:?}");
-            assert_eq!(state_cert.epoch.u64(), i);
-            assert_eq!(
-                state_cert.light_client_state.block_height,
-                (i + 1) * TEST_EPOCH_HEIGHT - 5
-            );
-        }
-    }
 }
 
 #[cfg(test)]
@@ -2168,8 +2084,8 @@ mod test {
     use hotshot_example_types::node_types::EpochsTestVersions;
     use hotshot_query_service::{
         availability::{
-            BlockQueryData, BlockSummaryQueryData, LeafQueryData, TransactionQueryData,
-            VidCommonQueryData,
+            BlockQueryData, BlockSummaryQueryData, LeafQueryData, StateCertQueryDataV1,
+            StateCertQueryDataV2, TransactionQueryData, VidCommonQueryData,
         },
         data_source::{sql::Config, storage::SqlStorage, VersionedDataSource},
         explorer::TransactionSummariesResponse,
@@ -2178,7 +2094,10 @@ mod test {
     use hotshot_types::{
         data::EpochNumber,
         event::LeafInfo,
-        traits::{election::Membership, metrics::NoMetrics, node_implementation::ConsensusTime},
+        traits::{
+            block_contents::BlockHeader, election::Membership, metrics::NoMetrics,
+            node_implementation::ConsensusTime,
+        },
         utils::epoch_from_block_number,
         ValidatorConfig,
     };
@@ -2186,7 +2105,6 @@ mod test {
     use portpicker::pick_unused_port;
     use rand::seq::SliceRandom;
     use rstest::rstest;
-    use sequencer_utils::test_utils::setup_test;
     use staking_cli::demo::DelegationConfig;
     use surf_disco::Client;
     use test_helpers::{
@@ -2216,10 +2134,8 @@ mod test {
     type PosVersionV3 = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
     type PosVersionV4 = SequencerVersions<StaticVersion<0, 4>, StaticVersion<0, 0>>;
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_healthcheck() {
-        setup_test();
-
         let port = pick_unused_port().expect("No ports free");
         let url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
@@ -2236,30 +2152,28 @@ mod test {
         assert_eq!(health.status, HealthStatus::Available);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn status_test_without_query_module() {
         status_test_helper(|opt| opt).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn submit_test_without_query_module() {
         submit_test_helper(|opt| opt).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn state_signature_test_without_query_module() {
         state_signature_test_helper(|opt| opt).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn catchup_test_without_query_module() {
         catchup_test_helper(|opt| opt).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn slow_test_merklized_state_api() {
-        setup_test();
-
         let port = pick_unused_port().expect("No ports free");
 
         let storage = SqlDataSource::create_storage().await;
@@ -2334,10 +2248,8 @@ mod test {
         assert_eq!(expected, amount.0);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_leaf_only_data_source() {
-        setup_test();
-
         let port = pick_unused_port().expect("No ports free");
 
         let storage = SqlDataSource::create_storage().await;
@@ -2424,8 +2336,6 @@ mod test {
     }
 
     async fn run_catchup_test(url_suffix: &str) {
-        setup_test();
-
         // Start a sequencer network, using the query service for catchup.
         let port = pick_unused_port().expect("No ports free");
         const NUM_NODES: usize = 5;
@@ -2525,25 +2435,23 @@ mod test {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_catchup() {
         run_catchup_test("").await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_catchup_v0() {
         run_catchup_test("/v0").await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_catchup_v1() {
         run_catchup_test("/v1").await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_catchup_no_state_peers() {
-        setup_test();
-
         // Start a sequencer network, using the query service for catchup.
         let port = pick_unused_port().expect("No ports free");
         const NUM_NODES: usize = 5;
@@ -2628,10 +2536,8 @@ mod test {
     }
 
     #[ignore]
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_catchup_epochs_no_state_peers() {
-        setup_test();
-
         // Start a sequencer network, using the query service for catchup.
         let port = pick_unused_port().expect("No ports free");
         const EPOCH_HEIGHT: u64 = 5;
@@ -2722,12 +2628,11 @@ mod test {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_chain_config_from_instance() {
         // This test uses a ValidatedState which only has the default chain config commitment.
         // The NodeState has the full chain config.
         // Both chain config commitments will match, so the ValidatedState should have the full chain config after a non-genesis block is decided.
-        setup_test();
 
         let port = pick_unused_port().expect("No ports free");
 
@@ -2775,14 +2680,12 @@ mod test {
         drop(network);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_chain_config_catchup() {
         // This test uses a ValidatedState with a non-default chain config
         // so it will be different from the NodeState chain config used by the TestNetwork.
         // However, for this test to work, at least one node should have a full chain config
         // to allow other nodes to catch up.
-
-        setup_test();
 
         let port = pick_unused_port().expect("No ports free");
 
@@ -2848,14 +2751,13 @@ mod test {
         drop(network);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_pos_upgrade_view_based() {
         type PosUpgrade = SequencerVersions<FeeVersion, EpochVersion>;
         test_upgrade_helper::<PosUpgrade>(PosUpgrade::new()).await;
     }
 
     async fn test_upgrade_helper<V: Versions>(version: V) {
-        setup_test();
         // wait this number of views beyond the configured first view
         // before asserting anything.
         let wait_extra_views = 10;
@@ -2944,10 +2846,8 @@ mod test {
         network.server.shut_down().await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub(crate) async fn test_restart() {
-        setup_test();
-
         const NUM_NODES: usize = 5;
         // Initialize nodes.
         let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
@@ -3073,10 +2973,8 @@ mod test {
         assert_eq!(chain, new_chain);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_config() {
-        setup_test();
-
         let port = pick_unused_port().expect("No ports free");
         let url: surf_disco::Url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url.clone());
@@ -3118,8 +3016,6 @@ mod test {
     }
 
     async fn run_hotshot_event_streaming_test(url_suffix: &str) {
-        setup_test();
-
         let hotshot_event_streaming_port =
             pick_unused_port().expect("No ports free for hotshot event streaming");
         let query_service_port = pick_unused_port().expect("No ports free for query service");
@@ -3164,26 +3060,25 @@ mod test {
         assert_eq!(receive_count, total_count + 1);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_hotshot_event_streaming_v0() {
         run_hotshot_event_streaming_test("/v0").await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_hotshot_event_streaming_v1() {
         run_hotshot_event_streaming_test("/v1").await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_hotshot_event_streaming() {
         run_hotshot_event_streaming_test("").await;
     }
 
     // TODO when `EpochVersion` becomes base version we can merge this
     // w/ above test.
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_hotshot_event_streaming_epoch_progression() {
-        setup_test();
         let epoch_height = 35;
         let wanted_epochs = 4;
 
@@ -3265,7 +3160,7 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_pos_rewards_basic() -> anyhow::Result<()> {
         // Basic PoS rewards test:
         // - Sets up a single validator and a single delegator (the node itself).
@@ -3273,7 +3168,6 @@ mod test {
         // - Rewards begin applying from block 41 (i.e., the start of the 3rd epoch).
         // - Since the validator is also the delegator, it receives the full reward.
         // - Verifies that the reward at block height 60 matches the expected amount.
-        setup_test();
         let epoch_height = 20;
 
         let network_config = TestConfigBuilder::default()
@@ -3364,14 +3258,13 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_cumulative_pos_rewards() -> anyhow::Result<()> {
         // This test registers 5 validators and multiple delegators for each validator.
         // One of the delegators is also a validator.
         // The test verifies that the cumulative reward at each block height equals the total block reward,
         // which is a constant.
 
-        setup_test();
         let epoch_height = 20;
 
         let network_config = TestConfigBuilder::default()
@@ -3488,12 +3381,11 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_stake_table_duplicate_events_from_contract() -> anyhow::Result<()> {
         // TODO(abdul): This test currently uses TestNetwork only for contract deployment and for L1 block number.
         // Once the stake table deployment logic is refactored and isolated, TestNetwork here will be unnecessary
 
-        setup_test();
         let epoch_height = 20;
 
         let network_config = TestConfigBuilder::default()
@@ -3597,14 +3489,13 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_rewards_v3() -> anyhow::Result<()> {
         // The test registers multiple delegators for each validator
         // It verifies that no rewards are distributed in the first two epochs
         // and that rewards are correctly allocated starting from the third epoch.
         // also checks that the total stake of delegators matches the stake of the validator
         // and that the calculated rewards match those obtained via the merklized state api
-        setup_test();
         const EPOCH_HEIGHT: u64 = 20;
 
         let network_config = TestConfigBuilder::default()
@@ -3819,7 +3710,7 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_rewards_v4() -> anyhow::Result<()> {
         // This test verifies PoS reward distribution logic for multiple delegators per validator.
         //
@@ -3830,7 +3721,6 @@ mod test {
         // - Reward values match those returned by the reward state API.
         // - Commission calculations are within a small acceptable rounding tolerance.
         // - Ensure that the `total_reward_distributed` field in the block header matches the total block reward distributed
-        setup_test();
         const EPOCH_HEIGHT: u64 = 20;
 
         type V4 = SequencerVersions<StaticVersion<0, 4>, StaticVersion<0, 0>>;
@@ -4092,10 +3982,9 @@ mod test {
     #[rstest]
     #[case(PosVersionV3::new())]
     #[case(PosVersionV4::new())]
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
 
     async fn test_node_stake_table_api<Ver: Versions>(#[case] ver: Ver) {
-        setup_test();
         let epoch_height = 20;
 
         let network_config = TestConfigBuilder::default()
@@ -4167,11 +4056,9 @@ mod test {
     #[rstest]
     #[case(PosVersionV3::new())]
     #[case(PosVersionV4::new())]
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
 
     async fn test_epoch_stake_table_catchup<Ver: Versions>(#[case] ver: Ver) {
-        setup_test();
-
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 6;
 
@@ -4301,11 +4188,9 @@ mod test {
     #[rstest]
     #[case(PosVersionV3::new())]
     #[case(PosVersionV4::new())]
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
 
     async fn test_epoch_stake_table_catchup_stress<Ver: Versions>(#[case] versions: Ver) {
-        setup_test();
-
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 6;
 
@@ -4448,7 +4333,7 @@ mod test {
     #[rstest]
     #[case(PosVersionV3::new())]
     #[case(PosVersionV4::new())]
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_merklized_state_catchup_on_restart<Ver: Versions>(
         #[case] versions: Ver,
     ) -> anyhow::Result<()> {
@@ -4463,7 +4348,6 @@ mod test {
         // 4. Allow the network to progress 3 more epochs (query node remains offline).
         // 5. Restart the query node.
         //    - The node is expected to reconstruct or catch up on its own
-        setup_test();
         const EPOCH_HEIGHT: u64 = 10;
 
         let network_config = TestConfigBuilder::default()
@@ -4671,7 +4555,7 @@ mod test {
     #[rstest]
     #[case(PosVersionV3::new())]
     #[case(PosVersionV4::new())]
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_state_reconstruction<Ver: Versions>(
         #[case] pos_version: Ver,
     ) -> anyhow::Result<()> {
@@ -4690,7 +4574,6 @@ mod test {
         //    - Both fee and reward accounts
         // 6. Assert that the reconstructed state is correct in all scenarios.
 
-        setup_test();
         const EPOCH_HEIGHT: u64 = 10;
 
         let network_config = TestConfigBuilder::default()
@@ -5009,9 +4892,8 @@ mod test {
     #[rstest]
     #[case(PosVersionV3::new())]
     #[case(PosVersionV4::new())]
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_block_reward_api<Ver: Versions>(#[case] versions: Ver) -> anyhow::Result<()> {
-        setup_test();
         let epoch_height = 10;
 
         let network_config = TestConfigBuilder::default()
@@ -5076,11 +4958,9 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_scanning_token_contract_initialized_event() -> anyhow::Result<()> {
         use espresso_types::v0_3::ChainConfig;
-
-        setup_test();
 
         let blocks_per_epoch = 10;
 
@@ -5199,10 +5079,8 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_tx_metadata() {
-        setup_test();
-
         let port = pick_unused_port().expect("No ports free");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
@@ -5281,10 +5159,8 @@ mod test {
 
     use rand::thread_rng;
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_aggregator_namespace_endpoints() {
-        setup_test();
-
         let mut rng = thread_rng();
 
         let port = pick_unused_port().expect("No ports free");
@@ -5457,13 +5333,12 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_stream_transactions_endpoint() {
         // This test submits transactions to a sequencer for multiple namespaces,
         // waits for them to be decided, and then verifies that:
         // 1. All transactions appear in the transaction stream.
         // 2. Each namespace-specific transaction stream only includes the transactions of that namespace.
-        setup_test();
 
         let mut rng = thread_rng();
 
@@ -5580,7 +5455,7 @@ mod test {
     #[rstest]
     #[case(PosVersionV3::new())]
     #[case(PosVersionV4::new())]
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_v3_and_v4_reward_tree_updates<Ver: Versions>(
         #[case] versions: Ver,
     ) -> anyhow::Result<()> {
@@ -5593,7 +5468,6 @@ mod test {
         // When the protocol version is v4:
         // - The v4 Merkle tree is updated
         // - The v3 Merkle tree must be empty.
-        setup_test();
         const EPOCH_HEIGHT: u64 = 10;
 
         let network_config = TestConfigBuilder::default()
@@ -5662,5 +5536,126 @@ mod test {
 
         network.stop_consensus().await;
         Ok(())
+    }
+
+    #[rstest]
+    #[case(PosVersionV3::new())]
+    #[case(PosVersionV4::new())]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+
+    pub(crate) async fn test_state_cert_query<Ver: Versions>(#[case] versions: Ver) {
+        const TEST_EPOCH_HEIGHT: u64 = 10;
+        const TEST_EPOCHS: u64 = 5;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(TEST_EPOCH_HEIGHT)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        tracing::info!("API PORT = {api_port}");
+        const NUM_NODES: usize = 2;
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port).catchup(Default::default()),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<Ver>(
+                DelegationConfig::MultipleDelegators,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+            )
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, versions).await;
+        let mut events = network.server.event_stream().await;
+
+        // Wait until 5 epochs have passed.
+        loop {
+            let event = events.next().await.unwrap();
+            tracing::info!("Received event from handle: {event:?}");
+
+            if let hotshot::types::EventType::Decide { leaf_chain, .. } = event.event {
+                println!(
+                    "Decide event received: {:?}",
+                    leaf_chain.first().unwrap().leaf.height()
+                );
+                if let Some(first_leaf) = leaf_chain.first() {
+                    let height = first_leaf.leaf.height();
+                    tracing::info!("Decide event received at height: {height}");
+
+                    if height >= TEST_EPOCHS * TEST_EPOCH_HEIGHT {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Connect client.
+        let client: Client<ServerError, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+        client.connect(Some(Duration::from_secs(10))).await;
+
+        // Get the state cert for the epoch 3 to 5
+        for i in 3..=TEST_EPOCHS {
+            // v2
+            let state_query_data_v2 = client
+                .get::<StateCertQueryDataV2<SeqTypes>>(&format!("availability/state-cert-v2/{i}"))
+                .send()
+                .await
+                .unwrap();
+            let state_cert_v2 = state_query_data_v2.0.clone();
+            tracing::info!("state_cert_v2: {state_cert_v2:?}");
+            assert_eq!(state_cert_v2.epoch.u64(), i);
+            assert_eq!(
+                state_cert_v2.light_client_state.block_height,
+                i * TEST_EPOCH_HEIGHT - 5
+            );
+            let block_height = state_cert_v2.light_client_state.block_height;
+
+            let header: Header = client
+                .get(&format!("availability/header/{block_height}"))
+                .send()
+                .await
+                .unwrap();
+
+            // verify auth root if the consensus version is v4
+            if header.version() == DrbAndHeaderUpgradeVersion::VERSION {
+                let auth_root = state_cert_v2.auth_root.expect("auth root is not None");
+                let header_auth_root = header.auth_root().unwrap().unwrap();
+
+                assert_eq!(auth_root, header_auth_root, "auth root mismatch");
+            }
+
+            // v1
+            let state_query_data_v1 = client
+                .get::<StateCertQueryDataV1<SeqTypes>>(&format!("availability/state-cert/{i}"))
+                .send()
+                .await
+                .unwrap();
+
+            let state_cert_v1 = state_query_data_v1.0.clone();
+            tracing::info!("state_cert_v1: {state_cert_v1:?}");
+            assert_eq!(state_query_data_v1, state_query_data_v2.into());
+        }
     }
 }

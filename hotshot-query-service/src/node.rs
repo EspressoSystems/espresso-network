@@ -244,15 +244,12 @@ mod test {
         testing::{
             consensus::{MockDataSource, MockNetwork, MockSqlDataSource},
             mocks::{mock_transaction, MockBase, MockTypes, MockVersions},
-            setup_test,
         },
         ApiState, Error, Header,
     };
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_api() {
-        setup_test();
-
         let window_limit = 78;
 
         // Create the consensus network.
@@ -431,10 +428,8 @@ mod test {
         network.shut_down().await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_aggregate_ranges() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockSqlDataSource, MockVersions>::init().await;
         let mut events = network.handle().event_stream();
@@ -595,10 +590,8 @@ mod test {
         network.shut_down().await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_extensions() {
-        setup_test();
-
         let dir = TempDir::with_prefix("test_node_extensions").unwrap();
         let data_source = ExtensibleDataSource::new(
             MockDataSource::create(dir.path(), Default::default())

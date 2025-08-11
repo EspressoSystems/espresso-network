@@ -41,7 +41,7 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeType},
         signature_key::StakeTableEntryType,
     },
-    utils::epoch_from_block_number,
+    utils::{epoch_from_block_number, transition_block_for_epoch},
     PeerConfig,
 };
 use humantime::format_duration;
@@ -583,9 +583,9 @@ pub struct EpochCommittees {
     /// Randomized committees, filled when we receive the DrbResult
     randomized_committees: BTreeMap<Epoch, RandomizedCommittee<StakeTableEntry<PubKey>>>,
     first_epoch: Option<Epoch>,
+    epoch_height: u64,
     block_reward: Option<RewardAmount>,
     fetcher: Arc<Fetcher>,
-    epoch_height: u64,
 }
 
 impl Fetcher {
@@ -2186,13 +2186,34 @@ impl Membership<SeqTypes> for EpochCommittees {
 
     async fn get_epoch_drb(
         membership: Arc<RwLock<Self>>,
-        block_height: u64,
         epoch: Epoch,
     ) -> anyhow::Result<DrbResult> {
         let membership_reader = membership.read().await;
         let peers = membership_reader.fetcher.peers.clone();
+
+        // Try to retrieve the DRB result from an existing committee
+        if let Some(randomized_committee) = membership_reader.randomized_committees.get(&epoch) {
+            return Ok(randomized_committee.drb_result());
+        }
+
+        // Otherwise, we try to fetch the epoch root leaf
+        let previous_epoch = match epoch.checked_sub(1) {
+            Some(epoch) => epoch,
+            None => {
+                return membership_reader
+                    .randomized_committees
+                    .get(&epoch)
+                    .map(|committee| committee.drb_result())
+                    .context(format!("Missing randomized committee for epoch {epoch}"))
+            },
+        };
+
         let stake_table = membership_reader.stake_table(Some(epoch)).clone();
         let success_threshold = membership_reader.success_threshold(Some(epoch));
+
+        let block_height =
+            transition_block_for_epoch(previous_epoch, membership_reader.epoch_height);
+
         drop(membership_reader);
 
         tracing::debug!(
@@ -2421,14 +2442,12 @@ mod tests {
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use pretty_assertions::assert_matches;
     use rstest::rstest;
-    use sequencer_utils::test_utils::setup_test;
 
     use super::*;
     use crate::{v0::impls::testing::*, L1ClientOptions};
 
-    #[test]
+    #[test_log::test]
     fn test_from_l1_events() -> anyhow::Result<()> {
-        setup_test();
         // Build a stake table with one DA node and one consensus node.
         let val_1 = TestValidator::random();
         let val_1_new_keys = val_1.randomize_keys();
@@ -2905,10 +2924,8 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_decaf_stake_table() {
-        setup_test();
-
         // The following commented-out block demonstrates how the `decaf_stake_table_events.json`
         // and `decaf_stake_table.json` files were originally generated.
 
@@ -2965,11 +2982,9 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     #[should_panic]
     async fn test_large_max_events_range_panic() {
-        setup_test();
-
         // decaf stake table contract address
         let contract_address = "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037";
 
@@ -2995,10 +3010,8 @@ mod tests {
         .await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn sanity_check_block_reward_v3() {
-        setup_test();
-
         // 10b tokens
         let initial_supply = U256::from_str("10000000000000000000000000000").unwrap();
 
