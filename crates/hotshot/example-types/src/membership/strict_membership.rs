@@ -1,17 +1,14 @@
-use std::{collections::HashSet, fmt, fmt::Debug, marker::PhantomData, sync::Arc, time::Duration};
+use std::{collections::HashSet, fmt, fmt::Debug, sync::Arc};
 use crate::membership::fetcher::Leaf2Fetcher;
 use crate::storage_types::TestStorage;
 use alloy::primitives::U256;
 use hotshot_types::{
-    data::Leaf2,
-    drb::DrbResult,
     stake_table::HSStakeTable,
     traits::{
         election::Membership,
         node_implementation::{NodeImplementation, NodeType},
-        signature_key::{SignatureKey, StakeTableEntryType},
+        signature_key::{ StakeTableEntryType},
     },
-    PeerConfig,
 };
 
 use crate::membership::stake_table::TestStakeTable;
@@ -32,7 +29,11 @@ impl<TYPES, StakeTable> Debug for StrictMembership<TYPES, StakeTable> where
     StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::StateSignatureKey>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-      todo!()
+        f.debug_struct("StrictMembership")
+         .field("inner", &self.inner)
+         .field("epochs", &self.epochs)
+         .field("drbs", &self.drbs)
+         .finish()
     }
 }
 
@@ -113,7 +114,7 @@ impl<
 
     fn committee_members(
         &self,
-        view_number: TYPES::View,
+        _view_number: TYPES::View,
         epoch: Option<TYPES::Epoch>,
     ) -> std::collections::BTreeSet<TYPES::SignatureKey> {
         self.assert_has_stake_table(epoch);
@@ -126,7 +127,7 @@ impl<
 
     fn da_committee_members(
         &self,
-        view_number: TYPES::View,
+        _view_number: TYPES::View,
         epoch: Option<TYPES::Epoch>,
     ) -> std::collections::BTreeSet<TYPES::SignatureKey> {
         self.assert_has_stake_table(epoch);

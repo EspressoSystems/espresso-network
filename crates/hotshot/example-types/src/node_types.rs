@@ -27,11 +27,11 @@ pub use crate::membership::helpers::{RandomOverlapQuorumFilterConfig, StableQuor
 use crate::{
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
     membership::{
-        helpers::QuorumFilterConfig,
-        randomized_committee::Committee, randomized_committee_members::RandomizedCommitteeMembers,
+        helpers::QuorumFilterConfig, randomized_committee::RandomizedStakeTable,
+        randomized_committee_members::RandomizedCommitteeMembers, stake_table::TestStakeTable,
         static_committee::StaticStakeTable,
-        static_committee_leader_two_views::StaticCommitteeLeaderForTwoViews,
-        strict_membership::StrictMembership, two_static_committees::TwoStaticCommittees,
+        static_committee_leader_two_views::StaticStakeTableLeaderForTwoViews,
+        strict_membership::StrictMembership, two_static_committees::TwoStakeTables,
     },
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
@@ -102,7 +102,13 @@ impl NodeType for TestTypesRandomizedLeader {
     type Transaction = TestTransaction;
     type ValidatedState = TestValidatedState;
     type InstanceState = TestInstanceState;
-    type Membership = Committee<TestTypesRandomizedLeader>;
+    type Membership = StrictMembership<
+        TestTypesRandomizedLeader,
+        RandomizedStakeTable<
+            <TestTypes as NodeType>::SignatureKey,
+            <TestTypes as NodeType>::StateSignatureKey,
+        >,
+    >;
     type BuilderSignatureKey = BuilderKey;
     type StateSignatureKey = SchnorrPubKey;
 }
@@ -120,24 +126,17 @@ impl NodeType for TestTypesRandomizedLeader {
     serde::Serialize,
     serde::Deserialize,
 )]
-pub struct TestTypesEpochCatchupTypes<V: Versions, InnerTypes: NodeType> {
-    _ph: PhantomData<V>,
-    _pd: PhantomData<InnerTypes>,
+pub struct TestTypesEpochCatchupTypes<StakeTable: TestStakeTable<BLSPubKey, SchnorrPubKey>> {
+    _pd: PhantomData<StakeTable>,
 }
-impl<V: Versions + Default + Ord + Hash, InnerTypes: NodeType> NodeType
-    for TestTypesEpochCatchupTypes<V, InnerTypes>
-where
-    InnerTypes::Epoch: From<EpochNumber>,
-    EpochNumber: From<InnerTypes::Epoch>,
-    InnerTypes::View: From<ViewNumber>,
-    BLSPubKey: From<InnerTypes::SignatureKey>,
-    for<'a> &'a InnerTypes::SignatureKey: From<&'a BLSPubKey>,
-    <InnerTypes::SignatureKey as SignatureKey>::StakeTableEntry:
-        From<<BLSPubKey as SignatureKey>::StakeTableEntry>,
-    InnerTypes::StateSignatureKey: From<SchnorrPubKey>,
-    <BLSPubKey as SignatureKey>::StakeTableEntry:
-        From<<InnerTypes::SignatureKey as SignatureKey>::StakeTableEntry>,
-    SchnorrPubKey: From<InnerTypes::StateSignatureKey>,
+impl<
+        StakeTable: TestStakeTable<BLSPubKey, SchnorrPubKey>
+            + 'static
+            + std::hash::Hash
+            + std::marker::Copy
+            + std::cmp::Ord
+            + std::default::Default,
+    > NodeType for TestTypesEpochCatchupTypes<StakeTable>
 {
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
@@ -149,8 +148,7 @@ where
     type Transaction = TestTransaction;
     type ValidatedState = TestValidatedState;
     type InstanceState = TestInstanceState;
-    type Membership =
-        DummyCatchupCommittee<TestTypesEpochCatchupTypes<V, InnerTypes>, V, InnerTypes>;
+    type Membership = StrictMembership<TestTypesEpochCatchupTypes<StakeTable>, StakeTable>;
     type BuilderSignatureKey = BuilderKey;
     type StateSignatureKey = SchnorrPubKey;
 }
@@ -227,7 +225,12 @@ impl NodeType for TestConsecutiveLeaderTypes {
     type Transaction = TestTransaction;
     type ValidatedState = TestValidatedState;
     type InstanceState = TestInstanceState;
-    type Membership = StaticCommitteeLeaderForTwoViews<TestConsecutiveLeaderTypes>;
+    type Membership = StrictMembership<TestConsecutiveLeaderTypes,
+        StaticStakeTableLeaderForTwoViews<
+            <TestTypes as NodeType>::SignatureKey,
+            <TestTypes as NodeType>::StateSignatureKey,
+        >,
+    >;
     type BuilderSignatureKey = BuilderKey;
     type StateSignatureKey = SchnorrPubKey;
 }
@@ -259,7 +262,13 @@ impl NodeType for TestTwoStakeTablesTypes {
     type Transaction = TestTransaction;
     type ValidatedState = TestValidatedState;
     type InstanceState = TestInstanceState;
-    type Membership = TwoStaticCommittees<TestTwoStakeTablesTypes>;
+    type Membership = StrictMembership<
+        TestTwoStakeTablesTypes,
+        TwoStakeTables<
+            <TestTypes as NodeType>::SignatureKey,
+            <TestTypes as NodeType>::StateSignatureKey,
+        >,
+    >;
     type BuilderSignatureKey = BuilderKey;
     type StateSignatureKey = SchnorrPubKey;
 }

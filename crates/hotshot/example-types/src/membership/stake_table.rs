@@ -74,8 +74,6 @@ pub trait TestStakeTable<
         epoch: Option<u64>,
     ) -> Option<TestStakeTableEntry<PubKey, StatePubKey>>;
 
-    fn total_stake(&self, epoch: Option<u64>) -> U256;
-
     fn lookup_leader(&self, view_number: u64, epoch: Option<u64>) -> anyhow::Result<PubKey>;
 
     fn has_stake_table(&self, epoch: u64) -> bool;

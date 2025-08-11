@@ -3,25 +3,16 @@
 
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
-use std::{
-    collections::{BTreeMap, HashMap},
-    marker::PhantomData,
-    rc::Rc,
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc};
 
 use alloy::transports::BoxFuture;
 use anyhow::Context;
-use async_trait::async_trait;
-use hotshot::traits::{NodeImplementation, TestableNodeImplementation};
+use hotshot::traits::NodeImplementation;
 use hotshot_types::{
     data::Leaf2,
     traits::{
-        block_contents::BlockHeader,
-        network::{AsyncGenerator, ConnectedNetwork},
-        node_implementation::{NodeType, Versions},
+        block_contents::BlockHeader, network::ConnectedNetwork, node_implementation::NodeType,
     },
-    HotShotConfig, ValidatorConfig,
 };
 use tokio::task::JoinHandle;
 
@@ -124,7 +115,7 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
                     .await
                     .proposals2
                     .iter()
-                    .map(|(view, proposal)| {
+                    .map(|(_view, proposal)| {
                         (
                             proposal.data.block_header.block_number(),
                             Leaf2::from_quorum_proposal(&proposal.data.clone().into()),
@@ -139,7 +130,9 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
 
                 let serialized_leaf = bincode::serialize(&leaf).expect("Failed to serialized leaf");
 
-                network_clone.direct_message(serialized_leaf, requester).await;
+                network_clone
+                    .direct_message(serialized_leaf, requester)
+                    .await;
             }
         });
 

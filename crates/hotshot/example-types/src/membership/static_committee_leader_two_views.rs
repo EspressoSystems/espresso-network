@@ -4,225 +4,100 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{collections::BTreeMap, fmt::Debug};
 
-use alloy::primitives::U256;
 use hotshot_types::{
     drb::DrbResult,
-    stake_table::HSStakeTable,
-    traits::{
-        election::Membership,
-        node_implementation::NodeType,
-        signature_key::{SignatureKey, StakeTableEntryType},
+    traits::signature_key::{
+        LCV1StateSignatureKey, LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey,
+        StateSignatureKey,
     },
-    PeerConfig,
 };
-use hotshot_utils::anytrace::Result;
-use crate::storage_types::TestStorage;
-use hotshot_types::traits::node_implementation::NodeImplementation;
+
+use crate::membership::stake_table::{TestStakeTable, TestStakeTableEntry};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
+/// Static stake table that doesn't use DRB results for leader election, where every leader leads for 2 views
+pub struct StaticStakeTableLeaderForTwoViews<
+    PubKey: SignatureKey,
+    StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
+> {
+    quorum_members: BTreeMap<PubKey, TestStakeTableEntry<PubKey, StatePubKey>>,
 
-/// The static committee election
-pub struct StaticCommitteeLeaderForTwoViews<T: NodeType> {
-    /// The nodes eligible for leadership.
-    /// NOTE: This is currently a hack because the DA leader needs to be the quorum
-    /// leader but without voting rights.
-    eligible_leaders: Vec<PeerConfig<T>>,
+    da_members: BTreeMap<PubKey, TestStakeTableEntry<PubKey, StatePubKey>>,
 
-    /// The nodes on the committee and their stake
-    stake_table: HSStakeTable<T>,
-
-    /// The nodes on the committee and their stake
-    da_stake_table: HSStakeTable<T>,
-
-    /// The nodes on the committee and their stake, indexed by public key
-    indexed_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T>>,
-
-    /// The nodes on the committee and their stake, indexed by public key
-    indexed_da_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T>>,
+    first_epoch: Option<u64>,
 }
 
-impl<TYPES: NodeType> Membership<TYPES> for StaticCommitteeLeaderForTwoViews<TYPES> {
-    type Error = hotshot_utils::anytrace::Error;
-    /// Create a new election
-    fn new(committee_members: Vec<PeerConfig<TYPES>>, da_members: Vec<PeerConfig<TYPES>>) -> Self {
-        // For each eligible leader, get the stake table entry
-        let eligible_leaders: Vec<PeerConfig<TYPES>> = committee_members
-            .iter()
-            .filter(|&member| member.stake_table_entry.stake() > U256::ZERO)
-            .cloned()
-            .collect();
-
-        // For each member, get the stake table entry
-        let members: Vec<PeerConfig<TYPES>> = committee_members
-            .iter()
-            .filter(|&member| member.stake_table_entry.stake() > U256::ZERO)
-            .cloned()
-            .collect();
-
-        // For each member, get the stake table entry
-        let da_members: Vec<PeerConfig<TYPES>> = da_members
-            .iter()
-            .filter(|&member| member.stake_table_entry.stake() > U256::ZERO)
-            .cloned()
-            .collect();
-
-        // Index the stake table by public key
-        let indexed_stake_table: BTreeMap<TYPES::SignatureKey, PeerConfig<TYPES>> = members
-            .iter()
-            .map(|member| {
-                (
-                    TYPES::SignatureKey::public_key(&member.stake_table_entry),
-                    member.clone(),
-                )
-            })
-            .collect();
-
-        // Index the stake table by public key
-        let indexed_da_stake_table: BTreeMap<TYPES::SignatureKey, PeerConfig<TYPES>> = da_members
-            .iter()
-            .map(|member| {
-                (
-                    TYPES::SignatureKey::public_key(&member.stake_table_entry),
-                    member.clone(),
-                )
-            })
-            .collect();
-
+impl<PubKey, StatePubKey> TestStakeTable<PubKey, StatePubKey>
+    for StaticStakeTableLeaderForTwoViews<PubKey, StatePubKey>
+where
+    PubKey: SignatureKey,
+    StatePubKey:
+        StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
+{
+    fn new(
+        quorum_members: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
+        da_members: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
+    ) -> Self {
         Self {
-            eligible_leaders,
-            stake_table: members.into(),
-            da_stake_table: da_members.into(),
-            indexed_stake_table,
-            indexed_da_stake_table,
+            quorum_members: quorum_members
+                .iter()
+                .map(|entry| (entry.signature_key.clone(), entry.clone()))
+                .collect(),
+            da_members: da_members
+                .iter()
+                .map(|entry| (entry.signature_key.clone(), entry.clone()))
+                .collect(),
+            first_epoch: None,
         }
     }
 
-    /// Get the stake table for the current view
-    fn stake_table(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> HSStakeTable<TYPES> {
-        self.stake_table.clone()
+    fn stake_table(&self, _epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
+        self.quorum_members.values().cloned().collect()
     }
 
-    /// Get the stake table for the current view
-    fn da_stake_table(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> HSStakeTable<TYPES> {
-        self.da_stake_table.clone()
+    fn da_stake_table(&self, _epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
+        self.da_members.values().cloned().collect()
     }
 
-    /// Get all members of the committee for the current view
-    fn committee_members(
-        &self,
-        _view_number: <TYPES as NodeType>::View,
-        _epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> BTreeSet<<TYPES as NodeType>::SignatureKey> {
-        self.stake_table
-            .iter()
-            .map(|sc| TYPES::SignatureKey::public_key(&sc.stake_table_entry))
-            .collect()
-    }
-
-    /// Get all members of the committee for the current view
-    fn da_committee_members(
-        &self,
-        _view_number: <TYPES as NodeType>::View,
-        _epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> BTreeSet<<TYPES as NodeType>::SignatureKey> {
-        self.da_stake_table
-            .iter()
-            .map(|da| TYPES::SignatureKey::public_key(&da.stake_table_entry))
-            .collect()
-    }
-
-    /// Get the stake table entry for a public key
     fn stake(
         &self,
-        pub_key: &<TYPES as NodeType>::SignatureKey,
-        _epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> Option<PeerConfig<TYPES>> {
-        // Only return the stake if it is above zero
-        self.indexed_stake_table.get(pub_key).cloned()
+        pub_key: PubKey,
+        _epoch: Option<u64>,
+    ) -> Option<TestStakeTableEntry<PubKey, StatePubKey>> {
+        self.quorum_members.get(&pub_key).cloned()
     }
 
-    /// Get DA the stake table entry for a public key
     fn da_stake(
         &self,
-        pub_key: &<TYPES as NodeType>::SignatureKey,
-        _epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> Option<PeerConfig<TYPES>> {
-        // Only return the stake if it is above zero
-        self.indexed_da_stake_table.get(pub_key).cloned()
+        pub_key: PubKey,
+        _epoch: Option<u64>,
+    ) -> Option<TestStakeTableEntry<PubKey, StatePubKey>> {
+        self.da_members.get(&pub_key).cloned()
     }
 
-    /// Check if a node has stake in the committee
-    fn has_stake(
-        &self,
-        pub_key: &<TYPES as NodeType>::SignatureKey,
-        _epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> bool {
-        self.indexed_stake_table
-            .get(pub_key)
-            .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
+    fn lookup_leader(&self, view_number: u64, _epoch: Option<u64>) -> anyhow::Result<PubKey> {
+        let index = (view_number / 2) as usize % self.quorum_members.len();
+        let leader = self.quorum_members.values().collect::<Vec<_>>()[index].clone();
+        Ok(leader.signature_key)
     }
 
-    /// Check if a node has stake in the committee
-    fn has_da_stake(
-        &self,
-        pub_key: &<TYPES as NodeType>::SignatureKey,
-        _epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> bool {
-        self.indexed_da_stake_table
-            .get(pub_key)
-            .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
-    }
-
-    /// Index the vector of public keys with the current view number
-    fn lookup_leader(
-        &self,
-        view_number: <TYPES as NodeType>::View,
-        _epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> Result<TYPES::SignatureKey> {
-        let index =
-            usize::try_from((*view_number / 2) % self.eligible_leaders.len() as u64).unwrap();
-        let res = self.eligible_leaders[index].clone();
-
-        Ok(TYPES::SignatureKey::public_key(&res.stake_table_entry))
-    }
-
-    /// Get the total number of nodes in the committee
-    fn total_nodes(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> usize {
-        self.stake_table.len()
-    }
-
-    /// Get the total number of DA nodes in the committee
-    fn da_total_nodes(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> usize {
-        self.da_stake_table.len()
-    }
-
-    /// Get the voting success threshold for the committee
-    fn success_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
-        U256::from(((self.stake_table.len() as u64 * 2) / 3) + 1)
-    }
-
-    /// Get the voting success threshold for the committee
-    fn da_success_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
-        U256::from(((self.da_stake_table.len() as u64 * 2) / 3) + 1)
-    }
-
-    /// Get the voting failure threshold for the committee
-    fn failure_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
-        U256::from(((self.stake_table.len() as u64) / 3) + 1)
-    }
-
-    /// Get the voting upgrade threshold for the committee
-    fn upgrade_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
-        U256::from(((self.stake_table.len() as u64 * 9) / 10) + 1)
-    }
-    fn has_stake_table(&self, _epoch: TYPES::Epoch) -> bool {
+    fn has_stake_table(&self, _epoch: u64) -> bool {
         true
     }
-    fn has_randomized_stake_table(&self, _epoch: TYPES::Epoch) -> anyhow::Result<bool> {
+
+    fn has_randomized_stake_table(&self, _epoch: u64) -> anyhow::Result<bool> {
         Ok(true)
     }
 
-    fn add_drb_result(&mut self, _epoch: <TYPES as NodeType>::Epoch, _drb_result: DrbResult) {}
+    fn add_drb_result(&mut self, _epoch: u64, _drb_result: DrbResult) {}
+
+    fn set_first_epoch(&mut self, epoch: u64, _initial_drb_result: DrbResult) {
+        self.first_epoch = Some(epoch);
+    }
+
+    fn first_epoch(&self) -> Option<u64> {
+        self.first_epoch
+    }
 }
