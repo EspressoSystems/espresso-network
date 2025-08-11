@@ -15,14 +15,14 @@ use hotshot_contract_adapter::{
     field_to_u256,
     sol_types::{LightClientStateSol, LightClientV2, PlonkProofSol, StakeTableStateSol},
 };
-use hotshot_query_service::availability::StateCertQueryData;
+use hotshot_query_service::availability::StateCertQueryDataV2;
 use hotshot_types::{
     data::EpochNumber,
     light_client::{
-        CircuitField, LightClientState, StakeTableState, StateSignature, StateSignaturesBundle,
+        CircuitField, LCV2StateSignaturesBundle, LightClientState, StakeTableState, StateSignature,
         StateVerKey,
     },
-    simple_certificate::LightClientStateUpdateCertificate,
+    simple_certificate::LightClientStateUpdateCertificateV2,
     traits::{
         node_implementation::{ConsensusTime, NodeType},
         signature_key::LCV2StateSignatureKey,
@@ -85,10 +85,10 @@ pub fn load_proving_key(stake_table_capacity: usize) -> ProvingKey {
 /// Get the latest LightClientState and signature bundle from Sequencer network
 pub async fn fetch_latest_state<ApiVer: StaticVersionType>(
     client: &Client<ServerError, ApiVer>,
-) -> Result<StateSignaturesBundle, ProverError> {
+) -> Result<LCV2StateSignaturesBundle, ProverError> {
     tracing::info!("Fetching the latest state signatures bundle from relay server.");
     client
-        .get::<StateSignaturesBundle>("/api/state")
+        .get::<LCV2StateSignaturesBundle>("/api/state")
         .send()
         .await
         .map_err(ProverError::RelayServerError)
@@ -168,18 +168,19 @@ pub async fn submit_state_and_proof(
 async fn fetch_epoch_state_from_sequencer(
     sequencer_url: &Url,
     epoch: u64,
-) -> Result<LightClientStateUpdateCertificate<SeqTypes>, ProverError> {
+) -> Result<LightClientStateUpdateCertificateV2<SeqTypes>, ProverError> {
     let state_cert =
         surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
             sequencer_url.clone(),
         )
-        .get::<StateCertQueryData<SeqTypes>>(&format!("availability/state-cert/{epoch}"))
+        .get::<StateCertQueryDataV2<SeqTypes>>(&format!("availability/state-cert-v2/{epoch}"))
+        .header("Accept", "application/json")
         .send()
         .await
         .map_err(|err| {
             ProverError::SequencerCommunicationError(
                 sequencer_url
-                    .join(&format!("availability/state-cert/{epoch}"))
+                    .join(&format!("availability/state-cert-v2/{epoch}"))
                     .unwrap(),
                 err,
             )

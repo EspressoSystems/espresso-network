@@ -10671,6 +10671,7 @@ dependencies = [
  "hotshot-orchestrator",
  "hotshot-query-service",
  "hotshot-state-prover",
+ "hotshot-task-impls",
  "hotshot-testing",
  "hotshot-types",
  "include_dir",
