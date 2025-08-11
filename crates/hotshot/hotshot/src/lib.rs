@@ -16,7 +16,7 @@ use hotshot_types::{
     drb::{drb_difficulty_selector, DrbResult, INITIAL_DRB_RESULT},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    simple_certificate::LightClientStateUpdateCertificate,
+    simple_certificate::LightClientStateUpdateCertificateV2,
     traits::{
         block_contents::BlockHeader, election::Membership, network::BroadcastDelay,
         node_implementation::Versions, signature_key::StateSignatureKey, storage::Storage,
@@ -1111,7 +1111,7 @@ pub struct HotShotInitializer<TYPES: NodeType> {
     pub saved_vid_shares: VidShares<TYPES>,
 
     /// The last formed light client state update certificate if there's any
-    pub state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
+    pub state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
 
     /// Saved epoch information. This must be sorted ascending by epoch.
     pub start_epoch_info: Vec<InitializerEpochInfo<TYPES>>,
@@ -1212,7 +1212,7 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
         saved_proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
         saved_vid_shares: VidShares<TYPES>,
         decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
-        state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
+        state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
     ) -> Self {
         let anchor_state = Arc::new(TYPES::ValidatedState::from_header(
             anchor_leaf.block_header(),
