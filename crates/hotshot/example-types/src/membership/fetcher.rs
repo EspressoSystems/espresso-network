@@ -19,10 +19,10 @@ use tokio::task::JoinHandle;
 use crate::storage_types::TestStorage;
 
 pub struct Leaf2Fetcher<TYPES: NodeType> {
-    network_functions: NetworkFunctions<TYPES>,
-    storage: TestStorage<TYPES>,
-    listener: JoinHandle<()>,
-    public_key: TYPES::SignatureKey,
+    pub network_functions: NetworkFunctions<TYPES>,
+    pub storage: TestStorage<TYPES>,
+    pub listener: JoinHandle<()>,
+    pub public_key: TYPES::SignatureKey,
 }
 
 pub type RecvMessageFn =
@@ -130,9 +130,12 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
 
                 let serialized_leaf = bincode::serialize(&leaf).expect("Failed to serialized leaf");
 
-                network_clone
+                if let Err(e) = network_clone
                     .direct_message(serialized_leaf, requester)
-                    .await;
+                    .await
+                {
+                    tracing::warn!("Failed to send leaf response in test membership fetcher: {e}");
+                };
             }
         });
 
@@ -153,7 +156,11 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
         let leaf_request = (height, self.public_key.clone());
         let serialized_leaf_request =
             bincode::serialize(&leaf_request).expect("Failed to serialize leaf request");
-        (self.network_functions.direct_message)(serialized_leaf_request, source).await;
+        if let Err(e) =
+            (self.network_functions.direct_message)(serialized_leaf_request, source).await
+        {
+            tracing::warn!("Failed to send leaf request in test membership fetcher: {e}");
+        };
 
         tokio::time::timeout(std::time::Duration::from_secs(6), async {
             while let Ok(message) = (self.network_functions.recv_message)().await {

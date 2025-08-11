@@ -1,5 +1,5 @@
 use std::{
-    cmp::{max, min},
+    cmp::min,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     future::Future,
     str::FromStr,
@@ -38,7 +38,7 @@ use hotshot_types::{
     stake_table::{HSStakeTable, StakeTableEntry},
     traits::{
         election::Membership,
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::StakeTableEntryType,
     },
     utils::epoch_from_block_number,
@@ -1850,12 +1850,16 @@ pub struct LeaderLookupError;
 // #[async_trait]
 impl Membership<SeqTypes> for EpochCommittees {
     type Error = LeaderLookupError;
+    type Storage = ();
     // DO NOT USE. Dummy constructor to comply w/ trait.
-    fn new(
+    fn new<I: NodeImplementation<SeqTypes>>(
         // TODO remove `new` from trait and remove this fn as well.
         // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
         _committee_members: Vec<PeerConfig<SeqTypes>>,
         _da_members: Vec<PeerConfig<SeqTypes>>,
+        _storage: Self::Storage,
+        _network: Arc<<I as NodeImplementation<SeqTypes>>::Network>,
+        _public_key: <SeqTypes as NodeType>::SignatureKey,
     ) -> Self {
         panic!("This function has been replaced with new_stake()");
     }

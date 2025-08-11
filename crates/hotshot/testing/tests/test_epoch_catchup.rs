@@ -13,8 +13,8 @@ use hotshot_example_types::{
         static_committee::StaticStakeTable, two_static_committees::TwoStakeTables,
     },
     node_types::{
-        EpochsTestVersions, PushCdnImpl, RandomOverlapQuorumFilterConfig, TestTwoStakeTablesTypes,
-        TestTypes, TestTypesEpochCatchupTypes, TestTypesRandomizedLeader,
+        EpochsTestVersions, PushCdnImpl, RandomOverlapQuorumFilterConfig,
+        TestTypesEpochCatchupTypes,
     },
 };
 use hotshot_macros::cross_tests;
@@ -25,7 +25,7 @@ use hotshot_testing::{
     spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
     test_builder::{TestDescription, TimingData},
 };
-use hotshot_types::signature_key::{BLSPubKey, BuilderKey, SchnorrPubKey};
+use hotshot_types::signature_key::{BLSPubKey, SchnorrPubKey};
 
 cross_tests!(
     TestName: test_catchup_epochs,

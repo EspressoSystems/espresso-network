@@ -16,9 +16,7 @@ use hotshot_types::{
     constants::TEST_UPGRADE_CONSTANTS,
     data::{EpochNumber, ViewNumber},
     signature_key::{BLSPubKey, BuilderKey, SchnorrPubKey},
-    traits::{
-        node_implementation::{NodeType, Versions},
-    },
+    traits::node_implementation::{NodeType, Versions},
     upgrade_config::UpgradeConstants,
 };
 use serde::{Deserialize, Serialize};

@@ -1,6 +1,5 @@
 use std::fmt::Debug;
 
-use alloy::primitives::U256;
 use hotshot_types::{
     drb::DrbResult,
     traits::{

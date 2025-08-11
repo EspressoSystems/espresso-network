@@ -4,26 +4,17 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{
-    collections::{BTreeMap, HashMap},
-    marker::PhantomData,
-    rc::Rc,
-    sync::Arc,
-};
+use std::{collections::HashMap, marker::PhantomData, rc::Rc, sync::Arc};
 
-use anyhow::Context;
 use hotshot::traits::{NodeImplementation, TestableNodeImplementation};
 use hotshot_example_types::storage_types::TestStorage;
 use hotshot_types::{
-    data::Leaf2,
     traits::{
-        block_contents::BlockHeader,
         network::{AsyncGenerator, ConnectedNetwork},
         node_implementation::{NodeType, Versions},
     },
     HotShotConfig, ValidatorConfig,
 };
-use tokio::task::JoinHandle;
 
 use super::{test_builder::TestDescription, test_runner::TestRunner};
 use crate::test_task::TestTaskStateSeed;

@@ -4,30 +4,17 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
-use alloy::primitives::U256;
 use hotshot_types::{
-    drb::{
-        election::{generate_stake_cdf, select_randomized_leader, RandomizedCommittee},
-        DrbResult,
+    drb::DrbResult,
+    traits::signature_key::{
+        LCV1StateSignatureKey, LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey,
+        StateSignatureKey,
     },
-    stake_table::HSStakeTable,
-    traits::{
-        node_implementation::{NodeImplementation, NodeType},
-        signature_key::{
-            LCV1StateSignatureKey, LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey,
-            StakeTableEntryType, StateSignatureKey,
-        },
-    },
-    PeerConfig,
 };
-use hotshot_utils::anytrace::*;
 
-use crate::{
-    membership::stake_table::{TestStakeTable, TestStakeTableEntry},
-    storage_types::TestStorage,
-};
+use crate::membership::stake_table::{TestStakeTable, TestStakeTableEntry};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct TwoStakeTables<

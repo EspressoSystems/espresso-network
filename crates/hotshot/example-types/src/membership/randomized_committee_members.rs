@@ -10,26 +10,17 @@ use std::{
 
 use hotshot_types::{
     drb::DrbResult,
-    traits::{
-        election::Membership,
-        node_implementation::{ConsensusTime},
-        signature_key::{
-            LCV1StateSignatureKey, LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey,
-            StakeTableEntryType, StateSignatureKey,
-        },
+    traits::signature_key::{
+        LCV1StateSignatureKey, LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey,
+        StateSignatureKey,
     },
-    PeerConfig,
 };
-use hotshot_utils::anytrace::Result;
 use rand::{rngs::StdRng, Rng};
 use tracing::error;
 
-use crate::{
-    membership::{
-        helpers::QuorumFilterConfig,
-        stake_table::{TestStakeTable, TestStakeTableEntry},
-    },
-    storage_types::TestStorage,
+use crate::membership::{
+    helpers::QuorumFilterConfig,
+    stake_table::{TestStakeTable, TestStakeTableEntry},
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]

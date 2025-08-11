@@ -110,11 +110,6 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
             })
             .collect::<Vec<_>>();
 
-        let membership = Arc::new(RwLock::new(MockMembership::new(
-            known_nodes_with_stake.clone(),
-            known_nodes_with_stake.clone(),
-        )));
-
         // Pick a random, unused port for the builder server
         let builder_port = portpicker::pick_unused_port().expect("No ports available");
 
@@ -169,7 +164,6 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
                 .into_iter()
                 .enumerate()
                 .map(|(node_id, priv_key)| {
-                    let membership = membership.clone();
                     let config = config.clone();
 
                     let pub_keys = pub_keys.clone();
@@ -180,6 +174,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
                         .collect::<Vec<_>>();
 
                     let span = info_span!("initialize node", node_id);
+                    let known_nodes_with_stake_clone = known_nodes_with_stake.clone();
                     async move {
                         let storage = D::create(node_id).await;
                         let data_source = if leaf_only {
@@ -194,8 +189,17 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
                             &[Topic::Global, Topic::Da],
                             None,
                         ));
-
                         let hs_storage: TestStorage<MockTypes> = TestStorage::default();
+
+                        let membership =
+                            Arc::new(RwLock::new(MockMembership::new::<MockNodeImpl>(
+                                known_nodes_with_stake_clone.clone(),
+                                known_nodes_with_stake_clone,
+                                hs_storage.clone(),
+                                network.clone(),
+                                pub_keys[node_id].clone(),
+                            )));
+
                         membership
                             .write()
                             .await

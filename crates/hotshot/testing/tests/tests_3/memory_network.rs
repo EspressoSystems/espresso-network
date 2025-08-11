@@ -16,15 +16,14 @@ use hotshot::{
 };
 use hotshot_example_types::{
     
-    block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
+    block_types::{TestTransaction},
     node_types::{TestVersions, TestTypes},
-    state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
 };
 use hotshot_types::{
-    data::{EpochNumber, ViewNumber},
+    data::{ViewNumber},
     message::{DataMessage, Message, MessageKind, UpgradeLock},
-    signature_key::{BLSPubKey, BuilderKey, SchnorrPubKey},
+    signature_key::{BLSPubKey},
     traits::{
         network::{BroadcastDelay, ConnectedNetwork, TestableNetworkingImplementation, Topic},
         node_implementation::{ConsensusTime, NodeType},
