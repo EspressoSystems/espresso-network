@@ -25,7 +25,7 @@ use hotshot_types::{
     event::HotShotAction,
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate2,
+        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
         UpgradeCertificate,
     },
     traits::{
@@ -61,7 +61,7 @@ pub struct TestStorageState<TYPES: NodeType> {
         Option<hotshot_types::simple_certificate::NextEpochQuorumCertificate2<TYPES>>,
     action: TYPES::View,
     epoch: Option<TYPES::Epoch>,
-    state_certs: BTreeMap<TYPES::Epoch, LightClientStateUpdateCertificate<TYPES>>,
+    state_certs: BTreeMap<TYPES::Epoch, LightClientStateUpdateCertificateV2<TYPES>>,
     drb_results: BTreeMap<TYPES::Epoch, DrbResult>,
     drb_inputs: BTreeMap<u64, DrbInput>,
     epoch_roots: BTreeMap<TYPES::Epoch, TYPES::BlockHeader>,
@@ -156,7 +156,7 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
         self.inner.read().await.vid2.clone()
     }
 
-    pub async fn state_cert_cloned(&self) -> Option<LightClientStateUpdateCertificate<TYPES>> {
+    pub async fn state_cert_cloned(&self) -> Option<LightClientStateUpdateCertificateV2<TYPES>> {
         self.inner
             .read()
             .await
@@ -345,7 +345,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
 
     async fn update_state_cert(
         &self,
-        state_cert: LightClientStateUpdateCertificate<TYPES>,
+        state_cert: LightClientStateUpdateCertificateV2<TYPES>,
     ) -> Result<()> {
         if self.should_return_err.load(Ordering::Relaxed) {
             bail!("Failed to update state_cert to storage");

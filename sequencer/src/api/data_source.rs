@@ -25,7 +25,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::{EpochNumber, VidShare, ViewNumber},
-    light_client::StateSignatureRequestBody,
+    light_client::LCV2StateSignatureRequestBody,
     traits::{
         network::ConnectedNetwork,
         node_implementation::{NodeType, Versions},
@@ -110,7 +110,7 @@ pub(crate) trait HotShotConfigDataSource {
 
 #[async_trait]
 pub(crate) trait StateSignatureDataSource<N: ConnectedNetwork<PubKey>> {
-    async fn get_state_signature(&self, height: u64) -> Option<StateSignatureRequestBody>;
+    async fn get_state_signature(&self, height: u64) -> Option<LCV2StateSignatureRequestBody>;
 }
 
 pub(crate) trait NodeStateDataSource {

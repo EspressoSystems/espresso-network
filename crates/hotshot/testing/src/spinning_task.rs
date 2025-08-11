@@ -29,7 +29,7 @@ use hotshot_types::{
     event::Event,
     message::convert_proposal,
     simple_certificate::{
-        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate2,
+        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
     },
     traits::{
         election::Membership,
@@ -86,7 +86,7 @@ pub struct SpinningTask<
     /// Generate network channel for restart nodes
     pub(crate) channel_generator: AsyncGenerator<Network<TYPES, I>>,
     /// The light client state update certificate
-    pub(crate) state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
+    pub(crate) state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
     /// Node stakes
     pub(crate) node_stakes: TestNodeStakes,
 }

@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 
+use anyhow::Context;
 use hotshot_types::{
     drb::DrbResult,
     traits::signature_key::{
@@ -28,6 +29,8 @@ pub struct TwoStakeTables<
     quorum_2_members: BTreeMap<PubKey, TestStakeTableEntry<PubKey, StatePubKey>>,
 
     da_2_members: BTreeMap<PubKey, TestStakeTableEntry<PubKey, StatePubKey>>,
+
+    drb_results: BTreeMap<u64, DrbResult>,
 
     first_epoch: Option<u64>,
 }
@@ -73,6 +76,7 @@ where
                 .map(|entry| (entry.signature_key.clone(), entry.clone()))
                 .collect(),
             first_epoch: None,
+            drb_results: BTreeMap::new(),
         }
     }
 
@@ -141,10 +145,22 @@ where
         Ok(true)
     }
 
-    fn add_drb_result(&mut self, _epoch: u64, _drb_result: DrbResult) {}
+    fn add_drb_result(&mut self, epoch: u64, drb_result: DrbResult) {
+        self.drb_results.insert(epoch, drb_result);
+    }
 
-    fn set_first_epoch(&mut self, epoch: u64, _initial_drb_result: DrbResult) {
+    fn set_first_epoch(&mut self, epoch: u64, initial_drb_result: DrbResult) {
         self.first_epoch = Some(epoch);
+
+        self.drb_results.insert(epoch, initial_drb_result);
+        self.drb_results.insert(epoch + 1, initial_drb_result);
+    }
+
+    fn get_epoch_drb(&self, epoch: u64) -> anyhow::Result<DrbResult> {
+        self.drb_results
+            .get(&epoch)
+            .context("DRB result missing")
+            .copied()
     }
 
     fn first_epoch(&self) -> Option<u64> {

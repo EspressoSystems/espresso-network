@@ -138,6 +138,7 @@ where
         storage.clone(),
         network.clone(),
         public_key.clone(),
+        launcher.metadata.test_config.epoch_height,
     )));
 
     let coordinator =

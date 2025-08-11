@@ -1,13 +1,16 @@
 use std::{collections::HashSet, fmt, fmt::Debug, sync::Arc};
 
 use alloy::primitives::U256;
+use async_lock::RwLock;
 use hotshot_types::{
+    drb::DrbResult,
     stake_table::HSStakeTable,
     traits::{
         election::Membership,
         node_implementation::{NodeImplementation, NodeType},
         signature_key::StakeTableEntryType,
     },
+    utils::transition_block_for_epoch,
 };
 
 use crate::{
@@ -24,6 +27,7 @@ pub struct StrictMembership<
     epochs: HashSet<TYPES::Epoch>,
     drbs: HashSet<TYPES::Epoch>,
     fetcher: Arc<Leaf2Fetcher<TYPES>>,
+    epoch_height: u64,
 }
 
 impl<TYPES, StakeTable> Debug for StrictMembership<TYPES, StakeTable>
@@ -79,6 +83,7 @@ impl<
         storage: Self::Storage,
         network: Arc<<I as NodeImplementation<TYPES>>::Network>,
         public_key: TYPES::SignatureKey,
+        epoch_height: u64,
     ) -> Self {
         let fetcher = Leaf2Fetcher::new::<I>(network, storage, public_key);
 
@@ -90,6 +95,7 @@ impl<
             epochs: HashSet::new(),
             drbs: HashSet::new(),
             fetcher: fetcher.into(),
+            epoch_height,
         }
     }
 
@@ -225,5 +231,54 @@ impl<
     fn add_drb_result(&mut self, epoch: TYPES::Epoch, drb_result: hotshot_types::drb::DrbResult) {
         self.drbs.insert(epoch);
         self.inner.add_drb_result(*epoch, drb_result);
+    }
+
+    fn set_first_epoch(&mut self, epoch: TYPES::Epoch, initial_drb_result: DrbResult) {
+        self.drbs.insert(epoch);
+        self.drbs.insert(epoch + 1);
+
+        self.inner.set_first_epoch(*epoch, initial_drb_result);
+    }
+
+    async fn get_epoch_drb(
+        membership: Arc<RwLock<Self>>,
+        epoch: TYPES::Epoch,
+    ) -> anyhow::Result<DrbResult> {
+        let membership_reader = membership.read().await;
+        if let Ok(drb_result) = membership_reader.inner.get_epoch_drb(*epoch) {
+            Ok(drb_result)
+        } else {
+            let previous_epoch = match epoch.checked_sub(1) {
+                Some(epoch) => epoch,
+                None => {
+                    anyhow::bail!("Missing initial DRB result for epoch {epoch:?}");
+                },
+            };
+
+            let drb_block_height =
+                transition_block_for_epoch(previous_epoch, membership_reader.epoch_height);
+
+            let mut drb_leaf = None;
+
+            for node in membership_reader.inner.stake_table(Some(previous_epoch)) {
+                if let Ok(leaf) = membership_reader
+                    .fetcher
+                    .fetch_leaf(drb_block_height, node.signature_key)
+                    .await
+                {
+                    drb_leaf = Some(leaf);
+                    break;
+                }
+            }
+
+            match drb_leaf {
+                Some(leaf) => Ok(leaf.next_drb_result.expect(
+                    "We fetched a leaf that is missing a DRB result. This should be impossible.",
+                )),
+                None => {
+                    anyhow::bail!("Failed to fetch leaf from all nodes");
+                },
+            }
+        }
     }
 }

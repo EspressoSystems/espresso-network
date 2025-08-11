@@ -51,5 +51,8 @@ vbs = { workspace = true }
 vec1 = { workspace = true }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
+[dev-dependencies]
+test-log = { workspace = true }
+
 [lints]
 workspace = true

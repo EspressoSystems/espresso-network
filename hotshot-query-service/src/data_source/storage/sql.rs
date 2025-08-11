@@ -1390,16 +1390,11 @@ mod test {
         availability::LeafQueryData,
         data_source::storage::{pruning::PrunedHeightStorage, UpdateAvailabilityStorage},
         merklized_state::{MerklizedState, UpdateStateData},
-        testing::{
-            mocks::{MockHeader, MockMerkleTree, MockPayload, MockTypes, MockVersions},
-            setup_test,
-        },
+        testing::mocks::{MockHeader, MockMerkleTree, MockPayload, MockTypes, MockVersions},
     };
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_migrations() {
-        setup_test();
-
         let db = TmpDb::init().await;
         let cfg = db.config();
 
@@ -1482,10 +1477,8 @@ mod test {
             .unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_target_period_pruning() {
-        setup_test();
-
         let db = TmpDb::init().await;
         let cfg = db.config();
 
@@ -1573,10 +1566,8 @@ mod test {
         )
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_merklized_state_pruning() {
-        setup_test();
-
         let db = TmpDb::init().await;
         let config = db.config();
 
@@ -1665,10 +1656,8 @@ mod test {
         assert!(count == 0);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_minimum_retention_pruning() {
-        setup_test();
-
         let db = TmpDb::init().await;
 
         let mut storage = SqlStorage::connect(db.config()).await.unwrap();
@@ -1742,10 +1731,8 @@ mod test {
         assert_eq!(header_rows, 0);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_pruned_height_storage() {
-        setup_test();
-
         let db = TmpDb::init().await;
         let cfg = db.config();
 
@@ -1775,10 +1762,8 @@ mod test {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_types_migration() {
-        setup_test();
-
         let num_rows = 500;
         let db = TmpDb::init().await;
 

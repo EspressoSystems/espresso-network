@@ -40,7 +40,7 @@ use hotshot_types::{
 };
 
 #[cfg(test)]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_quorum_proposal_recv_task() {
     use std::time::Duration;
 
@@ -48,8 +48,6 @@ async fn test_quorum_proposal_recv_task() {
         helpers::build_fake_view_with_leaf,
         script::{Expectations, TaskScript},
     };
-
-    hotshot::helpers::initialize_logging();
 
     let (handle, _, _, node_key_map) =
         build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2).await;
@@ -110,7 +108,7 @@ async fn test_quorum_proposal_recv_task() {
 }
 
 #[cfg(test)]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_quorum_proposal_recv_task_liveness_check() {
     use std::time::Duration;
 
@@ -122,8 +120,6 @@ async fn test_quorum_proposal_recv_task_liveness_check() {
         script::{Expectations, TaskScript},
     };
     use hotshot_types::{data::Leaf2, vote::HasViewNumber};
-
-    hotshot::helpers::initialize_logging();
 
     let (handle, _, _, node_key_map) =
         build_system_handle::<TestTypes, MemoryImpl, TestVersions>(4).await;

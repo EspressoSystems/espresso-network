@@ -1,5 +1,6 @@
 use std::fmt;
 
+use alloy::primitives::Keccak256;
 use anyhow::{ensure, Context};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
@@ -16,7 +17,7 @@ use hotshot_types::{
     },
     utils::BuilderCommitment,
 };
-use jf_merkle_tree::{AppendableMerkleTreeScheme, MerkleTreeScheme};
+use jf_merkle_tree::{AppendableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme};
 use serde::{
     de::{self, MapAccess, SeqAccess, Visitor},
     Deserialize, Deserializer, Serialize, Serializer,
@@ -1099,6 +1100,39 @@ impl BlockHeader<SeqTypes> for Header {
             )?,
         })
     }
+
+    fn auth_root(&self) -> anyhow::Result<Option<[u8; 32]>> {
+        match self {
+            Header::V1(_) | Header::V2(_) | Header::V3(_) => Ok(None),
+            Header::V4(header) => {
+                // Temporary placeholder values for future fields
+                let placeholder_1 = [0; 32];
+                let placeholder_2 = [0; 32];
+                let placeholder_3 = [0; 32];
+                let placeholder_4 = [0; 32];
+                let placeholder_5 = [0; 32];
+                let placeholder_6 = [0; 32];
+                let placeholder_7 = [0; 32];
+
+                let mut hasher = Keccak256::new();
+
+                // Start with the reward Merkle tree root digest as the base input
+                let digest = header.reward_merkle_tree_root.digest();
+                hasher.update(digest.0);
+                hasher.update(placeholder_1);
+                hasher.update(placeholder_2);
+                hasher.update(placeholder_3);
+                hasher.update(placeholder_4);
+                hasher.update(placeholder_5);
+                hasher.update(placeholder_6);
+                hasher.update(placeholder_7);
+
+                let result = hasher.finalize();
+
+                Ok(Some(result.0))
+            },
+        }
+    }
 }
 
 impl QueryableHeader<SeqTypes> for Header {
@@ -1163,7 +1197,6 @@ mod test_headers {
     };
     use hotshot_query_service::testing::mocks::MockVersions;
     use hotshot_types::traits::signature_key::BuilderSignatureKey;
-    use sequencer_utils::test_utils::setup_test;
     use v0_1::{BlockMerkleTree, FeeMerkleTree, L1Client};
     use vbs::{bincode_serializer::BincodeSerializer, version::StaticVersion, BinarySerializer};
 
@@ -1201,8 +1234,6 @@ mod test_headers {
 
     impl TestCase {
         async fn run(self) {
-            setup_test();
-
             // Check test case validity.
             assert!(self.expected_timestamp >= self.parent_timestamp);
             assert!(self.expected_timestamp_millis >= self.parent_timestamp_millis);
@@ -1306,13 +1337,13 @@ mod test_headers {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_new_header() {
         // Simplest case: building on genesis, L1 info and timestamp unchanged.
         TestCase::default().run().await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_new_header_advance_timestamp() {
         TestCase {
             timestamp: 1,
@@ -1325,7 +1356,7 @@ mod test_headers {
         .await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_new_header_advance_l1_block() {
         TestCase {
             parent_l1_head: 0,
@@ -1343,7 +1374,7 @@ mod test_headers {
         .await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_new_header_advance_l1_finalized_from_none() {
         TestCase {
             l1_finalized: Some(l1_block(1)),
@@ -1354,7 +1385,7 @@ mod test_headers {
         .await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_new_header_timestamp_behind_finalized_l1_block() {
         let l1_finalized = Some(L1BlockInfo {
             number: 1,
@@ -1378,7 +1409,7 @@ mod test_headers {
         .await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_new_header_timestamp_behind() {
         TestCase {
             parent_timestamp: 1,
@@ -1394,7 +1425,7 @@ mod test_headers {
         .await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_new_header_l1_head_behind() {
         TestCase {
             parent_l1_head: 1,
@@ -1407,7 +1438,7 @@ mod test_headers {
         .await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_new_header_l1_finalized_behind_some() {
         TestCase {
             parent_l1_finalized: Some(l1_block(1)),
@@ -1420,7 +1451,7 @@ mod test_headers {
         .await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_new_header_l1_finalized_behind_none() {
         TestCase {
             parent_l1_finalized: Some(l1_block(0)),
@@ -1433,7 +1464,7 @@ mod test_headers {
         .await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_new_header_deposits_one() {
         TestCase {
             l1_deposits: vec![FeeInfo::new(Address::default(), 1)],
@@ -1443,7 +1474,7 @@ mod test_headers {
         .await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_new_header_deposits_many() {
         TestCase {
             l1_deposits: [
@@ -1487,10 +1518,8 @@ mod test_headers {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_proposal_validation_success() {
-        setup_test();
-
         let anvil = Anvil::new().block_time(1u64).spawn();
         let mut genesis_state = NodeState::mock()
             .with_l1(L1Client::new(vec![anvil.endpoint_url()]).expect("Failed to create L1 client"))
@@ -1591,7 +1620,7 @@ mod test_headers {
         // );
     }
 
-    #[test]
+    #[test_log::test]
     fn verify_builder_signature() {
         // simulate a fixed size hash by padding our message
         let message = ";)";
@@ -1605,10 +1634,8 @@ mod test_headers {
             .validate_builder_signature(&signature, &commitment));
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_versioned_header_serialization() {
-        setup_test();
-
         let genesis = GenesisForTest::default().await;
         let header = genesis.header.clone();
         let ns_table = genesis.ns_table;

@@ -8,7 +8,6 @@ use std::path::PathBuf;
 
 use clap::Args;
 use committable::Committable;
-use derive_more::From;
 use futures::FutureExt;
 use hotshot_types::{traits::node_implementation::NodeType, utils::BuilderCommitment};
 use serde::{Deserialize, Serialize};

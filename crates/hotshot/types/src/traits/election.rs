@@ -35,6 +35,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         storage: Self::Storage,
         network: Arc<<I as NodeImplementation<TYPES>>::Network>,
         public_key: TYPES::SignatureKey,
+        epoch_height: u64,
     ) -> Self;
 
     fn total_stake(&self, epoch: Option<TYPES::Epoch>) -> U256 {
@@ -204,11 +205,8 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// Gets the DRB result for the given epoch
     fn get_epoch_drb(
         _membership: Arc<RwLock<Self>>,
-        _block_height: u64,
         _epoch: TYPES::Epoch,
-    ) -> impl std::future::Future<Output = anyhow::Result<DrbResult>> + Send {
-        async move { anyhow::bail!("Not implemented") }
-    }
+    ) -> impl std::future::Future<Output = anyhow::Result<DrbResult>> + Send;
 
     /// Handles notifications that a new epoch root has been created.
     fn add_epoch_root(
@@ -227,7 +225,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// Implementations should copy the pre-epoch stake table into epoch and epoch+1
     /// when this is called. The value of initial_drb_result should be used for DRB
     /// calculations for epochs (epoch+1) and earlier.
-    fn set_first_epoch(&mut self, _epoch: TYPES::Epoch, _initial_drb_result: DrbResult) {}
+    fn set_first_epoch(&mut self, _epoch: TYPES::Epoch, _initial_drb_result: DrbResult);
 
     /// Get first epoch if epochs are enabled, `None` otherwise
     fn first_epoch(&self) -> Option<TYPES::Epoch> {

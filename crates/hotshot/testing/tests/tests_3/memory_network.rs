@@ -89,10 +89,9 @@ fn gen_messages(num_messages: u64, seed: u64, pk: BLSPubKey) -> Vec<Message<Test
 
 // Spawning a single MemoryNetwork should produce no errors
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn memory_network_spawn_single() {
-    hotshot::helpers::initialize_logging();
     let group: Arc<MasterMap<<TestTypes as NodeType>::SignatureKey>> = MasterMap::new();
     trace!(?group);
     let _pub_key = pubkey();
@@ -100,10 +99,9 @@ async fn memory_network_spawn_single() {
 
 // // Spawning a two MemoryNetworks and connecting them should produce no errors
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn memory_network_spawn_double() {
-    hotshot::helpers::initialize_logging();
     let group: Arc<MasterMap<<TestTypes as NodeType>::SignatureKey>> = MasterMap::new();
     trace!(?group);
     let _pub_key_1 = pubkey();
@@ -112,10 +110,9 @@ async fn memory_network_spawn_double() {
 
 // Check to make sure direct queue works
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn memory_network_direct_queue() {
-    hotshot::helpers::initialize_logging();
     // Create some dummy messages
 
     // Make and connect the networking instances
@@ -234,11 +231,10 @@ async fn memory_network_broadcast_queue() {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 #[allow(deprecated)]
 async fn memory_network_test_in_flight_message_count() {
-    hotshot::helpers::initialize_logging();
 
     let group: Arc<MasterMap<<TestTypes as NodeType>::SignatureKey>> = MasterMap::new();
     trace!(?group);

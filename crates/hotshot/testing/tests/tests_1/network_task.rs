@@ -4,7 +4,10 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{sync::{Arc, atomic::Ordering}, time::Duration};
+use std::{
+    sync::{atomic::Ordering, Arc},
+    time::Duration,
+};
 
 use async_broadcast::Sender;
 use async_lock::RwLock;
@@ -22,7 +25,7 @@ use hotshot_types::{
     message::UpgradeLock,
     traits::{
         election::Membership,
-        node_implementation::{ConsensusTime, NodeType}
+        node_implementation::{ConsensusTime, NodeType},
     },
 };
 use tokio::time::timeout;
@@ -30,15 +33,13 @@ use tokio::time::timeout;
 // Test that the event task sends a message, and the message task receives it
 // and emits the proper event
 #[cfg(test)]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[allow(clippy::too_many_lines)]
 async fn test_network_task() {
     use std::collections::BTreeMap;
 
     use futures::StreamExt;
     use hotshot_types::epoch_membership::EpochMembershipCoordinator;
-
-    hotshot::helpers::initialize_logging();
 
     let builder: TestDescription<TestTypes, MemoryImpl, TestVersions> =
         TestDescription::default_multiple_rounds();
@@ -58,14 +59,18 @@ async fn test_network_task() {
 
     let all_nodes = config.known_nodes_with_stake.clone();
 
-    let membership = Arc::new(RwLock::new(<TestTypes as NodeType>::Membership::new::<MemoryImpl>(
+    let membership = Arc::new(RwLock::new(<TestTypes as NodeType>::Membership::new::<
+        MemoryImpl,
+    >(
         all_nodes.clone(),
         all_nodes,
         storage.clone(),
         network.clone(),
         public_key.clone(),
+        config.epoch_height,
     )));
-    let coordinator = EpochMembershipCoordinator::new(membership, config.epoch_height, &storage.clone());
+    let coordinator =
+        EpochMembershipCoordinator::new(membership, config.epoch_height, &storage.clone());
     let network_state: NetworkEventTaskState<TestTypes, TestVersions, MemoryNetwork<_>, _> =
         NetworkEventTaskState {
             id: node_id,
@@ -119,13 +124,11 @@ async fn test_network_task() {
 }
 
 #[cfg(test)]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_network_external_mnessages() {
     use hotshot::types::EventType;
     use hotshot_testing::helpers::build_system_handle_from_launcher;
     use hotshot_types::message::RecipientList;
-
-    hotshot::helpers::initialize_logging();
 
     let builder: TestDescription<TestTypes, MemoryImpl, TestVersions> =
         TestDescription::default_multiple_rounds();
@@ -211,14 +214,12 @@ async fn test_network_external_mnessages() {
 }
 
 #[cfg(test)]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_network_storage_fail() {
     use std::collections::BTreeMap;
 
     use futures::StreamExt;
     use hotshot_types::epoch_membership::EpochMembershipCoordinator;
-
-    hotshot::helpers::initialize_logging();
 
     let builder: TestDescription<TestTypes, MemoryImpl, TestVersions> =
         TestDescription::default_multiple_rounds();
@@ -231,21 +232,25 @@ async fn test_network_storage_fail() {
 
     let consensus = OuterConsensus::new(handle.hotshot.consensus());
     let storage = (launcher.resource_generators.storage)(node_id);
-    storage.should_return_err.store( true, Ordering::Relaxed);
+    storage.should_return_err.store(true, Ordering::Relaxed);
     let config = (launcher.resource_generators.hotshot_config)(node_id);
     let validator_config = (launcher.resource_generators.validator_config)(node_id);
     let public_key = validator_config.public_key;
     let all_nodes = config.known_nodes_with_stake.clone();
     let upgrade_lock = UpgradeLock::<TestTypes, TestVersions>::new();
 
-    let membership = Arc::new(RwLock::new(<TestTypes as NodeType>::Membership::new::<MemoryImpl>(
+    let membership = Arc::new(RwLock::new(<TestTypes as NodeType>::Membership::new::<
+        MemoryImpl,
+    >(
         all_nodes.clone(),
         all_nodes,
         storage.clone(),
         network.clone(),
         public_key.clone(),
+        config.epoch_height,
     )));
-    let coordinator = EpochMembershipCoordinator::new(membership, config.epoch_height, &storage.clone());
+    let coordinator =
+        EpochMembershipCoordinator::new(membership, config.epoch_height, &storage.clone());
     let network_state: NetworkEventTaskState<TestTypes, TestVersions, MemoryNetwork<_>, _> =
         NetworkEventTaskState {
             id: node_id,

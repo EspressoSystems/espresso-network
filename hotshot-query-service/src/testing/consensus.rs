@@ -198,6 +198,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
                                 hs_storage.clone(),
                                 network.clone(),
                                 pub_keys[node_id].clone(),
+                                config.epoch_height,
                             )));
 
                         membership

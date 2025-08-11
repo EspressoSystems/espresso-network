@@ -290,6 +290,10 @@ jobs:
 
       - uses: actions/checkout@v4
 
+      - name: Build espresso-dev-node
+        run: |
+          nix develop --accept-flake-config -c cargo build --bin espresso-dev-node --features testing,embedded-db
+
       - name: Build verification module
         run: |
           nix develop --accept-flake-config -c just build-go-crypto-helper
