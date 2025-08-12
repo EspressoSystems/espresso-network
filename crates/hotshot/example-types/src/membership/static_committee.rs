@@ -23,9 +23,9 @@ pub struct StaticStakeTable<
     PubKey: SignatureKey,
     StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
 > {
-    quorum_members: BTreeMap<PubKey, TestStakeTableEntry<PubKey, StatePubKey>>,
+    quorum_members: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
 
-    da_members: BTreeMap<PubKey, TestStakeTableEntry<PubKey, StatePubKey>>,
+    da_members: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
 
     first_epoch: Option<u64>,
 
@@ -44,25 +44,19 @@ where
         da_members: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
     ) -> Self {
         Self {
-            quorum_members: quorum_members
-                .iter()
-                .map(|entry| (entry.signature_key.clone(), entry.clone()))
-                .collect(),
-            da_members: da_members
-                .iter()
-                .map(|entry| (entry.signature_key.clone(), entry.clone()))
-                .collect(),
+            quorum_members,
+            da_members,
             first_epoch: None,
             drb_results: BTreeMap::new(),
         }
     }
 
     fn stake_table(&self, _epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
-        self.quorum_members.values().cloned().collect()
+        self.quorum_members.clone()
     }
 
     fn da_stake_table(&self, _epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
-        self.da_members.values().cloned().collect()
+        self.da_members.clone()
     }
 
     fn stake(
@@ -70,7 +64,7 @@ where
         pub_key: PubKey,
         _epoch: Option<u64>,
     ) -> Option<TestStakeTableEntry<PubKey, StatePubKey>> {
-        self.quorum_members.get(&pub_key).cloned()
+        self.quorum_members.iter().find(|entry| entry.signature_key == pub_key).cloned()
     }
 
     fn da_stake(
@@ -78,12 +72,12 @@ where
         pub_key: PubKey,
         _epoch: Option<u64>,
     ) -> Option<TestStakeTableEntry<PubKey, StatePubKey>> {
-        self.da_members.get(&pub_key).cloned()
+        self.da_members.iter().find(|entry| entry.signature_key == pub_key).cloned()
     }
 
     fn lookup_leader(&self, view_number: u64, _epoch: Option<u64>) -> anyhow::Result<PubKey> {
         let index = view_number as usize % self.quorum_members.len();
-        let leader = self.quorum_members.values().collect::<Vec<_>>()[index].clone();
+        let leader = self.quorum_members[index].clone();
         Ok(leader.signature_key)
     }
 
