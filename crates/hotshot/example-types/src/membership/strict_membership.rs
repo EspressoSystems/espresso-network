@@ -175,6 +175,8 @@ impl<
         pub_key: &<TYPES as NodeType>::SignatureKey,
         epoch: Option<<TYPES as NodeType>::Epoch>,
     ) -> bool {
+        self.assert_has_stake_table(epoch);
+
         self.stake(pub_key, epoch)
             .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
     }
@@ -185,6 +187,8 @@ impl<
         pub_key: &<TYPES as NodeType>::SignatureKey,
         epoch: Option<<TYPES as NodeType>::Epoch>,
     ) -> bool {
+        self.assert_has_stake_table(epoch);
+
         self.da_stake(pub_key, epoch)
             .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
     }
@@ -229,11 +233,16 @@ impl<
     }
 
     fn add_drb_result(&mut self, epoch: TYPES::Epoch, drb_result: hotshot_types::drb::DrbResult) {
+        self.assert_has_stake_table(epoch);
+
         self.drbs.insert(epoch);
         self.inner.add_drb_result(*epoch, drb_result);
     }
 
     fn set_first_epoch(&mut self, epoch: TYPES::Epoch, initial_drb_result: DrbResult) {
+        self.epochs.insert(epoch);
+        self.epochs.insert(epoch + 1);
+
         self.drbs.insert(epoch);
         self.drbs.insert(epoch + 1);
 
