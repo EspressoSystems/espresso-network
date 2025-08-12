@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{collections::BTreeMap, fmt::Debug};
+use std::{collections::{BTreeMap, BTreeSet}, fmt::Debug};
 
 use anyhow::Context;
 use hotshot_types::{
@@ -29,6 +29,8 @@ pub struct StaticStakeTable<
 
     first_epoch: Option<u64>,
 
+    epochs: BTreeSet<u64>,
+
     drb_results: BTreeMap<u64, DrbResult>,
 }
 
@@ -47,6 +49,7 @@ where
             quorum_members,
             da_members,
             first_epoch: None,
+            epochs: BTreeSet::new(),
             drb_results: BTreeMap::new(),
         }
     }
@@ -65,12 +68,16 @@ where
         Ok(leader.signature_key)
     }
 
-    fn has_stake_table(&self, _epoch: u64) -> bool {
-        true
+    fn has_stake_table(&self, epoch: u64) -> bool {
+        self.epochs.contains(&epoch)
     }
 
-    fn has_randomized_stake_table(&self, _epoch: u64) -> anyhow::Result<bool> {
-        Ok(true)
+    fn has_randomized_stake_table(&self, epoch: u64) -> anyhow::Result<bool> {
+       Ok(self.drb_results.contains_key(&epoch))
+    }
+
+    fn add_epoch_root(&mut self, epoch: u64) {
+        self.epochs.insert(epoch);
     }
 
     fn add_drb_result(&mut self, epoch: u64, drb_result: DrbResult) {
@@ -80,8 +87,11 @@ where
     fn set_first_epoch(&mut self, epoch: u64, initial_drb_result: DrbResult) {
         self.first_epoch = Some(epoch);
 
-        self.drb_results.insert(epoch, initial_drb_result);
-        self.drb_results.insert(epoch + 1, initial_drb_result);
+        self.add_epoch_root(epoch);
+        self.add_epoch_root(epoch + 1);
+
+        self.add_drb_result(epoch, initial_drb_result);
+        self.add_drb_result(epoch + 1, initial_drb_result);
     }
 
     fn get_epoch_drb(&self, epoch: u64) -> anyhow::Result<DrbResult> {

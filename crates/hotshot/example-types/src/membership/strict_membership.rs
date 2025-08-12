@@ -249,10 +249,25 @@ impl<
         self.inner.set_first_epoch(*epoch, initial_drb_result);
     }
 
+    async fn add_epoch_root(
+        membership: Arc<RwLock<Self>>,
+        epoch: TYPES::Epoch,
+        block_header: TYPES::BlockHeader,
+    ) -> anyhow::Result<()> {
+        let mut membership_writer = membership.write().await;
+
+        membership_writer.epochs.insert(epoch);
+
+        membership_writer.inner.add_epoch_root(*epoch);
+
+        Ok(())
+    }
+
     async fn get_epoch_drb(
         membership: Arc<RwLock<Self>>,
         epoch: TYPES::Epoch,
     ) -> anyhow::Result<DrbResult> {
+        tracing::error!("FETCHING EPOCH DRB");
         let membership_reader = membership.read().await;
         if let Ok(drb_result) = membership_reader.inner.get_epoch_drb(*epoch) {
             Ok(drb_result)

@@ -83,6 +83,8 @@ pub trait TestStakeTable<
 
     fn has_randomized_stake_table(&self, epoch: u64) -> anyhow::Result<bool>;
 
+    fn add_epoch_root(&mut self, epoch: u64) {}
+
     fn add_drb_result(&mut self, epoch: u64, drb_result: DrbResult);
 
     fn set_first_epoch(&mut self, epoch: u64, initial_drb_result: DrbResult);
