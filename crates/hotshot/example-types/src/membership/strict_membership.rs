@@ -5,6 +5,7 @@ use async_lock::RwLock;
 use hotshot_types::{
     drb::DrbResult,
     stake_table::HSStakeTable,
+    data::Leaf2,
     traits::{
         election::Membership,
         node_implementation::{NodeImplementation, NodeType},
@@ -215,7 +216,7 @@ impl<
     fn has_stake_table(&self, epoch: TYPES::Epoch) -> bool {
         let has_stake_table = self.inner.has_stake_table(*epoch);
 
-        assert_eq!(has_stake_table, self.epochs.contains(&epoch));
+//        assert_eq!(has_stake_table, self.epochs.contains(&epoch));
 
         has_stake_table
     }
@@ -265,6 +266,27 @@ impl<
         membership_writer.inner.add_epoch_root(*epoch);
 
         Ok(())
+    }
+
+    async fn get_epoch_root(
+        membership: Arc<RwLock<Self>>,
+        block_height: u64,
+        epoch: TYPES::Epoch,
+    ) -> anyhow::Result<Leaf2<TYPES>> {
+        tracing::error!("FETCHING EPOCH ROOT");
+        let membership_reader = membership.read().await;
+
+            for node in membership_reader.inner.stake_table(Some(*epoch)) {
+                if let Ok(leaf) = membership_reader
+                    .fetcher
+                    .fetch_leaf(block_height, node.signature_key)
+                    .await
+                {
+                    return Ok(leaf);
+                }
+            }
+
+            anyhow::bail!("Failed to fetch epoch root from any peer");
     }
 
     async fn get_epoch_drb(

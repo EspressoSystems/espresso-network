@@ -198,9 +198,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         _membership: Arc<RwLock<Self>>,
         _block_height: u64,
         _epoch: TYPES::Epoch,
-    ) -> impl std::future::Future<Output = anyhow::Result<Leaf2<TYPES>>> + Send {
-        async move { anyhow::bail!("Not implemented") }
-    }
+    ) -> impl std::future::Future<Output = anyhow::Result<Leaf2<TYPES>>> + Send;
 
     /// Gets the DRB result for the given epoch
     fn get_epoch_drb(
@@ -213,9 +211,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         _membership: Arc<RwLock<Self>>,
         _epoch: TYPES::Epoch,
         _block_header: TYPES::BlockHeader,
-    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send {
-        async { Ok(()) }
-    }
+    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
 
     /// Called to notify the Membership when a new DRB result has been calculated.
     /// Observes the same semantics as add_epoch_root
@@ -228,9 +224,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     fn set_first_epoch(&mut self, _epoch: TYPES::Epoch, _initial_drb_result: DrbResult);
 
     /// Get first epoch if epochs are enabled, `None` otherwise
-    fn first_epoch(&self) -> Option<TYPES::Epoch> {
-        None
-    }
+    fn first_epoch(&self) -> Option<TYPES::Epoch>;
 }
 
 pub fn membership_spawn_add_epoch_root<TYPES: NodeType>(
