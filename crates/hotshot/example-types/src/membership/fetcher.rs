@@ -98,45 +98,45 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
         let storage_clone = storage.clone();
         let network_clone = network.clone();
         let listener = tokio::spawn(async move {
-            while let Ok(message) = network_clone.recv_message().await {
-                // Deserialize the message
-                let (requested_height, requester): (u64, TYPES::SignatureKey) =
-                    match bincode::deserialize(&message) {
-                        Ok(message) => message,
-                        Err(e) => {
-                            tracing::error!("Failed to deserialize message: {:?}", e);
-                            continue;
-                        },
-                    };
-
-                let leaves: BTreeMap<u64, Leaf2<TYPES>> = storage_clone
-                    .inner
-                    .read()
-                    .await
-                    .proposals2
-                    .iter()
-                    .map(|(_view, proposal)| {
-                        (
-                            proposal.data.block_header.block_number(),
-                            Leaf2::from_quorum_proposal(&proposal.data.clone().into()),
-                        )
-                    })
-                    .collect();
-
-                let Some(leaf) = leaves.get(&requested_height) else {
-                    tracing::warn!("Block at height {} not found in storage", requested_height);
-                    continue;
-                };
-
-                let serialized_leaf = bincode::serialize(&leaf).expect("Failed to serialized leaf");
-
-                if let Err(e) = network_clone
-                    .direct_message(serialized_leaf, requester)
-                    .await
-                {
-                    tracing::warn!("Failed to send leaf response in test membership fetcher: {e}");
-                };
-            }
+//            while let Ok(message) = network_clone.recv_message().await {
+//                // Deserialize the message
+//                let (requested_height, requester): (u64, TYPES::SignatureKey) =
+//                    match bincode::deserialize(&message) {
+//                        Ok(message) => message,
+//                        Err(e) => {
+//                            tracing::error!("Failed to deserialize message: {:?}", e);
+//                            continue;
+//                        },
+//                    };
+//
+//                let leaves: BTreeMap<u64, Leaf2<TYPES>> = storage_clone
+//                    .inner
+//                    .read()
+//                    .await
+//                    .proposals2
+//                    .iter()
+//                    .map(|(_view, proposal)| {
+//                        (
+//                            proposal.data.block_header.block_number(),
+//                            Leaf2::from_quorum_proposal(&proposal.data.clone().into()),
+//                        )
+//                    })
+//                    .collect();
+//
+//                let Some(leaf) = leaves.get(&requested_height) else {
+//                    tracing::warn!("Block at height {} not found in storage", requested_height);
+//                    continue;
+//                };
+//
+//                let serialized_leaf = bincode::serialize(&leaf).expect("Failed to serialized leaf");
+//
+//                if let Err(e) = network_clone
+//                    .direct_message(serialized_leaf, requester)
+//                    .await
+//                {
+//                    tracing::warn!("Failed to send leaf response in test membership fetcher: {e}");
+//                };
+//            }
         });
 
         let network_functions: NetworkFunctions<TYPES> = network_functions::<TYPES, I>(network);
