@@ -6,6 +6,7 @@ import { BN254 } from "bn254/BN254.sol";
 import { LightClientV2 } from "./LightClientV2.sol";
 import { IPlonkVerifier } from "./interfaces/IPlonkVerifier.sol";
 import { PlonkVerifierV3 } from "./libraries/PlonkVerifierV3.sol";
+import { LightClientStateUpdateVKV3 as VkLib } from "./libraries/LightClientStateUpdateVKV3.sol";
 
 /// @title LightClientV3
 /// @notice LightClientV2 with an additional root for gas-efficient state authentication and
@@ -98,6 +99,16 @@ contract LightClientV3 is LightClientV2 {
         emit NewState(newState.viewNum, newState.blockHeight, newState.blockCommRoot);
     }
 
+    function _getVk()
+        public
+        pure
+        virtual
+        override
+        returns (IPlonkVerifier.VerifyingKey memory vk)
+    {
+        vk = VkLib.getVk();
+    }
+
     /// @dev compare to V2, we change public input length from 11 to 5:
     /// @dev 4 from votingStakeTableState, 1 from msg_signed := H(authenticated states)
     function verifyProof(
@@ -106,7 +117,6 @@ contract LightClientV3 is LightClientV2 {
         uint256 newAuthRoot,
         IPlonkVerifier.PlonkProof memory proof
     ) internal virtual {
-        // TODO: replace with newly generated VKLib
         IPlonkVerifier.VerifyingKey memory vk = _getVk();
 
         // DIFF: a redesign of public input from V2, reduced number of public inputs while
