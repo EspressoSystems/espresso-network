@@ -148,28 +148,6 @@ impl<
         }
     }
 
-    fn stake(
-        &self,
-        pub_key: PubKey,
-        epoch: Option<u64>,
-    ) -> Option<TestStakeTableEntry<PubKey, StatePubKey>> {
-        self.stake_table(epoch)
-            .iter()
-            .find(|entry| entry.signature_key == pub_key)
-            .cloned()
-    }
-
-    fn da_stake(
-        &self,
-        pub_key: PubKey,
-        epoch: Option<u64>,
-    ) -> Option<TestStakeTableEntry<PubKey, StatePubKey>> {
-        self.da_stake_table(epoch)
-            .iter()
-            .find(|entry| entry.signature_key == pub_key)
-            .cloned()
-    }
-
     fn lookup_leader(&self, view_number: u64, epoch: Option<u64>) -> anyhow::Result<PubKey> {
         let stake_table = self.stake_table(epoch);
         let mut rng: StdRng = rand::SeedableRng::seed_from_u64(view_number);

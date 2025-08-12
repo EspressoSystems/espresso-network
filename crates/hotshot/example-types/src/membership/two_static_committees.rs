@@ -22,13 +22,13 @@ pub struct TwoStakeTables<
     PubKey: SignatureKey,
     StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
 > {
-    quorum_1_members: BTreeMap<PubKey, TestStakeTableEntry<PubKey, StatePubKey>>,
+    quorum_1_members: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
 
-    da_1_members: BTreeMap<PubKey, TestStakeTableEntry<PubKey, StatePubKey>>,
+    da_1_members: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
 
-    quorum_2_members: BTreeMap<PubKey, TestStakeTableEntry<PubKey, StatePubKey>>,
+    quorum_2_members: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
 
-    da_2_members: BTreeMap<PubKey, TestStakeTableEntry<PubKey, StatePubKey>>,
+    da_2_members: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
 
     drb_results: BTreeMap<u64, DrbResult>,
 
@@ -51,29 +51,25 @@ where
                 .iter()
                 .enumerate()
                 .filter(|(idx, _)| idx % 2 == 0)
-                .map(|(_, leader)| leader.clone())
-                .map(|entry| (entry.signature_key.clone(), entry.clone()))
+                .map(|(_, entry)| entry.clone())
                 .collect(),
             da_1_members: da_members
                 .iter()
                 .enumerate()
                 .filter(|(idx, _)| idx % 2 == 0)
-                .map(|(_, leader)| leader.clone())
-                .map(|entry| (entry.signature_key.clone(), entry.clone()))
+                .map(|(_, entry)| entry.clone())
                 .collect(),
             quorum_2_members: quorum_members
                 .iter()
                 .enumerate()
                 .filter(|(idx, _)| idx % 2 == 1)
-                .map(|(_, leader)| leader.clone())
-                .map(|entry| (entry.signature_key.clone(), entry.clone()))
+                .map(|(_, entry)| entry.clone())
                 .collect(),
             da_2_members: da_members
                 .iter()
                 .enumerate()
                 .filter(|(idx, _)| idx % 2 == 1)
-                .map(|(_, leader)| leader.clone())
-                .map(|entry| (entry.signature_key.clone(), entry.clone()))
+                .map(|(_, entry)| entry.clone())
                 .collect(),
             first_epoch: None,
             drb_results: BTreeMap::new(),
@@ -83,58 +79,28 @@ where
     fn stake_table(&self, epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
         let epoch = epoch.expect("epochs cannot be disabled with TwoStakeTables");
         if epoch != 0 && epoch % 2 == 0 {
-            self.quorum_1_members.values().cloned().collect()
+            self.quorum_1_members.clone()
         } else {
-            self.quorum_2_members.values().cloned().collect()
+            self.quorum_2_members.clone()
         }
     }
 
     fn da_stake_table(&self, epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
         let epoch = epoch.expect("epochs cannot be disabled with TwoStakeTables");
         if epoch != 0 && epoch % 2 == 0 {
-            self.da_1_members.values().cloned().collect()
+            self.da_1_members.clone()
         } else {
-            self.da_2_members.values().cloned().collect()
-        }
-    }
-
-    fn stake(
-        &self,
-        pub_key: PubKey,
-        epoch: Option<u64>,
-    ) -> Option<TestStakeTableEntry<PubKey, StatePubKey>> {
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStakeTables");
-        if epoch != 0 && epoch % 2 == 0 {
-            self.quorum_1_members.get(&pub_key).cloned()
-        } else {
-            self.quorum_2_members.get(&pub_key).cloned()
-        }
-    }
-
-    fn da_stake(
-        &self,
-        pub_key: PubKey,
-        epoch: Option<u64>,
-    ) -> Option<TestStakeTableEntry<PubKey, StatePubKey>> {
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStakeTables");
-        if epoch != 0 && epoch % 2 == 0 {
-            self.da_1_members.get(&pub_key).cloned()
-        } else {
-            self.da_2_members.get(&pub_key).cloned()
+            self.da_2_members.clone()
         }
     }
 
     fn lookup_leader(&self, view_number: u64, epoch: Option<u64>) -> anyhow::Result<PubKey> {
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStakeTables");
-        if epoch != 0 && epoch % 2 == 0 {
-            let index = view_number as usize % self.quorum_1_members.len();
-            let leader = self.quorum_1_members.values().collect::<Vec<_>>()[index].clone();
-            Ok(leader.signature_key)
-        } else {
-            let index = view_number as usize % self.quorum_2_members.len();
-            let leader = self.quorum_2_members.values().collect::<Vec<_>>()[index].clone();
-            Ok(leader.signature_key)
-        }
+        let stake_table = self.stake_table(epoch);
+
+        let index = view_number as usize % stake_table.len();
+        let leader = stake_table[index].clone();
+
+        Ok(leader.signature_key)
     }
 
     fn has_stake_table(&self, _epoch: u64) -> bool {

@@ -65,22 +65,6 @@ where
         self.da_members.values().cloned().collect()
     }
 
-    fn stake(
-        &self,
-        pub_key: PubKey,
-        _epoch: Option<u64>,
-    ) -> Option<TestStakeTableEntry<PubKey, StatePubKey>> {
-        self.quorum_members.get(&pub_key).cloned()
-    }
-
-    fn da_stake(
-        &self,
-        pub_key: PubKey,
-        _epoch: Option<u64>,
-    ) -> Option<TestStakeTableEntry<PubKey, StatePubKey>> {
-        self.da_members.get(&pub_key).cloned()
-    }
-
     fn lookup_leader(&self, view_number: u64, _epoch: Option<u64>) -> anyhow::Result<PubKey> {
         let index = (view_number / 2) as usize % self.quorum_members.len();
         let leader = self.quorum_members.values().collect::<Vec<_>>()[index].clone();

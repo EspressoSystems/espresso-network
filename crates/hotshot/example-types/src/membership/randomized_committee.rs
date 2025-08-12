@@ -83,22 +83,6 @@ where
         self.da_members.values().cloned().collect()
     }
 
-    fn stake(
-        &self,
-        pub_key: PubKey,
-        _epoch: Option<u64>,
-    ) -> Option<TestStakeTableEntry<PubKey, StatePubKey>> {
-        self.quorum_members.get(&pub_key).cloned()
-    }
-
-    fn da_stake(
-        &self,
-        pub_key: PubKey,
-        _epoch: Option<u64>,
-    ) -> Option<TestStakeTableEntry<PubKey, StatePubKey>> {
-        self.da_members.get(&pub_key).cloned()
-    }
-
     fn lookup_leader(&self, view_number: u64, _epoch: Option<u64>) -> anyhow::Result<PubKey> {
         let res = select_randomized_leader(&self.randomized_committee, view_number);
 
