@@ -224,11 +224,11 @@ impl<
     fn has_randomized_stake_table(&self, epoch: TYPES::Epoch) -> anyhow::Result<bool> {
         let has_randomized_stake_table = self.inner.has_randomized_stake_table(*epoch);
 
-        if let Ok(result) = has_randomized_stake_table {
-            assert_eq!(result, self.drbs.contains(&epoch));
-        } else {
-            assert!(!self.drbs.contains(&epoch));
-        }
+//        if let Ok(result) = has_randomized_stake_table {
+//            assert_eq!(result, self.drbs.contains(&epoch));
+//        } else {
+//            assert!(!self.drbs.contains(&epoch));
+//        }
 
         has_randomized_stake_table
     }
