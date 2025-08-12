@@ -1,5 +1,5 @@
 use std::{collections::HashSet, fmt, fmt::Debug, sync::Arc};
-
+use hotshot_types::traits::node_implementation::ConsensusTime;
 use alloy::primitives::U256;
 use async_lock::RwLock;
 use hotshot_types::{
@@ -237,6 +237,10 @@ impl<
 
         self.drbs.insert(epoch);
         self.inner.add_drb_result(*epoch, drb_result);
+    }
+
+    fn first_epoch(&self) -> Option<TYPES::Epoch> {
+        self.inner.first_epoch().map(|e| TYPES::Epoch::new(e))
     }
 
     fn set_first_epoch(&mut self, epoch: TYPES::Epoch, initial_drb_result: DrbResult) {
