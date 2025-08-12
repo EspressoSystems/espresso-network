@@ -51,22 +51,22 @@ impl<
     > StrictMembership<TYPES, StakeTable>
 {
     fn assert_has_stake_table(&self, epoch: Option<TYPES::Epoch>) {
-       // let Some(epoch) = epoch else {
-       //     return;
-       // };
-       // assert!(
-       //     self.epochs.contains(&epoch),
-       //     "Failed stake table check for epoch {epoch}"
-       // );
+       let Some(epoch) = epoch else {
+           return;
+       };
+       assert!(
+           self.epochs.contains(&epoch),
+           "Failed stake table check for epoch {epoch}"
+       );
     }
     fn assert_has_randomized_stake_table(&self, epoch: Option<TYPES::Epoch>) {
-       // let Some(epoch) = epoch else {
-       //     return;
-       // };
-       // assert!(
-       //     self.drbs.contains(&epoch),
-       //     "Failed drb check for epoch {epoch}"
-       // );
+       let Some(epoch) = epoch else {
+           return;
+       };
+       assert!(
+           self.drbs.contains(&epoch),
+           "Failed drb check for epoch {epoch}"
+       );
     }
 }
 
@@ -216,7 +216,7 @@ impl<
     fn has_stake_table(&self, epoch: TYPES::Epoch) -> bool {
         let has_stake_table = self.inner.has_stake_table(*epoch);
 
-//        assert_eq!(has_stake_table, self.epochs.contains(&epoch));
+        assert_eq!(has_stake_table, self.epochs.contains(&epoch));
 
         has_stake_table
     }
@@ -224,11 +224,11 @@ impl<
     fn has_randomized_stake_table(&self, epoch: TYPES::Epoch) -> anyhow::Result<bool> {
         let has_randomized_stake_table = self.inner.has_randomized_stake_table(*epoch);
 
-//        if let Ok(result) = has_randomized_stake_table {
-//            assert_eq!(result, self.drbs.contains(&epoch));
-//        } else {
-//            assert!(!self.drbs.contains(&epoch));
-//        }
+        if let Ok(result) = has_randomized_stake_table {
+            assert_eq!(result, self.drbs.contains(&epoch));
+        } else {
+            assert!(!self.drbs.contains(&epoch));
+        }
 
         has_randomized_stake_table
     }
