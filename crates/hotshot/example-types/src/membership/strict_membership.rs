@@ -233,7 +233,7 @@ impl<
     }
 
     fn add_drb_result(&mut self, epoch: TYPES::Epoch, drb_result: hotshot_types::drb::DrbResult) {
-        self.assert_has_stake_table(epoch);
+        self.assert_has_stake_table(Some(epoch));
 
         self.drbs.insert(epoch);
         self.inner.add_drb_result(*epoch, drb_result);
