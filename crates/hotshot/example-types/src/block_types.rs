@@ -415,6 +415,10 @@ impl<
         )
     }
 
+    fn auth_root(&self) -> anyhow::Result<Option<[u8; 32]>> {
+        Ok(None)
+    }
+
     fn timestamp(&self) -> u64 {
         self.timestamp
     }

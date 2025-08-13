@@ -263,7 +263,7 @@ mod tests {
             assert!(BitVectorQc::<$aggsig>::assemble(
                 &qc_pp,
                 signers.as_bitslice(),
-                &[sig2.clone()]
+                std::slice::from_ref(&sig2)
             )
             .is_err());
             // total weight under threshold

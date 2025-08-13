@@ -51,7 +51,7 @@ use crate::{
             BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadQueryData, QueryableHeader,
             QueryablePayload, TransactionHash, VidCommonQueryData,
         },
-        NamespaceId, StateCertQueryData,
+        NamespaceId, StateCertQueryDataV2,
     },
     data_source::{update, VersionedDataSource},
     metrics::PrometheusMetrics,
@@ -85,7 +85,7 @@ where
     leaf_storage: LedgerLog<LeafQueryData<Types>>,
     block_storage: LedgerLog<BlockQueryData<Types>>,
     vid_storage: LedgerLog<(VidCommonQueryData<Types>, Option<VidShare>)>,
-    state_cert_storage: LedgerLog<StateCertQueryData<Types>>,
+    state_cert_storage: LedgerLog<StateCertQueryDataV2<Types>>,
 }
 
 impl<Types> FileSystemStorageInner<Types>
@@ -245,7 +245,7 @@ where
             "vid_common",
             CACHED_VID_COMMON_COUNT,
         )?;
-        let state_cert_storage = LedgerLog::<StateCertQueryData<Types>>::open(
+        let state_cert_storage = LedgerLog::<StateCertQueryDataV2<Types>>::open(
             loader,
             "state_cert",
             CACHED_STATE_CERT_COUNT,
@@ -649,7 +649,7 @@ where
         self.get_leaf((from as usize).into()).await
     }
 
-    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryData<Types>> {
+    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryDataV2<Types>> {
         self.inner
             .state_cert_storage
             .iter()
@@ -724,7 +724,7 @@ where
 
     async fn insert_state_cert(
         &mut self,
-        state_cert: StateCertQueryData<Types>,
+        state_cert: StateCertQueryDataV2<Types>,
     ) -> anyhow::Result<()> {
         self.inner
             .state_cert_storage

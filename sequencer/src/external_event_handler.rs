@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use espresso_types::{PubKey, SeqTypes};
 use hotshot::types::Message;
 use hotshot_types::{
-    message::{MessageKind, UpgradeLock},
+    message::MessageKind,
     traits::{
         network::{BroadcastDelay, ConnectedNetwork, Topic},
         node_implementation::Versions,
@@ -15,6 +15,7 @@ use hotshot_types::{
 use request_response::network::Bytes;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{Receiver, Sender};
+use vbs::{bincode_serializer::BincodeSerializer, version::StaticVersion, BinarySerializer};
 
 use crate::context::TaskList;
 
@@ -50,17 +51,11 @@ impl<V: Versions> ExternalEventHandler<V> {
         outbound_message_receiver: Receiver<OutboundMessage>,
         network: Arc<N>,
         public_key: PubKey,
-        hotshot_upgrade_lock: UpgradeLock<SeqTypes, V>,
     ) -> Result<Self> {
         // Spawn the outbound message handling loop
         tasks.spawn(
             "ExternalEventHandler",
-            Self::outbound_message_loop(
-                outbound_message_receiver,
-                network,
-                public_key,
-                hotshot_upgrade_lock,
-            ),
+            Self::outbound_message_loop(outbound_message_receiver, network, public_key),
         );
 
         Ok(Self {
@@ -95,7 +90,6 @@ impl<V: Versions> ExternalEventHandler<V> {
         mut receiver: Receiver<OutboundMessage>,
         network: Arc<N>,
         public_key: PubKey,
-        hotshot_upgrade_lock: UpgradeLock<SeqTypes, V>,
     ) {
         while let Some(message) = receiver.recv().await {
             // Match the message type
@@ -108,13 +102,14 @@ impl<V: Versions> ExternalEventHandler<V> {
                     };
 
                     // Serialize it
-                    let message_bytes = match hotshot_upgrade_lock.serialize(&message_inner).await {
-                        Ok(message_bytes) => message_bytes,
-                        Err(err) => {
-                            tracing::warn!("Failed to serialize direct message: {}", err);
-                            continue;
-                        },
-                    };
+                    let message_bytes =
+                        match BincodeSerializer::<StaticVersion<0, 0>>::serialize(&message_inner) {
+                            Ok(message_bytes) => message_bytes,
+                            Err(err) => {
+                                tracing::warn!("Failed to serialize direct message: {}", err);
+                                continue;
+                            },
+                        };
 
                     // Send the message to the recipient
                     if let Err(err) = network.direct_message(message_bytes, recipient).await {
@@ -130,13 +125,14 @@ impl<V: Versions> ExternalEventHandler<V> {
                     };
 
                     // Serialize it
-                    let message_bytes = match hotshot_upgrade_lock.serialize(&message_inner).await {
-                        Ok(message_bytes) => message_bytes,
-                        Err(err) => {
-                            tracing::warn!("Failed to serialize broadcast message: {}", err);
-                            continue;
-                        },
-                    };
+                    let message_bytes =
+                        match BincodeSerializer::<StaticVersion<0, 0>>::serialize(&message_inner) {
+                            Ok(message_bytes) => message_bytes,
+                            Err(err) => {
+                                tracing::warn!("Failed to serialize broadcast message: {}", err);
+                                continue;
+                            },
+                        };
 
                     // Broadcast the message to the global topic
                     if let Err(err) = network

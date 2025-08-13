@@ -124,6 +124,9 @@ pub struct DeployedContracts {
     /// PlonkVerifierV2.sol
     #[clap(long, env = Contract::PlonkVerifierV2)]
     plonk_verifier_v2: Option<Address>,
+    /// PlonkVerifierV3.sol
+    #[clap(long, env = Contract::PlonkVerifierV3)]
+    plonk_verifier_v3: Option<Address>,
 
     /// Use an already-deployed LightClient.sol instead of deploying a new one.
     #[clap(long, env = Contract::LightClient)]
@@ -131,6 +134,9 @@ pub struct DeployedContracts {
     /// LightClientV2.sol
     #[clap(long, env = Contract::LightClientV2)]
     light_client_v2: Option<Address>,
+    /// LightClientV3.sol
+    #[clap(long, env = Contract::LightClientV3)]
+    light_client_v3: Option<Address>,
 
     /// Use an already-deployed LightClient.sol proxy instead of deploying a new one.
     #[clap(long, env = Contract::LightClientProxy)]
@@ -180,10 +186,14 @@ pub enum Contract {
     SafeExitTimelock,
     #[display("ESPRESSO_SEQUENCER_PLONK_VERIFIER_V2_ADDRESS")]
     PlonkVerifierV2,
+    #[display("ESPRESSO_SEQUENCER_PLONK_VERIFIER_V3_ADDRESS")]
+    PlonkVerifierV3,
     #[display("ESPRESSO_SEQUENCER_LIGHT_CLIENT_ADDRESS")]
     LightClient,
     #[display("ESPRESSO_SEQUENCER_LIGHT_CLIENT_V2_ADDRESS")]
     LightClientV2,
+    #[display("ESPRESSO_SEQUENCER_LIGHT_CLIENT_V3_ADDRESS")]
+    LightClientV3,
     #[display("ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS")]
     LightClientProxy,
     #[display("ESPRESSO_SEQUENCER_FEE_CONTRACT_ADDRESS")]
@@ -223,6 +233,9 @@ impl From<DeployedContracts> for Contracts {
         if let Some(addr) = deployed.plonk_verifier_v2 {
             m.insert(Contract::PlonkVerifierV2, addr);
         }
+        if let Some(addr) = deployed.plonk_verifier_v3 {
+            m.insert(Contract::PlonkVerifierV3, addr);
+        }
         if let Some(addr) = deployed.safe_exit_timelock {
             m.insert(Contract::SafeExitTimelock, addr);
         }
@@ -234,6 +247,9 @@ impl From<DeployedContracts> for Contracts {
         }
         if let Some(addr) = deployed.light_client_v2 {
             m.insert(Contract::LightClientV2, addr);
+        }
+        if let Some(addr) = deployed.light_client_v3 {
+            m.insert(Contract::LightClientV3, addr);
         }
         if let Some(addr) = deployed.light_client_proxy {
             m.insert(Contract::LightClientProxy, addr);
@@ -591,6 +607,103 @@ pub async fn upgrade_light_client_v2(
     }
 }
 
+/// Upgrade the light client proxy to use LightClientV3.
+/// Internally, first detect existence of proxy, then deploy LCV3, then upgrade and initializeV3.
+/// Internal to "deploy LCV3", we deploy PlonkVerifierV3 whose address will be used at LCV3 init time.
+/// Assumes:
+/// - the proxy is already deployed.
+/// - the proxy is owned by a regular EOA, not a multisig.
+/// - the proxy is not yet initialized for V3
+pub async fn upgrade_light_client_v3(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+    is_mock: bool,
+) -> Result<TransactionReceipt> {
+    match contracts.address(Contract::LightClientProxy) {
+        // check if proxy already exists
+        None => Err(anyhow!("LightClientProxy not found, can't upgrade")),
+        Some(proxy_addr) => {
+            let proxy = LightClient::new(proxy_addr, &provider);
+
+            // first deploy PlonkVerifierV3.sol
+            let pv3_addr = contracts
+                .deploy(
+                    Contract::PlonkVerifierV3,
+                    PlonkVerifierV3::deploy_builder(&provider),
+                )
+                .await?;
+            assert!(is_contract(&provider, pv3_addr).await?);
+
+            // then deploy LightClientV3.sol
+            let target_lcv3_bytecode = if is_mock {
+                LightClientV3Mock::BYTECODE.encode_hex()
+            } else {
+                LightClientV3::BYTECODE.encode_hex()
+            };
+            let lcv3_linked_bytecode = {
+                match target_lcv3_bytecode
+                    .matches(LIBRARY_PLACEHOLDER_ADDRESS)
+                    .count()
+                {
+                    0 => return Err(anyhow!("lib placeholder not found")),
+                    1 => Bytes::from_hex(target_lcv3_bytecode.replacen(
+                        LIBRARY_PLACEHOLDER_ADDRESS,
+                        &pv3_addr.encode_hex(),
+                        1,
+                    ))?,
+                    _ => {
+                        return Err(anyhow!(
+                            "more than one lib placeholder found, consider using a different value"
+                        ))
+                    },
+                }
+            };
+            let lcv3_addr = if is_mock {
+                let addr = LightClientV3Mock::deploy_builder(&provider)
+                    .map(|req| req.with_deploy_code(lcv3_linked_bytecode))
+                    .deploy()
+                    .await?;
+                tracing::info!("deployed LightClientV3Mock at {addr:#x}");
+                addr
+            } else {
+                contracts
+                    .deploy(
+                        Contract::LightClientV3,
+                        LightClientV3::deploy_builder(&provider)
+                            .map(|req| req.with_deploy_code(lcv3_linked_bytecode)),
+                    )
+                    .await?
+            };
+
+            // get owner of proxy
+            let owner = proxy.owner().call().await?;
+            let owner_addr = owner._0;
+            tracing::info!("Proxy owner: {owner_addr:#x}");
+
+            // prepare init calldata
+            let lcv3 = LightClientV3::new(lcv3_addr, &provider);
+            let init_data = lcv3.initializeV3().calldata().to_owned();
+            // invoke upgrade on proxy
+            let receipt = proxy
+                .upgradeToAndCall(lcv3_addr, init_data)
+                .send()
+                .await?
+                .get_receipt()
+                .await?;
+            if receipt.inner.is_success() {
+                // post deploy verification checks
+                let proxy_as_v3 = LightClientV3::new(proxy_addr, &provider);
+                assert_eq!(proxy_as_v3.getVersion().call().await?.majorVersion, 3);
+                tracing::info!(%lcv3_addr, "LightClientProxy successfully upgrade to: ")
+            } else {
+                tracing::error!("LightClientProxy upgrade failed: {:?}", receipt);
+            }
+
+            Ok(receipt)
+        },
+    }
+}
+
 async fn already_initialized(
     provider: impl Provider,
     proxy_addr: Address,
@@ -603,6 +716,10 @@ async fn already_initialized(
     let contract_major_version = match contract {
         Contract::LightClientV2 => {
             let contract_proxy = LightClientV2::new(proxy_addr, &provider);
+            contract_proxy.getVersion().call().await?.majorVersion
+        },
+        Contract::LightClientV3 => {
+            let contract_proxy = LightClientV3::new(proxy_addr, &provider);
             contract_proxy.getVersion().call().await?.majorVersion
         },
         Contract::StakeTableV2 => {
@@ -1450,6 +1567,110 @@ mod tests {
     async fn test_upgrade_mock_light_client_v2() -> Result<()> {
         test_upgrade_light_client_to_v2_helper(true).await
     }
+
+    async fn test_upgrade_light_client_to_v3_helper(options: UpgradeTestOptions) -> Result<()> {
+        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+        let blocks_per_epoch = 10; // for test
+        let epoch_start_block = 22;
+
+        // prepare `initialize()` input
+        let genesis_state = LightClientStateSol::dummy_genesis();
+        let genesis_stake = StakeTableStateSol::dummy_genesis();
+        let admin = provider.get_accounts().await?[0];
+        let prover = Address::random();
+
+        // deploy proxy and V1
+        let lc_proxy_addr = deploy_light_client_proxy(
+            &provider,
+            &mut contracts,
+            false,
+            genesis_state.clone(),
+            genesis_stake.clone(),
+            admin,
+            Some(prover),
+        )
+        .await?;
+
+        // first upgrade to v2
+        upgrade_light_client_v2(
+            &provider,
+            &mut contracts,
+            options.is_mock,
+            blocks_per_epoch,
+            epoch_start_block,
+        )
+        .await?;
+
+        // then upgrade to v3
+        upgrade_light_client_v3(&provider, &mut contracts, options.is_mock).await?;
+
+        // test correct v1 and v2 state persistence
+        let lc = LightClientV3::new(lc_proxy_addr, &provider);
+        let finalized_state: LightClientStateSol = lc.finalizedState().call().await?.into();
+        assert_eq!(
+            genesis_state.abi_encode_params(),
+            finalized_state.abi_encode_params()
+        );
+
+        // test v2 state persistence
+        let next_stake: StakeTableStateSol = lc.votingStakeTableState().call().await?.into();
+        assert_eq!(
+            genesis_stake.abi_encode_params(),
+            next_stake.abi_encode_params()
+        );
+
+        // test v3 specific properties
+        assert_eq!(lc.getVersion().call().await?.majorVersion, 3);
+
+        // V3 inherits blocks_per_epoch and epoch_start_block from V2
+        let lc_as_v2 = LightClientV2::new(lc_proxy_addr, &provider);
+        assert_eq!(lc_as_v2.blocksPerEpoch().call().await?._0, blocks_per_epoch);
+        assert_eq!(
+            lc_as_v2.epochStartBlock().call().await?._0,
+            epoch_start_block
+        );
+
+        // test mock-specific functions
+        if options.is_mock {
+            // recast to mock
+            let lc_mock = LightClientV3Mock::new(lc_proxy_addr, &provider);
+            // Test that mock-specific functions work
+            let new_blocks_per_epoch = blocks_per_epoch + 10;
+            lc_mock
+                .setBlocksPerEpoch(new_blocks_per_epoch)
+                .send()
+                .await?
+                .watch()
+                .await?;
+            assert_eq!(
+                new_blocks_per_epoch,
+                lc_mock.blocksPerEpoch().call().await?._0
+            );
+        }
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_upgrade_light_client_to_v3() -> Result<()> {
+        test_upgrade_light_client_to_v3_helper(UpgradeTestOptions {
+            is_mock: false,
+            run_mode: RunMode::RealRun,
+            upgrade_count: UpgradeCount::Once,
+        })
+        .await
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_upgrade_mock_light_client_v3() -> Result<()> {
+        test_upgrade_light_client_to_v3_helper(UpgradeTestOptions {
+            is_mock: true,
+            run_mode: RunMode::RealRun,
+            upgrade_count: UpgradeCount::Once,
+        })
+        .await
+    }
+
     #[derive(Debug, Clone, Copy)]
     pub enum RunMode {
         DryRun,

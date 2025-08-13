@@ -31,7 +31,7 @@ use hotshot_query_service::{
         storage::{
             pruning::PrunerCfg,
             sql::{
-                include_migrations, query_as, syntax_helpers::MAX_FN, Config, Db, SqlStorage,
+                include_migrations, query_as, syntax_helpers::MAX_FN, Config, Db, Read, SqlStorage,
                 Transaction, TransactionMode, Write,
             },
         },
@@ -47,15 +47,15 @@ use hotshot_query_service::{
 use hotshot_types::{
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
-        DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper, VidCommitment,
-        VidDisperseShare,
+        DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper,
+        QuorumProposalWrapperLegacy, VidCommitment, VidDisperseShare,
     },
     drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
-        QuorumCertificate2, UpgradeCertificate,
+        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
+        NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
     },
     traits::{
         block_contents::{BlockHeader, BlockPayload},
@@ -769,23 +769,15 @@ impl Persistence {
                 .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
 
             // Collect state certs for the decide event.
-            let state_certs = tx
-                .fetch_all(
-                    query(
-                        "SELECT view, state_cert FROM state_cert WHERE view >= $1 AND view <= $2",
-                    )
-                    .bind(from_view.u64() as i64)
-                    .bind(to_view.u64() as i64),
-                )
-                .await?
-                .into_iter()
-                .map(|row| {
-                    let data: Vec<u8> = row.get("state_cert");
-                    let state_cert =
-                        bincode::deserialize::<LightClientStateUpdateCertificate<SeqTypes>>(&data)?;
-                    Ok((state_cert.epoch.u64(), state_cert))
-                })
-                .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+            let state_certs = Self::load_state_certs(&mut tx, from_view, to_view)
+                .await
+                .inspect_err(|err| {
+                    tracing::error!(
+                        ?from_view,
+                        ?to_view,
+                        "failed to load state certificates. error={err:#}"
+                    );
+                })?;
             drop(tx);
 
             // Collate all the information by view number and construct a chain of leaves.
@@ -916,6 +908,40 @@ impl Persistence {
             tx.commit().await?;
             last_processed_view = Some(to_view.u64() as i64);
         }
+    }
+
+    async fn load_state_certs(
+        tx: &mut Transaction<Read>,
+        from_view: ViewNumber,
+        to_view: ViewNumber,
+    ) -> anyhow::Result<BTreeMap<u64, LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        let rows = tx
+            .fetch_all(
+                query("SELECT view, state_cert FROM state_cert WHERE view >= $1 AND view <= $2")
+                    .bind(from_view.u64() as i64)
+                    .bind(to_view.u64() as i64),
+            )
+            .await?;
+
+        let mut result = BTreeMap::new();
+
+        for row in rows {
+            let data: Vec<u8> = row.get("state_cert");
+
+            let cert: LightClientStateUpdateCertificateV2<SeqTypes> = bincode::deserialize(&data)
+                .or_else(|err_v2| {
+                bincode::deserialize::<LightClientStateUpdateCertificateV1<SeqTypes>>(&data)
+                    .map(Into::into)
+                    .context(format!(
+                        "Failed to deserialize LightClientStateUpdateCertificate: with v1 and v2. \
+                         error: {err_v2}"
+                    ))
+            })?;
+
+            result.insert(cert.epoch.u64(), cert);
+        }
+
+        Ok(result)
     }
 
     #[tracing::instrument(skip(self))]
@@ -1203,7 +1229,21 @@ impl SequencerPersistence for Persistence {
                     let view: i64 = row.get("view");
                     let view_number: ViewNumber = ViewNumber::new(view.try_into()?);
                     let bytes: Vec<u8> = row.get("data");
-                    let proposal = bincode::deserialize(&bytes)?;
+                    let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
+                        bincode::deserialize(&bytes).or_else(|error| {
+                            bincode::deserialize::<
+                                Proposal<SeqTypes, QuorumProposalWrapperLegacy<SeqTypes>>,
+                            >(&bytes)
+                            .map(convert_proposal)
+                            .inspect_err(|err_v3| {
+                                tracing::warn!(
+                                    ?view_number,
+                                    %error,
+                                    %err_v3,
+                                    "ignoring malformed quorum proposal DB row"
+                                );
+                            })
+                        })?;
                     Ok((view_number, proposal))
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?,
@@ -1220,7 +1260,16 @@ impl SequencerPersistence for Persistence {
                 .bind(view.u64() as i64)
                 .fetch_one(tx.as_mut())
                 .await?;
-        let proposal = bincode::deserialize(&data)?;
+        let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
+            bincode::deserialize(&data).or_else(|error| {
+                bincode::deserialize::<Proposal<SeqTypes, QuorumProposalWrapperLegacy<SeqTypes>>>(
+                    &data,
+                )
+                .map(convert_proposal)
+                .context(format!(
+                    "Failed to deserialize quorum proposal for view {view}. error={error}"
+                ))
+            })?;
 
         Ok(proposal)
     }
@@ -2060,7 +2109,7 @@ impl SequencerPersistence for Persistence {
 
     async fn add_state_cert(
         &self,
-        state_cert: LightClientStateUpdateCertificate<SeqTypes>,
+        state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
         let state_cert_bytes = bincode::serialize(&state_cert)
             .context("serializing light client state update certificate")?;
@@ -2081,7 +2130,7 @@ impl SequencerPersistence for Persistence {
 
     async fn load_state_cert(
         &self,
-    ) -> anyhow::Result<Option<LightClientStateUpdateCertificate<SeqTypes>>> {
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
         let Some(row) = self
             .db
             .read()
@@ -2094,9 +2143,26 @@ impl SequencerPersistence for Persistence {
             return Ok(None);
         };
         let bytes: Vec<u8> = row.get("state_cert");
-        bincode::deserialize(&bytes)
-            .context("deserializing light client state update certificate")
-            .map(Some)
+
+        let cert = match bincode::deserialize(&bytes) {
+            Ok(cert) => cert,
+            Err(err) => {
+                tracing::info!(
+                    error = %err,
+                    "Failed to deserialize state certificate with v2. attempting with v1"
+                );
+
+                let v1_cert =
+                    bincode::deserialize::<LightClientStateUpdateCertificateV1<SeqTypes>>(&bytes)
+                        .with_context(|| {
+                        format!("Failed to deserialize using both v1 and v2. error: {err}")
+                    })?;
+
+                v1_cert.into()
+            },
+        };
+
+        Ok(Some(cert))
     }
 
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
@@ -3113,11 +3179,12 @@ mod test {
             .await
             .unwrap();
 
-            let state_cert = LightClientStateUpdateCertificate::<SeqTypes> {
+            let state_cert = LightClientStateUpdateCertificateV2::<SeqTypes> {
                 epoch: EpochNumber::new(i),
                 light_client_state: Default::default(), // filling arbitrary value
                 next_stake_table_state: Default::default(), // filling arbitrary value
                 signatures: vec![],                     // filling arbitrary value
+                auth_root: None,
             };
             // manually upsert the state cert to the finalized database
             let state_cert_bytes = bincode::serialize(&state_cert).unwrap();
@@ -3264,11 +3331,12 @@ mod test {
         );
         assert_eq!(
             storage.load_state_cert().await.unwrap().unwrap(),
-            LightClientStateUpdateCertificate::<SeqTypes> {
+            LightClientStateUpdateCertificateV2::<SeqTypes> {
                 epoch: EpochNumber::new(rows - 1),
                 light_client_state: Default::default(),
                 next_stake_table_state: Default::default(),
-                signatures: vec![]
+                signatures: vec![],
+                auth_root: None,
             },
             "Wrong light client state update certificate in the storage",
         );

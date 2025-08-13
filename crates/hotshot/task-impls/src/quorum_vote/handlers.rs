@@ -480,11 +480,19 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         )
         .wrap()
         .context(error!("Failed to sign the light client state"))?;
+        let auth_root = leaf
+            .block_header()
+            .auth_root()
+            .wrap()
+            .context(error!(format!(
+                "Failed to get auth root for light client state certificate. view={view_number}"
+            )))?;
         let state_vote = LightClientStateUpdateVote {
             epoch: TYPES::Epoch::new(epoch_from_block_number(leaf.height(), epoch_height)),
             light_client_state,
             next_stake_table_state,
             signature,
+            auth_root, // TODO: (Chengyu) Update signature logic for protocol version V4
         };
         broadcast_event(
             Arc::new(HotShotEvent::EpochRootQuorumVoteSend(EpochRootQuorumVote {

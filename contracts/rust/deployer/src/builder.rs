@@ -14,8 +14,9 @@ use crate::{
     proposals::{
         multisig::{
             transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
-            upgrade_light_client_v2_multisig_owner, upgrade_stake_table_v2_multisig_owner,
-            LightClientV2UpgradeParams, TransferOwnershipParams,
+            upgrade_light_client_v2_multisig_owner, upgrade_light_client_v3_multisig_owner,
+            upgrade_stake_table_v2_multisig_owner, LightClientV2UpgradeParams,
+            TransferOwnershipParams,
         },
         timelock::{
             cancel_timelock_operation, execute_timelock_operation, schedule_timelock_operation,
@@ -312,7 +313,29 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         epoch_start_block,
                     )
                     .await?;
+                    // NOTE: we don't transfer ownership to multisig, we only do so after V3 upgrade
+                }
+            },
+            Contract::LightClientV3 => {
+                let use_mock = self.mock_light_client;
+                let dry_run = self.dry_run;
+                let use_multisig = self.use_multisig;
+                let rpc_url = self.rpc_url.clone();
 
+                tracing::info!(?dry_run, ?use_multisig, "Upgrading LightClientV3 with ");
+                if use_multisig {
+                    upgrade_light_client_v3_multisig_owner(
+                        provider,
+                        contracts,
+                        use_mock,
+                        rpc_url,
+                        Some(dry_run),
+                    )
+                    .await?;
+                } else {
+                    crate::upgrade_light_client_v3(provider, contracts, use_mock).await?;
+
+                    // Transfer ownership to Timelook or MultiSig
                     let addr = contracts
                         .address(Contract::LightClientProxy)
                         .expect("fail to get LightClientProxy address");

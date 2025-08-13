@@ -17,7 +17,7 @@ import { EdOnBN254 } from "../src/libraries/EdOnBn254.sol";
 import { LightClient } from "../src/LightClient.sol";
 import { LightClientV2 } from "../src/LightClientV2.sol";
 import { IPlonkVerifier as V } from "../src/interfaces/IPlonkVerifier.sol";
-import { LightClientCommonTest } from "./LightClientV2.t.sol";
+import { LightClientCommonTest } from "./LightClientV3.t.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { OwnableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
