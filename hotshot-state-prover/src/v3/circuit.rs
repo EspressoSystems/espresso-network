@@ -4,11 +4,8 @@ use alloy::primitives::U256;
 use ark_ec::twisted_edwards::TECurveConfig;
 use ark_ff::PrimeField;
 use ark_std::borrow::Borrow;
-use hotshot_contract_adapter::{
-    sol_types::{LightClientStateSol, StakeTableStateSol},
-    u256_to_field,
-};
-use hotshot_types::light_client::{GenericLightClientState, GenericStakeTableState};
+use hotshot_contract_adapter::{sol_types::StakeTableStateSol, u256_to_field};
+use hotshot_types::light_client::GenericStakeTableState;
 use jf_plonk::PlonkError;
 use jf_relation::{BoolVar, Circuit, CircuitError, PlonkCircuit, Variable};
 use jf_rescue::{gadgets::RescueNativeGadget, RescueParameter};
@@ -18,44 +15,33 @@ use jf_signature::{
 };
 
 /// Public input to the light client state prover service
+/// The `signed_state_digest` is the keccak hash of all state to certify,
+/// currently containing the abi encoding of the light client state,
+/// the stake table state for the next update, the auth root, and maybe
+/// more in the future upon request.
 #[derive(Clone, Debug)]
 pub struct GenericPublicInput<F: PrimeField> {
-    // new light client state
-    pub lc_state: GenericLightClientState<F>,
-    // voting stake table state
     pub voting_st_state: GenericStakeTableState<F>,
-    // next-block stake table state
-    pub next_st_state: GenericStakeTableState<F>,
+    pub signed_state_digest: F,
 }
 
 impl<F: PrimeField> GenericPublicInput<F> {
     /// Construct a public input from light client state and static stake table state
-    pub fn new(
-        lc_state: GenericLightClientState<F>,
-        voting_st_state: GenericStakeTableState<F>,
-        next_st_state: GenericStakeTableState<F>,
-    ) -> Self {
+    pub fn new(voting_st_state: GenericStakeTableState<F>, signed_state_digest: F) -> Self {
         Self {
-            lc_state,
             voting_st_state,
-            next_st_state,
+            signed_state_digest,
         }
     }
 
     /// Convert to a vector of field elements
     pub fn to_vec(&self) -> Vec<F> {
         vec![
-            F::from(self.lc_state.view_number),
-            F::from(self.lc_state.block_height),
-            self.lc_state.block_comm_root,
             self.voting_st_state.bls_key_comm,
             self.voting_st_state.schnorr_key_comm,
             self.voting_st_state.amount_comm,
             self.voting_st_state.threshold,
-            self.next_st_state.bls_key_comm,
-            self.next_st_state.schnorr_key_comm,
-            self.next_st_state.amount_comm,
-            self.next_st_state.threshold,
+            self.signed_state_digest,
         ]
     }
 }
@@ -63,44 +49,27 @@ impl<F: PrimeField> GenericPublicInput<F> {
 impl<F: PrimeField> From<GenericPublicInput<F>> for Vec<F> {
     fn from(v: GenericPublicInput<F>) -> Self {
         vec![
-            F::from(v.lc_state.view_number),
-            F::from(v.lc_state.block_height),
-            v.lc_state.block_comm_root,
             v.voting_st_state.bls_key_comm,
             v.voting_st_state.schnorr_key_comm,
             v.voting_st_state.amount_comm,
             v.voting_st_state.threshold,
-            v.next_st_state.bls_key_comm,
-            v.next_st_state.schnorr_key_comm,
-            v.next_st_state.amount_comm,
-            v.next_st_state.threshold,
+            v.signed_state_digest,
         ]
     }
 }
 
 impl<F: PrimeField> From<Vec<F>> for GenericPublicInput<F> {
     fn from(v: Vec<F>) -> Self {
-        let lc_state = GenericLightClientState {
-            view_number: v[0].into_bigint().as_ref()[0],
-            block_height: v[1].into_bigint().as_ref()[0],
-            block_comm_root: v[2],
-        };
         let voting_st_state = GenericStakeTableState {
-            bls_key_comm: v[3],
-            schnorr_key_comm: v[4],
-            amount_comm: v[5],
-            threshold: v[6],
+            bls_key_comm: v[0],
+            schnorr_key_comm: v[1],
+            amount_comm: v[2],
+            threshold: v[3],
         };
-        let next_st_state = GenericStakeTableState {
-            bls_key_comm: v[7],
-            schnorr_key_comm: v[8],
-            amount_comm: v[9],
-            threshold: v[10],
-        };
+        let signed_state_digest = v[4];
         Self {
-            lc_state,
             voting_st_state,
-            next_st_state,
+            signed_state_digest,
         }
     }
 }
@@ -145,36 +114,13 @@ impl StakeTableVar {
     }
 }
 
-/// Light client state Variable
-#[derive(Clone, Debug)]
-pub struct LightClientStateVar {
-    pub(crate) view_num: Variable,
-    pub(crate) block_height: Variable,
-    pub(crate) block_comm_root: Variable,
-}
-
-impl LightClientStateVar {
-    /// # Errors
-    /// if unable to create any of the public variables
-    pub fn new<F: PrimeField>(
-        circuit: &mut PlonkCircuit<F>,
-        state: &GenericLightClientState<F>,
-    ) -> Result<Self, CircuitError> {
-        Ok(Self {
-            view_num: circuit.create_public_variable(F::from(state.view_number))?,
-            block_height: circuit.create_public_variable(F::from(state.block_height))?,
-            block_comm_root: circuit.create_public_variable(state.block_comm_root)?,
-        })
-    }
-}
-
 /// A function that takes as input:
 /// - a list of stake table entries (`Vec<(SchnorrVerKey, Amount)>`)
 /// - a bit vector indicates the signers
 /// - a list of schnorr signatures of the updated states (`Vec<SchnorrSignature>`), default if the node doesn't sign the state
-/// - updated light client state (`(view_number, block_height, block_comm_root)`)
 /// - voting stake table state (containing 3 commitments to the 3 columns of the stake table and a threshold)
-/// - stake table state for the next block (same as the voting stake table except at epoch boundaries)
+/// - The `signed_state_digest`, which is the keccak hash of all state to certify, currently containing the abi encoding of
+///   the light client state, the stake table state for the next update, the auth root, and maybe more in the future upon request.
 ///
 /// Lengths of input vectors should not exceed the `stake_table_capacity`.
 /// The list of stake table entries, bit indicators and signatures will be padded to the `stake_table_capacity`.
@@ -182,7 +128,7 @@ impl LightClientStateVar {
 /// - the vector that indicates who signed is a bit vector
 /// - the signers' accumulated weight exceeds the quorum threshold
 /// - the stake table corresponds to the one committed in the light client state
-/// - all Schnorr signatures over the light client state are valid
+/// - all Schnorr signatures over the signed state digest are valid
 ///
 /// and returns
 /// - A circuit for proof generation
@@ -193,10 +139,9 @@ pub(crate) fn build<F, P, STIter, BitIter, SigIter>(
     stake_table_entries: STIter,
     signer_bit_vec: BitIter,
     signatures: SigIter,
-    lightclient_state: &GenericLightClientState<F>,
     stake_table_state: &GenericStakeTableState<F>,
     stake_table_capacity: usize,
-    next_stake_table_state: &GenericStakeTableState<F>,
+    signed_state_digest: &F,
 ) -> Result<(PlonkCircuit<F>, GenericPublicInput<F>), PlonkError>
 where
     F: RescueParameter,
@@ -299,9 +244,8 @@ where
     );
 
     // public inputs
-    let lightclient_state_pub_var = LightClientStateVar::new(&mut circuit, lightclient_state)?;
     let stake_table_state_pub_var = StakeTableVar::new(&mut circuit, stake_table_state)?;
-    let next_stake_table_state_pub_var = StakeTableVar::new(&mut circuit, next_stake_table_state)?;
+    let signed_state_digest_var = circuit.create_public_variable(*signed_state_digest)?;
 
     // Checking whether the accumulated weight exceeds the quorum threshold
     let mut signed_amount_var = (0..stake_table_capacity / 2)
@@ -365,15 +309,7 @@ where
             SignatureGadget::<_, P>::check_signature_validity(
                 &mut circuit,
                 &entry.state_ver_key,
-                &[
-                    lightclient_state_pub_var.view_num,
-                    lightclient_state_pub_var.block_height,
-                    lightclient_state_pub_var.block_comm_root,
-                    next_stake_table_state_pub_var.qc_keys_comm,
-                    next_stake_table_state_pub_var.state_keys_comm,
-                    next_stake_table_state_pub_var.stake_amount_comm,
-                    next_stake_table_state_pub_var.threshold,
-                ],
+                &[signed_state_digest_var],
                 &sig,
             )
         })
@@ -392,11 +328,7 @@ where
     circuit.finalize_for_arithmetization()?;
     Ok((
         circuit,
-        GenericPublicInput::new(
-            *lightclient_state,
-            *stake_table_state,
-            *next_stake_table_state,
-        ),
+        GenericPublicInput::new(*stake_table_state, *signed_state_digest),
     ))
 }
 
@@ -408,28 +340,24 @@ where
     F: RescueParameter,
     P: TECurveConfig<BaseField = F>,
 {
-    let lightclient_state = LightClientStateSol::dummy_genesis().into();
     let stake_table_state = StakeTableStateSol::dummy_genesis().into();
+    let signed_state_digest = F::default();
 
     build::<F, P, _, _, _>(
         &[],
         &[],
         &[],
-        &lightclient_state,
         &stake_table_state,
         stake_table_capacity,
-        &stake_table_state,
+        &signed_state_digest,
     )
 }
 
 #[cfg(test)]
 mod tests {
     use ark_ed_on_bn254::EdwardsConfig as Config;
-    use ark_std::UniformRand;
     use hotshot_types::{
-        light_client::{LightClientState, StakeTableState},
-        signature_key::SchnorrPubKey,
-        traits::signature_key::StateSignatureKey,
+        signature_key::SchnorrPubKey, traits::signature_key::LCV3StateSignatureKey,
     };
     use jf_relation::Circuit;
     use jf_signature::schnorr::Signature;
@@ -450,7 +378,6 @@ mod tests {
         let (qc_keys, state_keys) = key_pairs_for_testing(num_validators, &mut prng);
         let st = stake_table_for_testing(&qc_keys, &state_keys);
         let st_state = st.commitment(ST_CAPACITY).unwrap();
-        let next_st_state = st_state;
 
         let entries = st
             .iter()
@@ -462,21 +389,13 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let lightclient_state = LightClientState {
-            view_number: 100,
-            block_height: 73,
-            block_comm_root: F::rand(&mut prng),
-        };
+        let signed_state_digest = F::from(2u64);
 
         let sigs: Vec<_> = state_keys
             .iter()
             .map(|(key, _)| {
-                <SchnorrPubKey as StateSignatureKey>::sign_state(
-                    key,
-                    &lightclient_state,
-                    &next_st_state,
-                )
-                .unwrap()
+                <SchnorrPubKey as LCV3StateSignatureKey>::sign_state(key, signed_state_digest)
+                    .unwrap()
             })
             .collect();
 
@@ -504,10 +423,9 @@ mod tests {
             &entries,
             &bit_vec,
             &bit_masked_sigs,
-            &lightclient_state,
             &st_state,
             ST_CAPACITY,
-            &next_st_state,
+            &signed_state_digest,
         )
         .unwrap();
         assert!(circuit
@@ -521,10 +439,9 @@ mod tests {
             &entries,
             &bit_vec,
             &bit_masked_sigs,
-            &lightclient_state,
             &good_st_state,
             ST_CAPACITY,
-            &next_st_state,
+            &signed_state_digest,
         )
         .unwrap();
         assert!(circuit
@@ -537,10 +454,9 @@ mod tests {
             &entries,
             &non_bit_vec,
             &bit_masked_sigs,
-            &lightclient_state,
             &st_state,
             ST_CAPACITY,
-            &next_st_state,
+            &signed_state_digest,
         )
         .unwrap();
         assert!(circuit
@@ -570,28 +486,24 @@ mod tests {
             &entries,
             &bad_bit_vec,
             &bad_bit_masked_sigs,
-            &lightclient_state,
             &st_state,
             ST_CAPACITY,
-            &next_st_state,
+            &signed_state_digest,
         )
         .unwrap();
         assert!(bad_circuit
             .check_circuit_satisfiability(&public_inputs.to_vec())
             .is_err());
 
-        // bad path: bad stake table commitment
-        let mut bad_lightclient_state = lightclient_state;
-        bad_lightclient_state.view_number += 1;
-
+        // bad path: bad lc state digest
+        let bad_signed_state_digest = F::from(12387u64);
         let (bad_circuit, public_inputs) = build(
             &entries,
             &bit_vec,
             &sigs,
-            &bad_lightclient_state,
             &st_state,
             ST_CAPACITY,
-            &next_st_state,
+            &bad_signed_state_digest,
         )
         .unwrap();
         assert!(bad_circuit
@@ -599,12 +511,11 @@ mod tests {
             .is_err());
 
         // bad path: incorrect signing message
-        let bad_lc_state = LightClientState::default();
-        let bad_st_state = StakeTableState::default();
+        let bad_signed_state_digest = F::from(12387u64);
         let bad_sigs: Vec<_> = state_keys
             .iter()
             .map(|(key, _)| {
-                <SchnorrPubKey as StateSignatureKey>::sign_state(key, &bad_lc_state, &bad_st_state)
+                <SchnorrPubKey as LCV3StateSignatureKey>::sign_state(key, bad_signed_state_digest)
                     .unwrap()
             })
             .collect();
@@ -612,10 +523,9 @@ mod tests {
             &entries,
             &bit_vec,
             &bad_sigs,
-            &lightclient_state,
             &st_state,
             ST_CAPACITY,
-            &next_st_state,
+            &signed_state_digest,
         )
         .unwrap();
         assert!(bad_circuit
@@ -627,10 +537,9 @@ mod tests {
             &entries,
             &bit_vec,
             &bit_masked_sigs,
-            &lightclient_state,
             &st_state,
             9,
-            &next_st_state,
+            &signed_state_digest,
         )
         .is_err());
     }

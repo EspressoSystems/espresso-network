@@ -38,6 +38,10 @@ func (h *Header) GetBuilderSignature() *common.Signature {
 	return h.BuilderSignature
 }
 
+func (h *Header) GetL1Finalized() *common.L1BlockInfo {
+	return h.L1Finalized
+}
+
 func (h *Header) UnmarshalJSON(b []byte) error {
 	var header v01.Header
 	err := json.Unmarshal(b, &header)

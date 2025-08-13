@@ -246,8 +246,7 @@ impl<R: RecordStore, D: DhtPersistentStorage> PersistentStore<R, D> {
         // Try to restore the DHT from the persistent store. If it fails, warn and start with an empty store
         if let Err(err) = store.restore_from_persistent_storage().await {
             warn!(
-                "Failed to restore DHT from persistent storage: {:?}. Starting with empty store",
-                err
+                "Failed to restore DHT from persistent storage: {err}. Starting with empty store",
             );
         }
 

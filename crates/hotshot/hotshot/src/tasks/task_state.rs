@@ -5,10 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use std::{
-    collections::{BTreeMap, HashSet},
-    num::NonZero,
-    sync::{atomic::AtomicBool, Arc},
-    time::Instant,
+    collections::{BTreeMap, HashSet}, num::NonZero, sync::{atomic::AtomicBool, Arc}, time::Instant
 };
 
 use async_trait::async_trait;

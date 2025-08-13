@@ -28,8 +28,8 @@ use super::{
 use crate::{
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceId, PayloadQueryData,
-        QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
-        TransactionQueryData, VidCommonQueryData,
+        QueryableHeader, QueryablePayload, StateCertQueryDataV2, TransactionHash,
+        VidCommonQueryData,
     },
     data_source::{
         storage::{PayloadMetadata, VidCommonMetadata},
@@ -450,12 +450,12 @@ where
         self.inner.get_vid_common_metadata_range(range).await
     }
 
-    async fn get_transaction(
+    async fn get_block_with_transaction(
         &mut self,
         hash: TransactionHash<Types>,
-    ) -> QueryResult<TransactionQueryData<Types>> {
+    ) -> QueryResult<BlockQueryData<Types>> {
         self.maybe_fail_read(FailableAction::GetTransaction).await?;
-        self.inner.get_transaction(hash).await
+        self.inner.get_block_with_transaction(hash).await
     }
 
     async fn first_available_leaf(&mut self, from: u64) -> QueryResult<LeafQueryData<Types>> {
@@ -464,7 +464,7 @@ where
         self.inner.first_available_leaf(from).await
     }
 
-    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryData<Types>> {
+    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryDataV2<Types>> {
         self.maybe_fail_read(FailableAction::GetStateCert).await?;
         self.inner.get_state_cert(epoch).await
     }
@@ -498,7 +498,7 @@ where
 
     async fn insert_state_cert(
         &mut self,
-        state_cert: StateCertQueryData<Types>,
+        state_cert: StateCertQueryDataV2<Types>,
     ) -> anyhow::Result<()> {
         self.maybe_fail_write(FailableAction::Any).await?;
         self.inner.insert_state_cert(state_cert).await

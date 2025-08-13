@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::{EventKey, IndexedStake, StakeTableEvent},
+    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent},
     Leaf2, NetworkConfig, ValidatorMap,
 };
 use hotshot::InitializerEpochInfo;
@@ -23,7 +23,7 @@ use hotshot_types::{
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::Proposal,
     simple_certificate::{
-        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate2,
+        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
         UpgradeCertificate,
     },
     traits::metrics::Metrics,
@@ -246,14 +246,14 @@ impl SequencerPersistence for NoStorage {
 
     async fn add_state_cert(
         &self,
-        _state_cert: LightClientStateUpdateCertificate<SeqTypes>,
+        _state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
         Ok(())
     }
 
     async fn load_state_cert(
         &self,
-    ) -> anyhow::Result<Option<LightClientStateUpdateCertificate<SeqTypes>>> {
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
         Ok(None)
     }
 
@@ -262,7 +262,10 @@ impl SequencerPersistence for NoStorage {
 
 #[async_trait]
 impl MembershipPersistence for NoStorage {
-    async fn load_stake(&self, _epoch: EpochNumber) -> anyhow::Result<Option<ValidatorMap>> {
+    async fn load_stake(
+        &self,
+        _epoch: EpochNumber,
+    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>)>> {
         Ok(None)
     }
 
@@ -270,7 +273,12 @@ impl MembershipPersistence for NoStorage {
         Ok(None)
     }
 
-    async fn store_stake(&self, _epoch: EpochNumber, _stake: ValidatorMap) -> anyhow::Result<()> {
+    async fn store_stake(
+        &self,
+        _epoch: EpochNumber,
+        _stake: ValidatorMap,
+        _block_reward: Option<RewardAmount>,
+    ) -> anyhow::Result<()> {
         Ok(())
     }
 

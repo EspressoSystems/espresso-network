@@ -473,12 +473,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     metadata: metadata.clone(),
                 });
                 // Save the payload early because we might need it to calculate VID for the next epoch nodes.
-                if let Err(e) = self
+                let update_result = self
                     .consensus
                     .write()
                     .await
-                    .update_saved_payloads(view_number, payload_with_metadata)
-                {
+                    .update_saved_payloads(view_number, payload_with_metadata);
+                if let Err(e) = update_result {
                     tracing::trace!("{e:?}");
                 }
             },

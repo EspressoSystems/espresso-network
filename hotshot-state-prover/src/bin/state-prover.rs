@@ -12,7 +12,8 @@ use alloy::{
 use clap::Parser;
 use espresso_contract_deployer::network_config::fetch_epoch_config_from_sequencer;
 use espresso_types::{parse_duration, v0_1::SwitchingTransport, L1ClientOptions};
-use hotshot_state_prover::service::StateProverConfig;
+use hotshot_contract_adapter::sol_types;
+use hotshot_state_prover::StateProverConfig;
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
 use sequencer_utils::logging;
 use url::Url;
@@ -169,15 +170,15 @@ async fn main() {
         max_gas_price,
     };
 
+    // TODO(Chengyu): turn on the v3 prover after the sequencer update
     // validate that the light client contract is a proxy, panics otherwise
     config.validate_light_client_contract().await.unwrap();
-    let is_legacy = match hotshot_state_prover::legacy::service::is_contract_legacy(
-        &l1_provider,
-        args.light_client_address,
-    )
-    .await
+    let is_legacy = match sol_types::LightClient::new(args.light_client_address, &l1_provider)
+        .getVersion()
+        .call()
+        .await
     {
-        Ok(is_legacy) => is_legacy,
+        Ok(version) => version.majorVersion == 1,
         Err(err) => {
             tracing::error!("Error checking the contract version: {err}");
             return;
@@ -194,9 +195,9 @@ async fn main() {
     if args.daemon {
         // Launching the prover service daemon
         let result = if is_legacy {
-            hotshot_state_prover::legacy::service::run_prover_service(config, bind_version).await
+            hotshot_state_prover::v1::service::run_prover_service(config, bind_version).await
         } else {
-            hotshot_state_prover::service::run_prover_service(config, bind_version).await
+            hotshot_state_prover::v2::service::run_prover_service(config, bind_version).await
         };
         if let Err(err) = result {
             tracing::error!("Error running prover service: {err}");
@@ -204,9 +205,9 @@ async fn main() {
     } else {
         // Run light client state update once
         let result = if is_legacy {
-            hotshot_state_prover::legacy::service::run_prover_once(config, bind_version).await
+            hotshot_state_prover::v1::service::run_prover_once(config, bind_version).await
         } else {
-            hotshot_state_prover::service::run_prover_once(config, bind_version).await
+            hotshot_state_prover::v2::service::run_prover_once(config, bind_version).await
         };
         if let Err(err) = result {
             tracing::error!("Error running prover once: {err}");

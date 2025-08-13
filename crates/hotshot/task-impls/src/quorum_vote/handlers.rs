@@ -22,7 +22,7 @@ use hotshot_types::{
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
-        signature_key::{SignatureKey, StateSignatureKey},
+        signature_key::{LCV2StateSignatureKey, SignatureKey, StateSignatureKey},
         storage::Storage,
         ValidatedState,
     },
@@ -107,7 +107,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
             proposal.block_header().block_number(),
             task_state.epoch_height,
         ) {
-            decide_from_proposal_2::<TYPES, I, V>(
+            decide_from_proposal_2::<TYPES, I>(
                 proposal,
                 OuterConsensus::new(Arc::clone(&task_state.consensus.inner_consensus)),
                 Arc::clone(&task_state.upgrade_lock.decided_upgrade_certificate),
@@ -115,23 +115,21 @@ pub(crate) async fn handle_quorum_proposal_validated<
                 version >= V::Epochs::VERSION,
                 &task_state.membership,
                 &task_state.storage,
-                &task_state.upgrade_lock,
             )
             .await
         } else {
             LeafChainTraversalOutcome::default()
         }
     } else {
-        decide_from_proposal::<TYPES, I, V>(
+        decide_from_proposal::<TYPES, I>(
             proposal,
             OuterConsensus::new(Arc::clone(&task_state.consensus.inner_consensus)),
             Arc::clone(&task_state.upgrade_lock.decided_upgrade_certificate),
             &task_state.public_key,
             version >= V::Epochs::VERSION,
-            task_state.membership.membership(),
+            &task_state.membership,
             &task_state.storage,
             task_state.epoch_height,
-            &task_state.upgrade_lock,
         )
         .await
     };
@@ -270,11 +268,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
 /// Updates the shared consensus state with the new voting data.
 #[instrument(skip_all, target = "VoteDependencyHandle", fields(view = *view_number))]
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn update_shared_state<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
-    V: Versions,
->(
+pub(crate) async fn update_shared_state<TYPES: NodeType, V: Versions>(
     consensus: OuterConsensus<TYPES>,
     sender: Sender<Arc<HotShotEvent<TYPES>>>,
     receiver: InactiveReceiver<Arc<HotShotEvent<TYPES>>>,
@@ -493,18 +487,26 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
             .commitment(stake_table_capacity)
             .wrap()
             .context(error!("Failed to compute stake table commitment"))?;
-        let signature = <TYPES::StateSignatureKey as StateSignatureKey>::sign_state(
+        let signature = <TYPES::StateSignatureKey as LCV2StateSignatureKey>::sign_state(
             state_private_key,
             &light_client_state,
             &next_stake_table_state,
         )
         .wrap()
         .context(error!("Failed to sign the light client state"))?;
+        let auth_root = leaf
+            .block_header()
+            .auth_root()
+            .wrap()
+            .context(error!(format!(
+                "Failed to get auth root for light client state certificate. view={view_number}"
+            )))?;
         let state_vote = LightClientStateUpdateVote {
             epoch: TYPES::Epoch::new(epoch_from_block_number(leaf.height(), epoch_height)),
             light_client_state,
             next_stake_table_state,
             signature,
+            auth_root, // TODO: (Chengyu) Update signature logic for protocol version V4
         };
         broadcast_event(
             Arc::new(HotShotEvent::EpochRootQuorumVoteSend(EpochRootQuorumVote {

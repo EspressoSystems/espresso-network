@@ -10,21 +10,27 @@ use std::{
     time::Instant,
 };
 
-use alloy::primitives::U256;
+use alloy::{
+    primitives::{FixedBytes, U256},
+    sol_types::SolValue,
+};
+use ark_ff::PrimeField;
 use async_broadcast::{Receiver, SendError, Sender};
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
+use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
 use hotshot_task::dependency::{Dependency, EventDependency};
 use hotshot_types::{
     consensus::OuterConsensus,
     data::{Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewChangeEvidence2},
-    drb::{DrbInput, DrbResult},
+    drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType, LeafInfo},
+    light_client::{CircuitField, LightClientState, StakeTableState},
     message::{Proposal, UpgradeLock},
     request_response::ProposalRequestPayload,
     simple_certificate::{
-        DaCertificate2, LightClientStateUpdateCertificate, NextEpochQuorumCertificate2,
+        DaCertificate2, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
         QuorumCertificate2, UpgradeCertificate,
     },
     simple_vote::HasEpoch,
@@ -33,8 +39,8 @@ use hotshot_types::{
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
-        signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
-        storage::{load_drb_progress_fn, store_drb_progress_fn, Storage},
+        signature_key::{LCV2StateSignatureKey, SignatureKey, StakeTableEntryType},
+        storage::Storage,
         BlockPayload, ValidatedState,
     },
     utils::{
@@ -244,16 +250,15 @@ pub(crate) async fn verify_drb_result<
 }
 
 /// Handles calling add_epoch_root and sync_l1 on Membership if necessary.
-async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
+async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     decided_leaf: &Leaf2<TYPES>,
     epoch_height: u64,
-    membership: &Arc<RwLock<TYPES::Membership>>,
+    membership: &EpochMembershipCoordinator<TYPES>,
     storage: &I::Storage,
     consensus: &OuterConsensus<TYPES>,
-    upgrade_lock: &UpgradeLock<TYPES, V>,
 ) {
+    let decided_leaf = decided_leaf.clone();
     let decided_block_number = decided_leaf.block_header().block_number();
-    let view_number = decided_leaf.view_number();
 
     // Skip if this is not the expected block.
     if epoch_height != 0 && is_epoch_root(decided_block_number, epoch_height) {
@@ -269,25 +274,12 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
         }
         tracing::info!("Time taken to store epoch root: {:?}", start.elapsed());
 
-        let Ok(drb_seed_input_vec) = bincode::serialize(&decided_leaf.justify_qc().signatures)
-        else {
-            tracing::error!("Failed to serialize the QC signature.");
-            return;
-        };
-
         let membership = membership.clone();
         let decided_block_header = decided_leaf.block_header().clone();
         let storage = storage.clone();
-        let store_drb_progress_fn = store_drb_progress_fn(storage.clone());
-        let load_drb_progress_fn = load_drb_progress_fn(storage.clone());
         let consensus = consensus.clone();
 
         let consensus_reader = consensus.read().await;
-        let difficulty_level = if upgrade_lock.upgraded_drb_and_header(view_number).await {
-            consensus_reader.drb_upgrade_difficulty
-        } else {
-            consensus_reader.drb_difficulty
-        };
 
         drop(consensus_reader);
 
@@ -296,7 +288,7 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
             let epoch_root_future = tokio::spawn(async move {
                 let start = Instant::now();
                 if let Err(e) = Membership::add_epoch_root(
-                    Arc::clone(&membership_clone),
+                    Arc::clone(membership_clone.membership()),
                     next_epoch_number,
                     decided_block_header,
                 )
@@ -307,48 +299,36 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
                 tracing::info!("Time taken to add epoch root: {:?}", start.elapsed());
             });
 
+            let membership_clone = membership.clone();
+
             let drb_result_future = tokio::spawn(async move {
-                let start = Instant::now();
-                let mut drb_seed_input = [0u8; 32];
-                let len = drb_seed_input_vec.len().min(32);
-                drb_seed_input[..len].copy_from_slice(&drb_seed_input_vec[..len]);
-
-                let drb_input = DrbInput {
-                    epoch: *next_epoch_number,
-                    iteration: 0,
-                    value: drb_seed_input,
-                    difficulty_level,
-                };
-
-                tracing::error!(
-                    "DRB LOG: compute_drb_result spawned from consensus for epoch \
-                     {next_epoch_number}"
-                );
-                let drb_result = hotshot_types::drb::compute_drb_result(
-                    drb_input,
-                    store_drb_progress_fn,
-                    load_drb_progress_fn,
-                )
-                .await;
-
-                tracing::info!("Time taken to calculate drb result: {:?}", start.elapsed());
-
-                drb_result
+                membership_clone
+                    .compute_drb_result(next_epoch_number, decided_leaf.clone())
+                    .await
             });
 
             let (_, drb_result) = tokio::join!(epoch_root_future, drb_result_future);
 
             let drb_result = match drb_result {
-                Ok(result) => result,
+                Ok(Ok(result)) => result,
                 Err(e) => {
-                    tracing::error!("Failed to compute DRB result: {e}");
+                    tracing::error!("Failed to compute DRB result from decide: {e}");
+                    return;
+                },
+                Ok(Err(e)) => {
+                    tracing::error!("Failed to compute DRB result from decide: {e}");
                     return;
                 },
             };
 
             let start = Instant::now();
-            handle_drb_result::<TYPES, I>(&membership, next_epoch_number, &storage, drb_result)
-                .await;
+            handle_drb_result::<TYPES, I>(
+                membership.membership(),
+                next_epoch_number,
+                &storage,
+                drb_result,
+            )
+            .await;
             tracing::info!("Time taken to handle drb result: {:?}", start.elapsed());
         });
     }
@@ -426,7 +406,7 @@ async fn update_metrics<TYPES: NodeType>(
 /// If the leaf chain contains no decided leaf while reaching a decided view, which should be
 /// impossible.
 #[allow(clippy::too_many_arguments)]
-pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
+pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     proposal: &QuorumProposalWrapper<TYPES>,
     consensus: OuterConsensus<TYPES>,
     existing_upgrade_cert: Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
@@ -434,7 +414,6 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
     with_epochs: bool,
     membership: &EpochMembershipCoordinator<TYPES>,
     storage: &I::Storage,
-    upgrade_lock: &UpgradeLock<TYPES, V>,
 ) -> LeafChainTraversalOutcome<TYPES> {
     let mut res = LeafChainTraversalOutcome::default();
     let consensus_reader = consensus.read().await;
@@ -523,13 +502,12 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
         drop(consensus_reader);
 
         for decided_leaf_info in &res.leaf_views {
-            decide_epoch_root::<TYPES, I, V>(
+            decide_epoch_root::<TYPES, I>(
                 &decided_leaf_info.leaf,
                 epoch_height,
-                membership.membership(),
+                membership,
                 storage,
                 &consensus,
-                upgrade_lock,
             )
             .await;
         }
@@ -571,16 +549,15 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
 /// If the leaf chain contains no decided leaf while reaching a decided view, which should be
 /// impossible.
 #[allow(clippy::too_many_arguments)]
-pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
+pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     proposal: &QuorumProposalWrapper<TYPES>,
     consensus: OuterConsensus<TYPES>,
     existing_upgrade_cert: Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
     public_key: &TYPES::SignatureKey,
     with_epochs: bool,
-    membership: &Arc<RwLock<TYPES::Membership>>,
+    membership: &EpochMembershipCoordinator<TYPES>,
     storage: &I::Storage,
     epoch_height: u64,
-    upgrade_lock: &UpgradeLock<TYPES, V>,
 ) -> LeafChainTraversalOutcome<TYPES> {
     let consensus_reader = consensus.read().await;
     let existing_upgrade_cert_reader = existing_upgrade_cert.read().await;
@@ -711,13 +688,12 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>,
 
     if with_epochs && res.new_decided_view_number.is_some() {
         for decided_leaf_info in &res.leaf_views {
-            decide_epoch_root::<TYPES, I, V>(
+            decide_epoch_root::<TYPES, I>(
                 &decided_leaf_info.leaf,
                 epoch_height,
                 membership,
                 storage,
                 &consensus,
-                upgrade_lock,
             )
             .await;
         }
@@ -969,7 +945,7 @@ pub(crate) async fn validate_epoch_transition_qc<
 /// If any validation or state update fails.
 #[allow(clippy::too_many_lines)]
 #[instrument(skip_all, fields(id = validation_info.id, view = *proposal.data.view_number()))]
-pub async fn validate_proposal_safety_and_liveness<
+pub(crate) async fn validate_proposal_safety_and_liveness<
     TYPES: NodeType,
     I: NodeImplementation<TYPES>,
     V: Versions,
@@ -1349,7 +1325,7 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
 
 /// Validates the light client state update certificate
 pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
-    state_cert: &LightClientStateUpdateCertificate<TYPES>,
+    state_cert: &LightClientStateUpdateCertificateV2<TYPES>,
     membership_coordinator: &EpochMembershipCoordinator<TYPES>,
 ) -> Result<()> {
     tracing::debug!("Validating light client state update certificate");
@@ -1373,7 +1349,8 @@ pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
     for (key, sig) in state_cert.signatures.iter() {
         if let Some(stake) = state_key_map.get(key) {
             accumulated_stake += *stake;
-            if !key.verify_state_sig(
+            if !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
+                key,
                 sig,
                 &state_cert.light_client_state,
                 &state_cert.next_stake_table_state,
@@ -1393,7 +1370,7 @@ pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
 
 pub(crate) fn check_qc_state_cert_correspondence<TYPES: NodeType>(
     qc: &QuorumCertificate2<TYPES>,
-    state_cert: &LightClientStateUpdateCertificate<TYPES>,
+    state_cert: &LightClientStateUpdateCertificateV2<TYPES>,
     epoch_height: u64,
 ) -> bool {
     qc.data
@@ -1493,4 +1470,23 @@ pub async fn broadcast_view_change<TYPES: NodeType>(
         sender,
     )
     .await
+}
+
+pub fn derive_signed_state_digest(
+    lc_state: &LightClientState,
+    next_stake_state: &StakeTableState,
+    auth_root: &FixedBytes<32>,
+) -> CircuitField {
+    let lc_state_sol: LightClientStateSol = (*lc_state).into();
+    let stake_st_sol: StakeTableStateSol = (*next_stake_state).into();
+
+    let res = alloy::primitives::keccak256(
+        (
+            lc_state_sol.abi_encode(),
+            stake_st_sol.abi_encode(),
+            auth_root.abi_encode(),
+        )
+            .abi_encode_packed(),
+    );
+    CircuitField::from_be_bytes_mod_order(res.as_ref())
 }

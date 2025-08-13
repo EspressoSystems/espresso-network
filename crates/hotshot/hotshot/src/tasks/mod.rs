@@ -35,7 +35,7 @@ use hotshot_task_impls::{
 use hotshot_types::{
     consensus::OuterConsensus,
     constants::EVENT_CHANNEL_SIZE,
-    message::{Message, UpgradeLock},
+    message::{Message, MessageKind, UpgradeLock, EXTERNAL_MESSAGE_VERSION},
     storage_metrics::StorageMetricsValue,
     traits::{
         network::ConnectedNetwork,
@@ -43,7 +43,7 @@ use hotshot_types::{
     },
 };
 use tokio::{spawn, time::sleep};
-use vbs::version::StaticVersionType;
+use vbs::version::{StaticVersionType, Version};
 
 use crate::{
     genesis_epoch_from_version, tasks::task_state::CreateTaskState, types::SystemContextHandle,
@@ -167,14 +167,23 @@ pub fn add_network_message_task<
                         continue;
                     };
 
-                    // Deserialize the message
-                    let deserialized_message: Message<TYPES> = match upgrade_lock.deserialize(&message).await {
+                    // Deserialize the message and get the version
+                    let (deserialized_message, version): (Message<TYPES>, Version) = match upgrade_lock.deserialize(&message).await {
                         Ok(message) => message,
                         Err(e) => {
                             tracing::error!("Failed to deserialize message: {:?}", e);
                             continue;
                         }
                     };
+
+                    // Special case: external messages (version 0.0). We want to make sure it is an external message
+                    // and warn and continue otherwise.
+                    if version == EXTERNAL_MESSAGE_VERSION
+                        && !matches!(deserialized_message.kind, MessageKind::<TYPES>::External(_))
+                    {
+                        tracing::warn!("Received a non-external message with version 0.0");
+                        continue;
+                    }
 
                     // Handle the message
                     state.handle_message(deserialized_message).await;

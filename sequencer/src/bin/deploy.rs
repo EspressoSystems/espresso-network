@@ -42,6 +42,7 @@ use vbs::version::StaticVersion;
 /// in the deployment process. The generated .env file will include all the addresses passed in as
 /// well as those newly deployed.
 #[derive(Clone, Debug, Parser)]
+
 struct Options {
     /// A JSON-RPC endpoint for the L1 to deploy to.
     #[clap(
@@ -135,6 +136,9 @@ struct Options {
     /// Option to upgrade to LightClient V2
     #[clap(long, default_value = "false")]
     upgrade_light_client_v2: bool,
+    /// Option to upgrade to LightClient V3
+    #[clap(long, default_value = "false")]
+    upgrade_light_client_v3: bool,
     /// Option to deploy esp token
     #[clap(long, default_value = "false")]
     deploy_esp_token: bool,
@@ -158,7 +162,15 @@ struct Options {
     use_timelock_owner: bool,
     /// Option to transfer ownership from multisig
     #[clap(long, default_value = "false")]
-    propose_transfer_ownership_to_timelock_fee_contract: bool,
+    propose_transfer_ownership_to_timelock: bool,
+
+    /// Option to transfer ownership directly from EOA to a new owner
+    #[clap(long, default_value = "false")]
+    transfer_ownership_from_eoa: bool,
+
+    /// The new owner address (when using --transfer-ownership-from-eoa)
+    #[clap(long, env = "ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER")]
+    transfer_ownership_new_owner: Option<Address>,
 
     /// Write deployment results to OUT as a .env file.
     ///
@@ -283,12 +295,8 @@ struct Options {
 
     /// The target contract of the timelock operation
     /// The timelock is the owner of this contract and can perform the timelock operation on it
-    #[clap(
-        long,
-        env = "ESPRESSO_TIMELOCK_OPERATION_TARGET_CONTRACT",
-        requires = "perform_timelock_operation"
-    )]
-    timelock_target_contract: Option<String>,
+    #[clap(long, env = "ESPRESSO_TARGET_CONTRACT")]
+    target_contract: Option<String>,
 
     /// The value to send with the timelock operation
     #[clap(
@@ -332,8 +340,8 @@ struct Options {
     )]
     timelock_operation_delay: Option<u64>,
     /// The address of the timelock controller
-    #[clap(long, env = "ESPRESSO_SEQUENCER_TIMELOCK_CONTROLLER_ADDRESS")]
-    timelock_controller: Option<Address>,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS")]
+    timelock_address: Option<Address>,
 
     #[clap(flatten)]
     logging: logging::Config,
@@ -421,7 +429,7 @@ async fn main() -> anyhow::Result<()> {
     // First use builder to build constructor input arguments
     let mut args_builder = DeployerArgsBuilder::default();
     args_builder
-        .deployer(provider)
+        .deployer(provider.clone())
         .mock_light_client(opt.use_mock)
         .use_multisig(opt.use_multisig)
         .dry_run(opt.dry_run)
@@ -454,7 +462,7 @@ async fn main() -> anyhow::Result<()> {
             args_builder.permissioned_prover(prover);
         }
     }
-    if opt.upgrade_light_client_v2 {
+    if opt.upgrade_light_client_v2 || opt.upgrade_light_client_v3 {
         let (blocks_per_epoch, epoch_start_block) =
             if (opt.dry_run && opt.use_multisig) || opt.mock_espresso_live_network {
                 (10, 22)
@@ -563,15 +571,15 @@ async fn main() -> anyhow::Result<()> {
                  var when scheduling timelock operation"
             )
         })?;
+
         args_builder.timelock_operation_type(timelock_operation_type);
-        let timelock_target_contract = opt.timelock_target_contract.clone().ok_or_else(|| {
+        let target_contract = opt.target_contract.clone().ok_or_else(|| {
             anyhow::anyhow!(
-                "Must provide --timelock-target-contract or \
-                 ESPRESSO_TIMELOCK_OPERATION_TARGET_CONTRACT env var when scheduling timelock \
-                 operation"
+                "Must provide --target-contract or ESPRESSO_TARGET_CONTRACT env var when \
+                 scheduling timelock operation"
             )
         })?;
-        args_builder.timelock_target_contract(timelock_target_contract);
+        args_builder.target_contract(target_contract);
         let function_signature = opt.function_signature.ok_or_else(|| {
             anyhow::anyhow!(
                 "Must provide --function-signature or \
@@ -624,6 +632,42 @@ async fn main() -> anyhow::Result<()> {
         args_builder.token_recipient(token_recipient);
     }
 
+    // Add EOA ownership transfer parameters to builder
+    if opt.transfer_ownership_from_eoa {
+        let target_contract = opt.target_contract.clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --target-contract when using --transfer-ownership-from-eoa"
+            )
+        })?;
+        let new_owner = opt.transfer_ownership_new_owner.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --transfer-ownership-new-owner when using \
+                 --transfer-ownership-from-eoa"
+            )
+        })?;
+        args_builder.transfer_ownership_from_eoa(true);
+        args_builder.target_contract(target_contract);
+        args_builder.transfer_ownership_new_owner(new_owner);
+    }
+
+    // Add multisig to timelock transfer parameters to builder
+    if opt.propose_transfer_ownership_to_timelock {
+        let target_contract = opt.target_contract.clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --target-contract when using \
+                 --propose-transfer-ownership-to-timelock"
+            )
+        })?;
+        let timelock_address = opt.timelock_address.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --timelock-address when using \
+                 --propose-transfer-ownership-to-timelock"
+            )
+        })?;
+        args_builder.target_contract(target_contract);
+        args_builder.timelock_address(timelock_address);
+    }
+
     // then deploy specified contracts
     let args = args_builder.build()?;
 
@@ -654,6 +698,9 @@ async fn main() -> anyhow::Result<()> {
     if opt.upgrade_light_client_v2 {
         args.deploy(&mut contracts, Contract::LightClientV2).await?;
     }
+    if opt.upgrade_light_client_v3 {
+        args.deploy(&mut contracts, Contract::LightClientV3).await?;
+    }
     if opt.deploy_stake_table {
         args.deploy(&mut contracts, Contract::StakeTableProxy)
             .await?;
@@ -669,18 +716,14 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Execute ownership transfer proposal if requested
-    if opt.propose_transfer_ownership_to_timelock_fee_contract {
-        let timelock_controller = opt.timelock_controller.expect(
-            "Must provide --timelock-controller when transferring ownership from multisig to \
-             timelock",
-        );
+    if opt.propose_transfer_ownership_to_timelock {
+        args.propose_transfer_ownership_to_timelock(&mut contracts)
+            .await?;
+    }
 
-        args.propose_transfer_ownership_from_multisig_to_timelock(
-            &mut contracts,
-            timelock_controller,
-            Contract::FeeContractProxy,
-        )
-        .await?;
+    // Execute ownership transfer when the admin is an EOA
+    if opt.transfer_ownership_from_eoa {
+        args.transfer_ownership_from_eoa(&mut contracts).await?;
     }
 
     // finally print out or persist deployed addresses

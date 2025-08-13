@@ -126,7 +126,6 @@ mod test {
     use alloy::{primitives::I256, sol};
     use anyhow::Result;
     use committable::RawCommitmentBuilder;
-    use test_utils::setup_test;
 
     use super::*;
 
@@ -186,9 +185,8 @@ mod test {
         );
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_contract_send() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let contract = CounterWithError::deploy(provider.clone()).await?;
 

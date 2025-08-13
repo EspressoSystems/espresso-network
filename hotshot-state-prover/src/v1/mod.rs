@@ -1,4 +1,4 @@
-//! Legacy prover
+//! Light client V1 prover
 
 /// State verifier circuit builder
 pub mod circuit;

@@ -1,16 +1,18 @@
-use std::{collections::HashSet, marker::PhantomData, sync::Arc, time::Duration};
+use std::{
+    collections::HashSet, marker::PhantomData, result::Result::Ok, sync::Arc, time::Duration,
+};
 
 use alloy::primitives::U256;
-use anyhow::Ok;
 use async_lock::RwLock;
 use hotshot_types::{
     data::Leaf2,
-    drb::DrbResult,
+    drb::{compute_drb_result, DrbInput, DrbResult},
     stake_table::HSStakeTable,
     traits::{
         election::Membership,
         node_implementation::{NodeType, Versions},
         signature_key::SignatureKey,
+        storage::{null_load_drb_progress_fn, null_store_drb_progress_fn},
     },
     PeerConfig,
 };
@@ -249,11 +251,42 @@ where
     }
 
     async fn get_epoch_drb(
-        _membership: Arc<RwLock<Self>>,
-        _epoch: TYPES::Epoch,
+        membership: Arc<RwLock<Self>>,
+        epoch: TYPES::Epoch,
     ) -> anyhow::Result<DrbResult> {
         tokio::time::sleep(Duration::from_millis(10)).await;
-        Ok(DrbResult::default())
+        if !membership.read().await.drbs.contains(&epoch) {
+            anyhow::bail!("Missing DRB for epoch {epoch}");
+        }
+
+        let default_drb = {
+            let root_leaf: Leaf2<TYPES> = Leaf2::genesis::<V>(
+                &TYPES::ValidatedState::default(),
+                &TYPES::InstanceState::default(),
+            )
+            .await;
+
+            let Ok(drb_seed_input_vec) = bincode::serialize(&root_leaf.justify_qc().signatures)
+            else {
+                panic!("Failed to serialize root leaf");
+            };
+            let drb_difficulty = 10;
+            let mut drb_seed_input = [0u8; 32];
+            let len = drb_seed_input_vec.len().min(32);
+            drb_seed_input[..len].copy_from_slice(&drb_seed_input_vec[..len]);
+            let drb_input = DrbInput {
+                epoch: 0,
+                iteration: 0,
+                value: drb_seed_input,
+                difficulty_level: drb_difficulty,
+            };
+
+            let store_drb_progress_fn = null_store_drb_progress_fn();
+            let load_drb_progress_fn = null_load_drb_progress_fn();
+
+            compute_drb_result(drb_input, store_drb_progress_fn, load_drb_progress_fn).await
+        };
+        Ok(default_drb)
     }
 
     fn add_drb_result(&mut self, epoch: TYPES::Epoch, drb_result: hotshot_types::drb::DrbResult) {

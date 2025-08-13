@@ -14,8 +14,9 @@ use crate::{
     proposals::{
         multisig::{
             transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
-            upgrade_light_client_v2_multisig_owner, upgrade_stake_table_v2_multisig_owner,
-            LightClientV2UpgradeParams, TransferOwnershipParams,
+            upgrade_light_client_v2_multisig_owner, upgrade_light_client_v3_multisig_owner,
+            upgrade_stake_table_v2_multisig_owner, LightClientV2UpgradeParams,
+            TransferOwnershipParams,
         },
         timelock::{
             cancel_timelock_operation, execute_timelock_operation, schedule_timelock_operation,
@@ -49,13 +50,14 @@ use crate::{
 /// - `safe_exit_timelock_executors`: executors for the safe exit timelock
 /// - `safe_exit_timelock_proposers`: proposers for the safe exit timelock
 /// - `timelock_operation_type`: type of the timelock operation
-/// - `timelock_target_contract`: target contract for the timelock operation
+/// - `target_contract`: target contract for the contract operations
 /// - `timelock_operation_value`: value for the timelock operation
 /// - `timelock_operation_delay`: delay for the timelock operation
 /// - `timelock_operation_function_signature`: function signature for the timelock operation
 /// - `timelock_operation_function_values`: function values for the timelock operation
 /// - `timelock_operation_salt`: salt for the timelock operation
 /// - `use_timelock_owner`: flag to indicate whether to transfer ownership to the timelock owner
+/// - `timelock_address`: address of the timelock contract
 #[derive(Builder, Clone)]
 #[builder(setter(strip_option))]
 pub struct DeployerArgs<P: Provider + WalletProvider> {
@@ -111,7 +113,7 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     #[builder(default)]
     timelock_operation_type: Option<TimelockOperationType>,
     #[builder(default)]
-    timelock_target_contract: Option<String>,
+    target_contract: Option<String>,
     #[builder(default)]
     timelock_operation_value: Option<U256>,
     #[builder(default)]
@@ -124,6 +126,12 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     timelock_operation_salt: Option<String>,
     #[builder(default)]
     use_timelock_owner: Option<bool>,
+    #[builder(default)]
+    transfer_ownership_from_eoa: Option<bool>,
+    #[builder(default)]
+    transfer_ownership_new_owner: Option<Address>,
+    #[builder(default)]
+    timelock_address: Option<Address>,
 }
 
 impl<P: Provider + WalletProvider> DeployerArgs<P> {
@@ -306,7 +314,29 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         epoch_start_block,
                     )
                     .await?;
+                    // NOTE: we don't transfer ownership to multisig, we only do so after V3 upgrade
+                }
+            },
+            Contract::LightClientV3 => {
+                let use_mock = self.mock_light_client;
+                let dry_run = self.dry_run;
+                let use_multisig = self.use_multisig;
+                let rpc_url = self.rpc_url.clone();
 
+                tracing::info!(?dry_run, ?use_multisig, "Upgrading LightClientV3 with ");
+                if use_multisig {
+                    upgrade_light_client_v3_multisig_owner(
+                        provider,
+                        contracts,
+                        use_mock,
+                        rpc_url,
+                        Some(dry_run),
+                    )
+                    .await?;
+                } else {
+                    crate::upgrade_light_client_v3(provider, contracts, use_mock).await?;
+
+                    // Transfer ownership to Timelook or MultiSig
                     let addr = contracts
                         .address(Contract::LightClientProxy)
                         .expect("fail to get LightClientProxy address");
@@ -507,7 +537,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             .timelock_operation_type
             .context("Timelock operation type not found")?;
         let target_contract = self
-            .timelock_target_contract
+            .target_contract
             .clone()
             .context("Timelock target not found")?;
         let value = self
@@ -611,16 +641,48 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
     }
 
     /// Propose ownership transfer from multisig to timelock
-    pub async fn propose_transfer_ownership_from_multisig_to_timelock(
+    pub async fn propose_transfer_ownership_to_timelock(
         &self,
         contracts: &mut Contracts,
-        timelock_controller: Address,
-        contract: Contract,
     ) -> Result<()> {
         let multisig = self.multisig.expect(
             "Multisig address must be set when proposing ownership transfer. Use \
              --multisig-address or ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS",
         );
+        let target_contract = self.target_contract.clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide target_contract when using \
+                 --propose-transfer-ownership-to-timelock. Use --target-contract or \
+                 ESPRESSO_TARGET_CONTRACT"
+            )
+        })?;
+
+        let timelock_address = self.timelock_address.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Timelock address must be set when proposing ownership transfer. Use \
+                 --timelock-address or ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS"
+            )
+        })?;
+
+        // Parse the contract type from string
+        let contract_type = match target_contract.to_lowercase().as_str() {
+            "lightclient" | "lightclientproxy" => Contract::LightClientProxy,
+            "feecontract" | "feecontractproxy" => Contract::FeeContractProxy,
+            "esptoken" | "esptokenproxy" => Contract::EspTokenProxy,
+            "staketable" | "staketableproxy" => Contract::StakeTableProxy,
+            _ => anyhow::bail!(
+                "Unknown contract type: {}. Supported types: lightclient, feecontract, esptoken, \
+                 staketable",
+                target_contract
+            ),
+        };
+
+        tracing::info!(
+            "Proposing transfer of ownership from multisig to timelock for {}",
+            target_contract
+        );
+
+        let contract = contract_type;
         let rpc_url = self.rpc_url.clone();
         let dry_run = self.dry_run;
         let use_hardware_wallet = false;
@@ -629,7 +691,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             contracts,
             contract,
             TransferOwnershipParams {
-                new_owner: timelock_controller,
+                new_owner: timelock_address,
                 rpc_url,
                 safe_addr: multisig,
                 use_hardware_wallet,
@@ -649,6 +711,67 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             );
         }
         tracing::info!("Successfully proposed ownership transfer for {}", contract);
+        Ok(())
+    }
+
+    /// Transfer ownership from EOA to new owner
+    pub async fn transfer_ownership_from_eoa(&self, contracts: &mut Contracts) -> Result<()> {
+        let transfer_ownership_from_eoa = self
+            .transfer_ownership_from_eoa
+            .ok_or_else(|| anyhow::anyhow!("transfer_ownership_from_eoa flag not set"))?;
+
+        if !transfer_ownership_from_eoa {
+            return Ok(());
+        }
+
+        let target_contract = self.target_contract.clone().ok_or_else(|| {
+            anyhow::anyhow!("Must provide target_contract when using transfer_ownership_from_eoa")
+        })?;
+        let new_owner = self.transfer_ownership_new_owner.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide transfer_ownership_new_owner when using transfer_ownership_from_eoa"
+            )
+        })?;
+
+        // Parse the contract type from string
+        let contract_type = match target_contract.to_lowercase().as_str() {
+            "lightclient" | "lightclientproxy" => Contract::LightClientProxy,
+            "feecontract" | "feecontractproxy" => Contract::FeeContractProxy,
+            "esptoken" | "esptokenproxy" => Contract::EspTokenProxy,
+            "staketable" | "staketableproxy" => Contract::StakeTableProxy,
+            _ => anyhow::bail!(
+                "Unknown contract type: {}. Supported types: lightclient, feecontract, esptoken, \
+                 staketable",
+                target_contract
+            ),
+        };
+
+        // Get the contract address from the contracts map
+        let contract_address = contracts.address(contract_type).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Contract {} not found in deployed contracts",
+                target_contract
+            )
+        })?;
+
+        tracing::info!(
+            "Transferring ownership of {} from EOA to {}",
+            target_contract,
+            new_owner
+        );
+
+        // Use the existing transfer_ownership function from lib.rs
+        let receipt =
+            crate::transfer_ownership(&self.deployer, contract_type, contract_address, new_owner)
+                .await?;
+
+        tracing::info!(
+            "Successfully transferred ownership of {} to {}. Transaction: {}",
+            target_contract,
+            new_owner,
+            receipt.transaction_hash
+        );
+
         Ok(())
     }
 }

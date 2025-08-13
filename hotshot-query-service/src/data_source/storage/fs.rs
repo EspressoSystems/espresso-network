@@ -49,16 +49,16 @@ use crate::{
         data_source::{BlockId, LeafId},
         query_data::{
             BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadQueryData, QueryableHeader,
-            QueryablePayload, TransactionHash, TransactionQueryData, VidCommonQueryData,
+            QueryablePayload, TransactionHash, VidCommonQueryData,
         },
-        NamespaceId, StateCertQueryData,
+        NamespaceId, StateCertQueryDataV2,
     },
     data_source::{update, VersionedDataSource},
     metrics::PrometheusMetrics,
     node::{SyncStatus, TimeWindowQueryData, WindowStart},
     status::HasMetrics,
     types::HeightIndexed,
-    ErrorSnafu, Header, MissingSnafu, NotFoundSnafu, Payload, QueryError, QueryResult,
+    Header, MissingSnafu, NotFoundSnafu, Payload, QueryError, QueryResult,
 };
 
 const CACHED_LEAVES_COUNT: usize = 100;
@@ -85,7 +85,7 @@ where
     leaf_storage: LedgerLog<LeafQueryData<Types>>,
     block_storage: LedgerLog<BlockQueryData<Types>>,
     vid_storage: LedgerLog<(VidCommonQueryData<Types>, Option<VidShare>)>,
-    state_cert_storage: LedgerLog<StateCertQueryData<Types>>,
+    state_cert_storage: LedgerLog<StateCertQueryDataV2<Types>>,
 }
 
 impl<Types> FileSystemStorageInner<Types>
@@ -245,7 +245,7 @@ where
             "vid_common",
             CACHED_VID_COMMON_COUNT,
         )?;
-        let state_cert_storage = LedgerLog::<StateCertQueryData<Types>>::open(
+        let state_cert_storage = LedgerLog::<StateCertQueryDataV2<Types>>::open(
             loader,
             "state_cert",
             CACHED_STATE_CERT_COUNT,
@@ -630,21 +630,16 @@ where
             .collect())
     }
 
-    async fn get_transaction(
+    async fn get_block_with_transaction(
         &mut self,
         hash: TransactionHash<Types>,
-    ) -> QueryResult<TransactionQueryData<Types>> {
+    ) -> QueryResult<BlockQueryData<Types>> {
         let height = self
             .inner
             .index_by_txn_hash
             .get(&hash)
             .context(NotFoundSnafu)?;
-        let block = self.inner.get_block((*height as usize).into())?;
-        TransactionQueryData::with_hash(&block, hash).context(ErrorSnafu {
-            message: format!(
-                "transaction index inconsistent: block {height} contains no transaction {hash}"
-            ),
-        })
+        self.inner.get_block((*height as usize).into())
     }
 
     async fn first_available_leaf(&mut self, from: u64) -> QueryResult<LeafQueryData<Types>> {
@@ -654,7 +649,7 @@ where
         self.get_leaf((from as usize).into()).await
     }
 
-    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryData<Types>> {
+    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryDataV2<Types>> {
         self.inner
             .state_cert_storage
             .iter()
@@ -729,7 +724,7 @@ where
 
     async fn insert_state_cert(
         &mut self,
-        state_cert: StateCertQueryData<Types>,
+        state_cert: StateCertQueryDataV2<Types>,
     ) -> anyhow::Result<()> {
         self.inner
             .state_cert_storage

@@ -118,10 +118,10 @@ use super::{
 };
 use crate::{
     availability::{
-        AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch, FetchStream,
-        HeaderQueryData, LeafId, LeafQueryData, NamespaceId, PayloadMetadata, PayloadQueryData,
-        QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
-        TransactionQueryData, UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
+        AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction, Fetch,
+        FetchStream, HeaderQueryData, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
+        PayloadQueryData, QueryableHeader, QueryablePayload, StateCertQueryDataV2, TransactionHash,
+        UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
     explorer::{self, ExplorerDataSource},
     fetching::{
@@ -805,14 +805,14 @@ where
         self.fetcher.clone().get_range_rev(start, end)
     }
 
-    async fn get_transaction(
+    async fn get_block_containing_transaction(
         &self,
-        hash: TransactionHash<Types>,
-    ) -> Fetch<TransactionQueryData<Types>> {
-        self.fetcher.get(TransactionRequest::from(hash)).await
+        h: TransactionHash<Types>,
+    ) -> Fetch<BlockWithTransaction<Types>> {
+        self.fetcher.clone().get(TransactionRequest::from(h)).await
     }
 
-    async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryData<Types>> {
+    async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryDataV2<Types>> {
         self.fetcher.get(StateCertRequest::from(epoch)).await
     }
 }
@@ -1762,7 +1762,7 @@ where
     block: Notifier<BlockQueryData<Types>>,
     leaf: Notifier<LeafQueryData<Types>>,
     vid_common: Notifier<VidCommonQueryData<Types>>,
-    state_cert: Notifier<StateCertQueryData<Types>>,
+    state_cert: Notifier<StateCertQueryDataV2<Types>>,
 }
 
 impl<Types> Default for Notifiers<Types>
