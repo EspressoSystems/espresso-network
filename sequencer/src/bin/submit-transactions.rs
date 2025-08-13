@@ -6,7 +6,7 @@ use std::fs::OpenOptions;
 use std::num::NonZeroUsize;
 use std::{
     collections::HashMap,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use clap::Parser;
@@ -144,6 +144,16 @@ struct Options {
     #[clap(short, long, env = "ESPRESSO_BENCH_END_BLOCK")]
     benchmark_end_block: NonZeroUsize,
 
+    /// If true, each randomly generated transaction will have
+    /// the UNIX timestamp in nanoseconds (U128) appended to the end of the transaction payload.
+    /// The last 16 bytes represent the timestamp in little endian format.
+    /// Useful for tracking transaction creation time during benchmarking.
+    #[clap(
+        long,
+        env = "ESPRESSO_SUBMIT_TRANSACTIONS_WITH_TIMESTAMP",
+        default_value_t = false
+    )]
+    with_timestamp: bool,
     #[clap(flatten)]
     logging: logging::Config,
 }
@@ -474,6 +484,16 @@ fn random_transaction(opt: &Options, rng: &mut ChaChaRng) -> Transaction {
     let len = rng.gen_range(opt.min_size..=opt.max_size);
     let mut payload = vec![0; len as usize];
     rng.fill_bytes(&mut payload);
+
+    if opt.with_timestamp {
+        // get the current UNIX timestamp in nanoseconds
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time is before unix epoch")
+            .as_nanos();
+        // The last 16 bytes in payload are occupied by timestamp
+        payload.extend_from_slice(&timestamp.to_le_bytes());
+    }
 
     Transaction::new(namespace.into(), payload)
 }
