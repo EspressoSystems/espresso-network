@@ -129,9 +129,7 @@ contract PlonkVerifier_verify_Test is PlonkVerifierCommonTest {
             IPlonkVerifier.VerifyingKey memory verifyingKey,
             uint256[5] memory publicInput,
             IPlonkVerifier.PlonkProof memory proof
-        ) = abi.decode(
-            result, (IPlonkVerifier.VerifyingKey, uint256[5], IPlonkVerifier.PlonkProof)
-        );
+        ) = abi.decode(result, (IPlonkVerifier.VerifyingKey, uint256[5], IPlonkVerifier.PlonkProof));
 
         vm.resumeGasMetering();
         assert(V.verify(verifyingKey, publicInput, proof));
@@ -148,9 +146,7 @@ contract PlonkVerifier_verify_Test is PlonkVerifierCommonTest {
             IPlonkVerifier.VerifyingKey memory verifyingKey,
             uint256[5] memory publicInput,
             IPlonkVerifier.PlonkProof memory proof
-        ) = abi.decode(
-            result, (IPlonkVerifier.VerifyingKey, uint256[5], IPlonkVerifier.PlonkProof)
-        );
+        ) = abi.decode(result, (IPlonkVerifier.VerifyingKey, uint256[5], IPlonkVerifier.PlonkProof));
 
         // there are 18 points in verifying key
         // randomly choose one to mutate
@@ -189,7 +185,7 @@ contract PlonkVerifier_verify_Test is PlonkVerifierCommonTest {
 
         bytes memory result = vm.ffi(cmds);
         (IPlonkVerifier.VerifyingKey memory verifyingKey,, IPlonkVerifier.PlonkProof memory proof) =
-        abi.decode(result, (IPlonkVerifier.VerifyingKey, uint256[5], IPlonkVerifier.PlonkProof));
+            abi.decode(result, (IPlonkVerifier.VerifyingKey, uint256[5], IPlonkVerifier.PlonkProof));
 
         assert(!V.verify(verifyingKey, badPublicInput, proof));
     }
@@ -203,8 +199,8 @@ contract PlonkVerifier_verify_Test is PlonkVerifierCommonTest {
         cmds[1] = "plonk-verify";
 
         bytes memory result = vm.ffi(cmds);
-        (IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[5] memory publicInput,) = abi
-            .decode(result, (IPlonkVerifier.VerifyingKey, uint256[5], IPlonkVerifier.PlonkProof));
+        (IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[5] memory publicInput,) =
+            abi.decode(result, (IPlonkVerifier.VerifyingKey, uint256[5], IPlonkVerifier.PlonkProof));
 
         assert(!V.verify(verifyingKey, publicInput, badProof));
     }

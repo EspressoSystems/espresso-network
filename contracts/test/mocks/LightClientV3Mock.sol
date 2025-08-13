@@ -247,7 +247,7 @@ contract LightClientV3Mock is LCV3 {
         }
     }
 
-    function getFirstEpoch() public view returns (uint64) {
-        return epochFromBlockNumber(epochStartBlock, blocksPerEpoch);
+    function firstEpoch() public view returns (uint64) {
+        return _firstEpoch;
     }
 }

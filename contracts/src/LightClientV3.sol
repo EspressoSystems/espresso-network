@@ -60,9 +60,7 @@ contract LightClientV3 is LightClientV2 {
         ) {
             revert OutdatedState();
         }
-        // DIFF: removed validation on newState.blockCommRoot as it's no longer a public input
-        // we keep validation on nextStakeTable not because they are part of public inputs now,
-        // but they will become votingStakeTable later, by then being part of the public inputs.
+        BN254.validateScalarField(newState.blockCommRoot);
         BN254.validateScalarField(nextStakeTable.blsKeyComm);
         BN254.validateScalarField(nextStakeTable.schnorrKeyComm);
         BN254.validateScalarField(nextStakeTable.amountComm);
