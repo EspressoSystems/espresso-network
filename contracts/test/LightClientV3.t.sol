@@ -1010,6 +1010,8 @@ contract LightClient_V2ToV3UpgradeTest is LightClientCommonTest {
     uint64 constant V2_EPOCH_START_BLOCK = 3160636;
 
     function test_ForkTest_UpgradeToV3() public {
+        // Skip in CI, uncomment locally to test
+        vm.skip(true);
         // create fork on Sepolia on which we have deployed LightClient
         // proxy: https://sepolia.etherscan.io/address/0x303872bb82a191771321d4828888920100d0b3e4
         vm.createSelectFork("https://1rpc.io/sepolia", 8966320); // Aug 12th, 2025
