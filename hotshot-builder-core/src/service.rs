@@ -2199,7 +2199,7 @@ mod test {
         );
     }
 
-    /// This test demonstrates the replacement behavior of the the
+    /// This test demonstrates the replacement behavior of the
     /// `update_global_state` method.
     ///
     /// When given a `BuilderStateId` that already exists in the `blocks` LRU,
