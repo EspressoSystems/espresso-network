@@ -9,7 +9,7 @@ use ark_ec::{AffineRepr, CurveGroup};
 use ark_ed_on_bn254::{EdwardsConfig as EdOnBn254Config, Fq as FqEd254};
 use ark_ff::field_hashers::{DefaultFieldHasher, HashToField};
 use ark_poly::{domain::radix2::Radix2EvaluationDomain, EvaluationDomain};
-use ark_std::rand::{rngs::StdRng, Rng, SeedableRng};
+use ark_std::rand::{rngs::StdRng, Rng, RngCore, SeedableRng};
 use clap::{Parser, ValueEnum};
 use hotshot_contract_adapter::{field_to_u256, jellyfish::*, sol_types::*, u256_to_field};
 use hotshot_state_prover::v3::mock_ledger::{
@@ -462,16 +462,23 @@ fn main() {
             }
 
             let res = if require_valid_proof {
-                let (pi, proof) = ledger.gen_state_proof();
+                let (_pi, proof) = ledger.gen_state_proof();
                 let state_parsed: LightClientStateSol = ledger.light_client_state().into();
                 let proof_parsed: PlonkProofSol = proof.into();
                 let next_stake_table: StakeTableStateSol = ledger.next_stake_table_state().into();
-                (state_parsed, next_stake_table, proof_parsed)
+                let new_auth_root = ledger.auth_root();
+                (state_parsed, next_stake_table, new_auth_root, proof_parsed)
             } else {
                 let state_parsed = ledger.light_client_state().into();
                 let proof_parsed = PlonkProofSol::dummy(&mut ledger.rng);
                 let next_stake_table: StakeTableStateSol = ledger.next_stake_table_state().into();
-                (state_parsed, next_stake_table, proof_parsed)
+                let new_auth_root = ledger.rng.next_u64();
+                (
+                    state_parsed,
+                    next_stake_table,
+                    U256::from(new_auth_root),
+                    proof_parsed,
+                )
             };
             println!("{}", res.abi_encode_params().encode_hex());
         },
@@ -550,28 +557,31 @@ fn main() {
             let mut new_states: Vec<LightClientStateSol> = vec![];
             let mut proofs: Vec<PlonkProofSol> = vec![];
             let mut next_st_states: Vec<StakeTableStateSol> = vec![];
+            let mut new_auth_roots: Vec<U256> = vec![];
 
             while ledger.light_client_state().block_height < height_one {
                 ledger.elapse_with_block();
             }
             // generate the updates for the first height
-            let (pi, proof) = ledger.gen_state_proof();
+            let (_pi, proof) = ledger.gen_state_proof();
             next_st_states.push(ledger.next_stake_table_state().into());
             new_states.push(ledger.light_client_state().into());
             proofs.push(proof.into());
+            new_auth_roots.push(ledger.auth_root());
 
             while ledger.light_client_state().block_height < height_two {
                 ledger.elapse_with_block();
             }
             // generate the updates for the first height
-            let (pi, proof) = ledger.gen_state_proof();
+            let (_pi, proof) = ledger.gen_state_proof();
             next_st_states.push(ledger.next_stake_table_state().into());
             new_states.push(ledger.light_client_state().into());
             proofs.push(proof.into());
+            new_auth_roots.push(ledger.auth_root());
 
             println!(
                 "{}",
-                (new_states, next_st_states, proofs)
+                (new_states, next_st_states, new_auth_roots, proofs)
                     .abi_encode_params()
                     .encode_hex()
             );

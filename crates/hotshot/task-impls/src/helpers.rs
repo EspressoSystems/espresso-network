@@ -1488,5 +1488,5 @@ pub fn derive_signed_state_digest(
         )
             .abi_encode_packed(),
     );
-    CircuitField::from_le_bytes_mod_order(res.as_ref())
+    CircuitField::from_be_bytes_mod_order(res.as_ref())
 }
