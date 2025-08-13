@@ -361,7 +361,9 @@ contract LightClient_newFinalizedState_BeforeEpochActivation_Test is LightClient
             LC.StakeTableState[] memory nextStakeTables,
             uint256[] memory authRoots,
             V.PlonkProof[] memory proofs
-        ) = abi.decode(result, (LC.LightClientState[], LC.StakeTableState[], uint256[], V.PlonkProof[]));
+        ) = abi.decode(
+            result, (LC.LightClientState[], LC.StakeTableState[], uint256[], V.PlonkProof[])
+        );
 
         uint256 statesLen = states.length;
         for (uint256 i = 0; i < statesLen; i++) {
@@ -593,7 +595,9 @@ contract LightClient_newFinalizedState_AfterEpochActivation_Test is LightClientC
             LC.StakeTableState[] memory nextStakeTables,
             uint256[] memory authRoots,
             V.PlonkProof[] memory proofs
-        ) = abi.decode(result, (LC.LightClientState[], LC.StakeTableState[], uint256[], V.PlonkProof[]));
+        ) = abi.decode(
+            result, (LC.LightClientState[], LC.StakeTableState[], uint256[], V.PlonkProof[])
+        );
 
         vm.startPrank(prover);
         vm.expectEmit(true, true, true, true);
@@ -618,7 +622,9 @@ contract LightClient_newFinalizedState_AfterEpochActivation_Test is LightClientC
             LC.StakeTableState[] memory nextStakeTables,
             uint256[] memory authRoots,
             V.PlonkProof[] memory proofs
-        ) = abi.decode(result, (LC.LightClientState[], LC.StakeTableState[], uint256[], V.PlonkProof[]));
+        ) = abi.decode(
+            result, (LC.LightClientState[], LC.StakeTableState[], uint256[], V.PlonkProof[])
+        );
 
         vm.startPrank(prover);
         vm.expectEmit(true, true, true, true);
@@ -651,7 +657,9 @@ contract LightClient_newFinalizedState_AfterEpochActivation_Test is LightClientC
             LC.StakeTableState[] memory nextStakeTables,
             uint256[] memory authRoots,
             V.PlonkProof[] memory proofs
-        ) = abi.decode(result, (LC.LightClientState[], LC.StakeTableState[], uint256[], V.PlonkProof[]));
+        ) = abi.decode(
+            result, (LC.LightClientState[], LC.StakeTableState[], uint256[], V.PlonkProof[])
+        );
 
         vm.startPrank(prover);
         lc.newFinalizedState(states[0], nextStakeTables[0], authRoots[0], proofs[0]);
@@ -673,7 +681,9 @@ contract LightClient_newFinalizedState_AfterEpochActivation_Test is LightClientC
             LC.StakeTableState[] memory nextStakeTables,
             uint256[] memory authRoots,
             V.PlonkProof[] memory proofs
-        ) = abi.decode(result, (LC.LightClientState[], LC.StakeTableState[], uint256[], V.PlonkProof[]));
+        ) = abi.decode(
+            result, (LC.LightClientState[], LC.StakeTableState[], uint256[], V.PlonkProof[])
+        );
 
         vm.startPrank(prover);
         lc.newFinalizedState(states[0], nextStakeTables[0], authRoots[0], proofs[0]);
