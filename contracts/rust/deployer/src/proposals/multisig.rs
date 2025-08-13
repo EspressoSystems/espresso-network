@@ -11,8 +11,9 @@ use alloy::{
 };
 use anyhow::{anyhow, Context, Result};
 use hotshot_contract_adapter::sol_types::{
-    EspToken, EspTokenV2, LightClient, LightClientV2, LightClientV2Mock, OwnableUpgradeable,
-    PlonkVerifierV2, StakeTable, StakeTableV2,
+    EspToken, EspTokenV2, LightClient, LightClientV2, LightClientV2Mock, LightClientV3,
+    LightClientV3Mock, OwnableUpgradeable, PlonkVerifierV2, PlonkVerifierV3, StakeTable,
+    StakeTableV2,
 };
 
 use crate::{Contract, Contracts, LIBRARY_PLACEHOLDER_ADDRESS};
@@ -361,6 +362,150 @@ pub async fn upgrade_light_client_v2_multisig_owner(
              epoch_start_block: {:?}",
             params.blocks_per_epoch,
             params.epoch_start_block
+        );
+    }
+    if !dry_run {
+        tracing::info!(
+                "LightClientProxy upgrade proposal sent. Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
+                owner_addr
+            );
+    }
+    // IDEA: add a function to wait for the proposal to be executed
+
+    Ok(result)
+}
+
+/// Upgrade the light client proxy to use LightClientV3.
+/// Internally, first detect existence of proxy, then deploy LCV3, then upgrade and initializeV3.
+/// Internal to "deploy LCV3", we deploy PlonkVerifierV3 whose address will be used at LCV3 init time.
+/// Assumes:
+/// - the proxy is already deployed.
+/// - the proxy is owned by a multisig.
+/// - the proxy is not yet initialized for V3
+///
+/// Returns the url link to the upgrade proposal
+/// This function can only be called on a real network supported by the safeSDK
+pub async fn upgrade_light_client_v3_multisig_owner(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+    is_mock: bool,
+    rpc_url: String,
+    dry_run: Option<bool>,
+) -> Result<(String, bool)> {
+    let expected_major_version: u8 = 3;
+    let dry_run = dry_run.unwrap_or_else(|| {
+        tracing::warn!("Dry run not specified, defaulting to false");
+        false
+    });
+
+    let proxy_addr = contracts
+        .address(Contract::LightClientProxy)
+        .ok_or_else(|| anyhow!("LightClientProxy (multisig owner) not found, can't upgrade"))?;
+    tracing::info!("LightClientProxy found at {proxy_addr:#x}");
+    let proxy = LightClient::new(proxy_addr, &provider);
+    let owner_addr = proxy.owner().call().await?._0;
+
+    if !dry_run && !crate::is_contract(&provider, owner_addr).await? {
+        tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
+        anyhow::bail!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
+    }
+
+    // Prepare addresses
+    let (_pv3_addr, lcv3_addr) = if !dry_run {
+        // Deploy PlonkVerifierV3.sol (if not already deployed)
+        let pv3_addr = contracts
+            .deploy(
+                Contract::PlonkVerifierV3,
+                PlonkVerifierV3::deploy_builder(&provider),
+            )
+            .await?;
+
+        // then deploy LightClientV3.sol
+        let target_lcv3_bytecode = if is_mock {
+            LightClientV3Mock::BYTECODE.encode_hex()
+        } else {
+            LightClientV3::BYTECODE.encode_hex()
+        };
+        let lcv3_linked_bytecode = {
+            match target_lcv3_bytecode
+                .matches(LIBRARY_PLACEHOLDER_ADDRESS)
+                .count()
+            {
+                0 => return Err(anyhow!("lib placeholder not found")),
+                1 => Bytes::from_hex(target_lcv3_bytecode.replacen(
+                    LIBRARY_PLACEHOLDER_ADDRESS,
+                    &pv3_addr.encode_hex(),
+                    1,
+                ))?,
+                _ => {
+                    return Err(anyhow!(
+                        "more than one lib placeholder found, consider using a different value"
+                    ))
+                },
+            }
+        };
+        let lcv3_addr = if is_mock {
+            let addr = LightClientV3Mock::deploy_builder(&provider)
+                .map(|req| req.with_deploy_code(lcv3_linked_bytecode))
+                .deploy()
+                .await?;
+            tracing::info!("deployed LightClientV3Mock at {addr:#x}");
+            addr
+        } else {
+            contracts
+                .deploy(
+                    Contract::LightClientV3,
+                    LightClientV3::deploy_builder(&provider)
+                        .map(|req| req.with_deploy_code(lcv3_linked_bytecode)),
+                )
+                .await?
+        };
+        (pv3_addr, lcv3_addr)
+    } else {
+        // Use dummy addresses for dry run
+        (Address::random(), Address::random())
+    };
+
+    // Prepare init data
+    let init_data = if crate::already_initialized(
+        &provider,
+        proxy_addr,
+        Contract::LightClientV3,
+        expected_major_version,
+    )
+    .await?
+    {
+        tracing::info!(
+            "Proxy was already initialized for version {}",
+            expected_major_version
+        );
+        vec![].into()
+    } else {
+        tracing::info!(
+            "Init Data to be signed.\n Function: initializeV3\n Arguments: none (V3 inherits from \
+             V2)"
+        );
+        LightClientV3::new(lcv3_addr, &provider)
+            .initializeV3()
+            .calldata()
+            .to_owned()
+    };
+
+    // invoke upgrade on proxy via the safeSDK
+    let result = call_upgrade_proxy_script(
+        proxy_addr,
+        lcv3_addr,
+        init_data.to_string(),
+        rpc_url,
+        owner_addr,
+        Some(dry_run),
+    )
+    .await?;
+
+    tracing::info!("Init data: {:?}", init_data);
+    if init_data.to_string() != "0x" {
+        tracing::info!(
+            "Data to be signed:\n Function: initializeV3\n Arguments: none (V3 inherits from V2)"
         );
     }
     if !dry_run {

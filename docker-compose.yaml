@@ -141,7 +141,7 @@ services:
   # different parts of the CDN
   keydb:
     image: docker.io/eqalpha/keydb:latest
-    command: ["--requirepass", "changemeplease!!"]
+    command: [ "--requirepass", "changemeplease!!" ]
     healthcheck:
       # Attempt to PING the database
       test: keydb-cli --pass changemeplease!! --raw incr PING
