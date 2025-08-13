@@ -17,12 +17,12 @@ pragma solidity ^0.8.0;
 import "forge-std/Test.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { IPlonkVerifier } from "../src/interfaces/IPlonkVerifier.sol";
-import { LightClientStateUpdateVKV2 as VkLib } from
-    "../src/libraries/LightClientStateUpdateVKV2.sol";
-import { PolynomialEvalV2 as Poly } from "../src/libraries/PolynomialEvalV2.sol";
+import { LightClientStateUpdateVKV3 as VkLib } from
+    "../src/libraries/LightClientStateUpdateVKV3.sol";
+import { PolynomialEvalV3 as Poly } from "../src/libraries/PolynomialEvalV3.sol";
 
 // Target contract
-import { PlonkVerifierV2 as V } from "../src/libraries/PlonkVerifierV2.sol";
+import { PlonkVerifierV3 as V } from "../src/libraries/PlonkVerifierV3.sol";
 
 /// @dev Common helpers/utils for PlonkVerifier tests
 contract PlonkVerifierCommonTest is Test {
@@ -41,7 +41,7 @@ contract PlonkVerifierCommonTest is Test {
 
     /// @dev Sanitize all values in `a` to be valid scalar fields Bn254::Fr.
     /// This is helpful to sanitize fuzzer-generated random `uint[]` values.
-    function sanitizeScalarFields(uint256[11] memory a) public pure returns (uint256[11] memory) {
+    function sanitizeScalarFields(uint256[5] memory a) public pure returns (uint256[5] memory) {
         for (uint256 i = 0; i < a.length; i++) {
             a[i] = sanitizeScalarField(a[i]);
         }
@@ -63,7 +63,7 @@ contract PlonkVerifierCommonTest is Test {
     /// @dev helper function to generate some dummy but format-valid arguments for
     /// `prepareOpeningProof` step. The verifyingKey should be fixed/loaded from library,
     /// proof should be generated via `dummyProof()`, other inputs are from fuzzers.
-    function dummyArgsForOpeningProof(uint64 seed, uint256[11] memory publicInput)
+    function dummyArgsForOpeningProof(uint64 seed, uint256[5] memory publicInput)
         public
         returns (
             IPlonkVerifier.VerifyingKey memory,
@@ -127,11 +127,9 @@ contract PlonkVerifier_verify_Test is PlonkVerifierCommonTest {
         bytes memory result = vm.ffi(cmds);
         (
             IPlonkVerifier.VerifyingKey memory verifyingKey,
-            uint256[11] memory publicInput,
+            uint256[5] memory publicInput,
             IPlonkVerifier.PlonkProof memory proof
-        ) = abi.decode(
-            result, (IPlonkVerifier.VerifyingKey, uint256[11], IPlonkVerifier.PlonkProof)
-        );
+        ) = abi.decode(result, (IPlonkVerifier.VerifyingKey, uint256[5], IPlonkVerifier.PlonkProof));
 
         vm.resumeGasMetering();
         assert(V.verify(verifyingKey, publicInput, proof));
@@ -146,11 +144,9 @@ contract PlonkVerifier_verify_Test is PlonkVerifierCommonTest {
         bytes memory result = vm.ffi(cmds);
         (
             IPlonkVerifier.VerifyingKey memory verifyingKey,
-            uint256[11] memory publicInput,
+            uint256[5] memory publicInput,
             IPlonkVerifier.PlonkProof memory proof
-        ) = abi.decode(
-            result, (IPlonkVerifier.VerifyingKey, uint256[11], IPlonkVerifier.PlonkProof)
-        );
+        ) = abi.decode(result, (IPlonkVerifier.VerifyingKey, uint256[5], IPlonkVerifier.PlonkProof));
 
         // there are 18 points in verifying key
         // randomly choose one to mutate
@@ -176,9 +172,9 @@ contract PlonkVerifier_verify_Test is PlonkVerifierCommonTest {
 
     // @dev Test when bad public input is supplied, the verification should fail
     // We know our `gen_circuit_for_test` in `diff_test.rs` has only 8 public inputs
-    function testFuzz_badPublicInput_fails(uint256[11] calldata randPublicInput) external {
-        uint256[11] memory badPublicInput;
-        for (uint256 i = 0; i < 11; i++) {
+    function testFuzz_badPublicInput_fails(uint256[5] calldata randPublicInput) external {
+        uint256[5] memory badPublicInput;
+        for (uint256 i = 0; i < 5; i++) {
             badPublicInput[i] = randPublicInput[i];
         }
         badPublicInput = sanitizeScalarFields(badPublicInput);
@@ -189,7 +185,7 @@ contract PlonkVerifier_verify_Test is PlonkVerifierCommonTest {
 
         bytes memory result = vm.ffi(cmds);
         (IPlonkVerifier.VerifyingKey memory verifyingKey,, IPlonkVerifier.PlonkProof memory proof) =
-        abi.decode(result, (IPlonkVerifier.VerifyingKey, uint256[11], IPlonkVerifier.PlonkProof));
+            abi.decode(result, (IPlonkVerifier.VerifyingKey, uint256[5], IPlonkVerifier.PlonkProof));
 
         assert(!V.verify(verifyingKey, badPublicInput, proof));
     }
@@ -203,8 +199,8 @@ contract PlonkVerifier_verify_Test is PlonkVerifierCommonTest {
         cmds[1] = "plonk-verify";
 
         bytes memory result = vm.ffi(cmds);
-        (IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[11] memory publicInput,) = abi
-            .decode(result, (IPlonkVerifier.VerifyingKey, uint256[11], IPlonkVerifier.PlonkProof));
+        (IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[5] memory publicInput,) =
+            abi.decode(result, (IPlonkVerifier.VerifyingKey, uint256[5], IPlonkVerifier.PlonkProof));
 
         assert(!V.verify(verifyingKey, publicInput, badProof));
     }
@@ -272,7 +268,7 @@ contract PlonkVerifier_validateProof_Test is PlonkVerifierCommonTest {
 
 contract PlonkVerifier_computeChallenges_Test is PlonkVerifierCommonTest {
     /// @dev Test `computeChallenges` matches that of Jellyfish
-    function testFuzz_computeChallenges_matches(uint64 seed, uint256[11] memory publicInput)
+    function testFuzz_computeChallenges_matches(uint64 seed, uint256[5] memory publicInput)
         external
     {
         IPlonkVerifier.PlonkProof memory proof = dummyProof(seed);
