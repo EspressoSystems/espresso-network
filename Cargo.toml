@@ -233,6 +233,10 @@ libp2p = { package = "libp2p", version = "0.54", default-features = false, featu
     "request-response",
     "secp256k1",
     "serde",
+    "tcp",
+    "noise",
+    "yamux",
+    "ping",
 ] }
 log-panics = { version = "2.0", features = ["with-backtrace"] }
 lru = "0.12"

@@ -12,6 +12,35 @@ pub struct AppConfig {
     pub peers: Vec<(PeerId, Multiaddr)>,
     pub send_mode: bool,
     pub message: Option<String>,
+    pub ping: Option<PingProtocol>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum PingProtocol {
+    Tcp {
+        auth: AuthType,
+        mplex: MultiplexerType,
+    },
+    Quic,
+}
+
+impl Default for PingProtocol {
+    fn default() -> Self {
+        PingProtocol::Tcp {
+            auth: AuthType::Noise,
+            mplex: MultiplexerType::Yamux,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum AuthType {
+    Noise,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum MultiplexerType {
+    Yamux,
 }
 
 impl AppConfig {

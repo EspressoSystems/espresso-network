@@ -6,6 +6,7 @@ mod types;
 
 use anyhow::Result;
 use hotshot_example_types::node_types::TestTypes;
+use tracing::info;
 
 use crate::config::AppConfig;
 
@@ -13,6 +14,10 @@ use crate::config::AppConfig;
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let config = AppConfig::from_file()?;
+    info!(
+        "Spawning simple node with config:\n{}",
+        toml::to_string(&config)?
+    );
     if config.send_mode {
         api::run_sender::<TestTypes>(config).await
     } else {

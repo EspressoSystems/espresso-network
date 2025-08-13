@@ -9,22 +9,47 @@ use hotshot_types::{
 };
 use libp2p::Multiaddr;
 use libp2p_identity::{ed25519, ed25519::SecretKey, Keypair, PeerId};
-use libp2p_test::{run_receiver, run_sender, AppConfig};
+use libp2p_test::{config::PingProtocol, run_receiver, run_sender, AppConfig};
 use tokio::{sync::Barrier, task::JoinHandle, time::sleep};
-use tracing::error;
+use tracing::{error, info};
 
-fn make_listen_string(port: u64) -> String {
-    format!("/ip4/127.0.0.1/udp/{port}/quic-v1")
+fn make_listen_string(port: u64, protocol: &PingProtocol) -> String {
+    match protocol {
+        PingProtocol::Tcp { .. } => format!("/ip4/127.0.0.1/tcp/{port}"),
+        PingProtocol::Quic => format!("/ip4/127.0.0.1/udp/{port}/quic-v1"),
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn local_sender_and_receivers() {
+async fn local_libp2p_test() {
+    local_sender_and_receivers(None).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn local_tcp_ping_test() {
+    local_sender_and_receivers(Some(PingProtocol::default())).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn local_quic_ping_test() {
+    local_sender_and_receivers(Some(PingProtocol::Quic)).await;
+}
+
+async fn local_sender_and_receivers(maybe_ping: Option<PingProtocol>) {
     tracing_subscriber::fmt::init();
     let base_port = 9000;
     let peers: Vec<_> = (base_port..base_port + 4)
         .map(|port| {
             let (_, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], port);
-            let listen = Multiaddr::from_str(&make_listen_string(port)).unwrap();
+            let listen = Multiaddr::from_str(&make_listen_string(
+                port,
+                maybe_ping.as_ref().unwrap_or(&PingProtocol::Quic),
+            ))
+            .unwrap();
+            info!("listen address: {}", listen);
+            let mut listen_clone = listen.clone();
+            while let Some(protocol) = listen_clone.pop() {
+                info!("listening protocol: {}", protocol);
+            }
             (private_key, listen)
         })
         .collect();
@@ -55,6 +80,7 @@ async fn local_sender_and_receivers() {
         handles.push(tokio::spawn({
             let private_key = private_key.to_tagged_base64().unwrap();
             let addr = addr.clone();
+            let maybe_ping_clone = maybe_ping.clone();
             async move {
                 let config = AppConfig {
                     listen: addr,
@@ -62,8 +88,13 @@ async fn local_sender_and_receivers() {
                     peers: receiver_peers,
                     send_mode: false,
                     message: None,
+                    ping: maybe_ping_clone,
                 };
                 barrier.wait().await;
+                info!(
+                    "Spawning simple node with config:\n{}",
+                    toml::to_string(&config).unwrap()
+                );
                 if let Err(e) = run_receiver::<TestTypes>(config).await {
                     error!("Receiver error: {}", e);
                 }
@@ -82,15 +113,20 @@ async fn local_sender_and_receivers() {
             peers: sender_peers,
             send_mode: true,
             message: Some("test-message".to_string()),
+            ping: maybe_ping,
         };
         barrier.wait().await;
+        info!(
+            "Spawning simple node with config:\n{}",
+            toml::to_string(&config).unwrap()
+        );
         if let Err(e) = run_sender::<TestTypes>(config).await {
             error!("Sender error: {}", e);
         }
     }));
 
     // Sleep to let the test run
-    sleep(Duration::from_secs(10)).await;
+    sleep(Duration::from_secs(60)).await;
 
     // Abort all tasks and finish
     for h in handles.into_iter() {
