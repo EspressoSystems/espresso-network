@@ -1539,7 +1539,7 @@
 <a href=#1539 id=1539 data-nosnippet>1539</a>        <span class="comment">// If the node starts from epoch version V4, there is no previous epoch root available.
 <a href=#1540 id=1540 data-nosnippet>1540</a>        // In this case, we assume a fixed average block time of 2000 milli seconds (2s)
 <a href=#1541 id=1541 data-nosnippet>1541</a>        // for the first epoch in which reward id distributed
-<a href=#1542 id=1542 data-nosnippet>1542</a>        </span><span class="kw">let </span>avg_block_time = <span class="kw">if </span>previous_epoch &lt;= first_epoch + <span class="number">1 </span>{
+<a href=#1542 id=1542 data-nosnippet>1542</a>        </span><span class="kw">let </span>average_block_time = <span class="kw">if </span>previous_epoch &lt;= first_epoch + <span class="number">1 </span>{
 <a href=#1543 id=1543 data-nosnippet>1543</a>            ASSUMED_BLOCK_TIME_SECONDS <span class="kw">as </span>u64 * <span class="number">1000 </span><span class="comment">// 2 seconds in milliseconds
 <a href=#1544 id=1544 data-nosnippet>1544</a>        </span>} <span class="kw">else </span>{
 <a href=#1545 id=1545 data-nosnippet>1545</a>            <span class="kw">let </span>prev_stake_table = <span class="self">self
@@ -1569,10 +1569,10 @@
 <a href=#1569 id=1569 data-nosnippet>1569</a>                .checked_div(epoch_height)
 <a href=#1570 id=1570 data-nosnippet>1570</a>                .context(<span class="string">"Epoch height is zero. cannot compute average block time"</span>)<span class="question-mark">?
 <a href=#1571 id=1571 data-nosnippet>1571</a>        </span>};
-<a href=#1572 id=1572 data-nosnippet>1572</a>        <span class="macro">tracing::debug!</span>(<span class="question-mark">?</span>epoch, <span class="string">"avg_block_time={avg_block_time:?}"</span>);
+<a href=#1572 id=1572 data-nosnippet>1572</a>        <span class="macro">tracing::info!</span>(<span class="question-mark">?</span>epoch, %total_supply, %total_stake, %average_block_time);
 <a href=#1573 id=1573 data-nosnippet>1573</a>
 <a href=#1574 id=1574 data-nosnippet>1574</a>        <span class="kw">let </span>block_reward =
-<a href=#1575 id=1575 data-nosnippet>1575</a>            <span class="self">Self</span>::compute_block_reward(epoch, total_supply, total_stake, avg_block_time)<span class="question-mark">?</span>;
+<a href=#1575 id=1575 data-nosnippet>1575</a>            <span class="self">Self</span>::compute_block_reward(epoch, total_supply, total_stake, average_block_time)<span class="question-mark">?</span>;
 <a href=#1576 id=1576 data-nosnippet>1576</a>
 <a href=#1577 id=1577 data-nosnippet>1577</a>        <span class="prelude-val">Ok</span>(block_reward)
 <a href=#1578 id=1578 data-nosnippet>1578</a>    }
