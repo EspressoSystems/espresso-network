@@ -263,12 +263,6 @@ impl MockLedger {
         let voting_st_state = self.voting_stake_table_state();
         let next_st_state = self.next_stake_table_state();
 
-        let mut msg = Vec::with_capacity(7);
-        let state_msg: [F; 3] = self.state.into();
-        msg.extend_from_slice(&state_msg);
-        let next_stake_msg: [F; 4] = next_st_state.into();
-        msg.extend_from_slice(&next_stake_msg);
-
         let st: Vec<(BLSVerKey, U256, SchnorrVerKey)> = self
             .voting_st
             .iter()
@@ -296,6 +290,10 @@ impl MockLedger {
             total_weight += st[signer_idx].1;
         }
 
+        // V3 uses a single digest hash instead of the full message
+        let signed_state_digest =
+            derive_signed_state_digest(&self.state, &next_st_state, &self.auth_root);
+
         let sigs = bit_vec
             .iter()
             .enumerate()
@@ -304,7 +302,7 @@ impl MockLedger {
                     SchnorrSignatureScheme::<EdwardsConfig>::sign(
                         &(),
                         self.key_archive.get(&st[i].0).unwrap(),
-                        &msg,
+                        [signed_state_digest],
                         &mut self.rng,
                     )
                 } else {
@@ -333,8 +331,6 @@ impl MockLedger {
             .into_iter()
             .map(|(_, stake_amount, schnorr_key)| (schnorr_key, stake_amount))
             .collect::<Vec<_>>();
-        let signed_state_digest =
-            derive_signed_state_digest(&self.state, &voting_st_state, &self.auth_root);
         let (proof, pi) = generate_state_update_proof(
             &mut self.rng,
             &pk,
@@ -433,6 +429,11 @@ impl MockLedger {
         } else {
             self.voting_stake_table_state()
         }
+    }
+
+    /// Returns the auth root
+    pub fn auth_root(&self) -> U256 {
+        self.auth_root.into()
     }
 
     /// Returns the light client state
@@ -574,8 +575,8 @@ pub fn gen_circuit_for_test<F: PrimeField>(m: usize, a0: usize) -> Result<PlonkC
         (cs.witness(b[1])? + cs.witness(a[0])?) * (cs.witness(b[1])? - cs.witness(a[0])?),
     )?;
 
-    // Create other public variables so that the number of public inputs is 11
-    for i in 0..8u32 {
+    // Create other public variables so that the number of public inputs is 5
+    for i in 0..2u32 {
         cs.create_public_variable(F::from(i))?;
     }
 
