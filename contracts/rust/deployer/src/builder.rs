@@ -472,6 +472,34 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 )
                 .await?;
             },
+            Contract::RewardClaimProxy => {
+                let token_addr = contracts
+                    .address(Contract::EspTokenProxy)
+                    .context("no ESP token proxy address")?;
+                let lc_addr = contracts
+                    .address(Contract::LightClientProxy)
+                    .context("no LightClient proxy address")?;
+                let addr = crate::deploy_reward_claim_proxy(
+                    provider, contracts, token_addr, lc_addr, admin,
+                )
+                .await?;
+
+                if let Some(use_timelock_owner) = self.use_timelock_owner {
+                    // RewardClaim uses SafeExitTimelock because:
+                    // - It handles token minting but is not as critical as the core protocol
+                    // - SafeExitTimelock provides sufficient security for reward operations
+                    tracing::info!("Transferring ownership to SafeExitTimelock");
+                    if use_timelock_owner {
+                        let timelock_addr = contracts
+                            .address(Contract::SafeExitTimelock)
+                            .expect("fail to get SafeExitTimelock address");
+                        crate::transfer_ownership(provider, target, addr, timelock_addr).await?;
+                    }
+                } else if let Some(multisig) = self.multisig {
+                    tracing::info!("Transferring ownership to multisig: {:?}", multisig);
+                    crate::transfer_ownership(provider, target, addr, multisig).await?;
+                }
+            },
             _ => {
                 panic!("Deploying {target} not supported.");
             },
@@ -491,6 +519,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         self.deploy(contracts, Contract::LightClientProxy).await?;
         self.deploy(contracts, Contract::LightClientV2).await?;
         self.deploy(contracts, Contract::StakeTableProxy).await?;
+        self.deploy(contracts, Contract::RewardClaimProxy).await?;
         Ok(())
     }
 
