@@ -2429,9 +2429,9 @@ dependencies = [
 [[package]]
 name = "cdn-broker"
 version = "0.4.0"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7#fd00e12f730ded87c26c8c2efe26638f4a9df969"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.8#591787a18459308bdb3944dda3dbd96f67d8ef2f"
 dependencies = [
- "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7)",
+ "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.8)",
  "clap 4.5.42",
  "console-subscriber 0.4.1",
  "derivative",
@@ -2451,9 +2451,9 @@ dependencies = [
 [[package]]
 name = "cdn-client"
 version = "0.4.0"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7#fd00e12f730ded87c26c8c2efe26638f4a9df969"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.8#591787a18459308bdb3944dda3dbd96f67d8ef2f"
 dependencies = [
- "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7)",
+ "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.8)",
  "clap 4.5.42",
  "derive_more 1.0.0",
  "jf-signature 0.2.0",
@@ -2480,9 +2480,9 @@ dependencies = [
 [[package]]
 name = "cdn-marshal"
 version = "0.4.0"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7#fd00e12f730ded87c26c8c2efe26638f4a9df969"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.8#591787a18459308bdb3944dda3dbd96f67d8ef2f"
 dependencies = [
- "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7)",
+ "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.8)",
  "clap 4.5.42",
  "jf-signature 0.2.0",
  "tokio",
@@ -2527,7 +2527,7 @@ dependencies = [
 [[package]]
 name = "cdn-proto"
 version = "0.4.0"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7#fd00e12f730ded87c26c8c2efe26638f4a9df969"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.8#591787a18459308bdb3944dda3dbd96f67d8ef2f"
 dependencies = [
  "anyhow",
  "ark-serialize 0.4.2",
@@ -5432,9 +5432,9 @@ dependencies = [
  "bimap",
  "bincode",
  "blake3",
- "cdn-broker 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7)",
+ "cdn-broker 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.8)",
  "cdn-client",
- "cdn-marshal 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7)",
+ "cdn-marshal 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.8)",
  "chrono",
  "committable",
  "dashmap",
@@ -5645,8 +5645,8 @@ dependencies = [
  "anyhow",
  "async-lock 3.4.1",
  "async-trait",
- "cdn-broker 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7)",
- "cdn-marshal 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7)",
+ "cdn-broker 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.8)",
+ "cdn-marshal 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.8)",
  "chrono",
  "clap 4.5.42",
  "espresso-types",
