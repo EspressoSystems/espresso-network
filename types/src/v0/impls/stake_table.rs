@@ -47,6 +47,7 @@ use hotshot_types::{
 use humantime::format_duration;
 use indexmap::IndexMap;
 use num_traits::{FromPrimitive, Zero};
+use sha3::{Digest as _, Keccak256};
 use thiserror::Error;
 use tokio::{spawn, time::sleep};
 use tracing::Instrument;
@@ -206,6 +207,8 @@ impl StakeTableEvents {
     }
 }
 
+pub struct StakeTableStateHash(pub [u8; 32]);
+
 #[derive(Debug)]
 pub struct StakeTableState {
     validators: ValidatorMap,
@@ -220,6 +223,22 @@ impl StakeTableState {
             used_bls_keys: HashSet::new(),
             used_schnorr_keys: HashSet::new(),
         }
+    }
+
+    pub fn hash(&self) -> Result<StakeTableStateHash, bincode::Error> {
+        let mut hasher = Keccak256::new();
+        for (address, validator) in &self.validators {
+            hasher.update(address);
+            hasher.update(bincode::serialize(&validator)?);
+        }
+        for key in &self.used_bls_keys {
+            hasher.update(bincode::serialize(&key)?);
+        }
+        for key in &self.used_schnorr_keys {
+            hasher.update(bincode::serialize(&key)?);
+        }
+        let hash = hasher.finalize();
+        Ok(StakeTableStateHash(hash.into()))
     }
 
     pub fn get_validators(self) -> ValidatorMap {
