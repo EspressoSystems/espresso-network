@@ -475,6 +475,8 @@ services:
         condition: service_healthy
       deploy-sequencer-contracts:
         condition: service_completed_successfully
+      deploy-staking-contracts:
+        condition: service_completed_successfully
 
   sequencer3:
     image: ghcr.io/espressosystems/espresso-sequencer/sequencer:${DOCKER_TAG:-main}
@@ -528,6 +530,8 @@ services:
         condition: service_healthy
       deploy-sequencer-contracts:
         condition: service_completed_successfully
+      deploy-staking-contracts:
+        condition: service_completed_successfully
 
   sequencer4:
     image: ghcr.io/espressosystems/espresso-sequencer/sequencer:${DOCKER_TAG:-main}
@@ -579,6 +583,8 @@ services:
       marshal-0:
         condition: service_healthy
       deploy-sequencer-contracts:
+        condition: service_completed_successfully
+      deploy-staking-contracts:
         condition: service_completed_successfully
 
   submit-transactions-public:

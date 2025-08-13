@@ -319,6 +319,8 @@ processes:
         condition: process_healthy
       deploy-sequencer-contracts:
         condition: process_completed
+      deploy-staking-contracts:
+        condition: process_completed
     readiness_probe:
       http_get:
         scheme: http
@@ -367,6 +369,8 @@ processes:
         condition: process_healthy
       deploy-sequencer-contracts:
         condition: process_completed
+      deploy-staking-contracts:
+        condition: process_completed
     readiness_probe:
       http_get:
         scheme: http
@@ -412,6 +416,8 @@ processes:
       marshal_0:
         condition: process_healthy
       deploy-sequencer-contracts:
+        condition: process_completed
+      deploy-staking-contracts:
         condition: process_completed
     readiness_probe:
       http_get:
