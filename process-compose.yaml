@@ -55,7 +55,7 @@ processes:
     # script will think they're already deployed.
     command:
       unset ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS
-      && deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2 --upgrade-light-client-v3
+      && deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2
     namespace: setup
     depends_on:
       demo-l1-network:

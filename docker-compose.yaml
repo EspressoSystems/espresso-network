@@ -45,7 +45,7 @@ services:
 
   deploy-prover-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
-    command: deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2 --upgrade-light-client-v3
+    command: deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2
     environment:
       - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL
       - ESPRESSO_SEQUENCER_L1_PROVIDER
@@ -141,7 +141,7 @@ services:
   # different parts of the CDN
   keydb:
     image: docker.io/eqalpha/keydb:latest
-    command: ["--requirepass", "changemeplease!!"]
+    command: [ "--requirepass", "changemeplease!!" ]
     healthcheck:
       # Attempt to PING the database
       test: keydb-cli --pass changemeplease!! --raw incr PING
