@@ -9,10 +9,10 @@
 <a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>ark_ed_on_bn254::{EdwardsConfig <span class="kw">as </span>EdOnBn254Config, Fq <span class="kw">as </span>FqEd254};
 <a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>ark_ff::field_hashers::{DefaultFieldHasher, HashToField};
 <a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>ark_poly::{domain::radix2::Radix2EvaluationDomain, EvaluationDomain};
-<a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>ark_std::rand::{rngs::StdRng, Rng, SeedableRng};
+<a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>ark_std::rand::{rngs::StdRng, Rng, RngCore, SeedableRng};
 <a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>clap::{Parser, ValueEnum};
 <a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>hotshot_contract_adapter::{field_to_u256, jellyfish::<span class="kw-2">*</span>, sol_types::<span class="kw-2">*</span>, u256_to_field};
-<a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>hotshot_state_prover::v2::mock_ledger::{
+<a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>hotshot_state_prover::v3::mock_ledger::{
 <a href=#16 id=16 data-nosnippet>16</a>    gen_plonk_proof_for_test, MockLedger, MockSystemParam, STAKE_TABLE_CAPACITY_FOR_TEST,
 <a href=#17 id=17 data-nosnippet>17</a>};
 <a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>hotshot_types::utils::{epoch_from_block_number, is_epoch_root, is_ge_epoch_root};
@@ -134,7 +134,7 @@
 <a href=#134 id=134 data-nosnippet>134</a>            <span class="kw">let </span>log_size = cli.args[<span class="number">0</span>].parse::&lt;u32&gt;().unwrap();
 <a href=#135 id=135 data-nosnippet>135</a>            <span class="kw">let </span>zeta = u256_to_field::&lt;Fr&gt;(cli.args[<span class="number">1</span>].parse::&lt;U256&gt;().unwrap());
 <a href=#136 id=136 data-nosnippet>136</a>            <span class="kw">let </span>pi_u256 =
-<a href=#137 id=137 data-nosnippet>137</a>                &lt;[U256; <span class="number">11</span>]&gt;::abi_decode(<span class="kw-2">&amp;</span>hex::decode(<span class="kw-2">&amp;</span>cli.args[<span class="number">2</span>]).unwrap(), <span class="bool-val">true</span>).unwrap();
+<a href=#137 id=137 data-nosnippet>137</a>                &lt;[U256; <span class="number">5</span>]&gt;::abi_decode(<span class="kw-2">&amp;</span>hex::decode(<span class="kw-2">&amp;</span>cli.args[<span class="number">2</span>]).unwrap(), <span class="bool-val">true</span>).unwrap();
 <a href=#138 id=138 data-nosnippet>138</a>            <span class="kw">let </span>pi: Vec&lt;Fr&gt; = pi_u256.into_iter().map(u256_to_field).collect();
 <a href=#139 id=139 data-nosnippet>139</a>
 <a href=#140 id=140 data-nosnippet>140</a>            <span class="kw">let </span>verifier = Verifier::&lt;Bn254&gt;::new(<span class="number">2u32</span>.pow(log_size) <span class="kw">as </span>usize).unwrap();
@@ -286,7 +286,7 @@
 <a href=#286 id=286 data-nosnippet>286</a>                    .into();
 <a href=#287 id=287 data-nosnippet>287</a>
 <a href=#288 id=288 data-nosnippet>288</a>            <span class="kw">let </span>pi_u256 =
-<a href=#289 id=289 data-nosnippet>289</a>                &lt;[U256; <span class="number">11</span>]&gt;::abi_decode(<span class="kw-2">&amp;</span>hex::decode(<span class="kw-2">&amp;</span>cli.args[<span class="number">1</span>]).unwrap(), <span class="bool-val">true</span>).unwrap();
+<a href=#289 id=289 data-nosnippet>289</a>                &lt;[U256; <span class="number">5</span>]&gt;::abi_decode(<span class="kw-2">&amp;</span>hex::decode(<span class="kw-2">&amp;</span>cli.args[<span class="number">1</span>]).unwrap(), <span class="bool-val">true</span>).unwrap();
 <a href=#290 id=290 data-nosnippet>290</a>            <span class="kw">let </span>pi: Vec&lt;Fr&gt; = pi_u256.into_iter().map(u256_to_field).collect();
 <a href=#291 id=291 data-nosnippet>291</a>
 <a href=#292 id=292 data-nosnippet>292</a>            <span class="kw">let </span>proof: Proof&lt;Bn254&gt; =
@@ -323,8 +323,8 @@
 <a href=#323 id=323 data-nosnippet>323</a>            .is_ok());
 <a href=#324 id=324 data-nosnippet>324</a>
 <a href=#325 id=325 data-nosnippet>325</a>            <span class="kw">let </span>vk_parsed: VerifyingKeySol = vk.into();
-<a href=#326 id=326 data-nosnippet>326</a>            <span class="kw">let </span><span class="kw-2">mut </span>pi_parsed = [U256::default(); <span class="number">11</span>];
-<a href=#327 id=327 data-nosnippet>327</a>            <span class="macro">assert_eq!</span>(public_input.len(), <span class="number">11</span>);
+<a href=#326 id=326 data-nosnippet>326</a>            <span class="kw">let </span><span class="kw-2">mut </span>pi_parsed = [U256::default(); <span class="number">5</span>];
+<a href=#327 id=327 data-nosnippet>327</a>            <span class="macro">assert_eq!</span>(public_input.len(), <span class="number">5</span>);
 <a href=#328 id=328 data-nosnippet>328</a>            <span class="kw">for </span>(i, pi) <span class="kw">in </span>public_input.into_iter().enumerate() {
 <a href=#329 id=329 data-nosnippet>329</a>                pi_parsed[i] = field_to_u256(pi);
 <a href=#330 id=330 data-nosnippet>330</a>            }
@@ -419,160 +419,172 @@
 <a href=#419 id=419 data-nosnippet>419</a>            <span class="kw">let </span><span class="kw-2">mut </span>new_states: Vec&lt;LightClientStateSol&gt; = <span class="macro">vec!</span>[];
 <a href=#420 id=420 data-nosnippet>420</a>            <span class="kw">let </span><span class="kw-2">mut </span>proofs: Vec&lt;PlonkProofSol&gt; = <span class="macro">vec!</span>[];
 <a href=#421 id=421 data-nosnippet>421</a>            <span class="kw">let </span><span class="kw-2">mut </span>next_st_states: Vec&lt;StakeTableStateSol&gt; = <span class="macro">vec!</span>[];
-<a href=#422 id=422 data-nosnippet>422</a>
-<a href=#423 id=423 data-nosnippet>423</a>            <span class="kw">for _ in </span><span class="number">1</span>..<span class="number">4 </span>{
-<a href=#424 id=424 data-nosnippet>424</a>                <span class="comment">// random number of notarized but not finalized block
-<a href=#425 id=425 data-nosnippet>425</a>                </span><span class="kw">if </span>ledger.rng.gen_bool(<span class="number">0.5</span>) {
-<a href=#426 id=426 data-nosnippet>426</a>                    <span class="kw">let </span>num_non_blk = ledger.rng.gen_range(<span class="number">0</span>..<span class="number">5</span>);
-<a href=#427 id=427 data-nosnippet>427</a>                    <span class="kw">for _ in </span><span class="number">0</span>..num_non_blk {
-<a href=#428 id=428 data-nosnippet>428</a>                        ledger.elapse_without_block();
-<a href=#429 id=429 data-nosnippet>429</a>                    }
-<a href=#430 id=430 data-nosnippet>430</a>                }
-<a href=#431 id=431 data-nosnippet>431</a>
-<a href=#432 id=432 data-nosnippet>432</a>                ledger.elapse_with_block();
-<a href=#433 id=433 data-nosnippet>433</a>
-<a href=#434 id=434 data-nosnippet>434</a>                <span class="kw">let </span>(pi, proof) = ledger.gen_state_proof();
-<a href=#435 id=435 data-nosnippet>435</a>                next_st_states.push(pi.next_st_state.into());
-<a href=#436 id=436 data-nosnippet>436</a>                new_states.push(pi.lc_state.into());
-<a href=#437 id=437 data-nosnippet>437</a>                proofs.push(proof.into());
-<a href=#438 id=438 data-nosnippet>438</a>            }
-<a href=#439 id=439 data-nosnippet>439</a>
-<a href=#440 id=440 data-nosnippet>440</a>            <span class="kw">let </span>res = (new_states, next_st_states, proofs);
-<a href=#441 id=441 data-nosnippet>441</a>            <span class="macro">println!</span>(<span class="string">"{}"</span>, res.abi_encode_params().encode_hex());
-<a href=#442 id=442 data-nosnippet>442</a>        },
-<a href=#443 id=443 data-nosnippet>443</a>        Action::MockSkipBlocks =&gt; {
-<a href=#444 id=444 data-nosnippet>444</a>            <span class="kw">if </span>cli.args.is_empty() || cli.args.len() &gt; <span class="number">2 </span>{
-<a href=#445 id=445 data-nosnippet>445</a>                <span class="macro">panic!</span>(<span class="string">"Should provide arg1=numBlockSkipped,arg2(opt)=requireValidProof"</span>);
-<a href=#446 id=446 data-nosnippet>446</a>            }
-<a href=#447 id=447 data-nosnippet>447</a>
-<a href=#448 id=448 data-nosnippet>448</a>            <span class="kw">let </span>num_block_skipped = cli.args[<span class="number">0</span>].parse::&lt;u64&gt;().unwrap();
-<a href=#449 id=449 data-nosnippet>449</a>            <span class="kw">let </span>require_valid_proof: bool = <span class="kw">if </span>cli.args.len() == <span class="number">2 </span>{
-<a href=#450 id=450 data-nosnippet>450</a>                cli.args[<span class="number">1</span>].parse::&lt;bool&gt;().unwrap()
-<a href=#451 id=451 data-nosnippet>451</a>            } <span class="kw">else </span>{
-<a href=#452 id=452 data-nosnippet>452</a>                <span class="bool-val">true
-<a href=#453 id=453 data-nosnippet>453</a>            </span>};
-<a href=#454 id=454 data-nosnippet>454</a>
-<a href=#455 id=455 data-nosnippet>455</a>            <span class="kw">let </span>pp = MockSystemParam::init();
-<a href=#456 id=456 data-nosnippet>456</a>            <span class="kw">let </span><span class="kw-2">mut </span>ledger = MockLedger::init(pp, STAKE_TABLE_CAPACITY_FOR_TEST / <span class="number">2</span>);
-<a href=#457 id=457 data-nosnippet>457</a>
-<a href=#458 id=458 data-nosnippet>458</a>            <span class="kw">while </span>ledger.light_client_state().block_height &lt; num_block_skipped {
-<a href=#459 id=459 data-nosnippet>459</a>                ledger.elapse_with_block();
-<a href=#460 id=460 data-nosnippet>460</a>            }
-<a href=#461 id=461 data-nosnippet>461</a>
-<a href=#462 id=462 data-nosnippet>462</a>            <span class="kw">let </span>res = <span class="kw">if </span>require_valid_proof {
-<a href=#463 id=463 data-nosnippet>463</a>                <span class="kw">let </span>(pi, proof) = ledger.gen_state_proof();
-<a href=#464 id=464 data-nosnippet>464</a>                <span class="kw">let </span>state_parsed: LightClientStateSol = pi.lc_state.into();
-<a href=#465 id=465 data-nosnippet>465</a>                <span class="kw">let </span>proof_parsed: PlonkProofSol = proof.into();
-<a href=#466 id=466 data-nosnippet>466</a>                <span class="kw">let </span>next_stake_table: StakeTableStateSol = pi.next_st_state.into();
-<a href=#467 id=467 data-nosnippet>467</a>                (state_parsed, next_stake_table, proof_parsed)
-<a href=#468 id=468 data-nosnippet>468</a>            } <span class="kw">else </span>{
-<a href=#469 id=469 data-nosnippet>469</a>                <span class="kw">let </span>state_parsed = ledger.light_client_state().into();
-<a href=#470 id=470 data-nosnippet>470</a>                <span class="kw">let </span>proof_parsed = PlonkProofSol::dummy(<span class="kw-2">&amp;mut </span>ledger.rng);
-<a href=#471 id=471 data-nosnippet>471</a>                <span class="kw">let </span>next_stake_table: StakeTableStateSol = ledger.next_stake_table_state().into();
-<a href=#472 id=472 data-nosnippet>472</a>                (state_parsed, next_stake_table, proof_parsed)
-<a href=#473 id=473 data-nosnippet>473</a>            };
-<a href=#474 id=474 data-nosnippet>474</a>            <span class="macro">println!</span>(<span class="string">"{}"</span>, res.abi_encode_params().encode_hex());
-<a href=#475 id=475 data-nosnippet>475</a>        },
-<a href=#476 id=476 data-nosnippet>476</a>        Action::GenBLSHashes =&gt; {
-<a href=#477 id=477 data-nosnippet>477</a>            <span class="kw">if </span>cli.args.len() != <span class="number">1 </span>{
-<a href=#478 id=478 data-nosnippet>478</a>                <span class="macro">panic!</span>(<span class="string">"Should provide arg1=message"</span>);
-<a href=#479 id=479 data-nosnippet>479</a>            }
-<a href=#480 id=480 data-nosnippet>480</a>
-<a href=#481 id=481 data-nosnippet>481</a>            <span class="comment">// Same as in the hash_to_curve function
-<a href=#482 id=482 data-nosnippet>482</a>            // See https://github.com/EspressoSystems/jellyfish/blob/6c2c08f4e966fd1d454d48bcf30bd41a952f9f76/primitives/src/signatures/bls_over_bn254.rs#L310
-<a href=#483 id=483 data-nosnippet>483</a>            </span><span class="kw">let </span>hasher_init = <span class="kw-2">&amp;</span>[<span class="number">1u8</span>];
-<a href=#484 id=484 data-nosnippet>484</a>            <span class="kw">let </span>hasher = &lt;DefaultFieldHasher&lt;Keccak256&gt; <span class="kw">as </span>HashToField&lt;Fq&gt;&gt;::new(hasher_init);
-<a href=#485 id=485 data-nosnippet>485</a>
-<a href=#486 id=486 data-nosnippet>486</a>            <span class="kw">let </span>message_bytes = cli.args[<span class="number">0</span>].parse::&lt;Bytes&gt;().unwrap();
-<a href=#487 id=487 data-nosnippet>487</a>
-<a href=#488 id=488 data-nosnippet>488</a>            <span class="kw">let </span>field_elem: Fq = hasher.hash_to_field(<span class="kw-2">&amp;</span>message_bytes, <span class="number">1</span>)[<span class="number">0</span>];
-<a href=#489 id=489 data-nosnippet>489</a>            <span class="kw">let </span>fq_u256 = field_to_u256::&lt;Fq&gt;(field_elem);
-<a href=#490 id=490 data-nosnippet>490</a>            <span class="kw">let </span>hash_to_curve_elem: G1Affine = hash_to_curve::&lt;Keccak256&gt;(<span class="kw-2">&amp;</span>message_bytes).into();
-<a href=#491 id=491 data-nosnippet>491</a>            <span class="kw">let </span>hash_to_curve_elem_parsed: G1PointSol = hash_to_curve_elem.into();
-<a href=#492 id=492 data-nosnippet>492</a>
-<a href=#493 id=493 data-nosnippet>493</a>            <span class="kw">let </span>res = (fq_u256, hash_to_curve_elem_parsed);
-<a href=#494 id=494 data-nosnippet>494</a>            <span class="macro">println!</span>(<span class="string">"{}"</span>, res.abi_encode_params().encode_hex());
-<a href=#495 id=495 data-nosnippet>495</a>        },
-<a href=#496 id=496 data-nosnippet>496</a>        Action::GenBLSSig =&gt; {
-<a href=#497 id=497 data-nosnippet>497</a>            <span class="kw">let </span><span class="kw-2">mut </span>rng = jf_utils::test_rng();
-<a href=#498 id=498 data-nosnippet>498</a>
-<a href=#499 id=499 data-nosnippet>499</a>            <span class="kw">if </span>cli.args.len() != <span class="number">1 </span>{
-<a href=#500 id=500 data-nosnippet>500</a>                <span class="macro">panic!</span>(<span class="string">"Should provide arg1=message"</span>);
-<a href=#501 id=501 data-nosnippet>501</a>            }
-<a href=#502 id=502 data-nosnippet>502</a>            <span class="kw">let </span>message_bytes = cli.args[<span class="number">0</span>].parse::&lt;Bytes&gt;().unwrap();
-<a href=#503 id=503 data-nosnippet>503</a>
-<a href=#504 id=504 data-nosnippet>504</a>            <span class="comment">// Generate the BLS ver key
-<a href=#505 id=505 data-nosnippet>505</a>            </span><span class="kw">let </span>key_pair = BLSKeyPair::generate(<span class="kw-2">&amp;mut </span>rng);
-<a href=#506 id=506 data-nosnippet>506</a>            <span class="kw">let </span>vk = key_pair.ver_key();
-<a href=#507 id=507 data-nosnippet>507</a>            <span class="kw">let </span>vk_g2_affine: G2Affine = vk.to_affine();
-<a href=#508 id=508 data-nosnippet>508</a>            <span class="kw">let </span>vk_parsed: G2PointSol = vk_g2_affine.into();
-<a href=#509 id=509 data-nosnippet>509</a>
-<a href=#510 id=510 data-nosnippet>510</a>            <span class="comment">// Sign the message
-<a href=#511 id=511 data-nosnippet>511</a>            </span><span class="kw">let </span>sig: Signature = key_pair.sign(<span class="kw-2">&amp;</span>message_bytes, CS_ID_BLS_BN254);
-<a href=#512 id=512 data-nosnippet>512</a>            <span class="kw">let </span>sig_affine_point = sig.sigma.into_affine();
-<a href=#513 id=513 data-nosnippet>513</a>            <span class="kw">let </span>sig_parsed: G1PointSol = sig_affine_point.into();
-<a href=#514 id=514 data-nosnippet>514</a>
-<a href=#515 id=515 data-nosnippet>515</a>            <span class="kw">let </span>res = (vk_parsed, sig_parsed);
-<a href=#516 id=516 data-nosnippet>516</a>            <span class="macro">println!</span>(<span class="string">"{}"</span>, res.abi_encode_params().encode_hex());
-<a href=#517 id=517 data-nosnippet>517</a>        },
-<a href=#518 id=518 data-nosnippet>518</a>        Action::EpochCompute =&gt; {
-<a href=#519 id=519 data-nosnippet>519</a>            <span class="kw">if </span>cli.args.len() != <span class="number">2 </span>{
-<a href=#520 id=520 data-nosnippet>520</a>                <span class="macro">panic!</span>(<span class="string">"Should provide arg1=blockNum, arg2=blocksPerEpoch"</span>);
-<a href=#521 id=521 data-nosnippet>521</a>            }
-<a href=#522 id=522 data-nosnippet>522</a>            <span class="kw">let </span>block_num = cli.args[<span class="number">0</span>].parse::&lt;u64&gt;().unwrap();
-<a href=#523 id=523 data-nosnippet>523</a>            <span class="kw">let </span>epoch_height = cli.args[<span class="number">1</span>].parse::&lt;u64&gt;().unwrap();
-<a href=#524 id=524 data-nosnippet>524</a>
-<a href=#525 id=525 data-nosnippet>525</a>            <span class="kw">let </span>epoch = epoch_from_block_number(block_num, epoch_height);
-<a href=#526 id=526 data-nosnippet>526</a>            <span class="kw">let </span>is_epoch_root = is_epoch_root(block_num, epoch_height);
-<a href=#527 id=527 data-nosnippet>527</a>            <span class="kw">let </span>is_gt_epoch_root = is_ge_epoch_root(block_num, epoch_height) &amp;&amp; !is_epoch_root;
-<a href=#528 id=528 data-nosnippet>528</a>            <span class="macro">println!</span>(
-<a href=#529 id=529 data-nosnippet>529</a>                <span class="string">"{}"</span>,
-<a href=#530 id=530 data-nosnippet>530</a>                (epoch, is_epoch_root, is_gt_epoch_root)
-<a href=#531 id=531 data-nosnippet>531</a>                    .abi_encode_params()
-<a href=#532 id=532 data-nosnippet>532</a>                    .encode_hex()
-<a href=#533 id=533 data-nosnippet>533</a>            );
-<a href=#534 id=534 data-nosnippet>534</a>        },
-<a href=#535 id=535 data-nosnippet>535</a>        Action::FirstAndSecondEpochUpdate =&gt; {
-<a href=#536 id=536 data-nosnippet>536</a>            <span class="kw">if </span>cli.args.len() != <span class="number">2 </span>{
-<a href=#537 id=537 data-nosnippet>537</a>                <span class="macro">panic!</span>(<span class="string">"Should provide arg1=heightOne, arg2=heightTwo"</span>);
-<a href=#538 id=538 data-nosnippet>538</a>            }
-<a href=#539 id=539 data-nosnippet>539</a>            <span class="kw">let </span>height_one = cli.args[<span class="number">0</span>].parse::&lt;u64&gt;().unwrap();
-<a href=#540 id=540 data-nosnippet>540</a>            <span class="kw">let </span>height_two = cli.args[<span class="number">1</span>].parse::&lt;u64&gt;().unwrap();
-<a href=#541 id=541 data-nosnippet>541</a>
-<a href=#542 id=542 data-nosnippet>542</a>            <span class="kw">let </span>pp = MockSystemParam::init();
-<a href=#543 id=543 data-nosnippet>543</a>            <span class="kw">let </span><span class="kw-2">mut </span>ledger = MockLedger::init(pp, STAKE_TABLE_CAPACITY_FOR_TEST / <span class="number">2</span>);
-<a href=#544 id=544 data-nosnippet>544</a>
-<a href=#545 id=545 data-nosnippet>545</a>            <span class="macro">assert_eq!</span>(ledger.derive_epoch(height_one), ledger.first_epoch());
-<a href=#546 id=546 data-nosnippet>546</a>            <span class="macro">assert_eq!</span>(ledger.derive_epoch(height_two), ledger.first_epoch() + <span class="number">1</span>);
-<a href=#547 id=547 data-nosnippet>547</a>
-<a href=#548 id=548 data-nosnippet>548</a>            <span class="kw">let </span><span class="kw-2">mut </span>new_states: Vec&lt;LightClientStateSol&gt; = <span class="macro">vec!</span>[];
-<a href=#549 id=549 data-nosnippet>549</a>            <span class="kw">let </span><span class="kw-2">mut </span>proofs: Vec&lt;PlonkProofSol&gt; = <span class="macro">vec!</span>[];
-<a href=#550 id=550 data-nosnippet>550</a>            <span class="kw">let </span><span class="kw-2">mut </span>next_st_states: Vec&lt;StakeTableStateSol&gt; = <span class="macro">vec!</span>[];
-<a href=#551 id=551 data-nosnippet>551</a>
-<a href=#552 id=552 data-nosnippet>552</a>            <span class="kw">while </span>ledger.light_client_state().block_height &lt; height_one {
-<a href=#553 id=553 data-nosnippet>553</a>                ledger.elapse_with_block();
-<a href=#554 id=554 data-nosnippet>554</a>            }
-<a href=#555 id=555 data-nosnippet>555</a>            <span class="comment">// generate the updates for the first height
-<a href=#556 id=556 data-nosnippet>556</a>            </span><span class="kw">let </span>(pi, proof) = ledger.gen_state_proof();
-<a href=#557 id=557 data-nosnippet>557</a>            next_st_states.push(pi.next_st_state.into());
-<a href=#558 id=558 data-nosnippet>558</a>            new_states.push(pi.lc_state.into());
-<a href=#559 id=559 data-nosnippet>559</a>            proofs.push(proof.into());
-<a href=#560 id=560 data-nosnippet>560</a>
-<a href=#561 id=561 data-nosnippet>561</a>            <span class="kw">while </span>ledger.light_client_state().block_height &lt; height_two {
-<a href=#562 id=562 data-nosnippet>562</a>                ledger.elapse_with_block();
-<a href=#563 id=563 data-nosnippet>563</a>            }
-<a href=#564 id=564 data-nosnippet>564</a>            <span class="comment">// generate the updates for the first height
-<a href=#565 id=565 data-nosnippet>565</a>            </span><span class="kw">let </span>(pi, proof) = ledger.gen_state_proof();
-<a href=#566 id=566 data-nosnippet>566</a>            next_st_states.push(pi.next_st_state.into());
-<a href=#567 id=567 data-nosnippet>567</a>            new_states.push(pi.lc_state.into());
-<a href=#568 id=568 data-nosnippet>568</a>            proofs.push(proof.into());
-<a href=#569 id=569 data-nosnippet>569</a>
-<a href=#570 id=570 data-nosnippet>570</a>            <span class="macro">println!</span>(
-<a href=#571 id=571 data-nosnippet>571</a>                <span class="string">"{}"</span>,
-<a href=#572 id=572 data-nosnippet>572</a>                (new_states, next_st_states, proofs)
-<a href=#573 id=573 data-nosnippet>573</a>                    .abi_encode_params()
-<a href=#574 id=574 data-nosnippet>574</a>                    .encode_hex()
-<a href=#575 id=575 data-nosnippet>575</a>            );
-<a href=#576 id=576 data-nosnippet>576</a>        },
-<a href=#577 id=577 data-nosnippet>577</a>    };
-<a href=#578 id=578 data-nosnippet>578</a>}</code></pre></div></section></main></body></html>
+<a href=#422 id=422 data-nosnippet>422</a>            <span class="kw">let </span><span class="kw-2">mut </span>new_auth_roots: Vec&lt;U256&gt; = <span class="macro">vec!</span>[];
+<a href=#423 id=423 data-nosnippet>423</a>
+<a href=#424 id=424 data-nosnippet>424</a>            <span class="kw">for _ in </span><span class="number">1</span>..<span class="number">4 </span>{
+<a href=#425 id=425 data-nosnippet>425</a>                <span class="comment">// random number of notarized but not finalized block
+<a href=#426 id=426 data-nosnippet>426</a>                </span><span class="kw">if </span>ledger.rng.gen_bool(<span class="number">0.5</span>) {
+<a href=#427 id=427 data-nosnippet>427</a>                    <span class="kw">let </span>num_non_blk = ledger.rng.gen_range(<span class="number">0</span>..<span class="number">5</span>);
+<a href=#428 id=428 data-nosnippet>428</a>                    <span class="kw">for _ in </span><span class="number">0</span>..num_non_blk {
+<a href=#429 id=429 data-nosnippet>429</a>                        ledger.elapse_without_block();
+<a href=#430 id=430 data-nosnippet>430</a>                    }
+<a href=#431 id=431 data-nosnippet>431</a>                }
+<a href=#432 id=432 data-nosnippet>432</a>
+<a href=#433 id=433 data-nosnippet>433</a>                ledger.elapse_with_block();
+<a href=#434 id=434 data-nosnippet>434</a>
+<a href=#435 id=435 data-nosnippet>435</a>                <span class="kw">let </span>(_pi, proof) = ledger.gen_state_proof();
+<a href=#436 id=436 data-nosnippet>436</a>                next_st_states.push(ledger.next_stake_table_state().into());
+<a href=#437 id=437 data-nosnippet>437</a>                new_states.push(ledger.light_client_state().into());
+<a href=#438 id=438 data-nosnippet>438</a>                new_auth_roots.push(ledger.auth_root());
+<a href=#439 id=439 data-nosnippet>439</a>                proofs.push(proof.into());
+<a href=#440 id=440 data-nosnippet>440</a>            }
+<a href=#441 id=441 data-nosnippet>441</a>
+<a href=#442 id=442 data-nosnippet>442</a>            <span class="kw">let </span>res = (new_states, next_st_states, new_auth_roots, proofs);
+<a href=#443 id=443 data-nosnippet>443</a>            <span class="macro">println!</span>(<span class="string">"{}"</span>, res.abi_encode_params().encode_hex());
+<a href=#444 id=444 data-nosnippet>444</a>        },
+<a href=#445 id=445 data-nosnippet>445</a>        Action::MockSkipBlocks =&gt; {
+<a href=#446 id=446 data-nosnippet>446</a>            <span class="kw">if </span>cli.args.is_empty() || cli.args.len() &gt; <span class="number">2 </span>{
+<a href=#447 id=447 data-nosnippet>447</a>                <span class="macro">panic!</span>(<span class="string">"Should provide arg1=numBlockSkipped,arg2(opt)=requireValidProof"</span>);
+<a href=#448 id=448 data-nosnippet>448</a>            }
+<a href=#449 id=449 data-nosnippet>449</a>
+<a href=#450 id=450 data-nosnippet>450</a>            <span class="kw">let </span>num_block_skipped = cli.args[<span class="number">0</span>].parse::&lt;u64&gt;().unwrap();
+<a href=#451 id=451 data-nosnippet>451</a>            <span class="kw">let </span>require_valid_proof: bool = <span class="kw">if </span>cli.args.len() == <span class="number">2 </span>{
+<a href=#452 id=452 data-nosnippet>452</a>                cli.args[<span class="number">1</span>].parse::&lt;bool&gt;().unwrap()
+<a href=#453 id=453 data-nosnippet>453</a>            } <span class="kw">else </span>{
+<a href=#454 id=454 data-nosnippet>454</a>                <span class="bool-val">true
+<a href=#455 id=455 data-nosnippet>455</a>            </span>};
+<a href=#456 id=456 data-nosnippet>456</a>
+<a href=#457 id=457 data-nosnippet>457</a>            <span class="kw">let </span>pp = MockSystemParam::init();
+<a href=#458 id=458 data-nosnippet>458</a>            <span class="kw">let </span><span class="kw-2">mut </span>ledger = MockLedger::init(pp, STAKE_TABLE_CAPACITY_FOR_TEST / <span class="number">2</span>);
+<a href=#459 id=459 data-nosnippet>459</a>
+<a href=#460 id=460 data-nosnippet>460</a>            <span class="kw">while </span>ledger.light_client_state().block_height &lt; num_block_skipped {
+<a href=#461 id=461 data-nosnippet>461</a>                ledger.elapse_with_block();
+<a href=#462 id=462 data-nosnippet>462</a>            }
+<a href=#463 id=463 data-nosnippet>463</a>
+<a href=#464 id=464 data-nosnippet>464</a>            <span class="kw">let </span>res = <span class="kw">if </span>require_valid_proof {
+<a href=#465 id=465 data-nosnippet>465</a>                <span class="kw">let </span>(_pi, proof) = ledger.gen_state_proof();
+<a href=#466 id=466 data-nosnippet>466</a>                <span class="kw">let </span>state_parsed: LightClientStateSol = ledger.light_client_state().into();
+<a href=#467 id=467 data-nosnippet>467</a>                <span class="kw">let </span>proof_parsed: PlonkProofSol = proof.into();
+<a href=#468 id=468 data-nosnippet>468</a>                <span class="kw">let </span>next_stake_table: StakeTableStateSol = ledger.next_stake_table_state().into();
+<a href=#469 id=469 data-nosnippet>469</a>                <span class="kw">let </span>new_auth_root = ledger.auth_root();
+<a href=#470 id=470 data-nosnippet>470</a>                (state_parsed, next_stake_table, new_auth_root, proof_parsed)
+<a href=#471 id=471 data-nosnippet>471</a>            } <span class="kw">else </span>{
+<a href=#472 id=472 data-nosnippet>472</a>                <span class="kw">let </span>state_parsed = ledger.light_client_state().into();
+<a href=#473 id=473 data-nosnippet>473</a>                <span class="kw">let </span>proof_parsed = PlonkProofSol::dummy(<span class="kw-2">&amp;mut </span>ledger.rng);
+<a href=#474 id=474 data-nosnippet>474</a>                <span class="kw">let </span>next_stake_table: StakeTableStateSol = ledger.next_stake_table_state().into();
+<a href=#475 id=475 data-nosnippet>475</a>                <span class="kw">let </span>new_auth_root = ledger.rng.next_u64();
+<a href=#476 id=476 data-nosnippet>476</a>                (
+<a href=#477 id=477 data-nosnippet>477</a>                    state_parsed,
+<a href=#478 id=478 data-nosnippet>478</a>                    next_stake_table,
+<a href=#479 id=479 data-nosnippet>479</a>                    U256::from(new_auth_root),
+<a href=#480 id=480 data-nosnippet>480</a>                    proof_parsed,
+<a href=#481 id=481 data-nosnippet>481</a>                )
+<a href=#482 id=482 data-nosnippet>482</a>            };
+<a href=#483 id=483 data-nosnippet>483</a>            <span class="macro">println!</span>(<span class="string">"{}"</span>, res.abi_encode_params().encode_hex());
+<a href=#484 id=484 data-nosnippet>484</a>        },
+<a href=#485 id=485 data-nosnippet>485</a>        Action::GenBLSHashes =&gt; {
+<a href=#486 id=486 data-nosnippet>486</a>            <span class="kw">if </span>cli.args.len() != <span class="number">1 </span>{
+<a href=#487 id=487 data-nosnippet>487</a>                <span class="macro">panic!</span>(<span class="string">"Should provide arg1=message"</span>);
+<a href=#488 id=488 data-nosnippet>488</a>            }
+<a href=#489 id=489 data-nosnippet>489</a>
+<a href=#490 id=490 data-nosnippet>490</a>            <span class="comment">// Same as in the hash_to_curve function
+<a href=#491 id=491 data-nosnippet>491</a>            // See https://github.com/EspressoSystems/jellyfish/blob/6c2c08f4e966fd1d454d48bcf30bd41a952f9f76/primitives/src/signatures/bls_over_bn254.rs#L310
+<a href=#492 id=492 data-nosnippet>492</a>            </span><span class="kw">let </span>hasher_init = <span class="kw-2">&amp;</span>[<span class="number">1u8</span>];
+<a href=#493 id=493 data-nosnippet>493</a>            <span class="kw">let </span>hasher = &lt;DefaultFieldHasher&lt;Keccak256&gt; <span class="kw">as </span>HashToField&lt;Fq&gt;&gt;::new(hasher_init);
+<a href=#494 id=494 data-nosnippet>494</a>
+<a href=#495 id=495 data-nosnippet>495</a>            <span class="kw">let </span>message_bytes = cli.args[<span class="number">0</span>].parse::&lt;Bytes&gt;().unwrap();
+<a href=#496 id=496 data-nosnippet>496</a>
+<a href=#497 id=497 data-nosnippet>497</a>            <span class="kw">let </span>field_elem: Fq = hasher.hash_to_field(<span class="kw-2">&amp;</span>message_bytes, <span class="number">1</span>)[<span class="number">0</span>];
+<a href=#498 id=498 data-nosnippet>498</a>            <span class="kw">let </span>fq_u256 = field_to_u256::&lt;Fq&gt;(field_elem);
+<a href=#499 id=499 data-nosnippet>499</a>            <span class="kw">let </span>hash_to_curve_elem: G1Affine = hash_to_curve::&lt;Keccak256&gt;(<span class="kw-2">&amp;</span>message_bytes).into();
+<a href=#500 id=500 data-nosnippet>500</a>            <span class="kw">let </span>hash_to_curve_elem_parsed: G1PointSol = hash_to_curve_elem.into();
+<a href=#501 id=501 data-nosnippet>501</a>
+<a href=#502 id=502 data-nosnippet>502</a>            <span class="kw">let </span>res = (fq_u256, hash_to_curve_elem_parsed);
+<a href=#503 id=503 data-nosnippet>503</a>            <span class="macro">println!</span>(<span class="string">"{}"</span>, res.abi_encode_params().encode_hex());
+<a href=#504 id=504 data-nosnippet>504</a>        },
+<a href=#505 id=505 data-nosnippet>505</a>        Action::GenBLSSig =&gt; {
+<a href=#506 id=506 data-nosnippet>506</a>            <span class="kw">let </span><span class="kw-2">mut </span>rng = jf_utils::test_rng();
+<a href=#507 id=507 data-nosnippet>507</a>
+<a href=#508 id=508 data-nosnippet>508</a>            <span class="kw">if </span>cli.args.len() != <span class="number">1 </span>{
+<a href=#509 id=509 data-nosnippet>509</a>                <span class="macro">panic!</span>(<span class="string">"Should provide arg1=message"</span>);
+<a href=#510 id=510 data-nosnippet>510</a>            }
+<a href=#511 id=511 data-nosnippet>511</a>            <span class="kw">let </span>message_bytes = cli.args[<span class="number">0</span>].parse::&lt;Bytes&gt;().unwrap();
+<a href=#512 id=512 data-nosnippet>512</a>
+<a href=#513 id=513 data-nosnippet>513</a>            <span class="comment">// Generate the BLS ver key
+<a href=#514 id=514 data-nosnippet>514</a>            </span><span class="kw">let </span>key_pair = BLSKeyPair::generate(<span class="kw-2">&amp;mut </span>rng);
+<a href=#515 id=515 data-nosnippet>515</a>            <span class="kw">let </span>vk = key_pair.ver_key();
+<a href=#516 id=516 data-nosnippet>516</a>            <span class="kw">let </span>vk_g2_affine: G2Affine = vk.to_affine();
+<a href=#517 id=517 data-nosnippet>517</a>            <span class="kw">let </span>vk_parsed: G2PointSol = vk_g2_affine.into();
+<a href=#518 id=518 data-nosnippet>518</a>
+<a href=#519 id=519 data-nosnippet>519</a>            <span class="comment">// Sign the message
+<a href=#520 id=520 data-nosnippet>520</a>            </span><span class="kw">let </span>sig: Signature = key_pair.sign(<span class="kw-2">&amp;</span>message_bytes, CS_ID_BLS_BN254);
+<a href=#521 id=521 data-nosnippet>521</a>            <span class="kw">let </span>sig_affine_point = sig.sigma.into_affine();
+<a href=#522 id=522 data-nosnippet>522</a>            <span class="kw">let </span>sig_parsed: G1PointSol = sig_affine_point.into();
+<a href=#523 id=523 data-nosnippet>523</a>
+<a href=#524 id=524 data-nosnippet>524</a>            <span class="kw">let </span>res = (vk_parsed, sig_parsed);
+<a href=#525 id=525 data-nosnippet>525</a>            <span class="macro">println!</span>(<span class="string">"{}"</span>, res.abi_encode_params().encode_hex());
+<a href=#526 id=526 data-nosnippet>526</a>        },
+<a href=#527 id=527 data-nosnippet>527</a>        Action::EpochCompute =&gt; {
+<a href=#528 id=528 data-nosnippet>528</a>            <span class="kw">if </span>cli.args.len() != <span class="number">2 </span>{
+<a href=#529 id=529 data-nosnippet>529</a>                <span class="macro">panic!</span>(<span class="string">"Should provide arg1=blockNum, arg2=blocksPerEpoch"</span>);
+<a href=#530 id=530 data-nosnippet>530</a>            }
+<a href=#531 id=531 data-nosnippet>531</a>            <span class="kw">let </span>block_num = cli.args[<span class="number">0</span>].parse::&lt;u64&gt;().unwrap();
+<a href=#532 id=532 data-nosnippet>532</a>            <span class="kw">let </span>epoch_height = cli.args[<span class="number">1</span>].parse::&lt;u64&gt;().unwrap();
+<a href=#533 id=533 data-nosnippet>533</a>
+<a href=#534 id=534 data-nosnippet>534</a>            <span class="kw">let </span>epoch = epoch_from_block_number(block_num, epoch_height);
+<a href=#535 id=535 data-nosnippet>535</a>            <span class="kw">let </span>is_epoch_root = is_epoch_root(block_num, epoch_height);
+<a href=#536 id=536 data-nosnippet>536</a>            <span class="kw">let </span>is_gt_epoch_root = is_ge_epoch_root(block_num, epoch_height) &amp;&amp; !is_epoch_root;
+<a href=#537 id=537 data-nosnippet>537</a>            <span class="macro">println!</span>(
+<a href=#538 id=538 data-nosnippet>538</a>                <span class="string">"{}"</span>,
+<a href=#539 id=539 data-nosnippet>539</a>                (epoch, is_epoch_root, is_gt_epoch_root)
+<a href=#540 id=540 data-nosnippet>540</a>                    .abi_encode_params()
+<a href=#541 id=541 data-nosnippet>541</a>                    .encode_hex()
+<a href=#542 id=542 data-nosnippet>542</a>            );
+<a href=#543 id=543 data-nosnippet>543</a>        },
+<a href=#544 id=544 data-nosnippet>544</a>        Action::FirstAndSecondEpochUpdate =&gt; {
+<a href=#545 id=545 data-nosnippet>545</a>            <span class="kw">if </span>cli.args.len() != <span class="number">2 </span>{
+<a href=#546 id=546 data-nosnippet>546</a>                <span class="macro">panic!</span>(<span class="string">"Should provide arg1=heightOne, arg2=heightTwo"</span>);
+<a href=#547 id=547 data-nosnippet>547</a>            }
+<a href=#548 id=548 data-nosnippet>548</a>            <span class="kw">let </span>height_one = cli.args[<span class="number">0</span>].parse::&lt;u64&gt;().unwrap();
+<a href=#549 id=549 data-nosnippet>549</a>            <span class="kw">let </span>height_two = cli.args[<span class="number">1</span>].parse::&lt;u64&gt;().unwrap();
+<a href=#550 id=550 data-nosnippet>550</a>
+<a href=#551 id=551 data-nosnippet>551</a>            <span class="kw">let </span>pp = MockSystemParam::init();
+<a href=#552 id=552 data-nosnippet>552</a>            <span class="kw">let </span><span class="kw-2">mut </span>ledger = MockLedger::init(pp, STAKE_TABLE_CAPACITY_FOR_TEST / <span class="number">2</span>);
+<a href=#553 id=553 data-nosnippet>553</a>
+<a href=#554 id=554 data-nosnippet>554</a>            <span class="macro">assert_eq!</span>(ledger.derive_epoch(height_one), ledger.first_epoch());
+<a href=#555 id=555 data-nosnippet>555</a>            <span class="macro">assert_eq!</span>(ledger.derive_epoch(height_two), ledger.first_epoch() + <span class="number">1</span>);
+<a href=#556 id=556 data-nosnippet>556</a>
+<a href=#557 id=557 data-nosnippet>557</a>            <span class="kw">let </span><span class="kw-2">mut </span>new_states: Vec&lt;LightClientStateSol&gt; = <span class="macro">vec!</span>[];
+<a href=#558 id=558 data-nosnippet>558</a>            <span class="kw">let </span><span class="kw-2">mut </span>proofs: Vec&lt;PlonkProofSol&gt; = <span class="macro">vec!</span>[];
+<a href=#559 id=559 data-nosnippet>559</a>            <span class="kw">let </span><span class="kw-2">mut </span>next_st_states: Vec&lt;StakeTableStateSol&gt; = <span class="macro">vec!</span>[];
+<a href=#560 id=560 data-nosnippet>560</a>            <span class="kw">let </span><span class="kw-2">mut </span>new_auth_roots: Vec&lt;U256&gt; = <span class="macro">vec!</span>[];
+<a href=#561 id=561 data-nosnippet>561</a>
+<a href=#562 id=562 data-nosnippet>562</a>            <span class="kw">while </span>ledger.light_client_state().block_height &lt; height_one {
+<a href=#563 id=563 data-nosnippet>563</a>                ledger.elapse_with_block();
+<a href=#564 id=564 data-nosnippet>564</a>            }
+<a href=#565 id=565 data-nosnippet>565</a>            <span class="comment">// generate the updates for the first height
+<a href=#566 id=566 data-nosnippet>566</a>            </span><span class="kw">let </span>(_pi, proof) = ledger.gen_state_proof();
+<a href=#567 id=567 data-nosnippet>567</a>            next_st_states.push(ledger.next_stake_table_state().into());
+<a href=#568 id=568 data-nosnippet>568</a>            new_states.push(ledger.light_client_state().into());
+<a href=#569 id=569 data-nosnippet>569</a>            proofs.push(proof.into());
+<a href=#570 id=570 data-nosnippet>570</a>            new_auth_roots.push(ledger.auth_root());
+<a href=#571 id=571 data-nosnippet>571</a>
+<a href=#572 id=572 data-nosnippet>572</a>            <span class="kw">while </span>ledger.light_client_state().block_height &lt; height_two {
+<a href=#573 id=573 data-nosnippet>573</a>                ledger.elapse_with_block();
+<a href=#574 id=574 data-nosnippet>574</a>            }
+<a href=#575 id=575 data-nosnippet>575</a>            <span class="comment">// generate the updates for the first height
+<a href=#576 id=576 data-nosnippet>576</a>            </span><span class="kw">let </span>(_pi, proof) = ledger.gen_state_proof();
+<a href=#577 id=577 data-nosnippet>577</a>            next_st_states.push(ledger.next_stake_table_state().into());
+<a href=#578 id=578 data-nosnippet>578</a>            new_states.push(ledger.light_client_state().into());
+<a href=#579 id=579 data-nosnippet>579</a>            proofs.push(proof.into());
+<a href=#580 id=580 data-nosnippet>580</a>            new_auth_roots.push(ledger.auth_root());
+<a href=#581 id=581 data-nosnippet>581</a>
+<a href=#582 id=582 data-nosnippet>582</a>            <span class="macro">println!</span>(
+<a href=#583 id=583 data-nosnippet>583</a>                <span class="string">"{}"</span>,
+<a href=#584 id=584 data-nosnippet>584</a>                (new_states, next_st_states, new_auth_roots, proofs)
+<a href=#585 id=585 data-nosnippet>585</a>                    .abi_encode_params()
+<a href=#586 id=586 data-nosnippet>586</a>                    .encode_hex()
+<a href=#587 id=587 data-nosnippet>587</a>            );
+<a href=#588 id=588 data-nosnippet>588</a>        },
+<a href=#589 id=589 data-nosnippet>589</a>    };
+<a href=#590 id=590 data-nosnippet>590</a>}</code></pre></div></section></main></body></html>
