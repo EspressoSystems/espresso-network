@@ -153,9 +153,12 @@ struct Options {
 impl Options {
     fn submit_url(&self, rng: &mut ChaChaRng) -> Url {
         let sequencer_urls = self.urls.clone();
-        self.submit_url
-            .clone()
-            .unwrap_or_else(|| sequencer_urls[rng.gen_range(0..sequencer_urls.len())].clone())
+        self.submit_url.clone().unwrap_or_else(|| {
+            sequencer_urls[rng.gen_range(0..sequencer_urls.len())]
+                .clone()
+                .join("submit")
+                .unwrap()
+        })
     }
 
     fn use_public_mempool(&self) -> bool {
