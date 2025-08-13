@@ -125,9 +125,11 @@ struct Options {
     #[clap(long, env = "ESPRESSO_SUBMIT_TRANSACTIONS_SUBMIT_URL")]
     submit_url: Option<Url>,
 
-    /// URL of the query service.
-    #[clap(env = "ESPRESSO_SEQUENCER_URL")]
-    url: Url,
+    /// list of query service URLs.
+    /// If `ESPRESSO_SUBMIT_TRANSACTIONS_SUBMIT_URL` is not provided,
+    /// transactions will be sent to a random node from this list.
+    #[clap(env = "ESPRESSO_SEQUENCER_URLS", value_delimiter = ',', num_args = 1..,)]
+    urls: Vec<Url>,
 
     /// Relay num_nodes for benchmark results output
     #[cfg(feature = "benchmarking")]
@@ -149,11 +151,13 @@ struct Options {
 }
 
 impl Options {
-    fn submit_url(&self) -> Url {
+    fn submit_url(&self, rng: &mut ChaChaRng) -> Url {
+        let sequencer_urls = self.urls.clone();
         self.submit_url
             .clone()
-            .unwrap_or_else(|| self.url.join("submit").unwrap())
+            .unwrap_or_else(|| sequencer_urls[rng.gen_range(0..sequencer_urls.len())].clone())
     }
+
     fn use_public_mempool(&self) -> bool {
         self.submit_url.is_none()
     }
@@ -164,7 +168,7 @@ async fn main() {
     let opt = Options::parse();
     opt.logging.init();
 
-    tracing::warn!("starting load generator for sequencer {}", opt.url);
+    tracing::warn!("starting load generator for sequencers {:?}", opt.urls);
 
     let (sender, mut receiver) = mpsc::channel(opt.channel_bound);
 
@@ -173,7 +177,7 @@ async fn main() {
     let mut rng = ChaChaRng::seed_from_u64(seed);
 
     // Subscribe to block stream so we can check that our transactions are getting sequenced.
-    let client = Client::<Error, SequencerApiVersion>::new(opt.url.clone());
+    let client = Client::<Error, SequencerApiVersion>::new(opt.urls[0].clone());
     let block_height: usize = client.get("status/block-height").send().await.unwrap();
     let mut blocks = client
         .socket(&format!("availability/stream/blocks/{}", block_height - 1))
@@ -386,9 +390,14 @@ async fn submit_transactions<ApiVer: StaticVersionType>(
     mut rng: ChaChaRng,
     _: ApiVer,
 ) {
-    let url = opt.submit_url();
-    tracing::info!(%url, "starting load generator task");
-    let client = Client::<Error, ApiVer>::new(url);
+    let submit_url = opt.submit_url.clone().map(|url| url.to_string());
+    let sequencer_urls = opt
+        .urls
+        .clone()
+        .into_iter()
+        .map(|url| url.to_string())
+        .collect::<Vec<_>>();
+    tracing::info!(submit_url, ?sequencer_urls, "starting load generator task");
 
     // Create an exponential distribution for sampling delay times. The distribution should have
     // mean `opt.delay`, or parameter `\lambda = 1 / opt.delay`.
@@ -414,6 +423,10 @@ async fn submit_transactions<ApiVer: StaticVersionType>(
         };
         let txns_batch_count = txns.len() as u64;
         if randomized_batch_size <= txns_batch_count {
+            let base_url = opt.submit_url(&mut rng);
+
+            let client = Client::<Error, ApiVer>::new(base_url.clone());
+
             if let Err(err) = if txns_batch_count == 1 {
                 // occasionally test the 'submit' endpoint, just for coverage
                 client
