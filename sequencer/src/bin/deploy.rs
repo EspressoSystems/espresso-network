@@ -136,6 +136,9 @@ struct Options {
     /// Option to upgrade to LightClient V2
     #[clap(long, default_value = "false")]
     upgrade_light_client_v2: bool,
+    /// Option to upgrade to LightClient V3
+    #[clap(long, default_value = "false")]
+    upgrade_light_client_v3: bool,
     /// Option to deploy esp token
     #[clap(long, default_value = "false")]
     deploy_esp_token: bool,
