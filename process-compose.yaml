@@ -357,9 +357,9 @@ processes:
     availability: *run-forever
 
   sequencer4:
-    command: sequencer -- storage-sql -- http -- query
+    command: sequencer-sqlite -- storage-sql -- http -- query
     environment:
-      # - ESPRESSO_SEQUENCER_LIGHTWEIGHT=true
+      - ESPRESSO_SEQUENCER_LIGHTWEIGHT=true
       - ESPRESSO_SEQUENCER_API_PORT=$ESPRESSO_SEQUENCER4_API_PORT
       - ESPRESSO_SEQUENCER_STATE_PEERS=http://localhost:$ESPRESSO_SEQUENCER_API_PORT
       - ESPRESSO_SEQUENCER_API_PEERS=http://localhost:$ESPRESSO_SEQUENCER_API_PORT
@@ -513,7 +513,6 @@ processes:
   submit-transactions-public:
     command: submit-transactions
     environment:
-      - ESPRESSO_SEQUENCER_URL=http://localhost:$ESPRESSO_SEQUENCER_API_PORT,http://localhost:$ESPRESSO_SEQUENCER1_API_PORT
       - ESPRESSO_SUBMIT_TRANSACTIONS_PORT=$ESPRESSO_SUBMIT_TRANSACTIONS_PUBLIC_PORT
     depends_on:
       sequencer0:
