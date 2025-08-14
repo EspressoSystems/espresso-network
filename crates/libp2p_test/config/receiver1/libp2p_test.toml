@@ -1,0 +1,9 @@
+# Example config for libp2p_test
+listen = "/ip4/0.0.0.0/udp/9001/quic-v1"
+private_key = "BLS_SIGNING_KEY~I8wAPjR0ksgO01wreQ9XgJsPXoCTmBylEleQfAbI1RbN"
+peers = [
+    ["12D3KooWGZJippUFtCCSGKDt7hxXspAiM2EZb5KSUaGWN5iFP45w", "/dns4/sender/udp/9000/quic-v1"],
+    ["12D3KooWFzobBRYtkR1G4g4hcwEpriKG99R7QqSJYiRH1kb5wjkY", "/dns4/receiver2/udp/9002/quic-v1"],
+    ["12D3KooWAPho9bSmLeyPSL4zypbPKxKjAJPpSUQ7KN6zG4Jkr5dx", "/dns4/receiver3/udp/9003/quic-v1"]
+]
+send_mode = false
