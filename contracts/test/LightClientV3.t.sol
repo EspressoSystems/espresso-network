@@ -12,14 +12,15 @@ import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 
 // Target contract
 import { LightClient as LC } from "../src/LightClient.sol";
-import { PlonkVerifierV2 as PV2 } from "../src/libraries/PlonkVerifierV2.sol";
 import { LightClientV2 as LCV2 } from "../src/LightClientV2.sol";
-import { LightClientV2Mock as LCV2Mock } from "./mocks/LightClientV2Mock.sol";
+import { PlonkVerifierV3 as PV3 } from "../src/libraries/PlonkVerifierV3.sol";
+import { LightClientV3 as LCV3 } from "../src/LightClientV3.sol";
+import { LightClientV3Mock as LCV3Mock } from "./mocks/LightClientV3Mock.sol";
 import { BN254 } from "bn254/BN254.sol";
 
 /// @dev Common helpers for LightClient tests
 contract LightClientCommonTest is Test {
-    LCV2Mock public lc;
+    LCV3Mock public lc;
     LC.LightClientState public genesis;
     LC.StakeTableState public genesisStakeTableState;
     uint32 public constant MAX_HISTORY_SECONDS = 1 days;
@@ -45,12 +46,12 @@ contract LightClientCommonTest is Test {
         genesis = state;
         genesisStakeTableState = stakeState;
 
-        // Now, we
+        // Now, we need to properly upgrade V1 -> V2 -> V3:
         // - deploy LCV1
         // - deploy proxy while setting current impl to LCV1 and initialize
         // - set permissioned prover on the LC proxy
-        // - deploy LCV2Mock
-        // - upgrade on the proxy to point to new impl as LCV2Mock and initialize
+        // - upgrade LCV1 to LCV2 and initialize V2
+        // - upgrade LCV2 to LCV3Mock and initialize V3
         LC lcv1 = new LC();
         bytes memory lcv1InitData = abi.encodeWithSignature(
             "initialize((uint64,uint64,uint256),(uint256,uint256,uint256,uint256),uint32,address)",
@@ -68,17 +69,21 @@ contract LightClientCommonTest is Test {
         vm.prank(admin);
         LC(proxyAddr).setPermissionedProver(prover);
 
-        // deploy PlonkVerifierV2 and LCV2Mock
-        LCV2Mock lcv2 = new LCV2Mock();
+        // First upgrade V1 to V2
+        LCV2 lcv2 = new LCV2();
         bytes memory lcv2InitData = abi.encodeWithSignature(
             "initializeV2(uint64,uint64)", BLOCKS_PER_EPOCH, EPOCH_START_BLOCK
         );
-
-        // upgrade proxy to new LC impl and initialize LCV2Mock
         vm.prank(admin);
         LC(proxyAddr).upgradeToAndCall(address(lcv2), lcv2InitData);
-        // now the proxy can be treated as LCV2Mock
-        lc = LCV2Mock(proxyAddr);
+
+        // Then upgrade V2 to V3
+        LCV3Mock lcv3 = new LCV3Mock();
+        bytes memory lcv3InitData = abi.encodeWithSignature("initializeV3()");
+        vm.prank(admin);
+        LCV2(proxyAddr).upgradeToAndCall(address(lcv3), lcv3InitData);
+        // now the proxy can be treated as LCV3Mock
+        lc = LCV3Mock(proxyAddr);
     }
 
     function assertEq(BN254.ScalarField a, BN254.ScalarField b) public pure {
@@ -96,6 +101,7 @@ contract LightClientCommonTest is Test {
         returns (
             LC.LightClientState memory newState,
             LC.StakeTableState memory nextStakeTable,
+            uint256 newAuthRoot,
             V.PlonkProof memory newProof
         )
     {
@@ -105,8 +111,8 @@ contract LightClientCommonTest is Test {
         cmds[2] = vm.toString(uint32(1));
 
         bytes memory result = vm.ffi(cmds);
-        (newState, nextStakeTable, newProof) =
-            abi.decode(result, (LC.LightClientState, LC.StakeTableState, V.PlonkProof));
+        (newState, nextStakeTable, newAuthRoot, newProof) =
+            abi.decode(result, (LC.LightClientState, LC.StakeTableState, uint256, V.PlonkProof));
     }
 
     /// @dev return a simulated new state that advance from current `finalizedState`
@@ -153,12 +159,9 @@ contract LightClient_constructor_Test is LightClientCommonTest {
     // NOTE: `contract LightClient_constructor_Test` for LightClient.sol (V1) is dropped since it's
     // already deployed, and LCV1 initialization sanity check is already done in `init()`
     //
-    /// @dev test the proxy-upgradable LC contracts (V1 + V2) are properly initialized
+    /// @dev test the proxy-upgradable LC contracts (V1 + V3) are properly initialized
     function test_ProxyInitialization() public {
         init();
-        // V2 initialization
-        assertEq(lc.blocksPerEpoch(), BLOCKS_PER_EPOCH);
-        assertEq(lc.epochStartBlock(), EPOCH_START_BLOCK);
 
         // V1 initialization
         (uint64 viewNum, uint64 blockHeight, BN254.ScalarField blockCommRoot) = lc.genesisState();
@@ -177,18 +180,26 @@ contract LightClient_constructor_Test is LightClientCommonTest {
         assertEq(genesisStakeTableState.amountComm, stakeTableAmountComm);
         assertEq(genesisStakeTableState.threshold, threshold);
 
-        assertEq(LCV2Mock(proxyAddr).permissionedProver(), prover);
+        assertEq(LCV3Mock(proxyAddr).permissionedProver(), prover);
+
+        // V2 initialization
+        assertEq(lc.blocksPerEpoch(), BLOCKS_PER_EPOCH);
+        assertEq(lc.epochStartBlock(), EPOCH_START_BLOCK);
+
+        // V3 initialization
+        assertEq(lc.firstEpoch(), lc.epochFromBlockNumber(EPOCH_START_BLOCK, BLOCKS_PER_EPOCH));
     }
 }
 
 contract LightClient_permissionedProver_Test is LightClientCommonTest {
     LC.LightClientState newState;
     LC.StakeTableState nextStakeTable;
+    uint256 newAuthRoot;
     V.PlonkProof newProof;
 
     function setUp() public {
         init();
-        (newState, nextStakeTable, newProof) = genStateProof();
+        (newState, nextStakeTable, newAuthRoot, newProof) = genStateProof();
     }
 
     function test_NoProverPermissionsRequired() external {
@@ -212,7 +223,7 @@ contract LightClient_permissionedProver_Test is LightClientCommonTest {
         vm.expectEmit(true, true, true, true);
         emit LC.NewState(newState.viewNum, newState.blockHeight, newState.blockCommRoot);
         vm.prank(makeAddr("randomUser"));
-        lc.newFinalizedState(newState, nextStakeTable, newProof);
+        lc.newFinalizedState(newState, nextStakeTable, newAuthRoot, newProof);
     }
 
     function test_UpdatePermissionedProverWhenPermissionedProverModeDisabled() external {
@@ -274,13 +285,13 @@ contract LightClient_permissionedProver_Test is LightClientCommonTest {
         //confirm that the old prover doesn't work
         vm.prank(oldPermissionedProver);
         vm.expectRevert(LC.ProverNotPermissioned.selector);
-        lc.newFinalizedState(newState, nextStakeTable, newProof);
+        lc.newFinalizedState(newState, nextStakeTable, newAuthRoot, newProof);
 
         //confirm that the new prover works
         vm.prank(prover2);
         vm.expectEmit(true, true, true, true);
         emit LC.NewState(newState.viewNum, newState.blockHeight, newState.blockCommRoot);
-        lc.newFinalizedState(newState, nextStakeTable, newProof);
+        lc.newFinalizedState(newState, nextStakeTable, newAuthRoot, newProof);
     }
 
     function test_RevertWhen_sameProverSentInUpdate() public {
@@ -306,13 +317,13 @@ contract LightClient_permissionedProver_Test is LightClientCommonTest {
     function test_RevertWhen_ProverDoesNotHavePermissions() external {
         vm.expectRevert(LC.ProverNotPermissioned.selector);
         vm.prank(makeAddr("ProverWithNoPermissions"));
-        lc.newFinalizedState(newState, nextStakeTable, newProof);
+        lc.newFinalizedState(newState, nextStakeTable, newAuthRoot, newProof);
     }
 
     function test_RevertWhen_ProverAddressNotPermissionedEvenIfAdminAddress() external {
         vm.expectRevert(LC.ProverNotPermissioned.selector);
         vm.prank(admin);
-        lc.newFinalizedState(newState, nextStakeTable, newProof);
+        lc.newFinalizedState(newState, nextStakeTable, newAuthRoot, newProof);
     }
 }
 
@@ -320,11 +331,12 @@ contract LightClient_permissionedProver_Test is LightClientCommonTest {
 contract LightClient_newFinalizedState_BeforeEpochActivation_Test is LightClientCommonTest {
     LC.LightClientState newState;
     LC.StakeTableState nextStakeTable;
+    uint256 newAuthRoot;
     V.PlonkProof newProof;
 
     function setUp() public {
         init();
-        (newState, nextStakeTable, newProof) = genStateProof();
+        (newState, nextStakeTable, newAuthRoot, newProof) = genStateProof();
     }
 
     /// @dev for benchmarking purposes only
@@ -332,7 +344,7 @@ contract LightClient_newFinalizedState_BeforeEpochActivation_Test is LightClient
         vm.expectEmit(true, true, true, true);
         emit LC.NewState(newState.viewNum, newState.blockHeight, newState.blockCommRoot);
         vm.prank(prover);
-        lc.newFinalizedState(newState, nextStakeTable, newProof);
+        lc.newFinalizedState(newState, nextStakeTable, newAuthRoot, newProof);
     }
 
     /// @dev Test happy path for (the number of states + 1) consecutive new finalized blocks
@@ -347,17 +359,21 @@ contract LightClient_newFinalizedState_BeforeEpochActivation_Test is LightClient
         (
             LC.LightClientState[] memory states,
             LC.StakeTableState[] memory nextStakeTables,
+            uint256[] memory authRoots,
             V.PlonkProof[] memory proofs
-        ) = abi.decode(result, (LC.LightClientState[], LC.StakeTableState[], V.PlonkProof[]));
+        ) = abi.decode(
+            result, (LC.LightClientState[], LC.StakeTableState[], uint256[], V.PlonkProof[])
+        );
 
         uint256 statesLen = states.length;
         for (uint256 i = 0; i < statesLen; i++) {
             vm.expectEmit(true, true, true, true);
             emit LC.NewState(states[i].viewNum, states[i].blockHeight, states[i].blockCommRoot);
             vm.prank(prover);
-            lc.newFinalizedState(states[i], nextStakeTables[i], proofs[i]);
+            lc.newFinalizedState(states[i], nextStakeTables[i], authRoots[i], proofs[i]);
 
             expectFinalizedState(states[i]);
+            assertEq(lc.authRoot(), authRoots[i]);
         }
     }
 
@@ -379,13 +395,14 @@ contract LightClient_newFinalizedState_BeforeEpochActivation_Test is LightClient
             (
                 LC.LightClientState memory state,
                 LC.StakeTableState memory _nextStakeTable,
+                uint256 authRoot,
                 V.PlonkProof memory proof
-            ) = abi.decode(result, (LC.LightClientState, LC.StakeTableState, V.PlonkProof));
+            ) = abi.decode(result, (LC.LightClientState, LC.StakeTableState, uint256, V.PlonkProof));
 
             vm.expectEmit(true, true, true, true);
             emit LC.NewState(state.viewNum, state.blockHeight, state.blockCommRoot);
             vm.prank(prover);
-            lc.newFinalizedState(state, _nextStakeTable, proof);
+            lc.newFinalizedState(state, _nextStakeTable, authRoot, proof);
         }
     }
 
@@ -399,13 +416,13 @@ contract LightClient_newFinalizedState_BeforeEpochActivation_Test is LightClient
 
         // outdated view num
         vm.expectRevert(LC.OutdatedState.selector);
-        lc.newFinalizedState(newState, nextStakeTable, newProof);
+        lc.newFinalizedState(newState, nextStakeTable, newAuthRoot, newProof);
 
         // outdated block height
         state.viewNum = genesis.viewNum;
         state.blockHeight = numBlockSkipped + 1;
         vm.expectRevert(LC.OutdatedState.selector);
-        lc.newFinalizedState(newState, nextStakeTable, newProof);
+        lc.newFinalizedState(newState, nextStakeTable, newAuthRoot, newProof);
         vm.stopPrank();
     }
 
@@ -417,8 +434,7 @@ contract LightClient_newFinalizedState_BeforeEpochActivation_Test is LightClient
         vm.startPrank(prover);
         badState.blockCommRoot = BN254.ScalarField.wrap(BN254.R_MOD);
         vm.expectRevert("Bn254: invalid scalar field");
-        lc.newFinalizedState(badState, nextStakeTable, newProof);
-        badState.blockCommRoot = newState.blockCommRoot;
+        lc.newFinalizedState(badState, nextStakeTable, newAuthRoot, newProof);
     }
 
     /// @dev Test unhappy path when the plonk proof or the public inputs are wrong
@@ -434,19 +450,25 @@ contract LightClient_newFinalizedState_BeforeEpochActivation_Test is LightClient
         vm.startPrank(prover);
         badState.viewNum = newState.viewNum + 2;
         vm.expectRevert(LC.InvalidProof.selector);
-        lc.newFinalizedState(badState, nextStakeTable, newProof);
+        lc.newFinalizedState(badState, nextStakeTable, newAuthRoot, newProof);
         badState.viewNum = newState.viewNum;
 
         // wrong block height
         badState.blockHeight = newState.blockHeight + 1;
         vm.expectRevert(LC.InvalidProof.selector);
-        lc.newFinalizedState(badState, nextStakeTable, newProof);
+        lc.newFinalizedState(badState, nextStakeTable, newAuthRoot, newProof);
         badState.blockHeight = newState.blockHeight;
 
         // wrong blockCommRoot
         badState.blockCommRoot = randScalar;
         vm.expectRevert(LC.InvalidProof.selector);
-        lc.newFinalizedState(badState, nextStakeTable, newProof);
+        lc.newFinalizedState(badState, nextStakeTable, newAuthRoot, newProof);
+        badState.blockCommRoot = newState.blockCommRoot;
+
+        // wrong auth root
+        uint256 badAuthRoot = 88;
+        vm.expectRevert(LC.InvalidProof.selector);
+        lc.newFinalizedState(newState, nextStakeTable, badAuthRoot, newProof);
         badState.blockCommRoot = newState.blockCommRoot;
 
         string[] memory cmds = new string[](3);
@@ -457,7 +479,7 @@ contract LightClient_newFinalizedState_BeforeEpochActivation_Test is LightClient
         bytes memory result = vm.ffi(cmds);
         (V.PlonkProof memory dummyProof) = abi.decode(result, (V.PlonkProof));
         vm.expectRevert(LC.InvalidProof.selector);
-        lc.newFinalizedState(newState, nextStakeTable, dummyProof);
+        lc.newFinalizedState(newState, nextStakeTable, newAuthRoot, dummyProof);
 
         vm.stopPrank();
     }
@@ -483,8 +505,9 @@ contract LightClient_newFinalizedState_OnEpochActivation_Test is LightClientComm
         (
             LC.LightClientState memory newState,
             LC.StakeTableState memory nextStakeTable,
+            uint256 newAuthRoot,
             V.PlonkProof memory proof
-        ) = abi.decode(result, (LC.LightClientState, LC.StakeTableState, V.PlonkProof));
+        ) = abi.decode(result, (LC.LightClientState, LC.StakeTableState, uint256, V.PlonkProof));
 
         // first check that nextStakeTable is still the same as the genesis stake
         assertEq(nextStakeTable.threshold, genesisStakeTableState.threshold);
@@ -493,9 +516,10 @@ contract LightClient_newFinalizedState_OnEpochActivation_Test is LightClientComm
         assertEq(nextStakeTable.amountComm, genesisStakeTableState.amountComm);
 
         vm.prank(prover);
-        lc.newFinalizedState(newState, nextStakeTable, proof);
+        lc.newFinalizedState(newState, nextStakeTable, newAuthRoot, proof);
         expectFinalizedState(newState);
         expectVotingStake(nextStakeTable);
+        assertEq(lc.authRoot(), newAuthRoot);
     }
 
     /// @dev test epoch root update in the first epoch
@@ -512,16 +536,18 @@ contract LightClient_newFinalizedState_OnEpochActivation_Test is LightClientComm
         (
             LC.LightClientState memory newState,
             LC.StakeTableState memory nextStakeTable,
+            uint256 newAuthRoot,
             V.PlonkProof memory proof
-        ) = abi.decode(result, (LC.LightClientState, LC.StakeTableState, V.PlonkProof));
+        ) = abi.decode(result, (LC.LightClientState, LC.StakeTableState, uint256, V.PlonkProof));
         assertEq(newState.blockHeight, height);
 
         vm.expectEmit(true, true, true, true);
         emit LCV2.NewEpoch(lc.epochFromBlockNumber(height, BLOCKS_PER_EPOCH) + 1);
         vm.prank(prover);
-        lc.newFinalizedState(newState, nextStakeTable, proof);
+        lc.newFinalizedState(newState, nextStakeTable, newAuthRoot, proof);
         expectFinalizedState(newState);
         expectVotingStake(nextStakeTable);
+        assertEq(lc.authRoot(), newAuthRoot);
     }
 
     /// @dev test if we update the block after the epoch root, should fail
@@ -539,10 +565,11 @@ contract LightClient_newFinalizedState_OnEpochActivation_Test is LightClientComm
             blockHeight: 16, // this > 15 which is the epoch root of the first epoch
             blockCommRoot: BN254.ScalarField.wrap(42)
         });
+        uint256 newAuthRoot = 42;
 
         vm.expectRevert(LCV2.MissingEpochRootUpdate.selector);
         vm.prank(prover);
-        lc.newFinalizedState(newState, genesisStakeTableState, dummyProof);
+        lc.newFinalizedState(newState, genesisStakeTableState, newAuthRoot, dummyProof);
     }
 }
 
@@ -566,15 +593,18 @@ contract LightClient_newFinalizedState_AfterEpochActivation_Test is LightClientC
         (
             LC.LightClientState[] memory states,
             LC.StakeTableState[] memory nextStakeTables,
+            uint256[] memory authRoots,
             V.PlonkProof[] memory proofs
-        ) = abi.decode(result, (LC.LightClientState[], LC.StakeTableState[], V.PlonkProof[]));
+        ) = abi.decode(
+            result, (LC.LightClientState[], LC.StakeTableState[], uint256[], V.PlonkProof[])
+        );
 
         vm.startPrank(prover);
         vm.expectEmit(true, true, true, true);
         emit LCV2.NewEpoch(3); // 3 is the numerical epoch, but represents second epoch
-        lc.newFinalizedState(states[0], nextStakeTables[0], proofs[0]);
+        lc.newFinalizedState(states[0], nextStakeTables[0], authRoots[0], proofs[0]);
 
-        lc.newFinalizedState(states[1], nextStakeTables[1], proofs[1]);
+        lc.newFinalizedState(states[1], nextStakeTables[1], authRoots[1], proofs[1]);
         expectFinalizedState(states[1]);
     }
 
@@ -590,17 +620,20 @@ contract LightClient_newFinalizedState_AfterEpochActivation_Test is LightClientC
         (
             LC.LightClientState[] memory states,
             LC.StakeTableState[] memory nextStakeTables,
+            uint256[] memory authRoots,
             V.PlonkProof[] memory proofs
-        ) = abi.decode(result, (LC.LightClientState[], LC.StakeTableState[], V.PlonkProof[]));
+        ) = abi.decode(
+            result, (LC.LightClientState[], LC.StakeTableState[], uint256[], V.PlonkProof[])
+        );
 
         vm.startPrank(prover);
         vm.expectEmit(true, true, true, true);
         emit LCV2.NewEpoch(3); // 3 is the numerical epoch, but represents second epoch
-        lc.newFinalizedState(states[0], nextStakeTables[0], proofs[0]);
+        lc.newFinalizedState(states[0], nextStakeTables[0], authRoots[0], proofs[0]);
 
         vm.expectEmit(true, true, true, true);
         emit LCV2.NewEpoch(4); // 4 is the numerical epoch, but represents third epoch
-        lc.newFinalizedState(states[1], nextStakeTables[1], proofs[1]);
+        lc.newFinalizedState(states[1], nextStakeTables[1], authRoots[1], proofs[1]);
         expectFinalizedState(states[1]);
         expectVotingStake(nextStakeTables[1]);
 
@@ -622,14 +655,17 @@ contract LightClient_newFinalizedState_AfterEpochActivation_Test is LightClientC
         (
             LC.LightClientState[] memory states,
             LC.StakeTableState[] memory nextStakeTables,
+            uint256[] memory authRoots,
             V.PlonkProof[] memory proofs
-        ) = abi.decode(result, (LC.LightClientState[], LC.StakeTableState[], V.PlonkProof[]));
+        ) = abi.decode(
+            result, (LC.LightClientState[], LC.StakeTableState[], uint256[], V.PlonkProof[])
+        );
 
         vm.startPrank(prover);
-        lc.newFinalizedState(states[0], nextStakeTables[0], proofs[0]);
+        lc.newFinalizedState(states[0], nextStakeTables[0], authRoots[0], proofs[0]);
 
         vm.expectRevert(LCV2.MissingEpochRootUpdate.selector);
-        lc.newFinalizedState(states[1], nextStakeTables[1], proofs[1]);
+        lc.newFinalizedState(states[1], nextStakeTables[1], authRoots[1], proofs[1]);
     }
 
     function test_RevertWhen_UpdateAfterSecondEpochRoot() external {
@@ -643,14 +679,17 @@ contract LightClient_newFinalizedState_AfterEpochActivation_Test is LightClientC
         (
             LC.LightClientState[] memory states,
             LC.StakeTableState[] memory nextStakeTables,
+            uint256[] memory authRoots,
             V.PlonkProof[] memory proofs
-        ) = abi.decode(result, (LC.LightClientState[], LC.StakeTableState[], V.PlonkProof[]));
+        ) = abi.decode(
+            result, (LC.LightClientState[], LC.StakeTableState[], uint256[], V.PlonkProof[])
+        );
 
         vm.startPrank(prover);
-        lc.newFinalizedState(states[0], nextStakeTables[0], proofs[0]);
+        lc.newFinalizedState(states[0], nextStakeTables[0], authRoots[0], proofs[0]);
 
         vm.expectRevert(LCV2.MissingEpochRootUpdate.selector);
-        lc.newFinalizedState(states[1], nextStakeTables[1], proofs[1]);
+        lc.newFinalizedState(states[1], nextStakeTables[1], authRoots[1], proofs[1]);
     }
 
     function test_RevertWhen_SkipEntireEpoch() external {
@@ -663,12 +702,13 @@ contract LightClient_newFinalizedState_AfterEpochActivation_Test is LightClientC
         (
             LC.LightClientState memory newState,
             LC.StakeTableState memory nextStakeTable,
+            uint256 newAuthRoot,
             V.PlonkProof memory newProof
-        ) = abi.decode(result, (LC.LightClientState, LC.StakeTableState, V.PlonkProof));
+        ) = abi.decode(result, (LC.LightClientState, LC.StakeTableState, uint256, V.PlonkProof));
 
         vm.startPrank(prover);
         vm.expectRevert(LCV2.MissingEpochRootUpdate.selector);
-        lc.newFinalizedState(newState, nextStakeTable, newProof);
+        lc.newFinalizedState(newState, nextStakeTable, newAuthRoot, newProof);
     }
 }
 
@@ -700,20 +740,21 @@ contract LightClient_EpochParamCompute_Test is LightClientCommonTest {
 contract LightClient_StateHistoryTest is LightClientCommonTest {
     LC.LightClientState newState;
     LC.StakeTableState nextStakeTable;
+    uint256 newAuthRoot;
     V.PlonkProof newProof;
 
     function setUp() public {
         init();
-        (newState, nextStakeTable, newProof) = genStateProof();
+        (newState, nextStakeTable, newAuthRoot, newProof) = genStateProof();
 
         //assert initial conditions
         assertEq(lc.stateHistoryFirstIndex(), 0);
         assertEq(lc.stateHistoryRetentionPeriod(), 1 days);
     }
 
-    function test_1lBlockUpdatesIsUpdated() public {
+    function test_l1BlockUpdatesIsUpdated() public {
         vm.prank(prover);
-        lc.newFinalizedState(newState, nextStakeTable, newProof);
+        lc.newFinalizedState(newState, nextStakeTable, newAuthRoot, newProof);
 
         // test that finalized state update will be added to the commitment history with correct
         // fields
@@ -962,70 +1003,42 @@ contract LightClient_LivenessDetectionTest is LightClientCommonTest {
     }
 }
 
-/// @dev Ensure production-deployed V1 can be upgraded to V2 properly
-contract LightClient_V1ToV2UpgradeTest is LightClientCommonTest {
+/// @dev Ensure production-deployed V2 can be upgraded to V3 properly
+contract LightClient_V2ToV3UpgradeTest is LightClientCommonTest {
     address proxy = 0x303872BB82a191771321d4828888920100d0b3e4;
+    uint64 constant V2_BLOCKS_PER_EPOCH = 3000;
+    uint64 constant V2_EPOCH_START_BLOCK = 3160636;
 
-    function test_ForkTest_UpgradeToV2() public {
-        string memory defaultStr = "";
-        string memory sepoliaRpcUrl = vm.envOr("SEPOLIA_RPC_URL", defaultStr);
-        if (bytes(sepoliaRpcUrl).length == 0) {
-            console.log("WARN: Skipping fork test: SEPOLIA_RPC_URL not set");
-            vm.skip(true);
-        }
-
+    function test_ForkTest_UpgradeToV3() public {
+        // Skip in CI, uncomment locally to test
+        vm.skip(true);
         // create fork on Sepolia on which we have deployed LightClient
         // proxy: https://sepolia.etherscan.io/address/0x303872bb82a191771321d4828888920100d0b3e4
-        vm.createSelectFork(sepoliaRpcUrl, 7844940); // March 6th, 2025
-        assertEq(block.number, 7844940);
+        vm.createSelectFork("https://1rpc.io/sepolia", 8966320); // Aug 12th, 2025
+        assertEq(block.number, 8966320);
         (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion) = LC(proxy).getVersion();
-        assertEq(majorVersion, 1);
-        assertEq(minorVersion, 0);
-        assertEq(patchVersion, 0);
-        (
-            uint256 genesisThreshold,
-            BN254.ScalarField genesisBlsKeyComm,
-            BN254.ScalarField genesisSchnorrKeyComm,
-            BN254.ScalarField genesisAmountComm
-        ) = LC(proxy).genesisStakeTableState();
-
-        // first deploy LCV2Mock
-        LC lcv2 = new LCV2Mock();
-        bytes memory lcv2InitData = abi.encodeWithSignature(
-            "initializeV2(uint64,uint64)", BLOCKS_PER_EPOCH, EPOCH_START_BLOCK
-        );
-        // upgrade V1 to V2 and initialize LCV2Mock
-        admin = LC(proxy).owner();
-        vm.startPrank(admin);
-        LC(proxy).upgradeToAndCall(address(lcv2), lcv2InitData);
-
-        // test LCV2Mock is successfully in effect
-        (majorVersion, minorVersion, patchVersion) = LCV2Mock(proxy).getVersion();
         assertEq(majorVersion, 2);
         assertEq(minorVersion, 0);
         assertEq(patchVersion, 0);
-        assertEq(LCV2Mock(proxy).blocksPerEpoch(), BLOCKS_PER_EPOCH);
-        (
-            uint256 threshold,
-            BN254.ScalarField blsKeyComm,
-            BN254.ScalarField schnorrKeyComm,
-            BN254.ScalarField amountComm
-        ) = LCV2Mock(proxy).votingStakeTableState();
-        assertEq(threshold, genesisThreshold);
-        assertEq(blsKeyComm, genesisBlsKeyComm);
-        assertEq(schnorrKeyComm, genesisSchnorrKeyComm);
-        assertEq(amountComm, genesisAmountComm);
 
-        // test updateEpochStartBlock()
-        LCV2Mock lcv2MockProxy = LCV2Mock(proxy);
-        uint64 genesisFirstEpoch = lcv2MockProxy.getFirstEpoch();
-        uint64 newEpochStartBlock = 100;
-        lcv2MockProxy.updateEpochStartBlock(newEpochStartBlock);
-        assertEq(lcv2MockProxy.epochStartBlock(), newEpochStartBlock);
-        assertNotEq(lcv2MockProxy.getFirstEpoch(), genesisFirstEpoch);
+        // Try upgrade V2 to V3
+        admin = LC(proxy).owner();
+        vm.startPrank(admin);
+        LCV3Mock lcv3 = new LCV3Mock();
+        bytes memory lcv3InitData = abi.encodeWithSignature("initializeV3()");
+        LCV2(proxy).upgradeToAndCall(address(lcv3), lcv3InitData);
+
+        // test LCV3Mock is successfully in effect
+        (majorVersion, minorVersion, patchVersion) = LCV3Mock(proxy).getVersion();
+        assertEq(majorVersion, 3);
+        assertEq(minorVersion, 0);
+        assertEq(patchVersion, 0);
+        // V2 storage data is still there
+        assertEq(LCV3Mock(proxy).blocksPerEpoch(), V2_BLOCKS_PER_EPOCH);
+        // V3 firstEpoch in constructor is correct
         assertEq(
-            lcv2MockProxy.getFirstEpoch(),
-            lcv2MockProxy.epochFromBlockNumber(newEpochStartBlock, BLOCKS_PER_EPOCH)
+            LCV3Mock(proxy).firstEpoch(),
+            LCV3Mock(proxy).epochFromBlockNumber(V2_EPOCH_START_BLOCK, V2_BLOCKS_PER_EPOCH)
         );
         vm.stopPrank();
     }

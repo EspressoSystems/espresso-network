@@ -9,7 +9,7 @@ import "forge-std/Test.sol";
 import { BN254 } from "bn254/BN254.sol";
 
 // Target contract
-import { PolynomialEvalV2 as Poly } from "../src/libraries/PolynomialEvalV2.sol";
+import { PolynomialEvalV3 as Poly } from "../src/libraries/PolynomialEvalV3.sol";
 
 contract PolynomialEval_newEvalDomain_Test is Test {
     /// @dev diff-test with Rust when `domainSize` is in {2^16 ~ 2^20, 2^5}
@@ -80,12 +80,12 @@ contract PolynomialEvalTest is Test {
         cmds[0] = "diff-test";
         cmds[1] = "eval-domain-elements";
         cmds[2] = vm.toString(logSize);
-        cmds[3] = vm.toString(uint256(11));
+        cmds[3] = vm.toString(uint256(5));
 
         bytes memory result = vm.ffi(cmds);
         (uint256[] memory elems) = abi.decode(result, (uint256[]));
 
-        for (uint256 i = 0; i < 11; i++) {
+        for (uint256 i = 0; i < 5; i++) {
             assertEq(elems[i], domain.elements[i]);
         }
     }
@@ -94,13 +94,13 @@ contract PolynomialEvalTest is Test {
 contract PolynomialEval_evalDataGen_Test is PolynomialEvalTest {
     /// @dev Test if evaluations on the vanishing poly, the lagrange one poly, and the public input
     /// poly are correct.
-    function testFuzz_evalDataGen_matches(uint256 zeta, uint256[11] memory publicInput) external {
+    function testFuzz_evalDataGen_matches(uint256 zeta, uint256[5] memory publicInput) external {
         uint256 logSize = 20;
         zeta = bound(zeta, 0, BN254.R_MOD - 1);
         BN254.validateScalarField(BN254.ScalarField.wrap(zeta));
         // Since these user-provided `publicInputs` were checked outside before passing in via
         // `BN254.validateScalarField()`, it suffices to assume they are proper for our test here.
-        for (uint256 i = 0; i < 11; i++) {
+        for (uint256 i = 0; i < 5; i++) {
             publicInput[i] = bound(publicInput[i], 0, BN254.R_MOD - 1);
             BN254.validateScalarField(BN254.ScalarField.wrap(publicInput[i]));
         }
@@ -166,16 +166,16 @@ contract PolynomialEval_evalDataGen_Test is PolynomialEvalTest {
         Poly.EvalDomain memory domain = Poly.newEvalDomain(size);
 
         uint256[] memory elements = domainElements(domain, size);
-        uint256[11] memory publicInputs;
+        uint256[5] memory publicInputs;
         // arbitrarily pick public input length = 10, and fill in arbitrary values
-        for (uint256 i = 0; i < 11; i++) {
+        for (uint256 i = 0; i < 5; i++) {
             publicInputs[i] = 2 ** i;
         }
 
         for (uint256 i = 0; i < size; i++) {
             uint256 zeta = elements[i];
             uint256 vanishEval = Poly.evaluateVanishingPoly(domain, zeta);
-            if (i < 11) {
+            if (i < 5) {
                 assertEq(vanishEval, 0);
                 assertEq(
                     Poly.evaluatePiPoly(domain, publicInputs, zeta, vanishEval), publicInputs[i]
