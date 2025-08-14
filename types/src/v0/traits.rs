@@ -45,7 +45,7 @@ use crate::{
     },
     v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2},
     BlockMerkleTree, Event, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig,
-    SeqTypes, ValidatorMap,
+    SeqTypes, StakeTableStateHash, ValidatorMap,
 };
 
 #[async_trait]
@@ -478,7 +478,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     async fn load_stake(
         &self,
         epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>)>>;
+    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, StakeTableStateHash)>>;
 
     /// Load stake tables for storage for latest `n` known epochs
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
@@ -489,6 +489,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
         epoch: EpochNumber,
         stake: ValidatorMap,
         block_reward: Option<RewardAmount>,
+        stake_table_hash: StakeTableStateHash,
     ) -> anyhow::Result<()>;
 
     async fn store_events(

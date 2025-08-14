@@ -35,6 +35,7 @@ use hotshot_types::{
         election::{generate_stake_cdf, select_randomized_leader, RandomizedCommittee},
         DrbResult,
     },
+    epoch_membership::StakeTableHash,
     stake_table::{HSStakeTable, StakeTableEntry},
     traits::{
         election::Membership,
@@ -68,7 +69,7 @@ use crate::{
         StakeTableError, ASSUMED_BLOCK_TIME_SECONDS, BLOCKS_PER_YEAR, COMMISSION_BASIS_POINTS,
         INFLATION_RATE, MILLISECONDS_PER_YEAR,
     },
-    DrbAndHeaderUpgradeVersion, EpochVersion,
+    DrbAndHeaderUpgradeVersion, EpochVersion, StakeTableStateHash,
 };
 
 type Epoch = <SeqTypes as NodeType>::Epoch;
@@ -206,8 +207,6 @@ impl StakeTableEvents {
         Ok(events)
     }
 }
-
-pub struct StakeTableStateHash(pub [u8; 32]);
 
 #[derive(Debug)]
 pub struct StakeTableState {
@@ -474,7 +473,7 @@ impl StakeTableState {
 
 pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
     events: I,
-) -> Result<ValidatorMap, StakeTableError> {
+) -> Result<(ValidatorMap, StakeTableStateHash), StakeTableError> {
     let mut state = StakeTableState::new();
     for event in events {
         match state.apply_event(event.clone()) {
@@ -490,7 +489,8 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
             },
         }
     }
-    Ok(state.get_validators())
+    let hash = state.hash()?.clone();
+    Ok((state.get_validators(), hash))
 }
 
 /// Select active validators
@@ -572,10 +572,10 @@ pub(crate) fn select_active_validator_set(
 /// Extract the active validator set from the L1 stake table events.
 pub(crate) fn active_validator_set_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
     events: I,
-) -> Result<ValidatorMap, StakeTableError> {
-    let mut validators = validators_from_l1_events(events)?;
+) -> Result<(ValidatorMap, StakeTableStateHash), StakeTableError> {
+    let (mut validators, stake_table_hash) = validators_from_l1_events(events)?;
     select_active_validator_set(&mut validators)?;
-    Ok(validators)
+    Ok((validators, stake_table_hash))
 }
 
 impl std::fmt::Debug for StakeTableEvent {
@@ -1079,7 +1079,7 @@ impl Fetcher {
         l1_client: L1Client,
         contract: Address,
         to_block: u64,
-    ) -> anyhow::Result<ValidatorMap> {
+    ) -> anyhow::Result<(ValidatorMap, StakeTableStateHash)> {
         let events = Self::fetch_events_from_contract(l1_client, contract, None, to_block).await;
         let sorted = events.sort_events()?;
         // Process the sorted events and return the resulting stake table.
@@ -1292,7 +1292,11 @@ impl Fetcher {
         Ok(())
     }
 
-    pub async fn fetch(&self, epoch: Epoch, header: &Header) -> anyhow::Result<ValidatorMap> {
+    pub async fn fetch(
+        &self,
+        epoch: Epoch,
+        header: &Header,
+    ) -> anyhow::Result<(ValidatorMap, StakeTableStateHash)> {
         let chain_config = *self.chain_config.lock().await;
         let Some(address) = chain_config.stake_table_contract else {
             bail!("No stake table contract address found in Chain config");
@@ -1435,6 +1439,7 @@ pub struct EpochCommittee {
     validators: ValidatorMap,
     address_mapping: HashMap<BLSPubKey, Address>,
     block_reward: Option<RewardAmount>,
+    stake_table_hash: StakeTableStateHash,
 }
 
 impl EpochCommittees {
@@ -1606,6 +1611,7 @@ impl EpochCommittees {
         epoch: EpochNumber,
         validators: ValidatorMap,
         block_reward: Option<RewardAmount>,
+        hash: StakeTableStateHash,
     ) {
         let mut address_mapping = HashMap::new();
         let stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>> = validators
@@ -1636,6 +1642,7 @@ impl EpochCommittees {
                 validators,
                 address_mapping,
                 block_reward,
+                stake_table_hash: hash,
             },
         );
     }
@@ -1751,6 +1758,7 @@ impl EpochCommittees {
             validators: Default::default(),
             address_mapping: HashMap::new(),
             block_reward: Default::default(),
+            stake_table_hash: StakeTableStateHash::default(),
         };
         map.insert(Epoch::genesis(), epoch_committee.clone());
         // TODO: remove this, workaround for hotshot asking for stake tables from epoch 1
@@ -1801,8 +1809,8 @@ impl EpochCommittees {
             },
         };
 
-        for (epoch, (stake_table, block_reward)) in loaded_stake {
-            self.insert_committee(epoch, stake_table, block_reward);
+        for (epoch, (stake_table, block_reward), stake_table_hash) in loaded_stake {
+            self.insert_committee(epoch, stake_table, block_reward, stake_table_hash);
         }
     }
 
@@ -2108,7 +2116,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         // - exists and has a block reward, skip.
         // - exists without a reward, reuse validators and update reward.
         // - doesn't exist, fetch it from L1.
-        let validators = match epoch_committee {
+        let (validators, stake_table_hash) = match epoch_committee {
             Some(ref committee) => {
                 if committee.block_reward.is_some() {
                     tracing::info!(
@@ -2117,7 +2125,10 @@ impl Membership<SeqTypes> for EpochCommittees {
                     return Ok(());
                 }
                 tracing::info!("Stake table exists for epoch {epoch}, updating block reward.");
-                committee.validators.clone()
+                (
+                    committee.validators.clone(),
+                    committee.stake_table_hash.clone(),
+                )
             },
             None => {
                 tracing::info!("Stake table missing for epoch {epoch}. Fetching from L1.");
@@ -2139,12 +2150,17 @@ impl Membership<SeqTypes> for EpochCommittees {
         }
 
         let mut membership_writer = membership.write().await;
-        membership_writer.insert_committee(epoch, validators.clone(), block_reward);
+        membership_writer.insert_committee(
+            epoch,
+            validators.clone(),
+            block_reward,
+            stake_table_hash.clone(),
+        );
         drop(membership_writer);
 
         let persistence_lock = fetcher.persistence.lock().await;
         if let Err(e) = persistence_lock
-            .store_stake(epoch, validators, block_reward)
+            .store_stake(epoch, validators, block_reward, stake_table_hash)
             .await
         {
             tracing::error!(?e, "`add_epoch_root`, error storing stake table");
@@ -2290,6 +2306,11 @@ impl Membership<SeqTypes> for EpochCommittees {
 
     fn first_epoch(&self) -> Option<<SeqTypes as NodeType>::Epoch> {
         self.first_epoch
+    }
+
+    fn stake_table_hash(&self, epoch: Epoch) -> Option<StakeTableHash> {
+        let committee = self.state.get(&epoch)?;
+        Some(committee.stake_table_hash.clone().0)
     }
 }
 
@@ -2507,7 +2528,7 @@ mod tests {
         ]
         .to_vec();
 
-        let st = active_validator_set_from_l1_events(events.iter().cloned())?;
+        let (st, _) = active_validator_set_from_l1_events(events.iter().cloned())?;
         let st_val_1 = st.get(&val_1.account).unwrap();
         // final staked amount should be 10 (delegated) - 7 (undelegated) + 5 (Delegated)
         assert_eq!(st_val_1.stake, U256::from(8));
@@ -2523,7 +2544,7 @@ mod tests {
 
         events.push(ValidatorExit::from(&val_1).into());
 
-        let st = active_validator_set_from_l1_events(events.iter().cloned())?;
+        let (st, _) = active_validator_set_from_l1_events(events.iter().cloned())?;
         // The first validator should have been removed
         assert_eq!(st.get(&val_1.account), None);
 
@@ -2987,7 +3008,7 @@ mod tests {
         let events: Vec<(EventKey, StakeTableEvent)> = serde_json::from_str(&events_json).unwrap();
 
         // Reconstruct stake table from events
-        let reconstructed_stake_table =
+        let (reconstructed_stake_table, _) =
             active_validator_set_from_l1_events(events.into_iter().map(|(_, e)| e)).unwrap();
 
         let stake_table_json =

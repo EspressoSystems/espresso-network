@@ -19,7 +19,7 @@ use super::L1Client;
 use crate::{
     traits::{MembershipPersistence, StateCatchup}, v0::ChainConfig, v0_3::RewardAmount, SeqTypes, ValidatorMap
 };
-
+use crate::StakeTableStateHash;
 /// Stake table holding all staking information (DA and non-DA stakers)
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
 pub struct CombinedStakeTable(Vec<PeerConfigKeys<SeqTypes>>);
@@ -60,6 +60,7 @@ pub struct Delegator {
 pub type IndexedStake = (
     EpochNumber,
     (ValidatorMap, Option<RewardAmount>),
+    StakeTableStateHash,
 );
 
 #[derive(Clone, derive_more::derive::Debug)]
@@ -128,6 +129,8 @@ pub enum StakeTableError {
     MinimumStakeOverflow,
     #[error("Delegator {0:#x} has 0 stake")]
     ZeroDelegatorStake(Address),
+    #[error("Failed to hash stake table: {0}")]
+    HashError(#[from] bincode::Error),
 }
 
 #[derive(Debug, Error)]
