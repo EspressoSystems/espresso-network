@@ -9,14 +9,17 @@ use hotshot_types::{
 };
 use libp2p::Multiaddr;
 use libp2p_identity::{ed25519, ed25519::SecretKey, Keypair, PeerId};
-use libp2p_test::{config::PingProtocol, run_receiver, run_sender, AppConfig};
+use libp2p_test::{
+    config::{Libp2pTest, TransportProtocol},
+    run_receiver, run_sender, AppConfig,
+};
 use tokio::{sync::Barrier, task::JoinHandle, time::sleep};
 use tracing::{error, info};
 
-fn make_listen_string(port: u64, protocol: &PingProtocol) -> String {
+fn make_listen_string(port: u64, protocol: &TransportProtocol) -> String {
     match protocol {
-        PingProtocol::Tcp { .. } => format!("/ip4/127.0.0.1/tcp/{port}"),
-        PingProtocol::Quic => format!("/ip4/127.0.0.1/udp/{port}/quic-v1"),
+        TransportProtocol::Tcp { .. } => format!("/ip4/127.0.0.1/tcp/{port}"),
+        TransportProtocol::Quic => format!("/ip4/127.0.0.1/udp/{port}/quic-v1"),
     }
 }
 
@@ -24,17 +27,40 @@ fn make_listen_string(port: u64, protocol: &PingProtocol) -> String {
 async fn local_libp2p_test() {
     local_sender_and_receivers(None).await;
 }
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn local_tcp_ping_test() {
-    local_sender_and_receivers(Some(PingProtocol::default())).await;
+    local_sender_and_receivers(Some(Libp2pTest::Ping {
+        transport_protocol: TransportProtocol::default(),
+    }))
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn local_quic_ping_test() {
-    local_sender_and_receivers(Some(PingProtocol::Quic)).await;
+    local_sender_and_receivers(Some(Libp2pTest::Ping {
+        transport_protocol: TransportProtocol::Quic,
+    }))
+    .await;
 }
 
-async fn local_sender_and_receivers(maybe_ping: Option<PingProtocol>) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn local_tcp_rr_test() {
+    local_sender_and_receivers(Some(Libp2pTest::RequestResponse {
+        transport_protocol: TransportProtocol::default(),
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn local_quic_rr_test() {
+    local_sender_and_receivers(Some(Libp2pTest::RequestResponse {
+        transport_protocol: TransportProtocol::Quic,
+    }))
+    .await;
+}
+
+async fn local_sender_and_receivers(maybe_libp2p_test: Option<Libp2pTest>) {
     tracing_subscriber::fmt::init();
     let base_port = 9000;
     let peers: Vec<_> = (base_port..base_port + 4)
@@ -42,7 +68,10 @@ async fn local_sender_and_receivers(maybe_ping: Option<PingProtocol>) {
             let (_, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], port);
             let listen = Multiaddr::from_str(&make_listen_string(
                 port,
-                maybe_ping.as_ref().unwrap_or(&PingProtocol::Quic),
+                maybe_libp2p_test
+                    .as_ref()
+                    .map(|t| t.transport_protocol())
+                    .unwrap_or(&TransportProtocol::Quic),
             ))
             .unwrap();
             info!("listen address: {}", listen);
@@ -80,7 +109,7 @@ async fn local_sender_and_receivers(maybe_ping: Option<PingProtocol>) {
         handles.push(tokio::spawn({
             let private_key = private_key.to_tagged_base64().unwrap();
             let addr = addr.clone();
-            let maybe_ping_clone = maybe_ping.clone();
+            let maybe_libp2p_test_clone = maybe_libp2p_test.clone();
             async move {
                 let config = AppConfig {
                     listen: addr,
@@ -88,7 +117,7 @@ async fn local_sender_and_receivers(maybe_ping: Option<PingProtocol>) {
                     peers: receiver_peers,
                     send_mode: false,
                     message: None,
-                    ping: maybe_ping_clone,
+                    libp2p_test: maybe_libp2p_test_clone,
                 };
                 barrier.wait().await;
                 info!(
@@ -113,7 +142,7 @@ async fn local_sender_and_receivers(maybe_ping: Option<PingProtocol>) {
             peers: sender_peers,
             send_mode: true,
             message: Some("test-message".to_string()),
-            ping: maybe_ping,
+            libp2p_test: maybe_libp2p_test,
         };
         barrier.wait().await;
         info!(

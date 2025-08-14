@@ -12,11 +12,11 @@ pub struct AppConfig {
     pub peers: Vec<(PeerId, Multiaddr)>,
     pub send_mode: bool,
     pub message: Option<String>,
-    pub ping: Option<PingProtocol>,
+    pub libp2p_test: Option<Libp2pTest>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub enum PingProtocol {
+pub enum TransportProtocol {
     Tcp {
         auth: AuthType,
         mplex: MultiplexerType,
@@ -24,9 +24,9 @@ pub enum PingProtocol {
     Quic,
 }
 
-impl Default for PingProtocol {
+impl Default for TransportProtocol {
     fn default() -> Self {
-        PingProtocol::Tcp {
+        TransportProtocol::Tcp {
             auth: AuthType::Noise,
             mplex: MultiplexerType::Yamux,
         }
@@ -41,6 +41,26 @@ pub enum AuthType {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum MultiplexerType {
     Yamux,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum Libp2pTest {
+    Ping {
+        transport_protocol: TransportProtocol,
+    },
+    RequestResponse {
+        transport_protocol: TransportProtocol,
+    },
+}
+
+impl Libp2pTest {
+    #[allow(dead_code)]
+    pub fn transport_protocol(&self) -> &TransportProtocol {
+        match self {
+            Libp2pTest::Ping { transport_protocol } => transport_protocol,
+            Libp2pTest::RequestResponse { transport_protocol } => transport_protocol,
+        }
+    }
 }
 
 impl AppConfig {

@@ -13,32 +13,47 @@ use hotshot_libp2p_networking::network::{
 };
 use hotshot_types::{signature_key::BLSPrivKey, traits::node_implementation::NodeType};
 use libp2p::{
-    futures::StreamExt, noise, ping, ping::Behaviour, swarm::SwarmEvent, tcp, yamux, Swarm,
+    futures::StreamExt,
+    noise, ping,
+    ping::Behaviour as PingBehaviour,
+    request_response,
+    request_response::{cbor::Behaviour as RrBehaviour, ProtocolSupport},
+    swarm::SwarmEvent,
+    tcp, yamux, StreamProtocol, Swarm,
 };
 use libp2p_identity::{ed25519, ed25519::SecretKey, Keypair};
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
 use tracing::{error, info};
 
-use crate::config::{AppConfig, PingProtocol};
+use crate::config::{AppConfig, Libp2pTest, TransportProtocol};
 
 pub const NODE_ID: usize = 0;
 
 pub async fn run_sender<T: NodeType>(config: AppConfig) -> Result<()> {
     info!("Starting as sender");
-    if config.ping.is_some() {
-        run_ping_sender(config).await
-    } else {
-        run_libp2p_sender::<T>(config).await
+    match config.libp2p_test {
+        Some(Libp2pTest::Ping {
+            transport_protocol: _,
+        }) => run_ping_sender(config).await,
+        Some(Libp2pTest::RequestResponse {
+            transport_protocol: _,
+        }) => run_rr_sender(config).await,
+        _ => run_libp2p_sender::<T>(config).await,
     }
 }
 
 pub async fn run_receiver<T: NodeType>(config: AppConfig) -> Result<()> {
     info!("Starting as receiver");
-    if config.ping.is_some() {
-        run_ping_receiver(config).await
-    } else {
-        run_libp2p_receiver::<T>(config).await
+    match config.libp2p_test {
+        Some(Libp2pTest::Ping {
+            transport_protocol: _,
+        }) => run_ping_receiver(config).await,
+        Some(Libp2pTest::RequestResponse {
+            transport_protocol: _,
+        }) => run_rr_receiver(config).await,
+        _ => run_libp2p_receiver::<T>(config).await,
     }
 }
 
@@ -118,37 +133,37 @@ pub async fn run_ping_sender(config: AppConfig) -> Result<()> {
     }
 }
 
-pub fn spawn_ping_swarm(config: &AppConfig) -> Result<Swarm<Behaviour>> {
+pub fn spawn_ping_swarm(config: &AppConfig) -> Result<Swarm<PingBehaviour>> {
     let libp2p_keypair = keypair_from_priv_key(&config.private_key.clone().try_into()?)?;
     let ping_config = ping::Config::new().with_interval(Duration::from_secs(1));
-    match config.ping.as_ref() {
-        Some(PingProtocol::Quic) => {
-            Ok(libp2p::SwarmBuilder::with_existing_identity(libp2p_keypair)
-                .with_tokio()
-                .with_quic()
-                .with_dns()?
-                .with_behaviour(|_| ping::Behaviour::new(ping_config))?
-                .with_swarm_config(|cfg| {
-                    cfg.with_idle_connection_timeout(Duration::from_secs(u64::MAX))
-                })
-                .build())
-        },
-        Some(PingProtocol::Tcp { auth: _, mplex: _ }) => {
-            Ok(libp2p::SwarmBuilder::with_existing_identity(libp2p_keypair)
-                .with_tokio()
-                .with_tcp(
-                    tcp::Config::default(),
-                    noise::Config::new,
-                    yamux::Config::default,
-                )?
-                .with_dns()?
-                .with_behaviour(|_| ping::Behaviour::new(ping_config))?
-                .with_swarm_config(|cfg| {
-                    cfg.with_idle_connection_timeout(Duration::from_secs(u64::MAX))
-                })
-                .build())
-        },
-        None => Err(anyhow::anyhow!("No ping protocol specified")),
+    match config.libp2p_test.as_ref() {
+        Some(Libp2pTest::Ping {
+            transport_protocol: TransportProtocol::Quic,
+        }) => Ok(libp2p::SwarmBuilder::with_existing_identity(libp2p_keypair)
+            .with_tokio()
+            .with_quic()
+            .with_dns()?
+            .with_behaviour(|_| ping::Behaviour::new(ping_config))?
+            .with_swarm_config(|cfg| {
+                cfg.with_idle_connection_timeout(Duration::from_secs(u64::MAX))
+            })
+            .build()),
+        Some(Libp2pTest::Ping {
+            transport_protocol: TransportProtocol::Tcp { auth: _, mplex: _ },
+        }) => Ok(libp2p::SwarmBuilder::with_existing_identity(libp2p_keypair)
+            .with_tokio()
+            .with_tcp(
+                tcp::Config::default(),
+                noise::Config::new,
+                yamux::Config::default,
+            )?
+            .with_dns()?
+            .with_behaviour(|_| ping::Behaviour::new(ping_config))?
+            .with_swarm_config(|cfg| {
+                cfg.with_idle_connection_timeout(Duration::from_secs(u64::MAX))
+            })
+            .build()),
+        _ => Err(anyhow::anyhow!("No transport protocol specified")),
     }
 }
 
@@ -234,3 +249,143 @@ pub async fn run_libp2p_sender<T: NodeType>(config: AppConfig) -> Result<()> {
         }
     }
 }
+
+fn spawn_rr_swarm(config: &AppConfig) -> Result<Swarm<RrBehaviour<TestRequest, TestResponse>>> {
+    let libp2p_keypair = keypair_from_priv_key(&config.private_key.clone().try_into()?)?;
+    let mut swarm: Swarm<RrBehaviour<TestRequest, TestResponse>> = match config.libp2p_test.as_ref()
+    {
+        Some(Libp2pTest::RequestResponse {
+            transport_protocol: TransportProtocol::Quic,
+        }) => libp2p::SwarmBuilder::with_existing_identity(libp2p_keypair)
+            .with_tokio()
+            .with_quic()
+            .with_dns()?
+            .with_behaviour(|_| {
+                RrBehaviour::new(
+                    [(StreamProtocol::new("/libp2p_test/1"), ProtocolSupport::Full)],
+                    request_response::Config::default(),
+                )
+            })?
+            .with_swarm_config(|cfg| {
+                cfg.with_idle_connection_timeout(Duration::from_secs(u64::MAX))
+            })
+            .build(),
+        Some(Libp2pTest::RequestResponse {
+            transport_protocol: TransportProtocol::Tcp { auth: _, mplex: _ },
+        }) => libp2p::SwarmBuilder::with_existing_identity(libp2p_keypair)
+            .with_tokio()
+            .with_tcp(
+                tcp::Config::default(),
+                noise::Config::new,
+                yamux::Config::default,
+            )?
+            .with_dns()?
+            .with_behaviour(|_| {
+                RrBehaviour::new(
+                    [(StreamProtocol::new("/libp2p_test/1"), ProtocolSupport::Full)],
+                    request_response::Config::default(),
+                )
+            })?
+            .with_swarm_config(|cfg| {
+                cfg.with_idle_connection_timeout(Duration::from_secs(u64::MAX))
+            })
+            .build(),
+        _ => return Err(anyhow::anyhow!("No transport protocol specified")),
+    };
+    for (peer_id, addr) in config.peers.iter() {
+        swarm.add_peer_address(*peer_id, addr.clone());
+    }
+    Ok(swarm)
+}
+
+pub async fn run_rr_sender(config: AppConfig) -> Result<()> {
+    let mut swarm = spawn_rr_swarm(&config)?;
+    let _ = swarm.listen_on(config.listen)?;
+    loop {
+        sleep(Duration::from_secs(1)).await;
+        let mut roundtrips = Vec::new();
+        for (peer_id, addr) in config.peers.iter() {
+            info!("Sending request to {}", addr.to_string());
+            let start = Instant::now();
+            let _ = swarm
+                .behaviour_mut()
+                .send_request(peer_id, TestRequest(config.message.clone().unwrap()));
+            loop {
+                match swarm.select_next_some().await {
+                    SwarmEvent::Behaviour(request_response::Event::Message { peer, message })
+                        if &peer == peer_id =>
+                    {
+                        match message {
+                            request_response::Message::Response {
+                                request_id: _,
+                                response: _,
+                            } => {
+                                let elapsed = start.elapsed();
+                                roundtrips.push((addr.to_string(), elapsed));
+                                info!(
+                                    "Reply from {}: {} in {:?}",
+                                    peer_id,
+                                    addr.to_string(),
+                                    elapsed
+                                );
+                                break;
+                            },
+                            message => {
+                                info!(
+                                    "Received unexpected message from {}: {:?}",
+                                    addr.to_string(),
+                                    message
+                                );
+                            },
+                        }
+                    },
+                    event => {
+                        info!("Received swarm event: {:?}", event);
+                    },
+                }
+            }
+        }
+        for (sender, elapsed) in roundtrips {
+            println!("Reply from {sender}: {elapsed:?}");
+        }
+    }
+}
+
+pub async fn run_rr_receiver(config: AppConfig) -> Result<()> {
+    let peers_map: HashMap<_, _> = config.peers.clone().into_iter().collect();
+    let mut swarm = spawn_rr_swarm(&config)?;
+    let _ = swarm.listen_on(config.listen)?;
+    loop {
+        match swarm.select_next_some().await {
+            SwarmEvent::Behaviour(request_response::Event::Message { peer, message }) => {
+                let peer_addr = peers_map.get(&peer).unwrap();
+                match message {
+                    request_response::Message::Request {
+                        request_id: _,
+                        request,
+                        channel,
+                    } => {
+                        if let Err(resp) = swarm
+                            .behaviour_mut()
+                            .send_response(channel, TestResponse(request.0))
+                        {
+                            info!("Failed to send response to {peer_addr}: {resp:?}");
+                        }
+                        info!("Received request from {peer_addr} and replied");
+                    },
+                    message => {
+                        info!("Received message from {peer_addr}: {message:?}");
+                    },
+                }
+            },
+            event => {
+                info!("Received swarm event: {event:?}");
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TestRequest(String);
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TestResponse(String);
