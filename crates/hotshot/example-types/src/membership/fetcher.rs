@@ -203,7 +203,7 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
                         let leaf: Leaf2<TYPES> = match bincode::deserialize(&data) {
                             Ok(message) => message,
                             Err(e) => {
-                                tracing::error!("Failed to deserialize message: {:?}", e);
+                                tracing::debug!("Failed to deserialize message: {:?}", e);
                                 continue;
                             },
                         };
