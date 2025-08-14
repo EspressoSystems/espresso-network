@@ -121,7 +121,6 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                     tracing::error!("Failed to get auth root for light client state");
                     return;
                 };
-                let auth_root = FixedBytes::from(auth_root.unwrap_or([0u8; 32]));
 
                 let option_state_epoch = option_epoch_from_block_number::<SeqTypes>(
                     leaf.with_epoch,
@@ -223,7 +222,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         next_stake_table: &StakeTableState,
         auth_root: FixedBytes<32>,
     ) -> Result<LCV3StateSignatureRequestBody, SignatureError> {
-        let signed_state_digest = derive_signed_state_digest(state, &next_stake_table, &auth_root);
+        let signed_state_digest = derive_signed_state_digest(state, next_stake_table, &auth_root);
         let signature = <SchnorrPubKey as LCV3StateSignatureKey>::sign_state(
             &self.sign_key,
             signed_state_digest,
@@ -236,7 +235,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         let request_body = LCV3StateSignatureRequestBody {
             key: self.ver_key.clone(),
             state: *state,
-            next_stake: next_stake_table.clone(),
+            next_stake: *next_stake_table,
             signature,
             v2_signature: v2signature.clone(),
             auth_root,

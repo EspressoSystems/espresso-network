@@ -3184,7 +3184,8 @@ mod test {
                 light_client_state: Default::default(), // filling arbitrary value
                 next_stake_table_state: Default::default(), // filling arbitrary value
                 signatures: vec![],                     // filling arbitrary value
-                auth_root: None,
+                v2_signatures: vec![],                  // filling arbitrary value
+                auth_root: Default::default(),
             };
             // manually upsert the state cert to the finalized database
             let state_cert_bytes = bincode::serialize(&state_cert).unwrap();
@@ -3336,7 +3337,8 @@ mod test {
                 light_client_state: Default::default(),
                 next_stake_table_state: Default::default(),
                 signatures: vec![],
-                auth_root: None,
+                v2_signatures: vec![],
+                auth_root: Default::default(),
             },
             "Wrong light client state update certificate in the storage",
         );

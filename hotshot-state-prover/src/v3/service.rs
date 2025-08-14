@@ -320,13 +320,12 @@ async fn advance_epoch(
             .into_iter()
             .collect::<HashMap<StateVerKey, StateSignature>>();
 
-        let auth_root = state_cert.auth_root.unwrap_or([0; 32]).into();
         let (proof, _) = generate_proof(
             state,
             state_cert.light_client_state,
             cur_st_state,
             state_cert.next_stake_table_state,
-            auth_root,
+            state_cert.auth_root,
             signature_map,
             proving_key,
         )
@@ -338,7 +337,7 @@ async fn advance_epoch(
             proof,
             state_cert.light_client_state,
             state_cert.next_stake_table_state,
-            auth_root,
+            state_cert.auth_root,
         )
         .await?;
         tracing::info!("Epoch root state update successfully for epoch {epoch}.");
