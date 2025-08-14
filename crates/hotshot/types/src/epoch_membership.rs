@@ -3,6 +3,7 @@ use std::{
     sync::Arc,
 };
 
+use async_broadcast::{Receiver};
 use alloy::primitives::U256;
 use async_broadcast::{broadcast, InactiveReceiver, Sender};
 use async_lock::{Mutex, RwLock};
@@ -12,6 +13,7 @@ use hotshot_utils::{
 };
 
 use crate::{
+    event::{Event},
     data::Leaf2,
     drb::{compute_drb_result, DrbDifficultySelectorFn, DrbInput, DrbResult},
     stake_table::HSStakeTable,
@@ -100,6 +102,11 @@ where
             drb_difficulty_selector: Arc::new(RwLock::new(None)),
         }
     }
+
+    pub async fn set_external_channel(
+        &mut self,
+        external_channel: Receiver<Event<TYPES>>,
+    ) { self.membership.write().await.set_external_channel(external_channel) }
 
     /// Get a reference to the membership
     #[must_use]

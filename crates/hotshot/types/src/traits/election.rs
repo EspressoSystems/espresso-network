@@ -11,6 +11,7 @@ use alloy::primitives::U256;
 use async_lock::RwLock;
 use hotshot_utils::anytrace::Result;
 
+use async_broadcast::{Receiver};
 use super::node_implementation::NodeType;
 use crate::{
     data::Leaf2,
@@ -18,6 +19,7 @@ use crate::{
     stake_table::HSStakeTable,
     traits::{node_implementation::NodeImplementation, signature_key::StakeTableEntryType},
     PeerConfig,
+    event::{Event},
 };
 
 /// A protocol for determining membership in and participating in a committee.
@@ -37,6 +39,11 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         public_key: TYPES::SignatureKey,
         epoch_height: u64,
     ) -> Self;
+
+    fn set_external_channel(
+        &mut self,
+        _external_channel: Receiver<Event<TYPES>>,
+    ) {    }
 
     fn total_stake(&self, epoch: Option<TYPES::Epoch>) -> U256 {
         self.stake_table(epoch)
