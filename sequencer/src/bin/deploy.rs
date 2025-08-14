@@ -136,6 +136,9 @@ struct Options {
     /// Option to upgrade to LightClient V2
     #[clap(long, default_value = "false")]
     upgrade_light_client_v2: bool,
+    /// Option to upgrade to LightClient V3
+    #[clap(long, default_value = "false")]
+    upgrade_light_client_v3: bool,
     /// Option to deploy esp token
     #[clap(long, default_value = "false")]
     deploy_esp_token: bool,
@@ -459,7 +462,7 @@ async fn main() -> anyhow::Result<()> {
             args_builder.permissioned_prover(prover);
         }
     }
-    if opt.upgrade_light_client_v2 {
+    if opt.upgrade_light_client_v2 || opt.upgrade_light_client_v3 {
         let (blocks_per_epoch, epoch_start_block) =
             if (opt.dry_run && opt.use_multisig) || opt.mock_espresso_live_network {
                 (10, 22)
@@ -694,6 +697,9 @@ async fn main() -> anyhow::Result<()> {
     }
     if opt.upgrade_light_client_v2 {
         args.deploy(&mut contracts, Contract::LightClientV2).await?;
+    }
+    if opt.upgrade_light_client_v3 {
+        args.deploy(&mut contracts, Contract::LightClientV3).await?;
     }
     if opt.deploy_stake_table {
         args.deploy(&mut contracts, Contract::StakeTableProxy)
