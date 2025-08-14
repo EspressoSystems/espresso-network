@@ -63,8 +63,8 @@ where
         );
 
         Self {
-            quorum_members: quorum_members,
-            da_members: da_members,
+            quorum_members,
+            da_members,
             first_epoch: None,
             randomized_committee,
             epochs: BTreeSet::new(),

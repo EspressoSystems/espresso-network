@@ -269,7 +269,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let (internal_tx, mut internal_rx) = internal_channel;
         let (mut external_tx, mut external_rx) = external_channel;
 
-        membership_coordinator.set_external_channel(external_rx.clone()).await;
+        membership_coordinator
+            .set_external_channel(external_rx.clone())
+            .await;
 
         tracing::warn!(
             "Starting consensus with versions:\n\n Base: {:?}\nUpgrade: {:?}.",

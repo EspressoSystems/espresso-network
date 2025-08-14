@@ -1,14 +1,16 @@
 use std::{collections::HashSet, fmt, fmt::Debug, sync::Arc};
-use hotshot_types::traits::node_implementation::ConsensusTime;
+
 use alloy::primitives::U256;
+use async_broadcast::Receiver;
 use async_lock::RwLock;
 use hotshot_types::{
-    drb::DrbResult,
-    stake_table::HSStakeTable,
     data::Leaf2,
+    drb::DrbResult,
+    event::Event,
+    stake_table::HSStakeTable,
     traits::{
         election::Membership,
-        node_implementation::{NodeImplementation, NodeType},
+        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::StakeTableEntryType,
     },
     utils::transition_block_for_epoch,
@@ -27,7 +29,7 @@ pub struct StrictMembership<
     inner: StakeTable,
     epochs: HashSet<TYPES::Epoch>,
     drbs: HashSet<TYPES::Epoch>,
-    fetcher: Arc<Leaf2Fetcher<TYPES>>,
+    fetcher: Arc<RwLock<Leaf2Fetcher<TYPES>>>,
     epoch_height: u64,
 }
 
@@ -51,22 +53,22 @@ impl<
     > StrictMembership<TYPES, StakeTable>
 {
     fn assert_has_stake_table(&self, epoch: Option<TYPES::Epoch>) {
-       let Some(epoch) = epoch else {
-           return;
-       };
-       assert!(
-           self.epochs.contains(&epoch),
-           "Failed stake table check for epoch {epoch}"
-       );
+        let Some(epoch) = epoch else {
+            return;
+        };
+        assert!(
+            self.epochs.contains(&epoch),
+            "Failed stake table check for epoch {epoch}"
+        );
     }
     fn assert_has_randomized_stake_table(&self, epoch: Option<TYPES::Epoch>) {
-       let Some(epoch) = epoch else {
-           return;
-       };
-       assert!(
-           self.drbs.contains(&epoch),
-           "Failed drb check for epoch {epoch}"
-       );
+        let Some(epoch) = epoch else {
+            return;
+        };
+        assert!(
+            self.drbs.contains(&epoch),
+            "Failed drb check for epoch {epoch}"
+        );
     }
 }
 
@@ -95,9 +97,16 @@ impl<
             ),
             epochs: HashSet::new(),
             drbs: HashSet::new(),
-            fetcher: fetcher.into(),
+            fetcher: RwLock::new(fetcher).into(),
             epoch_height,
         }
+    }
+
+    async fn set_external_channel(&mut self, external_channel: Receiver<Event<TYPES>>) {
+        self.fetcher
+            .write()
+            .await
+            .set_external_channel(external_channel)
     }
 
     fn stake_table(&self, epoch: Option<TYPES::Epoch>) -> HSStakeTable<TYPES> {
@@ -257,7 +266,7 @@ impl<
     async fn add_epoch_root(
         membership: Arc<RwLock<Self>>,
         epoch: TYPES::Epoch,
-        block_header: TYPES::BlockHeader,
+        _block_header: TYPES::BlockHeader,
     ) -> anyhow::Result<()> {
         let mut membership_writer = membership.write().await;
 
@@ -276,17 +285,19 @@ impl<
         tracing::error!("FETCHING EPOCH ROOT");
         let membership_reader = membership.read().await;
 
-            for node in membership_reader.inner.stake_table(Some(*epoch)) {
-                if let Ok(leaf) = membership_reader
-                    .fetcher
-                    .fetch_leaf(block_height, node.signature_key)
-                    .await
-                {
-                    return Ok(leaf);
-                }
+        for node in membership_reader.inner.stake_table(Some(*epoch)) {
+            if let Ok(leaf) = membership_reader
+                .fetcher
+                .read()
+                .await
+                .fetch_leaf(block_height, node.signature_key)
+                .await
+            {
+                return Ok(leaf);
             }
+        }
 
-            anyhow::bail!("Failed to fetch epoch root from any peer");
+        anyhow::bail!("Failed to fetch epoch root from any peer");
     }
 
     async fn get_epoch_drb(
@@ -313,6 +324,8 @@ impl<
             for node in membership_reader.inner.stake_table(Some(previous_epoch)) {
                 if let Ok(leaf) = membership_reader
                     .fetcher
+                    .read()
+                    .await
                     .fetch_leaf(drb_block_height, node.signature_key)
                     .await
                 {

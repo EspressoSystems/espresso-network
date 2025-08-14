@@ -3,9 +3,8 @@ use std::{
     sync::Arc,
 };
 
-use async_broadcast::{Receiver};
 use alloy::primitives::U256;
-use async_broadcast::{broadcast, InactiveReceiver, Sender};
+use async_broadcast::{broadcast, InactiveReceiver, Receiver, Sender};
 use async_lock::{Mutex, RwLock};
 use hotshot_utils::{
     anytrace::{self, Error, Level, Result, Wrap, DEFAULT_LOG_LEVEL},
@@ -13,9 +12,9 @@ use hotshot_utils::{
 };
 
 use crate::{
-    event::{Event},
     data::Leaf2,
     drb::{compute_drb_result, DrbDifficultySelectorFn, DrbInput, DrbResult},
+    event::Event,
     stake_table::HSStakeTable,
     traits::{
         election::Membership,
@@ -103,10 +102,13 @@ where
         }
     }
 
-    pub async fn set_external_channel(
-        &mut self,
-        external_channel: Receiver<Event<TYPES>>,
-    ) { self.membership.write().await.set_external_channel(external_channel) }
+    pub async fn set_external_channel(&mut self, external_channel: Receiver<Event<TYPES>>) {
+        self.membership
+            .write()
+            .await
+            .set_external_channel(external_channel)
+            .await;
+    }
 
     /// Get a reference to the membership
     #[must_use]

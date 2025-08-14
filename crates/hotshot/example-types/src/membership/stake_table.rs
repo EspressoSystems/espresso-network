@@ -66,7 +66,10 @@ pub trait TestStakeTable<
         pub_key: PubKey,
         epoch: Option<u64>,
     ) -> Option<TestStakeTableEntry<PubKey, StatePubKey>> {
-        self.stake_table(epoch).iter().find(|entry| entry.signature_key == pub_key).cloned()
+        self.stake_table(epoch)
+            .iter()
+            .find(|entry| entry.signature_key == pub_key)
+            .cloned()
     }
 
     fn da_stake(
@@ -74,7 +77,10 @@ pub trait TestStakeTable<
         pub_key: PubKey,
         epoch: Option<u64>,
     ) -> Option<TestStakeTableEntry<PubKey, StatePubKey>> {
-        self.da_stake_table(epoch).iter().find(|entry| entry.signature_key == pub_key).cloned()
+        self.da_stake_table(epoch)
+            .iter()
+            .find(|entry| entry.signature_key == pub_key)
+            .cloned()
     }
 
     fn lookup_leader(&self, view_number: u64, epoch: Option<u64>) -> anyhow::Result<PubKey>;
@@ -83,7 +89,7 @@ pub trait TestStakeTable<
 
     fn has_randomized_stake_table(&self, epoch: u64) -> anyhow::Result<bool>;
 
-    fn add_epoch_root(&mut self, epoch: u64) {}
+    fn add_epoch_root(&mut self, epoch: u64);
 
     fn add_drb_result(&mut self, epoch: u64, drb_result: DrbResult);
 

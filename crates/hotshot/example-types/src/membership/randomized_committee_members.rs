@@ -101,8 +101,8 @@ impl<
         da_members: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
     ) -> Self {
         let result = Self {
-            quorum_members: quorum_members,
-            da_members: da_members,
+            quorum_members,
+            da_members,
             first_epoch: None,
             epochs: BTreeSet::new(),
             drb_results: BTreeMap::new(),

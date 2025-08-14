@@ -7,22 +7,27 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use alloy::transports::BoxFuture;
 use anyhow::Context;
+use async_broadcast::Receiver;
 use hotshot::traits::NodeImplementation;
 use hotshot_types::{
     data::Leaf2,
+    event::{Event, EventType},
+    message::{Message, MessageKind},
     traits::{
         block_contents::BlockHeader, network::ConnectedNetwork, node_implementation::NodeType,
     },
 };
 use tokio::task::JoinHandle;
+use vbs::{bincode_serializer::BincodeSerializer, version::StaticVersion, BinarySerializer};
 
 use crate::storage_types::TestStorage;
 
 pub struct Leaf2Fetcher<TYPES: NodeType> {
     pub network_functions: NetworkFunctions<TYPES>,
     pub storage: TestStorage<TYPES>,
-    pub listener: JoinHandle<()>,
+    pub listener: Option<JoinHandle<()>>,
     pub public_key: TYPES::SignatureKey,
+    pub network_receiver: Option<Receiver<Event<TYPES>>>,
 }
 
 pub type RecvMessageFn =
@@ -34,27 +39,9 @@ pub type DirectMessageFn<TYPES> = std::sync::Arc<
         + Sync,
 >;
 
+#[derive(Clone)]
 pub struct NetworkFunctions<TYPES: NodeType> {
-    recv_message: RecvMessageFn,
     direct_message: DirectMessageFn<TYPES>,
-}
-
-pub async fn recv_message_impl<TYPES: NodeType, I: NodeImplementation<TYPES>>(
-    network: Arc<<I as NodeImplementation<TYPES>>::Network>,
-) -> anyhow::Result<Vec<u8>> {
-    network
-        .recv_message()
-        .await
-        .context("Failed to receive message from network")
-}
-
-pub fn recv_message_fn<TYPES: NodeType, I: NodeImplementation<TYPES>>(
-    network: Arc<<I as NodeImplementation<TYPES>>::Network>,
-) -> RecvMessageFn {
-    Arc::new(move || {
-        let network = network.clone();
-        Box::pin(recv_message_impl::<TYPES, I>(network))
-    })
 }
 
 pub async fn direct_message_impl<TYPES: NodeType, I: NodeImplementation<TYPES>>(
@@ -80,13 +67,9 @@ pub fn direct_message_fn<TYPES: NodeType, I: NodeImplementation<TYPES>>(
 pub fn network_functions<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     network: Arc<<I as NodeImplementation<TYPES>>::Network>,
 ) -> NetworkFunctions<TYPES> {
-    let recv_message = recv_message_fn::<TYPES, I>(network.clone());
     let direct_message = direct_message_fn::<TYPES, I>(network.clone());
 
-    NetworkFunctions {
-        recv_message,
-        direct_message,
-    }
+    NetworkFunctions { direct_message }
 }
 
 impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
@@ -95,49 +78,7 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
         storage: TestStorage<TYPES>,
         public_key: TYPES::SignatureKey,
     ) -> Self {
-        let storage_clone = storage.clone();
-        let network_clone = network.clone();
-        let listener = tokio::spawn(async move {
-//            while let Ok(message) = network_clone.recv_message().await {
-//                // Deserialize the message
-//                let (requested_height, requester): (u64, TYPES::SignatureKey) =
-//                    match bincode::deserialize(&message) {
-//                        Ok(message) => message,
-//                        Err(e) => {
-//                            tracing::error!("Failed to deserialize message: {:?}", e);
-//                            continue;
-//                        },
-//                    };
-//
-//                let leaves: BTreeMap<u64, Leaf2<TYPES>> = storage_clone
-//                    .inner
-//                    .read()
-//                    .await
-//                    .proposals2
-//                    .iter()
-//                    .map(|(_view, proposal)| {
-//                        (
-//                            proposal.data.block_header.block_number(),
-//                            Leaf2::from_quorum_proposal(&proposal.data.clone().into()),
-//                        )
-//                    })
-//                    .collect();
-//
-//                let Some(leaf) = leaves.get(&requested_height) else {
-//                    tracing::warn!("Block at height {} not found in storage", requested_height);
-//                    continue;
-//                };
-//
-//                let serialized_leaf = bincode::serialize(&leaf).expect("Failed to serialized leaf");
-//
-//                if let Err(e) = network_clone
-//                    .direct_message(serialized_leaf, requester)
-//                    .await
-//                {
-//                    tracing::warn!("Failed to send leaf response in test membership fetcher: {e}");
-//                };
-//            }
-        });
+        let listener = None;
 
         let network_functions: NetworkFunctions<TYPES> = network_functions::<TYPES, I>(network);
         Self {
@@ -145,7 +86,83 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
             storage,
             listener,
             public_key,
+            network_receiver: None,
         }
+    }
+
+    pub fn set_external_channel(&mut self, mut network_receiver: Receiver<Event<TYPES>>) {
+        let public_key = self.public_key.clone();
+        let storage = self.storage.clone();
+        let network_functions = self.network_functions.clone();
+
+        self.network_receiver = Some(network_receiver.clone());
+
+        let listener = tokio::spawn(async move {
+            loop {
+                match network_receiver.recv_direct().await {
+                    Ok(Event {
+                        view_number: _,
+                        event: EventType::ExternalMessageReceived { sender: _, data },
+                    }) => {
+                        let (requested_height, requester): (u64, TYPES::SignatureKey) =
+                            match bincode::deserialize(&data) {
+                                Ok(message) => message,
+                                Err(e) => {
+                                    tracing::debug!("Failed to deserialize message: {:?}", e);
+                                    continue;
+                                },
+                            };
+
+                        let leaves: BTreeMap<u64, Leaf2<TYPES>> = storage
+                            .inner
+                            .read()
+                            .await
+                            .proposals2
+                            .iter()
+                            .map(|(_view, proposal)| {
+                                (
+                                    proposal.data.block_header.block_number(),
+                                    Leaf2::from_quorum_proposal(&proposal.data.clone().into()),
+                                )
+                            })
+                            .collect();
+
+                        let Some(leaf) = leaves.get(&requested_height) else {
+                            tracing::warn!(
+                                "Block at height {} not found in storage",
+                                requested_height
+                            );
+                            continue;
+                        };
+
+                        let leaf_response = Message {
+                            sender: public_key.clone(),
+                            kind: MessageKind::<TYPES>::External(
+                                bincode::serialize(&leaf).expect("Failed to serialize leaf"),
+                            ),
+                        };
+
+                        let serialized_leaf_response =
+                            BincodeSerializer::<StaticVersion<0, 0>>::serialize(&leaf_response)
+                                .expect("Failed to serialize leaf response");
+
+                        if let Err(e) =
+                            (network_functions.direct_message)(serialized_leaf_response, requester)
+                                .await
+                        {
+                            tracing::warn!(
+                                "Failed to send leaf response in test membership fetcher: {e}"
+                            );
+                        };
+                    },
+                    _ => {
+                        continue;
+                    },
+                }
+            }
+        });
+
+        self.listener = Some(listener);
     }
 
     pub async fn fetch_leaf(
@@ -153,31 +170,53 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
         height: u64,
         source: TYPES::SignatureKey,
     ) -> anyhow::Result<Leaf2<TYPES>> {
-        let leaf_request = (height, self.public_key.clone());
+        let leaf_request = Message {
+            sender: self.public_key.clone(),
+            kind: MessageKind::<TYPES>::External(
+                bincode::serialize(&(height, self.public_key.clone()))
+                    .expect("Failed to serialize leaf request"),
+            ),
+        };
+
         let serialized_leaf_request =
-            bincode::serialize(&leaf_request).expect("Failed to serialize leaf request");
+            BincodeSerializer::<StaticVersion<0, 0>>::serialize(&leaf_request)
+                .expect("Failed to serialize leaf request");
+
         if let Err(e) =
             (self.network_functions.direct_message)(serialized_leaf_request, source).await
         {
             tracing::warn!("Failed to send leaf request in test membership fetcher: {e}");
         };
 
-        tokio::time::timeout(std::time::Duration::from_secs(6), async {
-            while let Ok(message) = (self.network_functions.recv_message)().await {
-                // Deserialize the message
-                let leaf: Leaf2<TYPES> = match bincode::deserialize(&message) {
-                    Ok(message) => message,
-                    Err(e) => {
-                        tracing::error!("Failed to deserialize message: {:?}", e);
+        let mut network_receiver = self
+            .network_receiver
+            .clone()
+            .expect("Tried to fetch leaf before calling `set_external_channel`");
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                match network_receiver.recv_direct().await {
+                    Ok(Event {
+                        view_number: _,
+                        event: EventType::ExternalMessageReceived { sender: _, data },
+                    }) => {
+                        let leaf: Leaf2<TYPES> = match bincode::deserialize(&data) {
+                            Ok(message) => message,
+                            Err(e) => {
+                                tracing::error!("Failed to deserialize message: {:?}", e);
+                                continue;
+                            },
+                        };
+
+                        if leaf.height() == height {
+                            return Ok(leaf);
+                        }
+                    },
+                    _ => {
                         continue;
                     },
-                };
-
-                if leaf.height() == height {
-                    return Ok(leaf);
                 }
             }
-            anyhow::bail!("Leaf not found")
         })
         .await
         .context("Leaf fetch timed out")?

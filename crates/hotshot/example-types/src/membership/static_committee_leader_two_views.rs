@@ -4,7 +4,10 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{collections::{BTreeMap, BTreeSet}, fmt::Debug};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Debug,
+};
 
 use anyhow::Context;
 use hotshot_types::{
@@ -26,7 +29,7 @@ pub struct StaticStakeTableLeaderForTwoViews<
     quorum_members: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
 
     da_members: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
-    
+
     epochs: BTreeSet<u64>,
 
     drb_results: BTreeMap<u64, DrbResult>,
@@ -46,8 +49,8 @@ where
         da_members: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
     ) -> Self {
         Self {
-            quorum_members: quorum_members,
-            da_members: da_members,
+            quorum_members,
+            da_members,
             first_epoch: None,
             epochs: BTreeSet::new(),
             drb_results: BTreeMap::new(),

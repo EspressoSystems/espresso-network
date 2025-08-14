@@ -4,7 +4,10 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{collections::{BTreeMap, BTreeSet}, fmt::Debug};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Debug,
+};
 
 use anyhow::Context;
 use hotshot_types::{
@@ -73,7 +76,7 @@ where
     }
 
     fn has_randomized_stake_table(&self, epoch: u64) -> anyhow::Result<bool> {
-       Ok(self.drb_results.contains_key(&epoch))
+        Ok(self.drb_results.contains_key(&epoch))
     }
 
     fn add_epoch_root(&mut self, epoch: u64) {
