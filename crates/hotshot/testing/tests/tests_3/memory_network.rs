@@ -141,7 +141,7 @@ async fn memory_network_direct_queue() {
             .recv_message()
             .await
             .expect("Failed to receive message");
-        let deserialized_message = upgrade_lock.deserialize(&recv_message).await.unwrap();
+        let (deserialized_message, _version) = upgrade_lock.deserialize(&recv_message).await.unwrap();
         assert!(timeout(Duration::from_secs(1), network2.recv_message())
             .await
             .is_err());
@@ -162,7 +162,7 @@ async fn memory_network_direct_queue() {
             .recv_message()
             .await
             .expect("Failed to receive message");
-        let deserialized_message = upgrade_lock.deserialize(&recv_message).await.unwrap();
+        let (deserialized_message, _version) = upgrade_lock.deserialize(&recv_message).await.unwrap();
         assert!(timeout(Duration::from_secs(1), network1.recv_message())
             .await
             .is_err());
@@ -198,7 +198,7 @@ async fn memory_network_broadcast_queue() {
             .recv_message()
             .await
             .expect("Failed to receive message");
-        let deserialized_message = upgrade_lock.deserialize(&recv_message).await.unwrap();
+        let (deserialized_message, _version) = upgrade_lock.deserialize(&recv_message).await.unwrap();
         assert!(timeout(Duration::from_secs(1), network2.recv_message())
             .await
             .is_err());
@@ -223,7 +223,7 @@ async fn memory_network_broadcast_queue() {
             .recv_message()
             .await
             .expect("Failed to receive message");
-        let deserialized_message = upgrade_lock.deserialize(&recv_message).await.unwrap();
+        let (deserialized_message, _version) = upgrade_lock.deserialize(&recv_message).await.unwrap();
         assert!(timeout(Duration::from_secs(1), network1.recv_message())
             .await
             .is_err());
