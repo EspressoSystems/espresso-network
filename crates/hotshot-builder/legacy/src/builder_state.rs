@@ -12,6 +12,7 @@ use async_broadcast::{broadcast, Receiver as BroadcastReceiver, Sender as Broadc
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
 use futures::StreamExt;
+use hotshot_builder_shared::block::{BlockId, BuilderStateId, ParentBlockReferences};
 use hotshot_types::{
     data::{DaProposal2, Leaf2, QuorumProposalWrapper},
     message::Proposal,
@@ -22,7 +23,6 @@ use hotshot_types::{
     },
     utils::BuilderCommitment,
 };
-use marketplace_builder_shared::block::{BlockId, BuilderStateId, ParentBlockReferences};
 use tokio::{
     spawn,
     sync::{mpsc::UnboundedSender, oneshot},
@@ -1148,6 +1148,7 @@ mod test {
 
     use async_broadcast::broadcast;
     use committable::RawCommitmentBuilder;
+    use hotshot_builder_shared::testing::constants::TEST_NUM_NODES_IN_VID_COMPUTATION;
     use hotshot_example_types::{
         block_types::TestTransaction,
         node_types::{TestTypes, TestVersions},
@@ -1157,7 +1158,6 @@ mod test {
         traits::node_implementation::{ConsensusTime, NodeType},
         utils::BuilderCommitment,
     };
-    use marketplace_builder_shared::testing::constants::TEST_NUM_NODES_IN_VID_COMPUTATION;
     use tracing_subscriber::EnvFilter;
 
     use super::{DAProposalInfo, MessageType, ParentBlockReferences};
