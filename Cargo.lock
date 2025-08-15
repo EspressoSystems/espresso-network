@@ -5717,6 +5717,7 @@ dependencies = [
 name = "hotshot-example-types"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "anyhow",
  "async-lock 3.4.1",
  "async-trait",

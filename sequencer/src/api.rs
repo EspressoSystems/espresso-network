@@ -32,7 +32,7 @@ use hotshot_query_service::{
 use hotshot_types::{
     data::{EpochNumber, VidCommitment, VidShare, ViewNumber},
     event::{Event, LegacyEvent},
-    light_client::LCV2StateSignatureRequestBody,
+    light_client::LCV3StateSignatureRequestBody,
     network::NetworkConfig,
     traits::{
         network::ConnectedNetwork,
@@ -870,7 +870,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> HotShotC
 impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     StateSignatureDataSource<N> for StorageState<N, P, D, V>
 {
-    async fn get_state_signature(&self, height: u64) -> Option<LCV2StateSignatureRequestBody> {
+    async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.as_ref().get_state_signature(height).await
     }
 }
@@ -879,7 +879,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSignatureDataSource<N>
     for ApiState<N, P, V>
 {
-    async fn get_state_signature(&self, height: u64) -> Option<LCV2StateSignatureRequestBody> {
+    async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.state_signer()
             .await
             .read()
@@ -915,6 +915,7 @@ pub mod test_helpers {
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_types::{
         event::LeafInfo,
+        light_client::LCV3StateSignatureRequestBody,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
     };
     use itertools::izip;
@@ -1405,7 +1406,7 @@ pub mod test_helpers {
         }
         // we cannot verify the signature now, because we don't know the stake table
         client
-            .get::<LCV2StateSignatureRequestBody>(&format!("state-signature/block/{height}"))
+            .get::<LCV3StateSignatureRequestBody>(&format!("state-signature/block/{height}"))
             .send()
             .await
             .unwrap();
@@ -5640,8 +5641,11 @@ mod test {
 
             // verify auth root if the consensus version is v4
             if header.version() == DrbAndHeaderUpgradeVersion::VERSION {
-                let auth_root = state_cert_v2.auth_root.expect("auth root is not None");
-                let header_auth_root = header.auth_root().unwrap().unwrap();
+                let auth_root = state_cert_v2.auth_root;
+                let header_auth_root = header.auth_root().unwrap();
+                if auth_root.is_zero() || header_auth_root.is_zero() {
+                    panic!("auth root shouldn't be zero");
+                }
 
                 assert_eq!(auth_root, header_auth_root, "auth root mismatch");
             }
