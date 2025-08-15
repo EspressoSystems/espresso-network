@@ -318,6 +318,7 @@ async fn advance_epoch(
         let signature_map = state_cert
             .signatures
             .into_iter()
+            .map(|(key, sig, _)| (key, sig))
             .collect::<HashMap<StateVerKey, StateSignature>>();
 
         let (proof, _) = generate_proof(

@@ -743,14 +743,11 @@ pub struct LightClientStateUpdateCertificateV2<TYPES: NodeType> {
     /// Next epoch stake table state
     pub next_stake_table_state: StakeTableState,
     /// Signatures to the light client state
+    #[allow(clippy::type_complexity)]
     pub signatures: Vec<(
         TYPES::StateSignatureKey,
-        <TYPES::StateSignatureKey as StateSignatureKey>::StateSignature,
-    )>,
-    /// Signatures to the light client V2 state
-    pub v2_signatures: Vec<(
-        TYPES::StateSignatureKey,
-        <TYPES::StateSignatureKey as StateSignatureKey>::StateSignature,
+        <TYPES::StateSignatureKey as StateSignatureKey>::StateSignature, // LCV3 signature
+        <TYPES::StateSignatureKey as StateSignatureKey>::StateSignature, // LCV2 signature
     )>,
     /// Present in versions >= V4.
     ///
@@ -783,8 +780,11 @@ impl<TYPES: NodeType> From<LightClientStateUpdateCertificateV1<TYPES>>
             epoch: v1.epoch,
             light_client_state: v1.light_client_state,
             next_stake_table_state: v1.next_stake_table_state,
-            signatures: vec![], // For storage conversion, putting empty list here.
-            v2_signatures: v1.signatures,
+            signatures: v1
+                .signatures
+                .into_iter()
+                .map(|(key, sig)| (key, sig.clone(), sig))
+                .collect(),
             auth_root: Default::default(),
         }
     }
@@ -798,7 +798,11 @@ impl<TYPES: NodeType> From<LightClientStateUpdateCertificateV2<TYPES>>
             epoch: v2.epoch,
             light_client_state: v2.light_client_state,
             next_stake_table_state: v2.next_stake_table_state,
-            signatures: v2.v2_signatures,
+            signatures: v2
+                .signatures
+                .into_iter()
+                .map(|(key, _, sig)| (key, sig))
+                .collect(),
         }
     }
 }
@@ -833,7 +837,6 @@ impl<TYPES: NodeType> LightClientStateUpdateCertificateV2<TYPES> {
             light_client_state: Default::default(),
             next_stake_table_state: Default::default(),
             signatures: vec![],
-            v2_signatures: vec![],
             auth_root: Default::default(),
         }
     }

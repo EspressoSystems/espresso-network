@@ -322,10 +322,9 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
                 light_client_state: vote.light_client_state,
                 next_stake_table_state: vote.next_stake_table_state,
                 signatures: Vec::from_iter(
-                    vote_map.iter().map(|(k, (v, _))| (k.clone(), v.clone())),
-                ),
-                v2_signatures: Vec::from_iter(
-                    vote_map.iter().map(|(k, (_, v))| (k.clone(), v.clone())),
+                    vote_map
+                        .iter()
+                        .map(|(k, (v3, v2))| (k.clone(), v3.clone(), v2.clone())),
                 ),
                 auth_root: vote.auth_root,
             });
