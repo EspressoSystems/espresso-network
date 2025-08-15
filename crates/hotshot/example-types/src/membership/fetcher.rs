@@ -7,7 +7,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use alloy::transports::BoxFuture;
 use anyhow::Context;
-use async_broadcast::Receiver;
+use async_broadcast::{Receiver, RecvError};
 use hotshot::traits::NodeImplementation;
 use hotshot_types::{
     data::Leaf2,
@@ -155,6 +155,9 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
                             );
                         };
                     },
+                    Err(RecvError::Closed) => {
+                        break;
+                    },
                     _ => {
                         continue;
                     },
@@ -211,6 +214,9 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
                         if leaf.height() == height {
                             return Ok(leaf);
                         }
+                    },
+                    Err(RecvError::Closed) => {
+                        break anyhow::bail!("Failed to fetch leaf: network task receiver closed");
                     },
                     _ => {
                         continue;
