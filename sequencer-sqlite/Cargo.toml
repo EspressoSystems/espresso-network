@@ -12,7 +12,7 @@ drb-and-header = ["sequencer/drb-and-header"]
 default = ["fee", "pos", "drb-and-header"]
 
 [dependencies]
-# disable default features to allow including versions on demand
-sequencer = { path = "../sequencer", default-features = false, features = ["embedded-db"]}
-tokio = { workspace = true }
 anyhow = { workspace = true }
+# disable default features to allow including versions on demand
+sequencer = { path = "../sequencer", default-features = false, features = ["embedded-db"] }
+tokio = { workspace = true }
