@@ -2,7 +2,7 @@ use espresso_types::SeqTypes;
 use hotshot_builder_api::v0_1::builder::{
     Error as BuilderApiError, Options as HotshotBuilderApiOptions,
 };
-use hotshot_builder_core::service::ProxyGlobalState;
+use hotshot_builder_legacy::service::ProxyGlobalState;
 use sequencer::SequencerApiVersion;
 use tide_disco::{App, Url};
 use tokio::spawn;
