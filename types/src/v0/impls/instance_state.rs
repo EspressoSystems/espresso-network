@@ -28,7 +28,7 @@ use crate::{
         Upgrade, UpgradeMode,
     },
     v0_3::RewardAmount,
-    ValidatorMap,
+    StakeTableStateHash, ValidatorMap,
 };
 
 /// Represents the immutable state of a node.
@@ -81,7 +81,7 @@ impl MembershipPersistence for NoStorage {
     async fn load_stake(
         &self,
         _epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>)>> {
+    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, StakeTableStateHash)>> {
         Ok(None)
     }
 
@@ -94,6 +94,7 @@ impl MembershipPersistence for NoStorage {
         _epoch: EpochNumber,
         _stake: ValidatorMap,
         _block_reward: Option<RewardAmount>,
+        _stake_table_hash: StakeTableStateHash,
     ) -> anyhow::Result<()> {
         Ok(())
     }

@@ -13,7 +13,7 @@ use hotshot_utils::anytrace::Result;
 
 use super::node_implementation::NodeType;
 use crate::{
-    data::Leaf2, drb::DrbResult, stake_table::HSStakeTable,
+    data::Leaf2, drb::DrbResult, epoch_membership::StakeTableHash, stake_table::HSStakeTable,
     traits::signature_key::StakeTableEntryType, PeerConfig,
 };
 
@@ -180,6 +180,12 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
 
     /// Get first epoch if epochs are enabled, `None` otherwise
     fn first_epoch(&self) -> Option<TYPES::Epoch> {
+        None
+    }
+
+    /// Returns the commitment of the stake table for the given epoch,
+    /// Errors if the stake table is not available for the given epoch
+    fn stake_table_hash(&self, _epoch: TYPES::Epoch) -> Option<StakeTableHash> {
         None
     }
 }

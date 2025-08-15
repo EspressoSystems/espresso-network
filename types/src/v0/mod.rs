@@ -188,6 +188,9 @@ pub type Event = hotshot::types::Event<SeqTypes>;
 pub type PubKey = BLSPubKey;
 pub type PrivKey = <PubKey as SignatureKey>::PrivateKey;
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct StakeTableStateHash(pub [u8; 32]);
+
 pub type NetworkConfig = hotshot_types::network::NetworkConfig<SeqTypes>;
 
 pub use self::impls::{NodeState, RewardDistributor, UpgradeMap, ValidatedState, ValidatorMap};

@@ -45,7 +45,7 @@ mod tests {
         },
         v0_3::{Fetcher, Validator},
         Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes,
-        SequencerVersions, ValidatedState,
+        SequencerVersions, StakeTableStateHash, ValidatedState,
     };
     use futures::{future::join_all, StreamExt, TryStreamExt};
     use hotshot::{
@@ -1591,53 +1591,102 @@ mod tests {
         st.insert(validator.account, validator);
 
         storage
-            .store_stake(EpochNumber::new(10), st.clone(), None)
+            .store_stake(
+                EpochNumber::new(10),
+                st.clone(),
+                None,
+                StakeTableStateHash::default(),
+            )
             .await?;
 
-        let (table, _) = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
+        let (table, ..) = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
         assert_eq!(st, table);
 
         let val2 = Validator::mock();
         let mut st2 = IndexMap::new();
         st2.insert(val2.account, val2);
         storage
-            .store_stake(EpochNumber::new(11), st2.clone(), None)
+            .store_stake(
+                EpochNumber::new(11),
+                st2.clone(),
+                None,
+                StakeTableStateHash::default(),
+            )
             .await?;
 
         let tables = storage.load_latest_stake(4).await?.unwrap();
         let mut iter = tables.iter();
         assert_eq!(
-            Some(&(EpochNumber::new(11), (st2.clone(), None))),
+            Some(&(
+                EpochNumber::new(11),
+                (st2.clone(), None),
+                StakeTableStateHash::default()
+            )),
             iter.next()
         );
-        assert_eq!(Some(&(EpochNumber::new(10), (st, None))), iter.next());
+        assert_eq!(
+            Some(&(
+                EpochNumber::new(10),
+                (st, None),
+                StakeTableStateHash::default()
+            )),
+            iter.next()
+        );
         assert_eq!(None, iter.next());
 
         for i in 0..=20 {
             storage
-                .store_stake(EpochNumber::new(i), st2.clone(), None)
+                .store_stake(
+                    EpochNumber::new(i),
+                    st2.clone(),
+                    None,
+                    StakeTableStateHash::default(),
+                )
                 .await?;
         }
 
         let tables = storage.load_latest_stake(5).await?.unwrap();
         let mut iter = tables.iter();
         assert_eq!(
-            Some(&(EpochNumber::new(20), (st2.clone(), None))),
+            Some(&(
+                EpochNumber::new(20),
+                (st2.clone(), None),
+                StakeTableStateHash::default()
+            )),
             iter.next()
         );
         assert_eq!(
-            Some(&(EpochNumber::new(19), (st2.clone(), None))),
+            Some(&(
+                EpochNumber::new(19),
+                (st2.clone(), None),
+                StakeTableStateHash::default()
+            )),
             iter.next()
         );
         assert_eq!(
-            Some(&(EpochNumber::new(18), (st2.clone(), None))),
+            Some(&(
+                EpochNumber::new(18),
+                (st2.clone(), None),
+                StakeTableStateHash::default()
+            )),
             iter.next()
         );
         assert_eq!(
-            Some(&(EpochNumber::new(17), (st2.clone(), None))),
+            Some(&(
+                EpochNumber::new(17),
+                (st2.clone(), None),
+                StakeTableStateHash::default()
+            )),
             iter.next()
         );
-        assert_eq!(Some(&(EpochNumber::new(16), (st2, None))), iter.next());
+        assert_eq!(
+            Some(&(
+                EpochNumber::new(16),
+                (st2, None),
+                StakeTableStateHash::default()
+            )),
+            iter.next()
+        );
         assert_eq!(None, iter.next());
 
         Ok(())

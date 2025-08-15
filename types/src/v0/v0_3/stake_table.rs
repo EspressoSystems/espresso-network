@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc};
 
 use alloy::{primitives::{Address, Log, U256}, transports::{RpcError, TransportErrorKind}};
 use async_lock::{Mutex, RwLock};
@@ -19,7 +19,7 @@ use super::L1Client;
 use crate::{
     traits::{MembershipPersistence, StateCatchup}, v0::ChainConfig, v0_3::RewardAmount, SeqTypes, ValidatorMap
 };
-
+use crate::StakeTableStateHash;
 /// Stake table holding all staking information (DA and non-DA stakers)
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
 pub struct CombinedStakeTable(Vec<PeerConfigKeys<SeqTypes>>);
@@ -45,7 +45,7 @@ pub struct Validator<KEY: SignatureKey> {
     // commission
     // TODO: MA commission is only valid from 0 to 10_000. Add newtype to enforce this.
     pub commission: u16,
-    pub delegators: HashMap<Address, U256>,
+    pub delegators: BTreeMap<Address, U256>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, std::hash::Hash, Clone, Debug, PartialEq, Eq)]
@@ -60,6 +60,7 @@ pub struct Delegator {
 pub type IndexedStake = (
     EpochNumber,
     (ValidatorMap, Option<RewardAmount>),
+    StakeTableStateHash,
 );
 
 #[derive(Clone, derive_more::derive::Debug)]
@@ -128,6 +129,8 @@ pub enum StakeTableError {
     MinimumStakeOverflow,
     #[error("Delegator {0:#x} has 0 stake")]
     ZeroDelegatorStake(Address),
+    #[error("Failed to hash stake table: {0}")]
+    HashError(#[from] bincode::Error),
 }
 
 #[derive(Debug, Error)]
