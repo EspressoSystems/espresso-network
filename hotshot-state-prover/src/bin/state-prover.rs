@@ -191,27 +191,31 @@ async fn main() {
 
     if args.daemon {
         // Launching the prover service daemon
-        let result = if contract_version == 1 {
-            hotshot_state_prover::v1::service::run_prover_service(config, bind_version).await
-        } else if contract_version == 2 {
-            hotshot_state_prover::v2::service::run_prover_service(config, bind_version).await
-        } else {
-            hotshot_state_prover::v3::service::run_prover_service(config, bind_version).await
+        let result = match contract_version {
+            1 => hotshot_state_prover::v1::service::run_prover_service(config, bind_version).await,
+            2 => hotshot_state_prover::v2::service::run_prover_service(config, bind_version).await,
+            3 => hotshot_state_prover::v3::service::run_prover_service(config, bind_version).await,
+            _ => {
+                tracing::error!("Unsupported contract version: {contract_version}");
+                return;
+            },
         };
         if let Err(err) = result {
             tracing::error!("Error running prover service: {err}");
         };
     } else {
         // Run light client state update once
-        let result = if contract_version == 1 {
-            hotshot_state_prover::v1::service::run_prover_once(config, bind_version).await
-        } else if contract_version == 2 {
-            hotshot_state_prover::v2::service::run_prover_once(config, bind_version).await
-        } else {
-            hotshot_state_prover::v3::service::run_prover_once(config, bind_version).await
+        let result = match contract_version {
+            1 => hotshot_state_prover::v1::service::run_prover_once(config, bind_version).await,
+            2 => hotshot_state_prover::v2::service::run_prover_once(config, bind_version).await,
+            3 => hotshot_state_prover::v3::service::run_prover_once(config, bind_version).await,
+            _ => {
+                tracing::error!("Unsupported contract version: {contract_version}");
+                return;
+            },
         };
         if let Err(err) = result {
             tracing::error!("Error running prover once: {err}");
-        }
+        };
     }
 }
