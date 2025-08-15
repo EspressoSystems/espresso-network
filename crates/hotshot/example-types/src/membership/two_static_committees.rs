@@ -125,6 +125,9 @@ where
     fn set_first_epoch(&mut self, epoch: u64, initial_drb_result: DrbResult) {
         self.first_epoch = Some(epoch);
 
+        self.add_epoch_root(epoch);
+        self.add_epoch_root(epoch + 1);
+
         self.add_drb_result(epoch, initial_drb_result);
         self.add_drb_result(epoch + 1, initial_drb_result);
     }
