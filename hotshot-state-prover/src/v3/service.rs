@@ -705,16 +705,16 @@ mod tests {
         assert_eq!(st_state, genesis_stake.into());
 
         // then manually set the `finalizedState` and `votingStakeTableState` (via mocked methods)
-        let lc_v2 = LightClientV3Mock::new(lc_proxy_addr, &provider);
+        let lc_v3 = LightClientV3Mock::new(lc_proxy_addr, &provider);
         let new_state = LightClientStateSol::rand(rng);
         let new_stake = StakeTableStateSol::rand(rng);
-        lc_v2
+        lc_v3
             .setFinalizedState(new_state.clone().into())
             .send()
             .await?
             .watch()
             .await?;
-        lc_v2
+        lc_v3
             .setVotingStakeTableState(new_stake.clone().into())
             .send()
             .await?
@@ -753,7 +753,7 @@ mod tests {
             genesis_stake.clone(),
         )
         .await?;
-        let lc_v2 = LightClientV3Mock::new(lc_proxy_addr, &provider);
+        let lc_v3 = LightClientV3Mock::new(lc_proxy_addr, &provider);
 
         // update first epoch root (in numerical 2nd epoch)
         // there will be new key registration but the effect only take place on the second epoch root update
@@ -804,7 +804,7 @@ mod tests {
         tracing::info!("Successfully submitted new finalized state to L1.");
 
         // test if new state is updated in l1
-        let finalized_l1: LightClientStateSol = lc_v2.finalizedState().call().await?.into();
+        let finalized_l1: LightClientStateSol = lc_v3.finalizedState().call().await?.into();
         let expected: LightClientStateSol = ledger.light_client_state().into();
         assert_eq!(
             finalized_l1.abi_encode_params(),
@@ -819,7 +819,7 @@ mod tests {
             genesis_stake.abi_encode_params()
         );
         let voting_stake_l1: StakeTableStateSol =
-            lc_v2.votingStakeTableState().call().await?.into();
+            lc_v3.votingStakeTableState().call().await?.into();
         assert_eq!(
             voting_stake_l1.abi_encode_params(),
             expected_new_stake.abi_encode_params(),
