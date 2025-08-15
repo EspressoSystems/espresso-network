@@ -11,7 +11,7 @@ use hotshot_types::{
         block_contents::BlockHeader, node_implementation::ConsensusTime,
         signature_key::BuilderSignatureKey, states::StateDelta, ValidatedState as HotShotState,
     },
-    utils::{epoch_from_block_number, is_epoch_transition},
+    utils::{epoch_from_block_number, is_epoch_transition, is_last_block},
 };
 use itertools::Itertools;
 use jf_merkle_tree::{
@@ -1020,16 +1020,18 @@ async fn validate_next_stake_table_hash(
     let Some(epoch_height) = instance.epoch_height else {
         return Err(ProposalValidationError::NextStakeTableNotFound);
     };
-    if !is_epoch_transition(proposed_header.height(), epoch_height) {
+    if !is_epoch_transition(proposed_header.height(), epoch_height)
+        || is_last_block(proposed_header.height(), epoch_height)
+    {
         return Ok(());
     }
     let epoch = EpochNumber::new(epoch_from_block_number(
-        proposed_header.height() + 1,
+        proposed_header.height(),
         epoch_height,
     ));
     let epoch_membership = instance
         .coordinator
-        .membership_for_epoch(Some(epoch + 1))
+        .stake_table_for_epoch(Some(epoch + 1))
         .await
         .map_err(|_| ProposalValidationError::NextStakeTableNotFound)?;
     let next_stake_table_hash = epoch_membership

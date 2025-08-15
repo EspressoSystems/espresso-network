@@ -15,7 +15,7 @@ use hotshot_types::{
         signature_key::BuilderSignatureKey,
         BlockPayload, EncodeBytes, ValidatedState as _,
     },
-    utils::{epoch_from_block_number, is_epoch_transition, BuilderCommitment},
+    utils::{epoch_from_block_number, is_epoch_transition, is_last_block, BuilderCommitment},
 };
 use jf_merkle_tree::{AppendableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme};
 use serde::{
@@ -988,23 +988,17 @@ impl BlockHeader<SeqTypes> for Header {
         };
 
         let mut next_stake_table_hash = None;
+        let epoch_height = instance_state
+            .epoch_height
+            .context("epoch height not in instance state")?;
         if version >= DrbAndHeaderUpgradeVersion::version()
-            && is_epoch_transition(
-                height + 1,
-                instance_state
-                    .epoch_height
-                    .context("epoch height not in instance state")?,
-            )
+            && is_epoch_transition(height + 1, epoch_height)
+            && !is_last_block(height + 1, epoch_height)
         {
-            let epoch = EpochNumber::new(epoch_from_block_number(
-                height + 1,
-                instance_state
-                    .epoch_height
-                    .context("epoch height not in instance state")?,
-            ));
+            let epoch = EpochNumber::new(epoch_from_block_number(height + 1, epoch_height));
             let coordinator = instance_state.coordinator.clone();
             let epoch_membership = coordinator
-                .membership_for_epoch(Some(epoch + 1))
+                .stake_table_for_epoch(Some(epoch + 1))
                 .await
                 .map_err(|e| anyhow::anyhow!("failed to get epoch membership: {e}"))?;
             next_stake_table_hash = Some(

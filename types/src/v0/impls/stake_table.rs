@@ -14,6 +14,7 @@ use alloy::{
     rpc::types::Log,
 };
 use anyhow::{bail, ensure, Context};
+use ark_ec::AffineRepr;
 use async_lock::{Mutex, RwLock, RwLockUpgradableReadGuard};
 use bigdecimal::BigDecimal;
 use committable::Committable;
@@ -47,6 +48,7 @@ use hotshot_types::{
 };
 use humantime::format_duration;
 use indexmap::IndexMap;
+use itertools::Itertools;
 use num_traits::{FromPrimitive, Zero};
 use sha3::{Digest as _, Keccak256};
 use thiserror::Error;
@@ -230,10 +232,14 @@ impl StakeTableState {
             hasher.update(address);
             hasher.update(bincode::serialize(&validator)?);
         }
-        for key in &self.used_bls_keys {
+        for key in self.used_bls_keys.iter().sorted() {
             hasher.update(bincode::serialize(&key)?);
         }
-        for key in &self.used_schnorr_keys {
+        for key in self
+            .used_schnorr_keys
+            .iter()
+            .sorted_by(|a, b| a.to_affine().xy().cmp(&b.to_affine().xy()))
+        {
             hasher.update(bincode::serialize(&key)?);
         }
         let hash = hasher.finalize();
@@ -280,7 +286,7 @@ impl StakeTableState {
                     state_ver_key,
                     stake: U256::ZERO,
                     commission,
-                    delegators: HashMap::new(),
+                    delegators: BTreeMap::new(),
                 });
             },
 
@@ -326,7 +332,7 @@ impl StakeTableState {
                     state_ver_key,
                     stake: U256::ZERO,
                     commission,
-                    delegators: HashMap::new(),
+                    delegators: BTreeMap::new(),
                 });
             },
 
@@ -2453,7 +2459,7 @@ pub mod testing {
             let mut seed = [1u8; 32];
             rng.fill_bytes(&mut seed);
             let mut validator_stake = alloy::primitives::U256::from(0);
-            let mut delegators = HashMap::new();
+            let mut delegators = BTreeMap::new();
             for _i in 0..=5000 {
                 let stake: u64 = rng.gen_range(0..10000);
                 delegators.insert(Address::random(), alloy::primitives::U256::from(stake));

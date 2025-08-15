@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc};
 
 use alloy::{primitives::{Address, Log, U256}, transports::{RpcError, TransportErrorKind}};
 use async_lock::{Mutex, RwLock};
@@ -45,7 +45,7 @@ pub struct Validator<KEY: SignatureKey> {
     // commission
     // TODO: MA commission is only valid from 0 to 10_000. Add newtype to enforce this.
     pub commission: u16,
-    pub delegators: HashMap<Address, U256>,
+    pub delegators: BTreeMap<Address, U256>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, std::hash::Hash, Clone, Debug, PartialEq, Eq)]
