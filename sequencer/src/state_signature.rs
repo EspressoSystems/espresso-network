@@ -114,6 +114,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
 
                 // The last few state updates are handled in the consensus, we do not sign them.
                 if leaf.with_epoch & is_ge_epoch_root(cur_block_height, blocks_per_epoch) {
+                    tracing::debug!("Skipping epoch transition block {cur_block_height}");
                     return;
                 }
 
@@ -135,7 +136,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                         .await
                     else {
                         tracing::error!(
-                            "Fail to get membership for epoch: {:?}",
+                            "Failed to get membership for epoch: {:?}",
                             option_state_epoch
                         );
                         return;
@@ -156,15 +157,15 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                     }
                 }
 
-                if let Some(client) = &self.relay_server_client {
-                    let Ok(request_body) = self
-                        .get_request_body(&state, &self.voting_stake_table, auth_root)
-                        .await
-                    else {
-                        tracing::error!("Failed to sign new state");
-                        return;
-                    };
+                let Ok(request_body) = self
+                    .get_request_body(&state, &self.voting_stake_table, auth_root)
+                    .await
+                else {
+                    tracing::error!("Failed to sign new state");
+                    return;
+                };
 
+                if let Some(client) = &self.relay_server_client {
                     if let Err(error) = client
                         .post::<()>("api/state")
                         .body_binary(&request_body)

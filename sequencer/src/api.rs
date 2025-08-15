@@ -915,7 +915,7 @@ pub mod test_helpers {
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_types::{
         event::LeafInfo,
-        light_client::LCV2StateSignatureRequestBody,
+        light_client::LCV3StateSignatureRequestBody,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
     };
     use itertools::izip;
@@ -1406,7 +1406,7 @@ pub mod test_helpers {
         }
         // we cannot verify the signature now, because we don't know the stake table
         client
-            .get::<LCV2StateSignatureRequestBody>(&format!("state-signature/block/{height}"))
+            .get::<LCV3StateSignatureRequestBody>(&format!("state-signature/block/{height}"))
             .send()
             .await
             .unwrap();
