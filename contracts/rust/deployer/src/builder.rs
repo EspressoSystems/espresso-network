@@ -270,11 +270,11 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             Contract::LightClientV2 => {
                 assert!(
                     self.blocks_per_epoch.is_some(),
-                    "forget to specify blocks_per_epoch()"
+                    "forgot to specify blocks_per_epoch()"
                 );
                 assert!(
                     self.epoch_start_block.is_some(),
-                    "forget to specify epoch_start_block()"
+                    "forgot to specify epoch_start_block()"
                 );
 
                 let use_mock = self.mock_light_client;
@@ -284,12 +284,11 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 let epoch_start_block = self.epoch_start_block.unwrap();
                 let rpc_url = self.rpc_url.clone();
 
-                // TEST-ONLY: if this config is not yet set, we use a large default value
+                // TEST-ONLY: if this config is not yet set, we use a reasonable default value
                 // to avoid contract complaining about invalid zero-valued blocks_per_epoch.
-                // This large value will act as if we are always in epoch 1, which won't conflict
-                // with the effective purpose of the real `PublicNetworkConfig`.
+                // This value will allow tests to proceed with realistic epoch behavior.
                 if use_mock && blocks_per_epoch == 0 {
-                    blocks_per_epoch = u64::MAX;
+                    blocks_per_epoch = 10;
                 }
                 tracing::info!(%blocks_per_epoch, ?dry_run, ?use_multisig, "Upgrading LightClientV2 with ");
                 if use_multisig {

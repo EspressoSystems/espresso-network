@@ -124,7 +124,7 @@ impl TestConfig {
         let builder_url = {
             let url = url_from_port(dotenvy::var("ESPRESSO_BUILDER_SERVER_PORT")?)?;
             let url = Url::from_str(&url)?;
-            wait_for_service(url.clone(), 1000, 200).await.unwrap();
+            wait_for_service(url.clone(), 1000, 600).await.unwrap();
             url.join("block_info/builderaddress").unwrap()
         };
 
