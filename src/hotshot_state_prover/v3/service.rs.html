@@ -318,15 +318,15 @@
 <a href=#318 id=318 data-nosnippet>318</a>        <span class="kw">let </span>signature_map = state_cert
 <a href=#319 id=319 data-nosnippet>319</a>            .signatures
 <a href=#320 id=320 data-nosnippet>320</a>            .into_iter()
-<a href=#321 id=321 data-nosnippet>321</a>            .collect::&lt;HashMap&lt;StateVerKey, StateSignature&gt;&gt;();
-<a href=#322 id=322 data-nosnippet>322</a>
-<a href=#323 id=323 data-nosnippet>323</a>        <span class="kw">let </span>auth_root = state_cert.auth_root.unwrap_or([<span class="number">0</span>; <span class="number">32</span>]).into();
+<a href=#321 id=321 data-nosnippet>321</a>            .map(|(key, sig, <span class="kw">_</span>)| (key, sig))
+<a href=#322 id=322 data-nosnippet>322</a>            .collect::&lt;HashMap&lt;StateVerKey, StateSignature&gt;&gt;();
+<a href=#323 id=323 data-nosnippet>323</a>
 <a href=#324 id=324 data-nosnippet>324</a>        <span class="kw">let </span>(proof, <span class="kw">_</span>) = generate_proof(
 <a href=#325 id=325 data-nosnippet>325</a>            state,
 <a href=#326 id=326 data-nosnippet>326</a>            state_cert.light_client_state,
 <a href=#327 id=327 data-nosnippet>327</a>            cur_st_state,
 <a href=#328 id=328 data-nosnippet>328</a>            state_cert.next_stake_table_state,
-<a href=#329 id=329 data-nosnippet>329</a>            auth_root,
+<a href=#329 id=329 data-nosnippet>329</a>            state_cert.auth_root,
 <a href=#330 id=330 data-nosnippet>330</a>            signature_map,
 <a href=#331 id=331 data-nosnippet>331</a>            proving_key,
 <a href=#332 id=332 data-nosnippet>332</a>        )
@@ -338,7 +338,7 @@
 <a href=#338 id=338 data-nosnippet>338</a>            proof,
 <a href=#339 id=339 data-nosnippet>339</a>            state_cert.light_client_state,
 <a href=#340 id=340 data-nosnippet>340</a>            state_cert.next_stake_table_state,
-<a href=#341 id=341 data-nosnippet>341</a>            auth_root,
+<a href=#341 id=341 data-nosnippet>341</a>            state_cert.auth_root,
 <a href=#342 id=342 data-nosnippet>342</a>        )
 <a href=#343 id=343 data-nosnippet>343</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#344 id=344 data-nosnippet>344</a>        <span class="macro">tracing::info!</span>(<span class="string">"Epoch root state update successfully for epoch {epoch}."</span>);
@@ -705,16 +705,16 @@
 <a href=#705 id=705 data-nosnippet>705</a>        <span class="macro">assert_eq!</span>(st_state, genesis_stake.into());
 <a href=#706 id=706 data-nosnippet>706</a>
 <a href=#707 id=707 data-nosnippet>707</a>        <span class="comment">// then manually set the `finalizedState` and `votingStakeTableState` (via mocked methods)
-<a href=#708 id=708 data-nosnippet>708</a>        </span><span class="kw">let </span>lc_v2 = LightClientV3Mock::new(lc_proxy_addr, <span class="kw-2">&amp;</span>provider);
+<a href=#708 id=708 data-nosnippet>708</a>        </span><span class="kw">let </span>lc_v3 = LightClientV3Mock::new(lc_proxy_addr, <span class="kw-2">&amp;</span>provider);
 <a href=#709 id=709 data-nosnippet>709</a>        <span class="kw">let </span>new_state = LightClientStateSol::rand(rng);
 <a href=#710 id=710 data-nosnippet>710</a>        <span class="kw">let </span>new_stake = StakeTableStateSol::rand(rng);
-<a href=#711 id=711 data-nosnippet>711</a>        lc_v2
+<a href=#711 id=711 data-nosnippet>711</a>        lc_v3
 <a href=#712 id=712 data-nosnippet>712</a>            .setFinalizedState(new_state.clone().into())
 <a href=#713 id=713 data-nosnippet>713</a>            .send()
 <a href=#714 id=714 data-nosnippet>714</a>            .<span class="kw">await</span><span class="question-mark">?
 <a href=#715 id=715 data-nosnippet>715</a>            </span>.watch()
 <a href=#716 id=716 data-nosnippet>716</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#717 id=717 data-nosnippet>717</a>        lc_v2
+<a href=#717 id=717 data-nosnippet>717</a>        lc_v3
 <a href=#718 id=718 data-nosnippet>718</a>            .setVotingStakeTableState(new_stake.clone().into())
 <a href=#719 id=719 data-nosnippet>719</a>            .send()
 <a href=#720 id=720 data-nosnippet>720</a>            .<span class="kw">await</span><span class="question-mark">?
@@ -753,7 +753,7 @@
 <a href=#753 id=753 data-nosnippet>753</a>            genesis_stake.clone(),
 <a href=#754 id=754 data-nosnippet>754</a>        )
 <a href=#755 id=755 data-nosnippet>755</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#756 id=756 data-nosnippet>756</a>        <span class="kw">let </span>lc_v2 = LightClientV3Mock::new(lc_proxy_addr, <span class="kw-2">&amp;</span>provider);
+<a href=#756 id=756 data-nosnippet>756</a>        <span class="kw">let </span>lc_v3 = LightClientV3Mock::new(lc_proxy_addr, <span class="kw-2">&amp;</span>provider);
 <a href=#757 id=757 data-nosnippet>757</a>
 <a href=#758 id=758 data-nosnippet>758</a>        <span class="comment">// update first epoch root (in numerical 2nd epoch)
 <a href=#759 id=759 data-nosnippet>759</a>        // there will be new key registration but the effect only take place on the second epoch root update
@@ -804,7 +804,7 @@
 <a href=#804 id=804 data-nosnippet>804</a>        <span class="macro">tracing::info!</span>(<span class="string">"Successfully submitted new finalized state to L1."</span>);
 <a href=#805 id=805 data-nosnippet>805</a>
 <a href=#806 id=806 data-nosnippet>806</a>        <span class="comment">// test if new state is updated in l1
-<a href=#807 id=807 data-nosnippet>807</a>        </span><span class="kw">let </span>finalized_l1: LightClientStateSol = lc_v2.finalizedState().call().<span class="kw">await</span><span class="question-mark">?</span>.into();
+<a href=#807 id=807 data-nosnippet>807</a>        </span><span class="kw">let </span>finalized_l1: LightClientStateSol = lc_v3.finalizedState().call().<span class="kw">await</span><span class="question-mark">?</span>.into();
 <a href=#808 id=808 data-nosnippet>808</a>        <span class="kw">let </span>expected: LightClientStateSol = ledger.light_client_state().into();
 <a href=#809 id=809 data-nosnippet>809</a>        <span class="macro">assert_eq!</span>(
 <a href=#810 id=810 data-nosnippet>810</a>            finalized_l1.abi_encode_params(),
@@ -819,7 +819,7 @@
 <a href=#819 id=819 data-nosnippet>819</a>            genesis_stake.abi_encode_params()
 <a href=#820 id=820 data-nosnippet>820</a>        );
 <a href=#821 id=821 data-nosnippet>821</a>        <span class="kw">let </span>voting_stake_l1: StakeTableStateSol =
-<a href=#822 id=822 data-nosnippet>822</a>            lc_v2.votingStakeTableState().call().<span class="kw">await</span><span class="question-mark">?</span>.into();
+<a href=#822 id=822 data-nosnippet>822</a>            lc_v3.votingStakeTableState().call().<span class="kw">await</span><span class="question-mark">?</span>.into();
 <a href=#823 id=823 data-nosnippet>823</a>        <span class="macro">assert_eq!</span>(
 <a href=#824 id=824 data-nosnippet>824</a>            voting_stake_l1.abi_encode_params(),
 <a href=#825 id=825 data-nosnippet>825</a>            expected_new_stake.abi_encode_params(),

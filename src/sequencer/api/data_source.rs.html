@@ -25,7 +25,7 @@
 <a href=#25 id=25 data-nosnippet>25</a>};
 <a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>hotshot_types::{
 <a href=#27 id=27 data-nosnippet>27</a>    data::{EpochNumber, VidShare, ViewNumber},
-<a href=#28 id=28 data-nosnippet>28</a>    light_client::LCV2StateSignatureRequestBody,
+<a href=#28 id=28 data-nosnippet>28</a>    light_client::LCV3StateSignatureRequestBody,
 <a href=#29 id=29 data-nosnippet>29</a>    traits::{
 <a href=#30 id=30 data-nosnippet>30</a>        network::ConnectedNetwork,
 <a href=#31 id=31 data-nosnippet>31</a>        node_implementation::{NodeType, Versions},
@@ -110,7 +110,7 @@
 <a href=#110 id=110 data-nosnippet>110</a>
 <a href=#111 id=111 data-nosnippet>111</a><span class="attr">#[async_trait]
 <a href=#112 id=112 data-nosnippet>112</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">trait </span>StateSignatureDataSource&lt;N: ConnectedNetwork&lt;PubKey&gt;&gt; {
-<a href=#113 id=113 data-nosnippet>113</a>    <span class="kw">async fn </span>get_state_signature(<span class="kw-2">&amp;</span><span class="self">self</span>, height: u64) -&gt; <span class="prelude-ty">Option</span>&lt;LCV2StateSignatureRequestBody&gt;;
+<a href=#113 id=113 data-nosnippet>113</a>    <span class="kw">async fn </span>get_state_signature(<span class="kw-2">&amp;</span><span class="self">self</span>, height: u64) -&gt; <span class="prelude-ty">Option</span>&lt;LCV3StateSignatureRequestBody&gt;;
 <a href=#114 id=114 data-nosnippet>114</a>}
 <a href=#115 id=115 data-nosnippet>115</a>
 <a href=#116 id=116 data-nosnippet>116</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">trait </span>NodeStateDataSource {

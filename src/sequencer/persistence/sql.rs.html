@@ -3184,7 +3184,7 @@
 <a href=#3184 id=3184 data-nosnippet>3184</a>                light_client_state: Default::default(), <span class="comment">// filling arbitrary value
 <a href=#3185 id=3185 data-nosnippet>3185</a>                </span>next_stake_table_state: Default::default(), <span class="comment">// filling arbitrary value
 <a href=#3186 id=3186 data-nosnippet>3186</a>                </span>signatures: <span class="macro">vec!</span>[],                     <span class="comment">// filling arbitrary value
-<a href=#3187 id=3187 data-nosnippet>3187</a>                </span>auth_root: <span class="prelude-val">None</span>,
+<a href=#3187 id=3187 data-nosnippet>3187</a>                </span>auth_root: Default::default(),
 <a href=#3188 id=3188 data-nosnippet>3188</a>            };
 <a href=#3189 id=3189 data-nosnippet>3189</a>            <span class="comment">// manually upsert the state cert to the finalized database
 <a href=#3190 id=3190 data-nosnippet>3190</a>            </span><span class="kw">let </span>state_cert_bytes = bincode::serialize(<span class="kw-2">&amp;</span>state_cert).unwrap();
@@ -3336,7 +3336,7 @@
 <a href=#3336 id=3336 data-nosnippet>3336</a>                light_client_state: Default::default(),
 <a href=#3337 id=3337 data-nosnippet>3337</a>                next_stake_table_state: Default::default(),
 <a href=#3338 id=3338 data-nosnippet>3338</a>                signatures: <span class="macro">vec!</span>[],
-<a href=#3339 id=3339 data-nosnippet>3339</a>                auth_root: <span class="prelude-val">None</span>,
+<a href=#3339 id=3339 data-nosnippet>3339</a>                auth_root: Default::default(),
 <a href=#3340 id=3340 data-nosnippet>3340</a>            },
 <a href=#3341 id=3341 data-nosnippet>3341</a>            <span class="string">"Wrong light client state update certificate in the storage"</span>,
 <a href=#3342 id=3342 data-nosnippet>3342</a>        );
