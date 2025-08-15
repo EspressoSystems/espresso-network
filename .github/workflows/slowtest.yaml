@@ -46,7 +46,7 @@ jobs:
       - uses: rui314/setup-mold@v1
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # NOTE: no rust cache, these tests are very slow anyway
 
@@ -79,7 +79,7 @@ jobs:
       - uses: rui314/setup-mold@v1
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # NOTE: no rust cache, these tests are very slow anyway
 
