@@ -1,6 +1,6 @@
 use std::fmt;
 
-use alloy::primitives::Keccak256;
+use alloy::primitives::{FixedBytes, Keccak256};
 use anyhow::{ensure, Context};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
@@ -1101,9 +1101,9 @@ impl BlockHeader<SeqTypes> for Header {
         })
     }
 
-    fn auth_root(&self) -> anyhow::Result<Option<[u8; 32]>> {
+    fn auth_root(&self) -> anyhow::Result<FixedBytes<32>> {
         match self {
-            Header::V1(_) | Header::V2(_) | Header::V3(_) => Ok(None),
+            Header::V1(_) | Header::V2(_) | Header::V3(_) => Ok(FixedBytes::from([0u8; 32])),
             Header::V4(header) => {
                 // Temporary placeholder values for future fields
                 let placeholder_1 = [0; 32];
@@ -1127,9 +1127,7 @@ impl BlockHeader<SeqTypes> for Header {
                 hasher.update(placeholder_6);
                 hasher.update(placeholder_7);
 
-                let result = hasher.finalize();
-
-                Ok(Some(result.0))
+                Ok(hasher.finalize())
             },
         }
     }
