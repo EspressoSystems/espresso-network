@@ -17,7 +17,7 @@ integrate with the Espresso marketplace.
 
 ## Integration approaches
 
-Similarly to their optimistic alternatives, ZK rollups need to instantiate their derivation pipeline in order to
+Similar to their optimistic alternatives, ZK rollups need to instantiate their derivation pipeline in order to
 integrate with Espresso. There are a number of alternatives for such integration, depending on specific constraints the
 rollup may have, such as using a particular data availability layer in addition to Tiramisu, or the need to update their
 state on the L1 at a faster pace than the Espresso light client contract does.
