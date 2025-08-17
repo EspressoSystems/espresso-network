@@ -3,6 +3,17 @@ name = "sequencer"
 version = "0.1.0"
 authors = ["Espresso Systems <hello@espressosys.com>"]
 edition = "2021"
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["hotshot-testing"]
+
+[package.metadata.cargo-machete]
+ignored = ["vergen", "include_dir", "hotshot_builder_api"]
+
+[[bin]]
+name = "espresso-dev-node"
+path = "src/bin/espresso-dev-node.rs"
+required-features = ["testing", "embedded-db"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
@@ -18,30 +29,6 @@ embedded-db = ["hotshot-query-service/embedded-db", "sqlx/sqlite"]
 fee = []
 pos = []
 drb-and-header = []
-
-[[bin]]
-name = "espresso-dev-node"
-path = "src/bin/espresso-dev-node.rs"
-required-features = ["testing", "embedded-db"]
-
-[dev-dependencies]
-escargot = "0.5.10"
-espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0" }
-hotshot-example-types = { workspace = true }
-hotshot-query-service = { workspace = true }
-hotshot-testing = { workspace = true }
-pretty_assertions = { workspace = true }
-rand = "0.8.5"
-reqwest = { workspace = true }
-test-log = { workspace = true }
-
-# Enable "testing" feature when running tests
-sequencer = { path = ".", features = ["testing"] }
-tempfile = { workspace = true }
-
-[build-dependencies]
-anyhow = { workspace = true }
-vergen = { workspace = true }
 
 [dependencies]
 
@@ -138,11 +125,24 @@ vbs = { workspace = true }
 vec1 = { workspace = true }
 vid = { path = "../vid" }
 
-[package.metadata.cargo-udeps.ignore]
-normal = ["hotshot-testing"]
+[build-dependencies]
+anyhow = { workspace = true }
+vergen = { workspace = true }
 
-[package.metadata.cargo-machete]
-ignored = ["vergen", "include_dir", "hotshot_builder_api"]
+[dev-dependencies]
+escargot = "0.5.10"
+espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0" }
+hotshot-example-types = { workspace = true }
+hotshot-query-service = { workspace = true }
+hotshot-testing = { workspace = true }
+pretty_assertions = { workspace = true }
+rand = "0.8.5"
+reqwest = { workspace = true }
+test-log = { workspace = true }
+
+# Enable "testing" feature when running tests
+sequencer = { path = ".", features = ["testing"] }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

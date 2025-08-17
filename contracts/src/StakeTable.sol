@@ -246,7 +246,8 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         token = ERC20(_tokenAddress);
         lightClient = ILightClient(_lightClientAddress);
 
-        uint256 minExitEscrowPeriod = lightClient.blocksPerEpoch() * 15; // assuming 15s per block
+        uint256 minExitEscrowPeriod = 90 seconds; // assuming 15s per block and min blocks per epoch
+            // is 6 in the light client
         uint256 maxExitEscrowPeriod = 86400 * 14; // 14 days
         if (_exitEscrowPeriod < minExitEscrowPeriod || _exitEscrowPeriod > maxExitEscrowPeriod) {
             revert ExitEscrowPeriodInvalid();

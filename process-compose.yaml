@@ -20,7 +20,6 @@ environment:
   - ESPRESSO_STATE_RELAY_SERVER_URL=http://localhost:$ESPRESSO_STATE_RELAY_SERVER_PORT
   - QUERY_SERVICE_URI=http://localhost:$ESPRESSO_SEQUENCER1_API_PORT/v0/
   - NODE_VALIDATOR_URI=ws://localhost:$ESPRESSO_NODE_VALIDATOR_PORT/v0/
-  - ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY=10
 processes:
   # Cheating a bit here but since we don't usually have to debug go-ethereum
   # it's using the docker compose service which is a bit easier.
@@ -44,8 +43,9 @@ processes:
       ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
       ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
       ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS
-      ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS
-      && deploy --deploy-ops-timelock --deploy-safe-exit-timelock --deploy-fee --deploy-esp-token
+      ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS
+      ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS
+      && deploy --deploy-ops-timelock --deploy-safe-exit-timelock --deploy-fee --deploy-esp-token --deploy-stake-table --upgrade-stake-table-v2
     namespace: setup
     depends_on:
       demo-l1-network:
@@ -55,8 +55,6 @@ processes:
   deploy-prover-contracts:
     # The contract addresses are implicitly inherited from .env. We need to unset these or else the
     # script will think they're already deployed.
-    environment:
-      - ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY=$ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY
     command:
       unset ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS
       && deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2
@@ -67,24 +65,6 @@ processes:
       sequencer0:
         condition: process_healthy
       deploy-sequencer-contracts:
-        condition: process_completed
-    availability: *exit-ok
-
-  deploy-staking-contracts:
-    # The contract addresses are implicitly inherited from .env. We need to unset these or else the
-    # script will think they're already deployed.
-    command:
-      unset ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS
-      && deploy --deploy-stake-table --upgrade-stake-table-v2
-    namespace: setup
-    depends_on:
-      demo-l1-network:
-        condition: process_healthy
-      sequencer0:
-        condition: process_healthy
-      deploy-sequencer-contracts:
-        condition: process_completed
-      deploy-prover-contracts:
         condition: process_completed
     availability: *exit-ok
 
@@ -105,8 +85,6 @@ processes:
         condition: process_completed
       deploy-prover-contracts:
         condition: process_completed
-      deploy-staking-contracts:
-        condition: process_completed
       sequencer1:
         condition: process_healthy
     availability: *exit-ok
@@ -124,8 +102,6 @@ processes:
       deploy-sequencer-contracts:
         condition: process_completed
       deploy-prover-contracts:
-        condition: process_completed
-      deploy-staking-contracts:
         condition: process_completed
       sequencer1:
         condition: process_healthy
@@ -322,8 +298,6 @@ processes:
         condition: process_healthy
       deploy-sequencer-contracts:
         condition: process_completed
-      deploy-staking-contracts:
-        condition: process_completed
     readiness_probe:
       http_get:
         scheme: http
@@ -372,8 +346,6 @@ processes:
         condition: process_healthy
       deploy-sequencer-contracts:
         condition: process_completed
-      deploy-staking-contracts:
-        condition: process_completed
     readiness_probe:
       http_get:
         scheme: http
@@ -419,8 +391,6 @@ processes:
       marshal_0:
         condition: process_healthy
       deploy-sequencer-contracts:
-        condition: process_completed
-      deploy-staking-contracts:
         condition: process_completed
     readiness_probe:
       http_get:
