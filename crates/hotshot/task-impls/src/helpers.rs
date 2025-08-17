@@ -39,7 +39,9 @@ use hotshot_types::{
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
-        signature_key::{LCV2StateSignatureKey, SignatureKey, StakeTableEntryType},
+        signature_key::{
+            LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StakeTableEntryType,
+        },
         storage::Storage,
         BlockPayload, ValidatedState,
     },
@@ -1346,12 +1348,21 @@ pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
     });
 
     let mut accumulated_stake = U256::from(0);
-    for (key, sig) in state_cert.signatures.iter() {
+    let signed_state_digest = derive_signed_state_digest(
+        &state_cert.light_client_state,
+        &state_cert.next_stake_table_state,
+        &state_cert.auth_root,
+    );
+    for (key, sig, sig_v2) in state_cert.signatures.iter() {
         if let Some(stake) = state_key_map.get(key) {
             accumulated_stake += *stake;
-            if !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
+            if !<TYPES::StateSignatureKey as LCV3StateSignatureKey>::verify_state_sig(
                 key,
                 sig,
+                signed_state_digest,
+            ) || !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
+                key,
+                sig_v2,
                 &state_cert.light_client_state,
                 &state_cert.next_stake_table_state,
             ) {

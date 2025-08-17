@@ -170,47 +170,52 @@ async fn main() {
         max_gas_price,
     };
 
-    // TODO(Chengyu): turn on the v3 prover after the sequencer update
     // validate that the light client contract is a proxy, panics otherwise
     config.validate_light_client_contract().await.unwrap();
-    let is_legacy = match sol_types::LightClient::new(args.light_client_address, &l1_provider)
-        .getVersion()
-        .call()
-        .await
-    {
-        Ok(version) => version.majorVersion == 1,
-        Err(err) => {
-            tracing::error!("Error checking the contract version: {err}");
-            return;
-        },
-    };
-    tracing::info!(
-        "Detected contract version {}",
-        if is_legacy { "v1" } else { "v2" }
-    );
+    let contract_version =
+        match sol_types::LightClient::new(args.light_client_address, &l1_provider)
+            .getVersion()
+            .call()
+            .await
+        {
+            Ok(version) => version.majorVersion,
+            Err(err) => {
+                tracing::error!("Error checking the contract version: {err}");
+                return;
+            },
+        };
+    tracing::info!("Detected contract version v{contract_version}");
 
     // This bind version doesn't represent anything now, but it's required by the service trait
     let bind_version = StaticVersion::<0, 1> {};
 
     if args.daemon {
         // Launching the prover service daemon
-        let result = if is_legacy {
-            hotshot_state_prover::v1::service::run_prover_service(config, bind_version).await
-        } else {
-            hotshot_state_prover::v2::service::run_prover_service(config, bind_version).await
+        let result = match contract_version {
+            1 => hotshot_state_prover::v1::service::run_prover_service(config, bind_version).await,
+            2 => hotshot_state_prover::v2::service::run_prover_service(config, bind_version).await,
+            3 => hotshot_state_prover::v3::service::run_prover_service(config, bind_version).await,
+            _ => {
+                tracing::error!("Unsupported contract version: {contract_version}");
+                return;
+            },
         };
         if let Err(err) = result {
             tracing::error!("Error running prover service: {err}");
         };
     } else {
         // Run light client state update once
-        let result = if is_legacy {
-            hotshot_state_prover::v1::service::run_prover_once(config, bind_version).await
-        } else {
-            hotshot_state_prover::v2::service::run_prover_once(config, bind_version).await
+        let result = match contract_version {
+            1 => hotshot_state_prover::v1::service::run_prover_once(config, bind_version).await,
+            2 => hotshot_state_prover::v2::service::run_prover_once(config, bind_version).await,
+            3 => hotshot_state_prover::v3::service::run_prover_once(config, bind_version).await,
+            _ => {
+                tracing::error!("Unsupported contract version: {contract_version}");
+                return;
+            },
         };
         if let Err(err) = result {
             tracing::error!("Error running prover once: {err}");
-        }
+        };
     }
 }

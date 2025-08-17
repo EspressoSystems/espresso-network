@@ -2219,7 +2219,7 @@ mod test {
                 },
                 next_stake_table_state: Default::default(),
                 signatures: vec![], // filling arbitrary value
-                auth_root: None,
+                auth_root: Default::default(),
             };
             assert!(storage.add_state_cert(state_cert).await.is_ok());
 

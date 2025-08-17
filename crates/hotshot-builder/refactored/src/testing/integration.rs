@@ -5,12 +5,12 @@ use std::{collections::HashMap, fmt::Display, marker::PhantomData, sync::Arc};
 
 use async_trait::async_trait;
 use hotshot::types::SignatureKey;
+use hotshot_builder_shared::testing::constants::TEST_PROTOCOL_MAX_BLOCK_SIZE;
 use hotshot_testing::{
     block_builder::{BuilderTask, TestBuilderImplementation},
     test_builder::BuilderChange,
 };
 use hotshot_types::{data::ViewNumber, traits::node_implementation::NodeType};
-use marketplace_builder_shared::testing::constants::TEST_PROTOCOL_MAX_BLOCK_SIZE;
 use tagged_base64::TaggedBase64;
 use tokio::spawn;
 use url::Url;
@@ -118,17 +118,17 @@ where
 mod tests {
     use std::time::Duration;
 
+    use hotshot_builder_shared::testing::{
+        generation::{self, TransactionGenerationConfig},
+        run_test,
+        validation::BuilderValidationConfig,
+    };
     use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
     use hotshot_macros::cross_tests;
     use hotshot_testing::{
         completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
         overall_safety_task::OverallSafetyPropertiesDescription,
         test_builder::TestDescription,
-    };
-    use marketplace_builder_shared::testing::{
-        generation::{self, TransactionGenerationConfig},
-        run_test,
-        validation::BuilderValidationConfig,
     };
 
     use crate::testing::integration::LegacyBuilderImpl;
