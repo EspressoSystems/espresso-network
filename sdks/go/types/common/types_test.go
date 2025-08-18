@@ -26,7 +26,7 @@ var ReferenceNsTable NsTable = NsTable{
 }
 
 var ReferencePayloadCommitment, _ = tagged_base64.Parse("HASH~1yS-KEtL3oDZDBJdsW51Pd7zywIiHesBZsTbpOzrxOfu")
-var ReferenceBuilderCommitment, _ = tagged_base64.Parse("BUILDER_COMMITMENT~1yS-KEtL3oDZDBJdsW51Pd7zywIiHesBZsTbpOzrxOdZ")
+var ReferenceBuilderCommitment, _ = tagged_base64.Parse("BUILDER_COMMITMENT~tEvs0rxqOiMCvfe2R0omNNaphSlUiEDrb2q0IZpRcgA_")
 var ReferenceBlockMerkleTreeRoot, _ = tagged_base64.Parse("MERKLE_COMM~yB4_Aqa35_PoskgTpcCR1oVLh6BUdLHIs7erHKWi-usUAAAAAAAAAAEAAAAAAAAAJg")
 var ReferenceFeeMerkleTreeRoot, _ = tagged_base64.Parse("MERKLE_COMM~VJ9z239aP9GZDrHp3VxwPd_0l28Hc5KEAB1pFeCIxhYgAAAAAAAAAAIAAAAAAAAAdA")
 
@@ -107,6 +107,50 @@ func TestEspressoCommitmentFromU256TrailingZero(t *testing.T) {
 	roundTrip, err := CommitmentFromUint256(comm.Uint256())
 	require.Nil(t, err)
 	require.Equal(t, comm, roundTrip)
+}
+
+func TestEspressoQuorumProposalEvent(t *testing.T) {
+	consensusMessageInBytes := []byte(removeWhitespace(SampleQuorumEvent))
+
+	consensusMessage, err := UnmarshalConsensusMessage(consensusMessageInBytes)
+	require.Nil(t, err)
+	require.Equal(t, consensusMessage.Event.QuorumProposalWrapper.QuorumProposalDataWrapper.Data.Proposal.ViewNumber, 13)
+	require.Equal(t, consensusMessage.Event.QuorumProposalWrapper.QuorumProposalDataWrapper.Data.Proposal.BlockHeader.Fields.BuilderCommitment, ReferenceBuilderCommitment.String())
+}
+
+func TestEspressoDaProposalEvent(t *testing.T) {
+	consensusMessageInBytes := []byte(removeWhitespace(SampleDAEvent))
+
+	consensusMessage, err := UnmarshalConsensusMessage(consensusMessageInBytes)
+	require.Nil(t, err)
+	require.Equal(t, consensusMessage.Event.DaProposalWrapper.DaProposalDataWrapper.Data.ViewNumber, 13)
+	// Check the builder commitment is correct
+	// require.Equal(t, consensusMessage.Event.DaProposalWrapper.DaProposalDataWrapper.Data.Metadata.Bytes, ReferenceBuilderCommitment)
+
+	// Convert the builder commitment
+	blockPayload, err := NewBlockPayload(consensusMessage.Event.DaProposalWrapper.DaProposalDataWrapper.Data.EncodedTransactions, consensusMessage.Event.DaProposalWrapper.DaProposalDataWrapper.Data.Metadata)
+	require.Nil(t, err)
+	builderCommitment, err := blockPayload.BuilderCommitment()
+	require.Nil(t, err)
+	builderCommitmentTagged, err := builderCommitment.ToTaggedSting()
+	require.Nil(t, err)
+	require.Equal(t, builderCommitmentTagged, ReferenceBuilderCommitment.String())
+}
+
+func TestEspressoDecideEvent(t *testing.T) {
+	consensusMessageInBytes := []byte(removeWhitespace(SampleDecideEvent))
+
+	consensusMessage, err := UnmarshalConsensusMessage(consensusMessageInBytes)
+	require.Nil(t, err)
+	require.Equal(t, consensusMessage.Event.Decide.LeafChain[0].Leaf.BlockHeader.Fields.BuilderCommitment, ReferenceBuilderCommitment.String())
+	require.Equal(t, consensusMessage.Event.Decide.LeafChain[0].Leaf.ViewNumber, 13)
+}
+
+func TestViewFinishedEvent(t *testing.T) {
+	consensusMessageInBytes := []byte(removeWhitespace(SampleViewFinishedEvent))
+	consensusMessage, err := UnmarshalConsensusMessage(consensusMessageInBytes)
+	require.Nil(t, err)
+	require.Equal(t, consensusMessage.Event.ViewFinished.ViewNumber, 13)
 }
 
 func CheckJsonRequiredFields[T any](t *testing.T, data []byte, fields ...string) {
