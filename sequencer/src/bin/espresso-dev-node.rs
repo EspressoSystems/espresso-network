@@ -1,7 +1,9 @@
 use std::{
     collections::{BTreeMap, HashMap},
+    fmt::Display,
     io::{self, Read},
     iter::{self, once},
+    sync::Arc,
     time::Duration,
 };
 
@@ -17,6 +19,7 @@ use alloy::{
     },
 };
 use anyhow::Context;
+use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::{Parser, ValueEnum};
 use espresso_contract_deployer::{
@@ -27,10 +30,19 @@ use espresso_types::{
     parse_duration, v0_3::ChainConfig, EpochVersion, L1ClientOptions, SeqTypes, SequencerVersions,
     ValidatedState,
 };
-use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
+use futures::{
+    future::BoxFuture,
+    stream::{BoxStream, FuturesUnordered},
+    FutureExt, StreamExt,
+};
+use hotshot::types::Event;
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
+use hotshot_events_service::events_source::{
+    EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
+};
 use hotshot_state_prover::{v2::service::run_prover_service, StateProverConfig};
 use hotshot_types::{
+    event::LegacyEvent,
     stake_table::{one_honest_threshold, HSStakeTable},
     utils::epoch_from_block_number,
 };
@@ -70,6 +82,11 @@ enum L1Deployment {
     /// configuration
     Skip,
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WrappedError(ServerError);
+
+impl std::error::Error for WrappedError {}
 
 #[derive(Clone, Debug, Parser)]
 struct Args {
@@ -326,7 +343,8 @@ async fn main() -> anyhow::Result<()> {
     let mut light_client_addresses = vec![];
     let mut prover_ports = Vec::new();
     let mut client_states = ApiState::default();
-    let mut handles = FuturesUnordered::new();
+    let mut handles: FuturesUnordered<tokio::task::JoinHandle<Result<(), anyhow::Error>>> =
+        FuturesUnordered::new();
 
     let mut chain_params = Vec::new();
     for (url, mnemonic, account_index, multisig_address, retry_interval) in once((
@@ -644,6 +662,10 @@ async fn main() -> anyhow::Result<()> {
     )
     .await;
 
+    // Get the event streamer for the first peer
+    let event_streamer = network.peers[0].event_streamer().clone();
+    client_states.event_streamer = Some(event_streamer);
+
     let relay_server_handle = spawn(async move {
         // using explicit relayer state will avoid it calling the dev-node on `/config/hotshot` for epoch info,
         // during `init_genesis()`, since this dev-node didn't expose those APIs.
@@ -724,6 +746,15 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+impl From<hotshot_events_service::events::Error> for WrappedError {
+    fn from(err: hotshot_events_service::events::Error) -> Self {
+        WrappedError(ServerError {
+            status: err.status(),
+            message: err.to_string(),
+        })
+    }
+}
+
 // ApiState is passed to the tide disco app so avoid cloning the contracts for each endpoint
 #[derive(Clone)]
 pub struct ApiState {
@@ -735,7 +766,46 @@ pub struct ApiState {
     pub wallet: EthereumWallet,
     /// L1 chain id
     pub l1_chain_id: u64,
+    /// Event streamer for the first peer
+    pub event_streamer: Option<Arc<RwLock<EventsStreamer<SeqTypes>>>>,
 }
+
+#[async_trait]
+impl EventsSource<SeqTypes> for ApiState {
+    type EventStream = BoxStream<'static, Arc<Event<SeqTypes>>>;
+    type LegacyEventStream = BoxStream<'static, Arc<LegacyEvent<SeqTypes>>>;
+
+    async fn get_event_stream(
+        &self,
+        filter: Option<EventFilterSet<SeqTypes>>,
+    ) -> Self::EventStream {
+        self.event_streamer
+            .as_ref()
+            .unwrap()
+            .read(|state| state.get_event_stream(filter))
+            .await
+    }
+
+    async fn get_legacy_event_stream(
+        &self,
+        filter: Option<EventFilterSet<SeqTypes>>,
+    ) -> Self::LegacyEventStream {
+        self.event_streamer
+            .as_ref()
+            .unwrap()
+            .read(|state| state.get_legacy_event_stream(filter))
+            .await
+    }
+
+    async fn get_startup_info(&self) -> StartupInfo<SeqTypes> {
+        self.event_streamer
+            .as_ref()
+            .unwrap()
+            .read(|state| state.get_startup_info())
+            .await
+    }
+}
+
 impl Default for ApiState {
     fn default() -> Self {
         Self {
@@ -743,6 +813,7 @@ impl Default for ApiState {
             provider_urls: BTreeMap::new(),
             wallet: EthereumWallet::default(),
             l1_chain_id: 31337,
+            event_streamer: None,
         }
     }
 }
@@ -752,18 +823,18 @@ impl ApiState {
     pub fn light_client_instance(
         &self,
         chain_id: Option<u64>,
-    ) -> Result<LightClientV2MockInstance<(), HttpProviderWithWallet>, ServerError> {
+    ) -> Result<LightClientV2MockInstance<(), HttpProviderWithWallet>, WrappedError> {
         // if chain id is not provided, primary L1 light client is used
         let id = chain_id.unwrap_or(self.l1_chain_id);
 
         let proxy_addr = self.lc_proxy_addr.get(&id).ok_or_else(|| {
-            ServerError::catch_all(
+            WrappedError::catch_all(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "LightClientProxy address not found for chain id {chain_id}".to_string(),
             )
         })?;
         let provider_url = self.provider_urls.get(&id).ok_or_else(|| {
-            ServerError::catch_all(
+            WrappedError::catch_all(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Provider URL not found for chain id {chain_id}".to_string(),
             )
@@ -794,12 +865,12 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(
     dev_info: DevInfo,
     bind_version: ApiVer,
 ) -> anyhow::Result<()> {
-    let mut app = tide_disco::App::<_, ServerError>::with_state(client_states);
+    let mut app = tide_disco::App::<_, WrappedError>::with_state(client_states);
     let toml =
         toml::from_str::<toml::value::Value>(include_str!("../../api/espresso_dev_node.toml"))
             .map_err(io::Error::other)?;
 
-    let mut api = Api::<_, ServerError, ApiVer>::new(toml).map_err(io::Error::other)?;
+    let mut api = Api::<_, WrappedError, ApiVer>::new(toml).map_err(io::Error::other)?;
     api.get("devinfo", move |_, _| {
         let info = dev_info.clone();
         async move { Ok(info.clone()) }.boxed()
@@ -809,7 +880,7 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(
         async move {
             let body = req
                 .body_auto::<SetHotshotDownReqBody, ApiVer>(ApiVer::instance())
-                .map_err(ServerError::from_request_error)?;
+                .map_err(WrappedError::from_request_error)?;
             let contract = state.light_client_instance(body.chain_id)?;
 
             contract
@@ -817,12 +888,12 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(
                 .send()
                 .await
                 .map_err(|err| {
-                    ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
+                    WrappedError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
                 })?
                 .watch()
                 .await
                 .map_err(|err| {
-                    ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
+                    WrappedError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
                 })?;
             Ok(())
         }
@@ -833,7 +904,7 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(
         async move {
             let chain_id = req
                 .body_auto::<Option<SetHotshotUpReqBody>, ApiVer>(ApiVer::instance())
-                .map_err(ServerError::from_request_error)?
+                .map_err(WrappedError::from_request_error)?
                 .map(|b| b.chain_id);
             let contract = state.light_client_instance(chain_id)?;
 
@@ -842,12 +913,12 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(
                 .send()
                 .await
                 .map_err(|err| {
-                    ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
+                    WrappedError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
                 })?
                 .watch()
                 .await
                 .map_err(|err| {
-                    ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
+                    WrappedError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
                 })?;
             Ok(())
         }
@@ -856,6 +927,16 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(
     .map_err(io::Error::other)?;
 
     app.register_module("api", api).map_err(io::Error::other)?;
+
+    // Add hotshot-events API
+    let hotshot_events_api = hotshot_events_service::events::define_api::<_, _, ApiVer>(
+        &hotshot_events_service::events::Options::default(),
+        "0.0.1".parse().unwrap(),
+    )
+    .map_err(io::Error::other)?;
+
+    app.register_module("hotshot-events", hotshot_events_api)
+        .map_err(io::Error::other)?;
 
     tracing::info!("Starting dev-node API on http://0.0.0.0:{port}");
 
@@ -916,6 +997,22 @@ struct AnvilState {
     accounts: HashMap<Address, AnvilAccount>,
 }
 
+impl tide_disco::Error for WrappedError {
+    fn catch_all(status: StatusCode, message: String) -> Self {
+        WrappedError(ServerError { status, message })
+    }
+
+    fn status(&self) -> StatusCode {
+        self.0.status()
+    }
+}
+
+impl Display for WrappedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{process::Child, time::Duration};
@@ -938,7 +1035,6 @@ mod tests {
     use rand::Rng;
     use sequencer::SequencerApiVersion;
     use surf_disco::Client;
-    use tide_disco::error::ServerError;
     use tokio::time::sleep;
     use url::Url;
 
@@ -995,7 +1091,7 @@ mod tests {
 
         let process = BackgroundProcess(process);
 
-        let api_client: Client<ServerError, SequencerApiVersion> =
+        let api_client: Client<WrappedError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         api_client.connect(None).await;
 
@@ -1010,7 +1106,7 @@ mod tests {
             .await
             .unwrap();
 
-        let builder_api_client: Client<ServerError, SequencerApiVersion> =
+        let builder_api_client: Client<WrappedError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{builder_port}").parse().unwrap());
         builder_api_client.connect(None).await;
 
@@ -1178,7 +1274,7 @@ mod tests {
             }
         }
 
-        let dev_node_client: Client<ServerError, SequencerApiVersion> =
+        let dev_node_client: Client<WrappedError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{dev_node_port}").parse().unwrap());
         dev_node_client.connect(None).await;
 
@@ -1326,7 +1422,7 @@ mod tests {
 
         let process = BackgroundProcess(process);
 
-        let api_client: Client<ServerError, SequencerApiVersion> =
+        let api_client: Client<WrappedError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         api_client.connect(None).await;
 
@@ -1341,7 +1437,7 @@ mod tests {
             .await
             .unwrap();
 
-        let dev_node_client: Client<ServerError, SequencerApiVersion> =
+        let dev_node_client: Client<WrappedError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{dev_node_port}").parse().unwrap());
         dev_node_client.connect(None).await;
 

@@ -115,6 +115,7 @@ trait-variant = "0.1"
 url = "2"
 vbs = "0.1"
 vec1 = "1.12"
+hotshot-events-service = { workspace = true }
 
 # Dependencies enabled by feature "backtrace-on-stack-overflow".
 #

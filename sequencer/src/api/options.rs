@@ -14,7 +14,7 @@ use futures::{
     channel::oneshot,
     future::{BoxFuture, Future},
 };
-use hotshot_events_service::events::Error as EventStreamingError;
+use hotshot_events_service::events_source::EventsSource;
 use hotshot_query_service::{
     data_source::{ExtensibleDataSource, MetricsDataSource},
     fetching::provider::QueryServiceProvider,
@@ -217,9 +217,9 @@ impl Options {
 
             self.init_hotshot_modules(&mut app)?;
 
-            if self.hotshot_events.is_some() {
-                self.init_and_spawn_hotshot_event_streaming_module(state, &mut tasks)?;
-            }
+            // if self.hotshot_events.is_some() {
+            //     self.init_and_spawn_hotshot_event_streaming_module(state, &mut tasks)?;
+            // }
 
             tasks.spawn(
                 "API server",
@@ -238,9 +238,9 @@ impl Options {
 
             self.init_hotshot_modules(&mut app)?;
 
-            if self.hotshot_events.is_some() {
-                self.init_and_spawn_hotshot_event_streaming_module(state, &mut tasks)?;
-            }
+            // if self.hotshot_events.is_some() {
+            //     self.init_and_spawn_hotshot_event_streaming_module(state, &mut tasks)?;
+            // }
 
             tasks.spawn(
                 "API server",
@@ -355,9 +355,9 @@ impl Options {
             .init_app_modules(ds, state.clone(), bind_version)
             .await?;
 
-        if self.hotshot_events.is_some() {
-            self.init_and_spawn_hotshot_event_streaming_module(state, tasks)?;
-        }
+        // if self.hotshot_events.is_some() {
+        //     self.init_and_spawn_hotshot_event_streaming_module(state, tasks)?;
+        // }
 
         tasks.spawn("API server", self.listen(self.http.port, app, bind_version));
         Ok((
@@ -448,9 +448,9 @@ impl Options {
             "merklized state storage update loop",
             update_state_storage_loop(ds.clone(), get_node_state),
         );
-        if self.hotshot_events.is_some() {
-            self.init_and_spawn_hotshot_event_streaming_module(state, tasks)?;
-        }
+        // if self.hotshot_events.is_some() {
+        //     self.init_and_spawn_hotshot_event_streaming_module(state, tasks)?;
+        // }
 
         tasks.spawn(
             "API server",
@@ -478,7 +478,8 @@ impl Options {
             + StateSignatureDataSource<N>
             + NodeStateDataSource
             + CatchupDataSource
-            + HotShotConfigDataSource,
+            + HotShotConfigDataSource
+            + EventsSource<espresso_types::SeqTypes>,
         N: ConnectedNetwork<PubKey>,
     {
         let bind_version = SequencerApiVersion::instance();
@@ -510,50 +511,56 @@ impl Options {
             })?;
         }
 
-        Ok(())
-    }
-
-    // Enable the events streaming api module
-    fn init_and_spawn_hotshot_event_streaming_module<
-        N,
-        P: SequencerPersistence,
-        V: Versions + 'static,
-    >(
-        &self,
-        state: ApiState<N, P, V>,
-        tasks: &mut TaskList,
-    ) -> anyhow::Result<()>
-    where
-        N: ConnectedNetwork<PubKey>,
-    {
-        // Start the event streaming API server if it is enabled.
-        // It runs to different port and app because State and Extensible Data source needs to support required
-        // EventsSource trait, which is currently intended not to implement to separate hotshot-query-service crate, and
-        // hotshot-events-service crate.
-
-        let mut app = App::<_, EventStreamingError>::with_state(AppState::from(state));
-
-        tracing::info!("initializing hotshot events API");
-
-        register_api("hotshot-events", &mut app, move |ver| {
-            hotshot_events_service::events::define_api::<_, _, SequencerApiVersion>(
-                &hotshot_events_service::events::Options::default(),
-                ver,
-            )
-            .context("failed to define hotshot events api")
-        })?;
-
-        tasks.spawn(
-            "Hotshot Events Streaming API server",
-            self.listen(
-                self.hotshot_events.unwrap().events_service_port,
-                app,
-                SequencerApiVersion::instance(),
-            ),
-        );
+        if self.hotshot_events.is_some() {
+            register_api("hotshot-events", app, move |ver| {
+                hotshot_events_service::events::define_api::<_, _, SequencerApiVersion>(
+                    &hotshot_events_service::events::Options::default(),
+                    ver,
+                )
+                .context("failed to define hotshot events api")
+            })?;
+        }
 
         Ok(())
     }
+
+    // // Enable the events streaming api module
+    // fn init_and_spawn_hotshot_event_streaming_module<
+    //     N,
+    //     P: SequencerPersistence,
+    //     V: Versions + 'static,
+    // >(
+    //     &self,
+    //     state: ApiState<N, P, V>,
+    //     tasks: &mut TaskList,
+    // ) -> anyhow::Result<()>
+    // where
+    //     N: ConnectedNetwork<PubKey>,
+    // {
+    //     // Start the event streaming API server if it is enabled.
+    //     // It runs to different port and app because State and Extensible Data source needs to support required
+    //     // EventsSource trait, which is currently intended not to implement to separate hotshot-query-service crate, and
+    //     // hotshot-events-service crate.
+
+    //     let mut app = App::<_, EventStreamingError>::with_state(AppState::from(state));
+
+    //     tracing::info!("initializing hotshot events API");
+
+    //     register_api("hotshot-events", &mut app, move |ver| {
+    //         hotshot_events_service::events::define_api::<_, _, SequencerApiVersion>(
+    //             &hotshot_events_service::events::Options::default(),
+    //             ver,
+    //         )
+    //         .context("failed to define hotshot events api")
+    //     })?;
+
+    //     tasks.spawn(
+    //         "Hotshot Events Streaming API server",
+    //         self.listen(self.http.port, app, SequencerApiVersion::instance()),
+    //     );
+
+    //     Ok(())
+    // }
 
     fn listen<S, E, ApiVer>(
         &self,
@@ -639,11 +646,7 @@ pub struct State;
 
 /// Options for the Hotshot events streaming API module.
 #[derive(Parser, Clone, Copy, Debug, Default)]
-pub struct HotshotEvents {
-    /// Port that the HTTP Hotshot Event streaming API will use.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT")]
-    pub events_service_port: u16,
-}
+pub struct HotshotEvents;
 
 /// Options for the explorer API module.
 #[derive(Parser, Clone, Copy, Debug, Default)]

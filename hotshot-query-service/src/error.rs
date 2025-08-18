@@ -15,6 +15,7 @@ use std::fmt::Display;
 use derive_more::From;
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
+use tide_disco::Error as TideError;
 use tide_disco::StatusCode;
 
 use crate::{availability, explorer, merklized_state, node, status};
@@ -60,6 +61,15 @@ impl tide_disco::Error for Error {
             Self::MerklizedState { source } => source.status(),
             Self::Explorer { source } => source.status(),
             Self::Custom { status, .. } => *status,
+        }
+    }
+}
+
+impl From<hotshot_events_service::events::Error> for Error {
+    fn from(err: hotshot_events_service::events::Error) -> Self {
+        Self::Custom {
+            message: err.to_string(),
+            status: err.status(),
         }
     }
 }

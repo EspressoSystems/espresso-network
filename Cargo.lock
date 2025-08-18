@@ -5807,6 +5807,7 @@ dependencies = [
  "futures",
  "generic-array",
  "hotshot",
+ "hotshot-events-service",
  "hotshot-example-types",
  "hotshot-testing",
  "hotshot-types",

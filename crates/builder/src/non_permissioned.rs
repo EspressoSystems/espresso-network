@@ -287,9 +287,7 @@ mod test {
                         Default::default(),
                         persistence::fs::Options::new(tmpdir.path().to_owned()),
                     )
-                    .hotshot_events(HotshotEvents {
-                        events_service_port: event_port,
-                    }),
+                    .hotshot_events(HotshotEvents),
             )
             .network_config(network_config)
             .build();
