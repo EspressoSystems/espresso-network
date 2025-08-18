@@ -13,23 +13,9 @@
 // see <https://www.gnu.org/licenses/>.
 use std::time::Duration;
 
-use tracing_subscriber::EnvFilter;
-
 pub mod consensus;
 pub mod mocks;
 
 pub async fn sleep(dur: Duration) {
     tokio::time::sleep(dur).await;
-}
-
-pub fn setup_test() {
-    // Initialize logging
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .try_init();
-
-    #[cfg(all(feature = "backtrace-on-stack-overflow", not(windows)))]
-    unsafe {
-        backtrace_on_stack_overflow::enable();
-    }
 }

@@ -28,9 +28,8 @@ use hotshot_types::{
 };
 use vbs::version::{StaticVersionType, Version};
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_da_task() {
-    hotshot::helpers::initialize_logging();
 
     let (handle, _, _, node_key_map) =
         build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2).await;
@@ -144,9 +143,8 @@ async fn test_da_task() {
     run_test![inputs, da_script].await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_da_task_storage_failure() {
-    hotshot::helpers::initialize_logging();
 
     let (handle, _, _, node_key_map) =
         build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2).await;

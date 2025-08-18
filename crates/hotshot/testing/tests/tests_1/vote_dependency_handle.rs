@@ -24,11 +24,9 @@ use tokio::time::timeout;
 const TIMEOUT: Duration = Duration::from_millis(35);
 
 #[cfg(test)]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_vote_dependency_handle() {
     use std::sync::Arc;
-
-    hotshot::helpers::initialize_logging();
 
     // We use a node ID of 2 here arbitrarily. We just need it to build the system handle.
     let node_id = 2;

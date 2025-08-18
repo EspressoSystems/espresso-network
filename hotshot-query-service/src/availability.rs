@@ -37,10 +37,10 @@ use hotshot_types::{
 };
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, Snafu};
-use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, StatusCode};
+use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, RequestParams, StatusCode};
 use vbs::version::StaticVersionType;
 
-use crate::{api::load_api, Header, Payload, QueryError, VidCommon};
+use crate::{api::load_api, types::HeightIndexed, Header, Payload, QueryError, VidCommon};
 
 pub(crate) mod data_source;
 mod fetch;
@@ -610,37 +610,28 @@ where
     })?
     .at("get_transaction", move |req, state| {
         async move {
-            match req.opt_blob_param("hash")? {
-                Some(hash) => {
-                    let fetch = state
-                        .read(|state| state.get_transaction(hash).boxed())
-                        .await;
-                    fetch
-                        .with_timeout(timeout)
-                        .await
-                        .context(FetchTransactionSnafu {
-                            resource: hash.to_string(),
-                        })
+            let tx = get_transaction(req, state, timeout).await?;
+            let height = tx.block.height();
+            let vid = state
+                .read(|state| state.get_vid_common(height as usize))
+                .await
+                .with_timeout(timeout)
+                .await
+                .context(FetchBlockSnafu {
+                    resource: height.to_string(),
+                })?;
+            let proof = tx.block.transaction_proof(&vid, &tx.index).context(
+                InvalidTransactionIndexSnafu {
+                    height,
+                    index: tx.transaction.index(),
                 },
-                None => {
-                    let height: u64 = req.integer_param("height")?;
-                    let fetch = state
-                        .read(|state| state.get_block(height as usize).boxed())
-                        .await;
-                    let block = fetch.with_timeout(timeout).await.context(FetchBlockSnafu {
-                        resource: height.to_string(),
-                    })?;
-                    let i: u64 = req.integer_param("index")?;
-                    let index = block
-                        .payload()
-                        .nth(block.metadata(), i as usize)
-                        .context(InvalidTransactionIndexSnafu { height, index: i })?;
-                    TransactionQueryData::new(&block, index, i)
-                        .context(InvalidTransactionIndexSnafu { height, index: i })
-                },
-            }
+            )?;
+            Ok(TransactionWithProofQueryData::new(tx.transaction, proof))
         }
         .boxed()
+    })?
+    .at("get_transaction_without_proof", move |req, state| {
+        async move { Ok(get_transaction(req, state, timeout).await?.transaction) }.boxed()
     })?
     .stream("stream_transactions", move |req, state| {
         async move {
@@ -680,7 +671,8 @@ where
                                             }
                                         }
 
-                                        TransactionQueryData::new(&block, index, i as u64)
+                                        let tx = block.transaction(&index)?;
+                                        TransactionQueryData::new(tx, &block, &index, i as u64)
                                     })
                                     .collect::<Vec<_>>();
 
@@ -753,6 +745,20 @@ where
                 .with_timeout(timeout)
                 .await
                 .context(FetchStateCertSnafu { epoch })
+                .map(StateCertQueryDataV1::from)
+        }
+        .boxed()
+    })?
+    .at("get_state_cert_v2", move |req, state| {
+        async move {
+            let epoch = req.integer_param("epoch")?;
+            let fetch = state
+                .read(|state| state.get_state_cert(epoch).boxed())
+                .await;
+            fetch
+                .with_timeout(timeout)
+                .await
+                .context(FetchStateCertSnafu { epoch })
         }
         .boxed()
     })?;
@@ -764,6 +770,54 @@ fn enforce_range_limit(from: usize, until: usize, limit: usize) -> Result<(), Er
         return Err(Error::RangeLimit { from, until, limit });
     }
     Ok(())
+}
+
+async fn get_transaction<Types, State>(
+    req: RequestParams,
+    state: &State,
+    timeout: Duration,
+) -> Result<BlockWithTransaction<Types>, Error>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+    State: 'static + Send + Sync + ReadState,
+    <State as ReadState>::State: Send + Sync + AvailabilityDataSource<Types>,
+{
+    match req.opt_blob_param("hash")? {
+        Some(hash) => state
+            .read(|state| state.get_block_containing_transaction(hash).boxed())
+            .await
+            .with_timeout(timeout)
+            .await
+            .context(FetchTransactionSnafu {
+                resource: hash.to_string(),
+            }),
+        None => {
+            let height: u64 = req.integer_param("height")?;
+            let fetch = state
+                .read(|state| state.get_block(height as usize).boxed())
+                .await;
+            let block = fetch.with_timeout(timeout).await.context(FetchBlockSnafu {
+                resource: height.to_string(),
+            })?;
+            let i: u64 = req.integer_param("index")?;
+            let index = block
+                .payload()
+                .nth(block.metadata(), i as usize)
+                .context(InvalidTransactionIndexSnafu { height, index: i })?;
+            let transaction = block
+                .transaction(&index)
+                .context(InvalidTransactionIndexSnafu { height, index: i })?;
+            let transaction = TransactionQueryData::new(transaction, &block, &index, i)
+                .context(InvalidTransactionIndexSnafu { height, index: i })?;
+            Ok(BlockWithTransaction {
+                transaction,
+                block,
+                index,
+            })
+        },
+    }
 }
 
 #[cfg(test)]
@@ -793,7 +847,6 @@ mod test {
         testing::{
             consensus::{MockDataSource, MockNetwork, MockSqlDataSource},
             mocks::{mock_transaction, MockBase, MockHeader, MockPayload, MockTypes, MockVersions},
-            setup_test,
         },
         types::HeightIndexed,
         ApiState, Error, Header,
@@ -990,7 +1043,7 @@ mod test {
             // Check that looking up each transaction in the block various ways returns the correct
             // transaction.
             for (j, txn_from_block) in block.enumerate() {
-                let txn: TransactionQueryData<MockTypes> = client
+                let txn: TransactionWithProofQueryData<MockTypes> = client
                     .get(&format!("transaction/{}/{}", i, j.position))
                     .send()
                     .await
@@ -1003,12 +1056,38 @@ mod test {
                 // We should be able to look up the transaction by hash. Note that for duplicate
                 // transactions, this endpoint may return a different transaction with the same
                 // hash, which is acceptable. Therefore, we don't check equivalence of the entire
-                // `TransactionQueryData` response, only its commitment.
+                // `TransactionWithProofQueryData` response, only its commitment.
+                assert_eq!(
+                    txn.hash(),
+                    client
+                        .get::<TransactionWithProofQueryData<MockTypes>>(&format!(
+                            "transaction/hash/{}",
+                            txn.hash()
+                        ))
+                        .send()
+                        .await
+                        .unwrap()
+                        .hash()
+                );
+
+                // We can also get the transaction with proof omitted.
                 assert_eq!(
                     txn.hash(),
                     client
                         .get::<TransactionQueryData<MockTypes>>(&format!(
-                            "transaction/hash/{}",
+                            "transaction/{}/{}/noproof",
+                            i, j.position
+                        ))
+                        .send()
+                        .await
+                        .unwrap()
+                        .hash()
+                );
+                assert_eq!(
+                    txn.hash(),
+                    client
+                        .get::<TransactionQueryData<MockTypes>>(&format!(
+                            "transaction/hash/{}/noproof",
                             txn.hash()
                         ))
                         .send()
@@ -1052,10 +1131,8 @@ mod test {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_api() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
         network.start().await;
@@ -1372,10 +1449,8 @@ mod test {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_api_epochs() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, EpochsTestVersions>::init().await;
         let epoch_height = network.epoch_height();
@@ -1426,8 +1501,8 @@ mod test {
         }
 
         for epoch in 1..4 {
-            let state_cert: StateCertQueryData<MockTypes> = client
-                .get(&format!("state-cert/{epoch}"))
+            let state_cert: StateCertQueryDataV2<MockTypes> = client
+                .get(&format!("state-cert-v2/{epoch}"))
                 .send()
                 .await
                 .unwrap();
@@ -1438,10 +1513,8 @@ mod test {
         network.shut_down().await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_old_api() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
         network.start().await;
@@ -1535,11 +1608,9 @@ mod test {
         network.shut_down().await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_extensions() {
         use hotshot_example_types::node_types::TestVersions;
-
-        setup_test();
 
         let dir = TempDir::with_prefix("test_availability_extensions").unwrap();
         let data_source = ExtensibleDataSource::new(
@@ -1639,10 +1710,8 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_range_limit() {
-        setup_test();
-
         let large_object_range_limit = 2;
         let small_object_range_limit = 3;
 
@@ -1734,10 +1803,8 @@ mod test {
         network.shut_down().await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_header_endpoint() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockSqlDataSource, MockVersions>::init().await;
         network.start().await;
@@ -1776,10 +1843,8 @@ mod test {
         network.shut_down().await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_leaf_only_ds() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockSqlDataSource, MockVersions>::init_with_leaf_ds().await;
         network.start().await;

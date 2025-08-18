@@ -10,7 +10,7 @@ import { IPlonkVerifier as V } from "../src/interfaces/IPlonkVerifier.sol";
 
 // Target contract
 import { LightClient as LC } from "../src/LightClient.sol";
-import { LightClientCommonTest } from "./LightClientV2.t.sol";
+import { LightClientCommonTest } from "./LightClientV3.t.sol";
 
 contract LightClientBench is LightClientCommonTest {
     constructor() {
@@ -23,11 +23,12 @@ contract LightClientBench is LightClientCommonTest {
         (
             LC.LightClientState memory newState,
             LC.StakeTableState memory nextStakeTable,
+            uint256 newAuthRoot,
             V.PlonkProof memory newProof
         ) = genStateProof();
 
         vm.prank(prover);
         vm.resumeGasMetering();
-        lc.newFinalizedState(newState, nextStakeTable, newProof);
+        lc.newFinalizedState(newState, nextStakeTable, newAuthRoot, newProof);
     }
 }

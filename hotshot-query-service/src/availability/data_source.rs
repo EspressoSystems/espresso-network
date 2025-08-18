@@ -31,10 +31,9 @@ use super::{
     fetch::Fetch,
     query_data::{
         BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadMetadata, PayloadQueryData,
-        QueryableHeader, QueryablePayload, TransactionHash, TransactionQueryData,
-        VidCommonMetadata, VidCommonQueryData,
+        QueryableHeader, QueryablePayload, TransactionHash, VidCommonMetadata, VidCommonQueryData,
     },
-    StateCertQueryData,
+    BlockWithTransaction, StateCertQueryDataV2,
 };
 use crate::{types::HeightIndexed, Header, Payload};
 
@@ -229,13 +228,12 @@ where
         end: usize,
     ) -> FetchStream<VidCommonMetadata<Types>>;
 
-    /// Returns the transaction with the given `hash`.
-    async fn get_transaction(
+    async fn get_block_containing_transaction(
         &self,
-        hash: TransactionHash<Types>,
-    ) -> Fetch<TransactionQueryData<Types>>;
+        h: TransactionHash<Types>,
+    ) -> Fetch<BlockWithTransaction<Types>>;
 
-    async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryData<Types>>;
+    async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryDataV2<Types>>;
 
     async fn subscribe_blocks(&self, from: usize) -> BoxStream<'static, BlockQueryData<Types>> {
         self.get_block_range(from..)
@@ -310,7 +308,7 @@ pub struct BlockInfo<Types: NodeType> {
     pub block: Option<BlockQueryData<Types>>,
     pub vid_common: Option<VidCommonQueryData<Types>>,
     pub vid_share: Option<VidShare>,
-    pub state_cert: Option<StateCertQueryData<Types>>,
+    pub state_cert: Option<StateCertQueryDataV2<Types>>,
 }
 
 impl<Types: NodeType> From<LeafQueryData<Types>> for BlockInfo<Types> {
@@ -331,7 +329,7 @@ impl<Types: NodeType> BlockInfo<Types> {
         block: Option<BlockQueryData<Types>>,
         vid_common: Option<VidCommonQueryData<Types>>,
         vid_share: Option<VidShare>,
-        state_cert: Option<StateCertQueryData<Types>>,
+        state_cert: Option<StateCertQueryDataV2<Types>>,
     ) -> Self {
         Self {
             leaf,

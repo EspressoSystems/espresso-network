@@ -13,14 +13,16 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
+use alloy::primitives::FixedBytes;
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::*;
+use jf_utils::canonical;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use vbs::version::Version;
 
 use crate::{
     data::{Leaf, Leaf2, VidCommitment},
-    light_client::{LightClientState, StakeTableState},
+    light_client::{CircuitField, LightClientState, StakeTableState},
     message::UpgradeLock,
     traits::{
         node_implementation::{ConsensusTime, NodeType, Versions},
@@ -952,6 +954,15 @@ pub struct LightClientStateUpdateVote<TYPES: NodeType> {
     pub next_stake_table_state: StakeTableState,
     /// The signature to the light client state
     pub signature: <TYPES::StateSignatureKey as StateSignatureKey>::StateSignature,
+    /// The signature to the light client V2 state
+    pub v2_signature: <TYPES::StateSignatureKey as StateSignatureKey>::StateSignature,
+    /// The auth root
+    pub auth_root: FixedBytes<32>,
+    /// The signed state digest used for LCV3
+    /// WARN: this field cannot be trusted, you need to verify that it's consistent with other fields in this struct.
+    /// It's here because it's hard to derive in the implementation of `LightClientStateUpdateVoteAccumulator`.
+    #[serde(with = "canonical")]
+    pub signed_state_digest: CircuitField,
 }
 
 impl<TYPES: NodeType> HasViewNumber<TYPES> for LightClientStateUpdateVote<TYPES> {

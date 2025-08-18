@@ -25,13 +25,12 @@ use crate::{
         Leaf2, QuorumProposalWrapper, VidCommitment, VidDisperse, VidDisperseAndDuration,
         VidDisperseShare,
     },
-    drb::DrbResults,
     epoch_membership::EpochMembershipCoordinator,
     error::HotShotError,
     event::{HotShotAction, LeafInfo},
     message::{Proposal, UpgradeLock},
     simple_certificate::{
-        DaCertificate2, LightClientStateUpdateCertificate, NextEpochQuorumCertificate2,
+        DaCertificate2, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
         QuorumCertificate2,
     },
     simple_vote::HasEpoch,
@@ -281,6 +280,90 @@ impl<T: ConsensusTime> HotShotActionViews<T> {
         }
     }
 }
+
+#[derive(Debug, Clone)]
+struct ValidatorParticipation<TYPES: NodeType> {
+    epoch: TYPES::Epoch,
+    /// Current epoch participation by key maps key -> (num leader, num times proposed)
+    current_epoch_participation: HashMap<TYPES::SignatureKey, (u64, u64)>,
+
+    /// Last epoch participation by key maps key -> (num leader, num times proposed)
+    last_epoch_participation: HashMap<TYPES::SignatureKey, (u64, u64)>,
+}
+
+impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
+    fn new() -> Self {
+        Self {
+            epoch: TYPES::Epoch::genesis(),
+            current_epoch_participation: HashMap::new(),
+            last_epoch_participation: HashMap::new(),
+        }
+    }
+
+    fn update_participation(
+        &mut self,
+        key: TYPES::SignatureKey,
+        epoch: TYPES::Epoch,
+        proposed: bool,
+    ) {
+        if epoch != self.epoch {
+            return;
+        }
+        let entry = self
+            .current_epoch_participation
+            .entry(key)
+            .or_insert((0, 0));
+        if proposed {
+            entry.1 += 1;
+        }
+        entry.0 += 1;
+    }
+
+    fn update_participation_epoch(&mut self, epoch: TYPES::Epoch) {
+        if epoch <= self.epoch {
+            return;
+        }
+        self.epoch = epoch;
+        self.last_epoch_participation = self.current_epoch_participation.clone();
+        self.current_epoch_participation = HashMap::new();
+    }
+
+    fn get_participation(&self, key: TYPES::SignatureKey) -> (f64, Option<f64>) {
+        let current_epoch_participation = self
+            .current_epoch_participation
+            .get(&key)
+            .unwrap_or(&(0, 0));
+        let num_leader = current_epoch_participation.0;
+        let num_proposed = current_epoch_participation.1;
+
+        let current_epoch_participation_ratio = if num_leader == 0 {
+            0.0
+        } else {
+            num_proposed as f64 / num_leader as f64
+        };
+        let last_epoch_participation = self.last_epoch_participation.get(&key);
+        let last_epoch_participation_ratio =
+            last_epoch_participation.map(|(leader, proposed)| *leader as f64 / *proposed as f64);
+        (
+            current_epoch_participation_ratio,
+            last_epoch_participation_ratio,
+        )
+    }
+
+    fn current_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
+        self.current_epoch_participation
+            .iter()
+            .map(|(key, (leader, proposed))| (key.clone(), *leader as f64 / *proposed as f64))
+            .collect()
+    }
+    fn previous_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
+        self.last_epoch_participation
+            .iter()
+            .map(|(key, (leader, proposed))| (key.clone(), *leader as f64 / *proposed as f64))
+            .collect()
+    }
+}
+
 /// A reference to the consensus algorithm
 ///
 /// This will contain the state of all rounds.
@@ -333,6 +416,9 @@ pub struct Consensus<TYPES: NodeType> {
     /// The high QC for the next epoch
     next_epoch_high_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
 
+    /// Track the participation of each validator in the current epoch and previous epoch
+    validator_participation: ValidatorParticipation<TYPES>,
+
     /// A reference to the metrics trait
     pub metrics: Arc<ConsensusMetricsValue>,
 
@@ -345,9 +431,6 @@ pub struct Consensus<TYPES: NodeType> {
     /// Number of iterations for the DRB calculation post-difficulty upgrade, taken from HotShotConfig
     pub drb_upgrade_difficulty: u64,
 
-    /// Tables for the DRB seeds and results.
-    pub drb_results: DrbResults<TYPES>,
-
     /// The transition QC for the current epoch
     transition_qc: Option<(
         QuorumCertificate2<TYPES>,
@@ -357,7 +440,7 @@ pub struct Consensus<TYPES: NodeType> {
     /// The highest block number that we have seen
     pub highest_block: u64,
     /// The light client state update certificate
-    pub state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
+    pub state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
 }
 
 /// This struct holds a payload and its metadata
@@ -488,7 +571,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         next_epoch_high_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
         metrics: Arc<ConsensusMetricsValue>,
         epoch_height: u64,
-        state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
+        state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
         drb_difficulty: u64,
         drb_upgrade_difficulty: u64,
     ) -> Self {
@@ -526,11 +609,11 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             next_epoch_high_qc,
             metrics,
             epoch_height,
-            drb_results: DrbResults::new(),
             transition_qc,
             highest_block: 0,
             state_cert,
             drb_difficulty,
+            validator_participation: ValidatorParticipation::new(),
             drb_upgrade_difficulty,
         }
     }
@@ -610,7 +693,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     }
 
     /// Get the current light client state certificate
-    pub fn state_cert(&self) -> Option<&LightClientStateUpdateCertificate<TYPES>> {
+    pub fn state_cert(&self) -> Option<&LightClientStateUpdateCertificateV2<TYPES>> {
         self.state_cert.as_ref()
     }
 
@@ -661,6 +744,40 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         );
         self.cur_view = view_number;
         Ok(())
+    }
+
+    /// Update the validator participation
+    pub fn update_validator_participation(
+        &mut self,
+        key: TYPES::SignatureKey,
+        epoch: TYPES::Epoch,
+        proposed: bool,
+    ) {
+        self.validator_participation
+            .update_participation(key, epoch, proposed);
+    }
+
+    /// Update the validator participation epoch
+    pub fn update_validator_participation_epoch(&mut self, epoch: TYPES::Epoch) {
+        self.validator_participation
+            .update_participation_epoch(epoch);
+    }
+
+    /// Get the validator participation
+    pub fn get_validator_participation(&self, key: TYPES::SignatureKey) -> (f64, Option<f64>) {
+        self.validator_participation.get_participation(key)
+    }
+
+    /// Get the current proposal participation
+    pub fn current_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
+        self.validator_participation
+            .current_proposal_participation()
+    }
+
+    /// Get the previous proposal participation
+    pub fn previous_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
+        self.validator_participation
+            .previous_proposal_participation()
     }
 
     /// Get the parent Leaf Info from a given leaf and our public key.
@@ -1005,7 +1122,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     /// Can return an error when the provided state_cert is not newer than the existing entry.
     pub fn update_state_cert(
         &mut self,
-        state_cert: LightClientStateUpdateCertificate<TYPES>,
+        state_cert: LightClientStateUpdateCertificateV2<TYPES>,
     ) -> Result<()> {
         if let Some(existing_state_cert) = &self.state_cert {
             ensure!(

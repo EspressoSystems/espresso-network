@@ -22,7 +22,7 @@ use hotshot_types::{
     epoch_membership::EpochMembership,
     message::Proposal,
     simple_certificate::{
-        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate2,
+        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
         UpgradeCertificate,
     },
     traits::{
@@ -133,7 +133,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
     ) -> Option<(
         QuorumCertificate2<TYPES>,
         Option<NextEpochQuorumCertificate2<TYPES>>,
-        Option<LightClientStateUpdateCertificate<TYPES>>,
+        Option<LightClientStateUpdateCertificateV2<TYPES>>,
     )> {
         while let Ok(event) = rx.recv_direct().await {
             let (qc, maybe_next_epoch_qc, mut maybe_state_cert) = match event.as_ref() {
@@ -298,7 +298,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
     ) -> Result<(
         QuorumCertificate2<TYPES>,
         Option<NextEpochQuorumCertificate2<TYPES>>,
-        Option<LightClientStateUpdateCertificate<TYPES>>,
+        Option<LightClientStateUpdateCertificateV2<TYPES>>,
     )> {
         tracing::debug!("waiting for QC");
         // If we haven't upgraded to Hotstuff 2 just return the high qc right away
@@ -447,7 +447,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         formed_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
         parent_qc: QuorumCertificate2<TYPES>,
         maybe_next_epoch_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
-        maybe_state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
+        maybe_state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
     ) -> Result<()> {
         let (parent_leaf, state) = parent_leaf_and_state(
             &self.sender,
@@ -596,13 +596,16 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         let next_drb_result = if is_epoch_transition(block_header.block_number(), self.epoch_height)
         {
             if let Some(epoch_val) = &epoch {
-                self.consensus
-                    .read()
+                let drb_result = epoch_membership
+                    .next_epoch()
                     .await
-                    .drb_results
-                    .results
-                    .get(&(*epoch_val + 1))
-                    .copied()
+                    .context(warn!("No stake table for epoch {}", *epoch_val + 1))?
+                    .get_epoch_drb()
+                    .await
+                    .clone()
+                    .context(warn!("No DRB result for epoch {}", *epoch_val + 1))?;
+
+                Some(drb_result)
             } else {
                 None
             }
