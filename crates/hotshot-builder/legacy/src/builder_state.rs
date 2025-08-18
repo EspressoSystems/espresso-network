@@ -529,7 +529,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
             return;
         };
 
-        // first check whether vid_commitment exists in the quorum_proposal_payload_commit_to_quorum_proposal hashmap, if yer, ignore it, otherwise validate it and later insert in
+        // first check whether vid_commitment exists in the quorum_proposal_payload_commit_to_quorum_proposal hashmap, if yes, ignore it, otherwise validate it and later insert in
         // if we have matching da and quorum proposals, we can skip storing the one, and remove the other from storage, and call build_block with both, to save a little space.
         let Entry::Occupied(da_proposal) = self
             .da_proposal_payload_commit_to_da_proposal
@@ -544,7 +544,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
         self.da_proposal_payload_commit_to_da_proposal
             .remove(&(payload_builder_commitment.clone(), view_number));
 
-        // also make sure we clone for the same view number( check incase payload commitments are same)
+        // also make sure we clone for the same view number (check in case payload commitments are same)
         if da_proposal_info.view_number != view_number {
             tracing::debug!(
                 "Not spawning a clone despite matching DA and quorum payload commitments, as they \
