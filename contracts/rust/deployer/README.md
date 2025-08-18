@@ -580,7 +580,7 @@ RUST_LOG=info cargo run --bin deploy -- \
   --upgrade-esp-token-v2 \
   --rpc-url=$RPC_URL \
   --use-multisig
-  # to similuate, add --dry-run
+  # to simulate, add --dry-run
 ```
 
 ### Upgrading with Docker Compose
@@ -593,7 +593,7 @@ docker compose run --rm \
   -v $(pwd)/.env.mydemo:/app/.env.mydemo \
   deploy-sequencer-contracts \
   deploy --deploy-esp-token --upgrade-esp-token-v2 --rpc-url=$RPC_URL --use-multisig
-  # to similuate, add --dry-run
+  # to simulate, add --dry-run
 ```
 
 You should see the output which says something like:
@@ -965,7 +965,7 @@ docker compose run --rm \
   \
   deploy-sequencer-contracts \
   deploy --upgrade-light-client-v2 --rpc-url=$RPC_URL --use-multisig --out $OUTPUT_FILE
-  # to similuate, add --dry-run
+  # to simulate, add --dry-run
 ```
 
 **Note**: The upgrade process will:
@@ -1052,7 +1052,7 @@ docker compose run --rm \
   --timelock-address $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
   --rpc-url=$RPC_URL \
   --out $OUTPUT_FILE
-  # to similuate, add --dry-run
+  # to simulate, add --dry-run
 ```
 
 **Note**: The admin transfer process will:
@@ -1117,7 +1117,7 @@ docker compose run --rm \
   \
   deploy-sequencer-contracts \
   deploy --deploy-esp-token --use-timelock-owner --rpc-url=$RPC_URL --out $OUTPUT_FILE
-  # to similuate, add --dry-run
+  # to simulate, add --dry-run
 ```
 
 **Note**: The EspToken deployment process will:
@@ -1226,7 +1226,7 @@ docker compose run --rm \
   \
   deploy-sequencer-contracts \
   deploy --deploy-stake-table --upgrade-stake-table-v2 --use-timelock-owner --rpc-url=$RPC_URL --out $OUTPUT_FILE
-  # to similuate, add --dry-run
+  # to simulate, add --dry-run
 ```
 
 **Note**: The StakeTable deployment and upgrade process will:
@@ -1427,7 +1427,7 @@ docker compose run --rm \
   --timelock-address $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS \
   --rpc-url=$RPC_URL \
   --out $OUTPUT_FILE
-  # to similuate, add --dry-run
+  # to simulate, add --dry-run
 ```
 
 **Note**: The admin transfer process will:
@@ -1501,7 +1501,7 @@ docker compose run --rm \
   --timelock-address $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
   --rpc-url=$RPC_URL \
   --out $OUTPUT_FILE
-  # to similuate, add --dry-run
+  # to simulate, add --dry-run
 ```
 
 Then create a multisig proposal to transfer ownership of the StakeTableProxy to the OpsTimelock.
@@ -1580,7 +1580,7 @@ docker compose run --rm \
   --transfer-ownership-new-owner $ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER \
   --rpc-url=$RPC_URL \
   --out $OUTPUT_FILE
-  # to similuate, add --dry-run
+  # to simulate, add --dry-run
 ```
 
 **Note**: The admin transfer process will:
@@ -1749,5 +1749,5 @@ docker compose run --rm \
   --transfer-ownership-new-owner $ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER \
   --rpc-url=$RPC_URL \
   --out $OUTPUT_FILE
-  # to similuate, add --dry-run
+  # to simulate, add --dry-run
 ```
