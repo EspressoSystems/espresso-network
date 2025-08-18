@@ -1455,7 +1455,7 @@ pub mod status_tests {
 
         {
             // Shutting down the consensus to halt block production
-            // Introducing a delay of 3 seconds to ensure that elapsed time since last block is atleast 3seconds
+            // Introducing a delay of 3 seconds to ensure that elapsed time since last block is at least 3 seconds
             network.shut_down().await;
             sleep(Duration::from_secs(3)).await;
             // Asserting that the elapsed time since the last block is at least 3 seconds

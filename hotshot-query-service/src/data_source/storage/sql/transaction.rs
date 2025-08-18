@@ -724,7 +724,7 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
                     hashset.insert([0_u8; 32].to_vec());
                 },
                 MerkleNode::ForgettenSubtree { .. } => {
-                    bail!("Node in the Merkle path contains a forgetten subtree");
+                    bail!("Node in the Merkle path contains a forgotten subtree");
                 },
                 MerkleNode::Leaf { value, pos, elem } => {
                     let mut leaf_commit = Vec::new();

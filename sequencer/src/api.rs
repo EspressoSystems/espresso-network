@@ -2327,7 +2327,7 @@ mod test {
                 .unwrap();
         }
 
-        // This would fail even though we have processed atleast 10 leaves
+        // This would fail even though we have processed at least 10 leaves
         // this is because light weight nodes only support leaves, headers and VID
         client
             .get::<BlockQueryData<SeqTypes>>("availability/block/1")
@@ -3213,7 +3213,7 @@ mod test {
         // first two epochs will be 1 and 2
         // rewards are distributed starting third epoch
         // third epoch starts from block 40 as epoch height is 20
-        // wait for atleast 65 blocks
+        // wait for at least 65 blocks
         let _blocks = client
             .socket("availability/stream/blocks/0")
             .subscribe::<BlockQueryData<SeqTypes>>()
@@ -3313,7 +3313,7 @@ mod test {
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
-        // wait for atleast 75 blocks
+        // wait for at least 75 blocks
         let _blocks = client
             .socket("availability/stream/blocks/0")
             .subscribe::<BlockQueryData<SeqTypes>>()
@@ -4028,7 +4028,7 @@ mod test {
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
-        // wait for atleast 2 epochs
+        // wait for at least 2 epochs
         let _blocks = client
             .socket("availability/stream/blocks/0")
             .subscribe::<BlockQueryData<SeqTypes>>()
@@ -4515,7 +4515,7 @@ mod test {
         }
 
         retries = 0;
-        // check that the node has stored atleast 6 epochs merklized state in persistence
+        // check that the node has stored at least 6 epochs merklized state in persistence
         loop {
             sleep(Duration::from_secs(3)).await;
 

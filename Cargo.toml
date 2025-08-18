@@ -272,7 +272,7 @@ vergen = { version = "8.3", features = ["git", "gitcl"] }
 zeroize = "1.7"
 
 [workspace.lints.clippy]
-# may prevent accidental deadlocks from holding guards over match statments
+# may prevent accidental deadlocks from holding guards over match statements
 significant_drop_in_scrutinee = "warn"
 
 # NOTE: when making changes here also update sequencer-sqlite/Cargo.toml.

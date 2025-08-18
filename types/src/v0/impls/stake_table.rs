@@ -2637,13 +2637,13 @@ mod tests {
         }
         .into();
 
-        // first ensure that wan build a valid stake table
+        // first ensure that we can build a valid stake table
         assert!(active_validator_set_from_l1_events(
             vec![register.clone(), delegate.clone()].into_iter()
         )
         .is_ok());
 
-        // add the invalid key update (re-using the same consensus keys)
+        // add the invalid key update (reusing the same consensus keys)
         let key_update = ConsensusKeysUpdated::from(&val).into();
         let err =
             active_validator_set_from_l1_events(vec![register, delegate, key_update].into_iter())
