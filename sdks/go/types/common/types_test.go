@@ -124,10 +124,6 @@ func TestEspressoDaProposalEvent(t *testing.T) {
 	consensusMessage, err := UnmarshalConsensusMessage(consensusMessageInBytes)
 	require.Nil(t, err)
 	require.Equal(t, consensusMessage.Event.DaProposalWrapper.DaProposalDataWrapper.Data.ViewNumber, 13)
-	// Check the builder commitment is correct
-	// require.Equal(t, consensusMessage.Event.DaProposalWrapper.DaProposalDataWrapper.Data.Metadata.Bytes, ReferenceBuilderCommitment)
-
-	// Convert the builder commitment
 	blockPayload, err := NewBlockPayload(consensusMessage.Event.DaProposalWrapper.DaProposalDataWrapper.Data.EncodedTransactions, consensusMessage.Event.DaProposalWrapper.DaProposalDataWrapper.Data.Metadata)
 	require.Nil(t, err)
 	builderCommitment, err := blockPayload.BuilderCommitment()
