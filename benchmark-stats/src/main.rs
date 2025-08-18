@@ -338,7 +338,8 @@ fn read_leader_view_stats(
     path: &Path,
 ) -> Result<BTreeMap<ViewNumber, LeaderViewStats<SeqTypes>>, Box<dyn std::error::Error>> {
     println!("\n**--- Leader Stats ---**");
-    let mut reader = csv::Reader::from_path(path)?;
+    let mut reader = csv::Reader::from_path(path)
+        .map_err(|e| format!("Failed to open leader stats CSV at {path:?}: {e}"))?;
     let mut leader_view_stats = BTreeMap::<ViewNumber, LeaderViewStats<SeqTypes>>::new();
 
     for result in reader.deserialize() {
@@ -353,6 +354,9 @@ fn plot_and_print_leader_stats(
     output_file: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut views = Vec::new();
+    let mut vid_ts = Vec::new();
+    let mut dac_ts = Vec::new();
+    let mut qc_ts = Vec::new();
 
     // Deltas relative to block built
     let mut da_cert_deltas = Vec::new();
@@ -368,39 +372,41 @@ fn plot_and_print_leader_stats(
 
     for (&view, record) in leader_view_stats.iter() {
         // Skip if either Block built, DA, VID, or QC is missing
-        let (block_built, da, vid, qc) = match (
+        let (block_built, dac, vid, qc) = match (
             record.block_built,
             record.da_cert_send,
             record.vid_disperse_send,
             record.qc_formed,
         ) {
-            (Some(block_built), Some(da), Some(vid), Some(qc)) => (block_built, da, vid, qc),
+            (Some(block_built), Some(dac), Some(vid), Some(qc)) => (block_built, dac, vid, qc),
             _ => continue, // need all three
         };
 
         views.push(view);
 
         // Determine first among QC / VID / DAC
-        let mut events = vec![("QC", qc), ("VID", vid), ("DAC", da)];
+        let mut events = vec![("QC", qc), ("VID", vid), ("DAC", dac)];
         events.sort_by_key(|&(_, ts)| ts);
         let first = events[0].0;
         *first_event_counts.entry(first).or_insert(0) += 1;
 
         qc_vid_diffs.push(((qc as i64 - vid as i64) as f64) / 1_000_000.0);
-        qc_dac_diffs.push(((qc as i64 - da as i64) as f64) / 1_000_000.0);
-        vid_dac_diffs.push(((vid as i64 - da as i64) as f64) / 1_000_000.0);
+        qc_dac_diffs.push(((qc as i64 - dac as i64) as f64) / 1_000_000.0);
+        vid_dac_diffs.push(((vid as i64 - dac as i64) as f64) / 1_000_000.0);
 
         // Difference relative to block built
-        da_cert_deltas.push((da - block_built) as f64 / 1_000_000.0);
+        da_cert_deltas.push((dac - block_built) as f64 / 1_000_000.0);
         vid_disperse_deltas.push((vid - block_built) as f64 / 1_000_000.0);
 
         // Difference between block built and previous proposal
         if let Some(prev_prop) = record.prev_proposal_send {
             block_built_prev_prop_deltas.push((block_built - prev_prop) as f64 / 1_000_000.0);
         }
-    }
 
-    let mut plot = Plot::new();
+        vid_ts.push(Some(vid as f64 / 1_000_000_000.0));
+        dac_ts.push(Some(dac as f64 / 1_000_000_000.0));
+        qc_ts.push(Some(qc as f64 / 1_000_000_000.0));
+    }
 
     let trace_da_cert_deltas = Scatter::new(views.clone(), da_cert_deltas.clone())
         .mode(Mode::Markers)
@@ -424,6 +430,8 @@ fn plot_and_print_leader_stats(
                 .line(Line::new().color("orange").width(1.0)),
         );
 
+    let mut plot = Plot::new();
+
     plot.add_trace(trace_da_cert_deltas);
     plot.add_trace(trace_vid_disperse_deltas);
 
@@ -436,20 +444,65 @@ fn plot_and_print_leader_stats(
             .marker(Marker::new().symbol(MarkerSymbol::Circle));
     plot.add_trace(trace_block_built_prev_prop);
 
+    let trace_vid = Scatter::new(views.clone(), vid_ts)
+        .mode(Mode::Markers)
+        .name("VID Timestamp")
+        .x_axis("x3")
+        .y_axis("y3")
+        .marker(
+            Marker::new()
+                .symbol(MarkerSymbol::Square)
+                .size(8)
+                .color("rgba(0,0,0,0)")
+                .line(Line::new().color("orange").width(1.0)),
+        );
+
+    let trace_dac = Scatter::new(views.clone(), dac_ts)
+        .mode(Mode::Markers)
+        .name("DAC Timestamp")
+        .x_axis("x3")
+        .y_axis("y3")
+        .marker(
+            Marker::new()
+                .symbol(MarkerSymbol::Diamond)
+                .size(10)
+                .color("rgba(0,0,0,0)")
+                .line(Line::new().color("blue").width(1.0)),
+        );
+
+    let trace_qc = Scatter::new(views.clone(), qc_ts)
+        .mode(Mode::Markers)
+        .name("QC Timestamp")
+        .x_axis("x3")
+        .y_axis("y3")
+        .marker(
+            Marker::new()
+                .symbol(MarkerSymbol::Circle)
+                .size(6)
+                .color("rgba(0,0,0,0)")
+                .line(Line::new().color("green").width(1.0)),
+        );
+
+    plot.add_trace(trace_vid);
+    plot.add_trace(trace_dac);
+    plot.add_trace(trace_qc);
+
     plot.set_layout(
         Layout::new()
             .title("Leader Stats")
             .grid(
                 LayoutGrid::new()
-                    .rows(2)
+                    .rows(3)
                     .columns(1)
                     .pattern(GridPattern::Independent),
             )
-            .height(1500)
+            .height(2000)
             .x_axis(Axis::new().title("View"))
-            .y_axis(Axis::new().title("VID/DAC/QC Δ from Block Built (ms)"))
+            .y_axis(Axis::new().title("VID/DAC Δ from Block Built (ms)"))
             .x_axis2(Axis::new().title("View"))
             .y_axis2(Axis::new().title("Block built Δ from previous proposal (ms)"))
+            .x_axis3(Axis::new().title("View"))
+            .y_axis3(Axis::new().title("VID/DAC/QC Timestamps (ms)"))
             .margin(layout::Margin::new().left(130)),
     );
 
