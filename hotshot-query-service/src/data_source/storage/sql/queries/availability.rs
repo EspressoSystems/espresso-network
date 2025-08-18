@@ -28,14 +28,14 @@ use super::{
 use crate::{
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceInfo, NamespaceMap,
-        PayloadQueryData, QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
-        TransactionQueryData, VidCommonQueryData,
+        PayloadQueryData, QueryableHeader, QueryablePayload, StateCertQueryDataV2, TransactionHash,
+        VidCommonQueryData,
     },
     data_source::storage::{
         sql::sqlx::Row, AvailabilityStorage, PayloadMetadata, VidCommonMetadata,
     },
     types::HeightIndexed,
-    ErrorSnafu, Header, MissingSnafu, Payload, QueryError, QueryResult,
+    Header, MissingSnafu, Payload, QueryError, QueryResult,
 };
 
 #[async_trait]
@@ -352,10 +352,10 @@ where
             .await)
     }
 
-    async fn get_transaction(
+    async fn get_block_with_transaction(
         &mut self,
         hash: TransactionHash<Types>,
-    ) -> QueryResult<TransactionQueryData<Types>> {
+    ) -> QueryResult<BlockQueryData<Types>> {
         let mut query = QueryBuilder::default();
         let hash_param = query.bind(hash.to_string())?;
 
@@ -371,16 +371,7 @@ where
                 LIMIT 1"
         );
         let row = query.query(&sql).fetch_one(self.as_mut()).await?;
-
-        // Extract the block.
-        let block = BlockQueryData::from_row(&row)?;
-
-        TransactionQueryData::with_hash(&block, hash).context(ErrorSnafu {
-            message: format!(
-                "transaction index inconsistent: block {} contains no transaction {hash}",
-                block.height()
-            ),
-        })
+        Ok(BlockQueryData::from_row(&row)?)
     }
 
     async fn first_available_leaf(&mut self, from: u64) -> QueryResult<LeafQueryData<Types>> {
@@ -394,14 +385,14 @@ where
         Ok(leaf)
     }
 
-    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryData<Types>> {
+    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryDataV2<Types>> {
         let row = query(&format!(
             "SELECT {STATE_CERT_COLUMNS} FROM finalized_state_cert WHERE epoch = $1 LIMIT 1"
         ))
         .bind(epoch as i64)
         .fetch_one(self.as_mut())
         .await?;
-        Ok(StateCertQueryData::from_row(&row)?)
+        Ok(StateCertQueryDataV2::from_row(&row)?)
     }
 }
 

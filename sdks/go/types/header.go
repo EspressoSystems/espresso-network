@@ -52,6 +52,7 @@ type HeaderInterface interface {
 	Version() common_types.Version
 	GetBlockHeight() uint64
 	GetL1Head() uint64
+	GetL1Finalized() *common_types.L1BlockInfo
 	GetTimestamp() uint64
 	GetPayloadCommitment() *common_types.TaggedBase64
 	GetBuilderCommitment() *common_types.TaggedBase64

@@ -18,10 +18,9 @@ use hotshot_types::traits::network::{
 };
 use tracing::instrument;
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn libp2p_network_sync() {
-    hotshot::helpers::initialize_logging();
 
     let mut metadata: TestDescription<TestTypes, Libp2pImpl, TestVersions> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
@@ -50,7 +49,7 @@ async fn libp2p_network_sync() {
 }
 
 #[cfg(test)]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_memory_network_sync() {
     use std::time::Duration;
 
@@ -59,8 +58,6 @@ async fn test_memory_network_sync() {
         completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
         test_builder::TestDescription,
     };
-
-    hotshot::helpers::initialize_logging();
 
     let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> = TestDescription {
         // allow more time to pass in CI
@@ -85,11 +82,10 @@ async fn test_memory_network_sync() {
         .await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[ignore]
 #[instrument]
 async fn libp2p_network_async() {
-    hotshot::helpers::initialize_logging();
 
     let mut metadata: TestDescription<TestTypes, Libp2pImpl, TestVersions> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
@@ -126,7 +122,7 @@ async fn libp2p_network_async() {
 
 #[cfg(test)]
 #[ignore]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_memory_network_async() {
     use std::time::Duration;
 
@@ -135,8 +131,6 @@ async fn test_memory_network_async() {
         completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
         test_builder::TestDescription,
     };
-
-    hotshot::helpers::initialize_logging();
 
     let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
@@ -173,7 +167,7 @@ async fn test_memory_network_async() {
 }
 
 #[cfg(test)]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_memory_network_partially_sync() {
     use std::time::Duration;
 
@@ -182,8 +176,6 @@ async fn test_memory_network_partially_sync() {
         completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
         test_builder::TestDescription,
     };
-
-    hotshot::helpers::initialize_logging();
 
     let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
@@ -225,10 +217,9 @@ async fn test_memory_network_partially_sync() {
         .await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn libp2p_network_partially_sync() {
-    hotshot::helpers::initialize_logging();
 
     let mut metadata: TestDescription<TestTypes, Libp2pImpl, TestVersions> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
@@ -267,7 +258,7 @@ async fn libp2p_network_partially_sync() {
 
 #[cfg(test)]
 #[ignore]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_memory_network_chaos() {
     use std::time::Duration;
 
@@ -276,8 +267,6 @@ async fn test_memory_network_chaos() {
         completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
         test_builder::TestDescription,
     };
-
-    hotshot::helpers::initialize_logging();
 
     let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> = TestDescription {
         // allow more time to pass in CI
@@ -306,11 +295,10 @@ async fn test_memory_network_chaos() {
         .await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[ignore]
 #[instrument]
 async fn libp2p_network_chaos() {
-    hotshot::helpers::initialize_logging();
 
     let mut metadata: TestDescription<TestTypes, Libp2pImpl, TestVersions> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {

@@ -17,7 +17,7 @@ import { EdOnBN254 } from "../src/libraries/EdOnBn254.sol";
 import { LightClient } from "../src/LightClient.sol";
 import { LightClientV2 } from "../src/LightClientV2.sol";
 import { IPlonkVerifier as V } from "../src/interfaces/IPlonkVerifier.sol";
-import { LightClientCommonTest } from "./LightClientV2.t.sol";
+import { LightClientCommonTest } from "./LightClientV3.t.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { OwnableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
@@ -2074,6 +2074,12 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
 
         vm.stopPrank();
 
+        address validator = makeAddr("validator");
+        vm.startPrank(validator);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        proxy.registerValidatorV2(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), "", 0);
+        vm.stopPrank();
+
         // unpause and see that the functions are callable
         vm.startPrank(pauser);
         vm.expectEmit(false, false, false, true, address(stakeTable));
@@ -2120,12 +2126,10 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         proxy.pause();
         vm.stopPrank();
 
-        // it reverts because the schnorrkey is invalid but it's still able to call that function
-        // as it's not paused even though the contract is paused
-        address validator = makeAddr("validator");
-        vm.startPrank(validator);
-        vm.expectRevert(S.InvalidSchnorrVK.selector);
-        proxy.registerValidatorV2(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), "", 0);
+        // update the contract
+        address admin = proxy.owner();
+        vm.startPrank(admin);
+        proxy.upgradeToAndCall(address(new StakeTableV2()), "");
         vm.stopPrank();
     }
 

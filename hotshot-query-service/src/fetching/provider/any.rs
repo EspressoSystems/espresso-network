@@ -216,7 +216,6 @@ mod test {
         testing::{
             consensus::{MockDataSource, MockNetwork},
             mocks::{MockBase, MockTypes, MockVersions},
-            setup_test,
         },
         types::HeightIndexed,
         ApiState, Error,
@@ -224,10 +223,8 @@ mod test {
 
     type Provider = AnyProvider<MockTypes>;
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_first_provider_fails() {
-        setup_test();
-
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 

@@ -1,6 +1,5 @@
 use hotshot::traits::BlockPayload;
 use rand::{Rng, RngCore};
-use sequencer_utils::test_utils::setup_test;
 
 use crate::{
     v0::impls::block::{
@@ -15,9 +14,8 @@ use crate::{
     NamespaceId, NsTable, Payload,
 };
 
-#[test]
+#[test_log::test]
 fn random_valid() {
-    setup_test();
     let mut rng = jf_utils::test_rng();
 
     for num_entries in 0..20 {
@@ -25,16 +23,15 @@ fn random_valid() {
     }
 }
 
-#[test]
+#[test_log::test]
 fn ns_table_from_bytes() {
     let bytes = Vec::from([0; NUM_NSS_BYTE_LEN]);
     let ns_table = NsTable::from_bytes_unchecked(&bytes);
     expect_valid(&ns_table);
 }
 
-#[test]
+#[test_log::test]
 fn ns_table_byte_len() {
-    setup_test();
     let mut rng = jf_utils::test_rng();
 
     // Extremely small byte lengths should get rejected.
@@ -67,9 +64,8 @@ fn ns_table_byte_len() {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn payload_byte_len() {
-    setup_test();
     let test_case = vec![vec![5, 8, 8], vec![7, 9, 11], vec![10, 5, 8]];
     let mut rng = jf_utils::test_rng();
     let test = ValidTest::from_tx_lengths(test_case, &mut rng);
@@ -130,10 +126,8 @@ async fn payload_byte_len() {
     );
 }
 
-#[test]
+#[test_log::test]
 fn monotonic_increase() {
-    setup_test();
-
     // Duplicate namespace ID
     two_entries_ns_table((5, 5), (5, 6), Some(DuplicateNamespaceId));
 
@@ -172,9 +166,8 @@ fn monotonic_increase() {
 
 // TODO this test obsolete after
 // https://github.com/EspressoSystems/espresso-sequencer/issues/1604
-#[test]
+#[test_log::test]
 fn header() {
-    setup_test();
     let mut rng = jf_utils::test_rng();
 
     for num_entries in 0..20 {

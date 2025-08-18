@@ -57,7 +57,7 @@ default-filter = 'package(tests)'
 retries = 2
 
 # Serial required
-# TRY 3 FAIL [   2.790s] hotshot-testing::tests_4 tests_4::test_marketplace::test_marketplace_builders_down::testtypes_::memoryimpl_::test_marketplace_builders_down
+# TRY 3 FAIL [   2.790s] hotshot-testing::tests_4 tests_4::test_marketplace::test_builders_down::testtypes_::memoryimpl_::test_builders_down
 # TRY 3 FAIL [   4.446s] hotshot-testing::tests_4 tests_4::test_marketplace::test_marketplace_fallback_builder_down::testtypes_::memoryimpl_::test_marketplace_fallback_builder_down
 # TRY 3 FAIL [   5.119s] hotshot-testing::tests_4 tests_4::test_marketplace::test_marketplace_upgrade::testtypes_::memoryimpl_::test_marketplace_upgrade
 #

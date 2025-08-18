@@ -32,9 +32,9 @@ use hotshot_task_impls::{
     view_sync::ViewSyncTaskState,
 };
 use hotshot_types::{
-    consensus::{Consensus, OuterConsensus},
+    consensus::OuterConsensus,
     constants::EVENT_CHANNEL_SIZE,
-    message::{Message, UpgradeLock},
+    message::{Message, MessageKind, UpgradeLock, EXTERNAL_MESSAGE_VERSION},
     storage_metrics::StorageMetricsValue,
     traits::{
         network::ConnectedNetwork,
@@ -42,7 +42,7 @@ use hotshot_types::{
     },
 };
 use tokio::{spawn, time::sleep};
-use vbs::version::StaticVersionType;
+use vbs::version::{StaticVersionType, Version};
 
 use crate::{
     genesis_epoch_from_version, tasks::task_state::CreateTaskState, types::SystemContextHandle,
@@ -166,14 +166,23 @@ pub fn add_network_message_task<
                         continue;
                     };
 
-                    // Deserialize the message
-                    let deserialized_message: Message<TYPES> = match upgrade_lock.deserialize(&message).await {
+                    // Deserialize the message and get the version
+                    let (deserialized_message, version): (Message<TYPES>, Version) = match upgrade_lock.deserialize(&message).await {
                         Ok(message) => message,
                         Err(e) => {
                             tracing::error!("Failed to deserialize message: {:?}", e);
                             continue;
                         }
                     };
+
+                    // Special case: external messages (version 0.0). We want to make sure it is an external message
+                    // and warn and continue otherwise.
+                    if version == EXTERNAL_MESSAGE_VERSION
+                        && !matches!(deserialized_message.kind, MessageKind::<TYPES>::External(_))
+                    {
+                        tracing::warn!("Received a non-external message with version 0.0");
+                        continue;
+                    }
 
                     // Handle the message
                     state.handle_message(deserialized_message).await;
@@ -299,6 +308,7 @@ pub fn create_shutdown_event_monitor<TYPES: NodeType, I: NodeImplementation<TYPE
     .boxed()
 }
 
+#[allow(clippy::too_many_arguments)]
 #[async_trait]
 /// Trait for intercepting and modifying messages between the network and consensus layers.
 ///
@@ -317,7 +327,9 @@ where
         public_key: &TYPES::SignatureKey,
         private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
         upgrade_lock: &UpgradeLock<TYPES, V>,
-        consensus: Arc<RwLock<Consensus<TYPES>>>,
+        consensus: OuterConsensus<TYPES>,
+        membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        network: Arc<I::Network>,
     ) -> Vec<HotShotEvent<TYPES>>;
 
     #[allow(clippy::too_many_arguments)]
@@ -420,7 +432,9 @@ where
         let public_key = handle.public_key().clone();
         let private_key = handle.private_key().clone();
         let upgrade_lock = handle.hotshot.upgrade_lock.clone();
-        let consensus = Arc::clone(&handle.hotshot.consensus());
+        let consensus = OuterConsensus::new(handle.consensus());
+        let membership_coordinator = handle.membership_coordinator.clone();
+        let network = Arc::clone(&handle.network);
         let send_handle = spawn(async move {
             futures::pin_mut!(shutdown_signal);
 
@@ -452,7 +466,9 @@ where
                                     &public_key,
                                     &private_key,
                                     &upgrade_lock,
-                                    Arc::clone(&consensus)
+                                    consensus.clone(),
+                                    membership_coordinator.clone(),
+                                    Arc::clone(&network),
                                 ).await;
                                 results.reverse();
                                 while let Some(event) = results.pop() {

@@ -1,14 +1,10 @@
-use std::{
-    collections::HashMap,
-    io::Write,
-    path::PathBuf,
-    process::{Command, Stdio},
-    time::Duration,
-};
+use std::{collections::HashMap, io::Write, time::Duration};
 
 use alloy::{
     contract::RawCallBuilder,
+    dyn_abi::{DynSolType, DynSolValue, JsonAbiExt},
     hex::{FromHex, ToHexExt},
+    json_abi::Function,
     network::{Ethereum, EthereumWallet, TransactionBuilder},
     primitives::{Address, Bytes, B256, U256},
     providers::{
@@ -23,7 +19,7 @@ use alloy::{
     },
     transports::http::reqwest::Url,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use clap::{builder::OsStr, Parser};
 use derive_more::{derive::Deref, Display};
 use hotshot_contract_adapter::sol_types::*;
@@ -128,6 +124,9 @@ pub struct DeployedContracts {
     /// PlonkVerifierV2.sol
     #[clap(long, env = Contract::PlonkVerifierV2)]
     plonk_verifier_v2: Option<Address>,
+    /// PlonkVerifierV3.sol
+    #[clap(long, env = Contract::PlonkVerifierV3)]
+    plonk_verifier_v3: Option<Address>,
 
     /// Use an already-deployed LightClient.sol instead of deploying a new one.
     #[clap(long, env = Contract::LightClient)]
@@ -135,6 +134,9 @@ pub struct DeployedContracts {
     /// LightClientV2.sol
     #[clap(long, env = Contract::LightClientV2)]
     light_client_v2: Option<Address>,
+    /// LightClientV3.sol
+    #[clap(long, env = Contract::LightClientV3)]
+    light_client_v3: Option<Address>,
 
     /// Use an already-deployed LightClient.sol proxy instead of deploying a new one.
     #[clap(long, env = Contract::LightClientProxy)]
@@ -184,10 +186,14 @@ pub enum Contract {
     SafeExitTimelock,
     #[display("ESPRESSO_SEQUENCER_PLONK_VERIFIER_V2_ADDRESS")]
     PlonkVerifierV2,
+    #[display("ESPRESSO_SEQUENCER_PLONK_VERIFIER_V3_ADDRESS")]
+    PlonkVerifierV3,
     #[display("ESPRESSO_SEQUENCER_LIGHT_CLIENT_ADDRESS")]
     LightClient,
     #[display("ESPRESSO_SEQUENCER_LIGHT_CLIENT_V2_ADDRESS")]
     LightClientV2,
+    #[display("ESPRESSO_SEQUENCER_LIGHT_CLIENT_V3_ADDRESS")]
+    LightClientV3,
     #[display("ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS")]
     LightClientProxy,
     #[display("ESPRESSO_SEQUENCER_FEE_CONTRACT_ADDRESS")]
@@ -227,6 +233,9 @@ impl From<DeployedContracts> for Contracts {
         if let Some(addr) = deployed.plonk_verifier_v2 {
             m.insert(Contract::PlonkVerifierV2, addr);
         }
+        if let Some(addr) = deployed.plonk_verifier_v3 {
+            m.insert(Contract::PlonkVerifierV3, addr);
+        }
         if let Some(addr) = deployed.safe_exit_timelock {
             m.insert(Contract::SafeExitTimelock, addr);
         }
@@ -238,6 +247,9 @@ impl From<DeployedContracts> for Contracts {
         }
         if let Some(addr) = deployed.light_client_v2 {
             m.insert(Contract::LightClientV2, addr);
+        }
+        if let Some(addr) = deployed.light_client_v3 {
+            m.insert(Contract::LightClientV3, addr);
         }
         if let Some(addr) = deployed.light_client_proxy {
             m.insert(Contract::LightClientProxy, addr);
@@ -318,23 +330,6 @@ impl Contracts {
         }
         Ok(())
     }
-}
-
-/// Verify the node js files are present and can be executed.
-///
-/// It calls the upgrade proxy script with a dummy address and a dummy rpc url in dry run mode
-pub async fn verify_node_js_files() -> Result<()> {
-    call_upgrade_proxy_script(
-        Address::random(),
-        Address::random(),
-        String::from("0x"),
-        String::from("https://sepolia.infura.io/v3/"),
-        Address::random(),
-        Some(true),
-    )
-    .await?;
-    tracing::info!("Node.js files verified successfully");
-    Ok(())
 }
 
 /// Default deployment function `LightClient.sol` or `LightClientMock.sol` with `mock: true`.
@@ -602,159 +597,101 @@ pub async fn upgrade_light_client_v2(
     }
 }
 
-pub struct LightClientV2UpgradeParams {
-    pub blocks_per_epoch: u64,
-    pub epoch_start_block: u64,
-}
-
-/// Upgrade the light client proxy to use LightClientV2.
-/// Internally, first detect existence of proxy, then deploy LCV2, then upgrade and initializeV2.
-/// Internal to "deploy LCV2", we deploy PlonkVerifierV2 whose address will be used at LCV2 init time.
+/// Upgrade the light client proxy to use LightClientV3.
+/// Internally, first detect existence of proxy, then deploy LCV3, then upgrade and initializeV3.
+/// Internal to "deploy LCV3", we deploy PlonkVerifierV3 whose address will be used at LCV3 init time.
 /// Assumes:
 /// - the proxy is already deployed.
-/// - the proxy is owned by a multisig.
-/// - the proxy is not yet initialized for V2
-///
-/// Returns the url link to the upgrade proposal
-/// This function can only be called on a real network supported by the safeSDK
-pub async fn upgrade_light_client_v2_multisig_owner(
+/// - the proxy is owned by a regular EOA, not a multisig.
+/// - the proxy is not yet initialized for V3
+pub async fn upgrade_light_client_v3(
     provider: impl Provider,
     contracts: &mut Contracts,
-    params: LightClientV2UpgradeParams,
     is_mock: bool,
-    rpc_url: String,
-    dry_run: Option<bool>,
-) -> Result<(String, bool)> {
-    let expected_major_version: u8 = 2;
-    let dry_run = dry_run.unwrap_or_else(|| {
-        tracing::warn!("Dry run not specified, defaulting to false");
-        false
-    });
+) -> Result<TransactionReceipt> {
+    match contracts.address(Contract::LightClientProxy) {
+        // check if proxy already exists
+        None => Err(anyhow!("LightClientProxy not found, can't upgrade")),
+        Some(proxy_addr) => {
+            let proxy = LightClient::new(proxy_addr, &provider);
 
-    let proxy_addr = contracts
-        .address(Contract::LightClientProxy)
-        .ok_or_else(|| anyhow!("LightClientProxy (multisig owner) not found, can't upgrade"))?;
-    tracing::info!("LightClientProxy found at {proxy_addr:#x}");
-    let proxy = LightClient::new(proxy_addr, &provider);
-    let owner_addr = proxy.owner().call().await?._0;
-
-    if !dry_run && !is_contract(&provider, owner_addr).await? {
-        tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
-        anyhow::bail!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
-    }
-
-    // Prepare addresses
-    let (_pv2_addr, lcv2_addr) = if !dry_run {
-        // Deploy PlonkVerifierV2.sol (if not already deployed)
-        let pv2_addr = contracts
-            .deploy(
-                Contract::PlonkVerifierV2,
-                PlonkVerifierV2::deploy_builder(&provider),
-            )
-            .await?;
-
-        // then deploy LightClientV2.sol
-        let target_lcv2_bytecode = if is_mock {
-            LightClientV2Mock::BYTECODE.encode_hex()
-        } else {
-            LightClientV2::BYTECODE.encode_hex()
-        };
-        let lcv2_linked_bytecode = {
-            match target_lcv2_bytecode
-                .matches(LIBRARY_PLACEHOLDER_ADDRESS)
-                .count()
-            {
-                0 => return Err(anyhow!("lib placeholder not found")),
-                1 => Bytes::from_hex(target_lcv2_bytecode.replacen(
-                    LIBRARY_PLACEHOLDER_ADDRESS,
-                    &pv2_addr.encode_hex(),
-                    1,
-                ))?,
-                _ => {
-                    return Err(anyhow!(
-                        "more than one lib placeholder found, consider using a different value"
-                    ))
-                },
-            }
-        };
-        let lcv2_addr = if is_mock {
-            let addr = LightClientV2Mock::deploy_builder(&provider)
-                .map(|req| req.with_deploy_code(lcv2_linked_bytecode))
-                .deploy()
-                .await?;
-            tracing::info!("deployed LightClientV2Mock at {addr:#x}");
-            addr
-        } else {
-            contracts
+            // first deploy PlonkVerifierV3.sol
+            let pv3_addr = contracts
                 .deploy(
-                    Contract::LightClientV2,
-                    LightClientV2::deploy_builder(&provider)
-                        .map(|req| req.with_deploy_code(lcv2_linked_bytecode)),
+                    Contract::PlonkVerifierV3,
+                    PlonkVerifierV3::deploy_builder(&provider),
                 )
+                .await?;
+            assert!(is_contract(&provider, pv3_addr).await?);
+
+            // then deploy LightClientV3.sol
+            let target_lcv3_bytecode = if is_mock {
+                LightClientV3Mock::BYTECODE.encode_hex()
+            } else {
+                LightClientV3::BYTECODE.encode_hex()
+            };
+            let lcv3_linked_bytecode = {
+                match target_lcv3_bytecode
+                    .matches(LIBRARY_PLACEHOLDER_ADDRESS)
+                    .count()
+                {
+                    0 => return Err(anyhow!("lib placeholder not found")),
+                    1 => Bytes::from_hex(target_lcv3_bytecode.replacen(
+                        LIBRARY_PLACEHOLDER_ADDRESS,
+                        &pv3_addr.encode_hex(),
+                        1,
+                    ))?,
+                    _ => {
+                        return Err(anyhow!(
+                            "more than one lib placeholder found, consider using a different value"
+                        ))
+                    },
+                }
+            };
+            let lcv3_addr = if is_mock {
+                let addr = LightClientV3Mock::deploy_builder(&provider)
+                    .map(|req| req.with_deploy_code(lcv3_linked_bytecode))
+                    .deploy()
+                    .await?;
+                tracing::info!("deployed LightClientV3Mock at {addr:#x}");
+                addr
+            } else {
+                contracts
+                    .deploy(
+                        Contract::LightClientV3,
+                        LightClientV3::deploy_builder(&provider)
+                            .map(|req| req.with_deploy_code(lcv3_linked_bytecode)),
+                    )
+                    .await?
+            };
+
+            // get owner of proxy
+            let owner = proxy.owner().call().await?;
+            let owner_addr = owner._0;
+            tracing::info!("Proxy owner: {owner_addr:#x}");
+
+            // prepare init calldata
+            let lcv3 = LightClientV3::new(lcv3_addr, &provider);
+            let init_data = lcv3.initializeV3().calldata().to_owned();
+            // invoke upgrade on proxy
+            let receipt = proxy
+                .upgradeToAndCall(lcv3_addr, init_data)
+                .send()
                 .await?
-        };
-        (pv2_addr, lcv2_addr)
-    } else {
-        // Use dummy addresses for dry run
-        (Address::random(), Address::random())
-    };
+                .get_receipt()
+                .await?;
+            if receipt.inner.is_success() {
+                // post deploy verification checks
+                let proxy_as_v3 = LightClientV3::new(proxy_addr, &provider);
+                assert_eq!(proxy_as_v3.getVersion().call().await?.majorVersion, 3);
+                tracing::info!(%lcv3_addr, "LightClientProxy successfully upgrade to: ")
+            } else {
+                tracing::error!("LightClientProxy upgrade failed: {:?}", receipt);
+            }
 
-    // Prepare init data
-    let init_data = if already_initialized(
-        &provider,
-        proxy_addr,
-        Contract::LightClientV2,
-        expected_major_version,
-    )
-    .await?
-    {
-        tracing::info!(
-            "Proxy was already initialized for version {}",
-            expected_major_version
-        );
-        vec![].into()
-    } else {
-        tracing::info!(
-            "Init Data to be signed.\n Function: initializeV2\n Arguments:\n blocks_per_epoch: \
-             {:?}\n epoch_start_block: {:?}",
-            params.blocks_per_epoch,
-            params.epoch_start_block
-        );
-        LightClientV2::new(lcv2_addr, &provider)
-            .initializeV2(params.blocks_per_epoch, params.epoch_start_block)
-            .calldata()
-            .to_owned()
-    };
-
-    // invoke upgrade on proxy via the safeSDK
-    let result = call_upgrade_proxy_script(
-        proxy_addr,
-        lcv2_addr,
-        init_data.to_string(),
-        rpc_url,
-        owner_addr,
-        Some(dry_run),
-    )
-    .await?;
-
-    tracing::info!("Init data: {:?}", init_data);
-    if init_data.to_string() != "0x" {
-        tracing::info!(
-            "Data to be signed:\n Function: initializeV2\n Arguments:\n blocks_per_epoch: {:?}\n \
-             epoch_start_block: {:?}",
-            params.blocks_per_epoch,
-            params.epoch_start_block
-        );
+            Ok(receipt)
+        },
     }
-    if !dry_run {
-        tracing::info!(
-            "LightClientProxy upgrade proposal sent. Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
-            owner_addr
-        );
-    }
-    // IDEA: add a function to wait for the proposal to be executed
-
-    Ok(result)
 }
 
 async fn already_initialized(
@@ -769,6 +706,10 @@ async fn already_initialized(
     let contract_major_version = match contract {
         Contract::LightClientV2 => {
             let contract_proxy = LightClientV2::new(proxy_addr, &provider);
+            contract_proxy.getVersion().call().await?.majorVersion
+        },
+        Contract::LightClientV3 => {
+            let contract_proxy = LightClientV3::new(proxy_addr, &provider);
             contract_proxy.getVersion().call().await?.majorVersion
         },
         Contract::StakeTableV2 => {
@@ -913,75 +854,6 @@ async fn upgrade_esp_token_v2(
     Ok(receipt)
 }
 
-/// Upgrade the EspToken proxy to use EspTokenV2.
-/// Internally, first detect existence of proxy, then deploy EspTokenV2, then upgrade and initializeV2.
-/// Assumes:
-/// - the proxy is already deployed.
-/// - the proxy is owned by a multisig.
-///
-/// Returns the url link to the upgrade proposal
-/// This function can only be called on a real network supported by the safeSDK
-pub async fn upgrade_esp_token_v2_multisig_owner(
-    provider: impl Provider,
-    contracts: &mut Contracts,
-    rpc_url: String,
-    dry_run: Option<bool>,
-) -> Result<(String, bool)> {
-    let dry_run = dry_run.unwrap_or_else(|| {
-        tracing::warn!("Dry run not specified, defaulting to false");
-        false
-    });
-
-    let proxy_addr = contracts
-        .address(Contract::EspTokenProxy)
-        .ok_or_else(|| anyhow!("EspTokenProxy (multisig owner) not found, can't upgrade"))?;
-    tracing::info!("EspTokenProxy found at {proxy_addr:#x}");
-    let proxy = EspToken::new(proxy_addr, &provider);
-    let owner_addr = proxy.owner().call().await?._0;
-
-    if !dry_run {
-        tracing::info!("Checking if owner is a contract");
-        assert!(
-            is_contract(&provider, owner_addr).await?,
-            "Owner is not a contract so not a multisig wallet"
-        );
-    }
-
-    // Prepare addresses
-    let esp_token_v2_addr = if !dry_run {
-        contracts
-            .deploy(Contract::EspTokenV2, EspTokenV2::deploy_builder(&provider))
-            .await?
-    } else {
-        // Use dummy addresses for dry run
-        Address::random()
-    };
-
-    // no reinitializer so empty init data
-    let init_data = "0x".to_string();
-
-    // invoke upgrade on proxy via the safeSDK
-    let result = call_upgrade_proxy_script(
-        proxy_addr,
-        esp_token_v2_addr,
-        init_data.to_string(),
-        rpc_url,
-        owner_addr,
-        Some(dry_run),
-    )
-    .await?;
-
-    tracing::info!("No init data to be signed");
-    if !dry_run {
-        tracing::info!(
-            "EspTokenProxy upgrade proposal sent. Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
-            owner_addr
-        );
-    }
-
-    Ok(result)
-}
-
 /// The primary logic for deploying and initializing an upgradable permissionless StakeTable contract.
 pub async fn deploy_stake_table_proxy(
     provider: impl Provider,
@@ -1112,114 +984,17 @@ async fn upgrade_stake_table_v2(
     Ok(receipt)
 }
 
-/// Upgrade the stake table proxy to use StakeTableV2.
-/// Internally, first detect existence of proxy, then deploy StakeTableV2
-/// Assumes:
-/// - the proxy is already deployed.
-/// - the proxy is owned by a multisig.
-///
-/// Returns the url link to the upgrade proposal
-/// This function can only be called on a real network supported by the safeSDK
-pub async fn upgrade_stake_table_v2_multisig_owner(
-    provider: impl Provider,
-    contracts: &mut Contracts,
-    rpc_url: String,
-    multisig_address: Address,
-    pauser: Address,
-    dry_run: Option<bool>,
-) -> Result<(String, bool)> {
-    tracing::info!("Upgrading StakeTableProxy to StakeTableV2 using multisig owner");
-    let dry_run = dry_run.unwrap_or(false);
-    match contracts.address(Contract::StakeTableProxy) {
-        // check if proxy already exists
-        None => Err(anyhow!("StakeTableProxy not found, can't upgrade")),
-        Some(proxy_addr) => {
-            let proxy = StakeTable::new(proxy_addr, &provider);
-            let owner = proxy.owner().call().await?;
-            let owner_addr = owner._0;
-            if owner_addr != multisig_address {
-                tracing::error!(
-                    "Proxy is not owned by the multisig. Expected: {multisig_address:#x}, Got: \
-                     {owner_addr:#x}"
-                );
-                anyhow::bail!("Proxy is not owned by the multisig");
-            }
-            if !dry_run && !is_contract(&provider, owner_addr).await? {
-                tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
-                anyhow::bail!("Proxy owner is not a contract");
-            }
-            // TODO: check if owner is a SAFE multisig
-
-            // first deploy StakeTableV2.sol implementation
-            let stake_table_v2_addr = contracts
-                .deploy(
-                    Contract::StakeTableV2,
-                    StakeTableV2::deploy_builder(&provider),
-                )
-                .await?;
-
-            // prepare init data
-            let expected_major_version = 2;
-            let init_data = if already_initialized(
-                &provider,
-                proxy_addr,
-                Contract::StakeTableV2,
-                expected_major_version,
-            )
-            .await?
-            {
-                tracing::info!(
-                    "Proxy was already initialized for version {}",
-                    expected_major_version
-                );
-                vec![].into()
-            } else {
-                tracing::info!(
-                    "Init Data to be signed.\n Function: initializeV2\n Arguments:\n pauser: \
-                     {:?}\n admin: {:?}",
-                    pauser,
-                    owner_addr
-                );
-                StakeTableV2::new(stake_table_v2_addr, &provider)
-                    .initializeV2(pauser, owner_addr)
-                    .calldata()
-                    .to_owned()
-            };
-
-            // invoke upgrade on proxy via the safeSDK
-            let result = call_upgrade_proxy_script(
-                proxy_addr,
-                stake_table_v2_addr,
-                init_data.to_string(),
-                rpc_url,
-                owner_addr,
-                Some(dry_run),
-            )
-            .await;
-
-            // Check the result directly
-            if let Err(ref err) = result {
-                tracing::error!("StakeTableProxy upgrade failed: {:?}", err);
-            } else {
-                tracing::info!("StakeTableProxy upgrade proposal sent");
-                // IDEA: add a function to wait for the proposal to be executed
-            }
-            Ok(result.context("Upgrade proposal failed")?)
-        },
-    }
-}
-
 /// Common logic for any Ownable contract to transfer ownership
 pub async fn transfer_ownership(
     provider: impl Provider,
-    target: Contract,
-    addr: Address,
+    target_contract: Contract,
+    target_address: Address,
     new_owner: Address,
 ) -> Result<TransactionReceipt> {
-    let receipt = match target {
+    let receipt = match target_contract {
         Contract::LightClient | Contract::LightClientProxy => {
-            tracing::info!(%addr, %new_owner, "Transfer LightClient ownership");
-            let lc = LightClient::new(addr, &provider);
+            tracing::info!(%target_address, %new_owner, "Transfer LightClient ownership");
+            let lc = LightClient::new(target_address, &provider);
             lc.transferOwnership(new_owner)
                 .send()
                 .await?
@@ -1227,8 +1002,8 @@ pub async fn transfer_ownership(
                 .await?
         },
         Contract::FeeContract | Contract::FeeContractProxy => {
-            tracing::info!(%addr, %new_owner, "Transfer FeeContract ownership");
-            let fee = FeeContract::new(addr, &provider);
+            tracing::info!(%target_address, %new_owner, "Transfer FeeContract ownership");
+            let fee = FeeContract::new(target_address, &provider);
             fee.transferOwnership(new_owner)
                 .send()
                 .await?
@@ -1236,8 +1011,8 @@ pub async fn transfer_ownership(
                 .await?
         },
         Contract::EspToken | Contract::EspTokenProxy => {
-            tracing::info!(%addr, %new_owner, "Transfer EspToken ownership");
-            let token = EspToken::new(addr, &provider);
+            tracing::info!(%target_address, %new_owner, "Transfer EspToken ownership");
+            let token = EspToken::new(target_address, &provider);
             token
                 .transferOwnership(new_owner)
                 .send()
@@ -1245,9 +1020,9 @@ pub async fn transfer_ownership(
                 .get_receipt()
                 .await?
         },
-        Contract::StakeTable | Contract::StakeTableProxy => {
-            tracing::info!(%addr, %new_owner, "Transfer StakeTable ownership");
-            let stake_table = StakeTable::new(addr, &provider);
+        Contract::StakeTable | Contract::StakeTableProxy | Contract::StakeTableV2 => {
+            tracing::info!(%target_address, %new_owner, "Transfer StakeTable ownership");
+            let stake_table = StakeTable::new(target_address, &provider);
             stake_table
                 .transferOwnership(new_owner)
                 .send()
@@ -1303,75 +1078,6 @@ pub async fn get_proxy_initialized_version(
     Ok(initialized)
 }
 
-/// this depends on upgradeProxy.ts which has to be ran on a real network supported by the safeSDK
-pub async fn call_upgrade_proxy_script(
-    proxy_addr: Address,
-    new_impl_addr: Address,
-    init_data: String,
-    rpc_url: String,
-    safe_addr: Address,
-    dry_run: Option<bool>,
-) -> Result<(String, bool), anyhow::Error> {
-    let dry_run = dry_run.unwrap_or(false);
-    tracing::info!("Dry run: {}", dry_run);
-    tracing::info!(
-        "Attempting to send the upgrade proposal to multisig: {}",
-        safe_addr
-    );
-
-    let script_path = find_script_path()?;
-
-    let output = Command::new(script_path)
-        .arg("upgradeProxy.ts")
-        .arg("--from-rust")
-        .arg("--proxy")
-        .arg(proxy_addr.to_string())
-        .arg("--impl")
-        .arg(new_impl_addr.to_string())
-        .arg("--init-data")
-        .arg(init_data)
-        .arg("--rpc-url")
-        .arg(rpc_url)
-        .arg("--safe-address")
-        .arg(safe_addr.to_string())
-        .arg("--dry-run")
-        .arg(dry_run.to_string())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output();
-
-    let output = output.unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    // if stderr is not empty, return the stderr
-    if !output.status.success() {
-        return Err(anyhow!("Upgrade script failed: {}", stderr));
-    }
-    Ok((stdout.to_string(), true))
-}
-
-fn find_script_path() -> Result<PathBuf> {
-    let mut path_options = Vec::new();
-    if let Ok(cargo_manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        path_options.push(
-            PathBuf::from(cargo_manifest_dir.clone())
-                .join("../../../scripts/multisig-upgrade-entrypoint"),
-        );
-        path_options
-            .push(PathBuf::from(cargo_manifest_dir).join("../scripts/multisig-upgrade-entrypoint"));
-    }
-    path_options.push(PathBuf::from("/bin/multisig-upgrade-entrypoint"));
-    for path in path_options {
-        if path.exists() {
-            return Ok(path);
-        }
-    }
-    anyhow::bail!(
-        "Upgrade entrypoint script, multisig-upgrade-entrypoint, not found in any of the possible \
-         locations"
-    );
-}
-
 /// Deploy and initialize the Ops Timelock contract
 ///
 /// Parameters:
@@ -1387,6 +1093,14 @@ pub async fn deploy_ops_timelock(
     executors: Vec<Address>,
     admin: Address,
 ) -> Result<Address> {
+    tracing::info!(
+        "OpsTimelock will be deployed with the following parameters: min_delay: {:?}, proposers: \
+         {:?}, executors: {:?}, admin: {:?}",
+        min_delay,
+        proposers,
+        executors,
+        admin
+    );
     let timelock_addr = contracts
         .deploy(
             Contract::OpsTimelock,
@@ -1448,6 +1162,14 @@ pub async fn deploy_safe_exit_timelock(
     executors: Vec<Address>,
     admin: Address,
 ) -> Result<Address> {
+    tracing::info!(
+        "SafeExitTimelock will be deployed with the following parameters: min_delay: {:?}, \
+         proposers: {:?}, executors: {:?}, admin: {:?}",
+        min_delay,
+        proposers,
+        executors,
+        admin
+    );
     let timelock_addr = contracts
         .deploy(
             Contract::SafeExitTimelock,
@@ -1494,19 +1216,75 @@ pub async fn deploy_safe_exit_timelock(
     Ok(timelock_addr)
 }
 
+/// Encode a function call with the given signature and arguments
+///
+/// Parameters:
+/// - `signature`: e.g. `"transfer(address,uint256)"`
+/// - `args`: Solidity typed arguments as `Vec<&str>`
+///
+/// Returns:
+/// - Full calldata: selector + encoded arguments
+pub fn encode_function_call(signature: &str, args: Vec<String>) -> Result<Bytes> {
+    let func = Function::parse(signature)?;
+
+    // Check if argument count matches the function signature
+    if args.len() != func.inputs.len() {
+        anyhow::bail!(
+            "Mismatch between argument count ({}) and parameter count ({})",
+            args.len(),
+            func.inputs.len()
+        );
+    }
+
+    // Parse argument values using the function's parameter types directly
+    let arg_values: Vec<DynSolValue> =
+        func.inputs
+            .iter()
+            .enumerate()
+            .map(|(i, param)| {
+                let arg_str = &args[i];
+                let dyn_type: DynSolType =
+                    param.ty.to_string().parse().map_err(|e| {
+                        anyhow!("Failed to parse parameter type '{}': {}", param.ty, e)
+                    })?;
+                dyn_type.coerce_str(arg_str).map_err(|e| {
+                    anyhow!(
+                        "Failed to coerce argument '{}' to type '{}': {}",
+                        arg_str,
+                        param.ty,
+                        e
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+    let encoded_input = func.abi_encode_input(&arg_values)?;
+    let data = Bytes::from(encoded_input);
+    Ok(data)
+}
+
 #[cfg(test)]
 mod tests {
     use alloy::{
         node_bindings::Anvil, primitives::utils::parse_ether, providers::ProviderBuilder,
         sol_types::SolValue,
     };
-    use sequencer_utils::test_utils::setup_test;
 
     use super::*;
+    use crate::proposals::{
+        multisig::{
+            transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
+            upgrade_light_client_v2_multisig_owner, upgrade_stake_table_v2_multisig_owner,
+            LightClientV2UpgradeParams, TransferOwnershipParams,
+        },
+        timelock::{
+            cancel_timelock_operation, execute_timelock_operation, schedule_timelock_operation,
+            TimelockOperationData,
+        },
+    };
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_is_contract() -> Result<(), anyhow::Error> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
 
         // test with zero address returns false
@@ -1525,9 +1303,8 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_is_proxy_contract() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let deployer = provider.get_accounts().await?[0];
 
@@ -1540,9 +1317,8 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_deploy_light_client() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -1558,9 +1334,8 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_deploy_mock_light_client_proxy() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -1608,9 +1383,8 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_deploy_light_client_proxy() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -1661,9 +1435,8 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_deploy_fee_contract_proxy() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let admin = provider.get_accounts().await?[0];
@@ -1696,7 +1469,6 @@ mod tests {
     }
 
     async fn test_upgrade_light_client_to_v2_helper(is_mock: bool) -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let blocks_per_epoch = 10; // for test
@@ -1776,17 +1548,119 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_upgrade_light_client_to_v2() -> Result<()> {
-        setup_test();
         test_upgrade_light_client_to_v2_helper(false).await
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_upgrade_mock_light_client_v2() -> Result<()> {
-        setup_test();
         test_upgrade_light_client_to_v2_helper(true).await
     }
+
+    async fn test_upgrade_light_client_to_v3_helper(options: UpgradeTestOptions) -> Result<()> {
+        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+        let blocks_per_epoch = 10; // for test
+        let epoch_start_block = 22;
+
+        // prepare `initialize()` input
+        let genesis_state = LightClientStateSol::dummy_genesis();
+        let genesis_stake = StakeTableStateSol::dummy_genesis();
+        let admin = provider.get_accounts().await?[0];
+        let prover = Address::random();
+
+        // deploy proxy and V1
+        let lc_proxy_addr = deploy_light_client_proxy(
+            &provider,
+            &mut contracts,
+            false,
+            genesis_state.clone(),
+            genesis_stake.clone(),
+            admin,
+            Some(prover),
+        )
+        .await?;
+
+        // first upgrade to v2
+        upgrade_light_client_v2(
+            &provider,
+            &mut contracts,
+            options.is_mock,
+            blocks_per_epoch,
+            epoch_start_block,
+        )
+        .await?;
+
+        // then upgrade to v3
+        upgrade_light_client_v3(&provider, &mut contracts, options.is_mock).await?;
+
+        // test correct v1 and v2 state persistence
+        let lc = LightClientV3::new(lc_proxy_addr, &provider);
+        let finalized_state: LightClientStateSol = lc.finalizedState().call().await?.into();
+        assert_eq!(
+            genesis_state.abi_encode_params(),
+            finalized_state.abi_encode_params()
+        );
+
+        // test v2 state persistence
+        let next_stake: StakeTableStateSol = lc.votingStakeTableState().call().await?.into();
+        assert_eq!(
+            genesis_stake.abi_encode_params(),
+            next_stake.abi_encode_params()
+        );
+
+        // test v3 specific properties
+        assert_eq!(lc.getVersion().call().await?.majorVersion, 3);
+
+        // V3 inherits blocks_per_epoch and epoch_start_block from V2
+        let lc_as_v2 = LightClientV2::new(lc_proxy_addr, &provider);
+        assert_eq!(lc_as_v2.blocksPerEpoch().call().await?._0, blocks_per_epoch);
+        assert_eq!(
+            lc_as_v2.epochStartBlock().call().await?._0,
+            epoch_start_block
+        );
+
+        // test mock-specific functions
+        if options.is_mock {
+            // recast to mock
+            let lc_mock = LightClientV3Mock::new(lc_proxy_addr, &provider);
+            // Test that mock-specific functions work
+            let new_blocks_per_epoch = blocks_per_epoch + 10;
+            lc_mock
+                .setBlocksPerEpoch(new_blocks_per_epoch)
+                .send()
+                .await?
+                .watch()
+                .await?;
+            assert_eq!(
+                new_blocks_per_epoch,
+                lc_mock.blocksPerEpoch().call().await?._0
+            );
+        }
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_upgrade_light_client_to_v3() -> Result<()> {
+        test_upgrade_light_client_to_v3_helper(UpgradeTestOptions {
+            is_mock: false,
+            run_mode: RunMode::RealRun,
+            upgrade_count: UpgradeCount::Once,
+        })
+        .await
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_upgrade_mock_light_client_v3() -> Result<()> {
+        test_upgrade_light_client_to_v3_helper(UpgradeTestOptions {
+            is_mock: true,
+            run_mode: RunMode::RealRun,
+            upgrade_count: UpgradeCount::Once,
+        })
+        .await
+    }
+
     #[derive(Debug, Clone, Copy)]
     pub enum RunMode {
         DryRun,
@@ -1950,7 +1824,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_upgrade_light_client_to_v2_multisig_owner_dry_run() -> Result<()> {
         test_upgrade_light_client_to_v2_multisig_owner_helper(UpgradeTestOptions {
             is_mock: false,
@@ -1961,7 +1835,7 @@ mod tests {
     }
 
     // We expect no init data for the second upgrade because the proxy was already initialized
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_upgrade_light_client_to_v2_twice_multisig_owner_dry_run() -> Result<()> {
         test_upgrade_light_client_to_v2_multisig_owner_helper(UpgradeTestOptions {
             is_mock: false,
@@ -1971,7 +1845,7 @@ mod tests {
         .await
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     #[ignore]
     async fn test_upgrade_light_client_to_v2_multisig_owner_live_eth_network() -> Result<()> {
         test_upgrade_light_client_to_v2_multisig_owner_helper(UpgradeTestOptions {
@@ -1982,9 +1856,8 @@ mod tests {
         .await
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_deploy_token_proxy() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -2022,9 +1895,8 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_deploy_stake_table_proxy() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -2072,9 +1944,8 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_upgrade_stake_table_v2() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -2226,14 +2097,13 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_upgrade_stake_table_to_v2_multisig_owner_dry_run() -> Result<()> {
         test_upgrade_stake_table_to_v2_multisig_owner_helper(true).await
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_deploy_ops_timelock() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -2286,9 +2156,8 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_deploy_safe_exit_timelock() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -2341,9 +2210,8 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_upgrade_esp_token_v2() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -2397,7 +2265,7 @@ mod tests {
     }
 
     // We expect no init data for the upgrade because there is no reinitializer for v2
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_upgrade_esp_token_v2_multisig_owner_dry_run() -> Result<()> {
         test_upgrade_esp_token_v2_multisig_owner_helper(UpgradeTestOptions {
             is_mock: false,
@@ -2526,6 +2394,101 @@ mod tests {
         Ok(())
     }
 
+    #[test_log::test(tokio::test)]
+    async fn test_schedule_and_execute_timelock_operation() -> Result<()> {
+        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+        let delay = U256::from(0);
+
+        // Get the provider's wallet address (the one actually sending transactions)
+        let provider_wallet = provider.get_accounts().await?[0];
+
+        let proposers = vec![provider_wallet];
+        let executors = vec![provider_wallet];
+
+        let timelock_addr = deploy_ops_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            proposers,
+            executors,
+            provider_wallet, // Use provider wallet as admin too
+        )
+        .await?;
+
+        // deploy fee contract and set the timelock as the admin
+        let fee_contract_proxy_addr =
+            deploy_fee_contract_proxy(&provider, &mut contracts, timelock_addr).await?;
+
+        let proxy = FeeContract::new(fee_contract_proxy_addr, &provider);
+        let upgrade_data = proxy
+            .transferOwnership(provider_wallet)
+            .calldata()
+            .to_owned();
+
+        // propose a timelock operation
+        let mut operation = TimelockOperationData {
+            target: fee_contract_proxy_addr,
+            value: U256::ZERO,
+            data: upgrade_data,
+            predecessor: B256::ZERO,
+            salt: B256::ZERO,
+            delay,
+        };
+        let operation_id =
+            schedule_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone())
+                .await?;
+
+        // check that the tx is scheduled
+        let timelock = OpsTimelock::new(timelock_addr, &provider);
+        assert!(timelock.isOperationPending(operation_id).call().await?._0);
+        assert!(timelock.isOperationReady(operation_id).call().await?._0);
+        assert!(!timelock.isOperationDone(operation_id).call().await?._0);
+        assert!(timelock.getTimestamp(operation_id).call().await?._0 > U256::ZERO);
+
+        // execute the tx since the delay is 0
+        execute_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone())
+            .await?;
+
+        // check that the tx is executed
+        assert!(timelock.isOperationDone(operation_id).call().await?._0);
+        assert!(!timelock.isOperationPending(operation_id).call().await?._0);
+        assert!(!timelock.isOperationReady(operation_id).call().await?._0);
+        // check that the new owner is the provider_wallet
+        let fee_contract = FeeContract::new(operation.target, &provider);
+        assert_eq!(fee_contract.owner().call().await?._0, provider_wallet);
+
+        operation.value = U256::from(1);
+        //transfer ownership back to the timelock
+        let tx_receipt = fee_contract
+            .transferOwnership(timelock_addr)
+            .send()
+            .await?
+            .get_receipt()
+            .await?;
+        assert!(tx_receipt.inner.is_success());
+
+        schedule_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone())
+            .await?;
+
+        cancel_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone()).await?;
+
+        // check that the tx is cancelled
+        let next_operation_id = timelock
+            .hashOperation(
+                operation.target,
+                operation.value,
+                operation.data.clone(),
+                operation.predecessor,
+                operation.salt,
+            )
+            .call()
+            .await?
+            ._0;
+        assert!(timelock.getTimestamp(next_operation_id).call().await?._0 == U256::ZERO);
+        Ok(())
+    }
+
     async fn test_transfer_ownership_helper(
         contract_type: Contract,
         options: UpgradeTestOptions,
@@ -2557,7 +2520,7 @@ mod tests {
                     mnemonic = val.to_string();
                 } else if key == "ESPRESSO_DEPLOYER_ACCOUNT_INDEX" {
                     account_index = val.parse::<u32>()?;
-                } else if key == "ESPRESSO_SEQUENCER_TIMELOCK_CONTROLLER_ADDRESS" {
+                } else if key == "ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS" {
                     timelock = val.parse::<Address>()?;
                 }
             }
@@ -2565,8 +2528,7 @@ mod tests {
             if sepolia_rpc_url.is_empty() || multisig_admin.is_zero() || timelock.is_zero() {
                 panic!(
                     "ESPRESSO_SEQUENCER_L1_PROVIDER, ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS, \
-                     ESPRESSO_SEQUENCER_TIMELOCK_CONTROLLER_ADDRESS must be set in \
-                     .env.deployer.rs.test"
+                     ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS must be set in .env.deployer.rs.test"
                 );
             }
         }
@@ -2663,11 +2625,11 @@ mod tests {
         );
 
         // then send transfer ownership proposal to the multisig wallet
-        let result = proposals::transfer_ownership_from_multisig_to_timelock(
+        let result = transfer_ownership_from_multisig_to_timelock(
             &provider,
             &mut contracts,
             contract_type,
-            proposals::TransferOwnershipParams {
+            TransferOwnershipParams {
                 new_owner: timelock,
                 rpc_url: sepolia_rpc_url.clone(),
                 safe_addr: multisig_admin,
@@ -2714,7 +2676,91 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
+    async fn test_encode_function_call() -> Result<()> {
+        let function_signature = "transfer(address,uint256)".to_string();
+        let values = vec![
+            "0x000000000000000000000000000000000000dead".to_string(),
+            "1000".to_string(),
+        ];
+        let expected = "0xa9059cbb000000000000000000000000000000000000000000000000000000000000dead00000000000000000000000000000000000000000000000000000000000003e8".parse::<Bytes>()?;
+        let encoded = encode_function_call(&function_signature, values).expect("encoding failed");
+
+        assert_eq!(encoded, expected);
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_encode_function_call_upgrade_to_and_call() -> Result<()> {
+        let function_signature = "upgradeToAndCall(address,bytes)".to_string();
+        let values = vec![
+            "0xe1f131b07550a689d6a11f21d9e9238a5c466996".to_string(),
+            "0x".to_string(),
+        ];
+        let expected = "0x4f1ef286000000000000000000000000e1f131b07550a689d6a11f21d9e9238a5c46699600000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000000".parse::<Bytes>()?;
+        let encoded = encode_function_call(&function_signature, values).expect("encoding failed");
+
+        assert_eq!(encoded, expected);
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_encode_function_call_with_bytes32() -> Result<()> {
+        let function_signature = "setHash(bytes32)".to_string();
+        let values =
+            vec!["0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string()];
+        let expected = "0x0c4c42850123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            .parse::<Bytes>()?;
+        let encoded = encode_function_call(&function_signature, values).expect("encoding failed");
+
+        assert_eq!(encoded, expected);
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_encode_function_call_with_bytes() -> Result<()> {
+        let function_signature = "emitData(bytes)".to_string();
+        let values = vec!["0xdeadbeef".to_string()];
+        let expected = "0xd836083e00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000004deadbeef00000000000000000000000000000000000000000000000000000000".parse::<Bytes>()?;
+        let encoded = encode_function_call(&function_signature, values).expect("encoding failed");
+
+        assert_eq!(encoded, expected);
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_encode_function_call_with_bool() -> Result<()> {
+        let function_signature = "setFlag(bool)".to_string();
+        let mut values = vec!["true".to_string()];
+        let mut expected =
+            "0x3927f6af0000000000000000000000000000000000000000000000000000000000000001"
+                .parse::<Bytes>()?;
+        let mut encoded =
+            encode_function_call(&function_signature, values).expect("encoding failed");
+
+        assert_eq!(encoded, expected);
+
+        values = vec!["false".to_string()];
+        expected = "0x3927f6af0000000000000000000000000000000000000000000000000000000000000000"
+            .parse::<Bytes>()?;
+        encoded = encode_function_call(&function_signature, values).expect("encoding failed");
+
+        assert_eq!(encoded, expected);
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_encode_function_call_with_string() -> Result<()> {
+        let function_signature = "logMessage(string)".to_string();
+        let values = vec!["Hello, world!".to_string()];
+        let expected = "0x7c9900520000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000d48656c6c6f2c20776f726c642100000000000000000000000000000000000000".parse::<Bytes>()?;
+        let encoded = encode_function_call(&function_signature, values).expect("encoding failed");
+
+        assert_eq!(encoded, expected);
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
     async fn test_transfer_ownership_light_client_proxy() -> Result<()> {
         test_transfer_ownership_helper(
             Contract::LightClientProxy,
@@ -2727,7 +2773,7 @@ mod tests {
         .await
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_transfer_ownership_fee_contract_proxy() -> Result<()> {
         test_transfer_ownership_helper(
             Contract::FeeContractProxy,
@@ -2740,7 +2786,7 @@ mod tests {
         .await
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     #[ignore]
     async fn test_transfer_ownership_fee_contract_proxy_real_proposal() -> Result<()> {
         println!("Starting test_transfer_ownership_fee_contract_proxy_real_proposal");
@@ -2757,7 +2803,7 @@ mod tests {
         .await
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_transfer_ownership_esp_token_proxy() -> Result<()> {
         test_transfer_ownership_helper(
             Contract::EspTokenProxy,
@@ -2770,7 +2816,7 @@ mod tests {
         .await
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_transfer_ownership_stake_table_proxy() -> Result<()> {
         test_transfer_ownership_helper(
             Contract::StakeTableProxy,

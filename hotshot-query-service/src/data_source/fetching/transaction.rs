@@ -21,7 +21,7 @@ use hotshot_types::traits::node_implementation::NodeType;
 
 use super::{AvailabilityProvider, FetchRequest, Fetchable, Fetcher, Notifiers};
 use crate::{
-    availability::{QueryableHeader, QueryablePayload, TransactionHash, TransactionQueryData},
+    availability::{BlockWithTransaction, QueryableHeader, QueryablePayload, TransactionHash},
     data_source::{
         storage::{
             pruning::PrunedHeightStorage, AvailabilityStorage, NodeStorage,
@@ -29,7 +29,8 @@ use crate::{
         },
         update::VersionedDataSource,
     },
-    Header, Payload, QueryResult,
+    types::HeightIndexed,
+    Header, Payload, QueryError, QueryResult,
 };
 
 #[derive(Clone, Copy, Debug, From)]
@@ -38,7 +39,7 @@ pub(super) struct TransactionRequest<Types: NodeType>(TransactionHash<Types>);
 impl<Types: NodeType> FetchRequest for TransactionRequest<Types> {}
 
 #[async_trait]
-impl<Types> Fetchable<Types> for TransactionQueryData<Types>
+impl<Types> Fetchable<Types> for BlockWithTransaction<Types>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
@@ -47,7 +48,7 @@ where
     type Request = TransactionRequest<Types>;
 
     fn satisfies(&self, req: Self::Request) -> bool {
-        req.0 == self.hash()
+        req.0 == self.transaction.hash()
     }
 
     async fn passive_fetch(
@@ -63,7 +64,7 @@ where
 
         async move {
             let block = wait_block.await?;
-            Self::with_hash(&block, req.0)
+            BlockWithTransaction::with_hash(block, req.0)
         }
         .boxed()
     }
@@ -91,6 +92,13 @@ where
     where
         S: AvailabilityStorage<Types>,
     {
-        storage.get_transaction(req.0).await
+        let hash = req.0;
+        let block = storage.get_block_with_transaction(hash).await?;
+        let height = block.height();
+        BlockWithTransaction::with_hash(block, hash).ok_or(QueryError::Error {
+            message: format!(
+                "transaction index inconsistent: block {height} contains no transaction {hash}"
+            ),
+        })
     }
 }
