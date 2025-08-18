@@ -1539,7 +1539,7 @@ impl EpochCommittees {
         // If the node starts from epoch version V4, there is no previous epoch root available.
         // In this case, we assume a fixed average block time of 2000 milli seconds (2s)
         // for the first epoch in which reward id distributed
-        let average_block_time = if previous_epoch <= first_epoch + 1 {
+        let average_block_time_ms = if previous_epoch <= first_epoch + 1 {
             ASSUMED_BLOCK_TIME_SECONDS as u64 * 1000 // 2 seconds in milliseconds
         } else {
             let prev_stake_table = self
@@ -1569,10 +1569,10 @@ impl EpochCommittees {
                 .checked_div(epoch_height)
                 .context("Epoch height is zero. cannot compute average block time")?
         };
-        tracing::info!(?epoch, %total_supply, %total_stake, %average_block_time);
+        tracing::info!(?epoch, %total_supply, %total_stake, %average_block_time_ms, "dynamic block reward parameters");
 
         let block_reward =
-            Self::compute_block_reward(epoch, total_supply, total_stake, average_block_time)?;
+            Self::compute_block_reward(epoch, total_supply, total_stake, average_block_time_ms)?;
 
         Ok(block_reward)
     }
