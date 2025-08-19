@@ -225,6 +225,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     })
     .submit(Default::default())
     .config(Default::default())
+    .catchup(Default::default())
     .explorer(Default::default());
 
     const NUM_NODES: usize = 2;
@@ -405,7 +406,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     );
 
     let reward_proof_url = format!(
-        "{}/catchup/{}/{}/reward-account-v2/{}",
+        "{}catchup/{}/{}/reward-account-v2/{}",
         sequencer_url, current_height, view_number, reward_account
     );
     println!("Fetching reward proof from: {}", reward_proof_url);
