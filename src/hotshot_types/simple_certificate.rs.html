@@ -783,8 +783,8 @@
 <a href=#783 id=783 data-nosnippet>783</a>            signatures: v1
 <a href=#784 id=784 data-nosnippet>784</a>                .signatures
 <a href=#785 id=785 data-nosnippet>785</a>                .into_iter()
-<a href=#786 id=786 data-nosnippet>786</a>                .map(|(key, sig)| (key, sig.clone(), sig))
-<a href=#787 id=787 data-nosnippet>787</a>                .collect(),
+<a href=#786 id=786 data-nosnippet>786</a>                .map(|(key, sig)| (key, sig.clone(), sig)) <span class="comment">// Cloning the signatues here because we use it only for storage.
+<a href=#787 id=787 data-nosnippet>787</a>                </span>.collect(),
 <a href=#788 id=788 data-nosnippet>788</a>            auth_root: Default::default(),
 <a href=#789 id=789 data-nosnippet>789</a>        }
 <a href=#790 id=790 data-nosnippet>790</a>    }
