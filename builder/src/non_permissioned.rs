@@ -34,7 +34,7 @@ use crate::run_builder_api_service;
 #[derive(Clone, Debug)]
 pub struct BuilderConfig {
     pub global_state: Arc<RwLock<GlobalState<SeqTypes>>>,
-    pub hotshot_events_api_url: Url,
+    pub sequencer_api_url: Url,
     pub hotshot_builder_apis_url: Url,
 }
 
@@ -96,7 +96,7 @@ impl BuilderConfig {
         node_count: NonZeroUsize,
         instance_state: NodeState,
         validated_state: ValidatedState,
-        hotshot_events_api_url: Url,
+        sequencer_api_url: Url,
         hotshot_builder_apis_url: Url,
         max_api_timeout_duration: Duration,
         max_block_size_increment_period: Duration,
@@ -211,7 +211,7 @@ impl BuilderConfig {
         run_builder_api_service(hotshot_builder_apis_url.clone(), proxy_global_state);
 
         // spawn the builder service
-        let events_url = hotshot_events_api_url.clone();
+        let events_url = sequencer_api_url.clone();
         let global_state_clone = global_state.clone();
         tracing::info!("Running permissionless builder against hotshot events API at {events_url}",);
 
@@ -236,7 +236,7 @@ impl BuilderConfig {
         tracing::info!("Builder init finished");
         Ok(Self {
             global_state,
-            hotshot_events_api_url,
+            sequencer_api_url,
             hotshot_builder_apis_url,
         })
     }
@@ -269,8 +269,7 @@ mod test {
     async fn test_non_permissioned_builder() {
         let query_port = pick_unused_port().expect("No ports free");
 
-        let event_port = pick_unused_port().expect("No ports free");
-        let event_service_url: Url = format!("http://localhost:{event_port}").parse().unwrap();
+        let event_service_url: Url = format!("http://localhost:{query_port}").parse().unwrap();
 
         let builder_port = pick_unused_port().expect("No ports free");
         let builder_api_url: Url = format!("http://localhost:{builder_port}").parse().unwrap();
@@ -287,9 +286,7 @@ mod test {
                         Default::default(),
                         persistence::fs::Options::new(tmpdir.path().to_owned()),
                     )
-                    .hotshot_events(HotshotEvents {
-                        events_service_port: event_port,
-                    }),
+                    .hotshot_events(HotshotEvents),
             )
             .network_config(network_config)
             .build();

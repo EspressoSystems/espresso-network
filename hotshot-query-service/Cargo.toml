@@ -118,6 +118,7 @@ tracing-subscriber = { workspace = true }
 trait-variant = "0.1"
 url = "2"
 vbs = "0.1"
+hotshot-events-service = { workspace = true }
 vec1 = "1.12"
 
 # Dependencies enabled by feature "backtrace-on-stack-overflow".

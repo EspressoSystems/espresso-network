@@ -20,10 +20,10 @@ struct NonPermissionedBuilderOptions {
     /// The builder will subscribe to this server to receive hotshot events
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_URL",
-        default_value = "http://localhost:22001"
+        env = "ESPRESSO_SEQUENCER_API_URL",
+        default_value = "http://localhost:24000"
     )]
-    hotshot_event_streaming_url: Url,
+    sequencer_api_url: Url,
 
     /// Mnemonic phrase for builder account.
     ///
@@ -178,7 +178,7 @@ async fn run<V: Versions>(
         opt.node_count,
         instance_state.clone(),
         validated_state,
-        opt.hotshot_event_streaming_url,
+        opt.sequencer_api_url,
         builder_server_url,
         api_response_timeout_duration,
         opt.max_block_size_increment_period,
