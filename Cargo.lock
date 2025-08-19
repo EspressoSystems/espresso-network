@@ -11941,6 +11941,7 @@ dependencies = [
  "espresso-types",
  "futures",
  "hotshot-contract-adapter",
+ "hotshot-query-service",
  "hotshot-state-prover",
  "hotshot-types",
  "jf-signature 0.2.0",

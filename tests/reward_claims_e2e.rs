@@ -19,6 +19,7 @@ use espresso_types::{
 use hotshot_contract_adapter::sol_types::{
     AccruedRewardsProofSol, EspTokenV2, LightClientV3, RewardClaim,
 };
+use hotshot_query_service::data_source::SqlDataSource;
 use hotshot_state_prover::{v3::service::run_prover_service, StateProverConfig};
 use hotshot_types::{
     stake_table::{one_honest_threshold, HSStakeTable},
@@ -27,6 +28,7 @@ use hotshot_types::{
 use portpicker::pick_unused_port;
 use sequencer::{
     api::{
+        data_source::testing::TestableSequencerDataSource,
         options,
         test_helpers::{TestNetwork, TestNetworkConfigBuilder, STAKE_TABLE_CAPACITY_FOR_TEST},
     },
@@ -63,6 +65,8 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         ])
         .spawn();
     let l1_url = anvil.endpoint_url();
+    // TODO: remove, use below for external anvil, to see console.log statements
+    // let l1_url = "http://localhost:8545".parse::<Url>()?;
     println!("L1 URL: {}", l1_url);
 
     let signer = MnemonicBuilder::<English>::default()
@@ -224,10 +228,19 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     .explorer(Default::default());
 
     const NUM_NODES: usize = 2;
+    let storage =
+        futures::future::join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+    let persistence: [_; NUM_NODES] = storage
+        .iter()
+        .map(<SqlDataSource<SeqTypes, _> as TestableSequencerDataSource>::persistence_options)
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap();
     let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
         .api_config(api_options)
         .network_config(network_config)
         .states(states)
+        .persistences(persistence.clone())
         .build();
 
     // Start the TestNetwork
@@ -287,6 +300,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         max_retries: 0,
         max_gas_price: None,
     };
+    println!("Prover service configuration: {:?}", prover_config);
 
     println!("Starting prover service on port {}...", prover_port);
     let prover_handle = spawn(run_prover_service(
@@ -396,9 +410,14 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     );
     println!("Fetching reward proof from: {}", reward_proof_url);
 
+    // sleep
+    tokio::time::sleep(Duration::from_secs(300)).await;
+
+    // XXX: this fails, we probably need to
     let http_client = reqwest::Client::new();
     let reward_data: RewardAccountQueryDataV2 = http_client
         .get(&reward_proof_url)
+        .header("Accept", "application/json")
         .send()
         .await?
         .json()
