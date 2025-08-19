@@ -140,7 +140,7 @@ pub async fn submit_state_and_proof(
     let proof: PlonkProofSol = proof.into();
     let new_state: LightClientStateSol = lc_state.into();
     let next_stake_table: StakeTableStateSol = next_st_state.into();
-    let auth_root = U256::from_le_bytes(auth_root.0);
+    let auth_root = U256::from_be_bytes(auth_root.0);
 
     let tx = contract.newFinalizedState_2(
         new_state.into(),
