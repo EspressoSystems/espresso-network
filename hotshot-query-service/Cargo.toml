@@ -66,6 +66,7 @@ either = { workspace = true }
 espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0", optional = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
+hotshot-events-service = { workspace = true }
 hotshot-example-types = { workspace = true }
 hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
@@ -114,7 +115,6 @@ tracing-subscriber = { workspace = true }
 trait-variant = "0.1"
 url = "2"
 vbs = "0.1"
-hotshot-events-service = { workspace = true }
 vec1 = "1.12"
 
 # Dependencies enabled by feature "backtrace-on-stack-overflow".
