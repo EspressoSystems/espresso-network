@@ -6,6 +6,7 @@ license = "MIT"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+anyhow = "1"
 alloy = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }

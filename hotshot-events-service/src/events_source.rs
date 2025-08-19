@@ -1,5 +1,6 @@
 use std::{marker::PhantomData, sync::Arc};
 
+use anyhow::Result;
 use async_broadcast::{broadcast, InactiveReceiver, Sender as BroadcastSender};
 use async_trait::async_trait;
 use futures::{
@@ -22,12 +23,15 @@ where
 {
     type EventStream: Stream<Item = Arc<Event<Types>>> + Unpin + Send + 'static;
     type LegacyEventStream: Stream<Item = Arc<LegacyEvent<Types>>> + Unpin + Send + 'static;
-    async fn get_event_stream(&self, filter: Option<EventFilterSet<Types>>) -> Self::EventStream;
+    async fn get_event_stream(
+        &self,
+        filter: Option<EventFilterSet<Types>>,
+    ) -> Result<Self::EventStream>;
     async fn get_legacy_event_stream(
         &self,
         filter: Option<EventFilterSet<Types>>,
-    ) -> Self::LegacyEventStream;
-    async fn get_startup_info(&self) -> StartupInfo<Types>;
+    ) -> Result<Self::LegacyEventStream>;
+    async fn get_startup_info(&self) -> Result<StartupInfo<Types>>;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -138,49 +142,52 @@ impl<Types: NodeType> EventsSource<Types> for EventsStreamer<Types> {
     type EventStream = BoxStream<'static, Arc<Event<Types>>>;
     type LegacyEventStream = BoxStream<'static, Arc<LegacyEvent<Types>>>;
 
-    async fn get_event_stream(&self, filter: Option<EventFilterSet<Types>>) -> Self::EventStream {
+    async fn get_event_stream(
+        &self,
+        filter: Option<EventFilterSet<Types>>,
+    ) -> Result<Self::EventStream> {
         let receiver = self.inactive_to_subscribe_clone_recv.activate_cloned();
 
         if let Some(filter) = filter {
-            receiver
+            Ok(receiver
                 .filter(move |event| {
                     futures::future::ready(filter.should_broadcast(&event.as_ref().event))
                 })
-                .boxed()
+                .boxed())
         } else {
-            receiver.boxed()
+            Ok(receiver.boxed())
         }
     }
 
     async fn get_legacy_event_stream(
         &self,
         filter: Option<EventFilterSet<Types>>,
-    ) -> Self::LegacyEventStream {
+    ) -> Result<Self::LegacyEventStream> {
         let receiver = self.inactive_to_subscribe_clone_recv.activate_cloned();
 
         if let Some(filter) = filter {
-            receiver
+            Ok(receiver
                 .filter(move |event| {
                     futures::future::ready(filter.should_broadcast(&event.as_ref().event))
                 })
                 .filter_map(|a| {
                     futures::future::ready(Event::to_legacy(a.as_ref().clone()).ok().map(Arc::new))
                 })
-                .boxed()
+                .boxed())
         } else {
-            receiver
+            Ok(receiver
                 .filter_map(|a| {
                     futures::future::ready(Event::to_legacy(a.as_ref().clone()).ok().map(Arc::new))
                 })
-                .boxed()
+                .boxed())
         }
     }
 
-    async fn get_startup_info(&self) -> StartupInfo<Types> {
-        StartupInfo {
+    async fn get_startup_info(&self) -> Result<StartupInfo<Types>> {
+        Ok(StartupInfo {
             known_node_with_stake: self.known_node_with_stake(),
             non_staked_node_count: self.non_staked_node_count(),
-        }
+        })
     }
 }
 

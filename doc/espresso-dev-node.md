@@ -122,3 +122,13 @@ Parameter
 | Name     | Type    | Required | Description                                                                                                          |
 | -------- | ------- | -------- | -------------------------------------------------------------------------------------------------------------------- |
 | chain_id | integer | No       | chain id for which the height needs to be unfrozen. If not provided, the base L1 light client contract will be used. |
+
+### WEBSOCKET /hotshot-events/events
+
+This endpoint provides a real-time websocket stream of HotShot consensus events. Clients can subscribe to this stream to receive live updates about consensus activity.
+
+An example of connecting to the websocket:
+
+```cmd
+websocat ws://localhost:20000/v0/hotshot-events/events 
+```

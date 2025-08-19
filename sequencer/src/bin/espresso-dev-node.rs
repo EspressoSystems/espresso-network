@@ -2,8 +2,16 @@ use std::{
     collections::{BTreeMap, HashMap},
     io::{self, Read},
     iter::{self, once},
+    sync::Arc,
     time::Duration,
 };
+
+use async_lock::RwLock;
+use futures::stream::BoxStream;
+use hotshot_events_service::events_source::{
+    EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
+};
+use hotshot_types::event::{Event, LegacyEvent};
 
 use alloy::{
     network::EthereumWallet,
@@ -50,7 +58,7 @@ use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
 use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
 use tempfile::NamedTempFile;
-use tide_disco::{error::ServerError, method::ReadState, Api, Error as _, StatusCode};
+use tide_disco::{method::ReadState, Api, Error as _, StatusCode};
 use tokio::spawn;
 use url::Url;
 use vbs::version::StaticVersionType;
@@ -644,6 +652,10 @@ async fn main() -> anyhow::Result<()> {
     )
     .await;
 
+    // Get and store the event streamer for the first peer
+    let event_streamer = network.peers[0].event_streamer().clone();
+    client_states.event_streamer = Some(event_streamer);
+
     let relay_server_handle = spawn(async move {
         // using explicit relayer state will avoid it calling the dev-node on `/config/hotshot` for epoch info,
         // during `init_genesis()`, since this dev-node didn't expose those APIs.
@@ -735,7 +747,10 @@ pub struct ApiState {
     pub wallet: EthereumWallet,
     /// L1 chain id
     pub l1_chain_id: u64,
+    /// The HotShot event streamer for the first node
+    pub event_streamer: Option<Arc<RwLock<EventsStreamer<SeqTypes>>>>,
 }
+
 impl Default for ApiState {
     fn default() -> Self {
         Self {
@@ -743,7 +758,34 @@ impl Default for ApiState {
             provider_urls: BTreeMap::new(),
             wallet: EthereumWallet::default(),
             l1_chain_id: 31337,
+            event_streamer: None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, derive_more::Display)]
+pub struct ServerError(tide_disco::error::ServerError);
+
+impl std::error::Error for ServerError {}
+
+/// Convert hotshot_events_service::events::Error to ServerError
+impl From<hotshot_events_service::events::Error> for ServerError {
+    fn from(err: hotshot_events_service::events::Error) -> Self {
+        ServerError(tide_disco::error::ServerError {
+            status: err.status(),
+            message: err.to_string(),
+        })
+    }
+}
+
+/// Implement the tide_disco::Error trait for ServerError
+impl tide_disco::Error for ServerError {
+    fn catch_all(status: StatusCode, message: String) -> Self {
+        ServerError(tide_disco::error::ServerError { status, message })
+    }
+
+    fn status(&self) -> StatusCode {
+        self.0.status()
     }
 }
 
@@ -785,6 +827,43 @@ impl ReadState for ApiState {
         op: impl Send + for<'a> FnOnce(&'a Self::State) -> BoxFuture<'a, T> + 'async_trait,
     ) -> T {
         op(self).await
+    }
+}
+
+/// Implement the EventsSource trait ApiState, which delegates to the event streamer
+#[async_trait]
+impl EventsSource<SeqTypes> for ApiState {
+    type EventStream = BoxStream<'static, Arc<Event<SeqTypes>>>;
+    type LegacyEventStream = BoxStream<'static, Arc<LegacyEvent<SeqTypes>>>;
+
+    async fn get_event_stream(
+        &self,
+        filter: Option<EventFilterSet<SeqTypes>>,
+    ) -> anyhow::Result<Self::EventStream> {
+        self.event_streamer
+            .as_ref()
+            .with_context(|| "event streamer was not yet initialized")?
+            .read(|state| state.get_event_stream(filter))
+            .await
+    }
+
+    async fn get_legacy_event_stream(
+        &self,
+        filter: Option<EventFilterSet<SeqTypes>>,
+    ) -> anyhow::Result<Self::LegacyEventStream> {
+        self.event_streamer
+            .as_ref()
+            .with_context(|| "event streamer was not yet initialized")?
+            .read(|state| state.get_legacy_event_stream(filter))
+            .await
+    }
+
+    async fn get_startup_info(&self) -> anyhow::Result<StartupInfo<SeqTypes>> {
+        self.event_streamer
+            .as_ref()
+            .with_context(|| "event streamer was not yet initialized")?
+            .read(|state| state.get_startup_info())
+            .await
     }
 }
 
@@ -856,6 +935,16 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(
     .map_err(io::Error::other)?;
 
     app.register_module("api", api).map_err(io::Error::other)?;
+
+    // Add the hotshot-events API to the dev-node API
+    let hotshot_events_api = hotshot_events_service::events::define_api::<_, _, ApiVer>(
+        &hotshot_events_service::events::Options::default(),
+        "0.0.1".parse().unwrap(),
+    )
+    .map_err(io::Error::other)?;
+
+    app.register_module("hotshot-events", hotshot_events_api)
+        .map_err(io::Error::other)?;
 
     tracing::info!("Starting dev-node API on http://0.0.0.0:{port}");
 

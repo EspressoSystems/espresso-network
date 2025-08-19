@@ -5632,6 +5632,7 @@ name = "hotshot-events-service"
 version = "0.1.57"
 dependencies = [
  "alloy",
+ "anyhow",
  "async-broadcast",
  "async-lock 3.4.1",
  "async-trait",
@@ -5807,6 +5808,7 @@ dependencies = [
  "futures",
  "generic-array",
  "hotshot",
+ "hotshot-events-service",
  "hotshot-example-types",
  "hotshot-testing",
  "hotshot-types",
