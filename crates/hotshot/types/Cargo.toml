@@ -6,6 +6,14 @@ name = "hotshot-types"
 version = "0.1.11"
 license = "MIT"
 
+[[bin]]
+name = "mnemonic"
+path = "bin/mnemonic.rs"
+
+[features]
+gpu-vid = ["jf-vid/gpu-vid"]
+test-srs = ["jf-vid/test-srs"]
+
 [dependencies]
 alloy = { workspace = true }
 anyhow = { workspace = true }
@@ -61,10 +69,5 @@ vec1 = { workspace = true }
 vid = { workspace = true }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
-[features]
-gpu-vid = ["jf-vid/gpu-vid"]
-test-srs = ["jf-vid/test-srs"]
-
-[[bin]]
-name = "mnemonic"
-path = "bin/mnemonic.rs"
+[lints]
+workspace = true

@@ -13,7 +13,9 @@
   };
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-  inputs.nixpkgs-legacy-foundry.url = "github:NixOS/nixpkgs/9abb87b552b7f55ac8916b6fc9e5cb486656a2f3";
+
+  # See https://github.com/EspressoSystems/espresso-network/issues/3240
+  inputs.nixpkgs-legacy-process-compose.url = "github:NixOS/nixpkgs/3730d8a308f94996a9ba7c7138ede69c1b9ac4ae";
 
   inputs.foundry-nix.url = "github:shazow/foundry.nix/monthly"; # Use monthly branch for permanent releases
 
@@ -33,7 +35,7 @@
   outputs =
     { self
     , nixpkgs
-    , nixpkgs-legacy-foundry
+    , nixpkgs-legacy-process-compose
     , foundry-nix
     , rust-overlay
     , nixpkgs-cross-overlay
@@ -47,9 +49,18 @@
       # node=error: disable noisy anvil output
       RUST_LOG = "info,libp2p=off,isahc=error,surf=error,node=error";
       RUST_BACKTRACE = 1;
-      # Use a distinct target dir for builds from within nix shells.
-      CARGO_TARGET_DIR = "target/nix";
-      rustEnvVars = { inherit RUST_LOG RUST_BACKTRACE CARGO_TARGET_DIR; };
+      rustEnvVars = { inherit RUST_LOG RUST_BACKTRACE; };
+
+      rustShellHook = ''
+        # on mac os `bin/pwd -P` returns the canonical path on case insensitive file-systems
+        my_pwd=$(/bin/pwd -P 2> /dev/null || pwd)
+
+        # Use a distinct target dir for builds from within nix shells.
+        export CARGO_TARGET_DIR="$my_pwd/target/nix"
+
+        # Add rust binaries to PATH
+        export PATH="$CARGO_TARGET_DIR/debug:$PATH"
+      '';
 
       solhintPkg = { buildNpmPackage, fetchFromGitHub }:
         buildNpmPackage rec {
@@ -72,6 +83,10 @@
         (final: prev: {
           solhint =
             solhintPkg { inherit (prev) buildNpmPackage fetchFromGitHub; };
+        })
+        (final: prev: {
+          process-compose =
+            (import nixpkgs-legacy-process-compose { inherit system; }).process-compose;
         })
 
         # The mold linker is around 50% faster on Linux than the default linker.
@@ -110,7 +125,7 @@
         in
         import ./cross-shell.nix
           {
-            inherit pkgs;
+            inherit pkgs rustShellHook;
             envVars = rustEnvVars;
           };
     in
@@ -247,38 +262,20 @@
             [ darwin.apple_sdk.frameworks.SystemConfiguration ]
           ++ lib.optionals (!stdenv.isDarwin) [ cargo-watch ] # broken on OSX
           ;
-          shellHook = ''
+          shellHook = rustShellHook + ''
             # Add the local scripts to the PATH
-            export PATH="$PWD/scripts:$PATH"
+            export PATH="$my_pwd/scripts:$PATH"
 
             # Add node binaries to PATH for development
-            export PATH="$PWD/node_modules/.bin:$PATH"
+            export PATH="$my_pwd/node_modules/.bin:$PATH"
 
             # Prevent cargo aliases from using programs in `~/.cargo` to avoid conflicts
             # with rustup installations.
             export CARGO_HOME=$HOME/.cargo-nix
-
-            # Add rust binaries to PATH for native demo
-            export PATH="$PWD/$CARGO_TARGET_DIR/debug:$PATH"
           '' + self.checks.${system}.pre-commit-check.shellHook;
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
           FOUNDRY_SOLC = "${solc}/bin/solc";
         });
-      # A shell with foundry v0.3.0 which can still build ethers-rs bindings.
-      # Can be removed when we are no longer using the ethers-rs bindings.
-      devShells.legacyFoundry =
-        let
-          overlays = [
-            solc-bin.overlays.default
-          ];
-          pkgs = import nixpkgs-legacy-foundry { inherit system overlays; };
-        in
-        mkShell {
-          packages = with pkgs; [
-            solc
-            foundry
-          ];
-        };
       devShells.crossShell =
         crossShell { config = "x86_64-unknown-linux-musl"; };
       devShells.armCrossShell =
@@ -298,6 +295,7 @@
             protobuf # to compile libp2p-autonat
             toolchain
           ];
+          shellHook = rustShellHook;
         });
       devShells.coverage =
         let
@@ -314,7 +312,7 @@
             grcov
           ];
           CARGO_INCREMENTAL = "0";
-          shellHook = ''
+          shellHook = rustShellHook + ''
             RUSTFLAGS="$RUSTFLAGS -Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests -Cdebuginfo=2"
           '';
           RUSTDOCFLAGS = "-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests";
@@ -335,6 +333,26 @@
             protobuf # to compile libp2p-autonat
             stableToolchain
           ];
+          shellHook = rustShellHook;
         });
+
+      # A separate dev-shell due to large size of dependencies (incl. ghc)
+      devShells.echidna =
+        let
+          solc = pkgs.solc-bin."0.8.28";
+        in
+        mkShell {
+          buildInputs = [
+            # Foundry tools
+            foundry-bin
+            solc
+
+            # Security analysis tools
+            slither-analyzer
+            echidna
+            python3.pkgs.crytic-compile
+          ];
+          FOUNDRY_SOLC = "${solc}/bin/solc";
+        };
     });
 }

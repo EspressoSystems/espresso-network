@@ -20,9 +20,12 @@ use committable::Committable;
 use hotshot_utils::anytrace::*;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use vbs::{
-    version::{StaticVersionType, Version},
+    version::{StaticVersion, StaticVersionType, Version},
     BinarySerializer, Serializer,
 };
+
+/// The version we should expect for external messages
+pub const EXTERNAL_MESSAGE_VERSION: Version = Version { major: 0, minor: 0 };
 
 use crate::{
     data::{
@@ -704,6 +707,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
     }
 
     /// Deserialize a message with a version number, using `message.view_number()` to determine the message's version. This function will fail on improperly versioned messages.
+    /// Returns both the deserialized message and the version of the message
     ///
     /// # Errors
     ///
@@ -711,13 +715,19 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
     pub async fn deserialize<M: HasViewNumber<TYPES> + for<'a> Deserialize<'a>>(
         &self,
         message: &[u8],
-    ) -> Result<M> {
+    ) -> Result<(M, Version)> {
+        // Get the actual version from the message itself
         let actual_version = Version::deserialize(message)
             .wrap()
             .context(info!("Failed to read message version!"))?
             .0;
 
+        // Deserialize the message using the stated version
         let deserialized_message: M = match actual_version {
+            // Special case: external messages (version 0.0)
+            v if v == EXTERNAL_MESSAGE_VERSION => {
+                Serializer::<StaticVersion<0, 0>>::deserialize(message)
+            },
             v if v == V::Base::VERSION => Serializer::<V::Base>::deserialize(message),
             v if v == V::Upgrade::VERSION => Serializer::<V::Upgrade>::deserialize(message),
             v => {
@@ -727,10 +737,19 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
         .wrap()
         .context(info!("Failed to deserialize message!"))?;
 
+        // If the message is version 0.0, just return the deserialized message and the version.
+        // We don't care about it matching the expected version for the view number.
+        if actual_version == EXTERNAL_MESSAGE_VERSION {
+            return Ok((deserialized_message, actual_version));
+        }
+
+        // Get the view number associated with the message
         let view = deserialized_message.view_number();
 
+        // Get the expected version for the message based on the view number
         let expected_version = self.version(view).await?;
 
+        // Check that the actual version matches the expected version
         if actual_version != expected_version {
             return Err(error!(format!(
                 "Message has invalid version number for its view. Expected: {expected_version}, \
@@ -738,6 +757,6 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
             )));
         };
 
-        Ok(deserialized_message)
+        Ok((deserialized_message, actual_version))
     }
 }

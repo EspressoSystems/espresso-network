@@ -16,10 +16,10 @@ use hotshot_types::{
     drb::{drb_difficulty_selector, DrbResult, INITIAL_DRB_RESULT},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    simple_certificate::LightClientStateUpdateCertificate,
+    simple_certificate::LightClientStateUpdateCertificateV2,
     traits::{
         block_contents::BlockHeader, election::Membership, network::BroadcastDelay,
-        node_implementation::Versions, signature_key::StateSignatureKey,
+        node_implementation::Versions, signature_key::StateSignatureKey, storage::Storage,
     },
     utils::epoch_from_block_number,
 };
@@ -369,6 +369,26 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         );
 
         let consensus = Arc::new(RwLock::new(consensus));
+
+        if let Some(epoch) = epoch {
+            // trigger catchup for the current and next epoch if needed
+            let _ = membership_coordinator
+                .membership_for_epoch(Some(epoch))
+                .await;
+            let _ = membership_coordinator
+                .membership_for_epoch(Some(epoch + 1))
+                .await;
+
+            if let Ok(drb_result) = storage.load_drb_result(epoch + 1).await {
+                tracing::error!("Writing DRB result for epoch {}", epoch + 1);
+                if let Ok(mem) = membership_coordinator
+                    .stake_table_for_epoch(Some(epoch + 1))
+                    .await
+                {
+                    mem.add_drb_result(drb_result).await;
+                }
+            }
+        }
 
         // This makes it so we won't block on broadcasting if there is not a receiver
         // Our own copy of the receiver is inactive so it doesn't count.
@@ -1091,7 +1111,7 @@ pub struct HotShotInitializer<TYPES: NodeType> {
     pub saved_vid_shares: VidShares<TYPES>,
 
     /// The last formed light client state update certificate if there's any
-    pub state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
+    pub state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
 
     /// Saved epoch information. This must be sorted ascending by epoch.
     pub start_epoch_info: Vec<InitializerEpochInfo<TYPES>>,
@@ -1192,7 +1212,7 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
         saved_proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
         saved_vid_shares: VidShares<TYPES>,
         decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
-        state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
+        state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
     ) -> Self {
         let anchor_state = Arc::new(TYPES::ValidatedState::from_header(
             anchor_leaf.block_header(),

@@ -3,7 +3,7 @@ use vbs::version::Version;
 // Re-export types which haven't changed since the last minor version.
 pub use super::v0_1::{
     ADVZNsProof, ADVZTxProof, AccountQueryData, BlockMerkleCommitment, BlockMerkleTree, BlockSize,
-    BuilderSignature, ChainId, Delta, FeeAccount, FeeAccountProof, FeeAmount, FeeInfo,
+    BuilderSignature, ChainId, FeeAccount, FeeAccountProof, FeeAmount, FeeInfo,
     FeeMerkleCommitment, FeeMerkleProof, FeeMerkleTree, Index, Iter, L1BlockInfo, L1Client,
     L1ClientOptions, L1Snapshot, NamespaceId, NsIndex, NsIter, NsPayload, NsPayloadBuilder,
     NsPayloadByteLen, NsPayloadOwned, NsPayloadRange, NsTable, NsTableBuilder,
@@ -21,5 +21,7 @@ pub use super::v0_3::{
 pub const VERSION: Version = Version { major: 0, minor: 4 };
 
 mod header;
+mod state;
 
 pub use header::*;
+pub use state::*;

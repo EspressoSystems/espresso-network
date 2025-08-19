@@ -6,21 +6,18 @@ use hotshot_query_service::{availability::QueryablePayload, VidCommon};
 use hotshot_types::{data::VidCommitment, traits::EncodeBytes, vid::advz::advz_scheme};
 use jf_vid::VidScheme;
 use rand::RngCore;
-use sequencer_utils::test_utils::setup_test;
 
 use crate::{
     v0_1::ADVZNsProof, v0_3::ChainConfig, BlockSize, NamespaceId, NodeState, Payload, Transaction,
     TxProof, ValidatedState,
 };
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn basic_correctness() {
     // play with this
     let test_cases = vec![
         vec![vec![5, 8, 8], vec![7, 9, 11], vec![10, 5, 8]], // 3 non-empty namespaces
     ];
-
-    setup_test();
     let mut rng = jf_utils::test_rng();
     let valid_tests = ValidTest::many_from_tx_lengths(test_cases, &mut rng);
 
@@ -111,9 +108,8 @@ async fn basic_correctness() {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn enforce_max_block_size() {
-    setup_test();
     let test_case = vec![vec![5, 8, 8], vec![7, 9, 11], vec![10, 5, 8]];
     let payload_byte_len_expected: usize = 119;
     let ns_table_byte_len_expected: usize = 28;

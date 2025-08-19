@@ -10,6 +10,7 @@ use std::{
     sync::Arc,
 };
 
+use alloy::primitives::FixedBytes;
 use async_trait::async_trait;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot_types::{
@@ -413,6 +414,10 @@ impl<
             self.block_number,
             self.payload_commitment.as_ref(),
         )
+    }
+
+    fn auth_root(&self) -> anyhow::Result<FixedBytes<32>> {
+        Ok(FixedBytes::from([0u8; 32]))
     }
 
     fn timestamp(&self) -> u64 {
