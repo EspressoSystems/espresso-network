@@ -15,7 +15,7 @@ use hotshot_types::{
         signature_key::BuilderSignatureKey,
         BlockPayload, EncodeBytes, ValidatedState as _,
     },
-    utils::{epoch_from_block_number, is_epoch_transition, is_last_block, BuilderCommitment},
+    utils::{epoch_from_block_number, is_ge_epoch_root, BuilderCommitment},
 };
 use jf_merkle_tree::{AppendableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme};
 use serde::{
@@ -993,9 +993,7 @@ impl BlockHeader<SeqTypes> for Header {
             let epoch_height = instance_state
                 .epoch_height
                 .context("epoch height not in instance state")?;
-            if is_epoch_transition(height + 1, epoch_height)
-                && !is_last_block(height + 1, epoch_height)
-            {
+            if is_ge_epoch_root(height + 1, epoch_height) {
                 let epoch = EpochNumber::new(epoch_from_block_number(height + 1, epoch_height));
                 let coordinator = instance_state.coordinator.clone();
                 let epoch_membership = coordinator
@@ -1142,8 +1140,9 @@ impl BlockHeader<SeqTypes> for Header {
         match self {
             Header::V1(_) | Header::V2(_) | Header::V3(_) => Ok(FixedBytes::from([0u8; 32])),
             Header::V4(header) => {
+                // Add next stake table hash to the auth root, will be 0 except during epoch transition
+                let next_stake_table_hash = self.next_stake_table_hash().unwrap_or([0; 32]);
                 // Temporary placeholder values for future fields
-                let placeholder_1 = [0; 32];
                 let placeholder_2 = [0; 32];
                 let placeholder_3 = [0; 32];
                 let placeholder_4 = [0; 32];
@@ -1156,7 +1155,7 @@ impl BlockHeader<SeqTypes> for Header {
                 // Start with the reward Merkle tree root digest as the base input
                 let digest = header.reward_merkle_tree_root.digest();
                 hasher.update(digest.0);
-                hasher.update(placeholder_1);
+                hasher.update(next_stake_table_hash);
                 hasher.update(placeholder_2);
                 hasher.update(placeholder_3);
                 hasher.update(placeholder_4);
