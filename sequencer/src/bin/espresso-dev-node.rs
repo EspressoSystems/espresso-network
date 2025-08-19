@@ -6,13 +6,6 @@ use std::{
     time::Duration,
 };
 
-use async_lock::RwLock;
-use futures::stream::BoxStream;
-use hotshot_events_service::events_source::{
-    EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
-};
-use hotshot_types::event::{Event, LegacyEvent};
-
 use alloy::{
     network::EthereumWallet,
     node_bindings::Anvil,
@@ -25,6 +18,7 @@ use alloy::{
     },
 };
 use anyhow::Context;
+use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::{Parser, ValueEnum};
 use espresso_contract_deployer::{
@@ -35,10 +29,18 @@ use espresso_types::{
     parse_duration, v0_3::ChainConfig, EpochVersion, L1ClientOptions, SeqTypes, SequencerVersions,
     ValidatedState,
 };
-use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
+use futures::{
+    future::BoxFuture,
+    stream::{BoxStream, FuturesUnordered},
+    FutureExt, StreamExt,
+};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
+use hotshot_events_service::events_source::{
+    EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
+};
 use hotshot_state_prover::{v2::service::run_prover_service, StateProverConfig};
 use hotshot_types::{
+    event::{Event, LegacyEvent},
     stake_table::{one_honest_threshold, HSStakeTable},
     utils::epoch_from_block_number,
 };

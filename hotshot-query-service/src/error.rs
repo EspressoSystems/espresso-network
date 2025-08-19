@@ -12,12 +12,12 @@
 
 use std::fmt::Display;
 
-use crate::{availability, explorer, merklized_state, node, status};
 use derive_more::From;
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
-use tide_disco::Error as TideError;
-use tide_disco::StatusCode;
+use tide_disco::{Error as TideError, StatusCode};
+
+use crate::{availability, explorer, merklized_state, node, status};
 
 #[derive(Clone, Debug, From, Snafu, Deserialize, Serialize)]
 pub enum Error {
