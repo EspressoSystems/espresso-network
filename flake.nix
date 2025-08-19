@@ -13,7 +13,9 @@
   };
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-  inputs.nixpkgs-legacy-foundry.url = "github:NixOS/nixpkgs/9abb87b552b7f55ac8916b6fc9e5cb486656a2f3";
+
+  # See https://github.com/EspressoSystems/espresso-network/issues/3240
+  inputs.nixpkgs-legacy-process-compose.url = "github:NixOS/nixpkgs/3730d8a308f94996a9ba7c7138ede69c1b9ac4ae";
 
   inputs.foundry-nix.url = "github:shazow/foundry.nix/monthly"; # Use monthly branch for permanent releases
 
@@ -33,7 +35,7 @@
   outputs =
     { self
     , nixpkgs
-    , nixpkgs-legacy-foundry
+    , nixpkgs-legacy-process-compose
     , foundry-nix
     , rust-overlay
     , nixpkgs-cross-overlay
@@ -52,10 +54,10 @@
       rustShellHook = ''
         # on mac os `bin/pwd -P` returns the canonical path on case insensitive file-systems
         my_pwd=$(/bin/pwd -P 2> /dev/null || pwd)
-        
+
         # Use a distinct target dir for builds from within nix shells.
         export CARGO_TARGET_DIR="$my_pwd/target/nix"
-        
+
         # Add rust binaries to PATH
         export PATH="$CARGO_TARGET_DIR/debug:$PATH"
       '';
@@ -81,6 +83,10 @@
         (final: prev: {
           solhint =
             solhintPkg { inherit (prev) buildNpmPackage fetchFromGitHub; };
+        })
+        (final: prev: {
+          process-compose =
+            (import nixpkgs-legacy-process-compose { inherit system; }).process-compose;
         })
 
         # The mold linker is around 50% faster on Linux than the default linker.
@@ -270,21 +276,6 @@
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
           FOUNDRY_SOLC = "${solc}/bin/solc";
         });
-      # A shell with foundry v0.3.0 which can still build ethers-rs bindings.
-      # Can be removed when we are no longer using the ethers-rs bindings.
-      devShells.legacyFoundry =
-        let
-          overlays = [
-            solc-bin.overlays.default
-          ];
-          pkgs = import nixpkgs-legacy-foundry { inherit system overlays; };
-        in
-        mkShell {
-          packages = with pkgs; [
-            solc
-            foundry
-          ];
-        };
       devShells.crossShell =
         crossShell { config = "x86_64-unknown-linux-musl"; };
       devShells.armCrossShell =
