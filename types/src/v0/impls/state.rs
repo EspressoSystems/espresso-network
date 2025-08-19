@@ -1027,6 +1027,17 @@ async fn validate_next_stake_table_hash(
         proposed_header.height(),
         epoch_height,
     ));
+    let coordinator = instance.coordinator.clone();
+    let Some(first_epoch) = coordinator.membership().read().await.first_epoch() else {
+        return Err(ProposalValidationError::NextStakeTableNotFound);
+    };
+
+    // Rewards are distributed only if the current epoch is not the first or second epoch
+    // this is because we don't have stake table from the contract for the first two epochs
+    if epoch <= first_epoch + 1 {
+        return Ok(());
+    }
+
     let epoch_membership = instance
         .coordinator
         .stake_table_for_epoch(Some(epoch + 1))

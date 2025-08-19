@@ -995,18 +995,31 @@ impl BlockHeader<SeqTypes> for Header {
                 .epoch_height
                 .context("epoch height not in instance state")?;
             if is_ge_epoch_root(height + 1, epoch_height) {
-                let epoch = EpochNumber::new(epoch_from_block_number(height + 1, epoch_height));
                 let coordinator = instance_state.coordinator.clone();
-                let epoch_membership = coordinator
-                    .stake_table_for_epoch(Some(epoch + 1))
-                    .await
-                    .map_err(|e| anyhow::anyhow!("failed to get epoch membership: {e}"))?;
-                next_stake_table_hash = Some(
-                    epoch_membership
-                        .stake_table_hash()
+                let first_epoch = {
+                    coordinator
+                        .membership()
+                        .read()
                         .await
-                        .context("failed to get next stake table hash")?,
-                );
+                        .first_epoch()
+                        .context("The first epoch was not set.")?
+                };
+
+                let epoch = EpochNumber::new(epoch_from_block_number(height + 1, epoch_height));
+
+                // first 2 epochs don't have stake table hash because they are configured.
+                if epoch > first_epoch + 1 {
+                    let epoch_membership = coordinator
+                        .stake_table_for_epoch(Some(epoch + 1))
+                        .await
+                        .map_err(|e| anyhow::anyhow!("failed to get epoch membership: {e}"))?;
+                    next_stake_table_hash = Some(
+                        epoch_membership
+                            .stake_table_hash()
+                            .await
+                            .context("failed to get next stake table hash")?,
+                    );
+                }
             }
         }
 
