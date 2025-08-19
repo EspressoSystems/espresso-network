@@ -5,10 +5,6 @@ authors = { workspace = true }
 edition = { workspace = true }
 publish = false
 
-[[test]]
-name = "integration"
-path = "main.rs"
-
 [dev-dependencies]
 alloy = { workspace = true }
 anyhow = { workspace = true }
@@ -35,6 +31,10 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
+
+[[test]]
+name = "integration"
+path = "main.rs"
 
 [lints]
 workspace = true

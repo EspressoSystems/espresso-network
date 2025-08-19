@@ -40,6 +40,7 @@ pub use crate::bindings::{
     lightclientv2::{self, LightClientV2},
     lightclientv2mock::{self, LightClientV2Mock},
     lightclientv3::{self, LightClientV3},
+    lightclientv3mock::{self, LightClientV3Mock},
     opstimelock::OpsTimelock,
     ownableupgradeable::OwnableUpgradeable,
     plonkverifier::PlonkVerifier,
@@ -230,6 +231,43 @@ impl From<PlonkProofSol> for lightclientv3::IPlonkVerifier::PlonkProof {
 
 impl From<AccruedRewardsProofSol> for rewardclaim::RewardMerkleTreeVerifier::AccruedRewardsProof {
     fn from(v: AccruedRewardsProofSol) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+// Transmute conversion functions for LightClientV3Mock
+impl From<lightclientv3mock::LightClient::LightClientState> for LightClientStateSol {
+    fn from(v: lightclientv3mock::LightClient::LightClientState) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<LightClientStateSol> for lightclientv3mock::LightClient::LightClientState {
+    fn from(v: LightClientStateSol) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<StakeTableStateSol> for lightclientv3mock::LightClient::StakeTableState {
+    fn from(v: StakeTableStateSol) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<LightClientV3Mock::genesisStateReturn> for LightClientStateSol {
+    fn from(v: LightClientV3Mock::genesisStateReturn) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<LightClientV3Mock::finalizedStateReturn> for LightClientStateSol {
+    fn from(v: LightClientV3Mock::finalizedStateReturn) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<LightClientV3Mock::votingStakeTableStateReturn> for StakeTableStateSol {
+    fn from(v: LightClientV3Mock::votingStakeTableStateReturn) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }

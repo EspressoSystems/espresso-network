@@ -211,7 +211,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             outbound_message_receiver,
             network,
             pub_key,
-            handle.hotshot.upgrade_lock.clone(),
         )
         .await
         .with_context(|| "Failed to create external event handler")?;
