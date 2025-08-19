@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 use tide_disco::{method::ReadState, Api, RequestError, StatusCode};
 use vbs::version::StaticVersionType;
+
 use crate::{api::load_api, events_source::EventsSource};
 
 #[derive(Args, Default, Debug)]
@@ -104,15 +105,16 @@ where
                 tracing::info!("client subscribed to legacy events");
                 state
                     .read(|state| {
-                        async move { 
+                        async move {
                             match state.get_legacy_event_stream(None).await {
                                 Ok(stream) => Ok(stream.map(Ok)),
-                                Err(e) => Err(Error::Custom { 
-                                    message: e.to_string(), 
-                                    status: StatusCode::INTERNAL_SERVER_ERROR 
+                                Err(e) => Err(Error::Custom {
+                                    message: e.to_string(),
+                                    status: StatusCode::INTERNAL_SERVER_ERROR,
                                 }),
                             }
-                        }.boxed()
+                        }
+                        .boxed()
                     })
                     .await
             }
@@ -125,15 +127,16 @@ where
                 tracing::info!("client subscribed to events");
                 state
                     .read(|state| {
-                        async move { 
+                        async move {
                             match state.get_event_stream(None).await {
                                 Ok(stream) => Ok(stream.map(Ok)),
-                                Err(e) => Err(Error::Custom { 
-                                    message: e.to_string(), 
-                                    status: StatusCode::INTERNAL_SERVER_ERROR 
+                                Err(e) => Err(Error::Custom {
+                                    message: e.to_string(),
+                                    status: StatusCode::INTERNAL_SERVER_ERROR,
                                 }),
                             }
-                        }.boxed()
+                        }
+                        .boxed()
                     })
                     .await
             }
@@ -143,12 +146,13 @@ where
     }
 
     api.get("startup_info", |_, state| {
-        async move { 
+        async move {
             state.get_startup_info().await.map_err(|e| Error::Custom {
                 message: e.to_string(),
                 status: StatusCode::INTERNAL_SERVER_ERROR,
             })
-        }.boxed()
+        }
+        .boxed()
     })?;
 
     Ok(api)
