@@ -26,7 +26,7 @@ use hotshot_types::{
 };
 use libp2p::{
     autonat,
-    core::transport::ListenerId,
+    core::{transport::ListenerId, upgrade::Version::V1Lazy},
     gossipsub::{
         Behaviour as Gossipsub, ConfigBuilder as GossipsubConfigBuilder, Event as GossipEvent,
         Message as GossipsubMessage, MessageAuthenticity, MessageId, Topic, ValidationMode,
@@ -331,7 +331,10 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 .unwrap()
                 .with_behaviour(|_| network)
                 .unwrap()
-                .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(10)))
+                .with_swarm_config(|cfg| {
+                    cfg.with_idle_connection_timeout(Duration::from_secs(10))
+                        .with_substream_upgrade_protocol_override(V1Lazy)
+                })
                 .build()
         };
         for (peer, addr) in &config.to_connect_addrs {
