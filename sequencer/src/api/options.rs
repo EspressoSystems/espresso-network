@@ -216,6 +216,11 @@ impl Options {
 
             self.init_hotshot_modules(&mut app)?;
 
+            // Initialize hotshot events API if enabled
+            if self.hotshot_events.is_some() {
+                self.init_hotshot_events_module(&mut app)?;
+            }
+
             tasks.spawn(
                 "API server",
                 self.listen(self.http.port, app, SequencerApiVersion::instance()),
@@ -232,6 +237,11 @@ impl Options {
             let mut app = App::<_, Error>::with_state(AppState::from(state.clone()));
 
             self.init_hotshot_modules(&mut app)?;
+
+            // Initialize hotshot events API if enabled
+            if self.hotshot_events.is_some() {
+                self.init_hotshot_events_module(&mut app)?;
+            }
 
             tasks.spawn(
                 "API server",
@@ -342,9 +352,14 @@ impl Options {
         // Get the inner storage from the data source
         let inner_storage = ds.inner();
 
-        let (metrics, ds, app) = self
+        let (metrics, ds, mut app) = self
             .init_app_modules(ds, state.clone(), bind_version)
             .await?;
+
+        // Initialize hotshot events API if enabled
+        if self.hotshot_events.is_some() {
+            self.init_hotshot_events_module(&mut app)?;
+        }
 
         tasks.spawn("API server", self.listen(self.http.port, app, bind_version));
         Ok((
@@ -436,16 +451,9 @@ impl Options {
             update_state_storage_loop(ds.clone(), get_node_state),
         );
 
-        // If the hotshot events API is enabled, we need to register the hotshot events API module.
+        // Initialize hotshot events API if enabled
         if self.hotshot_events.is_some() {
-            tracing::info!("Initializing HotShot events API at /hotshot-events");
-            register_api("hotshot-events", &mut app, move |ver| {
-                hotshot_events_service::events::define_api::<_, _, SequencerApiVersion>(
-                    &hotshot_events_service::events::Options::default(),
-                    ver,
-                )
-                .with_context(|| "failed to define the HotShot events API")
-            })?;
+            self.init_hotshot_events_module(&mut app)?;
         }
 
         tasks.spawn(
@@ -505,6 +513,28 @@ impl Options {
                 endpoints::config(bind_version, ver).context("failed to define config api")
             })?;
         }
+
+        Ok(())
+    }
+
+    /// Initialize the hotshot events API module if enabled.
+    ///
+    /// This function adds the hotshot events API module to the given app if the hotshot_events
+    /// option is enabled. This module requires the app state to implement EventsSource.
+    fn init_hotshot_events_module<S>(&self, app: &mut App<S, Error>) -> anyhow::Result<()>
+    where
+        S: 'static + Send + Sync + ReadState,
+        S::State:
+            Send + Sync + hotshot_events_service::events_source::EventsSource<crate::SeqTypes>,
+    {
+        tracing::info!("Initializing HotShot events API at /hotshot-events");
+        register_api("hotshot-events", app, move |ver| {
+            hotshot_events_service::events::define_api::<_, _, SequencerApiVersion>(
+                &hotshot_events_service::events::Options::default(),
+                ver,
+            )
+            .with_context(|| "failed to define the HotShot events API")
+        })?;
 
         Ok(())
     }
