@@ -486,7 +486,6 @@ async fn main() -> anyhow::Result<()> {
                     Err(e) => {
                         tracing::error!("Failed to fetch the network config: {e}");
                         sleep(Duration::from_secs(5));
-                        continue; // retry on error
                     },
                 }
             }
