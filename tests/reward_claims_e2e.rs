@@ -414,7 +414,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     // sleep
     tokio::time::sleep(Duration::from_secs(300)).await;
 
-    // XXX: this fails, we probably need to
+    // XXX: this fails
     let http_client = reqwest::Client::new();
     let reward_data: RewardAccountQueryDataV2 = http_client
         .get(&reward_proof_url)
