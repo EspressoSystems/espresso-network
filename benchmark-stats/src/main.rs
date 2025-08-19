@@ -506,9 +506,9 @@ fn plot_and_print_leader_stats(
             .margin(layout::Margin::new().left(130)),
     );
 
-    println!("\n-VID/DAC/QC which one arrived first:");
+    println!("\nOrdering of VID, DAC, QC):");
     for (event, count) in &first_event_counts {
-        println!("{event}: {count} times");
+        println!(" {event} was first in {count} views");
     }
 
     println!("\nDeltas calculated from block built:");
