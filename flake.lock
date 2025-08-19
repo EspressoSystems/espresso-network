@@ -177,19 +177,19 @@
         "type": "github"
       }
     },
-    "nixpkgs-legacy-foundry": {
+    "nixpkgs-legacy-process-compose": {
       "locked": {
-        "lastModified": 1736798957,
-        "narHash": "sha256-qwpCtZhSsSNQtK4xYGzMiyEDhkNzOCz/Vfu4oL2ETsQ=",
+        "lastModified": 1746461020,
+        "narHash": "sha256-7+pG1I9jvxNlmln4YgnlW4o+w0TZX24k688mibiFDUE=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "9abb87b552b7f55ac8916b6fc9e5cb486656a2f3",
+        "rev": "3730d8a308f94996a9ba7c7138ede69c1b9ac4ae",
         "type": "github"
       },
       "original": {
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "9abb87b552b7f55ac8916b6fc9e5cb486656a2f3",
+        "rev": "3730d8a308f94996a9ba7c7138ede69c1b9ac4ae",
         "type": "github"
       }
     },
@@ -299,7 +299,7 @@
         "foundry-nix": "foundry-nix",
         "nixpkgs": "nixpkgs_2",
         "nixpkgs-cross-overlay": "nixpkgs-cross-overlay",
-        "nixpkgs-legacy-foundry": "nixpkgs-legacy-foundry",
+        "nixpkgs-legacy-process-compose": "nixpkgs-legacy-process-compose",
         "pre-commit-hooks": "pre-commit-hooks",
         "rust-overlay": "rust-overlay_2",
         "solc-bin": "solc-bin"
