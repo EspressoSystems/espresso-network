@@ -463,33 +463,33 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     if opt.upgrade_light_client_v2 || opt.upgrade_light_client_v3 {
-        if (opt.dry_run && opt.use_multisig) || opt.mock_espresso_live_network {
-            args_builder.blocks_per_epoch(10);
-            args_builder.epoch_start_block(22);
-        } else {
-            // fetch epoch length from HotShot config
-            // Request the configuration until it is successful
-            loop {
-                match surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(
-                    opt.sequencer_url.clone(),
-                )
-                .get::<PublicNetworkConfig>("config/hotshot")
-                .send()
-                .await
-                {
-                    Ok(resp) => {
-                        let config = resp.hotshot_config();
-                        args_builder.blocks_per_epoch(config.blocks_per_epoch());
-                        args_builder.epoch_start_block(config.epoch_start_block());
-                        break;
-                    },
-                    Err(e) => {
-                        tracing::error!("Failed to fetch the network config: {e}");
-                        sleep(Duration::from_secs(5));
-                    },
+        let (blocks_per_epoch, epoch_start_block) =
+            if (opt.dry_run && opt.use_multisig) || opt.mock_espresso_live_network {
+                (10, 22)
+            } else {
+                // fetch epoch length from HotShot config
+                // Request the configuration until it is successful
+                loop {
+                    match surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(
+                        opt.sequencer_url.clone(),
+                    )
+                    .get::<PublicNetworkConfig>("config/hotshot")
+                    .send()
+                    .await
+                    {
+                        Ok(resp) => {
+                            let config = resp.hotshot_config();
+                            break (config.blocks_per_epoch(), config.epoch_start_block());
+                        },
+                        Err(e) => {
+                            tracing::error!("Failed to fetch the network config: {e}");
+                            sleep(Duration::from_secs(5));
+                        },
+                    }
                 }
-            }
-        };
+            };
+        args_builder.blocks_per_epoch(blocks_per_epoch);
+        args_builder.epoch_start_block(epoch_start_block);
     }
 
     if opt.deploy_stake_table {

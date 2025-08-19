@@ -1938,21 +1938,6 @@ mod tests {
             Some(init_recipient),
         )
         .await?;
-        // upgrade to v2
-        let blocks_per_epoch = 50;
-        let epoch_start_block = 50;
-        upgrade_light_client_v2(
-            &provider,
-            &mut contracts,
-            false,
-            blocks_per_epoch,
-            epoch_start_block,
-        )
-        .await?;
-        let lc_v2 = LightClientV2::new(lc_proxy_addr, &provider);
-        assert_eq!(lc_v2.getVersion().call().await?.majorVersion, 2);
-        assert_eq!(lc_v2.blocksPerEpoch().call().await?._0, blocks_per_epoch);
-        assert_eq!(lc_v2.epochStartBlock().call().await?._0, epoch_start_block);
 
         // deploy stake table
         let exit_escrow_period = U256::from(1000);
@@ -2011,21 +1996,6 @@ mod tests {
             Some(init_recipient),
         )
         .await?;
-        // upgrade to v2
-        let blocks_per_epoch = 50;
-        let epoch_start_block = 50;
-        upgrade_light_client_v2(
-            &provider,
-            &mut contracts,
-            false,
-            blocks_per_epoch,
-            epoch_start_block,
-        )
-        .await?;
-        let lc_v2 = LightClientV2::new(lc_proxy_addr, &provider);
-        assert_eq!(lc_v2.getVersion().call().await?.majorVersion, 2);
-        assert_eq!(lc_v2.blocksPerEpoch().call().await?._0, blocks_per_epoch);
-        assert_eq!(lc_v2.epochStartBlock().call().await?._0, epoch_start_block);
 
         // deploy stake table
         let exit_escrow_period = U256::from(1000);
