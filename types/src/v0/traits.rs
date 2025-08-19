@@ -478,7 +478,13 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     async fn load_stake(
         &self,
         epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, StakeTableStateHash)>>;
+    ) -> anyhow::Result<
+        Option<(
+            ValidatorMap,
+            Option<RewardAmount>,
+            Option<StakeTableStateHash>,
+        )>,
+    >;
 
     /// Load stake tables for storage for latest `n` known epochs
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
@@ -489,7 +495,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
         epoch: EpochNumber,
         stake: ValidatorMap,
         block_reward: Option<RewardAmount>,
-        stake_table_hash: StakeTableStateHash,
+        stake_table_hash: Option<StakeTableStateHash>,
     ) -> anyhow::Result<()>;
 
     async fn store_events(

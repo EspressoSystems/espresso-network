@@ -16,7 +16,7 @@ use crate::{
     drb::{compute_drb_result, DrbDifficultySelectorFn, DrbInput, DrbResult},
     stake_table::HSStakeTable,
     traits::{
-        election::Membership,
+        election::{Membership, StakeTableHash},
         node_implementation::{ConsensusTime, NodeType},
         storage::{
             load_drb_progress_fn, store_drb_progress_fn, store_drb_result_fn, LoadDrbProgressFn,
@@ -37,8 +37,6 @@ type EpochSender<TYPES> = (
     Sender<Result<EpochMembership<TYPES>>>,
 );
 
-pub type StakeTableHash = [u8; 32];
-
 /// Struct to Coordinate membership catchup
 pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     /// The underlying membhersip
@@ -47,7 +45,7 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     /// Any in progress attempts at catching up are stored in this map
     /// Any new callers wantin an `EpochMembership` will await on the signal
     /// alerting them the membership is ready.  The first caller for an epoch will
-    /// wait for the actual catchup and allert future callers when it's done
+    /// wait for the actual catchup and alert future callers when it's done
     catchup_map: Arc<Mutex<EpochMap<TYPES>>>,
 
     drb_calculation_map: Arc<Mutex<DrbMap<TYPES>>>,

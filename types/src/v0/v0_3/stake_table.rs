@@ -60,7 +60,7 @@ pub struct Delegator {
 pub type IndexedStake = (
     EpochNumber,
     (ValidatorMap, Option<RewardAmount>),
-    StakeTableStateHash,
+    Option<StakeTableStateHash>,
 );
 
 #[derive(Clone, derive_more::derive::Debug)]

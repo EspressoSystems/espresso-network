@@ -2219,7 +2219,13 @@ impl MembershipPersistence for Persistence {
     async fn load_stake(
         &self,
         epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, StakeTableStateHash)>> {
+    ) -> anyhow::Result<
+        Option<(
+            ValidatorMap,
+            Option<RewardAmount>,
+            Option<StakeTableStateHash>,
+        )>,
+    > {
         let result = self
             .db
             .read()
@@ -2237,7 +2243,7 @@ impl MembershipPersistence for Persistence {
                 let (stake_table, _reward, stake_table_hash): (
                     ValidatorMap,
                     Option<RewardAmount>,
-                    StakeTableStateHash,
+                    Option<StakeTableStateHash>,
                 ) = bincode::deserialize(&stake_table_bytes)
                     .context("deserializing stake table")?;
                 let reward: Option<RewardAmount> = reward_bytes
@@ -2273,7 +2279,7 @@ impl MembershipPersistence for Persistence {
                 let (stake_table, _reward, stake_table_hash): (
                     ValidatorMap,
                     Option<RewardAmount>,
-                    StakeTableStateHash,
+                    Option<StakeTableStateHash>,
                 ) = bincode::deserialize(&stake_bytes).context("deserializing stake table")?;
 
                 let block_reward: Option<RewardAmount> = reward_bytes_opt
@@ -2296,7 +2302,7 @@ impl MembershipPersistence for Persistence {
         epoch: EpochNumber,
         stake: ValidatorMap,
         block_reward: Option<RewardAmount>,
-        stake_table_hash: StakeTableStateHash,
+        stake_table_hash: Option<StakeTableStateHash>,
     ) -> anyhow::Result<()> {
         let mut tx = self.db.write().await?;
 

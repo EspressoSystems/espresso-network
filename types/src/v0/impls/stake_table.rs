@@ -36,10 +36,9 @@ use hotshot_types::{
         election::{generate_stake_cdf, select_randomized_leader, RandomizedCommittee},
         DrbResult,
     },
-    epoch_membership::StakeTableHash,
     stake_table::{HSStakeTable, StakeTableEntry},
     traits::{
-        election::Membership,
+        election::{Membership, StakeTableHash},
         node_implementation::{ConsensusTime, NodeType},
         signature_key::StakeTableEntryType,
     },
@@ -50,7 +49,6 @@ use humantime::format_duration;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use num_traits::{FromPrimitive, Zero};
-use sha3::{Digest as _, Keccak256};
 use thiserror::Error;
 use tokio::{spawn, time::sleep};
 use tracing::Instrument;
@@ -227,7 +225,7 @@ impl StakeTableState {
     }
 
     pub fn hash(&self) -> Result<StakeTableStateHash, bincode::Error> {
-        let mut hasher = Keccak256::new();
+        let mut hasher = alloy::primitives::Keccak256::new();
         for (address, validator) in &self.validators {
             hasher.update(address);
             hasher.update(bincode::serialize(&validator)?);
@@ -1445,7 +1443,7 @@ pub struct EpochCommittee {
     validators: ValidatorMap,
     address_mapping: HashMap<BLSPubKey, Address>,
     block_reward: Option<RewardAmount>,
-    stake_table_hash: StakeTableStateHash,
+    stake_table_hash: Option<StakeTableStateHash>,
 }
 
 impl EpochCommittees {
@@ -1617,7 +1615,7 @@ impl EpochCommittees {
         epoch: EpochNumber,
         validators: ValidatorMap,
         block_reward: Option<RewardAmount>,
-        hash: StakeTableStateHash,
+        hash: Option<StakeTableStateHash>,
     ) {
         let mut address_mapping = HashMap::new();
         let stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>> = validators
@@ -1764,7 +1762,7 @@ impl EpochCommittees {
             validators: Default::default(),
             address_mapping: HashMap::new(),
             block_reward: Default::default(),
-            stake_table_hash: StakeTableStateHash::default(),
+            stake_table_hash: None,
         };
         map.insert(Epoch::genesis(), epoch_committee.clone());
         // TODO: remove this, workaround for hotshot asking for stake tables from epoch 1
@@ -2138,7 +2136,8 @@ impl Membership<SeqTypes> for EpochCommittees {
             },
             None => {
                 tracing::info!("Stake table missing for epoch {epoch}. Fetching from L1.");
-                fetcher.fetch(epoch, &block_header).await?
+                let (map, hash) = fetcher.fetch(epoch, &block_header).await?;
+                (map, Some(hash))
             },
         };
 
@@ -2316,7 +2315,7 @@ impl Membership<SeqTypes> for EpochCommittees {
 
     fn stake_table_hash(&self, epoch: Epoch) -> Option<StakeTableHash> {
         let committee = self.state.get(&epoch)?;
-        Some(committee.stake_table_hash.clone().0)
+        committee.stake_table_hash.clone().map(|hash| hash.0)
     }
 }
 

@@ -13,10 +13,11 @@ use hotshot_utils::anytrace::Result;
 
 use super::node_implementation::NodeType;
 use crate::{
-    data::Leaf2, drb::DrbResult, epoch_membership::StakeTableHash, stake_table::HSStakeTable,
+    data::Leaf2, drb::DrbResult, stake_table::HSStakeTable,
     traits::signature_key::StakeTableEntryType, PeerConfig,
 };
 
+pub type StakeTableHash = [u8; 32];
 /// A protocol for determining membership in and participating in a committee.
 pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// The error type returned by methods like `lookup_leader`.

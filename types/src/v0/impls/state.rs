@@ -8,7 +8,7 @@ use hotshot_query_service::merklized_state::MerklizedState;
 use hotshot_types::{
     data::{BlockError, EpochNumber, ViewNumber},
     traits::{
-        block_contents::BlockHeader, node_implementation::ConsensusTime,
+        block_contents::BlockHeader, election::StakeTableHash, node_implementation::ConsensusTime,
         signature_key::BuilderSignatureKey, states::StateDelta, ValidatedState as HotShotState,
     },
     utils::{epoch_from_block_number, is_ge_epoch_root},
@@ -41,7 +41,7 @@ use crate::{
         RewardMerkleCommitmentV1, RewardMerkleTreeV1, REWARD_MERKLE_TREE_V1_HEIGHT,
     },
     v0_4::{
-        Delta, RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2, StakeTableHash,
+        Delta, RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2,
         REWARD_MERKLE_TREE_V2_HEIGHT,
     },
     BlockMerkleTree, DrbAndHeaderUpgradeVersion, FeeAccount, FeeAmount, FeeInfo, FeeMerkleTree,

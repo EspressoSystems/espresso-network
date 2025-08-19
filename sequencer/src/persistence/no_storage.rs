@@ -265,7 +265,13 @@ impl MembershipPersistence for NoStorage {
     async fn load_stake(
         &self,
         _epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, StakeTableStateHash)>> {
+    ) -> anyhow::Result<
+        Option<(
+            ValidatorMap,
+            Option<RewardAmount>,
+            Option<StakeTableStateHash>,
+        )>,
+    > {
         Ok(None)
     }
 
@@ -278,7 +284,7 @@ impl MembershipPersistence for NoStorage {
         _epoch: EpochNumber,
         _stake: ValidatorMap,
         _block_reward: Option<RewardAmount>,
-        _stake_table_hash: StakeTableStateHash,
+        _stake_table_hash: Option<StakeTableStateHash>,
     ) -> anyhow::Result<()> {
         Ok(())
     }

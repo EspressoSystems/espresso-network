@@ -11,6 +11,7 @@ use hotshot_types::{
     light_client::LightClientState,
     traits::{
         block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
+        election::StakeTableHash,
         node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::BuilderSignatureKey,
         BlockPayload, EncodeBytes, ValidatedState as _,
@@ -42,7 +43,7 @@ use crate::{
         self, RewardAmount, RewardMerkleCommitmentV1, RewardMerkleTreeV1,
         REWARD_MERKLE_TREE_V1_HEIGHT,
     },
-    v0_4::{self, RewardMerkleCommitmentV2, StakeTableHash},
+    v0_4::{self, RewardMerkleCommitmentV2},
     BlockMerkleCommitment, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeAmount,
     FeeInfo, FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex,
     NsTable, PayloadByteLen, SeqTypes, TimestampMillis, UpgradeType,

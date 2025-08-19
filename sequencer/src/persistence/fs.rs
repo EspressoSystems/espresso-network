@@ -1572,7 +1572,13 @@ impl MembershipPersistence for Persistence {
     async fn load_stake(
         &self,
         epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, StakeTableStateHash)>> {
+    ) -> anyhow::Result<
+        Option<(
+            ValidatorMap,
+            Option<RewardAmount>,
+            Option<StakeTableStateHash>,
+        )>,
+    > {
         let inner = self.inner.read().await;
         let path = &inner.stake_table_dir_path();
         let file_path = path.join(epoch.to_string()).with_extension("txt");
@@ -1596,7 +1602,7 @@ impl MembershipPersistence for Persistence {
                         err
                     )
                 })?;
-                (map, None, StakeTableStateHash::default())
+                (map, None, None)
             },
         };
 
@@ -1617,28 +1623,31 @@ impl MembershipPersistence for Persistence {
                 format!("failed to read stake table file at {}", file_path.display())
             })?;
 
-            let stake: (ValidatorMap, Option<RewardAmount>, StakeTableStateHash) =
-                match bincode::deserialize::<(
-                    ValidatorMap,
-                    Option<RewardAmount>,
-                    StakeTableStateHash,
-                )>(&bytes)
-                {
-                    Ok(res) => res,
-                    Err(err) => {
-                        let validatormap = bincode::deserialize::<ValidatorMap>(&bytes)
-                            .with_context(|| {
-                                format!(
-                                    "failed to deserialize legacy stake table at {}: fallback \
-                                     also failed after initial error: {}",
-                                    file_path.display(),
-                                    err
-                                )
-                            })?;
+            let stake: (
+                ValidatorMap,
+                Option<RewardAmount>,
+                Option<StakeTableStateHash>,
+            ) = match bincode::deserialize::<(
+                ValidatorMap,
+                Option<RewardAmount>,
+                Option<StakeTableStateHash>,
+            )>(&bytes)
+            {
+                Ok(res) => res,
+                Err(err) => {
+                    let validatormap =
+                        bincode::deserialize::<ValidatorMap>(&bytes).with_context(|| {
+                            format!(
+                                "failed to deserialize legacy stake table at {}: fallback also \
+                                 failed after initial error: {}",
+                                file_path.display(),
+                                err
+                            )
+                        })?;
 
-                        (validatormap, None, StakeTableStateHash::default())
-                    },
-                };
+                    (validatormap, None, None)
+                },
+            };
 
             validator_sets.push((epoch, (stake.0, stake.1), stake.2));
         }
@@ -1651,7 +1660,7 @@ impl MembershipPersistence for Persistence {
         epoch: EpochNumber,
         stake: ValidatorMap,
         block_reward: Option<RewardAmount>,
-        stake_table_hash: StakeTableStateHash,
+        stake_table_hash: Option<StakeTableStateHash>,
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
         let dir_path = &inner.stake_table_dir_path();

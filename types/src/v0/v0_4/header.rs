@@ -6,10 +6,8 @@ use super::{
 };
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
-use hotshot_types::{data::VidCommitment, utils::BuilderCommitment};
+use hotshot_types::{data::VidCommitment, traits::election::StakeTableHash, utils::BuilderCommitment};
 use serde::{Deserialize, Serialize};
-
-pub type StakeTableHash = [u8; 32];
 
 /// A header is like a [`Block`] with the body replaced by a digest.
 #[derive(Clone, Debug, Deserialize, Serialize, Hash, PartialEq, Eq)]
