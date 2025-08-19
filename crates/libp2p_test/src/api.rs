@@ -13,6 +13,7 @@ use hotshot_libp2p_networking::network::{
 };
 use hotshot_types::{signature_key::BLSPrivKey, traits::node_implementation::NodeType};
 use libp2p::{
+    core::upgrade::Version::V1Lazy,
     futures::StreamExt,
     noise, ping,
     ping::Behaviour as PingBehaviour,
@@ -146,6 +147,7 @@ pub fn spawn_ping_swarm(config: &AppConfig) -> Result<Swarm<PingBehaviour>> {
             .with_behaviour(|_| ping::Behaviour::new(ping_config))?
             .with_swarm_config(|cfg| {
                 cfg.with_idle_connection_timeout(Duration::from_secs(u64::MAX))
+                    .with_substream_upgrade_protocol_override(V1Lazy)
             })
             .build()),
         Some(Libp2pTest::Ping {
@@ -161,6 +163,7 @@ pub fn spawn_ping_swarm(config: &AppConfig) -> Result<Swarm<PingBehaviour>> {
             .with_behaviour(|_| ping::Behaviour::new(ping_config))?
             .with_swarm_config(|cfg| {
                 cfg.with_idle_connection_timeout(Duration::from_secs(u64::MAX))
+                    .with_substream_upgrade_protocol_override(V1Lazy)
             })
             .build()),
         _ => Err(anyhow::anyhow!("No transport protocol specified")),
@@ -268,6 +271,7 @@ fn spawn_rr_swarm(config: &AppConfig) -> Result<Swarm<RrBehaviour<TestRequest, T
             })?
             .with_swarm_config(|cfg| {
                 cfg.with_idle_connection_timeout(Duration::from_secs(u64::MAX))
+                    .with_substream_upgrade_protocol_override(V1Lazy)
             })
             .build(),
         Some(Libp2pTest::RequestResponse {
@@ -288,6 +292,7 @@ fn spawn_rr_swarm(config: &AppConfig) -> Result<Swarm<RrBehaviour<TestRequest, T
             })?
             .with_swarm_config(|cfg| {
                 cfg.with_idle_connection_timeout(Duration::from_secs(u64::MAX))
+                    .with_substream_upgrade_protocol_override(V1Lazy)
             })
             .build(),
         _ => return Err(anyhow::anyhow!("No transport protocol specified")),
@@ -305,6 +310,7 @@ pub async fn run_rr_sender(config: AppConfig) -> Result<()> {
         sleep(Duration::from_secs(1)).await;
         let mut roundtrips = Vec::new();
         for (peer_id, addr) in config.peers.iter() {
+            sleep(Duration::from_secs(1)).await;
             info!("Sending request to {}", addr.to_string());
             let start = Instant::now();
             let _ = swarm
