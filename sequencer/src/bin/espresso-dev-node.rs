@@ -490,7 +490,7 @@ async fn main() -> anyhow::Result<()> {
             }
 
             // deploy permissionless stake table
-            let exit_escrow_period = U256::from(300); // 300 sec
+            let exit_escrow_period = U256::from(250); // 250 sec
             let stake_table_proxy_addr = deployer::deploy_stake_table_proxy(
                 &provider,
                 contracts,

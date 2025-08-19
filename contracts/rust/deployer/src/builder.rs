@@ -375,7 +375,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 let lc_addr = contracts
                     .address(Contract::LightClientProxy)
                     .context("no LightClient proxy address")?;
-                let escrow_period = self.exit_escrow_period.unwrap_or(U256::from(300));
+                let escrow_period = self.exit_escrow_period.unwrap_or(U256::from(250));
                 crate::deploy_stake_table_proxy(
                     provider,
                     contracts,
