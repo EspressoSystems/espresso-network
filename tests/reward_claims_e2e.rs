@@ -8,13 +8,12 @@ use alloy::{
     rpc::client::RpcClient,
     signers::local::{coins_bip39::English, MnemonicBuilder},
 };
-use anyhow::anyhow;
 use espresso_contract_deployer::{
     builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table, Contract,
     Contracts,
 };
 use espresso_types::{
-    v0_4::{ChainConfig, RewardAccountQueryDataV2, RewardMerkleTreeV2},
+    v0_4::{ChainConfig, RewardAccountQueryDataV2},
     DrbAndHeaderUpgradeVersion, L1ClientOptions, SeqTypes, SequencerVersions, ValidatedState,
 };
 use futures::StreamExt;
@@ -50,7 +49,7 @@ const EPOCH_HEIGHT: u64 = 7;
 const MAX_BLOCK_SIZE: u64 = 1000000;
 const PROVER_UPDATE_INTERVAL: Duration = Duration::from_secs(60);
 const RETRY_INTERVAL: Duration = Duration::from_secs(2);
-const INITIAL_TOKEN_SUPPLY: U256 = U256::from_limbs([3590000000u64, 0, 0, 0]);
+const INITIAL_TOKEN_SUPPLY: u64 = 3_590_000_000u64;
 const TOKEN_NAME: &str = "Espresso";
 const TOKEN_SYMBOL: &str = "ESP";
 
@@ -125,7 +124,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         .blocks_per_epoch(blocks_per_epoch)
         .epoch_start_block(epoch_start_block)
         .exit_escrow_period(exit_escrow_period)
-        .initial_token_supply(INITIAL_TOKEN_SUPPLY)
+        .initial_token_supply(U256::from(INITIAL_TOKEN_SUPPLY))
         .token_name(TOKEN_NAME.to_string())
         .token_symbol(TOKEN_SYMBOL.to_string())
         .multisig_pauser(admin)
@@ -191,52 +190,16 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
 
     // Grant minter role to reward claim contract
     println!("Granting MINTER_ROLE to RewardClaim contract...");
-    let esp_token_v2 =
-        hotshot_contract_adapter::sol_types::EspTokenV2::new(token_proxy_addr, &provider);
+    let esp_token_v2 = EspTokenV2::new(token_proxy_addr, &provider);
 
-    // Check if the contract is properly initialized and we have admin role
-    let version = esp_token_v2.getVersion().call().await?;
-    println!(
-        "EspTokenV2 version: {}.{}.{}",
-        version.majorVersion, version.minorVersion, version.patchVersion
-    );
-
-    // Check if admin has DEFAULT_ADMIN_ROLE
-    let admin_role = [0u8; 32]; // DEFAULT_ADMIN_ROLE is 0x00...00
-    let has_admin_role = esp_token_v2
-        .hasRole(admin_role.into(), admin)
-        .call()
+    let minter_role = esp_token_v2.MINTER_ROLE().call().await?._0;
+    let receipt = esp_token_v2
+        .grantRole(minter_role, reward_claim_proxy_addr)
+        .send()
         .await?
-        ._0;
-    println!("Admin has DEFAULT_ADMIN_ROLE: {}", has_admin_role);
-
-    if has_admin_role {
-        let minter_role = alloy::primitives::keccak256("MINTER_ROLE".as_bytes());
-        println!("Minter role hash: {:#x}", minter_role);
-
-        let receipt = esp_token_v2
-            .grantRole(minter_role.into(), reward_claim_proxy_addr)
-            .send()
-            .await?
-            .get_receipt()
-            .await?;
-
-        if receipt.status() {
-            println!("MINTER_ROLE granted to RewardClaim contract successfully");
-        } else {
-            println!("Failed to grant MINTER_ROLE - transaction failed");
-        }
-
-        // Verify the role was granted
-        let has_minter_role = esp_token_v2
-            .hasRole(minter_role.into(), reward_claim_proxy_addr)
-            .call()
-            .await?
-            ._0;
-        println!("RewardClaim contract has MINTER_ROLE: {}", has_minter_role);
-    } else {
-        println!("Admin does not have DEFAULT_ADMIN_ROLE - cannot grant MINTER_ROLE");
-    }
+        .get_receipt()
+        .await?;
+    assert!(receipt.status());
 
     // Set up chain config for TestNetwork
     let chain_config = ChainConfig {
@@ -254,10 +217,8 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     let states = std::array::from_fn(|_| state.clone());
 
     let api_options = options::Options::with_port(sequencer_api_port)
-        .submit(Default::default())
         .config(Default::default())
-        .catchup(Default::default())
-        .explorer(Default::default());
+        .catchup(Default::default());
 
     const NUM_NODES: usize = 2;
     let storage =
@@ -343,9 +304,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
 
     // Listen to consensus events to get the actual view number
     let mut events = network.peers[0].event_stream().await;
-    let mut latest_view_number = None;
     let mut latest_height = 0;
-    let mut header = None;
 
     while let Some(event) = events.next().await {
         if let EventType::Decide { leaf_chain, .. } = event.event {
@@ -354,9 +313,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
                 let view = leaf_info.leaf.view_number();
 
                 if height > latest_height {
-                    header = Some(leaf_info.leaf.block_header());
                     latest_height = height;
-                    latest_view_number = Some(view);
                     println!(
                         "Block decided - Height: {}, View: {}, Target: {}",
                         height,
@@ -380,17 +337,6 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
             }
         }
     }
-
-    // let header: espresso_types::v0_4::Header = match header.unwrap() {
-    //     espresso_types::Header::V1(header) => todo!(),
-    //     espresso_types::Header::V2(header) => todo!(),
-    //     espresso_types::Header::V3(header) => todo!(),
-    //     espresso_types::Header::V4(header) => header.clone(),
-    // };
-
-    let view_number = latest_view_number
-        .expect("Should have a view number after waiting for blocks")
-        .u64();
 
     // Now run the prover once to generate and submit a proof for the current state
     println!("Running prover once to generate proof...");
@@ -446,8 +392,9 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
 
     // Retry fetching the reward proof up to 5 times with 2 second delays
     let http_client = reqwest::Client::new();
-    let mut reward_data = None;
-    for attempt in 1..=5 {
+    let mut attempt = 0;
+    let reward_data = loop {
+        attempt += 1;
         match http_client
             .get(&reward_proof_url)
             .header("Accept", "application/json")
@@ -457,27 +404,20 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         {
             Ok(response) => match response.json::<RewardAccountQueryDataV2>().await {
                 Ok(data) => {
-                    reward_data = Some(data);
-                    println!("Successfully fetched reward proof on attempt {}", attempt);
-                    break;
+                    break data;
                 },
                 Err(e) if attempt == 5 => {
-                    return Err(anyhow!("Failed to parse reward data: {}", e));
+                    panic!("Failed to parse reward proof data: {}", e);
                 },
                 Err(_) => {},
             },
             Err(e) if attempt == 5 => {
-                return Err(anyhow!("Request failed: {}", e));
+                panic!("Request for reward proof failed: {}", e);
             },
             Err(_) => {},
         }
-
-        if attempt < 5 {
-            tokio::time::sleep(Duration::from_secs(2)).await;
-        }
-    }
-
-    let reward_data = reward_data.expect("Failed to fetch reward proof after 5 attempts");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    };
 
     println!(
         "Reward data received: balance={}, proof account={}",
@@ -485,16 +425,9 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     );
 
     if reward_data.balance == U256::ZERO {
-        panic!(
-            "Reward balance is zero for validator account {}. Expected non-zero rewards after 3 \
-             epochs.",
-            reward_account
-        );
+        panic!("Reward balance is zero for validator account {reward_account}");
     }
-    println!(
-        "Validator has non-zero reward balance: {}",
-        reward_data.balance
-    );
+    println!("Validator reward balance: {}", reward_data.balance);
 
     let proof_sol: AccruedRewardsProofSol = reward_data.proof.try_into().unwrap();
 
@@ -526,11 +459,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
 
     println!("Attempting to claim rewards...");
     reward_claim_contract
-        .claimRewards(
-            reward_data.balance.into(),
-            proof_sol.into(),
-            auth_root_inputs,
-        )
+        .claimRewards(reward_data.balance, proof_sol.into(), auth_root_inputs)
         .send()
         .await?
         .get_receipt()
