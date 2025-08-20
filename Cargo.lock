@@ -11950,6 +11950,7 @@ dependencies = [
  "reqwest 0.12.22",
  "sequencer",
  "sequencer-utils",
+ "serde_json",
  "staking-cli",
  "surf-disco",
  "tempfile",

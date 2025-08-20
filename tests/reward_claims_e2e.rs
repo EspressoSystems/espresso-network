@@ -219,14 +219,11 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     };
     let states = std::array::from_fn(|_| state.clone());
 
-    let api_options = options::Options::from(options::Http {
-        port: sequencer_api_port,
-        max_connections: None,
-    })
-    .submit(Default::default())
-    .config(Default::default())
-    .catchup(Default::default())
-    .explorer(Default::default());
+    let api_options = options::Options::with_port(sequencer_api_port)
+        .submit(Default::default())
+        .config(Default::default())
+        .catchup(Default::default())
+        .explorer(Default::default());
 
     const NUM_NODES: usize = 2;
     let storage =
@@ -238,7 +235,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         .try_into()
         .unwrap();
     let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-        .api_config(api_options)
+        .api_config(SqlDataSource::options(&storage[0], api_options))
         .network_config(network_config)
         .states(states)
         .persistences(persistence.clone())
@@ -412,17 +409,20 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     println!("Fetching reward proof from: {}", reward_proof_url);
 
     // sleep
-    tokio::time::sleep(Duration::from_secs(300)).await;
+    // tokio::time::sleep(Duration::from_secs(300)).await;
 
     // XXX: this fails
     let http_client = reqwest::Client::new();
-    let reward_data: RewardAccountQueryDataV2 = http_client
+    let response = http_client
         .get(&reward_proof_url)
         .header("Accept", "application/json")
         .send()
-        .await?
-        .json()
         .await?;
+    let raw_json = response.text().await?;
+    println!("Raw JSON response: {}", raw_json);
+
+    // Deserialize the response into RewardAccountQueryDataV2
+    let reward_data: RewardAccountQueryDataV2 = serde_json::from_str(&raw_json)?;
 
     println!(
         "Reward data received: balance={}, proof account={}",
