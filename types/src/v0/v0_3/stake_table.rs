@@ -9,7 +9,7 @@ use hotshot_contract_adapter::sol_types::StakeTableV2::{
     ValidatorRegistered, ValidatorRegisteredV2,
 };
 use hotshot_types::{
-    data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, PeerConfig,
+    data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, traits::election::StakeTableHash, PeerConfig
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -19,7 +19,6 @@ use super::L1Client;
 use crate::{
     traits::{MembershipPersistence, StateCatchup}, v0::ChainConfig, v0_3::RewardAmount, SeqTypes, ValidatorMap
 };
-use crate::StakeTableStateHash;
 /// Stake table holding all staking information (DA and non-DA stakers)
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
 pub struct CombinedStakeTable(Vec<PeerConfigKeys<SeqTypes>>);
@@ -60,7 +59,7 @@ pub struct Delegator {
 pub type IndexedStake = (
     EpochNumber,
     (ValidatorMap, Option<RewardAmount>),
-    Option<StakeTableStateHash>,
+    Option<StakeTableHash>,
 );
 
 #[derive(Clone, derive_more::derive::Debug)]

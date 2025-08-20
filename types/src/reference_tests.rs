@@ -219,7 +219,7 @@ fn reference_stake_table_hash() -> StakeTableHash {
     // Reconstruct stake table from events
     let (_, hash) =
         active_validator_set_from_l1_events(events.into_iter().map(|(_, e)| e)).unwrap();
-    hash.0
+    hash
 }
 
 const REFERENCE_FEE_INFO_COMMITMENT: &str = "FEE_INFO~xCCeTjJClBtwtOUrnAmT65LNTQGceuyjSJHUFfX6VRXR";

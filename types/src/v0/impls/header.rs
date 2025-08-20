@@ -1155,7 +1155,9 @@ impl BlockHeader<SeqTypes> for Header {
             Header::V1(_) | Header::V2(_) | Header::V3(_) => Ok(FixedBytes::from([0u8; 32])),
             Header::V4(header) => {
                 // Add next stake table hash to the auth root, will be 0 except during epoch transition
-                let next_stake_table_hash = self.next_stake_table_hash().unwrap_or([0; 32]);
+                let next_stake_table_hash = self
+                    .next_stake_table_hash()
+                    .unwrap_or(FixedBytes::from([0u8; 32]));
                 // Temporary placeholder values for future fields
                 let placeholder_2 = [0; 32];
                 let placeholder_3 = [0; 32];

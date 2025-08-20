@@ -18,7 +18,7 @@ use espresso_types::{
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
     v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent},
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
-    StakeTableStateHash, ValidatorMap,
+    ValidatorMap,
 };
 use futures::stream::StreamExt;
 use hotshot::InitializerEpochInfo;
@@ -59,6 +59,7 @@ use hotshot_types::{
     },
     traits::{
         block_contents::{BlockHeader, BlockPayload},
+        election::StakeTableHash,
         metrics::Metrics,
         node_implementation::ConsensusTime,
     },
@@ -2219,13 +2220,7 @@ impl MembershipPersistence for Persistence {
     async fn load_stake(
         &self,
         epoch: EpochNumber,
-    ) -> anyhow::Result<
-        Option<(
-            ValidatorMap,
-            Option<RewardAmount>,
-            Option<StakeTableStateHash>,
-        )>,
-    > {
+    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>> {
         let result = self
             .db
             .read()
@@ -2249,7 +2244,7 @@ impl MembershipPersistence for Persistence {
                 let reward: Option<RewardAmount> = reward_bytes
                     .map(|b| bincode::deserialize(&b).context("deserializing block_reward"))
                     .transpose()?;
-                let stake_table_hash: Option<StakeTableStateHash> = stake_table_hash_bytes
+                let stake_table_hash: Option<StakeTableHash> = stake_table_hash_bytes
                     .map(|b| bincode::deserialize(&b).context("deserializing stake table hash"))
                     .transpose()?;
 
@@ -2287,7 +2282,7 @@ impl MembershipPersistence for Persistence {
                         .map(|b| bincode::deserialize(&b).context("deserializing block_reward"))
                         .transpose()?;
 
-                    let stake_table_hash: Option<StakeTableStateHash> = stake_table_hash_bytes_opt
+                    let stake_table_hash: Option<StakeTableHash> = stake_table_hash_bytes_opt
                         .map(|b| bincode::deserialize(&b).context("deserializing stake table hash"))
                         .transpose()?;
 
@@ -2308,7 +2303,7 @@ impl MembershipPersistence for Persistence {
         epoch: EpochNumber,
         stake: ValidatorMap,
         block_reward: Option<RewardAmount>,
-        stake_table_hash: Option<StakeTableStateHash>,
+        stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()> {
         let mut tx = self.db.write().await?;
 

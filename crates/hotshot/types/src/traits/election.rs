@@ -7,7 +7,7 @@
 //! The election trait, used to decide which node is the leader and determine if a vote is valid.
 use std::{collections::BTreeSet, fmt::Debug, sync::Arc};
 
-use alloy::primitives::U256;
+use alloy::primitives::{FixedBytes, U256};
 use async_lock::RwLock;
 use hotshot_utils::anytrace::Result;
 
@@ -17,7 +17,7 @@ use crate::{
     traits::signature_key::StakeTableEntryType, PeerConfig,
 };
 
-pub type StakeTableHash = [u8; 32];
+pub type StakeTableHash = FixedBytes<32>;
 /// A protocol for determining membership in and participating in a committee.
 pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// The error type returned by methods like `lookup_leader`.

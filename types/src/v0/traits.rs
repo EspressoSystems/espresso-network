@@ -24,6 +24,7 @@ use hotshot_types::{
     },
     stake_table::HSStakeTable,
     traits::{
+        election::StakeTableHash,
         metrics::Metrics,
         node_implementation::{ConsensusTime, NodeType, Versions},
         storage::Storage,
@@ -45,7 +46,7 @@ use crate::{
     },
     v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2},
     BlockMerkleTree, Event, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig,
-    SeqTypes, StakeTableStateHash, ValidatorMap,
+    SeqTypes, ValidatorMap,
 };
 
 #[async_trait]
@@ -478,13 +479,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     async fn load_stake(
         &self,
         epoch: EpochNumber,
-    ) -> anyhow::Result<
-        Option<(
-            ValidatorMap,
-            Option<RewardAmount>,
-            Option<StakeTableStateHash>,
-        )>,
-    >;
+    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>>;
 
     /// Load stake tables for storage for latest `n` known epochs
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
@@ -495,7 +490,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
         epoch: EpochNumber,
         stake: ValidatorMap,
         block_reward: Option<RewardAmount>,
-        stake_table_hash: Option<StakeTableStateHash>,
+        stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()>;
 
     async fn store_events(

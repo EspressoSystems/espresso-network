@@ -6,7 +6,9 @@ use anyhow::bail;
 use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_types::{
-    data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::states::InstanceState,
+    data::EpochNumber,
+    epoch_membership::EpochMembershipCoordinator,
+    traits::{election::StakeTableHash, states::InstanceState},
     HotShotConfig,
 };
 #[cfg(any(test, feature = "testing"))]
@@ -28,7 +30,7 @@ use crate::{
         Upgrade, UpgradeMode,
     },
     v0_3::RewardAmount,
-    StakeTableStateHash, ValidatorMap,
+    ValidatorMap,
 };
 
 /// Represents the immutable state of a node.
@@ -81,13 +83,7 @@ impl MembershipPersistence for NoStorage {
     async fn load_stake(
         &self,
         _epoch: EpochNumber,
-    ) -> anyhow::Result<
-        Option<(
-            ValidatorMap,
-            Option<RewardAmount>,
-            Option<StakeTableStateHash>,
-        )>,
-    > {
+    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>> {
         Ok(None)
     }
 
@@ -100,7 +96,7 @@ impl MembershipPersistence for NoStorage {
         _epoch: EpochNumber,
         _stake: ValidatorMap,
         _block_reward: Option<RewardAmount>,
-        _stake_table_hash: Option<StakeTableStateHash>,
+        _stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()> {
         Ok(())
     }
