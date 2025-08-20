@@ -24,7 +24,7 @@ contract RewardClaim is Initializable, OwnableUpgradeable, UUPSUpgradeable {
     /// @notice User claimed rewards
     event RewardClaimed(address indexed user, uint256 amount);
 
-    error InvalidProof();
+    error InvalidAuthRoot();
     error AlreadyClaimed();
     error InvalidRewardAmount();
 
@@ -69,7 +69,7 @@ contract RewardClaim is Initializable, OwnableUpgradeable, UUPSUpgradeable {
             )
         );
 
-        require(uint256(authRoot) == lightClient.authRoot(), InvalidProof());
+        require(uint256(authRoot) == lightClient.authRoot(), InvalidAuthRoot());
 
         uint256 newClaimAmount = accruedReward - claimedRewards[msg.sender];
         claimedRewards[msg.sender] = accruedReward;
