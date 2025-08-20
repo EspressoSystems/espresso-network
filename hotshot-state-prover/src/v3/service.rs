@@ -140,7 +140,7 @@ pub async fn submit_state_and_proof(
     let proof: PlonkProofSol = proof.into();
     let new_state: LightClientStateSol = lc_state.into();
     let next_stake_table: StakeTableStateSol = next_st_state.into();
-    let auth_root = U256::from_le_bytes(auth_root.0);
+    let auth_root = U256::from_be_bytes(auth_root.0);
 
     let tx = contract.newFinalizedState_2(
         new_state.into(),
@@ -159,7 +159,6 @@ pub async fn submit_state_and_proof(
     // send the tx
     let (receipt, included_block) = sequencer_utils::contract_send(&tx)
         .await
-        .with_context(|| "Failed to send contract tx")
         .map_err(ProverError::ContractError)?;
 
     tracing::info!(
@@ -767,7 +766,7 @@ mod tests {
         // Extract the light client state from the public input
         let lc_state = ledger.light_client_state();
         let next_st_state = ledger.next_stake_table_state();
-        let auth_root = [0u8; 32].into(); // dummy auth root for testing
+        let auth_root = ledger.auth_root().into();
 
         super::submit_state_and_proof(
             &provider,
@@ -790,7 +789,7 @@ mod tests {
         // Extract the light client state from the public input for second update
         let lc_state = ledger.light_client_state();
         let next_st_state = ledger.next_stake_table_state();
-        let auth_root = [0u8; 32].into(); // dummy auth root for testing
+        let auth_root = ledger.auth_root().into();
 
         super::submit_state_and_proof(
             &provider,
