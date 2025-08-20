@@ -5,6 +5,7 @@ resolver = "2"
 
 members = [
     "alloy-compat",
+    "benchmark-stats",
     "client",
     "contracts/rust/adapter",
     "contracts/rust/deployer",
@@ -44,6 +45,7 @@ members = [
 # for the whole workspace by default.
 default-members = [
     "alloy-compat",
+    "benchmark-stats",
     "client",
     "contracts/rust/adapter",
     "contracts/rust/deployer",
@@ -259,7 +261,10 @@ strum = { version = "0.26", features = ["derive"] }
 surf-disco = "0.9"
 tagged-base64 = "0.4"
 tempfile = "3.10"
-test-log = { version = "0.2", features = ["color", "trace"], default-features = false }
+test-log = { version = "0.2", features = [
+    "color",
+    "trace",
+], default-features = false }
 thiserror = "1.0.69"
 tide-disco = "0.9.4"
 time = "0.3"
