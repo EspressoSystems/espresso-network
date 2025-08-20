@@ -169,6 +169,10 @@ pub enum ProposalValidationError {
     NextStakeTableNotFound,
     #[error("Next stake table hash missing")]
     NextStakeTableHashNotFound,
+    #[error("No Epoch Height")]
+    NoEpochHeight,
+    #[error("No First Epoch Configured")]
+    NoFirstEpoch,
 }
 
 impl StateDelta for Delta {}
@@ -1018,7 +1022,7 @@ async fn validate_next_stake_table_hash(
     proposed_header: &Header,
 ) -> Result<(), ProposalValidationError> {
     let Some(epoch_height) = instance.epoch_height else {
-        return Err(ProposalValidationError::NextStakeTableNotFound);
+        return Err(ProposalValidationError::NoEpochHeight);
     };
     if !is_ge_epoch_root(proposed_header.height(), epoch_height) {
         return Ok(());
@@ -1029,7 +1033,7 @@ async fn validate_next_stake_table_hash(
     ));
     let coordinator = instance.coordinator.clone();
     let Some(first_epoch) = coordinator.membership().read().await.first_epoch() else {
-        return Err(ProposalValidationError::NextStakeTableNotFound);
+        return Err(ProposalValidationError::NoFirstEpoch);
     };
 
     // Rewards are distributed only if the current epoch is not the first or second epoch
