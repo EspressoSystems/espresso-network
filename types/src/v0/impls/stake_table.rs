@@ -208,7 +208,7 @@ impl StakeTableEvents {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct StakeTableState {
     validators: ValidatorMap,
     used_bls_keys: HashSet<BLSPubKey>,

@@ -18,6 +18,8 @@ mod sparse_mt;
 pub mod traits;
 mod utils;
 pub use header::Header;
+#[allow(unused_imports)]
+pub(crate) use impls::active_validator_set_from_l1_events;
 #[cfg(any(test, feature = "testing"))]
 pub use impls::mock;
 pub use impls::{
