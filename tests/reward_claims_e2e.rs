@@ -8,7 +8,7 @@ use alloy::{
     rpc::client::RpcClient,
     signers::local::{coins_bip39::English, MnemonicBuilder},
 };
-use client::SequencerClient;
+use anyhow::anyhow;
 use espresso_contract_deployer::{
     network_config::light_client_genesis_from_stake_table, Contracts,
 };
@@ -16,13 +16,16 @@ use espresso_types::{
     v0_4::{ChainConfig, RewardAccountQueryDataV2},
     DrbAndHeaderUpgradeVersion, L1ClientOptions, SeqTypes, SequencerVersions, ValidatedState,
 };
+use futures::StreamExt;
 use hotshot_contract_adapter::sol_types::{
     AccruedRewardsProofSol, EspTokenV2, LightClientV3, RewardClaim,
 };
 use hotshot_query_service::data_source::SqlDataSource;
-use hotshot_state_prover::{v3::service::run_prover_service, StateProverConfig};
+use hotshot_state_prover::{v3::service::run_prover_once, StateProverConfig};
 use hotshot_types::{
+    event::EventType,
     stake_table::{one_honest_threshold, HSStakeTable},
+    traits::node_implementation::ConsensusTime,
     utils::epoch_from_block_number,
 };
 use portpicker::pick_unused_port;
@@ -44,7 +47,7 @@ use vbs::version::StaticVersionType;
 const TEST_MNEMONIC: &str = "test test test test test test test test test test test junk";
 const EPOCH_HEIGHT: u64 = 10;
 const MAX_BLOCK_SIZE: u64 = 1000000;
-const UPDATE_INTERVAL: Duration = Duration::from_secs(10);
+const PROVER_UPDATE_INTERVAL: Duration = Duration::from_secs(60);
 const RETRY_INTERVAL: Duration = Duration::from_secs(2);
 const INITIAL_TOKEN_SUPPLY: U256 = U256::from_limbs([3590000000u64, 0, 0, 0]);
 const TOKEN_NAME: &str = "Espresso";
@@ -280,31 +283,24 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         relay_state,
     ));
 
-    // Start the prover service
-    let prover_port = pick_unused_port().unwrap();
+    // Prepare prover configuration (will run once after waiting for epochs)
     let l1_rpc_client = RpcClient::new_http(l1_url.clone());
     let prover_config = StateProverConfig {
         relay_server: relay_server_url,
-        update_interval: UPDATE_INTERVAL,
+        update_interval: PROVER_UPDATE_INTERVAL,
         retry_interval: RETRY_INTERVAL,
         sequencer_url: Url::parse(&format!("http://localhost:{sequencer_api_port}/")).unwrap(),
-        port: Some(prover_port),
+        port: None, // No HTTP server needed for run_prover_once
         stake_table_capacity: STAKE_TABLE_CAPACITY_FOR_TEST,
         l1_rpc_client,
         light_client_address: lc_proxy_addr,
         signer,
         blocks_per_epoch,
         epoch_start_block,
-        max_retries: 0,
+        max_retries: 5,
         max_gas_price: None,
     };
-    println!("Prover service configuration: {:?}", prover_config);
-
-    println!("Starting prover service on port {}...", prover_port);
-    let prover_handle = spawn(run_prover_service(
-        prover_config,
-        SequencerApiVersion::instance(),
-    ));
+    println!("Prover configuration: {:?}", prover_config);
 
     // Wait for blocks to be produced and 3 epochs to elapse to ensure rewards accrue
     println!(
@@ -314,64 +310,67 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     let target_block = epoch_start_block + (3 * blocks_per_epoch);
     println!("Target block for 3 epochs: {}", target_block);
 
-    // Wait and monitor progress
-    loop {
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        let sequencer_url_str = format!("http://localhost:{sequencer_api_port}");
-        let sequencer_url: Url = sequencer_url_str.parse().unwrap();
-        let sequencer_client = SequencerClient::new(sequencer_url);
+    // Listen to consensus events to get the actual view number
+    let mut events = network.peers[0].event_stream().await;
+    let mut latest_view_number = None;
+    let mut latest_height = 0;
 
-        match sequencer_client.get_height().await {
-            Ok(current_height) => {
-                println!(
-                    "Current block height: {}, target: {}",
-                    current_height, target_block
-                );
-                if current_height >= target_block {
-                    println!("Reached target block height, 3 epochs have elapsed");
+    while let Some(event) = events.next().await {
+        if let EventType::Decide { leaf_chain, .. } = event.event {
+            for leaf_info in leaf_chain.iter() {
+                let height = leaf_info.leaf.height();
+                let view = leaf_info.leaf.view_number();
+
+                if height > latest_height {
+                    latest_height = height;
+                    latest_view_number = Some(view);
+                    println!(
+                        "Block decided - Height: {}, View: {}, Target: {}",
+                        height,
+                        view.u64(),
+                        target_block
+                    );
+                }
+
+                if height >= target_block {
+                    println!(
+                        "Reached target block height {}, view number: {}, 3 epochs have elapsed",
+                        height,
+                        view.u64()
+                    );
                     break;
                 }
-            },
-            Err(e) => {
-                println!("Failed to get block height: {}", e);
-            },
+            }
+
+            if latest_height >= target_block {
+                break;
+            }
         }
     }
 
-    // Verify that the prover has submitted proofs to the Light Client
-    println!("Verifying Light Client has received state updates from prover...");
+    let view_number = latest_view_number
+        .expect("Should have a view number after waiting for blocks")
+        .u64();
+
+    // Now run the prover once to generate and submit a proof for the current state
+    println!("Running prover once to generate proof...");
+    run_prover_once(prover_config, SequencerApiVersion::instance()).await?;
+    println!("Prover completed successfully");
+
+    // Get the finalized state from the Light Client contract
+    println!("Getting finalized state from Light Client contract...");
     let light_client_contract = LightClientV3::new(lc_proxy_addr, &provider);
+    let finalized_state = light_client_contract.finalizedState().call().await?;
+    let auth_root = light_client_contract.authRoot().call().await?;
 
-    // Wait for prover to submit at least one state update
-    let mut attempts = 0;
-    const MAX_ATTEMPTS: u32 = 10;
+    println!(
+        "Light Client finalized state - Block height: {}, View: {}, Auth root: {:#x}",
+        finalized_state.blockHeight, finalized_state.viewNum, auth_root._0
+    );
 
-    loop {
-        let finalized_state = light_client_contract.finalizedState().call().await?;
-        let auth_root = light_client_contract.authRoot().call().await?;
-
-        println!(
-            "Light Client state - Block height: {}, View: {}, Auth root: {:#x}",
-            finalized_state.blockHeight, finalized_state.viewNum, auth_root._0
-        );
-
-        // Check if we have received state updates (block height > genesis)
-        if finalized_state.blockHeight > genesis_state.blockHeight && auth_root._0 != U256::ZERO {
-            println!("Light Client has received state updates from prover!");
-            break;
-        }
-
-        attempts += 1;
-        if attempts >= MAX_ATTEMPTS {
-            panic!("Timed out waiting for prover to submit state update");
-        }
-
-        println!(
-            "Waiting for prover to submit state updates... (attempt {}/{})",
-            attempts, MAX_ATTEMPTS
-        );
-        tokio::time::sleep(Duration::from_secs(3)).await;
-    }
+    // Use the block height from the light client contract for the reward proof
+    let lc_block_height = finalized_state.blockHeight;
+    let lc_view_number = finalized_state.viewNum;
 
     println!("Reward claims E2E test setup completed successfully!");
     println!("Contract addresses:");
@@ -384,17 +383,14 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     println!("  L1 URL: {}", l1_url);
     println!("  Sequencer API port: {}", sequencer_api_port);
     println!("  Relay server port: {}", relay_server_port);
-    println!("  Prover port: {}", prover_port);
 
     let sequencer_url: Url = format!("http://localhost:{sequencer_api_port}")
         .parse()
         .unwrap();
-    let sequencer_client = SequencerClient::new(sequencer_url.clone());
-    let current_height = sequencer_client.get_height().await?;
-    println!("Current block height: {}", current_height);
-
-    // TODO: get the actual view number
-    let view_number = current_height;
+    println!(
+        "Fetching reward proof for LC block height: {}, LC view number: {}",
+        lc_block_height, lc_view_number
+    );
 
     let reward_account = format!("0x{:x}", first_validator_address);
     println!(
@@ -404,25 +400,44 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
 
     let reward_proof_url = format!(
         "{}catchup/{}/{}/reward-account-v2/{}",
-        sequencer_url, current_height, view_number, reward_account
+        sequencer_url, lc_block_height, lc_view_number, reward_account
     );
     println!("Fetching reward proof from: {}", reward_proof_url);
 
-    // sleep
-    // tokio::time::sleep(Duration::from_secs(300)).await;
-
-    // XXX: this fails
+    // Retry fetching the reward proof up to 5 times with 2 second delays
     let http_client = reqwest::Client::new();
-    let response = http_client
-        .get(&reward_proof_url)
-        .header("Accept", "application/json")
-        .send()
-        .await?;
-    let raw_json = response.text().await?;
-    println!("Raw JSON response: {}", raw_json);
+    let mut reward_data = None;
+    for attempt in 1..=5 {
+        match http_client
+            .get(&reward_proof_url)
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .and_then(|r| r.error_for_status())
+        {
+            Ok(response) => match response.json::<RewardAccountQueryDataV2>().await {
+                Ok(data) => {
+                    reward_data = Some(data);
+                    println!("Successfully fetched reward proof on attempt {}", attempt);
+                    break;
+                },
+                Err(e) if attempt == 5 => {
+                    return Err(anyhow!("Failed to parse reward data: {}", e));
+                },
+                Err(_) => {},
+            },
+            Err(e) if attempt == 5 => {
+                return Err(anyhow!("Request failed: {}", e));
+            },
+            Err(_) => {},
+        }
 
-    // Deserialize the response into RewardAccountQueryDataV2
-    let reward_data: RewardAccountQueryDataV2 = serde_json::from_str(&raw_json)?;
+        if attempt < 5 {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+
+    let reward_data = reward_data.expect("Failed to fetch reward proof after 5 attempts");
 
     println!(
         "Reward data received: balance={}, proof account={}",
@@ -481,7 +496,6 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     }
 
     relay_server_handle.abort();
-    prover_handle.abort();
     drop(network);
     drop(anvil);
 
