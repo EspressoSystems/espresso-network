@@ -193,9 +193,9 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     // - It's a simple ERC20 token with minimal upgrade complexity
                     // - No emergency updates are expected for token functionality
                     // - SafeExitTimelock provides sufficient security for token operations
-                    tracing::info!("Transferring ownership to SafeExitTimelock");
                     // deployer is the timelock owner
                     if use_timelock_owner {
+                        tracing::info!("Transferring ownership to SafeExitTimelock");
                         let timelock_addr = contracts
                             .address(Contract::SafeExitTimelock)
                             .expect("fail to get SafeExitTimelock address");
@@ -223,9 +223,9 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         .expect("fail to get EspTokenProxy address");
 
                     if let Some(use_timelock_owner) = self.use_timelock_owner {
-                        tracing::info!("Transferring ownership to SafeExitTimelock");
                         // deployer is the timelock owner
                         if use_timelock_owner {
+                            tracing::info!("Transferring ownership to SafeExitTimelock");
                             let timelock_addr = contracts
                                 .address(Contract::SafeExitTimelock)
                                 .expect("fail to get SafeExitTimelock address");

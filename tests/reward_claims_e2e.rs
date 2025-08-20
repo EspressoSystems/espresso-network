@@ -4,16 +4,17 @@ use alloy::{
     network::EthereumWallet,
     node_bindings::Anvil,
     primitives::{FixedBytes, U256},
-    providers::{ProviderBuilder, WalletProvider},
+    providers::{Provider, ProviderBuilder, WalletProvider},
     rpc::client::RpcClient,
     signers::local::{coins_bip39::English, MnemonicBuilder},
 };
 use anyhow::anyhow;
 use espresso_contract_deployer::{
-    network_config::light_client_genesis_from_stake_table, Contracts,
+    builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table, Contract,
+    Contracts,
 };
 use espresso_types::{
-    v0_4::{ChainConfig, RewardAccountQueryDataV2},
+    v0_4::{ChainConfig, RewardAccountQueryDataV2, RewardMerkleTreeV2},
     DrbAndHeaderUpgradeVersion, L1ClientOptions, SeqTypes, SequencerVersions, ValidatedState,
 };
 use futures::StreamExt;
@@ -45,7 +46,7 @@ use url::Url;
 use vbs::version::StaticVersionType;
 
 const TEST_MNEMONIC: &str = "test test test test test test test test test test test junk";
-const EPOCH_HEIGHT: u64 = 10;
+const EPOCH_HEIGHT: u64 = 7;
 const MAX_BLOCK_SIZE: u64 = 1000000;
 const PROVER_UPDATE_INTERVAL: Duration = Duration::from_secs(60);
 const RETRY_INTERVAL: Duration = Duration::from_secs(2);
@@ -112,100 +113,146 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
 
     let mut l1_contracts = Contracts::new();
 
-    println!("Deploying L1 contracts...");
+    println!("Deploying L1 contracts using deploy builder...");
 
-    // Deploy Light Client proxy
-    let lc_proxy_addr = espresso_contract_deployer::deploy_light_client_proxy(
-        &provider,
-        &mut l1_contracts,
-        true, // use mock
-        genesis_state.clone(),
-        genesis_stake.clone(),
-        admin,
-        None, // no permissioned prover
-    )
-    .await?;
-    println!("Light Client proxy deployed at: {}", lc_proxy_addr);
-
-    // Upgrade to LightClientV2
-    espresso_contract_deployer::upgrade_light_client_v2(
-        &provider,
-        &mut l1_contracts,
-        true, // use mock
-        blocks_per_epoch,
-        epoch_start_block,
-    )
-    .await?;
-    println!("Light Client upgraded to V2");
-
-    // Upgrade to LightClientV3
-    espresso_contract_deployer::upgrade_light_client_v3(
-        &provider,
-        &mut l1_contracts,
-        true, // use mock
-    )
-    .await?;
-    println!("Light Client upgraded to V3");
-
-    // Deploy Fee Contract proxy
-    let fee_proxy_addr =
-        espresso_contract_deployer::deploy_fee_contract_proxy(&provider, &mut l1_contracts, admin)
-            .await?;
-    println!("Fee Contract proxy deployed at: {}", fee_proxy_addr);
-
-    // Deploy ESP Token proxy
-    let token_proxy_addr = espresso_contract_deployer::deploy_token_proxy(
-        &provider,
-        &mut l1_contracts,
-        admin,
-        admin,
-        INITIAL_TOKEN_SUPPLY,
-        TOKEN_NAME,
-        TOKEN_SYMBOL,
-    )
-    .await?;
-    println!("ESP Token proxy deployed at: {}", token_proxy_addr);
-
-    // Deploy Stake Table proxy
+    // Use DeployerArgsBuilder to deploy all contracts at once
     let exit_escrow_period = U256::from(300); // 300 seconds
-    let stake_table_proxy_addr = espresso_contract_deployer::deploy_stake_table_proxy(
+    let args = DeployerArgsBuilder::default()
+        .deployer(provider.clone())
+        .mock_light_client(true)
+        .genesis_lc_state(genesis_state.clone())
+        .genesis_st_state(genesis_stake.clone())
+        .blocks_per_epoch(blocks_per_epoch)
+        .epoch_start_block(epoch_start_block)
+        .exit_escrow_period(exit_escrow_period)
+        .initial_token_supply(INITIAL_TOKEN_SUPPLY)
+        .token_name(TOKEN_NAME.to_string())
+        .token_symbol(TOKEN_SYMBOL.to_string())
+        .multisig_pauser(admin)
+        .use_timelock_owner(false)
+        .build()
+        .unwrap();
+
+    args.deploy(&mut l1_contracts, Contract::FeeContractProxy)
+        .await?;
+    args.deploy(&mut l1_contracts, Contract::EspTokenProxy)
+        .await?;
+    args.deploy(&mut l1_contracts, Contract::EspTokenV2).await?;
+
+    // The deploy builder doesn't call initializeV2, so we need to call it manually
+    let esp_token_v2 = hotshot_contract_adapter::sol_types::EspTokenV2::new(
+        l1_contracts
+            .address(Contract::EspTokenProxy)
+            .expect("EspTokenProxy address"),
         &provider,
-        &mut l1_contracts,
-        token_proxy_addr,
-        lc_proxy_addr,
-        exit_escrow_period,
-        admin,
-    )
-    .await?;
+    );
+    println!("Calling initializeV2 on EspTokenV2...");
+    esp_token_v2
+        .initializeV2()
+        .send()
+        .await?
+        .get_receipt()
+        .await?;
+    println!("EspTokenV2 initializeV2 completed");
+    args.deploy(&mut l1_contracts, Contract::LightClientProxy)
+        .await?;
+    args.deploy(&mut l1_contracts, Contract::LightClientV2)
+        .await?;
+    args.deploy(&mut l1_contracts, Contract::LightClientV3)
+        .await?;
+    args.deploy(&mut l1_contracts, Contract::StakeTableProxy)
+        .await?;
+    args.deploy(&mut l1_contracts, Contract::RewardClaimProxy)
+        .await?;
+    args.deploy(&mut l1_contracts, Contract::StakeTableV2)
+        .await?;
+
+    // Get contract addresses
+    let lc_proxy_addr = l1_contracts
+        .address(Contract::LightClientProxy)
+        .expect("LightClientProxy address");
+    let fee_proxy_addr = l1_contracts
+        .address(Contract::FeeContractProxy)
+        .expect("FeeContractProxy address");
+    let token_proxy_addr = l1_contracts
+        .address(Contract::EspTokenProxy)
+        .expect("EspTokenProxy address");
+    let stake_table_proxy_addr = l1_contracts
+        .address(Contract::StakeTableProxy)
+        .expect("StakeTableProxy address");
+    let reward_claim_proxy_addr = l1_contracts
+        .address(Contract::RewardClaimProxy)
+        .expect("RewardClaimProxy address");
+
+    println!("Light Client proxy deployed at: {}", lc_proxy_addr);
+    println!("Fee Contract proxy deployed at: {}", fee_proxy_addr);
+    println!("ESP Token proxy deployed at: {}", token_proxy_addr);
     println!("Stake Table proxy deployed at: {}", stake_table_proxy_addr);
+    println!("RewardClaim proxy deployed at: {}", reward_claim_proxy_addr);
 
     // Set up stake table with validators
     let staking_priv_keys = network_config.staking_priv_keys();
-    let first_validator_address = staking_priv_keys[0].0.address();
-    println!("First validator address: {}", first_validator_address);
+    let claimer_address = staking_priv_keys[0].0.address();
+    println!("First validator address: {}", claimer_address);
 
     setup_stake_table_contract_for_test(
         l1_url.clone(),
         &provider,
         stake_table_proxy_addr,
-        staking_priv_keys,
+        staking_priv_keys.clone(),
         DelegationConfig::default(),
     )
     .await?;
     println!("Stake table populated with validators");
 
-    // Deploy RewardClaim contract
-    let reward_claim_proxy_addr = espresso_contract_deployer::deploy_reward_claim_proxy(
-        &provider,
-        &mut l1_contracts,
-        token_proxy_addr,
-        lc_proxy_addr,
-        admin,
-    )
-    .await?;
-    println!("RewardClaim proxy deployed at: {}", reward_claim_proxy_addr);
+    // Grant minter role to reward claim contract
+    println!("Granting MINTER_ROLE to RewardClaim contract...");
+    let esp_token_v2 =
+        hotshot_contract_adapter::sol_types::EspTokenV2::new(token_proxy_addr, &provider);
 
-    println!("All L1 contracts deployed successfully!");
+    // Check if the contract is properly initialized and we have admin role
+    let version = esp_token_v2.getVersion().call().await?;
+    println!(
+        "EspTokenV2 version: {}.{}.{}",
+        version.majorVersion, version.minorVersion, version.patchVersion
+    );
+
+    // Check if admin has DEFAULT_ADMIN_ROLE
+    let admin_role = [0u8; 32]; // DEFAULT_ADMIN_ROLE is 0x00...00
+    let has_admin_role = esp_token_v2
+        .hasRole(admin_role.into(), admin)
+        .call()
+        .await?
+        ._0;
+    println!("Admin has DEFAULT_ADMIN_ROLE: {}", has_admin_role);
+
+    if has_admin_role {
+        let minter_role = alloy::primitives::keccak256("MINTER_ROLE".as_bytes());
+        println!("Minter role hash: {:#x}", minter_role);
+
+        let receipt = esp_token_v2
+            .grantRole(minter_role.into(), reward_claim_proxy_addr)
+            .send()
+            .await?
+            .get_receipt()
+            .await?;
+
+        if receipt.status() {
+            println!("MINTER_ROLE granted to RewardClaim contract successfully");
+        } else {
+            println!("Failed to grant MINTER_ROLE - transaction failed");
+        }
+
+        // Verify the role was granted
+        let has_minter_role = esp_token_v2
+            .hasRole(minter_role.into(), reward_claim_proxy_addr)
+            .call()
+            .await?
+            ._0;
+        println!("RewardClaim contract has MINTER_ROLE: {}", has_minter_role);
+    } else {
+        println!("Admin does not have DEFAULT_ADMIN_ROLE - cannot grant MINTER_ROLE");
+    }
 
     // Set up chain config for TestNetwork
     let chain_config = ChainConfig {
@@ -314,6 +361,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     let mut events = network.peers[0].event_stream().await;
     let mut latest_view_number = None;
     let mut latest_height = 0;
+    let mut header = None;
 
     while let Some(event) = events.next().await {
         if let EventType::Decide { leaf_chain, .. } = event.event {
@@ -322,6 +370,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
                 let view = leaf_info.leaf.view_number();
 
                 if height > latest_height {
+                    header = Some(leaf_info.leaf.block_header());
                     latest_height = height;
                     latest_view_number = Some(view);
                     println!(
@@ -347,6 +396,13 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
             }
         }
     }
+
+    // let header: espresso_types::v0_4::Header = match header.unwrap() {
+    //     espresso_types::Header::V1(header) => todo!(),
+    //     espresso_types::Header::V2(header) => todo!(),
+    //     espresso_types::Header::V3(header) => todo!(),
+    //     espresso_types::Header::V4(header) => header.clone(),
+    // };
 
     let view_number = latest_view_number
         .expect("Should have a view number after waiting for blocks")
@@ -392,7 +448,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         lc_block_height, lc_view_number
     );
 
-    let reward_account = format!("0x{:x}", first_validator_address);
+    let reward_account = format!("0x{:x}", claimer_address);
     println!(
         "Testing reward claim for validator account: {}",
         reward_account
@@ -457,13 +513,29 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     );
 
     let proof_sol: AccruedRewardsProofSol = reward_data.proof.try_into().unwrap();
-    let reward_claim_contract = RewardClaim::new(reward_claim_proxy_addr, &provider);
-    let esp_token_contract = EspTokenV2::new(token_proxy_addr, &provider);
 
-    let balance_before = esp_token_contract.balanceOf(admin).call().await?._0;
+    // Create claimer wallet and provider for claiming rewards
+    let claimer_signer = staking_priv_keys[0].0.clone();
+    let claimer_wallet = EthereumWallet::from(claimer_signer.clone());
+    let claimer_provider = ProviderBuilder::new()
+        .wallet(claimer_wallet.clone())
+        .on_http(l1_url.clone());
+
+    // check Eth balance of claimer
+    let eth_balance = claimer_provider.get_balance(claimer_address).await?;
+    println!("Eth balance of claimer {claimer_address}: {eth_balance} wei");
+
+    let reward_claim_contract = RewardClaim::new(reward_claim_proxy_addr, &claimer_provider);
+    let esp_token_contract = EspTokenV2::new(token_proxy_addr, &claimer_provider);
+
+    let balance_before = esp_token_contract
+        .balanceOf(claimer_address)
+        .call()
+        .await?
+        ._0;
     println!(
         "ESP token balance before claim: {} for account: {}",
-        balance_before, admin
+        balance_before, claimer_address
     );
 
     let auth_root_inputs = [FixedBytes::default(); 7];
@@ -480,10 +552,14 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         .get_receipt()
         .await?;
 
-    let balance_after = esp_token_contract.balanceOf(admin).call().await?._0;
+    let balance_after = esp_token_contract
+        .balanceOf(claimer_address)
+        .call()
+        .await?
+        ._0;
     println!(
         "ESP token balance after claim: {} for account: {}",
-        balance_after, admin
+        balance_after, claimer_address
     );
 
     let expected_balance = balance_before + reward_data.balance;
