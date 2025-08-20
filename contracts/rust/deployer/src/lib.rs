@@ -849,9 +849,13 @@ async fn upgrade_esp_token_v2(
 
     assert!(is_contract(&provider, v2_addr).await?);
 
-    // invoke upgrade on proxy
+    // prepare init calldata for V2
+    let proxy_as_v2 = EspTokenV2::new(proxy_addr, &provider);
+    let init_data = proxy_as_v2.initializeV2().calldata().to_owned();
+
+    // invoke upgrade on proxy with initializeV2 call
     let receipt = proxy
-        .upgradeToAndCall(v2_addr, vec![].into() /* no new init data for V2 */)
+        .upgradeToAndCall(v2_addr, init_data)
         .send()
         .await?
         .get_receipt()

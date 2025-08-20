@@ -138,22 +138,6 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     args.deploy(&mut l1_contracts, Contract::EspTokenProxy)
         .await?;
     args.deploy(&mut l1_contracts, Contract::EspTokenV2).await?;
-
-    // The deploy builder doesn't call initializeV2, so we need to call it manually
-    let esp_token_v2 = hotshot_contract_adapter::sol_types::EspTokenV2::new(
-        l1_contracts
-            .address(Contract::EspTokenProxy)
-            .expect("EspTokenProxy address"),
-        &provider,
-    );
-    println!("Calling initializeV2 on EspTokenV2...");
-    esp_token_v2
-        .initializeV2()
-        .send()
-        .await?
-        .get_receipt()
-        .await?;
-    println!("EspTokenV2 initializeV2 completed");
     args.deploy(&mut l1_contracts, Contract::LightClientProxy)
         .await?;
     args.deploy(&mut l1_contracts, Contract::LightClientV2)
