@@ -1494,7 +1494,7 @@ mod tests {
 
         // spawn a separate task
         // this is going to keep registering validators and multiple delegators
-        // the interval mining is set to 1s so each transaction finalization would take atleast 1s
+        // the interval mining is set to 1s so each transaction finalization would take at least 1s
         spawn({
             let l1_url = l1_url.clone();
             async move {

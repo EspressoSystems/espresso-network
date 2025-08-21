@@ -269,7 +269,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 .set_publication_interval(Some(kademlia_record_republication_interval))
                 .set_record_ttl(Some(kademlia_ttl));
 
-            // allowing panic here because something is very wrong if this fales
+            // allowing panic here because something is very wrong if this fails
             #[allow(clippy::panic)]
             if let Some(factor) = config.replication_factor {
                 kconfig.set_replication_factor(factor);

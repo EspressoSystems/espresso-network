@@ -125,7 +125,7 @@ func getHeaderFromTestFile(path string, t *testing.T) HeaderInterface {
 }
 
 func TestUnmarshalSignature(t *testing.T) {
-	// `r` ans `s` are hex string of odd length.
+	// `r` and `s` are hex string of odd length.
 	// It should be unmarshalled successfully
 	data := `
 {

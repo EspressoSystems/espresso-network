@@ -508,7 +508,7 @@ impl SqlStorage {
         let pool = config.pool_opt.clone();
         let pruner_cfg = config.pruner_cfg;
 
-        // re-use the same pool if present and return early
+        // reuse the same pool if present and return early
         if let Some(pool) = config.pool {
             return Ok(Self {
                 metrics,

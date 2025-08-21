@@ -112,7 +112,7 @@ pub struct SystemContext<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versi
     /// Memberships used by consensus
     pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
 
-    /// the metrics that the implementor is using.
+    /// the metrics that the implementer is using.
     metrics: Arc<ConsensusMetricsValue>,
 
     /// The hotstuff implementation

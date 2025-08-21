@@ -395,7 +395,7 @@ impl<T: NodeType> NetworkNodeHandle<T> {
     /// Forcefully disconnect from a peer
     /// # Errors
     /// If the channel is closed somehow
-    /// Shouldnt' happen.
+    /// Shouldn't happen.
     /// # Panics
     /// If channel errors out
     /// shouldn't happen.
@@ -446,7 +446,7 @@ impl<T: NodeType> NetworkNodeHandle<T> {
     /// Returns number of peers this node is connected to
     /// # Errors
     /// If the channel is closed somehow
-    /// Shouldnt' happen.
+    /// Shouldn't happen.
     /// # Panics
     /// If channel errors out
     /// shouldn't happen.
@@ -460,7 +460,7 @@ impl<T: NodeType> NetworkNodeHandle<T> {
     /// return hashset of PIDs this node is connected to
     /// # Errors
     /// If the channel is closed somehow
-    /// Shouldnt' happen.
+    /// Shouldn't happen.
     /// # Panics
     /// If channel errors out
     /// shouldn't happen.

@@ -423,7 +423,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
                 let dishonest_proposals = self.dishonest_proposal_view_numbers.read().await;
                 if dishonest_proposals.contains(&proposal.data.view_number()) {
                     // Create a vote using data from most recent vote and the current event number
-                    // We wont update internal consensus state for this Byzantine replica but we are at least
+                    // We won't update internal consensus state for this Byzantine replica but we are at least
                     // Going to send a vote to the next honest leader
                     let vote = QuorumVote2::<TYPES>::create_signed_vote(
                         self.votes_sent.last().unwrap().data.clone(),

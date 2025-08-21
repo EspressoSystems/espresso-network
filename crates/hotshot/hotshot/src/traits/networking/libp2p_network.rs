@@ -582,7 +582,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
         Ok(result)
     }
 
-    /// Spawns task for looking up nodes pre-emptively
+    /// Spawns task for looking up nodes preemptively
     #[allow(clippy::cast_sign_loss, clippy::cast_precision_loss)]
     fn spawn_node_lookup(
         &self,

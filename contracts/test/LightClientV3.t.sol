@@ -406,7 +406,7 @@ contract LightClient_newFinalizedState_BeforeEpochActivation_Test is LightClient
         }
     }
 
-    /// @dev Test unhappy path when a valid but oudated finalized state is submitted
+    /// @dev Test unhappy path when a valid but outdated finalized state is submitted
     function test_RevertWhen_OutdatedStateSubmitted() external {
         uint64 numBlockSkipped = 1;
         LC.LightClientState memory state = genesis;
