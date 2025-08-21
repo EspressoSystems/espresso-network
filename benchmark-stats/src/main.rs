@@ -385,7 +385,7 @@ fn plot_and_print_leader_stats(
         views.push(view);
 
         // Determine first among QC / VID / DAC
-        let mut events = vec![("QC", qc), ("VID", vid), ("DAC", dac)];
+        let mut events = [("QC", qc), ("VID", vid), ("DAC", dac)];
         events.sort_by_key(|&(_, ts)| ts);
         let first = events[0].0;
         *first_event_counts.entry(first).or_insert(0) += 1;
