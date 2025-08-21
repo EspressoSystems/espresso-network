@@ -1075,7 +1075,7 @@ mod test {
                     txn.hash(),
                     client
                         .get::<TransactionQueryData<MockTypes>>(&format!(
-                            "transaction/{}/{}/noproof",
+                            "transaction/{}/{}/proof",
                             i, j.position
                         ))
                         .send()
@@ -1087,7 +1087,7 @@ mod test {
                     txn.hash(),
                     client
                         .get::<TransactionQueryData<MockTypes>>(&format!(
-                            "transaction/hash/{}/noproof",
+                            "transaction/hash/{}/proof",
                             txn.hash()
                         ))
                         .send()
