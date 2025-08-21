@@ -7,8 +7,9 @@
 //! The election trait, used to decide which node is the leader and determine if a vote is valid.
 use std::{collections::BTreeSet, fmt::Debug, sync::Arc};
 
-use alloy::primitives::{FixedBytes, U256};
+use alloy::primitives::U256;
 use async_lock::RwLock;
+use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::Result;
 
 use super::node_implementation::NodeType;
@@ -17,11 +18,20 @@ use crate::{
     traits::signature_key::StakeTableEntryType, PeerConfig,
 };
 
-pub type StakeTableHash = FixedBytes<32>;
+pub struct NoStakeTableHash;
+
+impl Committable for NoStakeTableHash {
+    fn commit(&self) -> Commitment<Self> {
+        Commitment::from_raw([0u8; 32])
+    }
+}
+
 /// A protocol for determining membership in and participating in a committee.
 pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// The error type returned by methods like `lookup_leader`.
     type Error: std::fmt::Display;
+
+    type StakeTableHash: Committable;
     /// Create a committee
     fn new(
         // Note: eligible_leaders is currently a hack because the DA leader == the quorum leader
@@ -186,7 +196,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
 
     /// Returns the commitment of the stake table for the given epoch,
     /// Errors if the stake table is not available for the given epoch
-    fn stake_table_hash(&self, _epoch: TYPES::Epoch) -> Option<StakeTableHash> {
+    fn stake_table_hash(&self, _epoch: TYPES::Epoch) -> Option<Commitment<Self::StakeTableHash>> {
         None
     }
 }

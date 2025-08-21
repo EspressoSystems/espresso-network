@@ -1,7 +1,9 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::{HashMap}, sync::Arc};
 
 use alloy::{primitives::{Address, Log, U256}, transports::{RpcError, TransportErrorKind}};
+use ark_serialize::CanonicalSerialize;
 use async_lock::{Mutex, RwLock};
+use committable::{Commitment, Committable, RawCommitmentBuilder};
 use derive_more::derive::{From, Into};
 use hotshot::types::{SignatureKey};
 use hotshot_contract_adapter::sol_types::StakeTableV2::{
@@ -9,15 +11,16 @@ use hotshot_contract_adapter::sol_types::StakeTableV2::{
     ValidatorRegistered, ValidatorRegisteredV2,
 };
 use hotshot_types::{
-    data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, traits::election::StakeTableHash, PeerConfig
+    data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, PeerConfig
 };
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinHandle;
 
 use super::L1Client;
 use crate::{
-    traits::{MembershipPersistence, StateCatchup}, v0::ChainConfig, v0_3::RewardAmount, SeqTypes, ValidatorMap
+    traits::{MembershipPersistence, StateCatchup}, v0::{impls::StakeTableHash, ChainConfig}, v0_3::RewardAmount, SeqTypes, ValidatorMap
 };
 /// Stake table holding all staking information (DA and non-DA stakers)
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
@@ -44,7 +47,38 @@ pub struct Validator<KEY: SignatureKey> {
     // commission
     // TODO: MA commission is only valid from 0 to 10_000. Add newtype to enforce this.
     pub commission: u16,
-    pub delegators: BTreeMap<Address, U256>,
+    pub delegators: HashMap<Address, U256>,
+}
+
+pub(crate) fn to_fixed_bytes(value: U256) -> [u8; std::mem::size_of::<U256>()] {
+    let bytes: [u8; std::mem::size_of::<U256>()] = value.to_le_bytes();
+    bytes
+}
+
+impl<KEY: SignatureKey> Committable for Validator<KEY> {
+    fn commit(&self) -> Commitment<Self> {
+        let mut schnorr_key_bytes = vec![];
+        self.state_ver_key.serialize_with_mode(&mut schnorr_key_bytes, ark_serialize::Compress::Yes).unwrap();
+
+        let mut builder = RawCommitmentBuilder::new(&Self::tag())
+            .fixed_size_field("account", &self.account)
+            .var_size_field("stake_table_key", self.stake_table_key.to_bytes().as_slice())
+            .var_size_field("state_ver_key", &schnorr_key_bytes)
+            .fixed_size_field("stake", &to_fixed_bytes(self.stake))
+            .u16(self.commission);
+
+        builder = builder.constant_str("delegators");
+        for (address, stake) in self.delegators.iter().sorted() {
+            builder = builder.fixed_size_bytes(address)
+            .fixed_size_bytes(&to_fixed_bytes(*stake));
+        }
+ 
+        builder.finalize()
+    }
+
+    fn tag() -> String {
+        "VALIDATOR".to_string()
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, std::hash::Hash, Clone, Debug, PartialEq, Eq)]

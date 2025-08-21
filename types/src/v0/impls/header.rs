@@ -11,7 +11,6 @@ use hotshot_types::{
     light_client::LightClientState,
     traits::{
         block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
-        election::StakeTableHash,
         node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::BuilderSignatureKey,
         BlockPayload, EncodeBytes, ValidatedState as _,
@@ -35,7 +34,7 @@ use crate::{
     eth_signature_key::BuilderSignature,
     v0::{
         header::{EitherOrVersion, VersionedHeader},
-        impls::{distribute_block_reward, reward::RewardDistributor},
+        impls::{distribute_block_reward, reward::RewardDistributor, StakeTableHash},
     },
     v0_1::{self},
     v0_2,
@@ -1154,11 +1153,8 @@ impl BlockHeader<SeqTypes> for Header {
         match self {
             Header::V1(_) | Header::V2(_) | Header::V3(_) => Ok(FixedBytes::from([0u8; 32])),
             Header::V4(header) => {
-                // Add next stake table hash to the auth root, will be 0 except during epoch transition
-                let next_stake_table_hash = self
-                    .next_stake_table_hash()
-                    .unwrap_or(FixedBytes::from([0u8; 32]));
                 // Temporary placeholder values for future fields
+                let placeholder_1 = [0; 32];
                 let placeholder_2 = [0; 32];
                 let placeholder_3 = [0; 32];
                 let placeholder_4 = [0; 32];
@@ -1171,7 +1167,7 @@ impl BlockHeader<SeqTypes> for Header {
                 // Start with the reward Merkle tree root digest as the base input
                 let digest = header.reward_merkle_tree_root.digest();
                 hasher.update(digest.0);
-                hasher.update(next_stake_table_hash);
+                hasher.update(placeholder_1);
                 hasher.update(placeholder_2);
                 hasher.update(placeholder_3);
                 hasher.update(placeholder_4);

@@ -1,4 +1,4 @@
-use crate::{v0_3::RewardAmount, v0_4::RewardMerkleCommitmentV2, NsTable, TimestampMillis};
+use crate::{v0::impls::StakeTableHash, v0_3::RewardAmount, v0_4::RewardMerkleCommitmentV2, NsTable, TimestampMillis};
 
 use super::{
     BlockMerkleCommitment, BuilderSignature, FeeInfo, FeeMerkleCommitment, L1BlockInfo,
@@ -6,7 +6,7 @@ use super::{
 };
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
-use hotshot_types::{data::VidCommitment, traits::election::StakeTableHash, utils::BuilderCommitment};
+use hotshot_types::{data::VidCommitment, utils::BuilderCommitment};
 use serde::{Deserialize, Serialize};
 
 /// A header is like a [`Block`] with the body replaced by a digest.
@@ -66,7 +66,7 @@ impl Committable for Header {
             .var_size_field("total_reward_distributed", &self.total_reward_distributed.to_fixed_bytes());
 
         if let Some(next_stake_table_hash) = self.next_stake_table_hash {
-            cb = cb.constant_str("next_stake_table_hash").fixed_size_bytes(&next_stake_table_hash);
+            cb = cb.field("next_stake_table_hash", next_stake_table_hash);
         }
 
         cb.finalize()

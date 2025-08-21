@@ -6,6 +6,7 @@ use std::{
 use alloy::primitives::U256;
 use async_broadcast::{broadcast, InactiveReceiver, Sender};
 use async_lock::{Mutex, RwLock};
+use committable::Commitment;
 use hotshot_utils::{
     anytrace::{self, Error, Level, Result, Wrap, DEFAULT_LOG_LEVEL},
     ensure, error, line_info, log, warn,
@@ -16,7 +17,7 @@ use crate::{
     drb::{compute_drb_result, DrbDifficultySelectorFn, DrbInput, DrbResult},
     stake_table::HSStakeTable,
     traits::{
-        election::{Membership, StakeTableHash},
+        election::Membership,
         node_implementation::{ConsensusTime, NodeType},
         storage::{
             load_drb_progress_fn, store_drb_progress_fn, store_drb_result_fn, LoadDrbProgressFn,
@@ -747,7 +748,9 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
                 .add_drb_result(epoch, drb_result);
         }
     }
-    pub async fn stake_table_hash(&self) -> Option<StakeTableHash> {
+    pub async fn stake_table_hash(
+        &self,
+    ) -> Option<Commitment<<TYPES::Membership as Membership<TYPES>>::StakeTableHash>> {
         self.coordinator
             .membership
             .read()

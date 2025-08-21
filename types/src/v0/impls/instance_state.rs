@@ -6,9 +6,7 @@ use anyhow::bail;
 use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_types::{
-    data::EpochNumber,
-    epoch_membership::EpochMembershipCoordinator,
-    traits::{election::StakeTableHash, states::InstanceState},
+    data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::states::InstanceState,
     HotShotConfig,
 };
 #[cfg(any(test, feature = "testing"))]
@@ -26,8 +24,8 @@ use super::{
 use crate::EpochCommittees;
 use crate::{
     v0::{
-        traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
-        Upgrade, UpgradeMode,
+        impls::StakeTableHash, traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo,
+        L1Client, Timestamp, Upgrade, UpgradeMode,
     },
     v0_3::RewardAmount,
     ValidatorMap,

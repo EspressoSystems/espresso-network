@@ -15,9 +15,10 @@ use alloy::{
 };
 use anyhow::{bail, ensure, Context};
 use ark_ec::AffineRepr;
+use ark_serialize::CanonicalSerialize;
 use async_lock::{Mutex, RwLock, RwLockUpgradableReadGuard};
 use bigdecimal::BigDecimal;
-use committable::Committable;
+use committable::{Commitment, Committable, RawCommitmentBuilder};
 use futures::{
     future::BoxFuture,
     stream::{self, StreamExt},
@@ -38,7 +39,7 @@ use hotshot_types::{
     },
     stake_table::{HSStakeTable, StakeTableEntry},
     traits::{
-        election::{Membership, StakeTableHash},
+        election::Membership,
         node_implementation::{ConsensusTime, NodeType},
         signature_key::StakeTableEntryType,
     },
@@ -74,6 +75,8 @@ use crate::{
 
 type Epoch = <SeqTypes as NodeType>::Epoch;
 pub type ValidatorMap = IndexMap<Address, Validator<BLSPubKey>>;
+
+pub type StakeTableHash = Commitment<StakeTableState>;
 
 /// The result of applying a stake table event:
 /// - `Ok(Ok(()))`: success
@@ -215,6 +218,39 @@ pub struct StakeTableState {
     used_schnorr_keys: HashSet<SchnorrPubKey>,
 }
 
+impl Committable for StakeTableState {
+    fn commit(&self) -> committable::Commitment<Self> {
+        let mut builder = RawCommitmentBuilder::new(&Self::tag());
+
+        for (_, validator) in self.validators.iter().sorted_by_key(|(a, _)| *a) {
+            builder = builder.field("validator", validator.commit());
+        }
+
+        builder = builder.constant_str("used_bls_keys");
+        for key in self.used_bls_keys.iter().sorted() {
+            builder = builder.var_size_bytes(&key.to_bytes());
+        }
+
+        builder = builder.constant_str("used_schnorr_keys");
+        for key in self
+            .used_schnorr_keys
+            .iter()
+            .sorted_by(|a, b| a.to_affine().xy().cmp(&b.to_affine().xy()))
+        {
+            let mut schnorr_key_bytes = vec![];
+            key.serialize_with_mode(&mut schnorr_key_bytes, ark_serialize::Compress::Yes)
+                .unwrap();
+            builder = builder.var_size_bytes(&schnorr_key_bytes);
+        }
+
+        builder.finalize()
+    }
+
+    fn tag() -> String {
+        "STAKE_TABLE".to_string()
+    }
+}
+
 impl StakeTableState {
     pub fn new() -> Self {
         Self {
@@ -222,26 +258,6 @@ impl StakeTableState {
             used_bls_keys: HashSet::new(),
             used_schnorr_keys: HashSet::new(),
         }
-    }
-
-    pub fn hash(&self) -> Result<StakeTableHash, bincode::Error> {
-        let mut hasher = alloy::primitives::Keccak256::new();
-        for (address, validator) in &self.validators {
-            hasher.update(address);
-            hasher.update(bincode::serialize(&validator)?);
-        }
-        for key in self.used_bls_keys.iter().sorted() {
-            hasher.update(bincode::serialize(&key)?);
-        }
-        for key in self
-            .used_schnorr_keys
-            .iter()
-            .sorted_by(|a, b| a.to_affine().xy().cmp(&b.to_affine().xy()))
-        {
-            hasher.update(bincode::serialize(&key)?);
-        }
-        let hash = hasher.finalize();
-        Ok(hash)
     }
 
     pub fn get_validators(self) -> ValidatorMap {
@@ -284,7 +300,7 @@ impl StakeTableState {
                     state_ver_key,
                     stake: U256::ZERO,
                     commission,
-                    delegators: BTreeMap::new(),
+                    delegators: HashMap::new(),
                 });
             },
 
@@ -330,7 +346,7 @@ impl StakeTableState {
                     state_ver_key,
                     stake: U256::ZERO,
                     commission,
-                    delegators: BTreeMap::new(),
+                    delegators: HashMap::new(),
                 });
             },
 
@@ -493,8 +509,8 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
             },
         }
     }
-    let hash = state.hash()?;
-    Ok((state.get_validators(), hash))
+    let commit = state.commit();
+    Ok((state.get_validators(), commit))
 }
 
 /// Select active validators
@@ -1881,6 +1897,7 @@ pub struct LeaderLookupError;
 // #[async_trait]
 impl Membership<SeqTypes> for EpochCommittees {
     type Error = LeaderLookupError;
+    type StakeTableHash = StakeTableState;
     // DO NOT USE. Dummy constructor to comply w/ trait.
     fn new(
         // TODO remove `new` from trait and remove this fn as well.
@@ -2455,7 +2472,7 @@ pub mod testing {
             let mut seed = [1u8; 32];
             rng.fill_bytes(&mut seed);
             let mut validator_stake = alloy::primitives::U256::from(0);
-            let mut delegators = BTreeMap::new();
+            let mut delegators = HashMap::new();
             for _i in 0..=5000 {
                 let stake: u64 = rng.gen_range(0..10000);
                 delegators.insert(Address::random(), alloy::primitives::U256::from(stake));

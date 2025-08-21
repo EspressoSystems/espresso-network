@@ -24,7 +24,6 @@ use hotshot_types::{
     },
     stake_table::HSStakeTable,
     traits::{
-        election::StakeTableHash,
         metrics::Metrics,
         node_implementation::{ConsensusTime, NodeType, Versions},
         storage::Storage,
@@ -40,7 +39,7 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
 use crate::{
-    v0::impls::ValidatedState,
+    v0::impls::{StakeTableHash, ValidatedState},
     v0_3::{
         ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount, RewardMerkleCommitmentV1,
     },

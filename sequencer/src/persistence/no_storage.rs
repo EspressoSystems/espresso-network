@@ -7,7 +7,7 @@ use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent},
-    Leaf2, NetworkConfig, ValidatorMap,
+    Leaf2, NetworkConfig, StakeTableHash, ValidatorMap,
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
@@ -26,7 +26,7 @@ use hotshot_types::{
         LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
         UpgradeCertificate,
     },
-    traits::{election::StakeTableHash, metrics::Metrics},
+    traits::metrics::Metrics,
 };
 
 use crate::{NodeType, SeqTypes, ViewNumber};

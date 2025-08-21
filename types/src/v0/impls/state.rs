@@ -8,7 +8,7 @@ use hotshot_query_service::merklized_state::MerklizedState;
 use hotshot_types::{
     data::{BlockError, EpochNumber, ViewNumber},
     traits::{
-        block_contents::BlockHeader, election::StakeTableHash, node_implementation::ConsensusTime,
+        block_contents::BlockHeader, node_implementation::ConsensusTime,
         signature_key::BuilderSignatureKey, states::StateDelta, ValidatedState as HotShotState,
     },
     utils::{epoch_from_block_number, is_ge_epoch_root},
@@ -33,7 +33,7 @@ use super::{
 use crate::{
     traits::StateCatchup,
     v0::{
-        impls::distribute_block_reward,
+        impls::{distribute_block_reward, StakeTableHash},
         sparse_mt::{Keccak256Hasher, KeccakNode},
     },
     v0_3::{
