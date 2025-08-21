@@ -608,7 +608,7 @@ where
         .try_flatten_stream()
         .boxed()
     })?
-    .at("get_transaction", move |req, state| {
+    .at("get_transaction_proof", move |req, state| {
         async move {
             let tx = get_transaction(req, state, timeout).await?;
             let height = tx.block.height();
@@ -630,7 +630,7 @@ where
         }
         .boxed()
     })?
-    .at("get_transaction_without_proof", move |req, state| {
+    .at("get_transaction", move |req, state| {
         async move { Ok(get_transaction(req, state, timeout).await?.transaction) }.boxed()
     })?
     .stream("stream_transactions", move |req, state| {

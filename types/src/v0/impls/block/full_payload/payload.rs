@@ -41,8 +41,7 @@ impl Payload {
         &self.ns_table
     }
 
-    /// Like [`QueryablePayload::transaction_with_proof`] except without the
-    /// proof.
+    /// Read a transaction from this payload.
     pub fn transaction(&self, index: &Index) -> Option<Transaction> {
         let ns = &index.ns_index;
         let ns_id = self.ns_table.read_ns_id(ns)?;
