@@ -20,7 +20,7 @@ struct NonPermissionedBuilderOptions {
     /// The builder will subscribe to this server to receive hotshot events
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_API_URL",
+        env = "ESPRESSO_SEQUENCER_URL",
         default_value = "http://localhost:24000"
     )]
     sequencer_api_url: Url,
