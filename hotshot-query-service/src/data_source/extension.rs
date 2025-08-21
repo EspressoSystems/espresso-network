@@ -16,7 +16,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use futures::{stream::BoxStream, StreamExt};
+use futures::stream::BoxStream;
 use hotshot::types::Event;
 use hotshot_events_service::events_source::{EventFilterSet, EventsSource, StartupInfo};
 use hotshot_types::{data::VidShare, event::LegacyEvent, traits::node_implementation::NodeType};
@@ -528,27 +528,18 @@ where
     type EventStream = BoxStream<'static, Arc<Event<Types>>>;
     type LegacyEventStream = BoxStream<'static, Arc<LegacyEvent<Types>>>;
 
-    async fn get_event_stream(
-        &self,
-        filter: Option<EventFilterSet<Types>>,
-    ) -> anyhow::Result<Self::EventStream> {
-        self.user_data
-            .get_event_stream(filter)
-            .await
-            .map(|stream| stream.boxed())
+    async fn get_event_stream(&self, filter: Option<EventFilterSet<Types>>) -> Self::EventStream {
+        Box::pin(self.user_data.get_event_stream(filter).await)
     }
 
     async fn get_legacy_event_stream(
         &self,
         filter: Option<EventFilterSet<Types>>,
-    ) -> anyhow::Result<Self::LegacyEventStream> {
-        self.user_data
-            .get_legacy_event_stream(filter)
-            .await
-            .map(|stream| stream.boxed())
+    ) -> Self::LegacyEventStream {
+        Box::pin(self.user_data.get_legacy_event_stream(filter).await)
     }
 
-    async fn get_startup_info(&self) -> anyhow::Result<StartupInfo<Types>> {
+    async fn get_startup_info(&self) -> StartupInfo<Types> {
         self.user_data.get_startup_info().await
     }
 }

@@ -143,7 +143,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> EventsSo
     async fn get_event_stream(
         &self,
         _filter: Option<EventFilterSet<SeqTypes>>,
-    ) -> anyhow::Result<Self::EventStream> {
+    ) -> Self::EventStream {
         self.event_streamer()
             .await
             .read()
@@ -155,7 +155,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> EventsSo
     async fn get_legacy_event_stream(
         &self,
         _filter: Option<EventFilterSet<SeqTypes>>,
-    ) -> anyhow::Result<Self::LegacyEventStream> {
+    ) -> Self::LegacyEventStream {
         self.event_streamer()
             .await
             .read()
@@ -164,7 +164,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> EventsSo
             .await
     }
 
-    async fn get_startup_info(&self) -> anyhow::Result<StartupInfo<SeqTypes>> {
+    async fn get_startup_info(&self) -> StartupInfo<SeqTypes> {
         self.event_streamer()
             .await
             .read()

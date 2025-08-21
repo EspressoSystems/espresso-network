@@ -178,34 +178,34 @@ mod tests {
         async fn get_event_stream(
             &self,
             _filter: Option<EventFilterSet<TestTypes>>,
-        ) -> anyhow::Result<Self::EventStream> {
+        ) -> Self::EventStream {
             let view = ViewNumber::new(self.counter.load(Ordering::SeqCst));
             let test_event = Arc::new(Event {
                 view_number: view,
                 event: EventType::ViewFinished { view_number: view },
             });
             self.counter.fetch_add(1, Ordering::SeqCst);
-            Ok(stream::iter(vec![test_event]))
+            stream::iter(vec![test_event])
         }
 
         async fn get_legacy_event_stream(
             &self,
             _filter: Option<EventFilterSet<TestTypes>>,
-        ) -> anyhow::Result<Self::LegacyEventStream> {
+        ) -> Self::LegacyEventStream {
             let view = ViewNumber::new(self.counter.load(Ordering::SeqCst));
             let test_event = Arc::new(LegacyEvent {
                 view_number: view,
                 event: LegacyEventType::ViewFinished { view_number: view },
             });
             self.counter.fetch_add(1, Ordering::SeqCst);
-            Ok(stream::iter(vec![test_event]))
+            stream::iter(vec![test_event])
         }
 
-        async fn get_startup_info(&self) -> anyhow::Result<StartupInfo<TestTypes>> {
-            Ok(StartupInfo {
+        async fn get_startup_info(&self) -> StartupInfo<TestTypes> {
+            StartupInfo {
                 known_node_with_stake: Vec::new(),
                 non_staked_node_count: 0,
-            })
+            }
         }
     }
 
