@@ -450,39 +450,67 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         .call()
         .await?
         ._0;
-    println!(
-        "ESP token balance before claim: {} for account: {}",
-        balance_before, claimer_address
-    );
+    println!("ESP token balance before claim: {balance_before}");
 
     let auth_root_inputs = [FixedBytes::default(); 7];
 
-    println!("Attempting to claim rewards...");
-    reward_claim_contract
-        .claimRewards(reward_data.balance, proof_sol.into(), auth_root_inputs)
+    println!("Attempting to claim with invalid proof");
+    let mut invalid_proof_sol = proof_sol.clone();
+    invalid_proof_sol.siblings[0].0[0] += invalid_proof_sol.siblings[0].0[0].wrapping_add(1);
+
+    let invalid_proof_result = reward_claim_contract
+        .claimRewards(
+            reward_data.balance,
+            invalid_proof_sol.into(),
+            auth_root_inputs,
+        )
+        .send()
+        .await;
+    assert!(invalid_proof_result.is_err(),);
+
+    println!("Attempting to claim with invalid balance");
+    let invalid_balance = reward_data.balance + U256::from(1);
+
+    let invalid_balance_result = reward_claim_contract
+        .claimRewards(invalid_balance, proof_sol.clone().into(), auth_root_inputs)
+        .send()
+        .await;
+    assert!(invalid_balance_result.is_err(),);
+
+    println!("Attempting to claim rewards with valid proof");
+    let claim_receipt = reward_claim_contract
+        .claimRewards(
+            reward_data.balance,
+            proof_sol.clone().into(),
+            auth_root_inputs,
+        )
         .send()
         .await?
         .get_receipt()
         .await?;
+    assert!(claim_receipt.status(), "Valid claim should succeed");
+    println!("Successful claim - Gas used: {}", claim_receipt.gas_used);
 
     let balance_after = esp_token_contract
         .balanceOf(claimer_address)
         .call()
         .await?
         ._0;
-    println!(
-        "ESP token balance after claim: {} for account: {}",
-        balance_after, claimer_address
+    println!("ESP token balance after claim: {balance_after}",);
+    assert_eq!(
+        balance_after,
+        balance_before + reward_data.balance,
+        "ESP token balance did not increase correctly"
     );
 
-    let expected_balance = balance_before + reward_data.balance;
-    if balance_after != expected_balance {
-        panic!(
-            "ESP token balance did not increase correctly. Expected: {}, Actual: {}, Reward \
-             amount: {}",
-            expected_balance, balance_after, reward_data.balance
-        );
-    }
+    println!("Attempting to double-claim rewards");
+    let double_claim_result = reward_claim_contract
+        .claimRewards(reward_data.balance, proof_sol.into(), auth_root_inputs)
+        .send()
+        .await;
+    assert!(double_claim_result.is_err(),);
+
+    println!("All reward claim tests passed successfully!");
 
     relay_server_handle.abort();
     drop(network);
