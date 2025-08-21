@@ -2246,6 +2246,7 @@ dependencies = [
  "hotshot",
  "hotshot-builder-api",
  "hotshot-builder-legacy",
+ "hotshot-builder-refactored",
  "hotshot-builder-shared",
  "hotshot-events-service",
  "hotshot-example-types",
