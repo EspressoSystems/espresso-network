@@ -7,7 +7,7 @@ license = "MIT"
 
 [dependencies]
 alloy = { workspace = true }
-anyhow = "1"
+anyhow = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
