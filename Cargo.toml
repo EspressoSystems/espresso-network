@@ -5,6 +5,7 @@ resolver = "2"
 
 members = [
     "alloy-compat",
+    "benchmark-stats",
     "client",
     "contracts/rust/adapter",
     "contracts/rust/deployer",
@@ -44,6 +45,7 @@ members = [
 # for the whole workspace by default.
 default-members = [
     "alloy-compat",
+    "benchmark-stats",
     "client",
     "contracts/rust/adapter",
     "contracts/rust/deployer",
