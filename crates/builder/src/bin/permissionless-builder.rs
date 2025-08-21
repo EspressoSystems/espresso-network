@@ -18,11 +18,7 @@ use vbs::version::StaticVersionType;
 struct NonPermissionedBuilderOptions {
     /// URL of hotshot events API running on Espresso Sequencer DA committee node
     /// The builder will subscribe to this server to receive hotshot events
-    #[clap(
-        long,
-        env = "ESPRESSO_SEQUENCER_URL",
-        default_value = "http://localhost:24000"
-    )]
+    #[clap(long, env = "ESPRESSO_SEQUENCER_URL")]
     sequencer_api_url: Url,
 
     /// Mnemonic phrase for builder account.
