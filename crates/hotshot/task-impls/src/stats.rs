@@ -311,6 +311,7 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                     .leader(*view)
                     .await?;
                 if leader == self.public_key {
+                    let now = OffsetDateTime::now_utc().unix_timestamp_nanos();
                     self.leader_entry(*view).builder_start = Some(now);
                 }
             },
@@ -319,6 +320,7 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
             },
             HotShotEvent::TransactionsRecv(_txns) => {
                 // TODO: Track transactions by time
+                // #3526 https://github.com/EspressoSystems/espresso-network/issues/3526
             },
             HotShotEvent::SendPayloadCommitmentAndMetadata(_, _, _, view, _) => {
                 self.leader_entry(*view).vid_disperse_send = Some(now);
