@@ -5,7 +5,8 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
+    num::NonZero,
     sync::{atomic::AtomicBool, Arc},
     time::Instant,
 };
@@ -13,9 +14,10 @@ use std::{
 use async_trait::async_trait;
 use chrono::Utc;
 use hotshot_task_impls::{
-    builder::BuilderClient, consensus::ConsensusTaskState, da::DaTaskState,
-    quorum_proposal::QuorumProposalTaskState, quorum_proposal_recv::QuorumProposalRecvTaskState,
-    quorum_vote::QuorumVoteTaskState, request::NetworkRequestState, rewind::RewindTaskState,
+    block_builder::BlockBuilderTaskState, builder::BuilderClient, consensus::ConsensusTaskState,
+    da::DaTaskState, quorum_proposal::QuorumProposalTaskState,
+    quorum_proposal_recv::QuorumProposalRecvTaskState, quorum_vote::QuorumVoteTaskState,
+    request::NetworkRequestState, rewind::RewindTaskState, stats::StatsTaskState,
     transactions::TransactionTaskState, upgrade::UpgradeTaskState, vid::VidTaskState,
     view_sync::ViewSyncTaskState,
 };
@@ -24,8 +26,10 @@ use hotshot_types::{
     traits::{
         consensus_api::ConsensusApi,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        signature_key::BuilderSignatureKey,
     },
 };
+use lru::LruCache;
 use tokio::spawn;
 
 use crate::{types::SystemContextHandle, Versions};
@@ -220,6 +224,31 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 
 #[async_trait]
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
+    for BlockBuilderTaskState<TYPES, V>
+{
+    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+        let (builder_key, builder_private_key) =
+            TYPES::BuilderSignatureKey::generated_from_seed_indexed([0; 32], handle.hotshot.id);
+        Self {
+            cur_view: handle.cur_view().await,
+            cur_epoch: handle.cur_epoch().await,
+            membership_coordinator: handle.hotshot.membership_coordinator.clone(),
+            upgrade_lock: handle.hotshot.upgrade_lock.clone(),
+            epoch_height: handle.epoch_height,
+            consensus: OuterConsensus::new(handle.hotshot.consensus()),
+            transactions: LruCache::new(NonZero::new(10000).unwrap()),
+            instance_state: handle.hotshot.instance_state(),
+            base_fee: 1,
+            public_key: handle.public_key().clone(),
+            builder_public_key: builder_key,
+            builder_private_key,
+            decided_not_seen_txns: HashSet::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
     for QuorumVoteTaskState<TYPES, I, V>
 {
     async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
@@ -338,6 +367,21 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             view_start_time: Instant::now(),
             first_epoch: None,
         }
+    }
+}
+
+#[async_trait]
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
+    for StatsTaskState<TYPES>
+{
+    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+        StatsTaskState::<TYPES>::new(
+            handle.cur_view().await,
+            handle.cur_epoch().await,
+            handle.public_key().clone(),
+            OuterConsensus::new(handle.hotshot.consensus()),
+            handle.hotshot.membership_coordinator.clone(),
+        )
     }
 }
 

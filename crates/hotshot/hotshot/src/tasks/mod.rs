@@ -21,12 +21,14 @@ use hotshot_task::task::Task;
 #[cfg(feature = "rewind")]
 use hotshot_task_impls::rewind::RewindTaskState;
 use hotshot_task_impls::{
+    block_builder::BlockBuilderTaskState,
     da::DaTaskState,
     events::HotShotEvent,
     network::{NetworkEventTaskState, NetworkMessageTaskState},
     request::NetworkRequestState,
     response::{run_response_task, NetworkResponseState},
-    transactions::TransactionTaskState,
+    stats::StatsTaskState,
+    // transactions::TransactionTaskState,
     upgrade::UpgradeTaskState,
     vid::VidTaskState,
     view_sync::ViewSyncTaskState,
@@ -231,7 +233,8 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, 
     handle.add_task(ViewSyncTaskState::<TYPES, V>::create_from(handle).await);
     handle.add_task(VidTaskState::<TYPES, I, V>::create_from(handle).await);
     handle.add_task(DaTaskState::<TYPES, I, V>::create_from(handle).await);
-    handle.add_task(TransactionTaskState::<TYPES, V>::create_from(handle).await);
+    // handle.add_task(TransactionTaskState::<TYPES, V>::create_from(handle).await);
+    handle.add_task(BlockBuilderTaskState::<TYPES, V>::create_from(handle).await);
 
     {
         let mut upgrade_certificate_lock = handle
@@ -267,6 +270,7 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, 
         handle.add_task(QuorumVoteTaskState::<TYPES, I, V>::create_from(handle).await);
         handle.add_task(QuorumProposalRecvTaskState::<TYPES, I, V>::create_from(handle).await);
         handle.add_task(ConsensusTaskState::<TYPES, I, V>::create_from(handle).await);
+        handle.add_task(StatsTaskState::<TYPES>::create_from(handle).await);
     }
     add_queue_len_task(handle);
     #[cfg(feature = "rewind")]
