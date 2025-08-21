@@ -2245,13 +2245,13 @@ dependencies = [
  "futures",
  "hotshot",
  "hotshot-builder-api",
- "hotshot-builder-core",
+ "hotshot-builder-legacy",
+ "hotshot-builder-shared",
  "hotshot-events-service",
  "hotshot-example-types",
  "hotshot-state-prover",
  "hotshot-types",
  "jf-signature 0.2.0",
- "marketplace-builder-shared",
  "portpicker",
  "rand 0.8.5",
  "sequencer",
@@ -3572,12 +3572,12 @@ dependencies = [
 
 [[package]]
 name = "darling"
-version = "0.21.1"
+version = "0.21.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6b136475da5ef7b6ac596c0e956e37bad51b85b987ff3d5e230e964936736b2"
+checksum = "08440b3dd222c3d0433e63e097463969485f112baff337dfdaca043a0d760570"
 dependencies = [
- "darling_core 0.21.1",
- "darling_macro 0.21.1",
+ "darling_core 0.21.2",
+ "darling_macro 0.21.2",
 ]
 
 [[package]]
@@ -3596,9 +3596,9 @@ dependencies = [
 
 [[package]]
 name = "darling_core"
-version = "0.21.1"
+version = "0.21.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b44ad32f92b75fb438b04b68547e521a548be8acc339a6dacc4a7121488f53e6"
+checksum = "d25b7912bc28a04ab1b7715a68ea03aaa15662b43a1a4b2c480531fd19f8bf7e"
 dependencies = [
  "fnv",
  "ident_case",
@@ -3621,11 +3621,11 @@ dependencies = [
 
 [[package]]
 name = "darling_macro"
-version = "0.21.1"
+version = "0.21.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b5be8a7a562d315a5b92a630c30cec6bcf663e6673f00fbb69cca66a6f521b9"
+checksum = "ce154b9bea7fb0c8e8326e62d00354000c36e79770ff21b8c84e3aa267d9d531"
 dependencies = [
- "darling_core 0.21.1",
+ "darling_core 0.21.2",
  "quote",
  "syn 2.0.104",
 ]
@@ -5583,7 +5583,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "hotshot-builder-core"
+name = "hotshot-builder-legacy"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -5599,13 +5599,13 @@ dependencies = [
  "futures",
  "hotshot",
  "hotshot-builder-api",
+ "hotshot-builder-shared",
  "hotshot-example-types",
  "hotshot-macros",
  "hotshot-task-impls",
  "hotshot-testing",
  "hotshot-types",
  "lru 0.12.5",
- "marketplace-builder-shared",
  "num_cpus",
  "portpicker",
  "serde",
@@ -5621,7 +5621,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "hotshot-builder-core-refactored"
+name = "hotshot-builder-refactored"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -5637,6 +5637,7 @@ dependencies = [
  "futures",
  "hotshot",
  "hotshot-builder-api",
+ "hotshot-builder-shared",
  "hotshot-example-types",
  "hotshot-macros",
  "hotshot-task-impls",
@@ -5644,7 +5645,6 @@ dependencies = [
  "hotshot-types",
  "jf-vid",
  "lru 0.12.5",
- "marketplace-builder-shared",
  "num_cpus",
  "portpicker",
  "serde",
@@ -5658,6 +5658,47 @@ dependencies = [
  "tracing-test 0.1.0",
  "url",
  "vbs",
+]
+
+[[package]]
+name = "hotshot-builder-shared"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-broadcast",
+ "async-lock 3.4.1",
+ "async-trait",
+ "bincode",
+ "chrono",
+ "committable",
+ "derive_more 2.0.1",
+ "either",
+ "futures",
+ "hex",
+ "hotshot",
+ "hotshot-builder-api",
+ "hotshot-events-service",
+ "hotshot-example-types",
+ "hotshot-task-impls",
+ "hotshot-testing",
+ "hotshot-types",
+ "jf-vid",
+ "nonempty-collections",
+ "portpicker",
+ "quick_cache",
+ "rand 0.8.5",
+ "serde",
+ "sha2 0.10.9",
+ "surf-disco",
+ "thiserror 1.0.69",
+ "tide-disco",
+ "tokio",
+ "tracing",
+ "tracing-subscriber 0.3.19",
+ "tracing-test 0.1.0",
+ "url",
+ "vbs",
+ "vec1",
 ]
 
 [[package]]
@@ -5717,6 +5758,7 @@ dependencies = [
 name = "hotshot-example-types"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "anyhow",
  "async-lock 3.4.1",
  "async-trait",
@@ -7926,47 +7968,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "marketplace-builder-shared"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-broadcast",
- "async-lock 3.4.1",
- "async-trait",
- "bincode",
- "chrono",
- "committable",
- "derive_more 2.0.1",
- "either",
- "futures",
- "hex",
- "hotshot",
- "hotshot-builder-api",
- "hotshot-events-service",
- "hotshot-example-types",
- "hotshot-task-impls",
- "hotshot-testing",
- "hotshot-types",
- "jf-vid",
- "nonempty-collections",
- "portpicker",
- "quick_cache",
- "rand 0.8.5",
- "serde",
- "sha2 0.10.9",
- "surf-disco",
- "thiserror 1.0.69",
- "tide-disco",
- "tokio",
- "tracing",
- "tracing-subscriber 0.3.19",
- "tracing-test 0.1.0",
- "url",
- "vbs",
- "vec1",
-]
-
-[[package]]
 name = "matchers"
 version = "0.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9077,7 +9078,7 @@ version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35f11c16698ff961f06499508442ddc83fd29aa8661fe5558334b7f9676e7c80"
 dependencies = [
- "darling 0.21.1",
+ "darling 0.21.2",
  "proc-macro2",
  "quote",
  "syn 2.0.104",
@@ -10344,6 +10345,9 @@ name = "rustc-hash"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "357703d41365b4b27c590e3ed91eabb1b663f07c4c084095e60cbed4362dff0d"
+dependencies = [
+ "rand 0.8.5",
+]
 
 [[package]]
 name = "rustc-hex"
@@ -10777,7 +10781,7 @@ dependencies = [
  "futures",
  "generic-tests",
  "hotshot",
- "hotshot-builder-core-refactored",
+ "hotshot-builder-refactored",
  "hotshot-contract-adapter",
  "hotshot-events-service",
  "hotshot-example-types",

@@ -9,6 +9,10 @@ edition = { workspace = true }
 [lib]
 doctest = false
 
+[[bin]]
+name = "eval-domain"
+path = "src/bin/eval_domain.rs"
+
 [dependencies]
 alloy = { workspace = true }
 anyhow = { workspace = true }
@@ -32,10 +36,6 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
-
-[[bin]]
-name = "eval-domain"
-path = "src/bin/eval_domain.rs"
 
 [lints]
 workspace = true
