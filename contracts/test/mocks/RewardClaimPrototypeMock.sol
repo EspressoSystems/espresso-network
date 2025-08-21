@@ -25,7 +25,6 @@ contract RewardClaimPrototypeMock {
         uint256 amount,
         RewardMerkleTreeVerifier.AccruedRewardsProof calldata proof
     ) external pure returns (bool) {
-        return
-            RewardMerkleTreeVerifier.computeAuthRootCommitment(account, amount, proof) == commitment;
+        return RewardMerkleTreeVerifier.authRootInput(account, amount, proof) == commitment;
     }
 }

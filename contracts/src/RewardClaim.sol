@@ -55,7 +55,7 @@ contract RewardClaim is Initializable, OwnableUpgradeable, UUPSUpgradeable {
         require(claimedRewards[msg.sender] < accruedReward, AlreadyClaimed());
 
         bytes32 rewardCommitment =
-            RewardMerkleTreeVerifier.computeAuthRootCommitment(msg.sender, accruedReward, proof);
+            RewardMerkleTreeVerifier.authRootInput(msg.sender, accruedReward, proof);
         bytes32 authRoot = keccak256(
             abi.encodePacked(
                 rewardCommitment,

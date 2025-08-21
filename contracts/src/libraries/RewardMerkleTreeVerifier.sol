@@ -42,16 +42,16 @@ library RewardMerkleTreeVerifier {
 
     /**
      * @dev Compute reward commitment from a key-value pair and proof
-     * @param key The key being proven - Ethereum address
-     * @param value The value associated with the key - reward amount
+     * @param key The key to prove - Ethereum address
+     * @param value The value to prove - accrued rewards amount
      * @param proof The membership proof containing sibling hashes and numLeaves
      * @return The computed reward commitment
      */
-    function computeAuthRootCommitment(
-        address key,
-        uint256 value,
-        AccruedRewardsProof calldata proof
-    ) internal pure returns (bytes32) {
+    function authRootInput(address key, uint256 value, AccruedRewardsProof calldata proof)
+        internal
+        pure
+        returns (bytes32)
+    {
         // NOTE: using memory instead of calldata for proof or siblings
         //       increases gas cost by 20%
         // NOTE: *not* defining siblings here increases gas cost by 20%
