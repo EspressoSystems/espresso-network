@@ -185,9 +185,7 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                 self.replica_entry(proposal.data.view_number())
                     .proposal_recv = Some(now);
             },
-            HotShotEvent::QuorumVoteRecv(_vote) => {
-                // self.leader_entry(vote.view_number()).vote_recv = Some(now);
-            },
+            HotShotEvent::QuorumVoteRecv(_vote) => {},
             HotShotEvent::TimeoutVoteRecv(_vote) => {},
             HotShotEvent::TimeoutVoteSend(vote) => {
                 self.replica_entry(vote.view_number()).timeout_vote_send = Some(now);
@@ -311,7 +309,6 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                     .leader(*view)
                     .await?;
                 if leader == self.public_key {
-                    let now = OffsetDateTime::now_utc().unix_timestamp_nanos();
                     self.leader_entry(*view).builder_start = Some(now);
                 }
             },
