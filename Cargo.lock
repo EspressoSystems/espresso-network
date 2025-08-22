@@ -4173,6 +4173,7 @@ dependencies = [
  "anyhow",
  "ark-ec",
  "ark-serialize 0.4.2",
+ "ark-std 0.4.0",
  "async-broadcast",
  "async-lock 3.4.1",
  "async-trait",

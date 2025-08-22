@@ -1,7 +1,6 @@
 use std::{collections::{HashMap}, sync::Arc};
 
 use alloy::{primitives::{Address, Log, U256}, transports::{RpcError, TransportErrorKind}};
-use ark_serialize::CanonicalSerialize;
 use async_lock::{Mutex, RwLock};
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use derive_more::derive::{From, Into};
@@ -14,6 +13,7 @@ use hotshot_types::{
     data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, PeerConfig
 };
 use itertools::Itertools;
+use jf_utils::to_bytes;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinHandle;
@@ -57,14 +57,15 @@ pub(crate) fn to_fixed_bytes(value: U256) -> [u8; std::mem::size_of::<U256>()] {
 
 impl<KEY: SignatureKey> Committable for Validator<KEY> {
     fn commit(&self) -> Commitment<Self> {
-        let mut schnorr_key_bytes = vec![];
-        self.state_ver_key.serialize_with_mode(&mut schnorr_key_bytes, ark_serialize::Compress::Yes).unwrap();
+        // let mut schnorr_key_bytes = vec![];
+        // self.state_ver_key.serialize_with_mode(&mut schnorr_key_bytes, ark_serialize::Compress::Yes).unwrap();
 
         let mut builder = RawCommitmentBuilder::new(&Self::tag())
             .fixed_size_field("account", &self.account)
             .var_size_field("stake_table_key", self.stake_table_key.to_bytes().as_slice())
-            .var_size_field("state_ver_key", &schnorr_key_bytes)
+            .var_size_field("state_ver_key", &to_bytes!(&self.state_ver_key).unwrap())
             .fixed_size_field("stake", &to_fixed_bytes(self.stake))
+            .constant_str("commission")
             .u16(self.commission);
 
         builder = builder.constant_str("delegators");

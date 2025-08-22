@@ -20,6 +20,7 @@ alloy-compat = { path = "../alloy-compat" }
 anyhow = { workspace = true }
 ark-ec = { workspace = true }
 ark-serialize = { workspace = true }
+ark-std = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
