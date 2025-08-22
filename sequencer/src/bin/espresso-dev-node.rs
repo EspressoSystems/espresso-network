@@ -1029,7 +1029,7 @@ mod tests {
 
         let mut tx_result = api_client
             .get::<TransactionQueryData<SeqTypes>>(&format!(
-                "availability/transaction/hash/{tx_hash}/proof",
+                "availability/transaction/hash/{tx_hash}",
             ))
             .send()
             .await;
@@ -1039,7 +1039,7 @@ mod tests {
 
             tx_result = api_client
                 .get::<TransactionQueryData<SeqTypes>>(&format!(
-                    "availability/transaction/hash/{tx_hash}/proof"
+                    "availability/transaction/hash/{tx_hash}"
                 ))
                 .send()
                 .await;
@@ -1078,7 +1078,7 @@ mod tests {
 
         let mut tx_result = api_client
             .get::<TransactionQueryData<SeqTypes>>(&format!(
-                "availability/transaction/hash/{tx_hash}/proof",
+                "availability/transaction/hash/{tx_hash}",
             ))
             .send()
             .await;
@@ -1088,7 +1088,7 @@ mod tests {
 
             tx_result = api_client
                 .get::<TransactionQueryData<SeqTypes>>(&format!(
-                    "availability/transaction/hash/{tx_hash}/proof"
+                    "availability/transaction/hash/{tx_hash}"
                 ))
                 .send()
                 .await;
@@ -1117,7 +1117,7 @@ mod tests {
 
             let mut result = api_client
                 .get::<TransactionQueryData<SeqTypes>>(&format!(
-                    "availability/transaction/hash/{tx_hash}/proof",
+                    "availability/transaction/hash/{tx_hash}",
                 ))
                 .send()
                 .await;
@@ -1126,7 +1126,7 @@ mod tests {
 
                 result = api_client
                     .get::<TransactionQueryData<SeqTypes>>(&format!(
-                        "availability/transaction/hash/{tx_hash}/proof"
+                        "availability/transaction/hash/{tx_hash}"
                     ))
                     .send()
                     .await;

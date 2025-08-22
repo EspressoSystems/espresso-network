@@ -1043,7 +1043,7 @@ mod test {
             // Check that looking up each transaction in the block various ways returns the correct
             // transaction.
             for (j, txn_from_block) in block.enumerate() {
-                let txn: TransactionWithProofQueryData<MockTypes> = client
+                let txn: TransactionQueryData<MockTypes> = client
                     .get(&format!("transaction/{}/{}", i, j.position))
                     .send()
                     .await
@@ -1060,7 +1060,7 @@ mod test {
                 assert_eq!(
                     txn.hash(),
                     client
-                        .get::<TransactionWithProofQueryData<MockTypes>>(&format!(
+                        .get::<TransactionQueryData<MockTypes>>(&format!(
                             "transaction/hash/{}",
                             txn.hash()
                         ))
@@ -1074,7 +1074,7 @@ mod test {
                 assert_eq!(
                     txn.hash(),
                     client
-                        .get::<TransactionQueryData<MockTypes>>(&format!(
+                        .get::<TransactionWithProofQueryData<MockTypes>>(&format!(
                             "transaction/{}/{}/proof",
                             i, j.position
                         ))
@@ -1086,7 +1086,7 @@ mod test {
                 assert_eq!(
                     txn.hash(),
                     client
-                        .get::<TransactionQueryData<MockTypes>>(&format!(
+                        .get::<TransactionWithProofQueryData<MockTypes>>(&format!(
                             "transaction/hash/{}/proof",
                             txn.hash()
                         ))
@@ -1406,6 +1406,32 @@ mod test {
                     client
                         .get::<TransactionQueryData<MockTypes>>(&format!(
                             "transaction/hash/{}",
+                            txn.hash()
+                        ))
+                        .send()
+                        .await
+                        .unwrap()
+                        .hash()
+                );
+
+                assert_eq!(
+                    txn.hash(),
+                    client
+                        .get::<TransactionWithProofQueryData<MockTypes>>(&format!(
+                            "transaction/{}/{}/proof",
+                            i, j.position
+                        ))
+                        .send()
+                        .await
+                        .unwrap()
+                        .hash()
+                );
+
+                assert_eq!(
+                    txn.hash(),
+                    client
+                        .get::<TransactionWithProofQueryData<MockTypes>>(&format!(
+                            "transaction/hash/{}/proof",
                             txn.hash()
                         ))
                         .send()
