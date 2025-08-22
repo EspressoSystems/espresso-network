@@ -97,6 +97,7 @@ alloy = { version = "0.13", default-features = false, features = [
     "provider-ws",
     "providers",
     "reqwest",
+    "rand",
     "rpc",
     "rpc-client",
     "rpc-types",
