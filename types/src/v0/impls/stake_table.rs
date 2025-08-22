@@ -2198,7 +2198,7 @@ impl Membership<SeqTypes> for EpochCommittees {
 
         // Otherwise, we try to fetch the epoch root leaf
         let previous_epoch = match epoch.checked_sub(1) {
-            Some(epoch) => epoch,
+            Some(epoch) => EpochNumber::new(epoch),
             None => {
                 return membership_reader
                     .randomized_committees
@@ -2208,11 +2208,11 @@ impl Membership<SeqTypes> for EpochCommittees {
             },
         };
 
-        let stake_table = membership_reader.stake_table(Some(epoch)).clone();
-        let success_threshold = membership_reader.success_threshold(Some(epoch));
+        let stake_table = membership_reader.stake_table(Some(previous_epoch)).clone();
+        let success_threshold = membership_reader.success_threshold(Some(previous_epoch));
 
         let block_height =
-            transition_block_for_epoch(previous_epoch, membership_reader.epoch_height);
+            transition_block_for_epoch(*previous_epoch, membership_reader.epoch_height);
 
         drop(membership_reader);
 
