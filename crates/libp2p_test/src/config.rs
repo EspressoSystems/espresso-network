@@ -51,6 +51,9 @@ pub enum Libp2pTest {
     RequestResponse {
         transport_protocol: TransportProtocol,
     },
+    Gossipsub {
+        transport_protocol: TransportProtocol,
+    },
 }
 
 impl Libp2pTest {
@@ -59,6 +62,7 @@ impl Libp2pTest {
         match self {
             Libp2pTest::Ping { transport_protocol } => transport_protocol,
             Libp2pTest::RequestResponse { transport_protocol } => transport_protocol,
+            Libp2pTest::Gossipsub { transport_protocol } => transport_protocol,
         }
     }
 }

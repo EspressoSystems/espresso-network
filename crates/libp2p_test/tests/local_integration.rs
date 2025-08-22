@@ -60,6 +60,22 @@ async fn local_quic_rr_test() {
     .await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn local_tcp_gossip_test() {
+    local_sender_and_receivers(Some(Libp2pTest::Gossipsub {
+        transport_protocol: TransportProtocol::default(),
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn local_quic_gossip_test() {
+    local_sender_and_receivers(Some(Libp2pTest::Gossipsub {
+        transport_protocol: TransportProtocol::Quic,
+    }))
+    .await;
+}
+
 async fn local_sender_and_receivers(maybe_libp2p_test: Option<Libp2pTest>) {
     tracing_subscriber::fmt::init();
     let base_port = 9000;

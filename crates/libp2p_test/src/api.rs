@@ -1,8 +1,10 @@
 use std::{
     collections::{HashMap, HashSet},
+    hash::{DefaultHasher, Hash, Hasher},
+    io,
     num::NonZeroUsize,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use anyhow::Result;
@@ -15,6 +17,8 @@ use hotshot_types::{signature_key::BLSPrivKey, traits::node_implementation::Node
 use libp2p::{
     core::upgrade::Version::V1Lazy,
     futures::StreamExt,
+    gossipsub,
+    gossipsub::{Behaviour as GossipsubBehaviour, Topic},
     noise, ping,
     ping::Behaviour as PingBehaviour,
     request_response,
@@ -25,7 +29,7 @@ use libp2p::{
 use libp2p_identity::{ed25519, ed25519::SecretKey, Keypair};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use tracing::{error, info};
 
 use crate::config::{AppConfig, Libp2pTest, TransportProtocol};
@@ -41,6 +45,9 @@ pub async fn run_sender<T: NodeType>(config: AppConfig) -> Result<()> {
         Some(Libp2pTest::RequestResponse {
             transport_protocol: _,
         }) => run_rr_sender(config).await,
+        Some(Libp2pTest::Gossipsub {
+            transport_protocol: _,
+        }) => run_gossipsub_sender(config).await,
         _ => run_libp2p_sender::<T>(config).await,
     }
 }
@@ -54,6 +61,9 @@ pub async fn run_receiver<T: NodeType>(config: AppConfig) -> Result<()> {
         Some(Libp2pTest::RequestResponse {
             transport_protocol: _,
         }) => run_rr_receiver(config).await,
+        Some(Libp2pTest::Gossipsub {
+            transport_protocol: _,
+        }) => run_gossipsub_receiver(config).await,
         _ => run_libp2p_receiver::<T>(config).await,
     }
 }
@@ -395,3 +405,185 @@ pub async fn run_rr_receiver(config: AppConfig) -> Result<()> {
 struct TestRequest(String);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TestResponse(String);
+
+pub async fn spawn_gossipsub_swarm<H: gossipsub::Hasher>(
+    config: &AppConfig,
+    topic: Topic<H>,
+) -> Result<Swarm<GossipsubBehaviour>> {
+    let libp2p_keypair = keypair_from_priv_key(&config.private_key.clone().try_into()?)?;
+    let mut swarm: Swarm<GossipsubBehaviour> = match config.libp2p_test {
+        Some(Libp2pTest::Gossipsub {
+            transport_protocol: TransportProtocol::Tcp { auth: _, mplex: _ },
+        }) => {
+            libp2p::SwarmBuilder::with_existing_identity(libp2p_keypair)
+                .with_tokio()
+                .with_tcp(
+                    tcp::Config::default(),
+                    noise::Config::new,
+                    yamux::Config::default,
+                )?
+                .with_dns()?
+                .with_behaviour(|key| {
+                    // To content-address message, we can take the hash of message and use it as an ID.
+                    let message_id_fn = |message: &gossipsub::Message| {
+                        let mut s = DefaultHasher::new();
+                        message.data.hash(&mut s);
+                        gossipsub::MessageId::from(s.finish().to_string())
+                    };
+
+                    // Set a custom gossipsub configuration
+                    let gossipsub_config = gossipsub::ConfigBuilder::default()
+                        .heartbeat_interval(Duration::from_secs(10)) // This is set to aid debugging by not cluttering the log space
+                        .validation_mode(gossipsub::ValidationMode::Strict) // This sets the kind of message validation. The default is Strict (enforce message
+                        // signing)
+                        .message_id_fn(message_id_fn) // content-address messages. No two messages of the same content will be propagated.
+                        .build()
+                        .map_err(io::Error::other)?; // Temporary hack because `build` does not return a proper `std::error::Error`.
+
+                    // build a gossipsub network behaviour
+                    let gossipsub = gossipsub::Behaviour::new(
+                        gossipsub::MessageAuthenticity::Signed(key.clone()),
+                        gossipsub_config,
+                    )?;
+                    Ok(gossipsub)
+                })?
+                .with_swarm_config(|cfg| {
+                    cfg.with_idle_connection_timeout(Duration::from_secs(u64::MAX))
+                        .with_substream_upgrade_protocol_override(V1Lazy)
+                })
+                .build()
+        },
+        Some(Libp2pTest::Gossipsub {
+            transport_protocol: TransportProtocol::Quic,
+        }) => {
+            libp2p::SwarmBuilder::with_existing_identity(libp2p_keypair)
+                .with_tokio()
+                .with_quic()
+                .with_dns()?
+                .with_behaviour(|key| {
+                    // To content-address message, we can take the hash of message and use it as an ID.
+                    let message_id_fn = |message: &gossipsub::Message| {
+                        let mut s = DefaultHasher::new();
+                        message.data.hash(&mut s);
+                        gossipsub::MessageId::from(s.finish().to_string())
+                    };
+
+                    // Set a custom gossipsub configuration
+                    let gossipsub_config = gossipsub::ConfigBuilder::default()
+                        .heartbeat_interval(Duration::from_secs(10)) // This is set to aid debugging by not cluttering the log space
+                        .validation_mode(gossipsub::ValidationMode::Strict) // This sets the kind of message validation. The default is Strict (enforce message
+                        // signing)
+                        .message_id_fn(message_id_fn) // content-address messages. No two messages of the same content will be propagated.
+                        .build()
+                        .map_err(io::Error::other)?; // Temporary hack because `build` does not return a proper `std::error::Error`.
+
+                    // build a gossipsub network behaviour
+                    let gossipsub = gossipsub::Behaviour::new(
+                        gossipsub::MessageAuthenticity::Signed(key.clone()),
+                        gossipsub_config,
+                    )?;
+                    Ok(gossipsub)
+                })?
+                .with_swarm_config(|cfg| {
+                    cfg.with_idle_connection_timeout(Duration::from_secs(u64::MAX))
+                        .with_substream_upgrade_protocol_override(V1Lazy)
+                })
+                .build()
+        },
+        _ => return Err(anyhow::anyhow!("No transport protocol specified")),
+    };
+    let _ = swarm.listen_on(config.listen.clone())?;
+    swarm.behaviour_mut().subscribe(&topic)?;
+    Ok(swarm)
+}
+
+pub async fn run_gossipsub_sender(config: AppConfig) -> Result<()> {
+    let topic = gossipsub::IdentTopic::new("test-topic");
+    let mut swarm = spawn_gossipsub_swarm(&config, topic.clone()).await?;
+    let mut now = Instant::now();
+    loop {
+        if now.elapsed() > Duration::from_secs(1) {
+            now = Instant::now();
+            if swarm.behaviour().all_peers().collect::<Vec<_>>().len() < config.peers.len() {
+                info!("Adding peers");
+                for (peer_id, _) in config.peers.iter() {
+                    swarm.behaviour_mut().add_explicit_peer(peer_id);
+                }
+            } else {
+                let timestamp = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?;
+                let serialized_timestamp = timestamp.as_micros().to_string().as_bytes().to_vec();
+                info!(
+                    "Sending message to topic {}: {}",
+                    topic.to_string(),
+                    timestamp.as_micros().to_string()
+                );
+                let _ = swarm
+                    .behaviour_mut()
+                    .publish(topic.clone(), serialized_timestamp);
+            }
+        }
+        match tokio::time::timeout(Duration::from_secs(1), swarm.select_next_some()).await {
+            Ok(SwarmEvent::Behaviour(gossipsub::Event::Message {
+                propagation_source: _,
+                message_id: _,
+                message,
+            })) => {
+                let data = message.data;
+                let timestamp = String::from_utf8(data)?.parse::<u128>()?;
+                let elapsed = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)?
+                    .as_micros()
+                    - timestamp;
+                info!(
+                    "Message received in {}ms, my address is {}",
+                    elapsed as f64 / 1000f64,
+                    config.listen
+                );
+            },
+            Ok(event) => {
+                info!("Received swarm event: {:?}", event);
+            },
+            Err(_) => {},
+        }
+    }
+}
+
+pub async fn run_gossipsub_receiver(config: AppConfig) -> Result<()> {
+    let topic = gossipsub::IdentTopic::new("test-topic");
+    let mut swarm = spawn_gossipsub_swarm(&config, topic.clone()).await?;
+    let mut now = Instant::now();
+    loop {
+        if now.elapsed() > Duration::from_secs(1)
+            && swarm.behaviour().all_peers().collect::<Vec<_>>().len() < config.peers.len()
+        {
+            now = Instant::now();
+            info!("Adding peers");
+            for (peer_id, _) in config.peers.iter() {
+                swarm.behaviour_mut().add_explicit_peer(peer_id);
+            }
+        }
+        match timeout(Duration::from_secs(1), swarm.select_next_some()).await {
+            Ok(SwarmEvent::Behaviour(gossipsub::Event::Message {
+                propagation_source: _,
+                message_id: _,
+                message,
+            })) => {
+                let data = message.data;
+                let timestamp = String::from_utf8(data)?.parse::<u128>()?;
+                let elapsed = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)?
+                    .as_micros()
+                    - timestamp;
+                info!(
+                    "Message received in {}ms, my address is {}",
+                    elapsed as f64 / 1000f64,
+                    config.listen
+                );
+            },
+            Ok(event) => {
+                info!("Received swarm event: {:?}", event);
+            },
+            Err(_) => {},
+        }
+    }
+}
