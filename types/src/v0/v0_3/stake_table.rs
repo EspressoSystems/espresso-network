@@ -57,9 +57,6 @@ pub(crate) fn to_fixed_bytes(value: U256) -> [u8; std::mem::size_of::<U256>()] {
 
 impl<KEY: SignatureKey> Committable for Validator<KEY> {
     fn commit(&self) -> Commitment<Self> {
-        // let mut schnorr_key_bytes = vec![];
-        // self.state_ver_key.serialize_with_mode(&mut schnorr_key_bytes, ark_serialize::Compress::Yes).unwrap();
-
         let mut builder = RawCommitmentBuilder::new(&Self::tag())
             .fixed_size_field("account", &self.account)
             .var_size_field("stake_table_key", self.stake_table_key.to_bytes().as_slice())
