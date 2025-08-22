@@ -15,7 +15,7 @@ use libp2p::{
 };
 use libp2p_identity::PeerId;
 use libp2p_swarm_derive::NetworkBehaviour;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use super::{
     behaviours::dht::store::{
@@ -110,8 +110,8 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> NetworkDef<K, D> {
 
     /// Unsubscribe from a given topic
     pub fn unsubscribe_gossip(&mut self, t: &str) {
-        if let Err(e) = self.gossipsub.unsubscribe(&IdentTopic::new(t)) {
-            error!("Failed to unsubscribe from topic {:?}. Error: {:?}", t, e);
+        if !self.gossipsub.unsubscribe(&IdentTopic::new(t)) {
+            info!("We were not subscribed to topic {:?}.", t);
         }
     }
 }
