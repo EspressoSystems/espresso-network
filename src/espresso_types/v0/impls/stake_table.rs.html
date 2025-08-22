@@ -2252,7 +2252,7 @@
 <a href=#2252 id=2252 data-nosnippet>2252</a>
 <a href=#2253 id=2253 data-nosnippet>2253</a>        <span class="comment">// Otherwise, we try to fetch the epoch root leaf
 <a href=#2254 id=2254 data-nosnippet>2254</a>        </span><span class="kw">let </span>previous_epoch = <span class="kw">match </span>epoch.checked_sub(<span class="number">1</span>) {
-<a href=#2255 id=2255 data-nosnippet>2255</a>            <span class="prelude-val">Some</span>(epoch) =&gt; epoch,
+<a href=#2255 id=2255 data-nosnippet>2255</a>            <span class="prelude-val">Some</span>(epoch) =&gt; EpochNumber::new(epoch),
 <a href=#2256 id=2256 data-nosnippet>2256</a>            <span class="prelude-val">None </span>=&gt; {
 <a href=#2257 id=2257 data-nosnippet>2257</a>                <span class="kw">return </span>membership_reader
 <a href=#2258 id=2258 data-nosnippet>2258</a>                    .randomized_committees
@@ -2262,11 +2262,11 @@
 <a href=#2262 id=2262 data-nosnippet>2262</a>            },
 <a href=#2263 id=2263 data-nosnippet>2263</a>        };
 <a href=#2264 id=2264 data-nosnippet>2264</a>
-<a href=#2265 id=2265 data-nosnippet>2265</a>        <span class="kw">let </span>stake_table = membership_reader.stake_table(<span class="prelude-val">Some</span>(epoch)).clone();
-<a href=#2266 id=2266 data-nosnippet>2266</a>        <span class="kw">let </span>success_threshold = membership_reader.success_threshold(<span class="prelude-val">Some</span>(epoch));
+<a href=#2265 id=2265 data-nosnippet>2265</a>        <span class="kw">let </span>stake_table = membership_reader.stake_table(<span class="prelude-val">Some</span>(previous_epoch)).clone();
+<a href=#2266 id=2266 data-nosnippet>2266</a>        <span class="kw">let </span>success_threshold = membership_reader.success_threshold(<span class="prelude-val">Some</span>(previous_epoch));
 <a href=#2267 id=2267 data-nosnippet>2267</a>
 <a href=#2268 id=2268 data-nosnippet>2268</a>        <span class="kw">let </span>block_height =
-<a href=#2269 id=2269 data-nosnippet>2269</a>            transition_block_for_epoch(previous_epoch, membership_reader.epoch_height);
+<a href=#2269 id=2269 data-nosnippet>2269</a>            transition_block_for_epoch(<span class="kw-2">*</span>previous_epoch, membership_reader.epoch_height);
 <a href=#2270 id=2270 data-nosnippet>2270</a>
 <a href=#2271 id=2271 data-nosnippet>2271</a>        drop(membership_reader);
 <a href=#2272 id=2272 data-nosnippet>2272</a>
