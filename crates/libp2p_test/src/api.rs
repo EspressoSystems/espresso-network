@@ -23,7 +23,7 @@ use libp2p::{
     ping::Behaviour as PingBehaviour,
     request_response,
     request_response::{cbor::Behaviour as RrBehaviour, ProtocolSupport},
-    swarm::SwarmEvent,
+    swarm::{dial_opts::DialOpts, SwarmEvent},
     tcp, yamux, StreamProtocol, Swarm,
 };
 use libp2p_identity::{ed25519, ed25519::SecretKey, Keypair};
@@ -506,8 +506,12 @@ pub async fn run_gossipsub_sender(config: AppConfig) -> Result<()> {
             now = Instant::now();
             if swarm.behaviour().all_peers().collect::<Vec<_>>().len() < config.peers.len() {
                 info!("Adding peers");
-                for (peer_id, _) in config.peers.iter() {
-                    swarm.behaviour_mut().add_explicit_peer(peer_id);
+                for (peer_id, addr) in config.peers.iter() {
+                    let _ = swarm.dial(
+                        DialOpts::peer_id(*peer_id)
+                            .addresses(vec![addr.clone()])
+                            .build(),
+                    );
                 }
             } else {
                 let timestamp = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?;
@@ -558,8 +562,12 @@ pub async fn run_gossipsub_receiver(config: AppConfig) -> Result<()> {
         {
             now = Instant::now();
             info!("Adding peers");
-            for (peer_id, _) in config.peers.iter() {
-                swarm.behaviour_mut().add_explicit_peer(peer_id);
+            for (peer_id, addr) in config.peers.iter() {
+                let _ = swarm.dial(
+                    DialOpts::peer_id(*peer_id)
+                        .addresses(vec![addr.clone()])
+                        .build(),
+                );
             }
         }
         match timeout(Duration::from_secs(1), swarm.select_next_some()).await {
