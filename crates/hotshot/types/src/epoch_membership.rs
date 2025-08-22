@@ -6,6 +6,7 @@ use std::{
 use alloy::primitives::U256;
 use async_broadcast::{broadcast, InactiveReceiver, Sender};
 use async_lock::{Mutex, RwLock};
+use committable::Commitment;
 use hotshot_utils::{
     anytrace::{self, Error, Level, Result, Wrap, DEFAULT_LOG_LEVEL},
     ensure, error, line_info, log, warn,
@@ -45,7 +46,7 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     /// Any in progress attempts at catching up are stored in this map
     /// Any new callers wantin an `EpochMembership` will await on the signal
     /// alerting them the membership is ready.  The first caller for an epoch will
-    /// wait for the actual catchup and allert future callers when it's done
+    /// wait for the actual catchup and alert future callers when it's done
     catchup_map: Arc<Mutex<EpochMap<TYPES>>>,
 
     drb_calculation_map: Arc<Mutex<DrbMap<TYPES>>>,
@@ -746,5 +747,14 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
                 .await
                 .add_drb_result(epoch, drb_result);
         }
+    }
+    pub async fn stake_table_hash(
+        &self,
+    ) -> Option<Commitment<<TYPES::Membership as Membership<TYPES>>::StakeTableHash>> {
+        self.coordinator
+            .membership
+            .read()
+            .await
+            .stake_table_hash(self.epoch?)
     }
 }
