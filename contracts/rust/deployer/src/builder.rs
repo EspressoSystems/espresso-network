@@ -284,11 +284,12 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 let epoch_start_block = self.epoch_start_block.unwrap();
                 let rpc_url = self.rpc_url.clone();
 
-                // TEST-ONLY: if this config is not yet set, we use a reasonable default value
+                // TEST-ONLY: if this config is not yet set, we use u64::MAX
                 // to avoid contract complaining about invalid zero-valued blocks_per_epoch.
                 // This value will allow tests to proceed with realistic epoch behavior.
+                // TODO: remove this once we have a proper way to set blocks_per_epoch
                 if use_mock && blocks_per_epoch == 0 {
-                    blocks_per_epoch = 10;
+                    blocks_per_epoch = u64::MAX;
                 }
                 tracing::info!(%blocks_per_epoch, ?dry_run, ?use_multisig, "Upgrading LightClientV2 with ");
                 if use_multisig {
