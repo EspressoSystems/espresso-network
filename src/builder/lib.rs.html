@@ -287,7 +287,7 @@
 <a href=#287 id=287 data-nosnippet>287</a>        }
 <a href=#288 id=288 data-nosnippet>288</a>        <span class="comment">// enable hotshot event streaming
 <a href=#289 id=289 data-nosnippet>289</a>        </span><span class="kw">pub fn </span>enable_hotshot_node_event_streaming&lt;P: SequencerPersistence, V: Versions&gt;(
-<a href=#290 id=290 data-nosnippet>290</a>            hotshot_events_api_url: Url,
+<a href=#290 id=290 data-nosnippet>290</a>            sequencer_api_url: Url,
 <a href=#291 id=291 data-nosnippet>291</a>            known_nodes_with_stake: Vec&lt;PeerConfig&lt;SeqTypes&gt;&gt;,
 <a href=#292 id=292 data-nosnippet>292</a>            num_non_staking_nodes: usize,
 <a href=#293 id=293 data-nosnippet>293</a>            hotshot_context_handle: Arc&lt;Consensus&lt;network::Memory, P, V&gt;&gt;,
@@ -299,7 +299,7 @@
 <a href=#299 id=299 data-nosnippet>299</a>            )));
 <a href=#300 id=300 data-nosnippet>300</a>
 <a href=#301 id=301 data-nosnippet>301</a>            <span class="comment">// serve the hotshot event streaming api with events_streamer state
-<a href=#302 id=302 data-nosnippet>302</a>            </span><span class="self">Self</span>::run_hotshot_event_streaming_api(hotshot_events_api_url, events_streamer.clone());
+<a href=#302 id=302 data-nosnippet>302</a>            </span><span class="self">Self</span>::run_hotshot_event_streaming_api(sequencer_api_url, events_streamer.clone());
 <a href=#303 id=303 data-nosnippet>303</a>
 <a href=#304 id=304 data-nosnippet>304</a>            <span class="comment">// send the events to the event streaming state
 <a href=#305 id=305 data-nosnippet>305</a>            </span>tokio::spawn({
