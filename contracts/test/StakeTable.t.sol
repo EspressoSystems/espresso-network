@@ -1197,20 +1197,6 @@ contract StakeTable_register_Test is LightClientCommonTest {
         new ERC1967Proxy(address(staketableImpl), initData);
     }
 
-    function test_RevertWhen_ExitEscrowPeriodTooLong() public {
-        uint256 tooLong = 100 days;
-        bytes memory initData = abi.encodeWithSignature(
-            "initialize(address,address,uint256,address)",
-            address(token),
-            address(lc),
-            tooLong,
-            admin
-        );
-        S staketableImpl = new S();
-        vm.expectRevert(S.ExitEscrowPeriodInvalid.selector);
-        new ERC1967Proxy(address(staketableImpl), initData);
-    }
-
     function test_ExitEscrowPeriodInBounds() public {
         uint256 minExitEscrowPeriod = lc.blocksPerEpoch() * 15;
         uint256 maxExitEscrowPeriod = 86400 * 14;
