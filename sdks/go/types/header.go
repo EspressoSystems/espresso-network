@@ -70,6 +70,9 @@ type BuilderCommitment = common_types.BuilderCommitment
 
 var NewU256 = common_types.NewU256
 
+var NewBlockPayload = common_types.NewBlockPayload
+var UnmarshalConsensusMessage = common_types.UnmarshalConsensusMessage
+
 type HeaderInterface interface {
 	Commit() common_types.Commitment
 	Version() common_types.Version
