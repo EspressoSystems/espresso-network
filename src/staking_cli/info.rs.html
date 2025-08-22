@@ -19,7 +19,7 @@
 <a href=#19 id=19 data-nosnippet>19</a>    l1_block_number: u64,
 <a href=#20 id=20 data-nosnippet>20</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Validator&lt;BLSPubKey&gt;&gt;&gt; {
 <a href=#21 id=21 data-nosnippet>21</a>    <span class="kw">let </span>l1 = L1Client::new(<span class="macro">vec!</span>[l1_url])<span class="question-mark">?</span>;
-<a href=#22 id=22 data-nosnippet>22</a>    <span class="kw">let </span>validators =
+<a href=#22 id=22 data-nosnippet>22</a>    <span class="kw">let </span>(validators, <span class="kw">_</span>) =
 <a href=#23 id=23 data-nosnippet>23</a>        Fetcher::fetch_all_validators_from_contract(l1, stake_table_address, l1_block_number)
 <a href=#24 id=24 data-nosnippet>24</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#25 id=25 data-nosnippet>25</a>

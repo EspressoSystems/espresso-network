@@ -7,7 +7,7 @@
 <a href=#7 id=7 data-nosnippet>7</a>    traits::{EventsPersistenceRead, MembershipPersistence},
 <a href=#8 id=8 data-nosnippet>8</a>    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
 <a href=#9 id=9 data-nosnippet>9</a>    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent},
-<a href=#10 id=10 data-nosnippet>10</a>    Leaf2, NetworkConfig, ValidatorMap,
+<a href=#10 id=10 data-nosnippet>10</a>    Leaf2, NetworkConfig, StakeTableHash, ValidatorMap,
 <a href=#11 id=11 data-nosnippet>11</a>};
 <a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>hotshot::InitializerEpochInfo;
 <a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
@@ -265,7 +265,7 @@
 <a href=#265 id=265 data-nosnippet>265</a>    <span class="kw">async fn </span>load_stake(
 <a href=#266 id=266 data-nosnippet>266</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
 <a href=#267 id=267 data-nosnippet>267</a>        _epoch: EpochNumber,
-<a href=#268 id=268 data-nosnippet>268</a>    ) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;(ValidatorMap, <span class="prelude-ty">Option</span>&lt;RewardAmount&gt;)&gt;&gt; {
+<a href=#268 id=268 data-nosnippet>268</a>    ) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;(ValidatorMap, <span class="prelude-ty">Option</span>&lt;RewardAmount&gt;, <span class="prelude-ty">Option</span>&lt;StakeTableHash&gt;)&gt;&gt; {
 <a href=#269 id=269 data-nosnippet>269</a>        <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>)
 <a href=#270 id=270 data-nosnippet>270</a>    }
 <a href=#271 id=271 data-nosnippet>271</a>
@@ -278,37 +278,38 @@
 <a href=#278 id=278 data-nosnippet>278</a>        _epoch: EpochNumber,
 <a href=#279 id=279 data-nosnippet>279</a>        _stake: ValidatorMap,
 <a href=#280 id=280 data-nosnippet>280</a>        _block_reward: <span class="prelude-ty">Option</span>&lt;RewardAmount&gt;,
-<a href=#281 id=281 data-nosnippet>281</a>    ) -&gt; anyhow::Result&lt;()&gt; {
-<a href=#282 id=282 data-nosnippet>282</a>        <span class="prelude-val">Ok</span>(())
-<a href=#283 id=283 data-nosnippet>283</a>    }
-<a href=#284 id=284 data-nosnippet>284</a>
-<a href=#285 id=285 data-nosnippet>285</a>    <span class="kw">async fn </span>store_events(
-<a href=#286 id=286 data-nosnippet>286</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#287 id=287 data-nosnippet>287</a>        _l1: u64,
-<a href=#288 id=288 data-nosnippet>288</a>        _events: Vec&lt;(EventKey, StakeTableEvent)&gt;,
-<a href=#289 id=289 data-nosnippet>289</a>    ) -&gt; anyhow::Result&lt;()&gt; {
-<a href=#290 id=290 data-nosnippet>290</a>        <span class="prelude-val">Ok</span>(())
-<a href=#291 id=291 data-nosnippet>291</a>    }
-<a href=#292 id=292 data-nosnippet>292</a>    <span class="kw">async fn </span>load_events(
-<a href=#293 id=293 data-nosnippet>293</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#294 id=294 data-nosnippet>294</a>        _l1_block: u64,
-<a href=#295 id=295 data-nosnippet>295</a>    ) -&gt; anyhow::Result&lt;(
-<a href=#296 id=296 data-nosnippet>296</a>        <span class="prelude-ty">Option</span>&lt;EventsPersistenceRead&gt;,
-<a href=#297 id=297 data-nosnippet>297</a>        Vec&lt;(EventKey, StakeTableEvent)&gt;,
-<a href=#298 id=298 data-nosnippet>298</a>    )&gt; {
-<a href=#299 id=299 data-nosnippet>299</a>        <span class="prelude-val">Ok</span>((<span class="prelude-val">None</span>, Vec::new()))
-<a href=#300 id=300 data-nosnippet>300</a>    }
-<a href=#301 id=301 data-nosnippet>301</a>}
-<a href=#302 id=302 data-nosnippet>302</a>
-<a href=#303 id=303 data-nosnippet>303</a><span class="attr">#[async_trait]
-<a href=#304 id=304 data-nosnippet>304</a></span><span class="kw">impl </span>DhtPersistentStorage <span class="kw">for </span>NoStorage {
-<a href=#305 id=305 data-nosnippet>305</a>    <span class="doccomment">/// Don't do anything
-<a href=#306 id=306 data-nosnippet>306</a>    </span><span class="kw">async fn </span>save(<span class="kw-2">&amp;</span><span class="self">self</span>, _records: Vec&lt;SerializableRecord&gt;) -&gt; anyhow::Result&lt;()&gt; {
-<a href=#307 id=307 data-nosnippet>307</a>        <span class="prelude-val">Ok</span>(())
-<a href=#308 id=308 data-nosnippet>308</a>    }
-<a href=#309 id=309 data-nosnippet>309</a>
-<a href=#310 id=310 data-nosnippet>310</a>    <span class="doccomment">/// Don't do anything
-<a href=#311 id=311 data-nosnippet>311</a>    </span><span class="kw">async fn </span>load(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; anyhow::Result&lt;Vec&lt;SerializableRecord&gt;&gt; {
-<a href=#312 id=312 data-nosnippet>312</a>        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[])
-<a href=#313 id=313 data-nosnippet>313</a>    }
-<a href=#314 id=314 data-nosnippet>314</a>}</code></pre></div></section></main></body></html>
+<a href=#281 id=281 data-nosnippet>281</a>        _stake_table_hash: <span class="prelude-ty">Option</span>&lt;StakeTableHash&gt;,
+<a href=#282 id=282 data-nosnippet>282</a>    ) -&gt; anyhow::Result&lt;()&gt; {
+<a href=#283 id=283 data-nosnippet>283</a>        <span class="prelude-val">Ok</span>(())
+<a href=#284 id=284 data-nosnippet>284</a>    }
+<a href=#285 id=285 data-nosnippet>285</a>
+<a href=#286 id=286 data-nosnippet>286</a>    <span class="kw">async fn </span>store_events(
+<a href=#287 id=287 data-nosnippet>287</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#288 id=288 data-nosnippet>288</a>        _l1: u64,
+<a href=#289 id=289 data-nosnippet>289</a>        _events: Vec&lt;(EventKey, StakeTableEvent)&gt;,
+<a href=#290 id=290 data-nosnippet>290</a>    ) -&gt; anyhow::Result&lt;()&gt; {
+<a href=#291 id=291 data-nosnippet>291</a>        <span class="prelude-val">Ok</span>(())
+<a href=#292 id=292 data-nosnippet>292</a>    }
+<a href=#293 id=293 data-nosnippet>293</a>    <span class="kw">async fn </span>load_events(
+<a href=#294 id=294 data-nosnippet>294</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#295 id=295 data-nosnippet>295</a>        _l1_block: u64,
+<a href=#296 id=296 data-nosnippet>296</a>    ) -&gt; anyhow::Result&lt;(
+<a href=#297 id=297 data-nosnippet>297</a>        <span class="prelude-ty">Option</span>&lt;EventsPersistenceRead&gt;,
+<a href=#298 id=298 data-nosnippet>298</a>        Vec&lt;(EventKey, StakeTableEvent)&gt;,
+<a href=#299 id=299 data-nosnippet>299</a>    )&gt; {
+<a href=#300 id=300 data-nosnippet>300</a>        <span class="prelude-val">Ok</span>((<span class="prelude-val">None</span>, Vec::new()))
+<a href=#301 id=301 data-nosnippet>301</a>    }
+<a href=#302 id=302 data-nosnippet>302</a>}
+<a href=#303 id=303 data-nosnippet>303</a>
+<a href=#304 id=304 data-nosnippet>304</a><span class="attr">#[async_trait]
+<a href=#305 id=305 data-nosnippet>305</a></span><span class="kw">impl </span>DhtPersistentStorage <span class="kw">for </span>NoStorage {
+<a href=#306 id=306 data-nosnippet>306</a>    <span class="doccomment">/// Don't do anything
+<a href=#307 id=307 data-nosnippet>307</a>    </span><span class="kw">async fn </span>save(<span class="kw-2">&amp;</span><span class="self">self</span>, _records: Vec&lt;SerializableRecord&gt;) -&gt; anyhow::Result&lt;()&gt; {
+<a href=#308 id=308 data-nosnippet>308</a>        <span class="prelude-val">Ok</span>(())
+<a href=#309 id=309 data-nosnippet>309</a>    }
+<a href=#310 id=310 data-nosnippet>310</a>
+<a href=#311 id=311 data-nosnippet>311</a>    <span class="doccomment">/// Don't do anything
+<a href=#312 id=312 data-nosnippet>312</a>    </span><span class="kw">async fn </span>load(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; anyhow::Result&lt;Vec&lt;SerializableRecord&gt;&gt; {
+<a href=#313 id=313 data-nosnippet>313</a>        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[])
+<a href=#314 id=314 data-nosnippet>314</a>    }
+<a href=#315 id=315 data-nosnippet>315</a>}</code></pre></div></section></main></body></html>
