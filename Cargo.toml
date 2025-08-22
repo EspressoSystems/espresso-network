@@ -5,6 +5,7 @@ resolver = "2"
 
 members = [
     "alloy-compat",
+    "benchmark-stats",
     "client",
     "contracts/rust/adapter",
     "contracts/rust/deployer",
@@ -45,6 +46,7 @@ members = [
 # for the whole workspace by default.
 default-members = [
     "alloy-compat",
+    "benchmark-stats",
     "client",
     "contracts/rust/adapter",
     "contracts/rust/deployer",
@@ -99,6 +101,7 @@ alloy = { version = "0.13", default-features = false, features = [
     "provider-ws",
     "providers",
     "reqwest",
+    "rand",
     "rpc",
     "rpc-client",
     "rpc-types",

@@ -15,14 +15,14 @@ use hotshot_contract_adapter::{
     field_to_u256,
     sol_types::{LightClientStateSol, LightClientV2, PlonkProofSol, StakeTableStateSol},
 };
-use hotshot_query_service::availability::StateCertQueryDataV2;
+use hotshot_query_service::availability::StateCertQueryDataV1;
 use hotshot_types::{
     data::EpochNumber,
     light_client::{
         CircuitField, LCV2StateSignaturesBundle, LightClientState, StakeTableState, StateSignature,
         StateVerKey,
     },
-    simple_certificate::LightClientStateUpdateCertificateV2,
+    simple_certificate::LightClientStateUpdateCertificateV1,
     traits::{
         node_implementation::{ConsensusTime, NodeType},
         signature_key::LCV2StateSignatureKey,
@@ -150,7 +150,6 @@ pub async fn submit_state_and_proof(
     // send the tx
     let (receipt, included_block) = sequencer_utils::contract_send(&tx)
         .await
-        .with_context(|| "Failed to send contract tx")
         .map_err(ProverError::ContractError)?;
 
     tracing::info!(
@@ -168,19 +167,19 @@ pub async fn submit_state_and_proof(
 async fn fetch_epoch_state_from_sequencer(
     sequencer_url: &Url,
     epoch: u64,
-) -> Result<LightClientStateUpdateCertificateV2<SeqTypes>, ProverError> {
+) -> Result<LightClientStateUpdateCertificateV1<SeqTypes>, ProverError> {
     let state_cert =
         surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
             sequencer_url.clone(),
         )
-        .get::<StateCertQueryDataV2<SeqTypes>>(&format!("availability/state-cert-v2/{epoch}"))
+        .get::<StateCertQueryDataV1<SeqTypes>>(&format!("availability/state-cert/{epoch}"))
         .header("Accept", "application/json")
         .send()
         .await
         .map_err(|err| {
             ProverError::SequencerCommunicationError(
                 sequencer_url
-                    .join(&format!("availability/state-cert-v2/{epoch}"))
+                    .join(&format!("availability/state-cert/{epoch}"))
                     .unwrap(),
                 err,
             )
@@ -307,7 +306,6 @@ async fn advance_epoch(
         let signature_map = state_cert
             .signatures
             .into_iter()
-            .map(|(key, _, sig)| (key, sig))
             .collect::<HashMap<StateVerKey, StateSignature>>();
 
         let (proof, public_input) = generate_proof(
