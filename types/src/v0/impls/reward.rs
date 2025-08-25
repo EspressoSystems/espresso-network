@@ -17,8 +17,8 @@ use hotshot_types::{
 };
 use jf_merkle_tree::{
     prelude::MerkleNode, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
-    LookupResult, MerkleCommitment, MerkleTreeScheme, PersistentUniversalMerkleTreeScheme,
-    ToTraversalPath, UniversalMerkleTreeScheme,
+    LookupResult, MerkleTreeScheme, PersistentUniversalMerkleTreeScheme, ToTraversalPath,
+    UniversalMerkleTreeScheme,
 };
 use num_traits::CheckedSub;
 use sequencer_utils::{
@@ -369,12 +369,7 @@ impl RewardAccountProofV2 {
         match &self.proof {
             RewardMerkleProofV2::Presence(proof) => {
                 ensure!(
-                    RewardMerkleTreeV2::verify(
-                        comm.digest(),
-                        RewardAccountV2(self.account),
-                        proof
-                    )?
-                    .is_ok(),
+                    RewardMerkleTreeV2::verify(comm, RewardAccountV2(self.account), proof)?.is_ok(),
                     "invalid proof"
                 );
                 Ok(proof
@@ -385,7 +380,11 @@ impl RewardAccountProofV2 {
             RewardMerkleProofV2::Absence(proof) => {
                 let tree = RewardMerkleTreeV2::from_commitment(comm);
                 ensure!(
-                    tree.non_membership_verify(RewardAccountV2(self.account), proof)?,
+                    RewardMerkleTreeV2::non_membership_verify(
+                        tree.commitment(),
+                        RewardAccountV2(self.account),
+                        proof
+                    )?,
                     "invalid proof"
                 );
                 Ok(U256::ZERO)
@@ -528,12 +527,7 @@ impl RewardAccountProofV1 {
         match &self.proof {
             RewardMerkleProofV1::Presence(proof) => {
                 ensure!(
-                    RewardMerkleTreeV1::verify(
-                        comm.digest(),
-                        RewardAccountV1(self.account),
-                        proof
-                    )?
-                    .is_ok(),
+                    RewardMerkleTreeV1::verify(comm, RewardAccountV1(self.account), proof)?.is_ok(),
                     "invalid proof"
                 );
                 Ok(proof
@@ -544,7 +538,11 @@ impl RewardAccountProofV1 {
             RewardMerkleProofV1::Absence(proof) => {
                 let tree = RewardMerkleTreeV1::from_commitment(comm);
                 ensure!(
-                    tree.non_membership_verify(RewardAccountV1(self.account), proof)?,
+                    RewardMerkleTreeV1::non_membership_verify(
+                        tree.commitment(),
+                        RewardAccountV1(self.account),
+                        proof
+                    )?,
                     "invalid proof"
                 );
                 Ok(U256::ZERO)
