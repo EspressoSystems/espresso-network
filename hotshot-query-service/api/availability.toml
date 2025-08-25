@@ -244,7 +244,7 @@ PATH = ["transaction/:height/:index", "transaction/hash/:hash"]
 ":index" = "Integer"
 ":hash" = "TaggedBase64"
 DOC = """
-Get a transaction by its `index` in the block at `height` or by its hash.
+Get a transaction inclusion proof by its `index` in the block at `height` or by its hash.
 
 If specified, `:height` and `:index` represent the block containing the transaction and the index
 of the transaction within the block, respectively. Otherwise, `:hash` is the hash of the
@@ -268,26 +268,33 @@ Returns
     "transaction": application-specific transaction type,
     "index": integer,
     "hash": TaggedBase64,
-    "proof": application-specific proof type,
     "block_hash": TaggedBase64,
     "block_height": integer,
 }
 ```
 """
 
-[route.get_transaction_without_proof]
-PATH = ["transaction/:height/:index/noproof", "transaction/hash/:hash/noproof"]
+[route.get_transaction_proof]
+PATH = ["transaction/:height/:index/proof", "transaction/hash/:hash/proof"]
 ":height" = "Integer"
 ":index" = "Integer"
 ":hash" = "TaggedBase64"
 DOC = """
-Get a transaction without proof.
 
-This is similar to the corresponding transaction endpoints without the `/noproof` modifier. The
-response simply omits the `proof` field. In some cases this endpoint can be significantly faster
-than the version with proof; however the absence of a proof means that the server is trusted to
-accurately report information about whether and where the transaction is included in the Espresso
-blockchain.
+Get a transaction inclusion proof. This is similar to the transaction endpoints. 
+In some cases this endpoint can be significantly slower. 
+
+Returns
+```
+{
+    "transaction": application-specific transaction type,
+    "index": integer,
+    "hash": TaggedBase64,
+    "proof": application-specific proof type,
+    "block_hash": TaggedBase64,
+    "block_height": integer,
+}
+```
 """
 
 [route.stream_transactions]

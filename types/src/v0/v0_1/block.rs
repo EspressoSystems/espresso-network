@@ -220,7 +220,7 @@ pub struct NsPayloadOwned(#[serde(with = "base64_bytes")] pub(crate) Vec<u8>);
 
 /// Proof of correctness for transaction bytes in a block.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct TxProof {
+pub struct ADVZTxProof {
     // Naming conventions for this struct's fields:
     // - `payload_x`: bytes from the payload
     // - `payload_proof_x`: a proof of those bytes from the payload

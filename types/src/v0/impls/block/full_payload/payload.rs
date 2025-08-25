@@ -2,10 +2,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
 use committable::Committable;
-use hotshot_query_service::{
-    availability::{QueryablePayload, VidCommonQueryData},
-    VidCommon,
-};
+use hotshot_query_service::availability::{QueryablePayload, VidCommonQueryData};
 use hotshot_types::{
     data::ViewNumber,
     traits::{BlockPayload, EncodeBytes},
@@ -44,8 +41,7 @@ impl Payload {
         &self.ns_table
     }
 
-    /// Like [`QueryablePayload::transaction_with_proof`] except without the
-    /// proof.
+    /// Read a transaction from this payload.
     pub fn transaction(&self, index: &Index) -> Option<Transaction> {
         let ns = &index.ns_index;
         let ns_id = self.ns_table.read_ns_id(ns)?;
@@ -242,21 +238,7 @@ impl QueryablePayload<SeqTypes> for Payload {
         vid: &VidCommonQueryData<SeqTypes>,
         index: &Index,
     ) -> Option<Self::InclusionProof> {
-        let common = match vid.common() {
-            VidCommon::V0(common) => common,
-            VidCommon::V1(_) => {
-                // TODO HACK! THE RETURNED PROOF MIGHT FAIL VERIFICATION.
-                // https://github.com/EspressoSystems/hotshot-query-service/issues/639
-                //
-                // Need a `ADVZCommon` to proceed. Need to modify return type to accept either
-                // version of VID common and produce a proof from the corresponding version.
-                &hotshot_types::vid::advz::advz_scheme(10)
-                    .disperse(&self.raw_payload)
-                    .unwrap()
-                    .common
-            },
-        };
-        let proof = TxProof::new(index, self, common)?.1;
+        let proof = TxProof::new(index, self, vid.common())?.1;
         Some(proof)
     }
 }

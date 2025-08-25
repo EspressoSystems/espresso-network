@@ -2,14 +2,14 @@
 use std::collections::BTreeMap;
 
 use hotshot::traits::BlockPayload;
-use hotshot_query_service::availability::QueryablePayload;
+use hotshot_query_service::{availability::QueryablePayload, VidCommon};
 use hotshot_types::{data::VidCommitment, traits::EncodeBytes, vid::advz::advz_scheme};
 use jf_vid::VidScheme;
 use rand::RngCore;
 
 use crate::{
-    v0_1::ADVZNsProof, v0_3::ChainConfig, BlockSize, NamespaceId, NodeState, Payload, Transaction,
-    TxProof, ValidatedState,
+    v0_3::ChainConfig, BlockSize, NamespaceId, NodeState, NsProof, Payload, Transaction, TxProof,
+    ValidatedState,
 };
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -45,10 +45,13 @@ async fn basic_correctness() {
 
         tracing::info!("all_txs {:?}", all_txs);
 
-        let (vid_commit, vid_common) = {
+        let (advz_commit, advz_common) = {
             let disperse_data = vid.disperse(block.encode()).unwrap();
             (disperse_data.commit, disperse_data.common)
         };
+
+        let vid_commit = VidCommitment::V0(advz_commit);
+        let vid_common = VidCommon::V0(advz_common);
 
         // test iterate over all txs
         for tx_index in block.iter(block.ns_table()) {
@@ -73,8 +76,6 @@ async fn basic_correctness() {
             "not all test txs consumed by block.iter"
         );
 
-        let vid_commit = VidCommitment::V0(vid_commit);
-
         // test iterate over all namespaces
         for ns_index in block.ns_table().iter() {
             let ns_id = block.ns_table().read_ns_id(&ns_index).unwrap();
@@ -85,7 +86,7 @@ async fn basic_correctness() {
                 .remove(&ns_id)
                 .expect("block ns_id missing from test");
 
-            let ns_proof = ADVZNsProof::new(&block, &ns_index, &vid_common)
+            let ns_proof = NsProof::new(&block, &ns_index, &vid_common)
                 .expect("namespace_with_proof should succeed");
 
             let (ns_proof_txs, ns_proof_ns_id) = ns_proof
