@@ -54,22 +54,7 @@ contract RewardClaim is Initializable, OwnableUpgradeable, UUPSUpgradeable {
         require(accruedReward != 0, InvalidRewardAmount());
         require(claimedRewards[msg.sender] < accruedReward, AlreadyClaimed());
 
-        bytes32 rewardCommitment =
-            RewardMerkleTreeVerifier.computeRoot(msg.sender, accruedReward, proof);
-        bytes32 authRoot = keccak256(
-            abi.encodePacked(
-                rewardCommitment,
-                authRootInputs[0],
-                authRootInputs[1],
-                authRootInputs[2],
-                authRootInputs[3],
-                authRootInputs[4],
-                authRootInputs[5],
-                authRootInputs[6]
-            )
-        );
-
-        require(uint256(authRoot) == lightClient.authRoot(), InvalidAuthRoot());
+        require(_verifyAuthRoot(accruedReward, proof, authRootInputs), InvalidAuthRoot());
 
         uint256 availableToClaim = accruedReward - claimedRewards[msg.sender];
         claimedRewards[msg.sender] = accruedReward;
@@ -85,5 +70,28 @@ contract RewardClaim is Initializable, OwnableUpgradeable, UUPSUpgradeable {
         returns (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion)
     {
         return (1, 0, 0);
+    }
+
+    function _verifyAuthRoot(
+        uint256 accruedReward,
+        RewardMerkleTreeVerifier.AccruedRewardsProof calldata proof,
+        bytes32[7] calldata authRootInputs
+    ) internal view virtual returns (bool) {
+        bytes32 rewardCommitment =
+            RewardMerkleTreeVerifier.computeRoot(msg.sender, accruedReward, proof);
+        bytes32 authRoot = keccak256(
+            abi.encodePacked(
+                rewardCommitment,
+                authRootInputs[0],
+                authRootInputs[1],
+                authRootInputs[2],
+                authRootInputs[3],
+                authRootInputs[4],
+                authRootInputs[5],
+                authRootInputs[6]
+            )
+        );
+
+        return uint256(authRoot) == lightClient.authRoot();
     }
 }
