@@ -493,9 +493,8 @@ fn build_get_path_query<'q>(
 mod test {
     use futures::stream::StreamExt;
     use jf_merkle_tree::{
-        prelude::{Sha3Digest, Sha3Node},
-        universal_merkle_tree::UniversalMerkleTree,
-        LookupResult, MerkleTreeScheme, UniversalMerkleTreeScheme,
+        universal_merkle_tree::UniversalMerkleTree, LookupResult, MerkleTreeScheme,
+        UniversalMerkleTreeScheme,
     };
     use rand::{seq::IteratorRandom, RngCore};
 
@@ -856,7 +855,9 @@ mod test {
                 .unwrap();
             assert_eq!(proof.elem(), None);
 
-            assert!(UniversalMerkleTree::<usize, Sha3Digest, usize, 8, Sha3Node>::non_membership_verify(test_tree.commitment(), 100, proof).unwrap());
+            assert!(
+                MockMerkleTree::non_membership_verify(test_tree.commitment(), 100, proof).unwrap()
+            );
 
             // insert an additional node into the tree.
             test_tree.update(i, i).unwrap();
