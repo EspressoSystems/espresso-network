@@ -55,7 +55,7 @@ contract RewardClaim is Initializable, OwnableUpgradeable, UUPSUpgradeable {
         require(claimedRewards[msg.sender] < accruedReward, AlreadyClaimed());
 
         bytes32 rewardCommitment =
-            RewardMerkleTreeVerifier.authRootInput(msg.sender, accruedReward, proof);
+            RewardMerkleTreeVerifier.computeRoot(msg.sender, accruedReward, proof);
         bytes32 authRoot = keccak256(
             abi.encodePacked(
                 rewardCommitment,
@@ -71,12 +71,12 @@ contract RewardClaim is Initializable, OwnableUpgradeable, UUPSUpgradeable {
 
         require(uint256(authRoot) == lightClient.authRoot(), InvalidAuthRoot());
 
-        uint256 newClaimAmount = accruedReward - claimedRewards[msg.sender];
+        uint256 availableToClaim = accruedReward - claimedRewards[msg.sender];
         claimedRewards[msg.sender] = accruedReward;
 
-        espToken.mint(msg.sender, newClaimAmount);
+        espToken.mint(msg.sender, availableToClaim);
 
-        emit RewardClaimed(msg.sender, newClaimAmount);
+        emit RewardClaimed(msg.sender, availableToClaim);
     }
 
     function getVersion()

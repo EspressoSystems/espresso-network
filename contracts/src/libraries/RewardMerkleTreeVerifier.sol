@@ -47,7 +47,7 @@ library RewardMerkleTreeVerifier {
      * @param proof The membership proof containing sibling hashes and numLeaves
      * @return The computed reward commitment
      */
-    function authRootInput(address key, uint256 value, AccruedRewardsProof calldata proof)
+    function computeRoot(address key, uint256 value, AccruedRewardsProof calldata proof)
         internal
         pure
         returns (bytes32)

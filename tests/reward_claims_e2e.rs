@@ -267,7 +267,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     );
 
     println!("Starting relay server on port {}...", relay_server_port);
-    let relay_server_handle = spawn(run_relay_server_with_state(
+    let _relay_server_handle = spawn(run_relay_server_with_state(
         format!("http://localhost:{relay_server_port}")
             .parse()
             .unwrap(),
@@ -511,10 +511,5 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     assert!(double_claim_result.is_err(),);
 
     println!("All reward claim tests passed successfully!");
-
-    relay_server_handle.abort();
-    drop(network);
-    drop(anvil);
-
     Ok(())
 }
