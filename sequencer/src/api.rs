@@ -1498,7 +1498,7 @@ pub mod test_helpers {
             .unwrap()
             .block_merkle_tree
             .commitment();
-        BlockMerkleTree::verify(root.digest(), root.size() - 1, res)
+        BlockMerkleTree::verify(root, root.size() - 1, res)
             .unwrap()
             .unwrap();
     }
