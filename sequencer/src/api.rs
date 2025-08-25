@@ -3017,21 +3017,15 @@ mod test {
     }
 
     async fn run_hotshot_event_streaming_test(url_suffix: &str) {
-        let hotshot_event_streaming_port =
-            pick_unused_port().expect("No ports free for hotshot event streaming");
         let query_service_port = pick_unused_port().expect("No ports free for query service");
 
-        let url = format!("http://localhost:{hotshot_event_streaming_port}{url_suffix}")
+        let url = format!("http://localhost:{query_service_port}{url_suffix}")
             .parse()
             .unwrap();
 
-        let hotshot_events = HotshotEvents {
-            events_service_port: hotshot_event_streaming_port,
-        };
-
         let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
 
-        let options = Options::with_port(query_service_port).hotshot_events(hotshot_events);
+        let options = Options::with_port(query_service_port).hotshot_events(HotshotEvents);
 
         let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::default()
@@ -3087,20 +3081,14 @@ mod test {
             .epoch_height(epoch_height)
             .build();
 
-        let hotshot_event_streaming_port =
-            pick_unused_port().expect("No ports free for hotshot event streaming");
-        let hotshot_url = format!("http://localhost:{hotshot_event_streaming_port}")
+        let query_service_port = pick_unused_port().expect("No ports free for query service");
+
+        let hotshot_url = format!("http://localhost:{query_service_port}")
             .parse()
             .unwrap();
 
-        let query_service_port = pick_unused_port().expect("No ports free for query service");
-
-        let hotshot_events = HotshotEvents {
-            events_service_port: hotshot_event_streaming_port,
-        };
-
         let client: Client<ServerError, SequencerApiVersion> = Client::new(hotshot_url);
-        let options = Options::with_port(query_service_port).hotshot_events(hotshot_events);
+        let options = Options::with_port(query_service_port).hotshot_events(HotshotEvents);
 
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)

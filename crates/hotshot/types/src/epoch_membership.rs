@@ -6,6 +6,7 @@ use std::{
 use alloy::primitives::U256;
 use async_broadcast::{broadcast, InactiveReceiver, Sender};
 use async_lock::{Mutex, RwLock};
+use committable::Commitment;
 use hotshot_utils::{
     anytrace::{self, Error, Level, Result, Wrap, DEFAULT_LOG_LEVEL},
     ensure, error, line_info, log, warn,
@@ -45,7 +46,7 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     /// Any in progress attempts at catching up are stored in this map
     /// Any new callers wantin an `EpochMembership` will await on the signal
     /// alerting them the membership is ready.  The first caller for an epoch will
-    /// wait for the actual catchup and allert future callers when it's done
+    /// wait for the actual catchup and alert future callers when it's done
     catchup_map: Arc<Mutex<EpochMap<TYPES>>>,
 
     drb_calculation_map: Arc<Mutex<DrbMap<TYPES>>>,
@@ -263,42 +264,49 @@ where
 
         // Iterate through the epochs we need to fetch in reverse, i.e. from the oldest to the newest
         while let Some((current_fetch_epoch, tx)) = fetch_epochs.pop() {
-            if let Err(err) = <TYPES::Membership as Membership<TYPES>>::get_epoch_drb(
+            let root_leaf = match self.fetch_stake_table(current_fetch_epoch).await {
+                Ok(root_leaf) => root_leaf,
+                Err(err) => {
+                    fetch_epochs.push((current_fetch_epoch, tx));
+                    self.catchup_cleanup(epoch, fetch_epochs, err).await;
+                    return;
+                },
+            };
+            match <TYPES::Membership as Membership<TYPES>>::get_epoch_drb(
                 self.membership.clone(),
                 epoch,
             )
             .await
             {
-                tracing::info!(
-                    "DRB result for epoch {} missing from membership. Beginning catchup to fetch \
-                     the leaf and recalculate it. Error: {}",
-                    current_fetch_epoch,
-                    err
-                );
-
-                let root_leaf = match self.fetch_stake_table(current_fetch_epoch).await {
-                    Ok(root_leaf) => root_leaf,
-                    Err(err) => {
-                        fetch_epochs.push((current_fetch_epoch, tx));
-                        self.catchup_cleanup(epoch, fetch_epochs, err).await;
-                        return;
-                    },
-                };
-
-                if let Err(err) = self
-                    .compute_drb_result(current_fetch_epoch, root_leaf)
-                    .await
-                {
-                    tracing::info!(
-                        "DRB calculation for epoch {} failed . Error: {}",
+                Ok(drb_result) => {
+                    self.membership
+                        .write()
+                        .await
+                        .add_drb_result(current_fetch_epoch, drb_result);
+                },
+                Err(err) => {
+                    tracing::warn!(
+                        "DRB result for epoch {} missing from membership. Beginning catchup to \
+                         recalculate it. Error: {}",
                         current_fetch_epoch,
                         err
                     );
-                    fetch_epochs.push((current_fetch_epoch, tx));
-                    self.catchup_cleanup(epoch, fetch_epochs, err).await;
-                    return;
-                }
-            }
+
+                    if let Err(err) = self
+                        .compute_drb_result(current_fetch_epoch, root_leaf)
+                        .await
+                    {
+                        tracing::info!(
+                            "DRB calculation for epoch {} failed . Error: {}",
+                            current_fetch_epoch,
+                            err
+                        );
+                        fetch_epochs.push((current_fetch_epoch, tx));
+                        self.catchup_cleanup(epoch, fetch_epochs, err).await;
+                        return;
+                    }
+                },
+            };
 
             // Signal the other tasks about the success
             if let Ok(Some(res)) = tx.try_broadcast(Ok(EpochMembership {
@@ -746,5 +754,14 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
                 .await
                 .add_drb_result(epoch, drb_result);
         }
+    }
+    pub async fn stake_table_hash(
+        &self,
+    ) -> Option<Commitment<<TYPES::Membership as Membership<TYPES>>::StakeTableHash>> {
+        self.coordinator
+            .membership
+            .read()
+            .await
+            .stake_table_hash(self.epoch?)
     }
 }

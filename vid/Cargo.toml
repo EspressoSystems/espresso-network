@@ -13,7 +13,7 @@ sha256 = []
 keccak256 = []
 
 [dependencies]
-anyhow = "1.0"
+anyhow = { workspace = true }
 ark-bn254 = { workspace = true }
 ark-ff = { workspace = true, features = [ "asm" ] }
 ark-poly = { workspace = true }

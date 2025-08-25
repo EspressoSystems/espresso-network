@@ -50,7 +50,7 @@ use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
 use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
 use tempfile::NamedTempFile;
-use tide_disco::{error::ServerError, method::ReadState, Api, Error as _, StatusCode};
+use tide_disco::{error::ServerError, method::ReadState, Api, Error, StatusCode};
 use tokio::spawn;
 use url::Url;
 use vbs::version::StaticVersionType;
@@ -629,7 +629,8 @@ async fn main() -> anyhow::Result<()> {
     .submit(Default::default())
     .config(Default::default())
     .explorer(Default::default())
-    .query_sql(Default::default(), sql);
+    .query_sql(Default::default(), sql)
+    .hotshot_events(Default::default());
 
     let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
         .api_config(api_options)
@@ -736,6 +737,7 @@ pub struct ApiState {
     /// L1 chain id
     pub l1_chain_id: u64,
 }
+
 impl Default for ApiState {
     fn default() -> Self {
         Self {

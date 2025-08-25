@@ -39,7 +39,7 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
 use crate::{
-    v0::impls::ValidatedState,
+    v0::impls::{StakeTableHash, ValidatedState},
     v0_3::{
         ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount, RewardMerkleCommitmentV1,
     },
@@ -478,7 +478,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     async fn load_stake(
         &self,
         epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>)>>;
+    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>>;
 
     /// Load stake tables for storage for latest `n` known epochs
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
@@ -489,6 +489,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
         epoch: EpochNumber,
         stake: ValidatorMap,
         block_reward: Option<RewardAmount>,
+        stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()>;
 
     async fn store_events(
