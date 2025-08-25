@@ -142,6 +142,9 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// A zero amount would lead to a no-op.
     error ZeroAmount();
 
+    /// The exit escrow period is invalid (either too short or too long)
+    error ExitEscrowPeriodInvalid();
+
     // === Structs ===
 
     /// @notice Represents an Espresso validator and tracks funds currently delegated to them.
@@ -229,6 +232,11 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         initializeState(_tokenAddress, _lightClientAddress, _exitEscrowPeriod);
     }
 
+    /// @notice Initialize the state of the contract
+    /// @param _tokenAddress The address of the staking token
+    /// @param _lightClientAddress The address of the light client
+    /// @param _exitEscrowPeriod The exit escrow period. Set to uint64.max to disable the exit
+    /// escrow period.
     function initializeState(
         address _tokenAddress,
         address _lightClientAddress,
@@ -242,6 +250,12 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         }
         token = ERC20(_tokenAddress);
         lightClient = ILightClient(_lightClientAddress);
+
+        uint256 minExitEscrowPeriod = 90 seconds; // assuming 15s per block and min blocks per epoch
+            // is 6 in the light client
+        if (_exitEscrowPeriod < minExitEscrowPeriod) {
+            revert ExitEscrowPeriodInvalid();
+        }
         exitEscrowPeriod = _exitEscrowPeriod;
     }
 
