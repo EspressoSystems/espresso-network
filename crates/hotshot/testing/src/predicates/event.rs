@@ -149,13 +149,13 @@ where
     Box::new(EventPredicate { check, info })
 }
 
-pub fn leaf_decided<TYPES>() -> Box<EventPredicate<TYPES>>
+pub fn leaves_decided<TYPES>() -> Box<EventPredicate<TYPES>>
 where
     TYPES: NodeType,
 {
-    let info = "LeafDecided".to_string();
+    let info = "LeavesDecided".to_string();
     let check: EventCallback<TYPES> =
-        Arc::new(move |e: Arc<HotShotEvent<TYPES>>| matches!(e.as_ref(), LeafDecided(_)));
+        Arc::new(move |e: Arc<HotShotEvent<TYPES>>| matches!(e.as_ref(), LeavesDecided(_)));
 
     Box::new(EventPredicate { check, info })
 }

@@ -518,12 +518,21 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
 
                 self.garbage_collect_tasks().await;
             },
-            HotShotEvent::LeafDecided(leaf) => {
-                let finalized_epoch = self
-                    .highest_finalized_epoch_view
-                    .0
-                    .max(leaf.epoch(self.epoch_height));
-                let finalized_view = self.highest_finalized_epoch_view.1.max(leaf.view_number());
+            HotShotEvent::LeavesDecided(leaves) => {
+                let finalized_epoch = self.highest_finalized_epoch_view.0.max(
+                    leaves
+                        .iter()
+                        .map(|leaf| leaf.epoch(self.epoch_height))
+                        .max()
+                        .unwrap_or(None),
+                );
+                let finalized_view = self.highest_finalized_epoch_view.1.max(
+                    leaves
+                        .iter()
+                        .map(|leaf| leaf.view_number())
+                        .max()
+                        .unwrap_or(TYPES::View::new(0)),
+                );
 
                 self.highest_finalized_epoch_view = (finalized_epoch, finalized_view);
 
