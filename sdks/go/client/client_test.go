@@ -61,9 +61,9 @@ func TestApiWithEspressoDevNode(t *testing.T) {
 		Namespace: 1,
 		Payload:   []byte("hello world"),
 	}
-	hash, err := client.SubmitTransaction(ctx, tx)
+	hash, txnErr := client.SubmitTransaction(ctx, tx)
 	if err != nil {
-		t.Fatal("failed to submit transaction", err)
+		t.Fatal("failed to submit transaction", txnErr.err)
 	}
 	fmt.Println("submitted transaction with hash", hash)
 

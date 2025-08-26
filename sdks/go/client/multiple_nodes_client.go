@@ -50,24 +50,24 @@ func (c *MultipleNodesClient) FetchLatestBlockHeight(ctx context.Context) (uint6
 
 func (c *MultipleNodesClient) FetchHeaderByHeight(ctx context.Context, height uint64) (types.HeaderImpl, error) {
 	var res types.HeaderImpl
-	if err := c.getWithMajority(ctx, &res, "availability/header/%d", height); err != nil {
+	if err := c.getWithMajority(ctx, &res, "availability/header/%d", height).err; err != nil {
 		return types.HeaderImpl{}, err
 	}
 	return res, nil
 }
 
-func (c *MultipleNodesClient) FetchRawHeaderByHeight(ctx context.Context, height uint64) (json.RawMessage, error) {
-	return FetchWithMajority(ctx, c.nodes, func(node *Client) (json.RawMessage, error) {
+func (c *MultipleNodesClient) FetchRawHeaderByHeight(ctx context.Context, height uint64) (json.RawMessage, TransactionError) {
+	return FetchWithMajority(ctx, c.nodes, func(node *Client) (json.RawMessage, TransactionError) {
 		return node.FetchRawHeaderByHeight(ctx, height)
 	})
 }
 
-func (c *MultipleNodesClient) FetchTransactionByHash(ctx context.Context, hash *types.TaggedBase64) (types.TransactionQueryData, error) {
+func (c *MultipleNodesClient) FetchTransactionByHash(ctx context.Context, hash *types.TaggedBase64) (types.TransactionQueryData, TransactionError) {
 	var res types.TransactionQueryData
-	if err := c.getWithMajority(ctx, &res, "availability/transaction/hash/%s", hash.String()); err != nil {
-		return types.TransactionQueryData{}, err
+	if txnErr := c.getWithMajority(ctx, &res, "availability/transaction/hash/%s", hash.String()); txnErr.err != nil {
+		return types.TransactionQueryData{}, txnErr
 	}
-	return res, nil
+	return res, TransactionError{nil, Success}
 }
 
 func (c *MultipleNodesClient) FetchExplorerTransactionByHash(ctx context.Context, hash *types.TaggedBase64) (types.ExplorerTransactionQueryData, error) {
@@ -75,7 +75,7 @@ func (c *MultipleNodesClient) FetchExplorerTransactionByHash(ctx context.Context
 		return types.ExplorerTransactionQueryData{}, fmt.Errorf("hash is nil")
 	}
 	var res types.ExplorerTransactionQueryData
-	if err := c.getWithMajority(ctx, &res, "explorer/transaction/hash/%s", hash.String()); err != nil {
+	if err := c.getWithMajority(ctx, &res, "explorer/transaction/hash/%s", hash.String()).err; err != nil {
 		return types.ExplorerTransactionQueryData{}, err
 	}
 	return res, nil
@@ -83,25 +83,25 @@ func (c *MultipleNodesClient) FetchExplorerTransactionByHash(ctx context.Context
 
 func (c *MultipleNodesClient) FetchHeadersByRange(ctx context.Context, from uint64, until uint64) ([]types.HeaderImpl, error) {
 	var res []types.HeaderImpl
-	if err := c.getWithMajority(ctx, &res, "availability/header/%d/%d", from, until); err != nil {
+	if err := c.getWithMajority(ctx, &res, "availability/header/%d/%d", from, until).err; err != nil {
 		return []types.HeaderImpl{}, err
 	}
 	return res, nil
 }
 
-func (c *MultipleNodesClient) getWithMajority(ctx context.Context, out any, format string, args ...any) error {
-	body, err := FetchWithMajority(ctx, c.nodes, func(node *Client) (json.RawMessage, error) {
+func (c *MultipleNodesClient) getWithMajority(ctx context.Context, out any, format string, args ...any) TransactionError {
+	body, txnErr := FetchWithMajority(ctx, c.nodes, func(node *Client) (json.RawMessage, TransactionError) {
 		return node.getRawMessage(ctx, format, args...)
 	})
-	if err != nil {
-		return err
+	if txnErr.err != nil {
+		return txnErr
 	}
-	return json.Unmarshal(body, out)
+	return TransactionError{json.Unmarshal(body, out), InvalidInfo}
 }
 
 func (c *MultipleNodesClient) FetchTransactionsInBlock(ctx context.Context, blockHeight uint64, namespace uint64) (TransactionsInBlock, error) {
 	var res NamespaceResponse
-	if err := c.getWithMajority(ctx, &res, "availability/block/%d/namespace/%d", blockHeight, namespace); err != nil {
+	if err := c.getWithMajority(ctx, &res, "availability/block/%d/namespace/%d", blockHeight, namespace).err; err != nil {
 		return TransactionsInBlock{}, err
 	}
 
@@ -135,30 +135,39 @@ func (c *MultipleNodesClient) FetchTransactionsInBlock(ctx context.Context, bloc
 
 func (c *MultipleNodesClient) FetchVidCommonByHeight(ctx context.Context, blockHeight uint64) (common.VidCommon, error) {
 	var res types.VidCommonQueryData
-	if err := c.getWithMajority(ctx, &res, "availability/vid/common/%d", blockHeight); err != nil {
+	if err := c.getWithMajority(ctx, &res, "availability/vid/common/%d", blockHeight).err; err != nil {
 		return types.VidCommon{}, err
 	}
 	return res.Common, nil
 }
 
-func (c *MultipleNodesClient) SubmitTransaction(ctx context.Context, tx common.Transaction) (*common.TaggedBase64, error) {
+func (c *MultipleNodesClient) SubmitTransaction(ctx context.Context, tx common.Transaction) (*common.TaggedBase64, TransactionError) {
+	// Consider the error type of the submission as
+	// * `Success` if one node succeeds.
+	// * `InvalidInfo` if all failed fetches were due to InvalidInfo.
+	// * `Other` in all other cases.
+	var combinedErrType TransactionErrorType = Success
+
 	// Check if one node is successfully able to submit the transaction
 	var errs []error
 	for _, node := range c.nodes {
-		hash, err := node.SubmitTransaction(ctx, tx)
-		if err == nil {
-			return hash, nil
+		hash, txnErr := node.SubmitTransaction(ctx, tx)
+		if txnErr.err == nil {
+			return hash, TransactionError{nil, Success}
 		} else {
-			errs = append(errs, err)
+			errs = append(errs, txnErr.err)
+			if txnErr.errType != InvalidInfo {
+				combinedErrType = Other
+			}
 		}
 	}
-	return nil, fmt.Errorf("encountered an error with all nodes while attempting to SubmitTransaction.\n Errors: %v \n", errs)
+	return nil, TransactionError{fmt.Errorf("encountered an error with all nodes while attempting to SubmitTransaction.\n Errors: %v \n", errs), combinedErrType}
 }
 
-func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T) (json.RawMessage, error)) (json.RawMessage, error) {
+func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T) (json.RawMessage, TransactionError)) (json.RawMessage, TransactionError) {
 	type result struct {
-		value json.RawMessage
-		err   error
+		value  json.RawMessage
+		txnErr TransactionError
 	}
 
 	results := make(chan result, len(nodes))
@@ -167,15 +176,20 @@ func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T
 
 	for _, node := range nodes {
 		go func(node *T) {
-			value, err := fetchFunc(node)
+			value, txnErr := fetchFunc(node)
 			select {
-			case results <- result{value, err}:
+			case results <- result{value, txnErr}:
 			case <-ctx.Done():
 			}
 		}(node)
 	}
 
 	var errs []error
+	// Consider the error type of the fetch as
+	// * `Success` if the majority of the nodes succeed.
+	// * `InvalidInfo` if all failed fetches were due to InvalidInfo.
+	// * `Other` in all other cases.
+	var combinedErrType TransactionErrorType = Success
 	var valueCount sync.Map
 	majorityCount := (len(nodes) / 2) + 1
 	responseCount := 0
@@ -183,7 +197,7 @@ func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T
 	for {
 		select {
 		case res := <-results:
-			if res.err == nil {
+			if res.txnErr.err == nil {
 				hash, err := hashNormalizedJSON(res.value)
 				// if err is not nil,
 				// this means that we still increase the response count
@@ -192,27 +206,33 @@ func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T
 				if err != nil {
 					fmt.Printf("error: failed to normalize json value: %v, error: %v", res.value, err)
 					errs = append(errs, err)
+					if res.txnErr.errType != InvalidInfo {
+						combinedErrType = Other
+					}
 				} else {
 					count, _ := valueCount.LoadOrStore(hash, 0)
 					if countInt, ok := count.(int); ok {
 						if countInt+1 >= majorityCount {
 							cancel()
-							return res.value, nil
+							return res.value, TransactionError{nil, Success}
 						}
 						valueCount.Store(hash, countInt+1)
 					}
 
 				}
 			} else {
-				errs = append(errs, res.err)
+				errs = append(errs, res.txnErr.err)
+				if res.txnErr.errType != InvalidInfo {
+					combinedErrType = Other
+				}
 			}
 
 			responseCount++
 			if responseCount == len(nodes) {
-				return json.RawMessage{}, fmt.Errorf("no majority consensus reached with potential errors. Errors: %v\n", errs)
+				return json.RawMessage{}, TransactionError{fmt.Errorf("no majority consensus reached with potential errors. Errors: %v\n", errs), combinedErrType}
 			}
 		case <-ctx.Done():
-			return json.RawMessage{}, ctx.Err()
+			return json.RawMessage{}, TransactionError{ctx.Err(), Other}
 		}
 	}
 }
