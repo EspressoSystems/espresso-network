@@ -450,6 +450,8 @@ where
             drb_calculation_map_lock.insert(epoch);
         }
 
+        drop(drb_calculation_map_lock);
+
         let Ok(drb_seed_input_vec) = bincode::serialize(&root_leaf.justify_qc().signatures) else {
             return Err(anytrace::error!(
                 "Failed to serialize the QC signature for leaf {root_leaf:?}"
@@ -479,6 +481,8 @@ where
         let load_drb_progress_fn = self.load_drb_progress_fn.clone();
 
         let drb = compute_drb_result(drb_input, store_drb_progress_fn, load_drb_progress_fn).await;
+
+        let mut drb_calculation_map_lock = self.drb_calculation_map.lock().await;
         drb_calculation_map_lock.remove(&epoch);
         drop(drb_calculation_map_lock);
 
