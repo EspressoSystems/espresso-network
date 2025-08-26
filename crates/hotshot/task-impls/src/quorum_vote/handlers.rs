@@ -222,7 +222,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
 
             broadcast_event(
                 Arc::new(HotShotEvent::LeafDecided(leaf_info.leaf.clone())),
-                &event_sender,
+                event_sender,
             )
             .await;
         }
