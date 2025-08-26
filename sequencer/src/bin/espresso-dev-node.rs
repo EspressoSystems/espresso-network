@@ -237,7 +237,7 @@ struct Args {
     #[clap(flatten)]
     sql: persistence::sql::Options,
 
-    /// Testnet version to run (V3 or V4)
+    /// protocol version to run (V3 or V4)
     #[clap(long, env = "ESPRESSO_DEV_NODE_VERSION", default_value = "0.3")]
     version: DevNodeVersion,
 
