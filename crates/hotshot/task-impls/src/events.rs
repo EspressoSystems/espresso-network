@@ -295,6 +295,8 @@ pub enum HotShotEvent<TYPES: NodeType> {
     ),
     /// A replica receives an epoch root QC
     EpochRootQcRecv(EpochRootQuorumCertificate<TYPES>, TYPES::SignatureKey),
+    /// We decided the given leaves
+    LeavesDecided(Vec<Leaf2<TYPES>>),
 }
 
 impl<TYPES: NodeType> HotShotEvent<TYPES> {
@@ -390,6 +392,7 @@ impl<TYPES: NodeType> HotShotEvent<TYPES> {
                 Some(cert.view_number())
             },
             HotShotEvent::SetFirstEpoch(..) => None,
+            HotShotEvent::LeavesDecided(..) => None,
         }
     }
 }
@@ -706,6 +709,9 @@ impl<TYPES: NodeType> Display for HotShotEvent<TYPES> {
             },
             HotShotEvent::SetFirstEpoch(view, epoch) => {
                 write!(f, "SetFirstEpoch(view_number={view:?}, epoch={epoch:?})")
+            },
+            HotShotEvent::LeavesDecided(leaf) => {
+                write!(f, "LeavesDecided(leaf={leaf:?})")
             },
         }
     }
