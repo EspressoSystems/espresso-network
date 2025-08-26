@@ -21,7 +21,7 @@
 use std::{
     collections::{HashMap, HashSet},
     marker::PhantomData,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use anyhow::{bail, Context};
@@ -43,8 +43,10 @@ use itertools::Itertools;
 use jf_merkle_tree::prelude::{MerkleNode, MerkleProof};
 pub use sqlx::Executor;
 use sqlx::{
-    pool::Pool, query_builder::Separated, types::BitVec, Encode, FromRow, QueryBuilder, Type,
+    pool::Pool, query_builder::Separated, types::BitVec, Encode, Execute, FromRow, QueryBuilder,
+    Type,
 };
+use tokio::time::sleep;
 
 use super::{
     queries::{
@@ -399,17 +401,38 @@ impl Transaction<Write> {
         }
         query_builder.push(format!(" ON CONFLICT ({pk}) DO UPDATE SET {set_columns}"));
 
-        let res = self.execute(query_builder.build()).await?;
-        let stmt = query_builder.sql();
-        let rows_modified = res.rows_affected() as usize;
+        let interval = Duration::from_secs(1);
+        let mut retries = 5;
 
-        if rows_modified != num_rows {
-            tracing::error!(
-                stmt,
-                "unexpected number of rows modified: expected {num_rows} but got {rows_modified}"
-            );
+        loop {
+            let query = query_builder.build();
+            let statement = query.sql();
+            match self.execute(query).await {
+                Ok(res) => {
+                    let rows_modified = res.rows_affected() as usize;
+                    if rows_modified as usize != num_rows {
+                        tracing::error!(
+                            statement,
+                            "unexpected number of rows modified: expected {num_rows} but got \
+                             {rows_modified}"
+                        );
+                    }
+                    return Ok(());
+                },
+                Err(err) => {
+                    tracing::error!(
+                        statement,
+                        "error in statement execution ({} tries remaining): {err}",
+                        retries
+                    );
+                    if retries == 0 {
+                        bail!(err);
+                    }
+                    retries -= 1;
+                    sleep(interval).await;
+                },
+            }
         }
-        Ok(())
     }
 }
 
