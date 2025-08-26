@@ -114,8 +114,8 @@ func TestEspressoQuorumProposalEvent(t *testing.T) {
 
 	consensusMessage, err := UnmarshalConsensusMessage(consensusMessageInBytes)
 	require.Nil(t, err)
-	require.Equal(t, consensusMessage.Event.QuorumProposalWrapper.QuorumProposalDataWrapper.Data.ViewNumber, 93)
-	require.Equal(t, consensusMessage.Event.QuorumProposalWrapper.QuorumProposalDataWrapper.Data.BlockHeader.Fields.BuilderCommitment, ReferenceBuilderCommitment.String())
+	require.Equal(t, consensusMessage.Event.QuorumProposalWrapper.QuorumProposalDataWrapper.Data.Proposal.ViewNumber, 13)
+	require.Equal(t, consensusMessage.Event.QuorumProposalWrapper.QuorumProposalDataWrapper.Data.Proposal.BlockHeader.Fields.BuilderCommitment, ReferenceBuilderCommitment.String())
 }
 
 func TestEspressoDaProposalEvent(t *testing.T) {
