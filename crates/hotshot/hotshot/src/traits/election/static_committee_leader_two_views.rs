@@ -12,7 +12,7 @@ use hotshot_types::{
     drb::DrbResult,
     stake_table::HSStakeTable,
     traits::{
-        election::Membership,
+        election::{Membership, NoStakeTableHash},
         node_implementation::NodeType,
         signature_key::{SignatureKey, StakeTableEntryType},
     },
@@ -49,6 +49,7 @@ pub struct StaticCommitteeLeaderForTwoViews<T: NodeType> {
 
 impl<TYPES: NodeType> Membership<TYPES> for StaticCommitteeLeaderForTwoViews<TYPES> {
     type Error = hotshot_utils::anytrace::Error;
+    type StakeTableHash = NoStakeTableHash;
     /// Create a new election
     fn new(committee_members: Vec<PeerConfig<TYPES>>, da_members: Vec<PeerConfig<TYPES>>) -> Self {
         // For each eligible leader, get the stake table entry

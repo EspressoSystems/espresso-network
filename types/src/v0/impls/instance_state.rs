@@ -24,8 +24,8 @@ use super::{
 use crate::EpochCommittees;
 use crate::{
     v0::{
-        traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
-        Upgrade, UpgradeMode,
+        impls::StakeTableHash, traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo,
+        L1Client, Timestamp, Upgrade, UpgradeMode,
     },
     v0_3::RewardAmount,
     ValidatorMap,
@@ -81,7 +81,7 @@ impl MembershipPersistence for NoStorage {
     async fn load_stake(
         &self,
         _epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>)>> {
+    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>> {
         Ok(None)
     }
 
@@ -94,6 +94,7 @@ impl MembershipPersistence for NoStorage {
         _epoch: EpochNumber,
         _stake: ValidatorMap,
         _block_reward: Option<RewardAmount>,
+        _stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()> {
         Ok(())
     }

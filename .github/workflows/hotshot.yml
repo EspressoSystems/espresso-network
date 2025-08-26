@@ -34,9 +34,6 @@ jobs:
       - uses: actions/checkout@v4
         name: Checkout Repository
 
-      - name: Install Rust
-        uses: mkroening/rust-toolchain-toml@main
-
       - uses: Swatinem/rust-cache@v2
         name: Enable Rust Caching
         with:
@@ -76,9 +73,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         name: Checkout Repository
-
-      - name: Install Rust
-        uses: mkroening/rust-toolchain-toml@main
 
       - uses: Swatinem/rust-cache@v2
         name: Enable Rust Caching
