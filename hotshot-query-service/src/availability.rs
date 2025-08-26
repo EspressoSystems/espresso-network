@@ -1044,7 +1044,7 @@ mod test {
             // transaction.
             for (j, txn_from_block) in block.enumerate() {
                 let txn: TransactionQueryData<MockTypes> = client
-                    .get(&format!("transaction/{}/{}", i, j.position))
+                    .get(&format!("transaction/{}/{}/noproof", i, j.position))
                     .send()
                     .await
                     .unwrap();
@@ -1061,7 +1061,7 @@ mod test {
                     txn.hash(),
                     client
                         .get::<TransactionQueryData<MockTypes>>(&format!(
-                            "transaction/hash/{}",
+                            "transaction/hash/{}/noproof",
                             txn.hash()
                         ))
                         .send()
@@ -1388,7 +1388,7 @@ mod test {
             // transaction.
             for (j, txn_from_block) in block.enumerate() {
                 let txn: TransactionQueryData<MockTypes> = client
-                    .get(&format!("transaction/{}/{}", i, j.position))
+                    .get(&format!("transaction/{}/{}/noproof", i, j.position))
                     .send()
                     .await
                     .unwrap();
@@ -1405,7 +1405,7 @@ mod test {
                     txn.hash(),
                     client
                         .get::<TransactionQueryData<MockTypes>>(&format!(
-                            "transaction/hash/{}",
+                            "transaction/hash/{}/noproof",
                             txn.hash()
                         ))
                         .send()

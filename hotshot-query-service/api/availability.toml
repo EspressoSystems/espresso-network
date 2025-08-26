@@ -239,7 +239,7 @@ Opens a WebSockets connection and sends a stream of the same data type returned 
 """
 
 [route.get_transaction]
-PATH = ["transaction/:height/:index", "transaction/hash/:hash"]
+PATH = ["transaction/:height/:index/noproof", "transaction/hash/:hash/noproof"]
 ":height" = "Integer"
 ":index" = "Integer"
 ":hash" = "TaggedBase64"
@@ -275,13 +275,18 @@ Returns
 """
 
 [route.get_transaction_proof]
-PATH = ["transaction/:height/:index/proof", "transaction/hash/:hash/proof"]
+PATH = [
+    "transaction/:height/:index",
+    "transaction/hash/:hash",
+    "transaction/:height/:index/proof",
+    "transaction/hash/:hash/proof"
+]
 ":height" = "Integer"
 ":index" = "Integer"
 ":hash" = "TaggedBase64"
 DOC = """
 
-Get a transaction inclusion proof. This is similar to the transaction endpoints. 
+Get a transaction with its inclusion proof. This is similar to the transaction endpoints. 
 In some cases this endpoint can be significantly slower. 
 
 Returns
