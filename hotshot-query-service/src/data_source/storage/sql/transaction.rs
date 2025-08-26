@@ -411,11 +411,12 @@ impl Transaction<Write> {
                 Ok(res) => {
                     let rows_modified = res.rows_affected() as usize;
                     if rows_modified != num_rows {
-                        tracing::error!(
-                            statement,
-                            "unexpected number of rows modified: expected {num_rows} but got \
-                             {rows_modified}"
+                        let error = format!(
+                            "unexpected number of rows modified: expected {num_rows}, got \
+                             {rows_modified}. query: {statement}"
                         );
+                        tracing::error!(error);
+                        bail!(error);
                     }
                     return Ok(());
                 },
