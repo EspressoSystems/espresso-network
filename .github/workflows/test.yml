@@ -224,8 +224,9 @@ jobs:
       - name: Install node deps
         uses: nick-fields/retry@v3
         with:
-          timeout_minutes: 1
-          max_attempts: 5
+          timeout_minutes: 3
+          max_attempts: 10
+          retry_wait_seconds: 60
           retry_on: error
           command: yarn
 
@@ -263,8 +264,9 @@ jobs:
       - name: Install node deps
         uses: nick-fields/retry@v3
         with:
-          timeout_minutes: 1
-          max_attempts: 5
+          timeout_minutes: 3
+          max_attempts: 10
+          retry_wait_seconds: 60
           retry_on: error
           command: yarn
 
