@@ -33,6 +33,27 @@ func NewClient(url string) *Client {
 	}
 }
 
+// Error Type of a transaction submission or fetch.
+// Used for the downstream (OP integration, for example) to decide whether to retry or skip the
+// job.
+type TransactionErrorType int
+
+const (
+	// The job is successful.
+	Success TransactionErrorType = iota
+	// The hash or the request is invalid. A simple retry won't help.
+	InvalidInfo
+	// Error not due to invalid info, e.g., sever issue, IO error, timeout. May be fixed by a
+	// retry.
+	Other
+)
+
+// Error and its type of a transaction submission or fetch.
+type TransactionError struct {
+	err     error
+	errType TransactionErrorType
+}
+
 func (c *Client) FetchVidCommonByHeight(ctx context.Context, blockHeight uint64) (common.VidCommon, error) {
 	var res types.VidCommonQueryData
 	if err := c.get(ctx, &res, "availability/vid/common/%d", blockHeight).err; err != nil {
@@ -84,30 +105,8 @@ func (c *Client) FetchExplorerTransactionByHash(ctx context.Context, hash *types
 	return res, nil
 }
 
-// Error Type of a transaction submission or fetch.
-// Used for the downstream (OP integration, for example) to decide whether to retry or skip the
-// job.
-type TransactionErrorType int
-
-const (
-	// The job is successful.
-	Success TransactionErrorType = iota
-	// The hash or the request is invalid. A simple retry won't help.
-	InvalidInfo
-	// Error not due to invalid info, e.g., sever issue, IO error, timeout. May be fixed by a
-	// retry.
-	Other
-)
-
-// Error and its type of a transaction submission or fetch.
-type TransactionError struct {
-	err     error
-	errType TransactionErrorType
-}
-
 func (c *Client) FetchTransactionByHash(ctx context.Context, hash *types.TaggedBase64) (types.TransactionQueryData, TransactionError) {
 	if hash == nil {
-		// The fetch failed and should be skipped since the hash is invalid.
 		return types.TransactionQueryData{}, TransactionError{fmt.Errorf("hash is nil"), InvalidInfo}
 	}
 	var res types.TransactionQueryData

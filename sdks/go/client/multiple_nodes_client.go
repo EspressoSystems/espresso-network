@@ -143,7 +143,7 @@ func (c *MultipleNodesClient) FetchVidCommonByHeight(ctx context.Context, blockH
 
 func (c *MultipleNodesClient) SubmitTransaction(ctx context.Context, tx common.Transaction) (*common.TaggedBase64, TransactionError) {
 	// Consider the error type of the submission as
-	// * `Success` if one node succeeds.
+	// * `Success` if at least one node succeeded.
 	// * `InvalidInfo` if all failed fetches were due to InvalidInfo.
 	// * `Other` in all other cases.
 	var combinedErrType TransactionErrorType = Success
@@ -186,7 +186,7 @@ func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T
 
 	var errs []error
 	// Consider the error type of the fetch as
-	// * `Success` if the majority of the nodes succeed.
+	// * `Success` if the majority of the nodes succeeded.
 	// * `InvalidInfo` if all failed fetches were due to InvalidInfo.
 	// * `Other` in all other cases.
 	var combinedErrType TransactionErrorType = Success
