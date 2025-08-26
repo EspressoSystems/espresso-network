@@ -33,25 +33,15 @@ func NewClient(url string) *Client {
 	}
 }
 
-// Error Type of a transaction submission or fetch.
-// Used for the downstream (OP integration, for example) to decide whether to retry or skip the
-// job.
-type TransactionErrorType int
-
-const (
-	// The job is successful.
-	Success TransactionErrorType = iota
-	// The hash or the request is invalid. A simple retry won't help.
-	InvalidInfo
-	// Error not due to invalid info, e.g., sever issue, IO error, timeout. May be fixed by a
-	// retry.
-	Other
-)
-
-// Error and its type of a transaction submission or fetch.
+// Error of a transaction submission or fetch and whether it can be retried.
 type TransactionError struct {
 	err     error
-	errType TransactionErrorType
+
+	// * `true` if it failed due to a server issue, IO error, timeout, etc., that may be fixed by a
+	// retry.
+	// * `false` if it succeeded, or failed due to invalid information or an error that cannot be
+	// resolved by a retry.
+	retryable bool
 }
 
 func (c *Client) FetchVidCommonByHeight(ctx context.Context, blockHeight uint64) (common.VidCommon, error) {
@@ -83,7 +73,7 @@ func (c *Client) FetchRawHeaderByHeight(ctx context.Context, blockHeight uint64)
 	if txnErr.err != nil {
 		return nil, txnErr
 	}
-	return res, TransactionError{nil, Success}
+	return res, TransactionError{nil, false}
 }
 
 func (c *Client) FetchHeadersByRange(ctx context.Context, from uint64, until uint64) ([]types.HeaderImpl, error) {
@@ -107,13 +97,13 @@ func (c *Client) FetchExplorerTransactionByHash(ctx context.Context, hash *types
 
 func (c *Client) FetchTransactionByHash(ctx context.Context, hash *types.TaggedBase64) (types.TransactionQueryData, TransactionError) {
 	if hash == nil {
-		return types.TransactionQueryData{}, TransactionError{fmt.Errorf("hash is nil"), InvalidInfo}
+		return types.TransactionQueryData{}, TransactionError{fmt.Errorf("hash is nil"), false}
 	}
 	var res types.TransactionQueryData
 	if txnErr := c.get(ctx, &res, "availability/transaction/hash/%s", hash.String()); txnErr.err != nil {
 		return types.TransactionQueryData{}, txnErr
 	}
-	return res, TransactionError{nil, Success}
+	return res, TransactionError{nil, false}
 }
 
 // Fetches a block merkle proof at the snapshot rootHeight for the leaf at the provided HotShot height
@@ -168,28 +158,28 @@ func (c *Client) FetchTransactionsInBlock(ctx context.Context, blockHeight uint6
 func (c *Client) SubmitTransaction(ctx context.Context, tx types.Transaction) (*types.TaggedBase64, TransactionError) {
 	response, err := c.tryPostRequest(ctx, c.baseUrl, tx)
 	if err != nil {
-		return nil, TransactionError{err, InvalidInfo}
+		return nil, TransactionError{err, false}
 	}
 
 	defer response.Body.Close()
 	if response.StatusCode != 200 {
 		if response.StatusCode >= 500 || response.StatusCode == 429 {
-			return nil, TransactionError{err, Other}
+			return nil, TransactionError{err, true}
 		}
-		return nil, TransactionError{err, InvalidInfo}
+		return nil, TransactionError{err, false}
 	}
 
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
-		return nil, TransactionError{err, Other}
+		return nil, TransactionError{err, true}
 	}
 
 	var hash types.TaggedBase64
 	if err := json.Unmarshal(body, &hash); err != nil {
-		return nil, TransactionError{err, InvalidInfo}
+		return nil, TransactionError{err, false}
 	}
 
-	return &hash, TransactionError{nil, Success}
+	return &hash, TransactionError{nil, false}
 }
 
 type NamespaceResponse struct {
@@ -200,7 +190,7 @@ type NamespaceResponse struct {
 func (c *Client) getRawMessage(ctx context.Context, format string, args ...any) (json.RawMessage, TransactionError) {
 	res, err := c.tryGetRequest(ctx, c.baseUrl, format, args...)
 	if err != nil {
-		return nil, TransactionError{err, InvalidInfo}
+		return nil, TransactionError{err, false}
 	}
 
 	defer res.Body.Close()
@@ -212,9 +202,9 @@ func (c *Client) getRawMessage(ctx context.Context, format string, args ...any) 
 		body, _ := io.ReadAll(res.Body)
 		err := fmt.Errorf("request failed with status %d and body %s", res.StatusCode, string(body))
 		if res.StatusCode >= 500 || res.StatusCode == 429 {
-			return nil, TransactionError{err, Other}
+			return nil, TransactionError{err, true}
 		} else {
-			return nil, TransactionError{err, InvalidInfo}
+			return nil, TransactionError{err, false}
 		}
 	}
 
@@ -223,9 +213,9 @@ func (c *Client) getRawMessage(ctx context.Context, format string, args ...any) 
 	// failed.
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		return nil, TransactionError{err, Other}
+		return nil, TransactionError{err, true}
 	}
-	return body, TransactionError{nil, Success}
+	return body, TransactionError{nil, false}
 }
 
 func (c *Client) get(ctx context.Context, out any, format string, args ...any) TransactionError {
@@ -234,9 +224,9 @@ func (c *Client) get(ctx context.Context, out any, format string, args ...any) T
 		return txnErr
 	}
 	if err := json.Unmarshal(body, out); err != nil {
-		return TransactionError{fmt.Errorf("request failed with body %s and error %v", string(body), err), InvalidInfo}
+		return TransactionError{fmt.Errorf("request failed with body %s and error %v", string(body), err), false}
 	}
-	return TransactionError{nil, Success}
+	return TransactionError{nil, false}
 }
 
 func (c *Client) tryGetRequest(ctx context.Context, baseUrl, format string, args ...interface{}) (*http.Response, error) {

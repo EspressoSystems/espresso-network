@@ -67,7 +67,7 @@ func (c *MultipleNodesClient) FetchTransactionByHash(ctx context.Context, hash *
 	if txnErr := c.getWithMajority(ctx, &res, "availability/transaction/hash/%s", hash.String()); txnErr.err != nil {
 		return types.TransactionQueryData{}, txnErr
 	}
-	return res, TransactionError{nil, Success}
+	return res, TransactionError{nil, false}
 }
 
 func (c *MultipleNodesClient) FetchExplorerTransactionByHash(ctx context.Context, hash *types.TaggedBase64) (types.ExplorerTransactionQueryData, error) {
@@ -96,7 +96,7 @@ func (c *MultipleNodesClient) getWithMajority(ctx context.Context, out any, form
 	if txnErr.err != nil {
 		return txnErr
 	}
-	return TransactionError{json.Unmarshal(body, out), InvalidInfo}
+	return TransactionError{json.Unmarshal(body, out), false}
 }
 
 func (c *MultipleNodesClient) FetchTransactionsInBlock(ctx context.Context, blockHeight uint64, namespace uint64) (TransactionsInBlock, error) {
@@ -142,26 +142,23 @@ func (c *MultipleNodesClient) FetchVidCommonByHeight(ctx context.Context, blockH
 }
 
 func (c *MultipleNodesClient) SubmitTransaction(ctx context.Context, tx common.Transaction) (*common.TaggedBase64, TransactionError) {
-	// Consider the error type of the submission as
-	// * `Success` if at least one node succeeded.
-	// * `InvalidInfo` if all failed fetches were due to InvalidInfo.
-	// * `Other` in all other cases.
-	var combinedErrType TransactionErrorType = Success
+	// Consider a failed submission as retryable if it failed for one node with a retryable reason.
+	var retryable = false
 
 	// Check if one node is successfully able to submit the transaction
 	var errs []error
 	for _, node := range c.nodes {
 		hash, txnErr := node.SubmitTransaction(ctx, tx)
 		if txnErr.err == nil {
-			return hash, TransactionError{nil, Success}
+			return hash, TransactionError{nil, false}
 		} else {
 			errs = append(errs, txnErr.err)
-			if txnErr.errType != InvalidInfo {
-				combinedErrType = Other
+			if txnErr.retryable {
+				retryable = true
 			}
 		}
 	}
-	return nil, TransactionError{fmt.Errorf("encountered an error with all nodes while attempting to SubmitTransaction.\n Errors: %v \n", errs), combinedErrType}
+	return nil, TransactionError{fmt.Errorf("encountered an error with all nodes while attempting to SubmitTransaction.\n Errors: %v \n", errs), retryable}
 }
 
 func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T) (json.RawMessage, TransactionError)) (json.RawMessage, TransactionError) {
@@ -185,11 +182,8 @@ func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T
 	}
 
 	var errs []error
-	// Consider the error type of the fetch as
-	// * `Success` if the majority of the nodes succeeded.
-	// * `InvalidInfo` if all failed fetches were due to InvalidInfo.
-	// * `Other` in all other cases.
-	var combinedErrType TransactionErrorType = Success
+	// Consider a failed fetch as retryable if it failed for one node with a retryable reason.
+	var retryable = false
 	var valueCount sync.Map
 	majorityCount := (len(nodes) / 2) + 1
 	responseCount := 0
@@ -206,15 +200,15 @@ func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T
 				if err != nil {
 					fmt.Printf("error: failed to normalize json value: %v, error: %v", res.value, err)
 					errs = append(errs, err)
-					if res.txnErr.errType != InvalidInfo {
-						combinedErrType = Other
+					if res.txnErr.retryable {
+						retryable = true
 					}
 				} else {
 					count, _ := valueCount.LoadOrStore(hash, 0)
 					if countInt, ok := count.(int); ok {
 						if countInt+1 >= majorityCount {
 							cancel()
-							return res.value, TransactionError{nil, Success}
+							return res.value, TransactionError{nil, false}
 						}
 						valueCount.Store(hash, countInt+1)
 					}
@@ -222,17 +216,17 @@ func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T
 				}
 			} else {
 				errs = append(errs, res.txnErr.err)
-				if res.txnErr.errType != InvalidInfo {
-					combinedErrType = Other
+				if res.txnErr.retryable {
+					retryable = true
 				}
 			}
 
 			responseCount++
 			if responseCount == len(nodes) {
-				return json.RawMessage{}, TransactionError{fmt.Errorf("no majority consensus reached with potential errors. Errors: %v\n", errs), combinedErrType}
+				return json.RawMessage{}, TransactionError{fmt.Errorf("no majority consensus reached with potential errors. Errors: %v\n", errs), retryable}
 			}
 		case <-ctx.Done():
-			return json.RawMessage{}, TransactionError{ctx.Err(), Other}
+			return json.RawMessage{}, TransactionError{ctx.Err(), true}
 		}
 	}
 }

@@ -26,8 +26,8 @@ type MockClient struct {
 func (m *MockClient) FetchRawHeaderByHeight(ctx context.Context, height uint64) (json.RawMessage, TransactionError) {
 	args := m.Called(ctx, height)
 
-	// Use `Other` as the error type for simplicity in tests.
-	return args.Get(0).(json.RawMessage), TransactionError{args.Error(1), Other}
+	// Mark the fetch as retryable for simplicity in tests.
+	return args.Get(0).(json.RawMessage), TransactionError{args.Error(1), true}
 }
 
 func TestFetchWithMajority(t *testing.T) {
