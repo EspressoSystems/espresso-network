@@ -55,7 +55,7 @@ contract StakeTable_register_Test is LightClientCommonTest {
     ERC1967Proxy public proxy;
 
     function genClientWallet(address sender, string memory _seed)
-        private
+        public
         returns (BN254.G2Point memory, EdOnBN254.EdOnBN254Point memory, BN254.G1Point memory)
     {
         // Generate a BLS signature and other values using rust code
@@ -1505,6 +1505,47 @@ contract StakeTableUpgradeV2Test is Test {
 
         vm.expectRevert(StakeTableV2.DeprecatedFunction.selector);
         proxy.updateConsensusKeys(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1());
+    }
+
+    function test_expectRevertWhen_InvalidSchnorrSigLength() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = stakeTableRegisterTest.stakeTable();
+        proxy.upgradeToAndCall(address(new StakeTableV2()), "");
+        vm.stopPrank();
+
+        address validator = makeAddr("validator");
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory blsSig
+        ) = stakeTableRegisterTest.genClientWallet(validator, "1");
+        vm.startPrank(validator);
+        StakeTableV2 proxyV2 = StakeTableV2(address(proxy));
+        bytes memory schnorrSig = new bytes(32);
+
+        vm.expectRevert(StakeTableV2.InvalidSchnorrSig.selector);
+        proxyV2.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 0);
+        vm.stopPrank();
+    }
+
+    function test_registerValidator_validSchnorrSigLength() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = stakeTableRegisterTest.stakeTable();
+        proxy.upgradeToAndCall(address(new StakeTableV2()), "");
+        vm.stopPrank();
+
+        address validator = makeAddr("validator");
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory blsSig
+        ) = stakeTableRegisterTest.genClientWallet(validator, "1");
+        vm.startPrank(validator);
+        StakeTableV2 proxyV2 = StakeTableV2(address(proxy));
+        bytes memory schnorrSig = new bytes(64);
+
+        proxyV2.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 0);
+        vm.stopPrank();
     }
 }
 

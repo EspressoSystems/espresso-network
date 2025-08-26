@@ -5,6 +5,7 @@ resolver = "2"
 
 members = [
     "alloy-compat",
+    "benchmark-stats",
     "client",
     "contracts/rust/adapter",
     "contracts/rust/deployer",
@@ -44,6 +45,7 @@ members = [
 # for the whole workspace by default.
 default-members = [
     "alloy-compat",
+    "benchmark-stats",
     "client",
     "contracts/rust/adapter",
     "contracts/rust/deployer",
@@ -199,7 +201,7 @@ committable = "0.2"
 derivative = "2.2"
 itertools = "0.12"
 jf-crhf = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5" }
-jf-merkle-tree = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5", features = [
+jf-merkle-tree = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5-patch1", features = [
     "std",
 ] }
 jf-pcs = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5", features = [

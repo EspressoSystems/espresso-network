@@ -287,7 +287,7 @@ pub mod testing {
         }
         // enable hotshot event streaming
         pub fn enable_hotshot_node_event_streaming<P: SequencerPersistence, V: Versions>(
-            hotshot_events_api_url: Url,
+            sequencer_api_url: Url,
             known_nodes_with_stake: Vec<PeerConfig<SeqTypes>>,
             num_non_staking_nodes: usize,
             hotshot_context_handle: Arc<Consensus<network::Memory, P, V>>,
@@ -299,7 +299,7 @@ pub mod testing {
             )));
 
             // serve the hotshot event streaming api with events_streamer state
-            Self::run_hotshot_event_streaming_api(hotshot_events_api_url, events_streamer.clone());
+            Self::run_hotshot_event_streaming_api(sequencer_api_url, events_streamer.clone());
 
             // send the events to the event streaming state
             tokio::spawn({

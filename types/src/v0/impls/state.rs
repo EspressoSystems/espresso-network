@@ -6,11 +6,12 @@ use committable::{Commitment, Committable};
 use either::Either;
 use hotshot_query_service::merklized_state::MerklizedState;
 use hotshot_types::{
-    data::{BlockError, ViewNumber},
+    data::{BlockError, EpochNumber, ViewNumber},
     traits::{
         block_contents::BlockHeader, node_implementation::ConsensusTime,
         signature_key::BuilderSignatureKey, states::StateDelta, ValidatedState as HotShotState,
     },
+    utils::{epoch_from_block_number, is_ge_epoch_root},
 };
 use itertools::Itertools;
 use jf_merkle_tree::{
@@ -32,7 +33,7 @@ use super::{
 use crate::{
     traits::StateCatchup,
     v0::{
-        impls::distribute_block_reward,
+        impls::{distribute_block_reward, StakeTableHash},
         sparse_mt::{Keccak256Hasher, KeccakNode},
     },
     v0_3::{
@@ -43,9 +44,9 @@ use crate::{
         Delta, RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2,
         REWARD_MERKLE_TREE_V2_HEIGHT,
     },
-    BlockMerkleTree, FeeAccount, FeeAmount, FeeInfo, FeeMerkleTree, Header, Leaf2,
-    NsTableValidationError, PayloadByteLen, SeqTypes, UpgradeType, BLOCK_MERKLE_TREE_HEIGHT,
-    FEE_MERKLE_TREE_HEIGHT,
+    BlockMerkleTree, DrbAndHeaderUpgradeVersion, FeeAccount, FeeAmount, FeeInfo, FeeMerkleTree,
+    Header, Leaf2, NsTableValidationError, PayloadByteLen, SeqTypes, UpgradeType,
+    BLOCK_MERKLE_TREE_HEIGHT, FEE_MERKLE_TREE_HEIGHT,
 };
 
 /// This enum is not used in code but functions as an index of
@@ -71,6 +72,11 @@ pub enum BuilderValidationError {
 /// Possible proposal validation failures
 #[derive(Error, Debug, Eq, PartialEq)]
 pub enum ProposalValidationError {
+    #[error("Next stake table hash mismatch: expected={expected:?}, proposal={proposal:?}")]
+    NextStakeTableHashMismatch {
+        expected: StakeTableHash,
+        proposal: StakeTableHash,
+    },
     #[error("Invalid ChainConfig: expected={expected:?}, proposal={proposal:?}")]
     InvalidChainConfig {
         expected: Box<ChainConfig>,
@@ -159,6 +165,14 @@ pub enum ProposalValidationError {
     InvalidL1Finalized,
     #[error("reward root not found")]
     RewardRootNotFound {},
+    #[error("Next stake table not found")]
+    NextStakeTableNotFound,
+    #[error("Next stake table hash missing")]
+    NextStakeTableHashNotFound,
+    #[error("No Epoch Height")]
+    NoEpochHeight,
+    #[error("No First Epoch Configured")]
+    NoFirstEpoch,
 }
 
 impl StateDelta for Delta {}
@@ -1003,6 +1017,52 @@ pub async fn get_l1_deposits(
     }
 }
 
+async fn validate_next_stake_table_hash(
+    instance: &NodeState,
+    proposed_header: &Header,
+) -> Result<(), ProposalValidationError> {
+    let Some(epoch_height) = instance.epoch_height else {
+        return Err(ProposalValidationError::NoEpochHeight);
+    };
+    if !is_ge_epoch_root(proposed_header.height(), epoch_height) {
+        return Ok(());
+    }
+    let epoch = EpochNumber::new(epoch_from_block_number(
+        proposed_header.height(),
+        epoch_height,
+    ));
+    let coordinator = instance.coordinator.clone();
+    let Some(first_epoch) = coordinator.membership().read().await.first_epoch() else {
+        return Err(ProposalValidationError::NoFirstEpoch);
+    };
+
+    // Rewards are distributed only if the current epoch is not the first or second epoch
+    // this is because we don't have stake table from the contract for the first two epochs
+    if epoch <= first_epoch + 1 {
+        return Ok(());
+    }
+
+    let epoch_membership = instance
+        .coordinator
+        .stake_table_for_epoch(Some(epoch + 1))
+        .await
+        .map_err(|_| ProposalValidationError::NextStakeTableNotFound)?;
+    let next_stake_table_hash = epoch_membership
+        .stake_table_hash()
+        .await
+        .ok_or(ProposalValidationError::NextStakeTableNotFound)?;
+    let Some(proposed_next_stake_table_hash) = proposed_header.next_stake_table_hash() else {
+        return Err(ProposalValidationError::NextStakeTableHashNotFound);
+    };
+    if next_stake_table_hash != proposed_next_stake_table_hash {
+        return Err(ProposalValidationError::NextStakeTableHashMismatch {
+            expected: next_stake_table_hash,
+            proposal: proposed_next_stake_table_hash,
+        });
+    }
+    Ok(())
+}
+
 impl HotShotState<SeqTypes> for ValidatedState {
     type Error = BlockError;
     type Instance = NodeState;
@@ -1042,6 +1102,10 @@ impl HotShotState<SeqTypes> for ValidatedState {
             )
             .await
             .map_err(|e| BlockError::FailedHeaderApply(e.to_string()))?;
+
+        if version >= DrbAndHeaderUpgradeVersion::version() {
+            validate_next_stake_table_hash(instance, proposed_header).await?;
+        }
 
         // Validate the proposal.
         let validated_state = ValidatedTransition::new(
