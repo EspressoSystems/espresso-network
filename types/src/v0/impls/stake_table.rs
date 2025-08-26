@@ -2730,6 +2730,22 @@ mod tests {
         assert!(matches!(err, StakeTableError::BlsKeyAlreadyUsed(addr) if addr == bls.to_string()));
     }
 
+    // Mismatch between GCL and contract implementation. The contract does not
+    // allow re-registration for the same Ethereum account.
+    #[test]
+    fn test_regression_reregister_eth_account() -> anyhow::Result<()> {
+        let val1 = TestValidator::random();
+        let val2 = val1.randomize_keys();
+
+        let register1 = ValidatorRegisteredV2::from(&val1).into();
+        let deregister1 = ValidatorExit::from(&val1).into();
+        let register2 = ValidatorRegisteredV2::from(&val2).into();
+        let events = vec![register1, deregister1, register2];
+
+        assert!(validators_from_l1_events(events.iter().cloned()).is_err());
+        Ok(())
+    }
+
     #[test]
     fn test_display_log() {
         let serialized = r#"{"address":"0x0000000000000000000000000000000000000069","topics":["0x0000000000000000000000000000000000000000000000000000000000000069"],"data":"0x69","blockHash":"0x0000000000000000000000000000000000000000000000000000000000000069","blockNumber":"0x69","blockTimestamp":"0x69","transactionHash":"0x0000000000000000000000000000000000000000000000000000000000000069","transactionIndex":"0x69","logIndex":"0x70","removed":false}"#;
