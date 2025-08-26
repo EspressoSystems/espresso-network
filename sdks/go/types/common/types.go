@@ -378,8 +378,12 @@ type QuorumProposalWrapper struct {
 }
 
 type QuorumProposalDataWrapper struct {
-	Data      QuorumProposal `json:"data"`
-	Signature string         `json:"signature"`
+	Data      QuorumProposalData `json:"data"`
+	Signature string             `json:"signature"`
+}
+
+type QuorumProposalData struct {
+	Proposal QuorumProposal `json:"proposal"`
 }
 
 type QuorumProposal struct {

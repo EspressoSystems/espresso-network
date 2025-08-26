@@ -54,6 +54,7 @@ type LeafChain = common_types.LeafChain
 type Leaf = common_types.Leaf
 type QuorumProposalWrapper = common_types.QuorumProposalWrapper
 type QuorumProposalDataWrapper = common_types.QuorumProposalDataWrapper
+type QuorumProposalData = common_types.QuorumProposalData
 type QuorumProposal = common_types.QuorumProposal
 type BlockHeader = common_types.BlockHeader
 type Fields = common_types.Fields
