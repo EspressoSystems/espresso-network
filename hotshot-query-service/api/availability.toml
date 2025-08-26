@@ -244,7 +244,7 @@ PATH = ["transaction/:height/:index/noproof", "transaction/hash/:hash/noproof"]
 ":index" = "Integer"
 ":hash" = "TaggedBase64"
 DOC = """
-Get a transaction inclusion proof by its `index` in the block at `height` or by its hash.
+Get a transaction by its `index` in the block at `height` or by its hash.
 
 If specified, `:height` and `:index` represent the block containing the transaction and the index
 of the transaction within the block, respectively. Otherwise, `:hash` is the hash of the
@@ -255,12 +255,7 @@ prohibit duplicate transactions. While each transaction has a unique position in
 by its height and index) there may be multiple transactions at different positions with the same
 hash. In such cases, this endpoint will return the _earliest_ transaction with the requested hash.
 
-The response includes the hash of the block containing this transaction as well as an application-
-defined inclusion proof relative to the block hash. Applications may use `proof` to prove that the
-returned transaction is actually a member of its block, but note that the proof system used here
-will vary by application. Some may prove more (for example, a shared sequencer proving that the
-transaction belongs not only to the block but to a section of the block dedicated to a specific
-rollup), some may prove less (for example, a trusted query service may return `null` for the proof).
+The response includes the hash of the block containing this transaction.
 
 Returns
 ```
@@ -288,6 +283,13 @@ DOC = """
 
 Get a transaction with its inclusion proof. This is similar to the transaction endpoints. 
 In some cases this endpoint can be significantly slower. 
+
+The response includes the hash of the block containing this transaction as well as an application-
+defined inclusion proof relative to the block hash. Applications may use `proof` to prove that the
+returned transaction is actually a member of its block, but note that the proof system used here
+will vary by application. Some may prove more (for example, a shared sequencer proving that the
+transaction belongs not only to the block but to a section of the block dedicated to a specific
+rollup), some may prove less (for example, a trusted query service may return `null` for the proof).
 
 Returns
 ```
