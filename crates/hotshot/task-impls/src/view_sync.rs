@@ -119,6 +119,8 @@ pub struct ViewSyncTaskState<TYPES: NodeType, V: Versions> {
 
     /// Keeps track of the highest finalized view and epoch, used for garbage collection
     pub highest_finalized_epoch_view: (Option<TYPES::Epoch>, TYPES::View),
+
+    pub epoch_height: u64,
 }
 
 #[async_trait]
@@ -513,6 +515,19 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                     self.next_view = self.cur_view;
                     self.num_timeouts_tracked = 0;
                 }
+
+                self.garbage_collect_tasks().await;
+            },
+            HotShotEvent::LeafDecided(leaf) => {
+                let finalized_epoch = self
+                    .highest_finalized_epoch_view
+                    .0
+                    .max(leaf.epoch(self.epoch_height));
+                let finalized_view = self.highest_finalized_epoch_view.1.max(leaf.view_number());
+
+                self.highest_finalized_epoch_view = (finalized_epoch, finalized_view);
+
+                self.garbage_collect_tasks().await;
             },
             &HotShotEvent::Timeout(view_number, ..) => {
                 // This is an old timeout and we can ignore it
