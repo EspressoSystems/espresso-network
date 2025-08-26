@@ -222,7 +222,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install node deps
-        run: yarn
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 3
+          max_attempts: 10
+          retry_wait_seconds: 60
+          retry_on: error
+          command: yarn
 
       - name: Install nextest
         uses: taiki-e/install-action@nextest
@@ -256,7 +262,13 @@ jobs:
           submodules: recursive
 
       - name: Install node deps
-        run: yarn
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 3
+          max_attempts: 10
+          retry_wait_seconds: 60
+          retry_on: error
+          command: yarn
 
       - name: Install nextest
         uses: taiki-e/install-action@nextest
