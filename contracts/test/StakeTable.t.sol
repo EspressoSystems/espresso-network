@@ -592,7 +592,11 @@ contract StakeTable_register_Test is LightClientCommonTest {
         (uint256 delegatedAmountBefore,) = stakeTable.validators(validator);
         stakeTable.undelegate(validator, 2 ether);
         (uint256 delegatedAmountAfter,) = stakeTable.validators(validator);
-        assertEq(delegatedAmountAfter, delegatedAmountBefore - 2 ether);
+        assertEq(
+            delegatedAmountAfter,
+            delegatedAmountBefore,
+            "the validator's delegated amount is the full amount until the delegator claims the withdrawal"
+        );
 
         vm.expectRevert(S.UndelegationAlreadyExists.selector);
         stakeTable.undelegate(validator, 1 ether);
@@ -634,6 +638,8 @@ contract StakeTable_register_Test is LightClientCommonTest {
 
         assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
         assertEq(token.balanceOf(address(stakeTable)), 0);
+        (uint256 validatorDelegatedAmountAtEnd,) = stakeTable.validators(validator);
+        assertEq(validatorDelegatedAmountAtEnd, 0, "the validator's delegatedAmount should be zero");
 
         vm.stopPrank();
     }
@@ -748,12 +754,14 @@ contract StakeTable_register_Test is LightClientCommonTest {
 
         registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
 
+        // delegate all of the balance
         vm.startPrank(delegator);
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.Delegated(delegator, validator, INITIAL_BALANCE);
         stakeTable.delegate(validator, INITIAL_BALANCE);
 
-        uint256 amountToUndelegate = INITIAL_BALANCE / 2;
+        // undelegate a 1/3 of the balance
+        uint256 amountToUndelegate = INITIAL_BALANCE / 3;
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.Undelegated(delegator, validator, amountToUndelegate);
         stakeTable.undelegate(validator, amountToUndelegate);
@@ -764,12 +772,21 @@ contract StakeTable_register_Test is LightClientCommonTest {
         assertEq(amountUndelegated, amountToUndelegate);
         assertEq(unlocksAt, block.timestamp + ESCROW_PERIOD);
         (uint256 validatorAmountDelegated,) = stakeTable.validators(validator);
-        assertEq(validatorAmountDelegated, INITIAL_BALANCE - amountToUndelegate);
-        assertEq(token.balanceOf(address(stakeTable)), INITIAL_BALANCE);
+        assertEq(
+            validatorAmountDelegated,
+            INITIAL_BALANCE,
+            "the validator's delegatedAmount should be the full amount as the delegator has not claimed yet"
+        );
+        assertEq(
+            token.balanceOf(address(stakeTable)),
+            INITIAL_BALANCE,
+            "the contract's balance should be the full amount"
+        );
 
         //warp to the exitEscrowPeriod and claim the withdrawal
         vm.warp(block.timestamp + ESCROW_PERIOD);
 
+        // claim the withdrawal
         uint256 delegatorBalanceBefore = token.balanceOf(delegator);
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.Withdrawal(delegator, amountToUndelegate);
@@ -777,8 +794,14 @@ contract StakeTable_register_Test is LightClientCommonTest {
         assertEq(token.balanceOf(delegator), delegatorBalanceBefore + amountToUndelegate);
         assertEq(token.balanceOf(address(stakeTable)), INITIAL_BALANCE - amountToUndelegate);
         (amountUndelegated, unlocksAt) = stakeTable.undelegations(validator, delegator);
-        assertEq(amountUndelegated, 0);
-        assertEq(unlocksAt, 0);
+        (uint256 validatorDelegatedAmount,) = stakeTable.validators(validator);
+        assertEq(amountUndelegated, 0, "the undelegated amount should be zero");
+        assertEq(unlocksAt, 0, "the unlocks at should be zero");
+        assertEq(
+            validatorDelegatedAmount,
+            INITIAL_BALANCE - amountToUndelegate,
+            "the validator's delegatedAmount should be the full amount minus the amount undelegated"
+        );
         vm.stopPrank();
     }
 
@@ -789,22 +812,29 @@ contract StakeTable_register_Test is LightClientCommonTest {
 
         vm.prank(delegator);
         token.approve(address(stakeTable), INITIAL_BALANCE);
-        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
+        assertEq(
+            token.balanceOf(delegator),
+            INITIAL_BALANCE,
+            "the delegator should have the full balance"
+        );
 
         address validator1 = makeAddr("validator1");
         address validator2 = makeAddr("validator2");
         registerValidatorOnStakeTable(validator1, seed1, COMMISSION, stakeTable);
         registerValidatorOnStakeTable(validator2, seed2, COMMISSION, stakeTable);
 
+        // delegate 1/3 of balance to validator1
         vm.startPrank(delegator);
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.Delegated(delegator, validator1, INITIAL_BALANCE / 3);
         stakeTable.delegate(validator1, INITIAL_BALANCE / 3);
 
+        // delegate 1/3 of balance to validator2
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.Delegated(delegator, validator2, INITIAL_BALANCE / 3);
         stakeTable.delegate(validator2, INITIAL_BALANCE / 3);
 
+        // undelegate 1/3 of balance from validator1
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.Undelegated(delegator, validator1, INITIAL_BALANCE / 3);
         stakeTable.undelegate(validator1, INITIAL_BALANCE / 3);
@@ -812,10 +842,19 @@ contract StakeTable_register_Test is LightClientCommonTest {
             stakeTable.undelegations(validator1, delegator);
         assertEq(amountUndelegated, INITIAL_BALANCE / 3);
         assertEq(unlocksAt, block.timestamp + ESCROW_PERIOD);
-        assertEq(token.balanceOf(address(stakeTable)), INITIAL_BALANCE / 3 + INITIAL_BALANCE / 3);
+        assertEq(
+            token.balanceOf(address(stakeTable)),
+            INITIAL_BALANCE / 3 + INITIAL_BALANCE / 3,
+            "the contract's balance should be the sum of the delegations"
+        );
         (uint256 validatorDelegatedAmount,) = stakeTable.validators(validator1);
-        assertEq(validatorDelegatedAmount, 0);
+        assertEq(
+            validatorDelegatedAmount,
+            INITIAL_BALANCE / 3,
+            "the validator's delegatedAmount should still be equal to the delegator's amount until they withdraw"
+        );
 
+        // undelegate from validator 2
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.Undelegated(delegator, validator2, INITIAL_BALANCE / 3);
         stakeTable.undelegate(validator2, INITIAL_BALANCE / 3);
@@ -824,7 +863,11 @@ contract StakeTable_register_Test is LightClientCommonTest {
         assertEq(unlocksAt, block.timestamp + ESCROW_PERIOD);
         assertEq(token.balanceOf(address(stakeTable)), INITIAL_BALANCE / 3 + INITIAL_BALANCE / 3);
         (validatorDelegatedAmount,) = stakeTable.validators(validator2);
-        assertEq(validatorDelegatedAmount, 0);
+        assertEq(
+            validatorDelegatedAmount,
+            INITIAL_BALANCE / 3,
+            "the validator's delegatedAmount should still be equal to the delegator's amount until they withdraw"
+        );
 
         vm.warp(block.timestamp + ESCROW_PERIOD);
         uint256 delegatorBalanceBefore = token.balanceOf(delegator);
@@ -868,102 +911,165 @@ contract StakeTable_register_Test is LightClientCommonTest {
 
         registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
 
+        // delegate to validator
         vm.startPrank(delegator);
+        uint256 amountDelegated = INITIAL_BALANCE;
         token.approve(address(stakeTable), INITIAL_BALANCE);
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.Delegated(delegator, validator, INITIAL_BALANCE);
-        stakeTable.delegate(validator, INITIAL_BALANCE);
+        emit S.Delegated(delegator, validator, amountDelegated);
+        stakeTable.delegate(validator, amountDelegated);
         vm.stopPrank();
 
+        // validator exits
         vm.startPrank(validator);
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.ValidatorExit(validator);
         stakeTable.deregisterValidator();
         vm.stopPrank();
+
+        // check the validator's delegatedAmount and undelegations
         (uint256 validatorAmountDelegated,) = stakeTable.validators(validator);
-        assertEq(validatorAmountDelegated, 0);
+        assertEq(
+            validatorAmountDelegated,
+            amountDelegated,
+            "the validator's delegatedAmount should be the full amount as the delegator has not claimed yet"
+        );
         (uint256 delegatorAmountUndelegated, uint256 unlocksAt) =
             stakeTable.undelegations(validator, delegator);
-        assertEq(delegatorAmountUndelegated, 0); // undelegated amount is zero because the user did
-            // not undelegate
-        assertEq(unlocksAt, 0); // unlocks at is zero because the user did not undelegate
+        assertEq(
+            delegatorAmountUndelegated,
+            0,
+            "the undelegated amount should be zero because the user did not undelegate"
+        );
+        assertEq(unlocksAt, 0, "the unlocks at should be zero because the user did not undelegate");
 
         vm.startPrank(delegator);
         vm.expectRevert(abi.encodeWithSelector(S.ValidatorAlreadyExited.selector));
-        stakeTable.undelegate(validator, INITIAL_BALANCE);
+        stakeTable.undelegate(validator, amountDelegated);
 
         //validator already exited so call claim withdaral exit
         vm.warp(block.timestamp + ESCROW_PERIOD);
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.Withdrawal(delegator, INITIAL_BALANCE);
+        emit S.Withdrawal(delegator, amountDelegated);
         stakeTable.claimValidatorExit(validator);
         vm.stopPrank();
 
-        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
-        assertEq(token.balanceOf(address(stakeTable)), 0);
+        assertEq(
+            token.balanceOf(delegator),
+            amountDelegated,
+            "the delegator should have received the full amount"
+        );
+        assertEq(token.balanceOf(address(stakeTable)), 0, "the contract's balance should be zero");
         (validatorAmountDelegated,) = stakeTable.validators(validator);
-        assertEq(validatorAmountDelegated, 0);
+        assertEq(validatorAmountDelegated, 0, "the validator's delegatedAmount should be zero");
         uint256 delegatedAmount = stakeTable.delegations(validator, delegator);
-        assertEq(delegatedAmount, 0);
+        assertEq(delegatedAmount, 0, "the delegator's delegation should be zero");
     }
 
     function test_ValidatorExitDuringUndelegationPeriod() public {
         // Should test withdrawing after validator exit
         vm.prank(tokenGrantRecipient);
         token.transfer(delegator, INITIAL_BALANCE);
+        uint256 originalDelegateAmount = INITIAL_BALANCE;
 
         registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
 
+        // delegate
         vm.startPrank(delegator);
-        token.approve(address(stakeTable), INITIAL_BALANCE);
+        token.approve(address(stakeTable), originalDelegateAmount);
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.Delegated(delegator, validator, INITIAL_BALANCE);
-        stakeTable.delegate(validator, INITIAL_BALANCE);
+        emit S.Delegated(delegator, validator, originalDelegateAmount);
+        stakeTable.delegate(validator, originalDelegateAmount);
 
+        // undelegate
+        uint256 amountUndelegated = INITIAL_BALANCE / 3;
+        uint256 remainderDelegation = originalDelegateAmount - amountUndelegated;
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.Undelegated(delegator, validator, INITIAL_BALANCE / 2);
-        stakeTable.undelegate(validator, INITIAL_BALANCE / 2);
+        emit S.Undelegated(delegator, validator, amountUndelegated);
+        stakeTable.undelegate(validator, amountUndelegated);
         vm.stopPrank();
 
+        // Validator Exits
         vm.startPrank(validator);
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.ValidatorExit(validator);
         stakeTable.deregisterValidator();
         vm.stopPrank();
+
+        // amount delegated to validator is still the same until the delegator(s) claim(s) the
+        // withdrawal
         (uint256 validatorAmountDelegated,) = stakeTable.validators(validator);
-        assertEq(validatorAmountDelegated, 0);
+        assertEq(
+            validatorAmountDelegated,
+            originalDelegateAmount,
+            "the validator's delegatedAmount should be the full amount as the delegator has not claimed yet"
+        );
         (uint256 delegatorAmountUndelegated, uint256 unlocksAt) =
             stakeTable.undelegations(validator, delegator);
-        assertEq(delegatorAmountUndelegated, INITIAL_BALANCE / 2); // undelegated amount is
+        assertEq(delegatorAmountUndelegated, amountUndelegated); // undelegated amount is
             // INITIAL_BALANCE/2 because the user undelegated INITIAL_BALANCE/2
         assertEq(unlocksAt, block.timestamp + ESCROW_PERIOD); // unlocks at is the current timestamp
             // + ESCROW_PERIOD because the user undelegated INITIAL_BALANCE/2
 
+        // delegator tries to undelegate but gets an error because the validator already exited
         vm.startPrank(delegator);
         vm.expectRevert(abi.encodeWithSelector(S.ValidatorAlreadyExited.selector));
-        stakeTable.undelegate(validator, INITIAL_BALANCE);
+        stakeTable.undelegate(validator, remainderDelegation);
 
-        //validator already exited so call claim validator exit
-        uint256 remainderStakedBalance = INITIAL_BALANCE - INITIAL_BALANCE / 2;
+        //escrow period passes so validator fully exited, delegator calls claim validator exit
+        // amount
+        uint256 delegatorDelegations = stakeTable.delegations(validator, delegator);
+        assertEq(
+            delegatorDelegations,
+            remainderDelegation,
+            "delegator should have the remainder delegation"
+        );
         vm.warp(block.timestamp + ESCROW_PERIOD);
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.Withdrawal(delegator, remainderStakedBalance);
+        emit S.Withdrawal(delegator, remainderDelegation);
         stakeTable.claimValidatorExit(validator);
         vm.stopPrank();
 
-        assertEq(token.balanceOf(delegator), INITIAL_BALANCE / 2);
-        assertEq(token.balanceOf(address(stakeTable)), INITIAL_BALANCE / 2);
+        assertEq(
+            token.balanceOf(delegator),
+            remainderDelegation,
+            "delegator should have received the remaininder delegation"
+        );
+        assertEq(
+            token.balanceOf(address(stakeTable)),
+            amountUndelegated,
+            "the contract's balance will be the amount undelegated but not yet claimed"
+        );
         (validatorAmountDelegated,) = stakeTable.validators(validator);
-        assertEq(validatorAmountDelegated, 0);
+        assertEq(
+            validatorAmountDelegated,
+            amountUndelegated,
+            "the undelegated amount left in the contract should still be equal to the validator's delegatedAmount"
+        );
         uint256 delegatedAmount = stakeTable.delegations(validator, delegator);
-        assertEq(delegatedAmount, 0);
+        assertEq(delegatedAmount, 0, "the delegator's delegation should be zero");
+        (uint256 undelegatedAmount,) = stakeTable.undelegations(validator, delegator);
+        assertEq(
+            undelegatedAmount,
+            amountUndelegated,
+            "the undelegated amount should be equal to the amount undelegated by delegator"
+        );
 
         // now claim the previous undelegation
         vm.startPrank(delegator);
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.Withdrawal(delegator, INITIAL_BALANCE / 2);
+        emit S.Withdrawal(delegator, amountUndelegated);
         stakeTable.claimWithdrawal(validator);
         vm.stopPrank();
+
+        assertEq(
+            token.balanceOf(delegator),
+            originalDelegateAmount,
+            "the delegator should have now received their full delegation"
+        );
+        assertEq(token.balanceOf(address(stakeTable)), 0, "the contract's balance should be zero");
+        (validatorAmountDelegated,) = stakeTable.validators(validator);
+        assertEq(validatorAmountDelegated, 0, "the validator's delegatedAmount should be zero");
     }
 
     function test_ValidatorExitWithMultipleDelegators() public {
