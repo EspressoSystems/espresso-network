@@ -410,7 +410,7 @@ impl Transaction<Write> {
             match self.execute(query).await {
                 Ok(res) => {
                     let rows_modified = res.rows_affected() as usize;
-                    if rows_modified as usize != num_rows {
+                    if rows_modified != num_rows {
                         tracing::error!(
                             statement,
                             "unexpected number of rows modified: expected {num_rows} but got \
