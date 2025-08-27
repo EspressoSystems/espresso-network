@@ -280,7 +280,7 @@ where
             };
             match <TYPES::Membership as Membership<TYPES>>::get_epoch_drb(
                 self.membership.clone(),
-                epoch,
+                current_fetch_epoch,
             )
             .await
             {
