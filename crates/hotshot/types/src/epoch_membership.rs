@@ -228,7 +228,9 @@ where
                 // and we have the previous epoch as well
                 if try_epoch <= TYPES::Epoch::new(epoch.saturating_sub(2)) {
                     let previous_epoch = TYPES::Epoch::new(try_epoch.saturating_sub(1));
-                    if self.membership.read().await.has_stake_table(previous_epoch) {
+                    if try_epoch <= first_epoch + 1
+                        || self.membership.read().await.has_stake_table(previous_epoch)
+                    {
                         break;
                     }
                 }
