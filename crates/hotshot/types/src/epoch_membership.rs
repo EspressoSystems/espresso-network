@@ -269,7 +269,7 @@ where
 
         // Iterate through the epochs we need to fetch in reverse, i.e. from the oldest to the newest
         while let Some((current_fetch_epoch, tx)) = fetch_epochs.pop() {
-            let _ = match self.fetch_stake_table(current_fetch_epoch).await {
+            match self.fetch_stake_table(current_fetch_epoch).await {
                 Ok(_) => {},
                 Err(err) => {
                     fetch_epochs.push((current_fetch_epoch, tx));
@@ -330,7 +330,6 @@ where
                         err
                     );
                     self.catchup_cleanup(epoch, fetch_epochs, err).await;
-                    return;
                 }
             },
         };
