@@ -221,6 +221,17 @@ pub(crate) async fn handle_quorum_proposal_validated<
             );
         }
 
+        broadcast_event(
+            Arc::new(HotShotEvent::LeavesDecided(
+                leaf_views
+                    .iter()
+                    .map(|leaf_info| leaf_info.leaf.clone())
+                    .collect(),
+            )),
+            event_sender,
+        )
+        .await;
+
         // Send an update to everyone saying that we've reached a decide
         broadcast_event(
             Event {

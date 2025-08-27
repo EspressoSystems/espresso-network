@@ -214,6 +214,7 @@ impl StakeTableEvents {
 #[derive(Debug, Default)]
 pub struct StakeTableState {
     validators: ValidatorMap,
+    validator_exits: HashSet<Address>,
     used_bls_keys: HashSet<BLSPubKey>,
     used_schnorr_keys: HashSet<SchnorrPubKey>,
 }
@@ -243,6 +244,12 @@ impl Committable for StakeTableState {
             builder = builder.var_size_bytes(&schnorr_key_bytes);
         }
 
+        builder = builder.constant_str("validator_exits");
+
+        for key in self.validator_exits.iter().sorted() {
+            builder = builder.fixed_size_bytes(&key.into_array());
+        }
+
         builder.finalize()
     }
 
@@ -255,6 +262,7 @@ impl StakeTableState {
     pub fn new() -> Self {
         Self {
             validators: IndexMap::new(),
+            validator_exits: HashSet::new(),
             used_bls_keys: HashSet::new(),
             used_schnorr_keys: HashSet::new(),
         }
@@ -274,6 +282,10 @@ impl StakeTableState {
             }) => {
                 let stake_table_key: BLSPubKey = blsVk.into();
                 let state_ver_key: SchnorrPubKey = schnorrVk.into();
+
+                if self.validator_exits.contains(&account) {
+                    return Err(StakeTableError::ValidatorAlreadyExited(account));
+                }
 
                 let entry = self.validators.entry(account);
                 if let indexmap::map::Entry::Occupied(_) = entry {
@@ -321,6 +333,11 @@ impl StakeTableState {
                 let stake_table_key: BLSPubKey = blsVK.into();
                 let state_ver_key: SchnorrPubKey = schnorrVK.into();
 
+                // Reject if validator already exited
+                if self.validator_exits.contains(&account) {
+                    return Err(StakeTableError::ValidatorAlreadyExited(account));
+                }
+
                 let entry = self.validators.entry(account);
                 if let indexmap::map::Entry::Occupied(_) = entry {
                     return Err(StakeTableError::AlreadyRegistered(account));
@@ -351,6 +368,7 @@ impl StakeTableState {
             },
 
             StakeTableEvent::Deregister(exit) => {
+                self.validator_exits.insert(exit.validator);
                 self.validators
                     .shift_remove(&exit.validator)
                     .ok_or(StakeTableError::ValidatorNotFound(exit.validator))?;
@@ -2710,6 +2728,22 @@ mod tests {
 
         let bls: BLSPubKey = val.bls_vk.into();
         assert!(matches!(err, StakeTableError::BlsKeyAlreadyUsed(addr) if addr == bls.to_string()));
+    }
+
+    // Test that the GCL does not
+    // allow re-registration for the same Ethereum account.
+    #[test]
+    fn test_regression_reregister_eth_account() {
+        let val1 = TestValidator::random();
+        let val2 = val1.randomize_keys();
+        let account = val1.account;
+
+        let register1 = ValidatorRegisteredV2::from(&val1).into();
+        let deregister1 = ValidatorExit::from(&val1).into();
+        let register2 = ValidatorRegisteredV2::from(&val2).into();
+        let events = vec![register1, deregister1, register2];
+        let error = validators_from_l1_events(events.iter().cloned()).unwrap_err();
+        assert_matches!(error, StakeTableError::ValidatorAlreadyExited(addr) if addr == account);
     }
 
     #[test]
