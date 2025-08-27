@@ -236,7 +236,10 @@ func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T
 				return json.RawMessage{}, fmt.Errorf("%w: no majority consensus reached with potential errors. Errors: %v\n", ErrEphemeral, errs)
 			}
 		case <-ctx.Done():
-			return json.RawMessage{}, fmt.Errorf("%w: %v", ErrEphemeral, ctx.Err())
+			if ctx.Err() != nil {
+				return json.RawMessage{}, fmt.Errorf("%w: %v", ErrEphemeral, ctx.Err())
+			}
+			return json.RawMessage{}, nil
 		}
 	}
 }

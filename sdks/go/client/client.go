@@ -206,7 +206,7 @@ func (c *Client) getRawMessage(ctx context.Context, format string, args ...any) 
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
 	}
-	return body, fmt.Errorf("%w: %v", ErrPermanent, err)
+	return body, nil
 }
 
 func (c *Client) get(ctx context.Context, out any, format string, args ...any) error {
