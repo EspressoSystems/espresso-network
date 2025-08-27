@@ -208,7 +208,6 @@ where
     ) {
         // We need to fetch the requested epoch, that's for sure
         let mut fetch_epochs = vec![];
-        fetch_epochs.push((epoch, epoch_tx));
 
         let mut try_epoch = TYPES::Epoch::new(epoch.saturating_sub(1));
         let maybe_first_epoch = self.membership.read().await.first_epoch();
@@ -270,47 +269,12 @@ where
 
         // Iterate through the epochs we need to fetch in reverse, i.e. from the oldest to the newest
         while let Some((current_fetch_epoch, tx)) = fetch_epochs.pop() {
-            let root_leaf = match self.fetch_stake_table(current_fetch_epoch).await {
-                Ok(root_leaf) => root_leaf,
+            let _ = match self.fetch_stake_table(current_fetch_epoch).await {
+                Ok(_) => {},
                 Err(err) => {
                     fetch_epochs.push((current_fetch_epoch, tx));
                     self.catchup_cleanup(epoch, fetch_epochs, err).await;
                     return;
-                },
-            };
-            match <TYPES::Membership as Membership<TYPES>>::get_epoch_drb(
-                self.membership.clone(),
-                epoch,
-            )
-            .await
-            {
-                Ok(drb_result) => {
-                    self.membership
-                        .write()
-                        .await
-                        .add_drb_result(current_fetch_epoch, drb_result);
-                },
-                Err(err) => {
-                    tracing::warn!(
-                        "DRB result for epoch {} missing from membership. Beginning catchup to \
-                         recalculate it. Error: {}",
-                        current_fetch_epoch,
-                        err
-                    );
-
-                    if let Err(err) = self
-                        .compute_drb_result(current_fetch_epoch, root_leaf)
-                        .await
-                    {
-                        tracing::info!(
-                            "DRB calculation for epoch {} failed . Error: {}",
-                            current_fetch_epoch,
-                            err
-                        );
-                        fetch_epochs.push((current_fetch_epoch, tx));
-                        self.catchup_cleanup(epoch, fetch_epochs, err).await;
-                        return;
-                    }
                 },
             };
 
@@ -329,6 +293,47 @@ where
             // Remove the epoch from the catchup map to indicate that the catchup is complete
             self.catchup_map.lock().await.remove(&current_fetch_epoch);
         }
+
+        let root_leaf = match self.fetch_stake_table(epoch).await {
+            Ok(root_leaf) => root_leaf,
+            Err(err) => {
+                fetch_epochs.push((epoch, epoch_tx));
+                self.catchup_cleanup(epoch, fetch_epochs, err).await;
+                return;
+            },
+        };
+
+        match <TYPES::Membership as Membership<TYPES>>::get_epoch_drb(
+            self.membership.clone(),
+            epoch,
+        )
+        .await
+        {
+            Ok(drb_result) => {
+                self.membership
+                    .write()
+                    .await
+                    .add_drb_result(epoch, drb_result);
+            },
+            Err(err) => {
+                tracing::warn!(
+                    "DRB result for epoch {} missing from membership. Beginning catchup to \
+                     recalculate it. Error: {}",
+                    epoch,
+                    err
+                );
+
+                if let Err(err) = self.compute_drb_result(epoch, root_leaf).await {
+                    tracing::error!(
+                        "DRB calculation for epoch {} failed . Error: {}",
+                        epoch,
+                        err
+                    );
+                    self.catchup_cleanup(epoch, fetch_epochs, err).await;
+                    return;
+                }
+            },
+        };
     }
 
     /// Call this method if you think catchup is in progress for a given epoch
