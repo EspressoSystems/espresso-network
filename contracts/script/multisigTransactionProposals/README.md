@@ -117,7 +117,7 @@ Once successful, all signers will see a transaction request on the SAFE UI e.g.
 `https://app.safe.global/transactions/queue?safe=$SAFE_MULTISIG_ADDRESS`
 
 Once the transaction has been signed by all signers and executed by one, you should be able to go to the light client
-proxy and read the state history retention period on etherscan.
+proxy and read the state history retention period on Etherscan.
 
 ## Demonstrating the setPermissionedProver workflow
 
