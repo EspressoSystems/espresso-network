@@ -204,7 +204,11 @@ where
         .boxed()
     })?
     .get("getlatestlegacystate", |_req, state| {
-        async move { LCV1StateRelayServerDataSource::get_latest_signature_bundle(state) }.boxed()
+        async move {
+            LCV1StateRelayServerDataSource::get_latest_signature_bundle(state)
+                .map(LCV2StateSignaturesBundle::from_v1)
+        }
+        .boxed()
     })?
     .get("getlateststate", |_req, state| {
         async move { LCV2StateRelayServerDataSource::get_latest_signature_bundle(state) }.boxed()

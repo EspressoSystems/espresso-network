@@ -67,6 +67,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// The exit escrow period is invalid (either too short or too long)
     error ExitEscrowPeriodInvalid();
 
+    /// The Schnorr signature is invalid (either the wrong length or the wrong key)
+    error InvalidSchnorrSig();
+
     /// The function is deprecated as it was replaced by a new function
     error DeprecatedFunction();
 
@@ -143,6 +146,11 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         // attacks.
         bytes memory message = abi.encode(validator);
         BLSSig.verifyBlsSig(message, blsSig, blsVK);
+
+        // ensure that the schnorrSig is the correct length
+        if (schnorrSig.length != 64) {
+            revert InvalidSchnorrSig();
+        }
 
         if (commission > 10000) {
             revert InvalidCommission();

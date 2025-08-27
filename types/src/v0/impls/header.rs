@@ -1,12 +1,13 @@
 use std::fmt;
 
+use alloy::primitives::{FixedBytes, Keccak256};
 use anyhow::{ensure, Context};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use either::Either;
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
 use hotshot_types::{
-    data::{vid_commitment, VidCommitment, ViewNumber},
+    data::{vid_commitment, EpochNumber, VidCommitment, ViewNumber},
     light_client::LightClientState,
     traits::{
         block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
@@ -14,9 +15,9 @@ use hotshot_types::{
         signature_key::BuilderSignatureKey,
         BlockPayload, EncodeBytes, ValidatedState as _,
     },
-    utils::BuilderCommitment,
+    utils::{epoch_from_block_number, is_ge_epoch_root, BuilderCommitment},
 };
-use jf_merkle_tree::{AppendableMerkleTreeScheme, MerkleTreeScheme};
+use jf_merkle_tree::{AppendableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme};
 use serde::{
     de::{self, MapAccess, SeqAccess, Visitor},
     Deserialize, Deserializer, Serialize, Serializer,
@@ -33,7 +34,7 @@ use crate::{
     eth_signature_key::BuilderSignature,
     v0::{
         header::{EitherOrVersion, VersionedHeader},
-        impls::{distribute_block_reward, reward::RewardDistributor},
+        impls::{distribute_block_reward, reward::RewardDistributor, StakeTableHash},
     },
     v0_1::{self},
     v0_2,
@@ -42,9 +43,9 @@ use crate::{
         REWARD_MERKLE_TREE_V1_HEIGHT,
     },
     v0_4::{self, RewardMerkleCommitmentV2},
-    BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment,
-    Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable, PayloadByteLen,
-    SeqTypes, TimestampMillis, UpgradeType,
+    BlockMerkleCommitment, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeAmount,
+    FeeInfo, FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex,
+    NsTable, PayloadByteLen, SeqTypes, TimestampMillis, UpgradeType,
 };
 
 impl v0_1::Header {
@@ -289,6 +290,7 @@ impl Header {
         builder_signature: Vec<BuilderSignature>,
         total_reward_distributed: Option<RewardAmount>,
         version: Version,
+        next_stake_table_hash: Option<StakeTableHash>,
     ) -> Self {
         // Ensure FeeInfo contains at least 1 element
         assert!(!fee_info.is_empty(), "Invalid fee_info length: 0");
@@ -357,11 +359,19 @@ impl Header {
                 builder_signature: builder_signature.first().copied(),
                 reward_merkle_tree_root: reward_merkle_tree_root_v2,
                 total_reward_distributed: total_reward_distributed.unwrap_or_default(),
+                next_stake_table_hash,
             }),
             // This case should never occur
             // but if it does, we must panic
             // because we don't have the versioned types for this version
             _ => panic!("invalid version: {version}"),
+        }
+    }
+
+    pub fn next_stake_table_hash(&self) -> Option<StakeTableHash> {
+        match self {
+            Self::V4(fields) => fields.next_stake_table_hash,
+            _ => None,
         }
     }
 }
@@ -405,6 +415,7 @@ impl Header {
         chain_config: ChainConfig,
         version: Version,
         reward_distributor: Option<RewardDistributor>,
+        next_stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<Self> {
         ensure!(
             version.major == 0,
@@ -587,6 +598,7 @@ impl Header {
                 total_reward_distributed: reward_distributor
                     .map(|r| r.total_distributed())
                     .unwrap_or_default(),
+                next_stake_table_hash,
             }),
             // This case should never occur
             // but if it does, we must panic
@@ -975,6 +987,41 @@ impl BlockHeader<SeqTypes> for Header {
             .await?;
         };
 
+        let mut next_stake_table_hash = None;
+
+        if version >= DrbAndHeaderUpgradeVersion::version() {
+            let epoch_height = instance_state
+                .epoch_height
+                .context("epoch height not in instance state")?;
+            if is_ge_epoch_root(height + 1, epoch_height) {
+                let coordinator = instance_state.coordinator.clone();
+                let first_epoch = {
+                    coordinator
+                        .membership()
+                        .read()
+                        .await
+                        .first_epoch()
+                        .context("The first epoch was not set.")?
+                };
+
+                let epoch = EpochNumber::new(epoch_from_block_number(height + 1, epoch_height));
+
+                // first 2 epochs don't have stake table hash because they are configured.
+                if epoch > first_epoch + 1 {
+                    let epoch_membership = coordinator
+                        .stake_table_for_epoch(Some(epoch + 1))
+                        .await
+                        .map_err(|e| anyhow::anyhow!("failed to get epoch membership: {e}"))?;
+                    next_stake_table_hash = Some(
+                        epoch_membership
+                            .stake_table_hash()
+                            .await
+                            .context("failed to get next stake table hash")?,
+                    );
+                }
+            }
+        }
+
         let now = OffsetDateTime::now_utc();
 
         let timestamp = now.unix_timestamp() as u64;
@@ -994,6 +1041,7 @@ impl BlockHeader<SeqTypes> for Header {
             chain_config,
             version,
             rewards,
+            next_stake_table_hash,
         )?)
     }
 
@@ -1053,6 +1101,7 @@ impl BlockHeader<SeqTypes> for Header {
             vec![],
             None,
             instance_state.current_version,
+            None,
         )
     }
 
@@ -1098,6 +1147,37 @@ impl BlockHeader<SeqTypes> for Header {
                 &block_comm_root_bytes,
             )?,
         })
+    }
+
+    fn auth_root(&self) -> anyhow::Result<FixedBytes<32>> {
+        match self {
+            Header::V1(_) | Header::V2(_) | Header::V3(_) => Ok(FixedBytes::from([0u8; 32])),
+            Header::V4(header) => {
+                // Temporary placeholder values for future fields
+                let placeholder_1 = [0; 32];
+                let placeholder_2 = [0; 32];
+                let placeholder_3 = [0; 32];
+                let placeholder_4 = [0; 32];
+                let placeholder_5 = [0; 32];
+                let placeholder_6 = [0; 32];
+                let placeholder_7 = [0; 32];
+
+                let mut hasher = Keccak256::new();
+
+                // Start with the reward Merkle tree root digest as the base input
+                let digest = header.reward_merkle_tree_root.digest();
+                hasher.update(digest.0);
+                hasher.update(placeholder_1);
+                hasher.update(placeholder_2);
+                hasher.update(placeholder_3);
+                hasher.update(placeholder_4);
+                hasher.update(placeholder_5);
+                hasher.update(placeholder_6);
+                hasher.update(placeholder_7);
+
+                Ok(hasher.finalize())
+            },
+        }
     }
 }
 
@@ -1271,6 +1351,7 @@ mod test_headers {
                 validated_state.clone(),
                 genesis.instance_state.chain_config,
                 Version { major: 0, minor: 1 },
+                None,
                 None,
             )
             .unwrap();
@@ -1633,6 +1714,7 @@ mod test_headers {
             Default::default(),
             None,
             Version { major: 0, minor: 1 },
+            None,
         );
 
         let serialized = serde_json::to_string(&v1_header).unwrap();
@@ -1664,6 +1746,7 @@ mod test_headers {
             Default::default(),
             None,
             Version { major: 0, minor: 2 },
+            None,
         );
 
         let serialized = serde_json::to_string(&v2_header).unwrap();
@@ -1695,6 +1778,7 @@ mod test_headers {
             Default::default(),
             None,
             Version { major: 0, minor: 3 },
+            None,
         );
 
         let serialized = serde_json::to_string(&v3_header).unwrap();

@@ -7,7 +7,7 @@ use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent},
-    Leaf2, NetworkConfig, ValidatorMap,
+    Leaf2, NetworkConfig, StakeTableHash, ValidatorMap,
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
@@ -23,7 +23,7 @@ use hotshot_types::{
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::Proposal,
     simple_certificate::{
-        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate2,
+        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
         UpgradeCertificate,
     },
     traits::metrics::Metrics,
@@ -246,14 +246,14 @@ impl SequencerPersistence for NoStorage {
 
     async fn add_state_cert(
         &self,
-        _state_cert: LightClientStateUpdateCertificate<SeqTypes>,
+        _state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
         Ok(())
     }
 
     async fn load_state_cert(
         &self,
-    ) -> anyhow::Result<Option<LightClientStateUpdateCertificate<SeqTypes>>> {
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
         Ok(None)
     }
 
@@ -265,7 +265,7 @@ impl MembershipPersistence for NoStorage {
     async fn load_stake(
         &self,
         _epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>)>> {
+    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>> {
         Ok(None)
     }
 
@@ -278,6 +278,7 @@ impl MembershipPersistence for NoStorage {
         _epoch: EpochNumber,
         _stake: ValidatorMap,
         _block_reward: Option<RewardAmount>,
+        _stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()> {
         Ok(())
     }

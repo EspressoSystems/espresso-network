@@ -28,15 +28,18 @@ use committable::Committable;
 use hotshot_example_types::node_types::TestVersions;
 use hotshot_query_service::{
     availability::{
-        BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, StateCertQueryData,
-        TransactionQueryData, TransactionWithProofQueryData, VidCommonQueryData,
+        BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, StateCertQueryDataV1,
+        StateCertQueryDataV2, TransactionQueryData, TransactionWithProofQueryData,
+        VidCommonQueryData,
     },
     testing::mocks::MockVersions,
     VidCommon,
 };
 use hotshot_types::{
     data::vid_commitment,
-    simple_certificate::LightClientStateUpdateCertificate,
+    simple_certificate::{
+        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
+    },
     traits::{signature_key::BuilderSignatureKey, BlockPayload, EncodeBytes},
     vid::{advz::advz_scheme, avidm::init_avidm_param},
 };
@@ -54,10 +57,13 @@ use vbs::{
 };
 
 use crate::{
+    active_validator_set_from_l1_events,
     v0_1::{self, ADVZNsProof},
-    v0_2, ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
-    NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload, SeqTypes, Transaction,
-    ValidatedState,
+    v0_2,
+    v0_3::{EventKey, StakeTableEvent},
+    ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
+    NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload, SeqTypes, StakeTableHash,
+    Transaction, ValidatedState,
 };
 
 type V1Serializer = vbs::Serializer<StaticVersion<0, 1>>;
@@ -204,6 +210,16 @@ fn reference_fee_info() -> FeeInfo {
     )
 }
 
+fn reference_stake_table_hash() -> StakeTableHash {
+    let events_json = std::fs::read_to_string("../data/v3/decaf_stake_table_events.json").unwrap();
+    let events: Vec<(EventKey, StakeTableEvent)> = serde_json::from_str(&events_json).unwrap();
+
+    // Reconstruct stake table from events
+    let (_, hash) =
+        active_validator_set_from_l1_events(events.into_iter().map(|(_, e)| e)).unwrap();
+    hash
+}
+
 const REFERENCE_FEE_INFO_COMMITMENT: &str = "FEE_INFO~xCCeTjJClBtwtOUrnAmT65LNTQGceuyjSJHUFfX6VRXR";
 
 async fn reference_header(version: Version) -> Header {
@@ -216,6 +232,8 @@ async fn reference_header(version: Version) -> Header {
     let builder_commitment = payload.builder_commitment(&ns_table);
     let builder_signature =
         FeeAccount::sign_fee(&builder_key, fee_info.amount().as_u64().unwrap(), &ns_table).unwrap();
+
+    let staket_table_hash = reference_stake_table_hash();
 
     let state = ValidatedState::default();
 
@@ -237,13 +255,14 @@ async fn reference_header(version: Version) -> Header {
         vec![builder_signature],
         None,
         version,
+        Some(staket_table_hash),
     )
 }
 
 const REFERENCE_V1_HEADER_COMMITMENT: &str = "BLOCK~dh1KpdvvxSvnnPpOi2yI3DOg8h6ltr2Kv13iRzbQvtN2";
 const REFERENCE_V2_HEADER_COMMITMENT: &str = "BLOCK~V0GJjL19nCrlm9n1zZ6gaOKEekSMCT6uR5P-h7Gi6UJR";
 const REFERENCE_V3_HEADER_COMMITMENT: &str = "BLOCK~jcrvSlMuQnR2bK6QtraQ4RhlP_F3-v_vae5Zml0rtPbl";
-const REFERENCE_V4_HEADER_COMMITMENT: &str = "BLOCK~Zalc4dI43O6TBAdKUaSWSrMpC9X10uwWVNTqTJLTZDBQ";
+const REFERENCE_V4_HEADER_COMMITMENT: &str = "BLOCK~hPVq9NasWW1vVYGGGr0PSRv1TV3nUV_8ARw5fWHlQLx3";
 
 fn reference_transaction<R>(ns_id: NamespaceId, rng: &mut R) -> Transaction
 where
@@ -620,7 +639,15 @@ async fn test_transaction_query_data() {
 // State certificate
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_state_cert_query_data_v3() {
-    let light_client_cert = LightClientStateUpdateCertificate::<SeqTypes>::genesis();
-    let state_cert = StateCertQueryData(light_client_cert);
+    let light_client_cert = LightClientStateUpdateCertificateV1::<SeqTypes>::genesis();
+    let state_cert = StateCertQueryDataV1(light_client_cert);
     reference_test_without_committable("v3", "state_cert", &state_cert);
+}
+
+// State certificate
+#[tokio::test(flavor = "multi_thread")]
+async fn test_state_cert_query_data_v4() {
+    let light_client_cert = LightClientStateUpdateCertificateV2::<SeqTypes>::genesis();
+    let state_cert = StateCertQueryDataV2(light_client_cert);
+    reference_test_without_committable("v4", "state_cert", &state_cert);
 }

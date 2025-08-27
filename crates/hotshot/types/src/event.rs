@@ -19,7 +19,7 @@ use crate::{
     error::HotShotError,
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        LightClientStateUpdateCertificate, QuorumCertificate, QuorumCertificate2,
+        LightClientStateUpdateCertificateV2, QuorumCertificate, QuorumCertificate2,
     },
     traits::{node_implementation::NodeType, ValidatedState},
 };
@@ -69,7 +69,7 @@ pub struct LeafInfo<TYPES: NodeType> {
     /// Optional VID share data.
     pub vid_share: Option<VidDisperseShare<TYPES>>,
     /// Optional light client state update certificate.
-    pub state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
+    pub state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
 }
 
 impl<TYPES: NodeType> LeafInfo<TYPES> {
@@ -79,7 +79,7 @@ impl<TYPES: NodeType> LeafInfo<TYPES> {
         state: Arc<<TYPES as NodeType>::ValidatedState>,
         delta: Option<Arc<<<TYPES as NodeType>::ValidatedState as ValidatedState<TYPES>>::Delta>>,
         vid_share: Option<VidDisperseShare<TYPES>>,
-        state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
+        state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
     ) -> Self {
         Self {
             leaf,

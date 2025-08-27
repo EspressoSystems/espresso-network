@@ -30,7 +30,7 @@ use hotshot_types::{
     message::{Proposal, UpgradeLock},
     request_response::ProposalRequestPayload,
     simple_certificate::{
-        DaCertificate2, LightClientStateUpdateCertificate, NextEpochQuorumCertificate2,
+        DaCertificate2, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
         QuorumCertificate2, UpgradeCertificate,
     },
     simple_vote::HasEpoch,
@@ -39,7 +39,9 @@ use hotshot_types::{
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
-        signature_key::{LCV2StateSignatureKey, SignatureKey, StakeTableEntryType},
+        signature_key::{
+            LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StakeTableEntryType,
+        },
         storage::Storage,
         BlockPayload, ValidatedState,
     },
@@ -1325,7 +1327,7 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
 
 /// Validates the light client state update certificate
 pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
-    state_cert: &LightClientStateUpdateCertificate<TYPES>,
+    state_cert: &LightClientStateUpdateCertificateV2<TYPES>,
     membership_coordinator: &EpochMembershipCoordinator<TYPES>,
 ) -> Result<()> {
     tracing::debug!("Validating light client state update certificate");
@@ -1346,12 +1348,21 @@ pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
     });
 
     let mut accumulated_stake = U256::from(0);
-    for (key, sig) in state_cert.signatures.iter() {
+    let signed_state_digest = derive_signed_state_digest(
+        &state_cert.light_client_state,
+        &state_cert.next_stake_table_state,
+        &state_cert.auth_root,
+    );
+    for (key, sig, sig_v2) in state_cert.signatures.iter() {
         if let Some(stake) = state_key_map.get(key) {
             accumulated_stake += *stake;
-            if !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
+            if !<TYPES::StateSignatureKey as LCV3StateSignatureKey>::verify_state_sig(
                 key,
                 sig,
+                signed_state_digest,
+            ) || !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
+                key,
+                sig_v2,
                 &state_cert.light_client_state,
                 &state_cert.next_stake_table_state,
             ) {
@@ -1370,7 +1381,7 @@ pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
 
 pub(crate) fn check_qc_state_cert_correspondence<TYPES: NodeType>(
     qc: &QuorumCertificate2<TYPES>,
-    state_cert: &LightClientStateUpdateCertificate<TYPES>,
+    state_cert: &LightClientStateUpdateCertificateV2<TYPES>,
     epoch_height: u64,
 ) -> bool {
     qc.data
@@ -1488,5 +1499,5 @@ pub fn derive_signed_state_digest(
         )
             .abi_encode_packed(),
     );
-    CircuitField::from_le_bytes_mod_order(res.as_ref())
+    CircuitField::from_be_bytes_mod_order(res.as_ref())
 }

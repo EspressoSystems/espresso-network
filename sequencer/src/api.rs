@@ -32,7 +32,7 @@ use hotshot_query_service::{
 use hotshot_types::{
     data::{EpochNumber, VidCommitment, VidShare, ViewNumber},
     event::{Event, LegacyEvent},
-    light_client::LCV2StateSignatureRequestBody,
+    light_client::LCV3StateSignatureRequestBody,
     network::NetworkConfig,
     traits::{
         network::ConnectedNetwork,
@@ -870,7 +870,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> HotShotC
 impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     StateSignatureDataSource<N> for StorageState<N, P, D, V>
 {
-    async fn get_state_signature(&self, height: u64) -> Option<LCV2StateSignatureRequestBody> {
+    async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.as_ref().get_state_signature(height).await
     }
 }
@@ -879,7 +879,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSignatureDataSource<N>
     for ApiState<N, P, V>
 {
-    async fn get_state_signature(&self, height: u64) -> Option<LCV2StateSignatureRequestBody> {
+    async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.state_signer()
             .await
             .read()
@@ -905,7 +905,8 @@ pub mod test_helpers {
     };
     use espresso_types::{
         v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
-        EpochVersion, MockSequencerVersions, NamespaceId, ValidatedState,
+        DrbAndHeaderUpgradeVersion, EpochVersion, FeeVersion, MockSequencerVersions, NamespaceId,
+        SequencerVersions, ValidatedState, V0_1,
     };
     use futures::{
         future::{join_all, FutureExt},
@@ -915,7 +916,9 @@ pub mod test_helpers {
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_types::{
         event::LeafInfo,
+        light_client::LCV3StateSignatureRequestBody,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
+        HotShotConfig,
     };
     use itertools::izip;
     use jf_merkle_tree::{MerkleCommitment, MerkleTreeScheme};
@@ -988,6 +991,30 @@ pub mod test_helpers {
                 catchup: Some(std::array::from_fn(|_| NullStateCatchup::default())),
                 network_config: None,
                 api_config: None,
+            }
+        }
+    }
+
+    pub enum AnyTestNetwork<P: PersistenceOptions, const NUM_NODES: usize> {
+        V0_1(TestNetwork<P, NUM_NODES, SequencerVersions<V0_1, V0_1>>),
+        V0_2(TestNetwork<P, NUM_NODES, SequencerVersions<FeeVersion, FeeVersion>>),
+        V0_3(TestNetwork<P, NUM_NODES, SequencerVersions<EpochVersion, EpochVersion>>),
+        V0_4(
+            TestNetwork<
+                P,
+                NUM_NODES,
+                SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
+            >,
+        ),
+    }
+
+    impl<P: PersistenceOptions, const NUM_NODES: usize> AnyTestNetwork<P, NUM_NODES> {
+        pub fn hotshot_config(&self) -> &HotShotConfig<SeqTypes> {
+            match self {
+                AnyTestNetwork::V0_1(network) => network.cfg.hotshot_config(),
+                AnyTestNetwork::V0_2(network) => network.cfg.hotshot_config(),
+                AnyTestNetwork::V0_3(network) => network.cfg.hotshot_config(),
+                AnyTestNetwork::V0_4(network) => network.cfg.hotshot_config(),
             }
         }
     }
@@ -1405,7 +1432,7 @@ pub mod test_helpers {
         }
         // we cannot verify the signature now, because we don't know the stake table
         client
-            .get::<LCV2StateSignatureRequestBody>(&format!("state-signature/block/{height}"))
+            .get::<LCV3StateSignatureRequestBody>(&format!("state-signature/block/{height}"))
             .send()
             .await
             .unwrap();
@@ -1497,7 +1524,7 @@ pub mod test_helpers {
             .unwrap()
             .block_merkle_tree
             .commitment();
-        BlockMerkleTree::verify(root.digest(), root.size() - 1, res)
+        BlockMerkleTree::verify(root, root.size() - 1, res)
             .unwrap()
             .unwrap();
     }
@@ -1578,9 +1605,9 @@ mod api_tests {
         Header, Leaf2, MockSequencerVersions, NamespaceId, NamespaceProofQueryData, ValidatedState,
     };
     use futures::{future, stream::StreamExt};
-    use hotshot_example_types::node_types::{EpochsTestVersions, TestVersions};
+    use hotshot_example_types::node_types::TestVersions;
     use hotshot_query_service::availability::{
-        AvailabilityDataSource, BlockQueryData, StateCertQueryData, VidCommonQueryData,
+        AvailabilityDataSource, BlockQueryData, VidCommonQueryData,
     };
     use hotshot_types::{
         data::{
@@ -2046,68 +2073,6 @@ mod api_tests {
             state_cert: None,
         }
     }
-
-    #[ignore]
-    #[rstest_reuse::apply(testable_sequencer_data_source)]
-    pub(crate) async fn test_state_cert_query<D: TestableSequencerDataSource>(_d: PhantomData<D>) {
-        const TEST_EPOCH_HEIGHT: u64 = 10;
-        const TEST_EPOCHS: u64 = 3;
-
-        // Start query service.
-        let port = pick_unused_port().expect("No ports free");
-        let storage = D::create_storage().await;
-        let network_config = TestConfigBuilder::default()
-            .epoch_height(TEST_EPOCH_HEIGHT)
-            .build();
-        let config = TestNetworkConfigBuilder::default()
-            .api_config(D::options(&storage, Options::with_port(port)).submit(Default::default()))
-            .network_config(network_config)
-            .build();
-        let network = TestNetwork::new(config, EpochsTestVersions {}).await;
-        let mut events = network.server.event_stream().await;
-
-        // Wait until 3 epochs have passed.
-        loop {
-            let event = events.next().await.unwrap();
-            tracing::info!("Received event from handle: {event:?}");
-
-            if let hotshot::types::EventType::Decide { leaf_chain, .. } = event.event {
-                println!(
-                    "Decide event received: {:?}",
-                    leaf_chain.first().unwrap().leaf.height()
-                );
-                if leaf_chain
-                    .first()
-                    .is_some_and(|leaf| leaf.leaf.height() >= TEST_EPOCHS * TEST_EPOCH_HEIGHT)
-                {
-                    break;
-                } else {
-                    // Keep waiting
-                }
-            }
-        }
-
-        // Connect client.
-        let client: Client<ServerError, StaticVersion<0, 1>> =
-            Client::new(format!("http://localhost:{port}").parse().unwrap());
-        client.connect(None).await;
-
-        // Get the state cert for the 3rd epoch.
-        for i in 0..TEST_EPOCHS {
-            let state_cert = client
-                .get::<StateCertQueryData<SeqTypes>>(&format!("availability/state-cert/{i}"))
-                .send()
-                .await
-                .unwrap()
-                .0;
-            tracing::info!("state_cert: {state_cert:?}");
-            assert_eq!(state_cert.epoch.u64(), i);
-            assert_eq!(
-                state_cert.light_client_state.block_height,
-                (i + 1) * TEST_EPOCH_HEIGHT - 5
-            );
-        }
-    }
 }
 
 #[cfg(test)]
@@ -2146,8 +2111,8 @@ mod test {
     use hotshot_example_types::node_types::EpochsTestVersions;
     use hotshot_query_service::{
         availability::{
-            BlockQueryData, BlockSummaryQueryData, LeafQueryData, TransactionQueryData,
-            VidCommonQueryData,
+            BlockQueryData, BlockSummaryQueryData, LeafQueryData, StateCertQueryDataV1,
+            StateCertQueryDataV2, TransactionQueryData, VidCommonQueryData,
         },
         data_source::{sql::Config, storage::SqlStorage, VersionedDataSource},
         explorer::TransactionSummariesResponse,
@@ -2156,7 +2121,10 @@ mod test {
     use hotshot_types::{
         data::EpochNumber,
         event::LeafInfo,
-        traits::{election::Membership, metrics::NoMetrics, node_implementation::ConsensusTime},
+        traits::{
+            block_contents::BlockHeader, election::Membership, metrics::NoMetrics,
+            node_implementation::ConsensusTime,
+        },
         utils::epoch_from_block_number,
         ValidatorConfig,
     };
@@ -3075,21 +3043,15 @@ mod test {
     }
 
     async fn run_hotshot_event_streaming_test(url_suffix: &str) {
-        let hotshot_event_streaming_port =
-            pick_unused_port().expect("No ports free for hotshot event streaming");
         let query_service_port = pick_unused_port().expect("No ports free for query service");
 
-        let url = format!("http://localhost:{hotshot_event_streaming_port}{url_suffix}")
+        let url = format!("http://localhost:{query_service_port}{url_suffix}")
             .parse()
             .unwrap();
 
-        let hotshot_events = HotshotEvents {
-            events_service_port: hotshot_event_streaming_port,
-        };
-
         let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
 
-        let options = Options::with_port(query_service_port).hotshot_events(hotshot_events);
+        let options = Options::with_port(query_service_port).hotshot_events(HotshotEvents);
 
         let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::default()
@@ -3145,20 +3107,14 @@ mod test {
             .epoch_height(epoch_height)
             .build();
 
-        let hotshot_event_streaming_port =
-            pick_unused_port().expect("No ports free for hotshot event streaming");
-        let hotshot_url = format!("http://localhost:{hotshot_event_streaming_port}")
+        let query_service_port = pick_unused_port().expect("No ports free for query service");
+
+        let hotshot_url = format!("http://localhost:{query_service_port}")
             .parse()
             .unwrap();
 
-        let query_service_port = pick_unused_port().expect("No ports free for query service");
-
-        let hotshot_events = HotshotEvents {
-            events_service_port: hotshot_event_streaming_port,
-        };
-
         let client: Client<ServerError, SequencerApiVersion> = Client::new(hotshot_url);
-        let options = Options::with_port(query_service_port).hotshot_events(hotshot_events);
+        let options = Options::with_port(query_service_port).hotshot_events(HotshotEvents);
 
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
@@ -5595,5 +5551,129 @@ mod test {
 
         network.stop_consensus().await;
         Ok(())
+    }
+
+    #[rstest]
+    #[case(PosVersionV3::new())]
+    #[case(PosVersionV4::new())]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+
+    pub(crate) async fn test_state_cert_query<Ver: Versions>(#[case] versions: Ver) {
+        const TEST_EPOCH_HEIGHT: u64 = 10;
+        const TEST_EPOCHS: u64 = 5;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(TEST_EPOCH_HEIGHT)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        tracing::info!("API PORT = {api_port}");
+        const NUM_NODES: usize = 2;
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port).catchup(Default::default()),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<Ver>(
+                DelegationConfig::MultipleDelegators,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+            )
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, versions).await;
+        let mut events = network.server.event_stream().await;
+
+        // Wait until 5 epochs have passed.
+        loop {
+            let event = events.next().await.unwrap();
+            tracing::info!("Received event from handle: {event:?}");
+
+            if let hotshot::types::EventType::Decide { leaf_chain, .. } = event.event {
+                println!(
+                    "Decide event received: {:?}",
+                    leaf_chain.first().unwrap().leaf.height()
+                );
+                if let Some(first_leaf) = leaf_chain.first() {
+                    let height = first_leaf.leaf.height();
+                    tracing::info!("Decide event received at height: {height}");
+
+                    if height >= TEST_EPOCHS * TEST_EPOCH_HEIGHT {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Connect client.
+        let client: Client<ServerError, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+        client.connect(Some(Duration::from_secs(10))).await;
+
+        // Get the state cert for the epoch 3 to 5
+        for i in 3..=TEST_EPOCHS {
+            // v2
+            let state_query_data_v2 = client
+                .get::<StateCertQueryDataV2<SeqTypes>>(&format!("availability/state-cert-v2/{i}"))
+                .send()
+                .await
+                .unwrap();
+            let state_cert_v2 = state_query_data_v2.0.clone();
+            tracing::info!("state_cert_v2: {state_cert_v2:?}");
+            assert_eq!(state_cert_v2.epoch.u64(), i);
+            assert_eq!(
+                state_cert_v2.light_client_state.block_height,
+                i * TEST_EPOCH_HEIGHT - 5
+            );
+            let block_height = state_cert_v2.light_client_state.block_height;
+
+            let header: Header = client
+                .get(&format!("availability/header/{block_height}"))
+                .send()
+                .await
+                .unwrap();
+
+            // verify auth root if the consensus version is v4
+            if header.version() == DrbAndHeaderUpgradeVersion::VERSION {
+                let auth_root = state_cert_v2.auth_root;
+                let header_auth_root = header.auth_root().unwrap();
+                if auth_root.is_zero() || header_auth_root.is_zero() {
+                    panic!("auth root shouldn't be zero");
+                }
+
+                assert_eq!(auth_root, header_auth_root, "auth root mismatch");
+            }
+
+            // v1
+            let state_query_data_v1 = client
+                .get::<StateCertQueryDataV1<SeqTypes>>(&format!("availability/state-cert/{i}"))
+                .send()
+                .await
+                .unwrap();
+
+            let state_cert_v1 = state_query_data_v1.0.clone();
+            tracing::info!("state_cert_v1: {state_cert_v1:?}");
+            assert_eq!(state_query_data_v1, state_query_data_v2.into());
+        }
     }
 }

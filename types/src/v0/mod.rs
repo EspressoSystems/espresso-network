@@ -16,8 +16,11 @@ mod impls;
 mod nsproof;
 mod sparse_mt;
 pub mod traits;
+mod txproof;
 mod utils;
 pub use header::Header;
+#[allow(unused_imports)]
+pub(crate) use impls::active_validator_set_from_l1_events;
 #[cfg(any(test, feature = "testing"))]
 pub use impls::mock;
 pub use impls::{
@@ -25,6 +28,7 @@ pub use impls::{
     EpochCommittees, FeeError, ProposalValidationError, StateValidationError,
 };
 pub use nsproof::*;
+pub use txproof::*;
 pub use utils::*;
 use vbs::version::{StaticVersion, StaticVersionType};
 
@@ -113,7 +117,6 @@ reexport_unchanged_types!(
     TxIter,
     TxPayload,
     TxPayloadRange,
-    TxProof,
     TxTableEntries,
     TxTableEntriesRange,
     Upgrade,
@@ -192,6 +195,7 @@ pub type NetworkConfig = hotshot_types::network::NetworkConfig<SeqTypes>;
 
 pub use self::impls::{NodeState, RewardDistributor, UpgradeMap, ValidatedState, ValidatorMap};
 pub use crate::{
+    v0::impls::StakeTableHash,
     v0_1::{
         BLOCK_MERKLE_TREE_HEIGHT, FEE_MERKLE_TREE_HEIGHT, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN,
         NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, TX_OFFSET_BYTE_LEN,

@@ -22,13 +22,14 @@ use crate::{
     epoch_membership::EpochMembership,
     light_client::{LightClientState, StakeTableState},
     message::UpgradeLock,
-    simple_certificate::{LightClientStateUpdateCertificate, Threshold},
+    simple_certificate::{LightClientStateUpdateCertificateV2, Threshold},
     simple_vote::{LightClientStateUpdateVote, VersionedVoteData, Voteable},
     stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
         node_implementation::{NodeType, Versions},
         signature_key::{
-            LCV2StateSignatureKey, SignatureKey, StakeTableEntryType, StateSignatureKey,
+            LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StakeTableEntryType,
+            StateSignatureKey,
         },
     },
     PeerConfig,
@@ -255,7 +256,10 @@ pub struct LightClientStateUpdateVoteAccumulator<TYPES: NodeType> {
             U256,
             HashMap<
                 TYPES::StateSignatureKey,
-                <TYPES::StateSignatureKey as StateSignatureKey>::StateSignature,
+                (
+                    <TYPES::StateSignatureKey as StateSignatureKey>::StateSignature, // LCV3 signature
+                    <TYPES::StateSignatureKey as StateSignatureKey>::StateSignature, // LCV2 signature
+                ),
             >,
         ),
     >,
@@ -270,7 +274,7 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
         key: &TYPES::SignatureKey,
         vote: &LightClientStateUpdateVote<TYPES>,
         membership: &EpochMembership<TYPES>,
-    ) -> Option<LightClientStateUpdateCertificate<TYPES>> {
+    ) -> Option<LightClientStateUpdateCertificateV2<TYPES>> {
         let epoch = membership.epoch()?;
         let threshold = membership.success_threshold().await;
         let PeerConfig {
@@ -280,9 +284,17 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
 
         if !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
             &state_ver_key,
-            &vote.signature,
+            &vote.v2_signature,
             &vote.light_client_state,
             &vote.next_stake_table_state,
+        ) {
+            error!("Invalid light client state update vote {vote:?}");
+            return None;
+        }
+        if !<TYPES::StateSignatureKey as LCV3StateSignatureKey>::verify_state_sig(
+            &state_ver_key,
+            &vote.signature,
+            vote.signed_state_digest,
         ) {
             error!("Invalid light client state update vote {vote:?}");
             return None;
@@ -299,14 +311,22 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
         }
 
         *total_stake_casted += stake_table_entry.stake();
-        vote_map.insert(state_ver_key.clone(), vote.signature.clone());
+        vote_map.insert(
+            state_ver_key.clone(),
+            (vote.signature.clone(), vote.v2_signature.clone()),
+        );
 
         if *total_stake_casted >= threshold {
-            return Some(LightClientStateUpdateCertificate {
+            return Some(LightClientStateUpdateCertificateV2 {
                 epoch,
                 light_client_state: vote.light_client_state,
                 next_stake_table_state: vote.next_stake_table_state,
-                signatures: Vec::from_iter(vote_map.iter().map(|(k, v)| (k.clone(), v.clone()))),
+                signatures: Vec::from_iter(
+                    vote_map
+                        .iter()
+                        .map(|(k, (v3, v2))| (k.clone(), v3.clone(), v2.clone())),
+                ),
+                auth_root: vote.auth_root,
             });
         }
         None
