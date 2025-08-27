@@ -13366,6 +13366,7 @@ dependencies = [
  "ark-poly",
  "ark-serialize 0.4.2",
  "ark-std 0.4.0",
+ "base64-bytes",
  "criterion",
  "displaydoc",
  "jf-crhf 0.1.1",
