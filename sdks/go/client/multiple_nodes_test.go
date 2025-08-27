@@ -23,11 +23,10 @@ type MockClient struct {
 	mock.Mock
 }
 
-func (m *MockClient) FetchRawHeaderByHeight(ctx context.Context, height uint64) (json.RawMessage, TransactionError) {
+func (m *MockClient) FetchRawHeaderByHeight(ctx context.Context, height uint64) (json.RawMessage, error) {
 	args := m.Called(ctx, height)
 
-	// Mark the fetch as retryable for simplicity in tests.
-	return args.Get(0).(json.RawMessage), TransactionError{args.Error(1), true}
+	return args.Get(0).(json.RawMessage), args.Error(1)
 }
 
 func TestFetchWithMajority(t *testing.T) {
@@ -45,11 +44,11 @@ func TestFetchWithMajority(t *testing.T) {
 
 	nodes := []*MockClient{mockNode1, mockNode2, mockNode3}
 
-	result, txnErr := FetchWithMajority(ctx, nodes, func(node *MockClient) (json.RawMessage, TransactionError) {
+	result, err := FetchWithMajority(ctx, nodes, func(node *MockClient) (json.RawMessage, error) {
 		return node.FetchRawHeaderByHeight(ctx, 1)
 	})
 
-	assert.NoError(t, txnErr.err)
+	assert.NoError(t, err)
 	assert.Equal(t, json.RawMessage(`{"data":"value1"}`), result)
 
 	// Simulate a scenario where no majority is reached
@@ -57,47 +56,47 @@ func TestFetchWithMajority(t *testing.T) {
 	mockNode2.On("FetchRawHeaderByHeight", ctx, uint64(2)).Return(json.RawMessage(`{"data":"value2"}`), nil)
 	mockNode3.On("FetchRawHeaderByHeight", ctx, uint64(2)).Return(json.RawMessage(`{"data":"value3"}`), nil)
 
-	_, txnErr = FetchWithMajority(ctx, nodes, func(node *MockClient) (json.RawMessage, TransactionError) {
+	_, err = FetchWithMajority(ctx, nodes, func(node *MockClient) (json.RawMessage, error) {
 		return node.FetchRawHeaderByHeight(ctx, 2)
 	})
 
-	assert.Error(t, txnErr.err)
-	assert.Equal(t, defaultFetchWithMajorityError.Error(), txnErr.err.Error())
+	assert.Error(t, err)
+	assert.Equal(t, defaultFetchWithMajorityError.Error(), err.Error())
 
 	// Simulate a scenario where all nodes return an error
 	mockNode1.On("FetchRawHeaderByHeight", ctx, uint64(3)).Return(json.RawMessage{}, errors.New("error"))
 	mockNode2.On("FetchRawHeaderByHeight", ctx, uint64(3)).Return(json.RawMessage{}, errors.New("error"))
 	mockNode3.On("FetchRawHeaderByHeight", ctx, uint64(3)).Return(json.RawMessage{}, errors.New("error"))
 
-	_, txnErr = FetchWithMajority(ctx, nodes, func(node *MockClient) (json.RawMessage, TransactionError) {
+	_, err = FetchWithMajority(ctx, nodes, func(node *MockClient) (json.RawMessage, error) {
 		return node.FetchRawHeaderByHeight(ctx, 3)
 	})
 
-	assert.Error(t, txnErr.err)
+	assert.Error(t, err)
 
 	// Simulate a scenario where the majority returns same result but not the same order
 	mockNode1.On("FetchRawHeaderByHeight", ctx, uint64(4)).Return(json.RawMessage(`{"key": "key", "data":"value1"}`), nil)
 	mockNode2.On("FetchRawHeaderByHeight", ctx, uint64(4)).Return(json.RawMessage(`{"data":"value1", "key": "key"}`), nil)
 	mockNode3.On("FetchRawHeaderByHeight", ctx, uint64(4)).Return(json.RawMessage(`{"key": "key", "data":"value2"}`), nil)
 
-	result, txnErr = FetchWithMajority(ctx, nodes, func(node *MockClient) (json.RawMessage, TransactionError) {
+	result, err = FetchWithMajority(ctx, nodes, func(node *MockClient) (json.RawMessage, error) {
 		return node.FetchRawHeaderByHeight(ctx, 4)
 	})
 
-	assert.NoError(t, txnErr.err)
+	assert.NoError(t, err)
 	expected, err := hashNormalizedJSON(json.RawMessage(`{"data":"value1", "key": "key"}`))
-	assert.NoError(t, txnErr.err)
+	assert.NoError(t, err)
 	actual, err := hashNormalizedJSON(result)
-	assert.NoError(t, txnErr.err)
+	assert.NoError(t, err)
 	// keys have been sorted
 	assert.Equal(t, expected, actual)
 
 	// Simulate a scenario where only a single node is available
 	newNodes := []*MockClient{mockNode1}
-	result, txnErr = FetchWithMajority(ctx, newNodes, func(node *MockClient) (json.RawMessage, TransactionError) {
+	result, err = FetchWithMajority(ctx, newNodes, func(node *MockClient) (json.RawMessage, error) {
 		return node.FetchRawHeaderByHeight(ctx, 1)
 	})
-	assert.NoError(t, txnErr.err)
+	assert.NoError(t, err)
 	assert.Equal(t, json.RawMessage(`{"data":"value1"}`), result)
 
 	// Simulate a scenario where the response is an array
@@ -105,10 +104,10 @@ func TestFetchWithMajority(t *testing.T) {
 	mockNode2.On("FetchRawHeaderByHeight", ctx, uint64(5)).Return(json.RawMessage(`[{"data":"value1"}, {"data":"value2"}]`), nil)
 	mockNode3.On("FetchRawHeaderByHeight", ctx, uint64(5)).Return(json.RawMessage(`[{"data":"value1"}, {"data":"value2"}, {"data":"value3"}]`), nil)
 
-	result, txnErr = FetchWithMajority(ctx, nodes, func(node *MockClient) (json.RawMessage, TransactionError) {
+	result, err = FetchWithMajority(ctx, nodes, func(node *MockClient) (json.RawMessage, error) {
 		return node.FetchRawHeaderByHeight(ctx, 5)
 	})
-	assert.NoError(t, txnErr.err)
+	assert.NoError(t, err)
 	assert.Equal(t, json.RawMessage(`[{"data":"value1"}, {"data":"value2"}]`), result)
 
 	// Simulate a scenario where some of nodes are not responding
@@ -116,10 +115,10 @@ func TestFetchWithMajority(t *testing.T) {
 	mockNode2.On("FetchRawHeaderByHeight", ctx, uint64(6)).Return(json.RawMessage{}, errors.New("error"))
 	mockNode3.On("FetchRawHeaderByHeight", ctx, uint64(6)).Return(json.RawMessage(`[{"data":"value1"}, {"data":"value2"}]`), nil)
 
-	result, txnErr = FetchWithMajority(ctx, nodes, func(node *MockClient) (json.RawMessage, TransactionError) {
+	result, err = FetchWithMajority(ctx, nodes, func(node *MockClient) (json.RawMessage, error) {
 		return node.FetchRawHeaderByHeight(ctx, 6)
 	})
-	assert.NoError(t, txnErr.err)
+	assert.NoError(t, err)
 	assert.Equal(t, json.RawMessage(`[{"data":"value1"}, {"data":"value2"}]`), result)
 
 	// Simulate a scenario where response is nested type
@@ -127,10 +126,10 @@ func TestFetchWithMajority(t *testing.T) {
 	mockNode2.On("FetchRawHeaderByHeight", ctx, uint64(7)).Return(json.RawMessage(`{"data":{"key":"value", "key2":"[1,2,3]"}}`), nil)
 	mockNode3.On("FetchRawHeaderByHeight", ctx, uint64(7)).Return(json.RawMessage(`{"data":{"key":"value", "key2":"[1,2,3]"}}`), nil)
 
-	result, txnErr = FetchWithMajority(ctx, nodes, func(node *MockClient) (json.RawMessage, TransactionError) {
+	result, err = FetchWithMajority(ctx, nodes, func(node *MockClient) (json.RawMessage, error) {
 		return node.FetchRawHeaderByHeight(ctx, 7)
 	})
-	assert.NoError(t, txnErr.err)
+	assert.NoError(t, err)
 	assert.Equal(t, json.RawMessage(`{"data":{"key":"value", "key2":"[1,2,3]"}}`), result)
 
 	// Test with the mock header data
@@ -145,13 +144,13 @@ func TestFetchWithMajority(t *testing.T) {
 	mockNode1.On("FetchRawHeaderByHeight", ctx, uint64(8)).Return(json.RawMessage(data1), nil)
 	mockNode2.On("FetchRawHeaderByHeight", ctx, uint64(8)).Return(json.RawMessage(data2), nil)
 	mockNode3.On("FetchRawHeaderByHeight", ctx, uint64(8)).Return(json.RawMessage(data3), nil)
-	result, txnErr = FetchWithMajority(ctx, nodes, func(node *MockClient) (json.RawMessage, TransactionError) {
+	result, err = FetchWithMajority(ctx, nodes, func(node *MockClient) (json.RawMessage, error) {
 		return node.FetchRawHeaderByHeight(ctx, 8)
 	})
-	assert.NoError(t, txnErr.err)
+	assert.NoError(t, err)
 	var resultHeader types.HeaderImpl
 	err = json.Unmarshal(result, &resultHeader)
-	assert.NoError(t, txnErr.err)
+	assert.NoError(t, err)
 	assert.Equal(t, header1.Header.Commit(), resultHeader.Header.Commit())
 }
 

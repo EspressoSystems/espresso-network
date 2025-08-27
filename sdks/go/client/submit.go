@@ -9,5 +9,5 @@ import (
 // Interface to the Espresso Sequencer submit API
 type SubmitAPI interface {
 	// Submit a transaction to the espresso sequencer.
-	SubmitTransaction(ctx context.Context, tx common.Transaction) (*common.TaggedBase64, TransactionError)
+	SubmitTransaction(ctx context.Context, tx common.Transaction) (*common.TaggedBase64, error)
 }
