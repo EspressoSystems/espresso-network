@@ -353,6 +353,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
 
         validators[validator].status = ValidatorStatus.Exited;
         validatorExits[validator] = block.timestamp + exitEscrowPeriod;
+        validators[validator].delegatedAmount = 0;
 
         emit ValidatorExit(validator);
     }
@@ -404,6 +405,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         delegations[validator][delegator] -= amount;
         undelegations[validator][delegator] =
             Undelegation({ amount: amount, unlocksAt: block.timestamp + exitEscrowPeriod });
+        validators[validator].delegatedAmount -= amount;
 
         emit Undelegated(delegator, validator, amount);
     }
@@ -424,8 +426,6 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
 
         // Mark funds as spent
         delete undelegations[validator][delegator];
-        // deduct the amount from the validator's delegatedAmount
-        validators[validator].delegatedAmount -= amount;
 
         SafeTransferLib.safeTransfer(token, delegator, amount);
 
@@ -452,8 +452,6 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
 
         // Mark funds as spent
         delegations[validator][delegator] = 0;
-        // deduct the amount from the validator's delegatedAmount
-        validators[validator].delegatedAmount -= amount;
 
         SafeTransferLib.safeTransfer(token, delegator, amount);
 

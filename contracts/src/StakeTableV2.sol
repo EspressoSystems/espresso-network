@@ -12,6 +12,7 @@ import { StakeTable } from "./StakeTable.sol";
 import { EdOnBN254 } from "./libraries/EdOnBn254.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { BLSSig } from "./libraries/BLSSig.sol";
+import { SafeTransferLib, ERC20 } from "solmate/utils/SafeTransferLib.sol";
 
 /// @title Ethereum L1 component of the Espresso Global Confirmation Layer (GCL) stake table.
 ///
@@ -73,10 +74,14 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// The function is deprecated as it was replaced by a new function
     error DeprecatedFunction();
 
+    /// @notice Constructor
+    /// @dev This function is overridden to disable initializers
     constructor() {
         _disableInitializers();
     }
 
+    /// @notice Reinitialize the contract
+    /// @dev This function is overridden to add pauser and admin roles
     function initializeV2(address pauser, address admin) public reinitializer(2) {
         __AccessControl_init();
 
@@ -84,6 +89,8 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         _grantRole(PAUSER_ROLE, pauser);
     }
 
+    /// @notice Get the version of the contract
+    /// @dev This function is overridden to return the version of the contract
     function getVersion()
         public
         pure
@@ -94,32 +101,130 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         return (2, 0, 0);
     }
 
+    /// @notice Pause the contract
+    /// @dev This function is only callable by the PAUSER_ROLE
     function pause() external onlyRole(PAUSER_ROLE) {
         _pause();
     }
 
+    /// @notice Unpause the contract
+    /// @dev This function is only callable by the PAUSER_ROLE
     function unpause() external onlyRole(PAUSER_ROLE) {
         _unpause();
     }
 
+    /// @notice Withdraw previously delegated funds after a validator has exited
+    /// @param validator The validator to withdraw from
+    /// @dev This function is overridden to deduct the amount from the validator's delegatedAmount
+    /// @dev and to add pausable functionality
+    /// @dev since the delegated Amount is no longer updated during validator exit
     function claimValidatorExit(address validator) public virtual override whenNotPaused {
-        super.claimValidatorExit(validator);
+        address delegator = msg.sender;
+        uint256 unlocksAt = validatorExits[validator];
+        if (unlocksAt == 0) {
+            revert ValidatorNotExited();
+        }
+
+        if (block.timestamp < unlocksAt) {
+            revert PrematureWithdrawal();
+        }
+
+        uint256 amount = delegations[validator][delegator];
+        if (amount == 0) {
+            revert NothingToWithdraw();
+        }
+
+        // Mark funds as spent
+        delegations[validator][delegator] = 0;
+        // deduct the amount from the validator's delegatedAmount
+        validators[validator].delegatedAmount -= amount;
+
+        SafeTransferLib.safeTransfer(token, delegator, amount);
+
+        emit Withdrawal(delegator, amount);
     }
 
+    /// @notice Withdraw previously delegated funds after a validator has exited
+    /// @param validator The validator to withdraw from
+    /// @dev This function is overridden to deduct the amount from the validator's delegatedAmount
+    /// and to add pausable functionality
+    /// @dev since the delegated Amount is no longer updated during undelegation
+    /// @dev delegatedAmount represents the no. of tokens that have been delegated to a validator,
+    /// even if it's not participating in consensus
     function claimWithdrawal(address validator) public virtual override whenNotPaused {
-        super.claimWithdrawal(validator);
+        address delegator = msg.sender;
+        // If entries are missing at any of the levels of the mapping this will return zero
+        uint256 amount = undelegations[validator][delegator].amount;
+        if (amount == 0) {
+            revert NothingToWithdraw();
+        }
+
+        if (block.timestamp < undelegations[validator][delegator].unlocksAt) {
+            revert PrematureWithdrawal();
+        }
+
+        // Mark funds as spent
+        delete undelegations[validator][delegator];
+        // deduct the amount from the validator's delegatedAmount
+        validators[validator].delegatedAmount -= amount;
+
+        SafeTransferLib.safeTransfer(token, delegator, amount);
+
+        emit Withdrawal(delegator, amount);
     }
 
+    /// @notice Delegate funds to a validator
+    /// @param validator The validator to delegate to
+    /// @param amount The amount to delegate
+    /// @dev This function is overridden to add pausable functionality
     function delegate(address validator, uint256 amount) public virtual override whenNotPaused {
         super.delegate(validator, amount);
     }
 
+    /// @notice Undelegate funds from a validator
+    /// @param validator The validator to undelegate from
+    /// @param amount The amount to undelegate
+    /// @dev This function is overridden to add pausable functionality
+    /// @dev and to ensure that the validator's delegatedAmount is not updated until withdrawal
+    /// @dev delegatedAmount represents the no. of tokens that have been delegated to a validator,
+    /// even if it's not participating in consensus
     function undelegate(address validator, uint256 amount) public virtual override whenNotPaused {
-        super.undelegate(validator, amount);
+        ensureValidatorActive(validator);
+        address delegator = msg.sender;
+
+        if (amount == 0) {
+            revert ZeroAmount();
+        }
+
+        if (undelegations[validator][delegator].amount != 0) {
+            revert UndelegationAlreadyExists();
+        }
+
+        uint256 balance = delegations[validator][delegator];
+        if (balance < amount) {
+            revert InsufficientBalance(balance);
+        }
+
+        delegations[validator][delegator] -= amount;
+        undelegations[validator][delegator] =
+            Undelegation({ amount: amount, unlocksAt: block.timestamp + exitEscrowPeriod });
+
+        emit Undelegated(delegator, validator, amount);
     }
 
+    /// @notice Deregister a validator
+    /// @dev This function is overridden to add pausable functionality
+    /// @dev and to ensure that the validator's delegatedAmount is not updated until withdrawal
+    /// @dev delegatedAmount represents the no. of tokens that have been delegated to a validator,
+    /// even if it's not participating in consensus
     function deregisterValidator() public virtual override whenNotPaused {
-        super.deregisterValidator();
+        address validator = msg.sender;
+        ensureValidatorActive(validator);
+
+        validators[validator].status = ValidatorStatus.Exited;
+        validatorExits[validator] = block.timestamp + exitEscrowPeriod;
+
+        emit ValidatorExit(validator);
     }
 
     /// @notice Register a validator in the stake table
@@ -129,6 +234,8 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @param blsSig The BLS signature that authenticates the BLS VK
     /// @param schnorrSig The Schnorr signature that authenticates the Schnorr VK
     /// @param commission in % with 2 decimals, from 0.00% (value 0) to 100% (value 10_000)
+    /// @dev This function is overridden to add pausable functionality
+    /// @dev and to add schnorrSig validation
     function registerValidatorV2(
         BN254.G2Point memory blsVK,
         EdOnBN254.EdOnBN254Point memory schnorrVK,
@@ -168,6 +275,8 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @param schnorrVK The new Schnorr verification key
     /// @param blsSig The BLS signature that authenticates the blsVK
     /// @param schnorrSig The Schnorr signature that authenticates the schnorrVK
+    /// @dev This function is overridden to add pausable functionality
+    /// @dev and to add schnorrSig validation
     function updateConsensusKeysV2(
         BN254.G2Point memory blsVK,
         EdOnBN254.EdOnBN254Point memory schnorrVK,
@@ -190,6 +299,11 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         emit ConsensusKeysUpdatedV2(validator, blsVK, schnorrVK, blsSig, schnorrSig);
     }
 
+    /// @notice Update the exit escrow period
+    /// @param newExitEscrowPeriod The new exit escrow period
+    /// @dev This function ensures that the exit escrow period is within the valid range
+    /// @dev This function is not pausable so that governance can perform emergency updates in the
+    /// presence of system
     function updateExitEscrowPeriod(uint64 newExitEscrowPeriod) external virtual onlyOwner {
         uint64 minExitEscrowPeriod = lightClient.blocksPerEpoch() * 15; // assuming 15 seconds per
             // block
@@ -203,7 +317,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         emit ExitEscrowPeriodUpdated(newExitEscrowPeriod);
     }
 
-    // deprecate previous registration function
+    /// @notice Deprecate previous registration function
+    /// @dev This function is overridden to revert with a DeprecatedFunction error
+    /// @dev users must call registerValidatorV2 instead
     function registerValidator(
         BN254.G2Point memory,
         EdOnBN254.EdOnBN254Point memory,
@@ -213,7 +329,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         revert DeprecatedFunction();
     }
 
-    // deprecate previous updateConsensusKeys function
+    /// @notice Deprecate previous updateConsensusKeys function
+    /// @dev This function is overridden to revert with a DeprecatedFunction error
+    /// @dev users must call updateConsensusKeysV2 instead
     function updateConsensusKeys(
         BN254.G2Point memory,
         EdOnBN254.EdOnBN254Point memory,
