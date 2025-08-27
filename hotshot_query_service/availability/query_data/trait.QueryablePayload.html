@@ -48,7 +48,7 @@
 }</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>A block payload whose contents (e.g. individual transactions) can be examined.</p>
 <p>Note to implementers: this trait has only a few required methods. The provided methods, for
 querying transactions in various ways, are implemented in terms of the required
-<a href="../trait.QueryablePayload.html#tymethod.iter"><code>iter</code></a> and <a href="Self::transaction_with_proof"><code>transaction_with_proof</code></a> methods, and
+<a href="../trait.QueryablePayload.html#tymethod.iter"><code>iter</code></a> and <a href="../trait.QueryablePayload.html#tymethod.transaction_proof"><code>transaction_proof</code></a> methods, and
 the default implementations may be inefficient (e.g. performing an O(n) search, or computing an
 unnecessary inclusion proof). It is good practice to override these default implementations if
 your block type supports more efficient implementations (e.g. sublinear indexing by hash).</p>
