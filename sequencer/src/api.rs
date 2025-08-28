@@ -5777,7 +5777,7 @@ mod test {
             for (address, _) in validated_state.reward_merkle_tree_v1.iter() {
                 let (_, expected_proof) = validated_state
                     .reward_merkle_tree_v1
-                    .lookup(address.clone())
+                    .lookup(*address)
                     .expect_ok()
                     .unwrap();
 
@@ -5804,7 +5804,7 @@ mod test {
             for (address, _) in validated_state.reward_merkle_tree_v2.iter() {
                 let (_, expected_proof) = validated_state
                     .reward_merkle_tree_v2
-                    .lookup(address.clone())
+                    .lookup(*address)
                     .expect_ok()
                     .unwrap();
 
