@@ -303,6 +303,21 @@ where
             },
         };
 
+        // Signal the other tasks about the success
+        if let Ok(Some(res)) = epoch_tx.try_broadcast(Ok(EpochMembership {
+            epoch: Some(epoch),
+            coordinator: self.clone(),
+        })) {
+            tracing::warn!(
+                "The catchup channel for epoch {} was overflown, dropped message {:?}",
+                epoch,
+                res.map(|em| em.epoch)
+            );
+        }
+
+        // Remove the epoch from the catchup map to indicate that the catchup is complete
+        self.catchup_map.lock().await.remove(&epoch);
+
         match <TYPES::Membership as Membership<TYPES>>::get_epoch_drb(
             self.membership.clone(),
             epoch,
