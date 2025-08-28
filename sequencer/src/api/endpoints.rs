@@ -141,11 +141,23 @@ where
                     status: StatusCode::BAD_REQUEST,
                 })?;
             let path = state.get_path(snapshot, key).await?;
+
+            let last_height = state.get_last_state_height().await?;
+
+            if height > last_height {
+                return Err(merklized_state::Error::Custom {
+                    message: format!(
+                        "requested height {height} is greater than last known height {last_height}"
+                    ),
+                    status: StatusCode::BAD_REQUEST,
+                });
+            }
+
             Ok(path.elem().copied())
         }
         .boxed()
-    })?.
-    get("get_reward_account_proof", move |req, state| {
+    })?
+    .get("get_reward_account_proof", move |req, state| {
         async move {
             let address = req.string_param("address")?;
             let height = state.get_last_state_height().await?;
@@ -156,6 +168,18 @@ where
                     message: "failed to parse reward address".to_string(),
                     status: StatusCode::BAD_REQUEST,
                 })?;
+
+            let last_height = state.get_last_state_height().await?;
+
+            if height > last_height {
+                return Err(merklized_state::Error::Custom {
+                    message: format!(
+                        "requested height {height} is greater than last known height {last_height}"
+                    ),
+                    status: StatusCode::BAD_REQUEST,
+                });
+            }
+
             let path = state.get_path(snapshot, key).await?;
             Ok(path)
         }

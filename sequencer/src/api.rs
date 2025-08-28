@@ -2096,8 +2096,10 @@ mod test {
     };
     use espresso_types::{
         config::PublicHotShotConfig,
+        sparse_mt::KeccakNode,
         traits::{NullEventConsumer, PersistenceOptions},
-        v0_3::{Fetcher, RewardAmount, COMMISSION_BASIS_POINTS},
+        v0_3::{Fetcher, RewardAmount, COMMISSION_BASIS_POINTS, REWARD_MERKLE_TREE_V1_ARITY},
+        v0_4::REWARD_MERKLE_TREE_V2_ARITY,
         validators_from_l1_events, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAmount, FeeVersion,
         Header, L1ClientOptions, MockSequencerVersions, NamespaceId, RewardDistributor,
         SequencerVersions, ValidatedState,
@@ -5684,17 +5686,16 @@ mod test {
     async fn test_reward_proof_endpoint<Ver: Versions>(
         #[case] versions: Ver,
     ) -> anyhow::Result<()> {
-       
         const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 5;
+        const MAX_RETRIES: usize = 30;
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
             .build();
 
         let api_port = pick_unused_port().expect("No ports free for query service");
-
         tracing::info!("API PORT = {api_port}");
-        const NUM_NODES: usize = 5;
 
         let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
         let persistence: [_; NUM_NODES] = storage
@@ -5725,44 +5726,108 @@ mod test {
             .await
             .unwrap()
             .build();
+
         let mut network = TestNetwork::new(config, versions).await;
 
-        let mut events = network.peers[2].event_stream().await;
         // wait for 4 epochs
+        let mut events = network.server.event_stream().await;
         wait_for_epochs(&mut events, EPOCH_HEIGHT, 4).await;
 
-         let url = format!("http://localhost:{api_port}").parse().unwrap();
-         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
-
+        let url = format!("http://localhost:{api_port}").parse().unwrap();
+        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        network.stop_consensus().await;
 
         let validated_state = network.server.decided_state().await;
-        let accounts : Vec<_> = validated_state.reward_merkle_tree_v1.iter().collect();
-        let version = Ver::Base::VERSION;
-        if version == EpochVersion::VERSION {
-            
-          
+        // let decided_leaf = network.server.decided_leaf().await;
+        let height = validated_state.block_merkle_tree.num_leaves() - 1;
 
+        async fn wait_until_block_height(
+            client: &Client<ServerError, StaticVersion<0, 1>>,
+            endpoint: &str,
+            height: u64,
+        ) {
+            for retry in 0..=MAX_RETRIES {
+                let bh = client
+                    .get::<u64>(endpoint)
+                    .send()
+                    .await
+                    .expect("block height not found");
 
-            let proof : MerkleProof<RewardAmount, RewardAccountV1, Sha3Node, REWARD_MERKLE_TREE_V1_ARITY> = client
-            .get(&format!(
-                "reward-state/proof/{block_height}/{address}"
-            ))
-            .send()
-            .await
-            .unwrap()
-            .unwrap();
-        } else {
-             let amount = client
-            .get::<Option<RewardAmount>>(&format!(
-                "reward-state/reward-balance/{block_height}/{address}"
-            ))
-            .send()
-            .await
-            .unwrap()
-            .unwrap();
+                tracing::info!("{endpoint}: block height = {bh}");
+
+                if bh > height {
+                    return;
+                }
+                sleep(Duration::from_secs(3)).await;
+
+                if retry == MAX_RETRIES {
+                    panic!(
+                        "Max retries reached. {endpoint} block height ({bh}) did not exceed \
+                         {height}"
+                    );
+                }
+            }
         }
 
-        network.stop_consensus().await;
+        // validate proof returned from the api
+        if Ver::Base::VERSION == EpochVersion::VERSION {
+            // V1 case
+            wait_until_block_height(&client, "reward-state/block-height", height).await;
+
+            for (address, _) in validated_state.reward_merkle_tree_v1.iter() {
+                let (_, expected_proof) = validated_state
+                    .reward_merkle_tree_v1
+                    .lookup(address.clone())
+                    .expect_ok()
+                    .unwrap();
+
+                let api_proof = client
+                    .get::<MerkleProof<
+                        RewardAmount,
+                        RewardAccountV1,
+                        Sha3Node,
+                        { REWARD_MERKLE_TREE_V1_ARITY },
+                    >>(&format!("reward-state/proof/{height}/{address}"))
+                    .send()
+                    .await
+                    .unwrap();
+
+                assert_eq!(
+                    api_proof, expected_proof,
+                    "Proof mismatch for V1 at {height}, addr={address}"
+                );
+            }
+        } else {
+            // V2 case
+            wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
+
+            for (address, _) in validated_state.reward_merkle_tree_v2.iter() {
+                let (_, expected_proof) = validated_state
+                    .reward_merkle_tree_v2
+                    .lookup(address.clone())
+                    .expect_ok()
+                    .unwrap();
+
+                let api_proof = client
+                    .get::<MerkleProof<
+                        RewardAmount,
+                        RewardAccountV2,
+                        KeccakNode,
+                        { REWARD_MERKLE_TREE_V2_ARITY },
+                    >>(&format!(
+                        "reward-state-v2/proof/{height}/{address}"
+                    ))
+                    .send()
+                    .await
+                    .unwrap();
+
+                assert_eq!(
+                    api_proof, expected_proof,
+                    "Proof mismatch for V2 at {height}, addr={address}"
+                );
+            }
+        }
+
         Ok(())
     }
 }
