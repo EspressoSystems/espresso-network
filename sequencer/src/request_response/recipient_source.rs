@@ -46,7 +46,7 @@ impl<I: NodeImplementation<SeqTypes>, V: Versions> RecipientSourceTrait<Request,
         // Attempt to get the membership for the current epoch
         let membership = match self
             .memberships
-            .membership_for_epoch(Some(epoch_number))
+            .stake_table_for_epoch(Some(epoch_number))
             .await
         {
             Ok(membership) => membership,
@@ -56,7 +56,7 @@ impl<I: NodeImplementation<SeqTypes>, V: Versions> RecipientSourceTrait<Request,
                     epoch_number
                 );
                 self.memberships
-                    .membership_for_epoch(Some(EpochNumber::genesis()))
+                    .stake_table_for_epoch(Some(EpochNumber::genesis()))
                     .await
                     .with_context(|| "failed to get stake table for epoch")?
             },
