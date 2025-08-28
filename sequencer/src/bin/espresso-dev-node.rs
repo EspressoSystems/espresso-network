@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
+    fmt,
     io::{self, Read},
     iter::{self, once},
     time::Duration,
@@ -24,8 +25,8 @@ use espresso_contract_deployer::{
     DeployedContracts, HttpProviderWithWallet,
 };
 use espresso_types::{
-    parse_duration, v0_3::ChainConfig, EpochVersion, L1ClientOptions, SeqTypes, SequencerVersions,
-    ValidatedState,
+    parse_duration, v0_3::ChainConfig, DrbAndHeaderUpgradeVersion, EpochVersion, L1ClientOptions,
+    SeqTypes, SequencerVersions, ValidatedState,
 };
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
@@ -39,7 +40,9 @@ use portpicker::pick_unused_port;
 use sequencer::{
     api::{
         options,
-        test_helpers::{TestNetwork, TestNetworkConfigBuilder, STAKE_TABLE_CAPACITY_FOR_TEST},
+        test_helpers::{
+            AnyTestNetwork, TestNetwork, TestNetworkConfigBuilder, STAKE_TABLE_CAPACITY_FOR_TEST,
+        },
     },
     persistence,
     state_signature::relay_server::{run_relay_server_with_state, StateRelayServerState},
@@ -69,6 +72,23 @@ enum L1Deployment {
     /// dump has to have been done on the same version of dev-node with the same
     /// configuration
     Skip,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+enum DevNodeVersion {
+    #[value(name = "0.3")]
+    V0_3,
+    #[value(name = "0.4")]
+    V0_4,
+}
+
+impl fmt::Display for DevNodeVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DevNodeVersion::V0_3 => write!(f, "0.3"),
+            DevNodeVersion::V0_4 => write!(f, "0.4"),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Parser)]
@@ -217,6 +237,10 @@ struct Args {
     #[clap(flatten)]
     sql: persistence::sql::Options,
 
+    /// protocol version to run (V3 or V4)
+    #[clap(long, env = "ESPRESSO_DEV_NODE_VERSION", default_value = "0.3")]
+    version: DevNodeVersion,
+
     #[clap(flatten)]
     logging: logging::Config,
 }
@@ -264,6 +288,7 @@ async fn main() -> anyhow::Result<()> {
         initial_token_supply,
         token_name,
         token_symbol,
+        version,
     } = cli_params;
 
     logging.init();
@@ -639,11 +664,22 @@ async fn main() -> anyhow::Result<()> {
         .build();
 
     // Start the nodes
-    let network = TestNetwork::new(
-        config,
-        SequencerVersions::<EpochVersion, EpochVersion>::new(),
-    )
-    .await;
+    let network = match version {
+        DevNodeVersion::V0_3 => AnyTestNetwork::V0_3(
+            TestNetwork::new(
+                config,
+                SequencerVersions::<EpochVersion, EpochVersion>::new(),
+            )
+            .await,
+        ),
+        DevNodeVersion::V0_4 => AnyTestNetwork::V0_4(
+            TestNetwork::new(
+                config,
+                SequencerVersions::<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>::new(),
+            )
+            .await,
+        ),
+    };
 
     let relay_server_handle = spawn(async move {
         // using explicit relayer state will avoid it calling the dev-node on `/config/hotshot` for epoch info,
@@ -688,7 +724,7 @@ async fn main() -> anyhow::Result<()> {
     let l1_prover_port = prover_ports.remove(0);
 
     let dev_info = DevInfo {
-        builder_url: network.cfg.hotshot_config().builder_urls[0].clone(),
+        builder_url: network.hotshot_config().builder_urls[0].clone(),
         sequencer_api_port,
         l1_prover_port,
         l1_url,
@@ -963,8 +999,11 @@ mod tests {
     // and open a PR.
     // - APIs update
     // - Types (like `Header`) update
+    #[rstest::rstest]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn slow_dev_node_test() {
+    async fn slow_dev_node_test(
+        #[values(DevNodeVersion::V0_3, DevNodeVersion::V0_4)] version: DevNodeVersion,
+    ) {
         let builder_port = pick_unused_port().unwrap();
         let api_port = pick_unused_port().unwrap();
         let dev_node_port = pick_unused_port().unwrap();
@@ -992,6 +1031,7 @@ mod tests {
             )
             .env("ESPRESSO_SEQUENCER_DATABASE_MAX_CONNECTIONS", "25")
             .env("ESPRESSO_DEV_NODE_MAX_BLOCK_SIZE", "500000")
+            .env("ESPRESSO_DEV_NODE_VERSION", version.to_string())
             .spawn()
             .unwrap();
 
