@@ -146,31 +146,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     /// @notice Withdraw previously delegated funds after a validator has exited
     /// @param validator The validator to withdraw from
-    /// @dev This function is overridden to deduct the amount from the validator's delegatedAmount
-    /// and to add pausable functionality
-    /// @dev since the delegated Amount is no longer updated during undelegation
-    /// @dev delegatedAmount represents the no. of tokens that have been delegated to a validator,
-    /// even if it's not participating in consensus
+    /// @dev This function is overridden to add pausable functionality
     function claimWithdrawal(address validator) public virtual override whenNotPaused {
-        address delegator = msg.sender;
-        // If entries are missing at any of the levels of the mapping this will return zero
-        uint256 amount = undelegations[validator][delegator].amount;
-        if (amount == 0) {
-            revert NothingToWithdraw();
-        }
-
-        if (block.timestamp < undelegations[validator][delegator].unlocksAt) {
-            revert PrematureWithdrawal();
-        }
-
-        // Mark funds as spent
-        delete undelegations[validator][delegator];
-        // deduct the amount from the validator's delegatedAmount
-        validators[validator].delegatedAmount -= amount;
-
-        SafeTransferLib.safeTransfer(token, delegator, amount);
-
-        emit Withdrawal(delegator, amount);
+        super.claimWithdrawal(validator);
     }
 
     /// @notice Delegate funds to a validator
@@ -185,31 +163,8 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @param validator The validator to undelegate from
     /// @param amount The amount to undelegate
     /// @dev This function is overridden to add pausable functionality
-    /// @dev and to ensure that the validator's delegatedAmount is not updated until withdrawal
-    /// @dev delegatedAmount represents the no. of tokens that have been delegated to a validator,
-    /// even if it's not participating in consensus
     function undelegate(address validator, uint256 amount) public virtual override whenNotPaused {
-        ensureValidatorActive(validator);
-        address delegator = msg.sender;
-
-        if (amount == 0) {
-            revert ZeroAmount();
-        }
-
-        if (undelegations[validator][delegator].amount != 0) {
-            revert UndelegationAlreadyExists();
-        }
-
-        uint256 balance = delegations[validator][delegator];
-        if (balance < amount) {
-            revert InsufficientBalance(balance);
-        }
-
-        delegations[validator][delegator] -= amount;
-        undelegations[validator][delegator] =
-            Undelegation({ amount: amount, unlocksAt: block.timestamp + exitEscrowPeriod });
-
-        emit Undelegated(delegator, validator, amount);
+        super.undelegate(validator, amount);
     }
 
     /// @notice Deregister a validator

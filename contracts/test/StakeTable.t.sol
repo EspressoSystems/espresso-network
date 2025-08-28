@@ -1302,8 +1302,8 @@ contract StakeTableUpgradeV2Test is Test {
         (uint256 validatorAmountDelegated,) = stakeTable.validators(validator);
         assertEq(
             validatorAmountDelegated,
-            originalDelegateAmount,
-            "the validator's delegatedAmount should be the full amount as the delegator has not claimed yet"
+            originalDelegateAmount - amountUndelegated,
+            "the validator's delegatedAmount should be reduced as the delegator undelegated before it de-registered"
         );
         (uint256 delegatorAmountUndelegated, uint256 unlocksAt) =
             stakeTable.undelegations(validator, delegator);
@@ -1338,13 +1338,13 @@ contract StakeTableUpgradeV2Test is Test {
         assertEq(
             stakeTable.token().balanceOf(address(stakeTable)),
             amountUndelegated,
-            "the contract's balance will be the amount undelegated but not yet claimed"
+            "the contract's balance will be the amount undelegated because the delegator has not called claimWithdrawal yet"
         );
         (validatorAmountDelegated,) = stakeTable.validators(validator);
         assertEq(
             validatorAmountDelegated,
-            amountUndelegated,
-            "the undelegated amount left in the contract should still be equal to the validator's delegatedAmount"
+            0,
+            "the validator's delegatedAmount should be zero since the user has called undelegate and claimWithdrawalExit"
         );
         uint256 delegatedAmount = stakeTable.delegations(validator, delegator);
         assertEq(delegatedAmount, 0, "the delegator's delegation should be zero");
@@ -1502,8 +1502,8 @@ contract StakeTableUpgradeV2Test is Test {
         (uint256 validatorDelegatedAmount,) = stakeTable.validators(validator1);
         assertEq(
             validatorDelegatedAmount,
-            amountDelegated / 3,
-            "the validator's delegatedAmount should still be equal to the delegator's amount until they withdraw"
+            0,
+            "the validator's delegatedAmount should be zero as the delegator has undelegated"
         );
 
         // undelegate from validator 2
@@ -1520,8 +1520,8 @@ contract StakeTableUpgradeV2Test is Test {
         (validatorDelegatedAmount,) = stakeTable.validators(validator2);
         assertEq(
             validatorDelegatedAmount,
-            amountDelegated / 3,
-            "the validator's delegatedAmount should still be equal to the delegator's amount until they withdraw"
+            0,
+            "the validator's delegatedAmount should be zero as the delegator has undelegated"
         );
 
         vm.warp(block.timestamp + stakeTable.exitEscrowPeriod());
@@ -1586,8 +1586,8 @@ contract StakeTableUpgradeV2Test is Test {
         (uint256 validatorAmountDelegated,) = stakeTable.validators(validator);
         assertEq(
             validatorAmountDelegated,
-            amountFirstDelegated,
-            "the validator's delegatedAmount should be the full amount as the delegator has not claimed yet"
+            amountFirstDelegated - amountToUndelegate,
+            "the validator's delegatedAmount should be reduced as the user undelegated"
         );
         assertEq(
             stakeTable.token().balanceOf(address(stakeTable)),
@@ -1655,8 +1655,8 @@ contract StakeTableUpgradeV2Test is Test {
         (uint256 delegatedAmountAfter,) = stakeTable.validators(validator);
         assertEq(
             delegatedAmountAfter,
-            delegatedAmountBefore,
-            "the validator's delegated amount is the full amount until the delegator claims the withdrawal"
+            delegatedAmountBefore - 2 ether,
+            "the validator's delegated amount after the undelegation method is reduced by the undelegation amount"
         );
 
         vm.expectRevert(S.UndelegationAlreadyExists.selector);
