@@ -20,14 +20,13 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
     SeqTypes, UpgradeType, ViewBasedUpgrade,
 };
-use crate::EpochCommittees;
 use crate::{
     v0::{
         impls::StakeTableHash, traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo,
         L1Client, Timestamp, Upgrade, UpgradeMode,
     },
     v0_3::RewardAmount,
-    ValidatorMap,
+    EpochCommittees, ValidatorMap,
 };
 
 /// Represents the immutable state of a node.
