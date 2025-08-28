@@ -37,13 +37,14 @@ use hotshot_types::{
         election::{generate_stake_cdf, select_randomized_leader, RandomizedCommittee},
         DrbResult,
     },
+    epoch_membership::EpochMembershipCoordinator,
     stake_table::{HSStakeTable, StakeTableEntry},
     traits::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeType},
         signature_key::StakeTableEntryType,
     },
-    utils::{epoch_from_block_number, transition_block_for_epoch},
+    utils::{epoch_from_block_number, root_block_in_epoch, transition_block_for_epoch},
     PeerConfig,
 };
 use humantime::format_duration;
@@ -1478,6 +1479,7 @@ pub struct EpochCommittee {
     address_mapping: HashMap<BLSPubKey, Address>,
     block_reward: Option<RewardAmount>,
     stake_table_hash: Option<StakeTableHash>,
+    header: Option<Header>,
 }
 
 impl EpochCommittees {
@@ -1498,7 +1500,7 @@ impl EpochCommittees {
     /// the `fetch_block_reward` logic can be updated to support per-epoch rewards.
     /// Initially, the block reward is zero if the node starts on pre-epoch version
     /// but it is updated on the first call to `add_epoch_root()`
-    async fn update_fixed_block_reward(
+    async fn fetch_and_update_fixed_block_reward(
         membership: Arc<RwLock<Self>>,
         epoch: EpochNumber,
     ) -> anyhow::Result<RewardAmount> {
@@ -1557,6 +1559,100 @@ impl EpochCommittees {
         Ok(block_reward_u256.into())
     }
 
+    pub async fn get_block_reward(
+        epoch: Option<Epoch>,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
+    ) -> anyhow::Result<RewardAmount> {
+        let membership_read = coordinator.membership().read().await;
+        let epoch_height = membership_read.epoch_height;
+        let fixed_block_reward = membership_read.block_reward;
+        // return fixed reward if no epoch is specified
+        let current_epoch = match epoch {
+            Some(e) => e,
+            None => return fixed_block_reward.context("block reward not found"),
+        };
+
+        let committee = membership_read
+            .state
+            .get(&current_epoch)
+            .context(format!("committee not found for epoch={current_epoch:?}"))?
+            .clone();
+
+        // Return early if committee has a reward already
+        if let Some(reward) = committee.block_reward {
+            return Ok(reward);
+        }
+
+        let first_epoch = *membership_read.first_epoch().context(format!(
+            "First epoch not initialized (current_epoch={current_epoch})"
+        ))?;
+
+        drop(membership_read);
+
+        if *current_epoch <= first_epoch + 1 {
+            bail!(
+                "epoch is in first two epochs: current_epoch={current_epoch}, \
+                 first_epoch={first_epoch}"
+            );
+        }
+
+        let header = match committee.header.clone() {
+            Some(header) => header,
+            None => {
+                let root_epoch = current_epoch.checked_sub(2).context(format!(
+                    "Epoch calculation underflow (current_epoch={current_epoch})"
+                ))?;
+
+                tracing::info!(?root_epoch, "catchup epoch root header");
+
+                let membership = coordinator.membership();
+                let leaf = Self::get_epoch_root(
+                    membership.clone(),
+                    root_block_in_epoch(root_epoch, epoch_height),
+                    current_epoch,
+                )
+                .await
+                .with_context(|| format!("Failed to get epoch root for root_epoch={root_epoch}"))?;
+                leaf.block_header().clone()
+            },
+        };
+
+        if header.version() <= EpochVersion::version() {
+            return fixed_block_reward.context(format!(
+                "Fixed block reward not found for current_epoch={current_epoch}"
+            ));
+        }
+
+        let prev_epoch_u64 = current_epoch.checked_sub(1).context(format!(
+            "Underflow: cannot compute previous epoch when current_epoch={current_epoch}"
+        ))?;
+
+        let prev_epoch = EpochNumber::new(prev_epoch_u64);
+
+        // If the previous epoch is not in the first two epochs,
+        // there should be a stake table for it
+        if *prev_epoch > first_epoch + 1 {
+            if let Err(err) = coordinator.membership_for_epoch(Some(prev_epoch)).await {
+                tracing::info!("failed to get membership for epoch={prev_epoch:?}: {err:#}");
+
+                coordinator
+                    .wait_for_catchup(prev_epoch)
+                    .await
+                    .context(format!("failed to catch up for epoch={prev_epoch}"))?;
+            }
+        }
+
+        let membership_read = coordinator.membership().read().await;
+
+        membership_read
+            .calculate_dynamic_block_reward(&current_epoch, &header, &committee.validators)
+            .await
+            .with_context(|| {
+                format!("dynamic block reward calculation failed for epoch={current_epoch}")
+            })?
+            .with_context(|| format!("dynamic block reward returned None. epoch={current_epoch}"))
+    }
+
     /// Calculates the dynamic block reward for a given block header within an epoch.
     ///
     /// The reward is based on a dynamic inflation rate computed from the current stake ratio (p),
@@ -1566,11 +1662,29 @@ impl EpochCommittees {
     async fn calculate_dynamic_block_reward(
         &self,
         epoch: &Epoch,
-        header: Header,
+        header: &Header,
         validators: &ValidatorMap,
-    ) -> anyhow::Result<RewardAmount> {
-        let fetcher = self.fetcher.clone();
+    ) -> anyhow::Result<Option<RewardAmount>> {
         let epoch_height = self.epoch_height;
+        let current_epoch = epoch_from_block_number(header.height(), epoch_height);
+        let previous_epoch = current_epoch
+            .checked_sub(1)
+            .context("underflow: cannot get previous epoch when current_epoch is 0")?;
+        tracing::debug!(?epoch, "previous_epoch={previous_epoch:?}");
+
+        let first_epoch = *self.first_epoch().context("first epoch is None")?;
+
+        // return early if previous epoch is not the first two epochs
+        // and we don't have the stake table
+        if previous_epoch > first_epoch + 1
+            && !self.has_stake_table(EpochNumber::new(previous_epoch))
+        {
+            tracing::warn!(?previous_epoch, "missing stake table for previous epoch");
+            return Ok(None);
+        }
+
+        let fetcher = self.fetcher.clone();
+
         let previous_reward_distributed = header
             .total_reward_distributed()
             .context("Invalid block header: missing total_reward_distributed field")?;
@@ -1589,14 +1703,6 @@ impl EpochCommittees {
         // Calculate average block time over the last epoch
         let curr_ts = header.timestamp_millis_internal();
         tracing::debug!(?epoch, "curr_ts={curr_ts:?}");
-
-        let current_epoch = epoch_from_block_number(header.height(), epoch_height);
-        let previous_epoch = current_epoch
-            .checked_sub(1)
-            .context("underflow: cannot get previous epoch when current_epoch is 0")?;
-        tracing::debug!(?epoch, "previous_epoch={previous_epoch:?}");
-
-        let first_epoch = *self.first_epoch().context("first epoch is None")?;
 
         // If the node starts from epoch version V4, there is no previous epoch root available.
         // In this case, we assume a fixed average block time of 2000 milli seconds (2s)
@@ -1636,7 +1742,17 @@ impl EpochCommittees {
         let block_reward =
             Self::compute_block_reward(epoch, total_supply, total_stake, average_block_time_ms)?;
 
-        Ok(block_reward)
+        Ok(Some(block_reward))
+    }
+
+    pub fn block_reward(&self, epoch: Option<EpochNumber>) -> Option<RewardAmount> {
+        match epoch {
+            None => self.block_reward,
+            Some(e) => self
+                .state
+                .get(&e)
+                .and_then(|committee| committee.block_reward),
+        }
     }
 
     /// Updates `Self.stake_table` with stake_table for
@@ -1650,6 +1766,7 @@ impl EpochCommittees {
         validators: ValidatorMap,
         block_reward: Option<RewardAmount>,
         hash: Option<StakeTableHash>,
+        header: Option<Header>,
     ) {
         let mut address_mapping = HashMap::new();
         let stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>> = validators
@@ -1681,6 +1798,7 @@ impl EpochCommittees {
                 address_mapping,
                 block_reward,
                 stake_table_hash: hash,
+                header,
             },
         );
     }
@@ -1718,16 +1836,6 @@ impl EpochCommittees {
             .get(&address)
             .context("validator not found")
             .cloned()
-    }
-
-    pub fn block_reward(&self, epoch: Option<EpochNumber>) -> Option<RewardAmount> {
-        match epoch {
-            None => self.block_reward,
-            Some(e) => self
-                .state
-                .get(&e)
-                .and_then(|committee| committee.block_reward),
-        }
     }
 
     // We need a constructor to match our concrete type.
@@ -1797,6 +1905,7 @@ impl EpochCommittees {
             address_mapping: HashMap::new(),
             block_reward: Default::default(),
             stake_table_hash: None,
+            header: None,
         };
         map.insert(Epoch::genesis(), epoch_committee.clone());
         // TODO: remove this, workaround for hotshot asking for stake tables from epoch 1
@@ -1823,7 +1932,6 @@ impl EpochCommittees {
                 tracing::warn!(
                     "Failed to fetch the block reward when reloading the stake tables: {err}"
                 );
-                return;
             },
         }
 
@@ -1848,7 +1956,7 @@ impl EpochCommittees {
         };
 
         for (epoch, (stake_table, block_reward), stake_table_hash) in loaded_stake {
-            self.insert_committee(epoch, stake_table, block_reward, stake_table_hash);
+            self.insert_committee(epoch, stake_table, block_reward, stake_table_hash, None);
         }
     }
 
@@ -2142,7 +2250,8 @@ impl Membership<SeqTypes> for EpochCommittees {
         // Even if the current header is the root of the epoch which falls in the post upgrade
         // we use the fixed block reward
         if version == EpochVersion::version() {
-            let reward = Self::update_fixed_block_reward(membership.clone(), epoch).await?;
+            let reward =
+                Self::fetch_and_update_fixed_block_reward(membership.clone(), epoch).await?;
             block_reward = Some(reward);
         }
 
@@ -2152,18 +2261,23 @@ impl Membership<SeqTypes> for EpochCommittees {
         };
 
         // If the epoch committee:
-        // - exists and has a block reward, skip.
+        // - exists and has a header and block reward, return early.
         // - exists without a reward, reuse validators and update reward.
         // - doesn't exist, fetch it from L1.
         let (validators, stake_table_hash) = match epoch_committee {
             Some(ref committee) => {
-                if committee.block_reward.is_some() {
+                if committee.block_reward.is_some() && committee.header.is_some() {
                     tracing::info!(
-                        "Stake table and block reward already exist for epoch {epoch}. Skipping."
+                        ?epoch,
+                        "committee already has block reward and header, skipping add_epoch_root"
                     );
                     return Ok(());
                 }
-                tracing::info!("Stake table exists for epoch {epoch}, updating block reward.");
+
+                if let Some(reward) = committee.block_reward {
+                    block_reward = Some(reward);
+                }
+
                 (committee.validators.clone(), committee.stake_table_hash)
             },
             None => {
@@ -2174,16 +2288,17 @@ impl Membership<SeqTypes> for EpochCommittees {
         };
 
         // If we are past the DRB+Header upgrade point,
+        // and don't have block reward
         // calculate the dynamic block reward based on validator info and block header.
-        if version >= DrbAndHeaderUpgradeVersion::version() {
+        if block_reward.is_none() && version >= DrbAndHeaderUpgradeVersion::version() {
             tracing::info!(?epoch, "calculating dynamic block reward");
             let reader = membership.read().await;
             let reward = reader
-                .calculate_dynamic_block_reward(&epoch, block_header, &validators)
+                .calculate_dynamic_block_reward(&epoch, &block_header, &validators)
                 .await?;
 
             tracing::info!(?epoch, "calculated dynamic block reward = {reward:?}");
-            block_reward = Some(reward);
+            block_reward = reward;
         }
 
         let mut membership_writer = membership.write().await;
@@ -2192,6 +2307,7 @@ impl Membership<SeqTypes> for EpochCommittees {
             validators.clone(),
             block_reward,
             stake_table_hash,
+            Some(block_header),
         );
         drop(membership_writer);
 

@@ -69,10 +69,8 @@ pub struct NodeState {
 }
 
 impl NodeState {
-    pub async fn block_reward(&self, epoch: Option<EpochNumber>) -> Option<RewardAmount> {
-        let coordinator = self.coordinator.clone();
-        let membership = coordinator.membership().read().await;
-        membership.block_reward(epoch)
+    pub async fn block_reward(&self, epoch: Option<EpochNumber>) -> anyhow::Result<RewardAmount> {
+        EpochCommittees::get_block_reward(epoch, self.coordinator.clone()).await
     }
 }
 
