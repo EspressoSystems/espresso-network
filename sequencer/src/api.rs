@@ -5738,7 +5738,6 @@ mod test {
         network.stop_consensus().await;
 
         let validated_state = network.server.decided_state().await;
-        // let decided_leaf = network.server.decided_leaf().await;
         let height = validated_state.block_merkle_tree.num_leaves() - 1;
 
         async fn wait_until_block_height(
