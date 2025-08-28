@@ -5676,4 +5676,93 @@ mod test {
             assert_eq!(state_query_data_v1, state_query_data_v2.into());
         }
     }
+
+    #[rstest]
+    #[case(PosVersionV3::new())]
+    #[case(PosVersionV4::new())]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_reward_proof_endpoint<Ver: Versions>(
+        #[case] versions: Ver,
+    ) -> anyhow::Result<()> {
+       
+        const EPOCH_HEIGHT: u64 = 10;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        tracing::info!("API PORT = {api_port}");
+        const NUM_NODES: usize = 5;
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port).catchup(Default::default()),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<Ver>(
+                DelegationConfig::MultipleDelegators,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+            )
+            .await
+            .unwrap()
+            .build();
+        let mut network = TestNetwork::new(config, versions).await;
+
+        let mut events = network.peers[2].event_stream().await;
+        // wait for 4 epochs
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, 4).await;
+
+         let url = format!("http://localhost:{api_port}").parse().unwrap();
+         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+
+
+        let validated_state = network.server.decided_state().await;
+        let accounts : Vec<_> = validated_state.reward_merkle_tree_v1.iter().collect();
+        let version = Ver::Base::VERSION;
+        if version == EpochVersion::VERSION {
+            
+          
+
+
+            let proof : MerkleProof<RewardAmount, RewardAccountV1, Sha3Node, REWARD_MERKLE_TREE_V1_ARITY> = client
+            .get(&format!(
+                "reward-state/proof/{block_height}/{address}"
+            ))
+            .send()
+            .await
+            .unwrap()
+            .unwrap();
+        } else {
+             let amount = client
+            .get::<Option<RewardAmount>>(&format!(
+                "reward-state/reward-balance/{block_height}/{address}"
+            ))
+            .send()
+            .await
+            .unwrap()
+            .unwrap();
+        }
+
+        network.stop_consensus().await;
+        Ok(())
+    }
 }

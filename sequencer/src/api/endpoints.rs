@@ -144,6 +144,22 @@ where
             Ok(path.elem().copied())
         }
         .boxed()
+    })?.
+    get("get_reward_account_proof", move |req, state| {
+        async move {
+            let address = req.string_param("address")?;
+            let height = state.get_last_state_height().await?;
+            let snapshot = Snapshot::Index(height as u64);
+            let key = address
+                .parse()
+                .map_err(|_| merklized_state::Error::Custom {
+                    message: "failed to parse reward address".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                })?;
+            let path = state.get_path(snapshot, key).await?;
+            Ok(path)
+        }
+        .boxed()
     })?;
     Ok(api)
 }
