@@ -1559,6 +1559,10 @@ impl EpochCommittees {
         Ok(block_reward_u256.into())
     }
 
+    /// Returns the fixed block reward if the epoch is not provided.
+    /// For version V3, we pass `None` and use the fixed block reward.
+    /// For version V4, an epoch number must be provided,
+    /// as each V4 epoch can have a different block reward.
     pub async fn get_block_reward(
         epoch: Option<Epoch>,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
