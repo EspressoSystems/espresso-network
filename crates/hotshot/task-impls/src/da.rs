@@ -448,6 +448,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 } else {
                     EpochTransitionIndicator::NotInTransition
                 };
+                drop(consensus_reader);
 
                 let data: DaProposal2<TYPES> = DaProposal2 {
                     encoded_transactions: Arc::clone(encoded_transactions),
