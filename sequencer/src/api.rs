@@ -5814,9 +5814,7 @@ mod test {
                         RewardAccountV2,
                         KeccakNode,
                         { REWARD_MERKLE_TREE_V2_ARITY },
-                    >>(&format!(
-                        "reward-state-v2/proof/{height}/{address}"
-                    ))
+                    >>(&format!("reward-state-v2/proof/{height}/{address}"))
                     .send()
                     .await
                     .unwrap();
