@@ -1823,7 +1823,6 @@ impl EpochCommittees {
                 tracing::warn!(
                     "Failed to fetch the block reward when reloading the stake tables: {err}"
                 );
-                return;
             },
         }
 
