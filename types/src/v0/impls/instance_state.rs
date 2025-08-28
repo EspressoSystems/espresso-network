@@ -20,7 +20,6 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
     SeqTypes, UpgradeType, ViewBasedUpgrade,
 };
-#[cfg(any(test, feature = "testing"))]
 use crate::EpochCommittees;
 use crate::{
     v0::{
