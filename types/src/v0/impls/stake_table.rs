@@ -1632,7 +1632,7 @@ impl EpochCommittees {
         // If the previous epoch is not in the first two epochs,
         // there should be a stake table for it
         if *prev_epoch > first_epoch + 1 {
-            if let Err(err) = coordinator.membership_for_epoch(Some(prev_epoch)).await {
+            if let Err(err) = coordinator.stake_table_for_epoch(Some(prev_epoch)).await {
                 tracing::info!("failed to get membership for epoch={prev_epoch:?}: {err:#}");
 
                 coordinator
