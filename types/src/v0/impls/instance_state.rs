@@ -208,7 +208,7 @@ impl NodeState {
             Arc::new(mock::MockStateCatchup::default()),
             StaticVersion::<0, 2>::version(),
             coordinator,
-            Version { major: 0, minor: 1 },
+            Version { major: 0, minor: 2 },
         )
     }
 
@@ -238,7 +238,7 @@ impl NodeState {
             mock::MockStateCatchup::default(),
             StaticVersion::<0, 3>::version(),
             coordinator,
-            Version { major: 0, minor: 1 },
+            Version { major: 0, minor: 3 },
         )
     }
 
