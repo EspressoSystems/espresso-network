@@ -162,7 +162,8 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
         // Mark funds as spent
         delegations[validator][delegator] = 0;
-        // the delegatedAmount is updated here in v2
+        // the delegatedAmount is updated here (instead of during deregistration) in v2,
+        // it's only decremented during withdrawal
         validators[validator].delegatedAmount -= amount;
 
         SafeTransferLib.safeTransfer(token, delegator, amount);
@@ -204,6 +205,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
         validators[validator].status = ValidatorStatus.Exited;
         validatorExits[validator] = block.timestamp + exitEscrowPeriod;
+        // in v2, the delegatedAmount is not updated until withdrawal
 
         emit ValidatorExit(validator);
     }
