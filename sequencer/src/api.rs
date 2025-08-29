@@ -905,7 +905,8 @@ pub mod test_helpers {
     };
     use espresso_types::{
         v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
-        EpochVersion, MockSequencerVersions, NamespaceId, ValidatedState,
+        DrbAndHeaderUpgradeVersion, EpochVersion, FeeVersion, MockSequencerVersions, NamespaceId,
+        SequencerVersions, ValidatedState, V0_1,
     };
     use futures::{
         future::{join_all, FutureExt},
@@ -917,6 +918,7 @@ pub mod test_helpers {
         event::LeafInfo,
         light_client::LCV3StateSignatureRequestBody,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
+        HotShotConfig,
     };
     use itertools::izip;
     use jf_merkle_tree::{MerkleCommitment, MerkleTreeScheme};
@@ -989,6 +991,30 @@ pub mod test_helpers {
                 catchup: Some(std::array::from_fn(|_| NullStateCatchup::default())),
                 network_config: None,
                 api_config: None,
+            }
+        }
+    }
+
+    pub enum AnyTestNetwork<P: PersistenceOptions, const NUM_NODES: usize> {
+        V0_1(TestNetwork<P, NUM_NODES, SequencerVersions<V0_1, V0_1>>),
+        V0_2(TestNetwork<P, NUM_NODES, SequencerVersions<FeeVersion, FeeVersion>>),
+        V0_3(TestNetwork<P, NUM_NODES, SequencerVersions<EpochVersion, EpochVersion>>),
+        V0_4(
+            TestNetwork<
+                P,
+                NUM_NODES,
+                SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
+            >,
+        ),
+    }
+
+    impl<P: PersistenceOptions, const NUM_NODES: usize> AnyTestNetwork<P, NUM_NODES> {
+        pub fn hotshot_config(&self) -> &HotShotConfig<SeqTypes> {
+            match self {
+                AnyTestNetwork::V0_1(network) => network.cfg.hotshot_config(),
+                AnyTestNetwork::V0_2(network) => network.cfg.hotshot_config(),
+                AnyTestNetwork::V0_3(network) => network.cfg.hotshot_config(),
+                AnyTestNetwork::V0_4(network) => network.cfg.hotshot_config(),
             }
         }
     }
@@ -1095,6 +1121,7 @@ pub mod test_helpers {
                 .genesis_st_state(genesis_stake)
                 .blocks_per_epoch(blocks_per_epoch)
                 .epoch_start_block(epoch_start_block)
+                .exit_escrow_period(U256::from(blocks_per_epoch * 15 + 100))
                 .multisig_pauser(signer.address())
                 .token_name("Espresso".to_string())
                 .token_symbol("ESP".to_string())

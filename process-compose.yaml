@@ -63,7 +63,6 @@ processes:
         condition: process_healthy
       sequencer0:
         condition: process_healthy
-      # Make sure this doesn't start until the other contracts have been deployed, since we use the same mnemonic.
       deploy-sequencer-contracts:
         condition: process_completed
     availability: *exit-ok

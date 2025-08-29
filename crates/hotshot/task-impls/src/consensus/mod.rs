@@ -185,15 +185,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                         .stake_table()
                         .await
                 );
-                tracing::info!(
-                    "Stake table for epoch {}:\n\n{:?}",
-                    next_epoch + 1,
-                    self.membership_coordinator
-                        .stake_table_for_epoch(Some(next_epoch + 1))
-                        .await?
-                        .stake_table()
-                        .await
-                );
             },
             HotShotEvent::ExtendedQcRecv(high_qc, next_epoch_high_qc, _) => {
                 if !high_qc
