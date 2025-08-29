@@ -29,6 +29,7 @@ use hotshot_types::{
         block_contents::BlockHeader,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::SignatureKey,
+        storage::Storage,
         BlockPayload,
     },
     utils::{
@@ -895,6 +896,14 @@ pub(super) async fn handle_eqc_formed<
     let _ = consensus_writer.update_high_qc(current_epoch_qc_clone.clone());
     let _ = consensus_writer.update_next_epoch_high_qc(next_epoch_qc.clone());
     drop(consensus_writer);
+
+    if let Err(e) = task_state
+        .storage
+        .update_eqc(current_epoch_qc.clone(), next_epoch_qc.clone())
+        .await
+    {
+        tracing::error!("Failed to store EQC: {}", e);
+    }
 
     task_state.formed_quorum_certificates =
         task_state.formed_quorum_certificates.split_off(&cert_view);

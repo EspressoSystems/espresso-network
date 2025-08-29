@@ -129,9 +129,14 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
     async fn update_next_epoch_high_qc2(
         &self,
         _next_epoch_high_qc: NextEpochQuorumCertificate2<TYPES>,
-    ) -> Result<()> {
-        Ok(())
-    }
+    ) -> Result<()>;
+
+    /// Update the current eQC in storage.
+    async fn update_eqc(
+        &self,
+        _high_qc: QuorumCertificate2<TYPES>,
+        _next_epoch_high_qc: NextEpochQuorumCertificate2<TYPES>,
+    ) -> Result<()>;
 
     /// Upgrade the current decided upgrade certificate in storage.
     async fn update_decided_upgrade_certificate(

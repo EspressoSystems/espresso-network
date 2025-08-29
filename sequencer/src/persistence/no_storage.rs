@@ -186,6 +186,23 @@ impl SequencerPersistence for NoStorage {
         Ok(None)
     }
 
+    async fn store_eqc(
+        &self,
+        _high_qc: QuorumCertificate2<SeqTypes>,
+        _next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn load_eqc(
+        &self,
+    ) -> Option<(
+        QuorumCertificate2<SeqTypes>,
+        NextEpochQuorumCertificate2<SeqTypes>,
+    )> {
+        None
+    }
+
     async fn append_da2(
         &self,
         _proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,

@@ -57,6 +57,10 @@ pub struct TestStorageState<TYPES: NodeType> {
     proposals_wrapper: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
     high_qc: Option<hotshot_types::simple_certificate::QuorumCertificate<TYPES>>,
     high_qc2: Option<hotshot_types::simple_certificate::QuorumCertificate2<TYPES>>,
+    eqc: Option<(
+        hotshot_types::simple_certificate::QuorumCertificate2<TYPES>,
+        hotshot_types::simple_certificate::NextEpochQuorumCertificate2<TYPES>,
+    )>,
     next_epoch_high_qc2:
         Option<hotshot_types::simple_certificate::NextEpochQuorumCertificate2<TYPES>>,
     action: TYPES::View,
@@ -79,8 +83,9 @@ impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
             proposals2: BTreeMap::new(),
             proposals_wrapper: BTreeMap::new(),
             high_qc: None,
-            next_epoch_high_qc2: None,
             high_qc2: None,
+            eqc: None,
+            next_epoch_high_qc2: None,
             action: TYPES::View::genesis(),
             epoch: None,
             state_certs: BTreeMap::new(),
@@ -320,6 +325,27 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
             }
         } else {
             inner.high_qc = Some(new_high_qc);
+        }
+        Ok(())
+    }
+
+    /// Update the current high QC in storage.
+    async fn update_eqc(
+        &self,
+        high_qc: QuorumCertificate2<TYPES>,
+        next_epoch_high_qc: NextEpochQuorumCertificate2<TYPES>,
+    ) -> Result<()> {
+        if self.should_return_err.load(Ordering::Relaxed) {
+            bail!("Failed to update eqc in storage");
+        }
+        Self::run_delay_settings_from_config(&self.delay_config).await;
+        let mut inner = self.inner.write().await;
+        if let Some((ref current_high_qc, _)) = inner.eqc {
+            if high_qc.view_number() > current_high_qc.view_number() {
+                inner.eqc = Some((high_qc, next_epoch_high_qc));
+            }
+        } else {
+            inner.eqc = Some((high_qc, next_epoch_high_qc));
         }
         Ok(())
     }
