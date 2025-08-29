@@ -475,8 +475,6 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// @notice Update the consensus keys for a validator
     /// @dev This function is used to update the consensus keys for a validator
     /// @dev This function can only be called by the validator itself when it hasn't exited
-    ///      TODO: MA: is this a good idea? Why should key rotation be blocked for an exiting
-    ///      validator?
     /// @dev The validator will need to give up either its old BLS key and/or old Schnorr key
     /// @dev The validator will need to provide a BLS signature to prove that the account owns the
     /// new BLS key
