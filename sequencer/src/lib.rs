@@ -467,7 +467,7 @@ where
         .with_metrics(metrics)
         .connect(l1_params.urls)
         .with_context(|| "failed to create L1 client")?;
-    genesis.validate_fee_contract(&l1_client).await?;
+    genesis.validate(&l1_client).await?;
 
     l1_client.spawn_tasks().await;
     let l1_genesis = match genesis.l1_finalized {
