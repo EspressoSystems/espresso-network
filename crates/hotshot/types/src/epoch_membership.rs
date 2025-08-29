@@ -477,7 +477,8 @@ where
             ));
         };
 
-        let Some(ref drb_difficulty_selector) = *self.drb_difficulty_selector.read().await else {
+        let Some(drb_difficulty_selector) = self.drb_difficulty_selector.read().await.clone()
+        else {
             return Err(anytrace::error!(
                 "The DRB difficulty selector is missing from the epoch membership coordinator. \
                  This node will not be able to spawn any DRB calculation tasks from catchup."
