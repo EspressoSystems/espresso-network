@@ -1211,4 +1211,122 @@ mod test {
 
         toml::from_str::<Genesis>(&toml).unwrap();
     }
+
+    fn mock_genesis() -> Genesis {
+        Genesis {
+            base_version: Version { major: 0, minor: 0 },
+            upgrade_version: Version { major: 0, minor: 0 },
+            genesis_version: Version { major: 0, minor: 0 },
+            epoch_height: None,
+            drb_difficulty: None,
+            drb_upgrade_difficulty: None,
+            epoch_start_block: None,
+            stake_table_capacity: None,
+            chain_config: Default::default(),
+            stake_table: StakeTableConfig { capacity: 10 },
+            accounts: HashMap::new(),
+            l1_finalized: L1Finalized::Number { number: 0 },
+            header: GenesisHeader::default(),
+            upgrades: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_base_version_fee_contract_missing_should_fail() {
+        let mut genesis = mock_genesis();
+        genesis.base_version = FeeVersion::version();
+        genesis.chain_config.fee_contract = None;
+
+        assert!(genesis.validate_base_version_config().is_err())
+    }
+
+    #[test]
+    fn test_base_version_fee_contract_zero_should_fail() {
+        let mut genesis = mock_genesis();
+        genesis.base_version = FeeVersion::version();
+        genesis.chain_config.fee_contract = Some(Address::default());
+
+        assert!(genesis.validate_base_version_config().is_err());
+    }
+
+    #[test]
+    fn test_base_version_fee_contract_ok() {
+        let mut genesis = mock_genesis();
+        genesis.base_version = FeeVersion::version();
+        genesis.chain_config.fee_contract = Some(Address::random());
+
+        assert!(genesis.validate_base_version_config().is_ok());
+    }
+
+    #[test]
+    fn test_base_version_epoch_fields_missing_should_fail() {
+        let mut genesis = mock_genesis();
+        genesis.base_version = EpochVersion::version();
+        genesis.chain_config.stake_table_contract = Some(Address::random());
+
+        assert!(genesis.validate_base_version_config().is_err());
+    }
+
+    #[test]
+    fn test_base_version_epoch_fields_ok() {
+        let mut genesis = mock_genesis();
+        genesis.base_version = EpochVersion::version();
+        genesis.epoch_height = Some(10);
+        genesis.epoch_start_block = Some(5);
+        genesis.chain_config.stake_table_contract = Some(Address::random());
+
+        assert!(genesis.validate_base_version_config().is_ok());
+    }
+
+    #[test]
+    fn test_upgrade_with_zero_stake_table_should_fail() {
+        let mut genesis = mock_genesis();
+        genesis.upgrades.insert(
+            EpochVersion::version(),
+            Upgrade {
+                mode: UpgradeMode::View(ViewBasedUpgrade {
+                    start_proposing_view: 0,
+                    stop_proposing_view: 0,
+                    start_voting_view: None,
+                    stop_voting_view: None,
+                }),
+                upgrade_type: UpgradeType::Epoch {
+                    chain_config: ChainConfig {
+                        base_fee: 1.into(),
+                        fee_contract: Some(Address::random()),
+                        stake_table_contract: Some(Address::default()),
+                        ..Default::default()
+                    },
+                },
+            },
+        );
+
+        assert!(genesis.validate_upgrades_config().is_err());
+    }
+
+    #[test]
+    fn test_upgrade_with_valid_stake_table_should_pass() {
+        let mut genesis = mock_genesis();
+        genesis.upgrades.insert(
+            EpochVersion::version(),
+            Upgrade {
+                mode: UpgradeMode::View(ViewBasedUpgrade {
+                    start_proposing_view: 0,
+                    stop_proposing_view: 0,
+                    start_voting_view: None,
+                    stop_voting_view: None,
+                }),
+                upgrade_type: UpgradeType::Epoch {
+                    chain_config: ChainConfig {
+                        base_fee: 1.into(),
+                        fee_contract: Some(Address::random()),
+                        stake_table_contract: Some(Address::random()),
+                        ..Default::default()
+                    },
+                },
+            },
+        );
+
+        assert!(genesis.validate_upgrades_config().is_ok());
+    }
 }
