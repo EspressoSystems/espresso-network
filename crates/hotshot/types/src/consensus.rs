@@ -1394,6 +1394,14 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let block_height = leaf.height();
         is_ge_epoch_root(block_height, self.epoch_height)
     }
+
+    pub fn is_high_qc_last_block(&self) -> bool {
+        let Some(block_height) = self.high_qc().data.block_number else {
+            tracing::warn!("We don't have a block number for the high QC");
+            return false;
+        };
+        is_last_block(block_height, self.epoch_height)
+    }
 }
 
 /// Alias for the block payload commitment and the associated metadata. The primary data
