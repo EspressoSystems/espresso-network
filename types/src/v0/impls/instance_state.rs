@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use alloy::primitives::Address;
-use anyhow::bail;
+use anyhow::{bail, Context};
 #[cfg(any(test, feature = "testing"))]
 use async_lock::RwLock;
 use async_trait::async_trait;
@@ -67,8 +67,16 @@ pub struct NodeState {
 }
 
 impl NodeState {
-    pub async fn block_reward(&self, epoch: Option<EpochNumber>) -> anyhow::Result<RewardAmount> {
-        EpochCommittees::get_block_reward(epoch, self.coordinator.clone()).await
+    pub async fn block_reward(&self, epoch: EpochNumber) -> anyhow::Result<RewardAmount> {
+        EpochCommittees::fetch_and_calculate_block_reward(epoch, self.coordinator.clone()).await
+    }
+
+    pub async fn fixed_block_reward(&self) -> anyhow::Result<RewardAmount> {
+        let coordinator = self.coordinator.clone();
+        let membership = coordinator.membership().read().await;
+        membership
+            .fixed_block_reward()
+            .context("fixed block reward not found")
     }
 }
 

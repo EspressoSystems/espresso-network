@@ -278,8 +278,12 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             .clone();
 
         let membership = coordinator.membership().read().await;
+        let block_reward = match epoch {
+            None => membership.fixed_block_reward(),
+            Some(e) => membership.epoch_block_reward(e),
+        };
 
-        Ok(membership.block_reward(epoch))
+        Ok(block_reward)
     }
 
     /// Get the whole validators map
@@ -3261,7 +3265,7 @@ mod test {
         let node_state = network.server.node_state();
         let membership = node_state.coordinator.membership().read().await;
         let block_reward = membership
-            .block_reward(None)
+            .fixed_block_reward()
             .expect("block reward is not None");
         drop(membership);
 
@@ -3321,7 +3325,7 @@ mod test {
         let node_state = network.server.node_state();
         let membership = node_state.coordinator.membership().read().await;
         let block_reward = membership
-            .block_reward(None)
+            .fixed_block_reward()
             .expect("block reward is not None");
         drop(membership);
         let client: Client<ServerError, SequencerApiVersion> =
@@ -3628,7 +3632,7 @@ mod test {
 
         let membership = coordinator.membership().read().await;
         let block_reward = membership
-            .block_reward(None)
+            .fixed_block_reward()
             .expect("block reward is not None");
 
         drop(membership);
@@ -3844,7 +3848,7 @@ mod test {
             let epoch_number =
                 EpochNumber::new(epoch_from_block_number(leaf.height(), EPOCH_HEIGHT));
 
-            assert!(membership.block_reward(Some(epoch_number)).is_none());
+            assert!(membership.epoch_block_reward(epoch_number).is_none());
 
             let height = header.height();
             for address in addresses.clone() {
@@ -3884,7 +3888,7 @@ mod test {
             let epoch_number =
                 EpochNumber::new(epoch_from_block_number(leaf.height(), EPOCH_HEIGHT));
 
-            let block_reward = membership.block_reward(Some(epoch_number)).unwrap();
+            let block_reward = membership.epoch_block_reward(epoch_number).unwrap();
             let leader = membership
                 .leader(leaf.leaf().view_number(), Some(epoch_number))
                 .expect("leader");

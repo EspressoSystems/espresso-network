@@ -642,7 +642,9 @@ pub struct EpochCommittees {
     randomized_committees: BTreeMap<Epoch, RandomizedCommittee<StakeTableEntry<PubKey>>>,
     first_epoch: Option<Epoch>,
     epoch_height: u64,
-    block_reward: Option<RewardAmount>,
+    /// Fixed block reward (used only in V3).
+    /// starting from V4, block reward is dynamic
+    fixed_block_reward: Option<RewardAmount>,
     fetcher: Arc<Fetcher>,
 }
 
@@ -1491,6 +1493,10 @@ impl EpochCommittees {
         &self.fetcher
     }
 
+    pub fn fixed_block_reward(&self) -> Option<RewardAmount> {
+        self.fixed_block_reward
+    }
+
     /// Fetch the block reward and update it if its None.
     /// We used a fixed block reward for version v3
     /// Version v4 uses the dynamic block reward based
@@ -1506,7 +1512,7 @@ impl EpochCommittees {
     ) -> anyhow::Result<RewardAmount> {
         let membership_reader = membership.upgradable_read().await;
         let fetcher = membership_reader.fetcher.clone();
-        match membership_reader.block_reward {
+        match membership_reader.fixed_block_reward {
             Some(reward) => Ok(reward),
             None => {
                 tracing::warn!(%epoch,
@@ -1520,7 +1526,7 @@ impl EpochCommittees {
                         tracing::error!(?epoch, ?err, "failed to fetch block_reward");
                     })?;
                 let mut writer = RwLockUpgradableReadGuard::upgrade(membership_reader).await;
-                writer.block_reward = Some(block_reward);
+                writer.fixed_block_reward = Some(block_reward);
                 Ok(block_reward)
             },
         }
@@ -1559,22 +1565,22 @@ impl EpochCommittees {
         Ok(block_reward_u256.into())
     }
 
-    /// Returns the fixed block reward if the epoch is not provided.
-    /// For version V3, we pass `None` and use the fixed block reward.
-    /// For version V4, an epoch number must be provided,
-    /// as each V4 epoch can have a different block reward.
-    pub async fn get_block_reward(
-        epoch: Option<Epoch>,
+    /// returns the block reward for the given epoch.
+    ///
+    /// Reward depends on the epoch root header version:
+    /// V3: Returns the fixed block reward as V3 only supports fixed reward
+    /// >= V4 : Returns the dynamic block reward
+    ///
+    /// It also attempts catchup for the root header if not present in the committee,
+    /// and also for the stake table of the previous epoch
+    /// before computing the dynamic block reward
+    pub async fn fetch_and_calculate_block_reward(
+        current_epoch: Epoch,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
     ) -> anyhow::Result<RewardAmount> {
         let membership_read = coordinator.membership().read().await;
         let epoch_height = membership_read.epoch_height;
-        let fixed_block_reward = membership_read.block_reward;
-        // return fixed reward if no epoch is specified
-        let current_epoch = match epoch {
-            Some(e) => e,
-            None => return fixed_block_reward.context("block reward not found"),
-        };
+        let fixed_block_reward = membership_read.fixed_block_reward;
 
         let committee = membership_read
             .state
@@ -1749,16 +1755,12 @@ impl EpochCommittees {
         Ok(Some(block_reward))
     }
 
-    pub fn block_reward(&self, epoch: Option<EpochNumber>) -> Option<RewardAmount> {
-        match epoch {
-            None => self.block_reward,
-            Some(e) => self
-                .state
-                .get(&e)
-                .and_then(|committee| committee.block_reward),
-        }
+    /// This function just returns the stored block reward in epoch committee
+    pub fn epoch_block_reward(&self, epoch: EpochNumber) -> Option<RewardAmount> {
+        self.state
+            .get(&epoch)
+            .and_then(|committee| committee.block_reward)
     }
-
     /// Updates `Self.stake_table` with stake_table for
     /// `Self.contract_address` at `l1_block_height`. This is intended
     /// to be called before calling `self.stake()` so that
@@ -1848,7 +1850,7 @@ impl EpochCommittees {
         // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
         committee_members: Vec<PeerConfig<SeqTypes>>,
         da_members: Vec<PeerConfig<SeqTypes>>,
-        block_reward: Option<RewardAmount>,
+        fixed_block_reward: Option<RewardAmount>,
         fetcher: Fetcher,
         epoch_height: u64,
     ) -> Self {
@@ -1920,7 +1922,7 @@ impl EpochCommittees {
             state: map,
             randomized_committees: BTreeMap::new(),
             first_epoch: None,
-            block_reward,
+            fixed_block_reward,
             fetcher: Arc::new(fetcher),
             epoch_height,
         }
@@ -1930,7 +1932,7 @@ impl EpochCommittees {
         match self.fetcher.fetch_fixed_block_reward().await {
             Ok(block_reward) => {
                 tracing::info!("Fetched block reward: {block_reward}");
-                self.block_reward = Some(block_reward);
+                self.fixed_block_reward = Some(block_reward);
             },
             Err(err) => {
                 tracing::warn!(
