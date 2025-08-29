@@ -2000,6 +2000,43 @@ impl SequencerPersistence for Persistence {
             .transpose()
     }
 
+    async fn store_eqc(
+        &self,
+        high_qc: QuorumCertificate2<SeqTypes>,
+        next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let eqc_bytes =
+            bincode::serialize(&(high_qc, next_epoch_high_qc)).context("serializing eqc")?;
+        let mut tx = self.db.write().await?;
+        tx.upsert("eqc", ["id", "data"], ["id"], [(true, eqc_bytes)])
+            .await?;
+        tx.commit().await
+    }
+
+    async fn load_eqc(
+        &self,
+    ) -> Option<(
+        QuorumCertificate2<SeqTypes>,
+        NextEpochQuorumCertificate2<SeqTypes>,
+    )> {
+        let result = self
+            .db
+            .read()
+            .await
+            .ok()?
+            .fetch_optional("SELECT * FROM eqc where id = true")
+            .await
+            .ok()?;
+
+        result
+            .map(|row| {
+                let bytes: Vec<u8> = row.get("data");
+                bincode::deserialize(&bytes)
+            })
+            .transpose()
+            .ok()?
+    }
+
     async fn append_da2(
         &self,
         proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,

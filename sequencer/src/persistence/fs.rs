@@ -221,6 +221,10 @@ impl Inner {
         self.path.join("next_epoch_quorum_certificate")
     }
 
+    fn eqc(&self) -> PathBuf {
+        self.path.join("eqc")
+    }
+
     fn libp2p_dht_path(&self) -> PathBuf {
         self.path.join("libp2p_dht")
     }
@@ -1062,6 +1066,45 @@ impl SequencerPersistence for Persistence {
         Ok(Some(
             bincode::deserialize(&bytes).context("deserialize next epoch qc")?,
         ))
+    }
+
+    async fn store_eqc(
+        &self,
+        high_qc: QuorumCertificate2<SeqTypes>,
+        next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let mut inner = self.inner.write().await;
+        let path = &inner.eqc();
+
+        inner.replace(
+            path,
+            |_| {
+                // Always overwrite the previous file.
+                Ok(true)
+            },
+            |mut file| {
+                let bytes = bincode::serialize(&(high_qc, next_epoch_high_qc))
+                    .context("serializing next epoch qc")?;
+                file.write_all(&bytes)?;
+                Ok(())
+            },
+        )
+    }
+
+    async fn load_eqc(
+        &self,
+    ) -> Option<(
+        QuorumCertificate2<SeqTypes>,
+        NextEpochQuorumCertificate2<SeqTypes>,
+    )> {
+        let inner = self.inner.read().await;
+        let path = inner.next_epoch_qc();
+        if !path.is_file() {
+            return None;
+        }
+        let bytes = fs::read(&path).ok()?;
+
+        bincode::deserialize(&bytes).ok()
     }
 
     async fn append_da2(
