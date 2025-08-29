@@ -225,8 +225,14 @@ where
             let has_stake_table = self.membership.read().await.has_stake_table(try_epoch);
             if has_stake_table {
                 // We have this stake table but we need to make sure we have the epoch root of the requested epoch
+                // and we have the previous epoch as well
                 if try_epoch <= TYPES::Epoch::new(epoch.saturating_sub(2)) {
-                    break;
+                    let previous_epoch = TYPES::Epoch::new(try_epoch.saturating_sub(1));
+                    if try_epoch <= first_epoch + 1
+                        || self.membership.read().await.has_stake_table(previous_epoch)
+                    {
+                        break;
+                    }
                 }
                 try_epoch = TYPES::Epoch::new(try_epoch.saturating_sub(1));
             } else {
@@ -274,7 +280,7 @@ where
             };
             match <TYPES::Membership as Membership<TYPES>>::get_epoch_drb(
                 self.membership.clone(),
-                epoch,
+                current_fetch_epoch,
             )
             .await
             {
