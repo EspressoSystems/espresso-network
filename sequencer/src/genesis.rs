@@ -1274,7 +1274,7 @@ mod test {
         genesis.epoch_height = Some(10);
         genesis.epoch_start_block = Some(5);
         genesis.chain_config.stake_table_contract = Some(Address::random());
-         genesis.chain_config.fee_contract = Some(Address::random());
+        genesis.chain_config.fee_contract = Some(Address::random());
 
         assert!(genesis.validate_base_version_config().is_ok());
     }
