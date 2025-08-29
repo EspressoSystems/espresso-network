@@ -267,6 +267,11 @@ impl NodeState {
         self
     }
 
+    pub fn with_genesis_version(mut self, version: Version) -> Self {
+        self.genesis_version = version;
+        self
+    }
+
     pub fn with_epoch_height(mut self, epoch_height: u64) -> Self {
         self.epoch_height = Some(epoch_height);
         self
