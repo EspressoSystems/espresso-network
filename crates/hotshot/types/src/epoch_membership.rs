@@ -215,7 +215,8 @@ where
             let err = anytrace::error!(
                 "We got a catchup request for epoch {epoch:?} but the first epoch is not set"
             );
-            self.catchup_cleanup(epoch, fetch_epochs, err).await;
+            self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
+                .await;
             return;
         };
 
@@ -234,7 +235,8 @@ where
                         "We are trying to catchup to an epoch lower than the second epoch! This \
                          means the initial stake table is missing!"
                     );
-                    self.catchup_cleanup(epoch, fetch_epochs, err).await;
+                    self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
+                        .await;
                     return;
                 }
                 // Lock the catchup map
@@ -266,8 +268,8 @@ where
             match self.fetch_stake_table(current_fetch_epoch).await {
                 Ok(_) => {},
                 Err(err) => {
-                    fetch_epochs.push((current_fetch_epoch, tx));
-                    self.catchup_cleanup(epoch, fetch_epochs, err).await;
+                    self.catchup_cleanup(epoch, epoch_tx, fetch_epochs, err)
+                        .await;
                     return;
                 },
             };
@@ -291,8 +293,8 @@ where
         let root_leaf = match self.fetch_stake_table(epoch).await {
             Ok(root_leaf) => root_leaf,
             Err(err) => {
-                fetch_epochs.push((epoch, epoch_tx));
-                self.catchup_cleanup(epoch, fetch_epochs, err).await;
+                self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
+                    .await;
                 return;
             },
         };
@@ -323,7 +325,8 @@ where
                         epoch,
                         err
                     );
-                    self.catchup_cleanup(epoch, fetch_epochs, err).await;
+                    self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
+                        .await;
                 }
             },
         };
@@ -383,10 +386,12 @@ where
     async fn catchup_cleanup(
         &mut self,
         req_epoch: TYPES::Epoch,
-        cancel_epochs: Vec<EpochSender<TYPES>>,
+        epoch_tx: Sender<Result<EpochMembership<TYPES>>>,
+        mut cancel_epochs: Vec<EpochSender<TYPES>>,
         err: Error,
     ) {
         // Cleanup in case of error
+        cancel_epochs.push((req_epoch, epoch_tx));
         let mut map_lock = self.catchup_map.lock().await;
         for (epoch, _) in cancel_epochs.iter() {
             // Remove the failed epochs from the catchup map
