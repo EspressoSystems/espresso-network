@@ -270,11 +270,11 @@
 <a href=#270 id=270 data-nosnippet>270</a>            Contract::LightClientV2 =&gt; {
 <a href=#271 id=271 data-nosnippet>271</a>                <span class="macro">assert!</span>(
 <a href=#272 id=272 data-nosnippet>272</a>                    <span class="self">self</span>.blocks_per_epoch.is_some(),
-<a href=#273 id=273 data-nosnippet>273</a>                    <span class="string">"forget to specify blocks_per_epoch()"
+<a href=#273 id=273 data-nosnippet>273</a>                    <span class="string">"forgot to specify blocks_per_epoch()"
 <a href=#274 id=274 data-nosnippet>274</a>                </span>);
 <a href=#275 id=275 data-nosnippet>275</a>                <span class="macro">assert!</span>(
 <a href=#276 id=276 data-nosnippet>276</a>                    <span class="self">self</span>.epoch_start_block.is_some(),
-<a href=#277 id=277 data-nosnippet>277</a>                    <span class="string">"forget to specify epoch_start_block()"
+<a href=#277 id=277 data-nosnippet>277</a>                    <span class="string">"forgot to specify epoch_start_block()"
 <a href=#278 id=278 data-nosnippet>278</a>                </span>);
 <a href=#279 id=279 data-nosnippet>279</a>
 <a href=#280 id=280 data-nosnippet>280</a>                <span class="kw">let </span>use_mock = <span class="self">self</span>.mock_light_client;
@@ -284,10 +284,10 @@
 <a href=#284 id=284 data-nosnippet>284</a>                <span class="kw">let </span>epoch_start_block = <span class="self">self</span>.epoch_start_block.unwrap();
 <a href=#285 id=285 data-nosnippet>285</a>                <span class="kw">let </span>rpc_url = <span class="self">self</span>.rpc_url.clone();
 <a href=#286 id=286 data-nosnippet>286</a>
-<a href=#287 id=287 data-nosnippet>287</a>                <span class="comment">// TEST-ONLY: if this config is not yet set, we use a large default value
+<a href=#287 id=287 data-nosnippet>287</a>                <span class="comment">// TEST-ONLY: if this config is not yet set, we use u64::MAX
 <a href=#288 id=288 data-nosnippet>288</a>                // to avoid contract complaining about invalid zero-valued blocks_per_epoch.
-<a href=#289 id=289 data-nosnippet>289</a>                // This large value will act as if we are always in epoch 1, which won't conflict
-<a href=#290 id=290 data-nosnippet>290</a>                // with the effective purpose of the real `PublicNetworkConfig`.
+<a href=#289 id=289 data-nosnippet>289</a>                // This value will allow tests to proceed with realistic epoch behavior.
+<a href=#290 id=290 data-nosnippet>290</a>                // TODO: remove this once we have a proper way to set blocks_per_epoch
 <a href=#291 id=291 data-nosnippet>291</a>                </span><span class="kw">if </span>use_mock &amp;&amp; blocks_per_epoch == <span class="number">0 </span>{
 <a href=#292 id=292 data-nosnippet>292</a>                    blocks_per_epoch = u64::MAX;
 <a href=#293 id=293 data-nosnippet>293</a>                }
@@ -376,7 +376,7 @@
 <a href=#376 id=376 data-nosnippet>376</a>                <span class="kw">let </span>lc_addr = contracts
 <a href=#377 id=377 data-nosnippet>377</a>                    .address(Contract::LightClientProxy)
 <a href=#378 id=378 data-nosnippet>378</a>                    .context(<span class="string">"no LightClient proxy address"</span>)<span class="question-mark">?</span>;
-<a href=#379 id=379 data-nosnippet>379</a>                <span class="kw">let </span>escrow_period = <span class="self">self</span>.exit_escrow_period.unwrap_or(U256::from(<span class="number">300</span>));
+<a href=#379 id=379 data-nosnippet>379</a>                <span class="kw">let </span>escrow_period = <span class="self">self</span>.exit_escrow_period.unwrap_or(U256::from(<span class="number">250</span>));
 <a href=#380 id=380 data-nosnippet>380</a>                <span class="kw">crate</span>::deploy_stake_table_proxy(
 <a href=#381 id=381 data-nosnippet>381</a>                    provider,
 <a href=#382 id=382 data-nosnippet>382</a>                    contracts,

@@ -61,7 +61,7 @@
 <a href=#61 id=61 data-nosnippet>61</a>    <span class="kw">pub async fn </span>deploy_version(
 <a href=#62 id=62 data-nosnippet>62</a>        stake_table_contract_version: StakeTableContractVersion,
 <a href=#63 id=63 data-nosnippet>63</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-<a href=#64 id=64 data-nosnippet>64</a>        <span class="kw">let </span>exit_escrow_period = Duration::from_secs(<span class="number">1</span>);
+<a href=#64 id=64 data-nosnippet>64</a>        <span class="kw">let </span>exit_escrow_period = Duration::from_secs(<span class="number">250</span>);
 <a href=#65 id=65 data-nosnippet>65</a>        <span class="kw">let </span>port = portpicker::pick_unused_port().unwrap();
 <a href=#66 id=66 data-nosnippet>66</a>        <span class="comment">// Spawn anvil
 <a href=#67 id=67 data-nosnippet>67</a>        </span><span class="kw">let </span>provider = ProviderBuilder::new().on_anvil_with_wallet_and_config(|anvil| {
