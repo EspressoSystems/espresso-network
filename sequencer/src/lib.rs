@@ -1274,7 +1274,7 @@ pub mod testing {
                 Arc::new(catchup_providers.clone()),
                 V::Base::VERSION,
                 coordinator.clone(),
-                Version { major: 0, minor: 1 },
+                V::Base::VERSION,
             )
             .with_current_version(V::Base::version())
             .with_genesis(state)
