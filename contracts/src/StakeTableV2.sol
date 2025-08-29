@@ -34,8 +34,6 @@ import { BLSSig } from "./libraries/BLSSig.sol";
 /// @notice The StakeTableV2 contract ABI is a superset of the original ABI. Consumers of the
 /// contract can use the V2 ABI, even if they would like to maintain backwards compatibility.
 contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeable {
-    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
-
     // === Events ===
 
     /// @notice A validator is registered in the stake table
@@ -69,6 +67,20 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     /// The function is deprecated as it was replaced by a new function
     error DeprecatedFunction();
+
+    ///
+    error SchnorrKeyAlreadyUsed();
+
+    /// Variables
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+
+    /// Schnorr keys that have been seen by the contract
+    ///
+    /// @dev to simplify the reasoning about what keys and prevent some errors due to
+    /// misconfigurations of validators the contract currently marks keys as used and only allow
+    /// them to be used once. This for example prevents callers from accidentally registering the
+    /// same Schnorr key twice.
+    mapping(bytes32 schnorrKey => bool used) public schnorrKeys;
 
     constructor() {
         _disableInitializers();
@@ -137,7 +149,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
         ensureValidatorNotRegistered(validator);
         ensureNonZeroSchnorrKey(schnorrVK);
-        ensureNewKey(blsVK);
+        ensureNewKey(blsVK, schnorrVK);
 
         // Verify that the validator can sign for that blsVK. This prevents rogue public-key
         // attacks.
@@ -175,7 +187,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
         ensureValidatorActive(validator);
         ensureNonZeroSchnorrKey(schnorrVK);
-        ensureNewKey(blsVK);
+        ensureNewKey(blsVK, schnorrVK);
 
         // Verify that the validator can sign for that blsVK. This prevents rogue public-key
         // attacks.
@@ -198,6 +210,28 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         }
         exitEscrowPeriod = newExitEscrowPeriod;
         emit ExitEscrowPeriodUpdated(newExitEscrowPeriod);
+    }
+
+    function _hashSchnorrKey(EdOnBN254.EdOnBN254Point memory schnorrVK)
+        internal
+        pure
+        returns (bytes32)
+    {
+        return keccak256(abi.encode(schnorrVK.x, schnorrVK.y));
+    }
+
+    // override the ensureNewKey function to check the schnorr key
+    function ensureNewKey(BN254.G2Point memory blsVK, EdOnBN254.EdOnBN254Point memory schnorrVK)
+        internal
+        view
+    {
+        if (blsKeys[_hashBlsKey(blsVK)]) {
+            revert BlsKeyAlreadyUsed();
+        }
+
+        if (schnorrKeys[_hashSchnorrKey(schnorrVK)]) {
+            revert SchnorrKeyAlreadyUsed();
+        }
     }
 
     // deprecate previous registration function
