@@ -30,7 +30,33 @@ import { SafeTransferLib, ERC20 } from "solmate/utils/SafeTransferLib.sol";
 /// support registration and key updates must use the V2 functions and listen to the V2 events. The
 /// original functions revert with a `DeprecatedFunction` error in V2.
 ///
-/// 2. The exit escrow period can be updated by the owner of the contract.
+/// 2. The exit escrow period can be updated by the owner of the contract
+/// within valid bounds (15 blocks to 14 days).
+///
+/// 3. The following functions can be paused by the PAUSER_ROLE:
+/// - `claimWithdrawal(...)`
+/// - `claimValidatorExit(...)`
+/// - `delegate(...)`
+/// - `undelegate(...)`
+/// - `deregisterValidator(...)`
+/// - `registerValidatorV2(...)`
+/// - `updateConsensusKeysV2(...)`
+/// When paused, these functions revert with a standard pausable error, `EnforcedPause()`.
+/// Only the PAUSER_ROLE can pause/unpause the contract.
+///
+/// Note: `updateExitEscrowPeriod` is NOT pausable for emergency governance access.
+///
+/// 4. The `claimValidatorExit` function is overridden to ensure
+/// that the validator's delegatedAmount is updated during this method
+/// The update is deferred until the funds are actually withdrawn.
+///
+/// 5. The `deregisterValidator` function is overridden to ensure
+/// that the validator's delegatedAmount is not updated during this method as it was in v1.
+///
+/// 6. The `updateExitEscrowPeriod` function is added to allow governance to update
+/// the exit escrow period within valid bounds (15 blocks to 14 days).
+///
+/// 7. The `pause` and `unpause` functions are added for emergency control.
 ///
 /// @notice The StakeTableV2 contract ABI is a superset of the original ABI. Consumers of the
 /// contract can use the V2 ABI, even if they would like to maintain backwards compatibility.
@@ -136,6 +162,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
         // Mark funds as spent
         delegations[validator][delegator] = 0;
+        // the delegatedAmount is updated here in v2
         validators[validator].delegatedAmount -= amount;
 
         SafeTransferLib.safeTransfer(token, delegator, amount);
