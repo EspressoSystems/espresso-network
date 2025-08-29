@@ -65,7 +65,7 @@ jobs:
       - uses: rui314/setup-mold@v1
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -130,7 +130,7 @@ jobs:
       - uses: rui314/setup-mold@v1
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -192,7 +192,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download executables AMD
         uses: actions/download-artifact@v4
@@ -300,7 +300,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download executables ARM
         uses: actions/download-artifact@v4
@@ -433,7 +433,7 @@ jobs:
       - uses: taiki-e/install-action@just
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -472,7 +472,7 @@ jobs:
       - uses: taiki-e/install-action@just
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Match the docker image tag built or pushed to the registry
         run: |
