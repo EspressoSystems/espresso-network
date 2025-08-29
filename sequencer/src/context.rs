@@ -126,6 +126,11 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             .load_consensus_state::<V>(instance_state.clone())
             .await?;
 
+        tracing::warn!(
+            "Starting up sequencer context with initializer:\n\n{:?}",
+            initializer
+        );
+
         let stake_table = config.hotshot_stake_table();
         let stake_table_commit = stake_table.commitment(stake_table_capacity)?;
         let stake_table_epoch = None;
