@@ -64,9 +64,6 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     // === Errors ===
 
-    /// The exit escrow period is invalid (either too short or too long)
-    error ExitEscrowPeriodInvalid();
-
     /// The Schnorr signature is invalid (either the wrong length or the wrong key)
     error InvalidSchnorrSig();
 
