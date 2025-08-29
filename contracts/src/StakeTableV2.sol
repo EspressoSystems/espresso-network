@@ -136,7 +136,6 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
         // Mark funds as spent
         delegations[validator][delegator] = 0;
-        // deduct the amount from the validator's delegatedAmount
         validators[validator].delegatedAmount -= amount;
 
         SafeTransferLib.safeTransfer(token, delegator, amount);
