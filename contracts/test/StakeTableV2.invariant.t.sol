@@ -35,6 +35,9 @@ contract StakeTableV2InvariantTest is StdInvariant, Test {
         console.log("\n=== State before withdrawal ===");
         stats.logCurrentState();
 
+        // Run the slow delegated amount check only once per invariant run
+        handler.assertValidatorDelegatedAmountSum();
+
         // Ensure all participants can withdraw all their funds
         handler.withdrawAllFunds();
 
