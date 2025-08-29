@@ -783,7 +783,7 @@ impl<TYPES: NodeType> From<LightClientStateUpdateCertificateV1<TYPES>>
             signatures: v1
                 .signatures
                 .into_iter()
-                .map(|(key, sig)| (key, sig.clone(), sig)) // Cloning the signatues here because we use it only for storage.
+                .map(|(key, sig)| (key, sig.clone(), sig)) // Cloning the signatures here because we use it only for storage.
                 .collect(),
             auth_root: Default::default(),
         }
