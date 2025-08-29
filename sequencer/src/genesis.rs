@@ -4,13 +4,13 @@ use std::{
 };
 
 use alloy::primitives::Address;
-use anyhow::{Context, Ok};
+use anyhow::{ensure, Context, Ok};
 use espresso_types::{
-    v0_3::ChainConfig, FeeAccount, FeeAmount, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
-    Upgrade,
+    v0_3::ChainConfig, EpochVersion, FeeAccount, FeeAmount, FeeVersion, GenesisHeader, L1BlockInfo,
+    L1Client, Timestamp, Upgrade,
 };
 use serde::{Deserialize, Serialize};
-use vbs::version::Version;
+use vbs::version::{StaticVersionType, Version};
 
 /// Initial configuration of an Espresso stake table.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -130,6 +130,87 @@ impl Genesis {
         }
         // TODO: it's optional for the fee contract to be included in a proxy in v1 so no need to panic but revisit this after v1 https://github.com/EspressoSystems/espresso-sequencer/pull/2000#discussion_r1765174702
         Ok(())
+    }
+
+    pub async fn validate(&self, l1: &L1Client) -> anyhow::Result<()> {
+        self.validate_fee_contract(l1).await?;
+        self.validate_base_version_config()?;
+        self.validate_upgrades_config()?;
+        Ok(())
+    }
+
+    fn validate_base_version_config(&self) -> anyhow::Result<()> {
+        if self.base_version >= FeeVersion::version() {
+            Self::validate_address(
+                self.chain_config.fee_contract,
+                "fee_contract",
+                "base_version",
+                &self.base_version,
+            )?;
+        }
+
+        if self.base_version >= EpochVersion::version() {
+            ensure!(
+                self.epoch_height.is_some(),
+                "epoch_height must be provided for base_version {} and above",
+                self.base_version
+            );
+
+            ensure!(
+                self.epoch_start_block.is_some(),
+                "epoch_start_block must be provided for base_version {} and above",
+                self.base_version
+            );
+
+            Self::validate_address(
+                self.chain_config.stake_table_contract,
+                "stake_table_contract",
+                "base_version",
+                &self.base_version,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn validate_upgrades_config(&self) -> anyhow::Result<()> {
+        for (version, upgrade) in &self.upgrades {
+            let chain_config = upgrade.upgrade_type.chain_config();
+
+            if *version >= FeeVersion::version() {
+                Self::validate_address(
+                    chain_config.and_then(|c| c.fee_contract),
+                    "fee_contract",
+                    "upgrade version",
+                    version,
+                )?;
+            }
+
+            if *version >= EpochVersion::version() {
+                Self::validate_address(
+                    chain_config.and_then(|c| c.stake_table_contract),
+                    "stake_table_contract",
+                    "upgrade version",
+                    version,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_address(
+        opt: Option<Address>,
+        field: &str,
+        kind: &str,
+        version: &Version,
+    ) -> anyhow::Result<()> {
+        match opt {
+            Some(addr) if addr == Address::default() => {
+                anyhow::bail!("{field} cannot be the zero address in {kind} {version} and above")
+            },
+            Some(_) => Ok(()),
+            None => anyhow::bail!("{field} must be provided in {kind} {version} and above"),
+        }
     }
 }
 
