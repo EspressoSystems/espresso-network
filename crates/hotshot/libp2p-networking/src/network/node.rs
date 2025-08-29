@@ -636,6 +636,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                                     protocol_version: _,
                                     agent_version: _,
                                     observed_addr: _,
+                                    signed_peer_record: _,
                                 },
                             connection_id: _,
                         } = *e
@@ -665,6 +666,13 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                         },
                         GossipEvent::GossipsubNotSupported { peer_id } => {
                             warn!("Peer {peer_id:?} does not support gossipsub");
+                            None
+                        },
+                        GossipEvent::SlowPeer {
+                            peer_id,
+                            failed_messages: _,
+                        } => {
+                            warn!("Peer {peer_id:?} is slow");
                             None
                         },
                     },
@@ -715,6 +723,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 local_addr: _,
                 send_back_addr: _,
                 error,
+                peer_id: _,
             } => {
                 warn!("Incoming connection error: {error:?}");
             },
