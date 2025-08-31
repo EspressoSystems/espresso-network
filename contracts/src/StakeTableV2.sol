@@ -166,6 +166,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         }
 
         blsKeys[_hashBlsKey(blsVK)] = true;
+        schnorrKeys[_hashSchnorrKey(schnorrVK)] = true;
         validators[validator] = Validator({ status: ValidatorStatus.Active, delegatedAmount: 0 });
 
         emit ValidatorRegisteredV2(validator, blsVK, schnorrVK, commission, blsSig, schnorrSig);

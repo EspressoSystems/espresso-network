@@ -1547,6 +1547,42 @@ contract StakeTableUpgradeV2Test is Test {
         proxyV2.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 0);
         vm.stopPrank();
     }
+
+    function test_RevertWhen_SchnorrKeyAlreadyUsed() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = stakeTableRegisterTest.stakeTable();
+        proxy.upgradeToAndCall(address(new StakeTableV2()), "");
+        vm.stopPrank();
+
+        address validator = makeAddr("validator");
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory blsSig
+        ) = stakeTableRegisterTest.genClientWallet(validator, "1");
+
+        // register once so the keys are stored on chains
+        vm.startPrank(validator);
+        bytes memory schnorrSig = new bytes(64);
+        StakeTableV2 proxyV2 = StakeTableV2(address(proxy));
+        proxyV2.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 0);
+        vm.stopPrank();
+
+        // register again with the same schnorr key to get the revert
+        address validator2 = makeAddr("validator2");
+        (BN254.G2Point memory blsVK2,, BN254.G1Point memory blsSig2) =
+            stakeTableRegisterTest.genClientWallet(validator2, "2");
+
+        vm.startPrank(validator2);
+        vm.expectRevert(StakeTableV2.SchnorrKeyAlreadyUsed.selector);
+        proxyV2.registerValidatorV2(blsVK2, schnorrVK, blsSig2, schnorrSig, 0);
+        vm.stopPrank();
+
+        vm.startPrank(validator);
+        vm.expectRevert(StakeTableV2.SchnorrKeyAlreadyUsed.selector);
+        proxyV2.updateConsensusKeysV2(blsVK2, schnorrVK, blsSig2, schnorrSig);
+        vm.stopPrank();
+    }
 }
 
 contract StakeTableTimelockTest is Test {
