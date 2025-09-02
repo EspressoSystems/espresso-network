@@ -1098,7 +1098,7 @@ impl SequencerPersistence for Persistence {
         NextEpochQuorumCertificate2<SeqTypes>,
     )> {
         let inner = self.inner.read().await;
-        let path = inner.next_epoch_qc();
+        let path = inner.eqc();
         if !path.is_file() {
             return None;
         }
