@@ -1,0 +1,28 @@
+[package]
+name = "libp2p_test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+bimap = "0.6"
+blake3 = "1.4"
+hotshot-example-types = { path = "../hotshot/example-types" }
+hotshot-libp2p-networking = { path = "../hotshot/libp2p-networking" }
+hotshot-types = { path = "../hotshot/types" }
+libp2p = { version = "0.54", features = ["tokio"] }
+libp2p-identity = "0.2"
+parking_lot = "0.12"
+serde = { version = "1", features = ["derive"] }
+tagged-base64 = { workspace = true }
+tokio = { version = "1", features = ["full"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "libp2p_test"
+path = "src/main.rs"
