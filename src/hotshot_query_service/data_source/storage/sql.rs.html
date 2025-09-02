@@ -1909,4 +1909,28 @@
 <a href=#1909 id=1909 data-nosnippet>1909</a>        <span class="macro">assert_eq!</span>(leaf_count <span class="kw">as </span>u64, num_rows, <span class="string">"not all leaves migrated"</span>);
 <a href=#1910 id=1910 data-nosnippet>1910</a>        <span class="macro">assert_eq!</span>(vid_count <span class="kw">as </span>u64, num_rows, <span class="string">"not all vid migrated"</span>);
 <a href=#1911 id=1911 data-nosnippet>1911</a>    }
-<a href=#1912 id=1912 data-nosnippet>1912</a>}</code></pre></div></section></main></body></html>
+<a href=#1912 id=1912 data-nosnippet>1912</a>
+<a href=#1913 id=1913 data-nosnippet>1913</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#1914 id=1914 data-nosnippet>1914</a>    </span><span class="kw">async fn </span>test_transaction_upsert_retries() {
+<a href=#1915 id=1915 data-nosnippet>1915</a>        <span class="kw">let </span>db = TmpDb::init().<span class="kw">await</span>;
+<a href=#1916 id=1916 data-nosnippet>1916</a>        <span class="kw">let </span>config = db.config();
+<a href=#1917 id=1917 data-nosnippet>1917</a>
+<a href=#1918 id=1918 data-nosnippet>1918</a>        <span class="kw">let </span>storage = SqlStorage::connect(config).<span class="kw">await</span>.unwrap();
+<a href=#1919 id=1919 data-nosnippet>1919</a>
+<a href=#1920 id=1920 data-nosnippet>1920</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.write().<span class="kw">await</span>.unwrap();
+<a href=#1921 id=1921 data-nosnippet>1921</a>
+<a href=#1922 id=1922 data-nosnippet>1922</a>        <span class="comment">// Try to upsert into a table that does not exist.
+<a href=#1923 id=1923 data-nosnippet>1923</a>        // This will fail, so our `upsert` function will enter the retry loop.
+<a href=#1924 id=1924 data-nosnippet>1924</a>        // Since the table does not exist, all retries will eventually
+<a href=#1925 id=1925 data-nosnippet>1925</a>        // fail and we expect an error to be returned.
+<a href=#1926 id=1926 data-nosnippet>1926</a>        //
+<a href=#1927 id=1927 data-nosnippet>1927</a>        // Previously, this case would cause  a panic because we were calling
+<a href=#1928 id=1928 data-nosnippet>1928</a>        // methods on `QueryBuilder` after `.build()` without first
+<a href=#1929 id=1929 data-nosnippet>1929</a>        // calling `.reset()`and according to the sqlx docs, that always panics.
+<a href=#1930 id=1930 data-nosnippet>1930</a>        // Now, since we are properly calling `.reset()` inside `upsert()` for
+<a href=#1931 id=1931 data-nosnippet>1931</a>        // the query builder, the function returns an error instead of panicking.
+<a href=#1932 id=1932 data-nosnippet>1932</a>        </span>tx.upsert(<span class="string">"does_not_exist"</span>, [<span class="string">"test"</span>], [<span class="string">"test"</span>], [(<span class="number">1_i64</span>,)])
+<a href=#1933 id=1933 data-nosnippet>1933</a>            .<span class="kw">await
+<a href=#1934 id=1934 data-nosnippet>1934</a>            </span>.unwrap_err();
+<a href=#1935 id=1935 data-nosnippet>1935</a>    }
+<a href=#1936 id=1936 data-nosnippet>1936</a>}</code></pre></div></section></main></body></html>
