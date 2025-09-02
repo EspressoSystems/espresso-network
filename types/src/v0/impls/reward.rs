@@ -825,13 +825,12 @@ pub async fn distribute_block_reward(
 
     let parent_header = parent_leaf.block_header();
     // Initialize the total rewards distributed so far in this block.
-
     let mut previously_distributed = parent_header.total_reward_distributed().unwrap_or_default();
 
     // Decide whether to use a fixed or dynamic block reward.
     let block_reward = if version >= DrbAndHeaderUpgradeVersion::version() {
         let block_reward = instance_state
-            .block_reward(Some(EpochNumber::new(*epoch)))
+            .block_reward(EpochNumber::new(*epoch))
             .await
             .with_context(|| format!("block reward is None for epoch {epoch}"))?;
 
@@ -843,10 +842,7 @@ pub async fn distribute_block_reward(
                 "epoch_start_block is zero"
             );
 
-            let fixed_block_reward = instance_state
-                .block_reward(None)
-                .await
-                .with_context(|| format!("block reward is None for epoch {epoch}"))?;
+            let fixed_block_reward = instance_state.fixed_block_reward().await?;
 
             // Compute the first block where rewards start being distributed.
             // Rewards begin only after the first two epochs
@@ -869,10 +865,7 @@ pub async fn distribute_block_reward(
 
         block_reward
     } else {
-        instance_state
-            .block_reward(None)
-            .await
-            .with_context(|| format!("fixed block reward is None for epoch {epoch}"))?
+        instance_state.fixed_block_reward().await?
     };
 
     if block_reward.0.is_zero() {
