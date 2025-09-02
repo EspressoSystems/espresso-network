@@ -374,39 +374,47 @@ impl Transaction<Write> {
     ) -> anyhow::Result<()>
     where
         R: IntoIterator,
-        R::Item: 'p + FixedLengthParams<'p, N>,
+        R::Item: 'p + FixedLengthParams<'p, N> + Clone,
     {
         let set_columns = columns
             .iter()
             .map(|col| format!("{col} = excluded.{col}"))
             .join(",");
-        let columns_str = columns
-            .into_iter()
-            .map(|col| format!("\"{col}\""))
-            .join(",");
+
+        let columns_str = columns.iter().map(|col| format!("\"{col}\"")).join(",");
+
         let pk = pk.into_iter().join(",");
 
-        let mut query_builder =
-            QueryBuilder::new(format!("INSERT INTO \"{table}\" ({columns_str}) "));
-        let mut num_rows = 0;
-
-        query_builder.push_values(rows, |mut b, row| {
-            num_rows += 1;
-            row.bind(&mut b);
-        });
+        let rows: Vec<_> = rows.into_iter().collect();
+        let num_rows = rows.len();
 
         if num_rows == 0 {
-            tracing::warn!("trying to upsert 0 rows, this has no effect");
+            tracing::warn!("trying to upsert 0 rows into {table}, this has no effect");
             return Ok(());
         }
-        query_builder.push(format!(" ON CONFLICT ({pk}) DO UPDATE SET {set_columns}"));
 
         let interval = Duration::from_secs(1);
         let mut retries = 5;
 
+        let mut query_builder =
+            QueryBuilder::new(format!("INSERT INTO \"{table}\" ({columns_str}) "));
+
         loop {
+            // Reset back to the state immediately after `new()`.
+            // - This clears all SQL values we pushed in this loop iteration,
+            // - Required because once `.build()` has been called, any other method
+            //   on `QueryBuilder` will panic unless you call `.reset()` first
+            let query_builder = query_builder.reset();
+
+            query_builder.push_values(rows.clone(), |mut b, row| {
+                row.bind(&mut b);
+            });
+
+            query_builder.push(format!(" ON CONFLICT ({pk}) DO UPDATE SET {set_columns}"));
+
             let query = query_builder.build();
             let statement = query.sql();
+
             match self.execute(query).await {
                 Ok(res) => {
                     let rows_modified = res.rows_affected() as usize;
