@@ -46,11 +46,11 @@
               "justify_qc": {
                 "_pd": null,
                 "data": {
-                  "leaf_commit": "COMMIT~tqpBNqqt63akxJWcfI46uDV8c_Sn_aZ777yCj4X_ukDG"
+                  "leaf_commit": "COMMIT~QUXl9iXWMA6tr_85idFaTLI1AkO7iGjoLTrkONxXH1bA"
                 },
                 "signatures": null,
                 "view_number": 0,
-                "vote_commitment": "COMMIT~tzMwZg2x5QJTx7Di9eEvNC0P8CZ_iNX7LJ01DHA9XEdO"
+                "vote_commitment": "COMMIT~dQ4OKcjmkh5ysPOzKAd2dEt9_qjtGJyro2mkszSayOWf"
               },
               "proposal_certificate": {
                 "Timeout": {
