@@ -389,7 +389,8 @@ impl Transaction<Write> {
         let num_rows = rows.len();
 
         if num_rows == 0 {
-            bail!("no rows provided for upsert into table {table}");
+            tracing::warn!("trying to upsert 0 rows into {table}, this has no effect");
+            return Ok(());
         }
 
         let interval = Duration::from_secs(1);
