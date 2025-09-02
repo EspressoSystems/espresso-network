@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use alloy::primitives::Address;
-use anyhow::bail;
+use anyhow::{bail, Context};
 #[cfg(any(test, feature = "testing"))]
 use async_lock::RwLock;
 use async_trait::async_trait;
@@ -20,15 +20,13 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
     SeqTypes, UpgradeType, ViewBasedUpgrade,
 };
-#[cfg(any(test, feature = "testing"))]
-use crate::EpochCommittees;
 use crate::{
     v0::{
         impls::StakeTableHash, traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo,
         L1Client, Timestamp, Upgrade, UpgradeMode,
     },
     v0_3::RewardAmount,
-    ValidatorMap,
+    EpochCommittees, ValidatorMap,
 };
 
 /// Represents the immutable state of a node.
@@ -69,10 +67,16 @@ pub struct NodeState {
 }
 
 impl NodeState {
-    pub async fn block_reward(&self, epoch: Option<EpochNumber>) -> Option<RewardAmount> {
+    pub async fn block_reward(&self, epoch: EpochNumber) -> anyhow::Result<RewardAmount> {
+        EpochCommittees::fetch_and_calculate_block_reward(epoch, self.coordinator.clone()).await
+    }
+
+    pub async fn fixed_block_reward(&self) -> anyhow::Result<RewardAmount> {
         let coordinator = self.coordinator.clone();
         let membership = coordinator.membership().read().await;
-        membership.block_reward(epoch)
+        membership
+            .fixed_block_reward()
+            .context("fixed block reward not found")
     }
 }
 
@@ -208,7 +212,7 @@ impl NodeState {
             Arc::new(mock::MockStateCatchup::default()),
             StaticVersion::<0, 2>::version(),
             coordinator,
-            Version { major: 0, minor: 1 },
+            Version { major: 0, minor: 2 },
         )
     }
 
@@ -238,7 +242,7 @@ impl NodeState {
             mock::MockStateCatchup::default(),
             StaticVersion::<0, 3>::version(),
             coordinator,
-            Version { major: 0, minor: 1 },
+            Version { major: 0, minor: 3 },
         )
     }
 
@@ -264,6 +268,11 @@ impl NodeState {
 
     pub fn with_current_version(mut self, version: Version) -> Self {
         self.current_version = version;
+        self
+    }
+
+    pub fn with_genesis_version(mut self, version: Version) -> Self {
+        self.genesis_version = version;
         self
     }
 
