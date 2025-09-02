@@ -848,18 +848,23 @@ pub async fn distribute_block_reward(
             // Rewards begin only after the first two epochs
             // Example:
             //   epoch_height = 10, first_epoch = 1
-            // first_reward_block = 31
-            let first_reward_block = (*first_epoch + 2) * epoch_height + 1;
+            // first_reward_block = 21
+            let first_reward_block = (*first_epoch + 1) * epoch_height + 1;
 
-            // If v4 upgrade started at block 101, and first_reward_block is 31:
-            // total_distributed = (101 - 31) * fixed_block_reward
-            let blocks = height
-                .checked_sub(first_reward_block)
-                .context("height - epoch_start_block underflowed")?;
-
+            // If v4 upgrade started at block 101, and first_reward_block is 21:
+            // total_distributed = (101 - 21) * fixed_block_reward
+            let blocks = height.checked_sub(first_reward_block).with_context(|| {
+                format!("height ({height}) - first_reward_block ({first_reward_block}) underflowed")
+            })?;
             previously_distributed = U256::from(blocks)
                 .checked_mul(fixed_block_reward.0)
-                .context("overflow during total_distributed calculation")?
+                .with_context(|| {
+                    format!(
+                        "overflow during total_distributed calculation: blocks={blocks}, \
+                         fixed_block_reward={}",
+                        fixed_block_reward.0
+                    )
+                })?
                 .into();
         }
 
