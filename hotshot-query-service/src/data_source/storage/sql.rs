@@ -1909,4 +1909,28 @@ mod test {
         assert_eq!(leaf_count as u64, num_rows, "not all leaves migrated");
         assert_eq!(vid_count as u64, num_rows, "not all vid migrated");
     }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_transaction_upsert_retries() {
+        let db = TmpDb::init().await;
+        let config = db.config();
+
+        let storage = SqlStorage::connect(config).await.unwrap();
+
+        let mut tx = storage.write().await.unwrap();
+
+        // Try to upsert into a table that does not exist.
+        // This will fail, so our `upsert` function will enter the retry loop.
+        // Since the table does not exist, all retries will eventually
+        // fail and we expect an error to be returned.
+        //
+        // Previously, this case would cause  a panic because we were calling
+        // methods on `QueryBuilder` after `.build()` without first
+        // calling `.reset()`and according to the sqlx docs, that always panics.
+        // Now, since we are properly calling `.reset()` inside `upsert()` for
+        // the query builder, the function returns an error instead of panicking.
+        tx.upsert("does_not_exist", ["test"], ["test"], [(1 as i64,)])
+            .await
+            .unwrap_err();
+    }
 }
