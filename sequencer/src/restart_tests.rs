@@ -646,8 +646,11 @@ impl TestNetwork {
         let tmp = TempDir::new().unwrap();
         let genesis_file_path = tmp.path().join("genesis.toml");
 
-        let mut chain_config = ChainConfig::default();
-        chain_config.fee_contract = Some(Address::random());
+        let chain_config = ChainConfig {
+            fee_contract: Some(Address::random()),
+            ..Default::default()
+        };
+
         let mut genesis = Genesis {
             chain_config,
             // TODO we apparently have two `capacity` configurations
