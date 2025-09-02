@@ -15,7 +15,7 @@
 <a href=#15 id=15 data-nosnippet>15</a>};
 <a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>libp2p_identity::PeerId;
 <a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>libp2p_swarm_derive::NetworkBehaviour;
-<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>tracing::{debug, error};
+<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>tracing::{debug, error, info};
 <a href=#19 id=19 data-nosnippet>19</a>
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use super</span>::{
 <a href=#21 id=21 data-nosnippet>21</a>    behaviours::dht::store::{
@@ -110,8 +110,8 @@
 <a href=#110 id=110 data-nosnippet>110</a>
 <a href=#111 id=111 data-nosnippet>111</a>    <span class="doccomment">/// Unsubscribe from a given topic
 <a href=#112 id=112 data-nosnippet>112</a>    </span><span class="kw">pub fn </span>unsubscribe_gossip(<span class="kw-2">&amp;mut </span><span class="self">self</span>, t: <span class="kw-2">&amp;</span>str) {
-<a href=#113 id=113 data-nosnippet>113</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = <span class="self">self</span>.gossipsub.unsubscribe(<span class="kw-2">&amp;</span>IdentTopic::new(t)) {
-<a href=#114 id=114 data-nosnippet>114</a>            <span class="macro">error!</span>(<span class="string">"Failed to unsubscribe from topic {:?}. Error: {:?}"</span>, t, e);
+<a href=#113 id=113 data-nosnippet>113</a>        <span class="kw">if </span>!<span class="self">self</span>.gossipsub.unsubscribe(<span class="kw-2">&amp;</span>IdentTopic::new(t)) {
+<a href=#114 id=114 data-nosnippet>114</a>            <span class="macro">info!</span>(<span class="string">"We were not subscribed to topic {:?}."</span>, t);
 <a href=#115 id=115 data-nosnippet>115</a>        }
 <a href=#116 id=116 data-nosnippet>116</a>    }
 <a href=#117 id=117 data-nosnippet>117</a>}

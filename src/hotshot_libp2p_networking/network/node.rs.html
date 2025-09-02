@@ -636,165 +636,174 @@
 <a href=#636 id=636 data-nosnippet>636</a>                                    protocol_version: <span class="kw">_</span>,
 <a href=#637 id=637 data-nosnippet>637</a>                                    agent_version: <span class="kw">_</span>,
 <a href=#638 id=638 data-nosnippet>638</a>                                    observed_addr: <span class="kw">_</span>,
-<a href=#639 id=639 data-nosnippet>639</a>                                },
-<a href=#640 id=640 data-nosnippet>640</a>                            connection_id: <span class="kw">_</span>,
-<a href=#641 id=641 data-nosnippet>641</a>                        } = <span class="kw-2">*</span>e
-<a href=#642 id=642 data-nosnippet>642</a>                        {
-<a href=#643 id=643 data-nosnippet>643</a>                            <span class="kw">let </span>behaviour = <span class="self">self</span>.swarm.behaviour_mut();
-<a href=#644 id=644 data-nosnippet>644</a>
-<a href=#645 id=645 data-nosnippet>645</a>                            <span class="comment">// into hashset to delete duplicates (I checked: there are duplicates)
-<a href=#646 id=646 data-nosnippet>646</a>                            </span><span class="kw">for </span>addr <span class="kw">in </span>listen_addrs.iter().collect::&lt;HashSet&lt;<span class="kw">_</span>&gt;&gt;() {
-<a href=#647 id=647 data-nosnippet>647</a>                                behaviour.dht.add_address(<span class="kw-2">&amp;</span>peer_id, addr.clone());
-<a href=#648 id=648 data-nosnippet>648</a>                            }
-<a href=#649 id=649 data-nosnippet>649</a>                        }
-<a href=#650 id=650 data-nosnippet>650</a>                        <span class="prelude-val">None
-<a href=#651 id=651 data-nosnippet>651</a>                    </span>},
-<a href=#652 id=652 data-nosnippet>652</a>                    NetworkEventInternal::GossipEvent(e) =&gt; <span class="kw">match </span><span class="kw-2">*</span>e {
-<a href=#653 id=653 data-nosnippet>653</a>                        GossipEvent::Message {
-<a href=#654 id=654 data-nosnippet>654</a>                            propagation_source: _peer_id,
-<a href=#655 id=655 data-nosnippet>655</a>                            message_id: _id,
-<a href=#656 id=656 data-nosnippet>656</a>                            message,
-<a href=#657 id=657 data-nosnippet>657</a>                        } =&gt; <span class="prelude-val">Some</span>(NetworkEvent::GossipMsg(message.data)),
-<a href=#658 id=658 data-nosnippet>658</a>                        GossipEvent::Subscribed { peer_id, topic } =&gt; {
-<a href=#659 id=659 data-nosnippet>659</a>                            <span class="macro">debug!</span>(<span class="string">"Peer {peer_id:?} subscribed to topic {topic:?}"</span>);
-<a href=#660 id=660 data-nosnippet>660</a>                            <span class="prelude-val">None
-<a href=#661 id=661 data-nosnippet>661</a>                        </span>},
-<a href=#662 id=662 data-nosnippet>662</a>                        GossipEvent::Unsubscribed { peer_id, topic } =&gt; {
-<a href=#663 id=663 data-nosnippet>663</a>                            <span class="macro">debug!</span>(<span class="string">"Peer {peer_id:?} unsubscribed from topic {topic:?}"</span>);
-<a href=#664 id=664 data-nosnippet>664</a>                            <span class="prelude-val">None
-<a href=#665 id=665 data-nosnippet>665</a>                        </span>},
-<a href=#666 id=666 data-nosnippet>666</a>                        GossipEvent::GossipsubNotSupported { peer_id } =&gt; {
-<a href=#667 id=667 data-nosnippet>667</a>                            <span class="macro">warn!</span>(<span class="string">"Peer {peer_id:?} does not support gossipsub"</span>);
-<a href=#668 id=668 data-nosnippet>668</a>                            <span class="prelude-val">None
-<a href=#669 id=669 data-nosnippet>669</a>                        </span>},
-<a href=#670 id=670 data-nosnippet>670</a>                    },
-<a href=#671 id=671 data-nosnippet>671</a>                    NetworkEventInternal::DMEvent(e) =&gt; <span class="self">self
-<a href=#672 id=672 data-nosnippet>672</a>                        </span>.direct_message_state
-<a href=#673 id=673 data-nosnippet>673</a>                        .handle_dm_event(e, <span class="self">self</span>.resend_tx.clone()),
-<a href=#674 id=674 data-nosnippet>674</a>                    NetworkEventInternal::AutonatEvent(e) =&gt; {
-<a href=#675 id=675 data-nosnippet>675</a>                        <span class="kw">match </span>e {
-<a href=#676 id=676 data-nosnippet>676</a>                            autonat::Event::InboundProbe(<span class="kw">_</span>) =&gt; {},
-<a href=#677 id=677 data-nosnippet>677</a>                            autonat::Event::OutboundProbe(e) =&gt; <span class="kw">match </span>e {
-<a href=#678 id=678 data-nosnippet>678</a>                                autonat::OutboundProbeEvent::Request { .. }
-<a href=#679 id=679 data-nosnippet>679</a>                                | autonat::OutboundProbeEvent::Response { .. } =&gt; {},
-<a href=#680 id=680 data-nosnippet>680</a>                                autonat::OutboundProbeEvent::Error {
-<a href=#681 id=681 data-nosnippet>681</a>                                    probe_id: <span class="kw">_</span>,
-<a href=#682 id=682 data-nosnippet>682</a>                                    peer,
-<a href=#683 id=683 data-nosnippet>683</a>                                    error,
-<a href=#684 id=684 data-nosnippet>684</a>                                } =&gt; {
-<a href=#685 id=685 data-nosnippet>685</a>                                    <span class="macro">warn!</span>(
-<a href=#686 id=686 data-nosnippet>686</a>                                        <span class="string">"AutoNAT Probe failed to peer {peer:?} with error: \
-<a href=#687 id=687 data-nosnippet>687</a>                                         {error:?}"
-<a href=#688 id=688 data-nosnippet>688</a>                                    </span>);
-<a href=#689 id=689 data-nosnippet>689</a>                                },
-<a href=#690 id=690 data-nosnippet>690</a>                            },
-<a href=#691 id=691 data-nosnippet>691</a>                            autonat::Event::StatusChanged { old, new } =&gt; {
-<a href=#692 id=692 data-nosnippet>692</a>                                <span class="macro">debug!</span>(<span class="string">"AutoNAT Status changed. Old: {old:?}, New: {new:?}"</span>);
-<a href=#693 id=693 data-nosnippet>693</a>                            },
-<a href=#694 id=694 data-nosnippet>694</a>                        };
-<a href=#695 id=695 data-nosnippet>695</a>                        <span class="prelude-val">None
-<a href=#696 id=696 data-nosnippet>696</a>                    </span>},
-<a href=#697 id=697 data-nosnippet>697</a>                };
-<a href=#698 id=698 data-nosnippet>698</a>
-<a href=#699 id=699 data-nosnippet>699</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(event) = maybe_event {
-<a href=#700 id=700 data-nosnippet>700</a>                    <span class="comment">// forward messages directly to Client
-<a href=#701 id=701 data-nosnippet>701</a>                    </span>send_to_client
-<a href=#702 id=702 data-nosnippet>702</a>                        .send(event)
-<a href=#703 id=703 data-nosnippet>703</a>                        .map_err(|err| NetworkError::ChannelSendError(err.to_string()))<span class="question-mark">?</span>;
-<a href=#704 id=704 data-nosnippet>704</a>                }
-<a href=#705 id=705 data-nosnippet>705</a>            },
-<a href=#706 id=706 data-nosnippet>706</a>            SwarmEvent::OutgoingConnectionError {
-<a href=#707 id=707 data-nosnippet>707</a>                connection_id: <span class="kw">_</span>,
-<a href=#708 id=708 data-nosnippet>708</a>                peer_id,
-<a href=#709 id=709 data-nosnippet>709</a>                error,
-<a href=#710 id=710 data-nosnippet>710</a>            } =&gt; {
-<a href=#711 id=711 data-nosnippet>711</a>                <span class="macro">warn!</span>(<span class="string">"Outgoing connection error to {peer_id:?}: {error:?}"</span>);
-<a href=#712 id=712 data-nosnippet>712</a>            },
-<a href=#713 id=713 data-nosnippet>713</a>            SwarmEvent::IncomingConnectionError {
-<a href=#714 id=714 data-nosnippet>714</a>                connection_id: <span class="kw">_</span>,
-<a href=#715 id=715 data-nosnippet>715</a>                local_addr: <span class="kw">_</span>,
-<a href=#716 id=716 data-nosnippet>716</a>                send_back_addr: <span class="kw">_</span>,
+<a href=#639 id=639 data-nosnippet>639</a>                                    signed_peer_record: <span class="kw">_</span>,
+<a href=#640 id=640 data-nosnippet>640</a>                                },
+<a href=#641 id=641 data-nosnippet>641</a>                            connection_id: <span class="kw">_</span>,
+<a href=#642 id=642 data-nosnippet>642</a>                        } = <span class="kw-2">*</span>e
+<a href=#643 id=643 data-nosnippet>643</a>                        {
+<a href=#644 id=644 data-nosnippet>644</a>                            <span class="kw">let </span>behaviour = <span class="self">self</span>.swarm.behaviour_mut();
+<a href=#645 id=645 data-nosnippet>645</a>
+<a href=#646 id=646 data-nosnippet>646</a>                            <span class="comment">// into hashset to delete duplicates (I checked: there are duplicates)
+<a href=#647 id=647 data-nosnippet>647</a>                            </span><span class="kw">for </span>addr <span class="kw">in </span>listen_addrs.iter().collect::&lt;HashSet&lt;<span class="kw">_</span>&gt;&gt;() {
+<a href=#648 id=648 data-nosnippet>648</a>                                behaviour.dht.add_address(<span class="kw-2">&amp;</span>peer_id, addr.clone());
+<a href=#649 id=649 data-nosnippet>649</a>                            }
+<a href=#650 id=650 data-nosnippet>650</a>                        }
+<a href=#651 id=651 data-nosnippet>651</a>                        <span class="prelude-val">None
+<a href=#652 id=652 data-nosnippet>652</a>                    </span>},
+<a href=#653 id=653 data-nosnippet>653</a>                    NetworkEventInternal::GossipEvent(e) =&gt; <span class="kw">match </span><span class="kw-2">*</span>e {
+<a href=#654 id=654 data-nosnippet>654</a>                        GossipEvent::Message {
+<a href=#655 id=655 data-nosnippet>655</a>                            propagation_source: _peer_id,
+<a href=#656 id=656 data-nosnippet>656</a>                            message_id: _id,
+<a href=#657 id=657 data-nosnippet>657</a>                            message,
+<a href=#658 id=658 data-nosnippet>658</a>                        } =&gt; <span class="prelude-val">Some</span>(NetworkEvent::GossipMsg(message.data)),
+<a href=#659 id=659 data-nosnippet>659</a>                        GossipEvent::Subscribed { peer_id, topic } =&gt; {
+<a href=#660 id=660 data-nosnippet>660</a>                            <span class="macro">debug!</span>(<span class="string">"Peer {peer_id:?} subscribed to topic {topic:?}"</span>);
+<a href=#661 id=661 data-nosnippet>661</a>                            <span class="prelude-val">None
+<a href=#662 id=662 data-nosnippet>662</a>                        </span>},
+<a href=#663 id=663 data-nosnippet>663</a>                        GossipEvent::Unsubscribed { peer_id, topic } =&gt; {
+<a href=#664 id=664 data-nosnippet>664</a>                            <span class="macro">debug!</span>(<span class="string">"Peer {peer_id:?} unsubscribed from topic {topic:?}"</span>);
+<a href=#665 id=665 data-nosnippet>665</a>                            <span class="prelude-val">None
+<a href=#666 id=666 data-nosnippet>666</a>                        </span>},
+<a href=#667 id=667 data-nosnippet>667</a>                        GossipEvent::GossipsubNotSupported { peer_id } =&gt; {
+<a href=#668 id=668 data-nosnippet>668</a>                            <span class="macro">warn!</span>(<span class="string">"Peer {peer_id:?} does not support gossipsub"</span>);
+<a href=#669 id=669 data-nosnippet>669</a>                            <span class="prelude-val">None
+<a href=#670 id=670 data-nosnippet>670</a>                        </span>},
+<a href=#671 id=671 data-nosnippet>671</a>                        GossipEvent::SlowPeer {
+<a href=#672 id=672 data-nosnippet>672</a>                            peer_id,
+<a href=#673 id=673 data-nosnippet>673</a>                            failed_messages: <span class="kw">_</span>,
+<a href=#674 id=674 data-nosnippet>674</a>                        } =&gt; {
+<a href=#675 id=675 data-nosnippet>675</a>                            <span class="macro">warn!</span>(<span class="string">"Peer {peer_id:?} is slow"</span>);
+<a href=#676 id=676 data-nosnippet>676</a>                            <span class="prelude-val">None
+<a href=#677 id=677 data-nosnippet>677</a>                        </span>},
+<a href=#678 id=678 data-nosnippet>678</a>                    },
+<a href=#679 id=679 data-nosnippet>679</a>                    NetworkEventInternal::DMEvent(e) =&gt; <span class="self">self
+<a href=#680 id=680 data-nosnippet>680</a>                        </span>.direct_message_state
+<a href=#681 id=681 data-nosnippet>681</a>                        .handle_dm_event(e, <span class="self">self</span>.resend_tx.clone()),
+<a href=#682 id=682 data-nosnippet>682</a>                    NetworkEventInternal::AutonatEvent(e) =&gt; {
+<a href=#683 id=683 data-nosnippet>683</a>                        <span class="kw">match </span>e {
+<a href=#684 id=684 data-nosnippet>684</a>                            autonat::Event::InboundProbe(<span class="kw">_</span>) =&gt; {},
+<a href=#685 id=685 data-nosnippet>685</a>                            autonat::Event::OutboundProbe(e) =&gt; <span class="kw">match </span>e {
+<a href=#686 id=686 data-nosnippet>686</a>                                autonat::OutboundProbeEvent::Request { .. }
+<a href=#687 id=687 data-nosnippet>687</a>                                | autonat::OutboundProbeEvent::Response { .. } =&gt; {},
+<a href=#688 id=688 data-nosnippet>688</a>                                autonat::OutboundProbeEvent::Error {
+<a href=#689 id=689 data-nosnippet>689</a>                                    probe_id: <span class="kw">_</span>,
+<a href=#690 id=690 data-nosnippet>690</a>                                    peer,
+<a href=#691 id=691 data-nosnippet>691</a>                                    error,
+<a href=#692 id=692 data-nosnippet>692</a>                                } =&gt; {
+<a href=#693 id=693 data-nosnippet>693</a>                                    <span class="macro">warn!</span>(
+<a href=#694 id=694 data-nosnippet>694</a>                                        <span class="string">"AutoNAT Probe failed to peer {peer:?} with error: \
+<a href=#695 id=695 data-nosnippet>695</a>                                         {error:?}"
+<a href=#696 id=696 data-nosnippet>696</a>                                    </span>);
+<a href=#697 id=697 data-nosnippet>697</a>                                },
+<a href=#698 id=698 data-nosnippet>698</a>                            },
+<a href=#699 id=699 data-nosnippet>699</a>                            autonat::Event::StatusChanged { old, new } =&gt; {
+<a href=#700 id=700 data-nosnippet>700</a>                                <span class="macro">debug!</span>(<span class="string">"AutoNAT Status changed. Old: {old:?}, New: {new:?}"</span>);
+<a href=#701 id=701 data-nosnippet>701</a>                            },
+<a href=#702 id=702 data-nosnippet>702</a>                        };
+<a href=#703 id=703 data-nosnippet>703</a>                        <span class="prelude-val">None
+<a href=#704 id=704 data-nosnippet>704</a>                    </span>},
+<a href=#705 id=705 data-nosnippet>705</a>                };
+<a href=#706 id=706 data-nosnippet>706</a>
+<a href=#707 id=707 data-nosnippet>707</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(event) = maybe_event {
+<a href=#708 id=708 data-nosnippet>708</a>                    <span class="comment">// forward messages directly to Client
+<a href=#709 id=709 data-nosnippet>709</a>                    </span>send_to_client
+<a href=#710 id=710 data-nosnippet>710</a>                        .send(event)
+<a href=#711 id=711 data-nosnippet>711</a>                        .map_err(|err| NetworkError::ChannelSendError(err.to_string()))<span class="question-mark">?</span>;
+<a href=#712 id=712 data-nosnippet>712</a>                }
+<a href=#713 id=713 data-nosnippet>713</a>            },
+<a href=#714 id=714 data-nosnippet>714</a>            SwarmEvent::OutgoingConnectionError {
+<a href=#715 id=715 data-nosnippet>715</a>                connection_id: <span class="kw">_</span>,
+<a href=#716 id=716 data-nosnippet>716</a>                peer_id,
 <a href=#717 id=717 data-nosnippet>717</a>                error,
 <a href=#718 id=718 data-nosnippet>718</a>            } =&gt; {
-<a href=#719 id=719 data-nosnippet>719</a>                <span class="macro">warn!</span>(<span class="string">"Incoming connection error: {error:?}"</span>);
+<a href=#719 id=719 data-nosnippet>719</a>                <span class="macro">warn!</span>(<span class="string">"Outgoing connection error to {peer_id:?}: {error:?}"</span>);
 <a href=#720 id=720 data-nosnippet>720</a>            },
-<a href=#721 id=721 data-nosnippet>721</a>            SwarmEvent::ListenerError {
-<a href=#722 id=722 data-nosnippet>722</a>                listener_id: <span class="kw">_</span>,
-<a href=#723 id=723 data-nosnippet>723</a>                error,
-<a href=#724 id=724 data-nosnippet>724</a>            } =&gt; {
-<a href=#725 id=725 data-nosnippet>725</a>                <span class="macro">warn!</span>(<span class="string">"Listener error: {error:?}"</span>);
-<a href=#726 id=726 data-nosnippet>726</a>            },
-<a href=#727 id=727 data-nosnippet>727</a>            SwarmEvent::ExternalAddrConfirmed { address } =&gt; {
-<a href=#728 id=728 data-nosnippet>728</a>                <span class="kw">let </span>my_id = <span class="kw-2">*</span><span class="self">self</span>.swarm.local_peer_id();
-<a href=#729 id=729 data-nosnippet>729</a>                <span class="self">self</span>.swarm
-<a href=#730 id=730 data-nosnippet>730</a>                    .behaviour_mut()
-<a href=#731 id=731 data-nosnippet>731</a>                    .dht
-<a href=#732 id=732 data-nosnippet>732</a>                    .add_address(<span class="kw-2">&amp;</span>my_id, address.clone());
-<a href=#733 id=733 data-nosnippet>733</a>            },
-<a href=#734 id=734 data-nosnippet>734</a>            SwarmEvent::NewExternalAddrOfPeer { peer_id, address } =&gt; {
-<a href=#735 id=735 data-nosnippet>735</a>                <span class="self">self</span>.swarm
-<a href=#736 id=736 data-nosnippet>736</a>                    .behaviour_mut()
-<a href=#737 id=737 data-nosnippet>737</a>                    .dht
-<a href=#738 id=738 data-nosnippet>738</a>                    .add_address(<span class="kw-2">&amp;</span>peer_id, address.clone());
-<a href=#739 id=739 data-nosnippet>739</a>            },
-<a href=#740 id=740 data-nosnippet>740</a>            <span class="kw">_ </span>=&gt; {
-<a href=#741 id=741 data-nosnippet>741</a>                <span class="macro">debug!</span>(<span class="string">"Unhandled swarm event {event:?}"</span>);
+<a href=#721 id=721 data-nosnippet>721</a>            SwarmEvent::IncomingConnectionError {
+<a href=#722 id=722 data-nosnippet>722</a>                connection_id: <span class="kw">_</span>,
+<a href=#723 id=723 data-nosnippet>723</a>                local_addr: <span class="kw">_</span>,
+<a href=#724 id=724 data-nosnippet>724</a>                send_back_addr: <span class="kw">_</span>,
+<a href=#725 id=725 data-nosnippet>725</a>                error,
+<a href=#726 id=726 data-nosnippet>726</a>                peer_id: <span class="kw">_</span>,
+<a href=#727 id=727 data-nosnippet>727</a>            } =&gt; {
+<a href=#728 id=728 data-nosnippet>728</a>                <span class="macro">warn!</span>(<span class="string">"Incoming connection error: {error:?}"</span>);
+<a href=#729 id=729 data-nosnippet>729</a>            },
+<a href=#730 id=730 data-nosnippet>730</a>            SwarmEvent::ListenerError {
+<a href=#731 id=731 data-nosnippet>731</a>                listener_id: <span class="kw">_</span>,
+<a href=#732 id=732 data-nosnippet>732</a>                error,
+<a href=#733 id=733 data-nosnippet>733</a>            } =&gt; {
+<a href=#734 id=734 data-nosnippet>734</a>                <span class="macro">warn!</span>(<span class="string">"Listener error: {error:?}"</span>);
+<a href=#735 id=735 data-nosnippet>735</a>            },
+<a href=#736 id=736 data-nosnippet>736</a>            SwarmEvent::ExternalAddrConfirmed { address } =&gt; {
+<a href=#737 id=737 data-nosnippet>737</a>                <span class="kw">let </span>my_id = <span class="kw-2">*</span><span class="self">self</span>.swarm.local_peer_id();
+<a href=#738 id=738 data-nosnippet>738</a>                <span class="self">self</span>.swarm
+<a href=#739 id=739 data-nosnippet>739</a>                    .behaviour_mut()
+<a href=#740 id=740 data-nosnippet>740</a>                    .dht
+<a href=#741 id=741 data-nosnippet>741</a>                    .add_address(<span class="kw-2">&amp;</span>my_id, address.clone());
 <a href=#742 id=742 data-nosnippet>742</a>            },
-<a href=#743 id=743 data-nosnippet>743</a>        }
-<a href=#744 id=744 data-nosnippet>744</a>        <span class="prelude-val">Ok</span>(())
-<a href=#745 id=745 data-nosnippet>745</a>    }
-<a href=#746 id=746 data-nosnippet>746</a>
-<a href=#747 id=747 data-nosnippet>747</a>    <span class="doccomment">/// Spawn a task to listen for requests on the returned channel
-<a href=#748 id=748 data-nosnippet>748</a>    /// as well as any events produced by libp2p
-<a href=#749 id=749 data-nosnippet>749</a>    ///
-<a href=#750 id=750 data-nosnippet>750</a>    /// # Errors
-<a href=#751 id=751 data-nosnippet>751</a>    /// - If we fail to create the channels or the bootstrap channel
-<a href=#752 id=752 data-nosnippet>752</a>    </span><span class="kw">pub fn </span>spawn_listeners(
-<a href=#753 id=753 data-nosnippet>753</a>        <span class="kw-2">mut </span><span class="self">self</span>,
-<a href=#754 id=754 data-nosnippet>754</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;
-<a href=#755 id=755 data-nosnippet>755</a>        (
-<a href=#756 id=756 data-nosnippet>756</a>            UnboundedSender&lt;ClientRequest&gt;,
-<a href=#757 id=757 data-nosnippet>757</a>            UnboundedReceiver&lt;NetworkEvent&gt;,
-<a href=#758 id=758 data-nosnippet>758</a>        ),
-<a href=#759 id=759 data-nosnippet>759</a>        NetworkError,
-<a href=#760 id=760 data-nosnippet>760</a>    &gt; {
-<a href=#761 id=761 data-nosnippet>761</a>        <span class="kw">let </span>(s_input, <span class="kw-2">mut </span>s_output) = unbounded_channel::&lt;ClientRequest&gt;();
-<a href=#762 id=762 data-nosnippet>762</a>        <span class="kw">let </span>(r_input, r_output) = unbounded_channel::&lt;NetworkEvent&gt;();
-<a href=#763 id=763 data-nosnippet>763</a>        <span class="kw">let </span>(<span class="kw-2">mut </span>bootstrap_tx, bootstrap_rx) = mpsc::channel(<span class="number">100</span>);
-<a href=#764 id=764 data-nosnippet>764</a>        <span class="self">self</span>.resend_tx = <span class="prelude-val">Some</span>(s_input.clone());
-<a href=#765 id=765 data-nosnippet>765</a>        <span class="self">self</span>.dht_handler.set_bootstrap_sender(bootstrap_tx.clone());
-<a href=#766 id=766 data-nosnippet>766</a>
-<a href=#767 id=767 data-nosnippet>767</a>        DHTBootstrapTask::run(bootstrap_rx, s_input.clone());
-<a href=#768 id=768 data-nosnippet>768</a>        spawn(
-<a href=#769 id=769 data-nosnippet>769</a>            <span class="kw">async move </span>{
-<a href=#770 id=770 data-nosnippet>770</a>                <span class="kw">loop </span>{
-<a href=#771 id=771 data-nosnippet>771</a>                    <span class="macro">select!</span> {
-<a href=#772 id=772 data-nosnippet>772</a>                        event = <span class="self">self</span>.swarm.next() =&gt; {
-<a href=#773 id=773 data-nosnippet>773</a>                            <span class="macro">debug!</span>(<span class="string">"peerid {:?}\t\thandling maybe event {:?}"</span>, <span class="self">self</span>.peer_id, event);
-<a href=#774 id=774 data-nosnippet>774</a>                            <span class="kw">if let </span><span class="prelude-val">Some</span>(event) = event {
-<a href=#775 id=775 data-nosnippet>775</a>                                <span class="macro">debug!</span>(<span class="string">"peerid {:?}\t\thandling event {:?}"</span>, <span class="self">self</span>.peer_id, event);
-<a href=#776 id=776 data-nosnippet>776</a>                                <span class="self">self</span>.handle_swarm_events(event, <span class="kw-2">&amp;</span>r_input).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#777 id=777 data-nosnippet>777</a>                            }
-<a href=#778 id=778 data-nosnippet>778</a>                        },
-<a href=#779 id=779 data-nosnippet>779</a>                        msg = s_output.recv() =&gt; {
-<a href=#780 id=780 data-nosnippet>780</a>                            <span class="macro">debug!</span>(<span class="string">"peerid {:?}\t\thandling msg {:?}"</span>, <span class="self">self</span>.peer_id, msg);
-<a href=#781 id=781 data-nosnippet>781</a>                            <span class="kw">let </span>shutdown = <span class="self">self</span>.handle_client_requests(msg).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#782 id=782 data-nosnippet>782</a>                            <span class="kw">if </span>shutdown {
-<a href=#783 id=783 data-nosnippet>783</a>                                <span class="kw">let _ </span>= bootstrap_tx.send(InputEvent::ShutdownBootstrap).<span class="kw">await</span>;
-<a href=#784 id=784 data-nosnippet>784</a>                                <span class="kw">break
-<a href=#785 id=785 data-nosnippet>785</a>                            </span>}
-<a href=#786 id=786 data-nosnippet>786</a>                        }
-<a href=#787 id=787 data-nosnippet>787</a>                    }
-<a href=#788 id=788 data-nosnippet>788</a>                }
-<a href=#789 id=789 data-nosnippet>789</a>                <span class="prelude-val">Ok</span>::&lt;(), NetworkError&gt;(())
-<a href=#790 id=790 data-nosnippet>790</a>            }
-<a href=#791 id=791 data-nosnippet>791</a>            .instrument(<span class="macro">info_span!</span>(<span class="string">"Libp2p NetworkBehaviour Handler"</span>)),
-<a href=#792 id=792 data-nosnippet>792</a>        );
-<a href=#793 id=793 data-nosnippet>793</a>        <span class="prelude-val">Ok</span>((s_input, r_output))
-<a href=#794 id=794 data-nosnippet>794</a>    }
-<a href=#795 id=795 data-nosnippet>795</a>
-<a href=#796 id=796 data-nosnippet>796</a>    <span class="doccomment">/// Get a reference to the network node's peer id.
-<a href=#797 id=797 data-nosnippet>797</a>    </span><span class="kw">pub fn </span>peer_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; PeerId {
-<a href=#798 id=798 data-nosnippet>798</a>        <span class="self">self</span>.peer_id
-<a href=#799 id=799 data-nosnippet>799</a>    }
-<a href=#800 id=800 data-nosnippet>800</a>}</code></pre></div></section></main></body></html>
+<a href=#743 id=743 data-nosnippet>743</a>            SwarmEvent::NewExternalAddrOfPeer { peer_id, address } =&gt; {
+<a href=#744 id=744 data-nosnippet>744</a>                <span class="self">self</span>.swarm
+<a href=#745 id=745 data-nosnippet>745</a>                    .behaviour_mut()
+<a href=#746 id=746 data-nosnippet>746</a>                    .dht
+<a href=#747 id=747 data-nosnippet>747</a>                    .add_address(<span class="kw-2">&amp;</span>peer_id, address.clone());
+<a href=#748 id=748 data-nosnippet>748</a>            },
+<a href=#749 id=749 data-nosnippet>749</a>            <span class="kw">_ </span>=&gt; {
+<a href=#750 id=750 data-nosnippet>750</a>                <span class="macro">debug!</span>(<span class="string">"Unhandled swarm event {event:?}"</span>);
+<a href=#751 id=751 data-nosnippet>751</a>            },
+<a href=#752 id=752 data-nosnippet>752</a>        }
+<a href=#753 id=753 data-nosnippet>753</a>        <span class="prelude-val">Ok</span>(())
+<a href=#754 id=754 data-nosnippet>754</a>    }
+<a href=#755 id=755 data-nosnippet>755</a>
+<a href=#756 id=756 data-nosnippet>756</a>    <span class="doccomment">/// Spawn a task to listen for requests on the returned channel
+<a href=#757 id=757 data-nosnippet>757</a>    /// as well as any events produced by libp2p
+<a href=#758 id=758 data-nosnippet>758</a>    ///
+<a href=#759 id=759 data-nosnippet>759</a>    /// # Errors
+<a href=#760 id=760 data-nosnippet>760</a>    /// - If we fail to create the channels or the bootstrap channel
+<a href=#761 id=761 data-nosnippet>761</a>    </span><span class="kw">pub fn </span>spawn_listeners(
+<a href=#762 id=762 data-nosnippet>762</a>        <span class="kw-2">mut </span><span class="self">self</span>,
+<a href=#763 id=763 data-nosnippet>763</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;
+<a href=#764 id=764 data-nosnippet>764</a>        (
+<a href=#765 id=765 data-nosnippet>765</a>            UnboundedSender&lt;ClientRequest&gt;,
+<a href=#766 id=766 data-nosnippet>766</a>            UnboundedReceiver&lt;NetworkEvent&gt;,
+<a href=#767 id=767 data-nosnippet>767</a>        ),
+<a href=#768 id=768 data-nosnippet>768</a>        NetworkError,
+<a href=#769 id=769 data-nosnippet>769</a>    &gt; {
+<a href=#770 id=770 data-nosnippet>770</a>        <span class="kw">let </span>(s_input, <span class="kw-2">mut </span>s_output) = unbounded_channel::&lt;ClientRequest&gt;();
+<a href=#771 id=771 data-nosnippet>771</a>        <span class="kw">let </span>(r_input, r_output) = unbounded_channel::&lt;NetworkEvent&gt;();
+<a href=#772 id=772 data-nosnippet>772</a>        <span class="kw">let </span>(<span class="kw-2">mut </span>bootstrap_tx, bootstrap_rx) = mpsc::channel(<span class="number">100</span>);
+<a href=#773 id=773 data-nosnippet>773</a>        <span class="self">self</span>.resend_tx = <span class="prelude-val">Some</span>(s_input.clone());
+<a href=#774 id=774 data-nosnippet>774</a>        <span class="self">self</span>.dht_handler.set_bootstrap_sender(bootstrap_tx.clone());
+<a href=#775 id=775 data-nosnippet>775</a>
+<a href=#776 id=776 data-nosnippet>776</a>        DHTBootstrapTask::run(bootstrap_rx, s_input.clone());
+<a href=#777 id=777 data-nosnippet>777</a>        spawn(
+<a href=#778 id=778 data-nosnippet>778</a>            <span class="kw">async move </span>{
+<a href=#779 id=779 data-nosnippet>779</a>                <span class="kw">loop </span>{
+<a href=#780 id=780 data-nosnippet>780</a>                    <span class="macro">select!</span> {
+<a href=#781 id=781 data-nosnippet>781</a>                        event = <span class="self">self</span>.swarm.next() =&gt; {
+<a href=#782 id=782 data-nosnippet>782</a>                            <span class="macro">debug!</span>(<span class="string">"peerid {:?}\t\thandling maybe event {:?}"</span>, <span class="self">self</span>.peer_id, event);
+<a href=#783 id=783 data-nosnippet>783</a>                            <span class="kw">if let </span><span class="prelude-val">Some</span>(event) = event {
+<a href=#784 id=784 data-nosnippet>784</a>                                <span class="macro">debug!</span>(<span class="string">"peerid {:?}\t\thandling event {:?}"</span>, <span class="self">self</span>.peer_id, event);
+<a href=#785 id=785 data-nosnippet>785</a>                                <span class="self">self</span>.handle_swarm_events(event, <span class="kw-2">&amp;</span>r_input).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#786 id=786 data-nosnippet>786</a>                            }
+<a href=#787 id=787 data-nosnippet>787</a>                        },
+<a href=#788 id=788 data-nosnippet>788</a>                        msg = s_output.recv() =&gt; {
+<a href=#789 id=789 data-nosnippet>789</a>                            <span class="macro">debug!</span>(<span class="string">"peerid {:?}\t\thandling msg {:?}"</span>, <span class="self">self</span>.peer_id, msg);
+<a href=#790 id=790 data-nosnippet>790</a>                            <span class="kw">let </span>shutdown = <span class="self">self</span>.handle_client_requests(msg).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#791 id=791 data-nosnippet>791</a>                            <span class="kw">if </span>shutdown {
+<a href=#792 id=792 data-nosnippet>792</a>                                <span class="kw">let _ </span>= bootstrap_tx.send(InputEvent::ShutdownBootstrap).<span class="kw">await</span>;
+<a href=#793 id=793 data-nosnippet>793</a>                                <span class="kw">break
+<a href=#794 id=794 data-nosnippet>794</a>                            </span>}
+<a href=#795 id=795 data-nosnippet>795</a>                        }
+<a href=#796 id=796 data-nosnippet>796</a>                    }
+<a href=#797 id=797 data-nosnippet>797</a>                }
+<a href=#798 id=798 data-nosnippet>798</a>                <span class="prelude-val">Ok</span>::&lt;(), NetworkError&gt;(())
+<a href=#799 id=799 data-nosnippet>799</a>            }
+<a href=#800 id=800 data-nosnippet>800</a>            .instrument(<span class="macro">info_span!</span>(<span class="string">"Libp2p NetworkBehaviour Handler"</span>)),
+<a href=#801 id=801 data-nosnippet>801</a>        );
+<a href=#802 id=802 data-nosnippet>802</a>        <span class="prelude-val">Ok</span>((s_input, r_output))
+<a href=#803 id=803 data-nosnippet>803</a>    }
+<a href=#804 id=804 data-nosnippet>804</a>
+<a href=#805 id=805 data-nosnippet>805</a>    <span class="doccomment">/// Get a reference to the network node's peer id.
+<a href=#806 id=806 data-nosnippet>806</a>    </span><span class="kw">pub fn </span>peer_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; PeerId {
+<a href=#807 id=807 data-nosnippet>807</a>        <span class="self">self</span>.peer_id
+<a href=#808 id=808 data-nosnippet>808</a>    }
+<a href=#809 id=809 data-nosnippet>809</a>}</code></pre></div></section></main></body></html>
