@@ -55,14 +55,16 @@ pub async fn wait_for_rpc(
 
 /// converting a keccak256-based structured commitment (32 bytes) into type `U256`
 pub fn commitment_to_u256<T: Committable>(comm: Commitment<T>) -> U256 {
-    let mut buf = vec![];
-    comm.serialize_uncompressed(&mut buf).unwrap();
+    let mut buf = [0u8; 32];
+    let mut cursor = &mut buf[..];
+    comm.serialize_uncompressed(&mut cursor).unwrap();
     U256::from_le_slice(&buf)
 }
 
 /// converting a `U256` value into a keccak256-based structured commitment (32 bytes)
 pub fn u256_to_commitment<T: Committable>(comm: U256) -> Result<Commitment<T>, SerializationError> {
-    Commitment::deserialize_uncompressed_unchecked(&*comm.to_le_bytes_vec())
+    let bytes = comm.to_le_bytes_vec();
+    Commitment::deserialize_uncompressed_unchecked(&bytes)
 }
 
 /// Implement `to_fixed_bytes` for wrapped types
