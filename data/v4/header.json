@@ -31,6 +31,7 @@
       "timestamp": "0x456"
     },
     "l1_head": 124,
+    "next_stake_table_hash": "STAKE_TABLE~v55sHI9xfLCPGytKJGlVMKbsp0evKzNFSA7ChMuzY1NA",
     "ns_table": {
       "bytes": "AwAAAO7/wAAcBgAAobC5EkAOAABksAWiXBQAAA=="
     },

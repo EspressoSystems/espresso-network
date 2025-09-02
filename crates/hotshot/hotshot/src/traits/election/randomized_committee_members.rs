@@ -14,7 +14,7 @@ use hotshot_types::{
     drb::DrbResult,
     stake_table::HSStakeTable,
     traits::{
-        election::Membership,
+        election::{Membership, NoStakeTableHash},
         node_implementation::{ConsensusTime, NodeType},
         signature_key::{SignatureKey, StakeTableEntryType},
     },
@@ -112,6 +112,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig, DaConfig: QuorumFilterConfig> 
     for RandomizedCommitteeMembers<TYPES, CONFIG, DaConfig>
 {
     type Error = hotshot_utils::anytrace::Error;
+    type StakeTableHash = NoStakeTableHash;
     /// Create a new election
     fn new(committee_members: Vec<PeerConfig<TYPES>>, da_members: Vec<PeerConfig<TYPES>>) -> Self {
         // For each eligible leader, get the stake table entry

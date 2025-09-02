@@ -56,6 +56,7 @@ impl DMBehaviour {
                 peer,
                 request_id: _,
                 error,
+                connection_id: _,
             } => {
                 error!("Inbound message failure from {:?}: {:?}", peer, error);
                 None
@@ -64,6 +65,7 @@ impl DMBehaviour {
                 peer,
                 request_id,
                 error,
+                connection_id: _,
             } => {
                 warn!("Outbound message failure to {:?}: {:?}", peer, error);
                 if let Some(mut req) = self.in_progress_rr.remove(&request_id) {

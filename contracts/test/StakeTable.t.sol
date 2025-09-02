@@ -55,7 +55,7 @@ contract StakeTable_register_Test is LightClientCommonTest {
     ERC1967Proxy public proxy;
 
     function genClientWallet(address sender, string memory _seed)
-        private
+        public
         returns (BN254.G2Point memory, EdOnBN254.EdOnBN254Point memory, BN254.G1Point memory)
     {
         // Generate a BLS signature and other values using rust code
@@ -1182,6 +1182,41 @@ contract StakeTable_register_Test is LightClientCommonTest {
         );
         vm.stopPrank();
     }
+
+    function test_RevertWhen_ExitEscrowPeriodTooShort() public {
+        uint256 tooShort = 1;
+        bytes memory initData = abi.encodeWithSignature(
+            "initialize(address,address,uint256,address)",
+            address(token),
+            address(lc),
+            tooShort,
+            admin
+        );
+        S staketableImpl = new S();
+        vm.expectRevert(S.ExitEscrowPeriodInvalid.selector);
+        new ERC1967Proxy(address(staketableImpl), initData);
+    }
+
+    function test_ExitEscrowPeriodInBounds() public {
+        uint256 minExitEscrowPeriod = lc.blocksPerEpoch() * 15;
+        uint256 maxExitEscrowPeriod = 86400 * 14;
+
+        uint256 validEscrowPeriod =
+            minExitEscrowPeriod + (maxExitEscrowPeriod - minExitEscrowPeriod) / 2;
+
+        S staketableImpl = new S();
+        bytes memory initData = abi.encodeWithSignature(
+            "initialize(address,address,uint256,address)",
+            address(token),
+            address(lc),
+            validEscrowPeriod,
+            admin
+        );
+        proxy = new ERC1967Proxy(address(staketableImpl), initData);
+        S stakeTable = S(payable(address(proxy)));
+
+        assertEq(stakeTable.exitEscrowPeriod(), validEscrowPeriod);
+    }
 }
 
 contract StakeTableV2Test is S {
@@ -1442,7 +1477,7 @@ contract StakeTableUpgradeV2Test is Test {
         address proxy = address(stakeTableRegisterTest.stakeTable());
         S(proxy).upgradeToAndCall(address(new StakeTableV2()), "");
 
-        vm.expectRevert(StakeTableV2.ExitEscrowPeriodInvalid.selector);
+        vm.expectRevert(S.ExitEscrowPeriodInvalid.selector);
         StakeTableV2(proxy).updateExitEscrowPeriod(100 seconds);
         vm.stopPrank();
     }
@@ -1451,7 +1486,7 @@ contract StakeTableUpgradeV2Test is Test {
         vm.startPrank(stakeTableRegisterTest.admin());
         address proxy = address(stakeTableRegisterTest.stakeTable());
         S(proxy).upgradeToAndCall(address(new StakeTableV2()), "");
-        vm.expectRevert(StakeTableV2.ExitEscrowPeriodInvalid.selector);
+        vm.expectRevert(S.ExitEscrowPeriodInvalid.selector);
         StakeTableV2(proxy).updateExitEscrowPeriod(100 days);
         vm.stopPrank();
     }
@@ -1470,6 +1505,47 @@ contract StakeTableUpgradeV2Test is Test {
 
         vm.expectRevert(StakeTableV2.DeprecatedFunction.selector);
         proxy.updateConsensusKeys(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1());
+    }
+
+    function test_expectRevertWhen_InvalidSchnorrSigLength() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = stakeTableRegisterTest.stakeTable();
+        proxy.upgradeToAndCall(address(new StakeTableV2()), "");
+        vm.stopPrank();
+
+        address validator = makeAddr("validator");
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory blsSig
+        ) = stakeTableRegisterTest.genClientWallet(validator, "1");
+        vm.startPrank(validator);
+        StakeTableV2 proxyV2 = StakeTableV2(address(proxy));
+        bytes memory schnorrSig = new bytes(32);
+
+        vm.expectRevert(StakeTableV2.InvalidSchnorrSig.selector);
+        proxyV2.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 0);
+        vm.stopPrank();
+    }
+
+    function test_registerValidator_validSchnorrSigLength() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = stakeTableRegisterTest.stakeTable();
+        proxy.upgradeToAndCall(address(new StakeTableV2()), "");
+        vm.stopPrank();
+
+        address validator = makeAddr("validator");
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory blsSig
+        ) = stakeTableRegisterTest.genClientWallet(validator, "1");
+        vm.startPrank(validator);
+        StakeTableV2 proxyV2 = StakeTableV2(address(proxy));
+        bytes memory schnorrSig = new bytes(64);
+
+        proxyV2.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 0);
+        vm.stopPrank();
     }
 }
 

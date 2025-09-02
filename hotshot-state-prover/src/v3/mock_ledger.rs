@@ -170,6 +170,7 @@ impl MockLedger {
                     self.state.view_number += 1;
                     self.state.block_height += 1;
                     self.state.block_comm_root = self.new_dummy_comm();
+                    self.auth_root = self.new_dummy_auth_root();
                 }
                 // simulate 2 new registration, 1 exit, this snapshot only take effect another 1 epoch later
                 self.sync_stake_table(2, 1);
@@ -193,6 +194,7 @@ impl MockLedger {
         self.state.view_number += 1;
         self.state.block_height += 1;
         self.state.block_comm_root = self.new_dummy_comm();
+        self.auth_root = self.new_dummy_auth_root();
     }
 
     /// Elapse a view without a new finalized block
@@ -444,6 +446,11 @@ impl MockLedger {
     // return a dummy commitment value
     fn new_dummy_comm(&mut self) -> F {
         F::rand(&mut self.rng)
+    }
+
+    // return a dummy auth root
+    pub fn new_dummy_auth_root(&mut self) -> FixedBytes<32> {
+        FixedBytes::random_with(&mut self.rng)
     }
 }
 

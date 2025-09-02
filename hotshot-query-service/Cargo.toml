@@ -41,12 +41,8 @@ testing = [
     "rand",
     "tempfile",
     "sql-data-source",
-    "file-system-data-source"
+    "file-system-data-source",
 ]
-
-[[example]]
-name = "simple-server"
-required-features = ["sql-data-source", "testing"]
 
 [dependencies]
 alloy = { workspace = true }
@@ -70,6 +66,7 @@ either = { workspace = true }
 espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0", optional = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
+hotshot-events-service = { workspace = true }
 hotshot-example-types = { workspace = true }
 hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
@@ -77,7 +74,7 @@ hotshot-types = { workspace = true }
 # Dependencies enabled by feature "sql-data-source".
 include_dir = { version = "0.7", optional = true }
 itertools = "0.12.1"
-jf-merkle-tree = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5", features = [
+jf-merkle-tree = { workspace = true , features = [
     "std",
 ] }
 jf-vid = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5", features = [
@@ -140,6 +137,10 @@ rand = "0.8"
 reqwest = "0.12.3"
 tempfile = "3.10"
 test-log = { workspace = true }
+
+[[example]]
+name = "simple-server"
+required-features = ["sql-data-source", "testing"]
 
 [lints]
 workspace = true

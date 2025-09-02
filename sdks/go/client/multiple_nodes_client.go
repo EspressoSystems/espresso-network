@@ -96,7 +96,11 @@ func (c *MultipleNodesClient) getWithMajority(ctx context.Context, out any, form
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(body, out)
+	err = json.Unmarshal(body, out)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrPermanent, err)
+	}
+	return nil
 }
 
 func (c *MultipleNodesClient) FetchTransactionsInBlock(ctx context.Context, blockHeight uint64, namespace uint64) (TransactionsInBlock, error) {
@@ -142,6 +146,9 @@ func (c *MultipleNodesClient) FetchVidCommonByHeight(ctx context.Context, blockH
 }
 
 func (c *MultipleNodesClient) SubmitTransaction(ctx context.Context, tx common.Transaction) (*common.TaggedBase64, error) {
+	// Consider a failed submission as permanent if it failed for all nodes with permanent reasons.
+	var permanent = true
+
 	// Check if one node is successfully able to submit the transaction
 	var errs []error
 	for _, node := range c.nodes {
@@ -150,9 +157,15 @@ func (c *MultipleNodesClient) SubmitTransaction(ctx context.Context, tx common.T
 			return hash, nil
 		} else {
 			errs = append(errs, err)
+			if !errors.Is(err, ErrPermanent) {
+				permanent = false
+			}
 		}
 	}
-	return nil, fmt.Errorf("encountered an error with all nodes while attempting to SubmitTransaction.\n Errors: %v \n", errs)
+	if permanent {
+		return nil, fmt.Errorf("%w: encountered an error with all nodes while attempting to SubmitTransaction.\n Errors: %v \n", ErrPermanent, errs)
+	}
+	return nil, fmt.Errorf("%w: encountered an error with all nodes while attempting to SubmitTransaction.\n Errors: %v \n", ErrEphemeral, errs)
 }
 
 func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T) (json.RawMessage, error)) (json.RawMessage, error) {
@@ -167,15 +180,17 @@ func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T
 
 	for _, node := range nodes {
 		go func(node *T) {
-			value, err := fetchFunc(node)
+			value, txnErr := fetchFunc(node)
 			select {
-			case results <- result{value, err}:
+			case results <- result{value, txnErr}:
 			case <-ctx.Done():
 			}
 		}(node)
 	}
 
 	var errs []error
+	// Consider a failed fetch as permanent if it failed for all nodes with permanent reasons.
+	var permanent = true
 	var valueCount sync.Map
 	majorityCount := (len(nodes) / 2) + 1
 	responseCount := 0
@@ -192,6 +207,9 @@ func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T
 				if err != nil {
 					fmt.Printf("error: failed to normalize json value: %v, error: %v", res.value, err)
 					errs = append(errs, err)
+					if !errors.Is(res.err, ErrPermanent) {
+						permanent = false
+					}
 				} else {
 					count, _ := valueCount.LoadOrStore(hash, 0)
 					if countInt, ok := count.(int); ok {
@@ -205,14 +223,23 @@ func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T
 				}
 			} else {
 				errs = append(errs, res.err)
+				if !errors.Is(res.err, ErrPermanent) {
+					permanent = false
+				}
 			}
 
 			responseCount++
 			if responseCount == len(nodes) {
-				return json.RawMessage{}, fmt.Errorf("no majority consensus reached with potential errors. Errors: %v\n", errs)
+				if permanent {
+					return json.RawMessage{}, fmt.Errorf("%w: no majority consensus reached with potential errors. Errors: %v\n", ErrPermanent, errs)
+				}
+				return json.RawMessage{}, fmt.Errorf("%w: no majority consensus reached with potential errors. Errors: %v\n", ErrEphemeral, errs)
 			}
 		case <-ctx.Done():
-			return json.RawMessage{}, ctx.Err()
+			if ctx.Err() != nil {
+				return json.RawMessage{}, fmt.Errorf("%w: %v", ErrEphemeral, ctx.Err())
+			}
+			return json.RawMessage{}, nil
 		}
 	}
 }

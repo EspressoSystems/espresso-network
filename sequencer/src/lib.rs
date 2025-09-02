@@ -674,7 +674,7 @@ pub mod testing {
         },
         types::EventType::Decide,
     };
-    use hotshot_builder_core_refactored::service::{
+    use hotshot_builder_refactored::service::{
         BuilderConfig as LegacyBuilderConfig, GlobalState as LegacyGlobalState,
     };
     use hotshot_testing::block_builder::{
@@ -914,6 +914,7 @@ pub mod testing {
                         .genesis_st_state(genesis_stake)
                         .blocks_per_epoch(blocks_per_epoch)
                         .epoch_start_block(epoch_start_block)
+                        .exit_escrow_period(U256::from(blocks_per_epoch * 15 + 100))
                         .multisig_pauser(self.signer.address())
                         .token_name("Espresso".to_string())
                         .token_symbol("ESP".to_string())
@@ -1274,7 +1275,7 @@ pub mod testing {
                 Arc::new(catchup_providers.clone()),
                 V::Base::VERSION,
                 coordinator.clone(),
-                Version { major: 0, minor: 1 },
+                V::Base::VERSION,
             )
             .with_current_version(V::Base::version())
             .with_genesis(state)

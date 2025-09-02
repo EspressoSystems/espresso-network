@@ -10,10 +10,16 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use std::ops::{Bound, RangeBounds};
+use std::{
+    ops::{Bound, RangeBounds},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
-use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
+use futures::stream::BoxStream;
+use hotshot::types::Event;
+use hotshot_events_service::events_source::{EventFilterSet, EventsSource, StartupInfo};
+use hotshot_types::{data::VidShare, event::LegacyEvent, traits::node_implementation::NodeType};
 use jf_merkle_tree::prelude::MerkleProof;
 use tagged_base64::TaggedBase64;
 
@@ -507,6 +513,34 @@ where
         explorer::query_data::GetSearchResultsError,
     > {
         self.data_source.get_search_results(query).await
+    }
+}
+
+/// Where the user data type supports it, derive `EventsSource` for the extensible data
+/// source.
+#[async_trait]
+impl<D, U, Types> EventsSource<Types> for ExtensibleDataSource<D, U>
+where
+    U: EventsSource<Types> + Sync,
+    D: Send + Sync,
+    Types: NodeType,
+{
+    type EventStream = BoxStream<'static, Arc<Event<Types>>>;
+    type LegacyEventStream = BoxStream<'static, Arc<LegacyEvent<Types>>>;
+
+    async fn get_event_stream(&self, filter: Option<EventFilterSet<Types>>) -> Self::EventStream {
+        Box::pin(self.user_data.get_event_stream(filter).await)
+    }
+
+    async fn get_legacy_event_stream(
+        &self,
+        filter: Option<EventFilterSet<Types>>,
+    ) -> Self::LegacyEventStream {
+        Box::pin(self.user_data.get_legacy_event_stream(filter).await)
+    }
+
+    async fn get_startup_info(&self) -> StartupInfo<Types> {
+        self.user_data.get_startup_info().await
     }
 }
 

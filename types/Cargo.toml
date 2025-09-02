@@ -4,6 +4,9 @@ version = "0.1.0"
 authors = ["Espresso Systems <hello@espressosys.com>"]
 edition = "2021"
 
+[package.metadata.cargo-machete]
+ignored = ["base64_bytes", "hotshot_testing"]
+
 # TODO: fix comments so doctests don't fail
 [lib]
 doctest = false
@@ -15,7 +18,9 @@ testing = ["hotshot-query-service/testing"]
 alloy = { workspace = true }
 alloy-compat = { path = "../alloy-compat" }
 anyhow = { workspace = true }
+ark-ec = { workspace = true }
 ark-serialize = { workspace = true }
+ark-std = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
@@ -76,9 +81,6 @@ portpicker = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }
 test-log = { workspace = true }
-
-[package.metadata.cargo-machete]
-ignored = ["base64_bytes", "hotshot_testing"]
 
 [lints]
 workspace = true

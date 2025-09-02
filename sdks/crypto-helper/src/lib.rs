@@ -9,9 +9,7 @@ use espresso_types::{
 use ethers::types::U256;
 use hotshot_query_service::VidCommon;
 use hotshot_types::{data::VidCommitment, light_client::hash_bytes_to_field};
-use jf_merkle_tree::prelude::{
-    MerkleCommitment, MerkleNode, MerkleProof, MerkleTreeScheme, Sha3Node,
-};
+use jf_merkle_tree::prelude::{MerkleNode, MerkleProof, MerkleTreeScheme, Sha3Node};
 use sha2::{Digest, Sha256};
 use tagged_base64::TaggedBase64;
 
@@ -105,7 +103,7 @@ pub extern "C" fn verify_merkle_proof_helper(
         return VerificationResult::err("Merkle Proof missing element");
     };
     handle_result!(handle_result!(BlockMerkleTree::verify(
-        block_comm.digest(),
+        block_comm,
         header.height(),
         proof
     )));

@@ -32,7 +32,7 @@ use hotshot_query_service::{
 use hotshot_types::{
     data::{EpochNumber, VidCommitment, VidShare, ViewNumber},
     event::{Event, LegacyEvent},
-    light_client::LCV2StateSignatureRequestBody,
+    light_client::LCV3StateSignatureRequestBody,
     network::NetworkConfig,
     traits::{
         network::ConnectedNetwork,
@@ -278,8 +278,12 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             .clone();
 
         let membership = coordinator.membership().read().await;
+        let block_reward = match epoch {
+            None => membership.fixed_block_reward(),
+            Some(e) => membership.epoch_block_reward(e),
+        };
 
-        Ok(membership.block_reward(epoch))
+        Ok(block_reward)
     }
 
     /// Get the whole validators map
@@ -870,7 +874,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> HotShotC
 impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     StateSignatureDataSource<N> for StorageState<N, P, D, V>
 {
-    async fn get_state_signature(&self, height: u64) -> Option<LCV2StateSignatureRequestBody> {
+    async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.as_ref().get_state_signature(height).await
     }
 }
@@ -879,7 +883,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSignatureDataSource<N>
     for ApiState<N, P, V>
 {
-    async fn get_state_signature(&self, height: u64) -> Option<LCV2StateSignatureRequestBody> {
+    async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.state_signer()
             .await
             .read()
@@ -905,7 +909,8 @@ pub mod test_helpers {
     };
     use espresso_types::{
         v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
-        EpochVersion, MockSequencerVersions, NamespaceId, ValidatedState,
+        DrbAndHeaderUpgradeVersion, EpochVersion, FeeVersion, MockSequencerVersions, NamespaceId,
+        SequencerVersions, ValidatedState, V0_1,
     };
     use futures::{
         future::{join_all, FutureExt},
@@ -915,7 +920,9 @@ pub mod test_helpers {
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_types::{
         event::LeafInfo,
+        light_client::LCV3StateSignatureRequestBody,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
+        HotShotConfig,
     };
     use itertools::izip;
     use jf_merkle_tree::{MerkleCommitment, MerkleTreeScheme};
@@ -988,6 +995,30 @@ pub mod test_helpers {
                 catchup: Some(std::array::from_fn(|_| NullStateCatchup::default())),
                 network_config: None,
                 api_config: None,
+            }
+        }
+    }
+
+    pub enum AnyTestNetwork<P: PersistenceOptions, const NUM_NODES: usize> {
+        V0_1(TestNetwork<P, NUM_NODES, SequencerVersions<V0_1, V0_1>>),
+        V0_2(TestNetwork<P, NUM_NODES, SequencerVersions<FeeVersion, FeeVersion>>),
+        V0_3(TestNetwork<P, NUM_NODES, SequencerVersions<EpochVersion, EpochVersion>>),
+        V0_4(
+            TestNetwork<
+                P,
+                NUM_NODES,
+                SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
+            >,
+        ),
+    }
+
+    impl<P: PersistenceOptions, const NUM_NODES: usize> AnyTestNetwork<P, NUM_NODES> {
+        pub fn hotshot_config(&self) -> &HotShotConfig<SeqTypes> {
+            match self {
+                AnyTestNetwork::V0_1(network) => network.cfg.hotshot_config(),
+                AnyTestNetwork::V0_2(network) => network.cfg.hotshot_config(),
+                AnyTestNetwork::V0_3(network) => network.cfg.hotshot_config(),
+                AnyTestNetwork::V0_4(network) => network.cfg.hotshot_config(),
             }
         }
     }
@@ -1094,6 +1125,7 @@ pub mod test_helpers {
                 .genesis_st_state(genesis_stake)
                 .blocks_per_epoch(blocks_per_epoch)
                 .epoch_start_block(epoch_start_block)
+                .exit_escrow_period(U256::from(blocks_per_epoch * 15 + 100))
                 .multisig_pauser(signer.address())
                 .token_name("Espresso".to_string())
                 .token_symbol("ESP".to_string())
@@ -1405,7 +1437,7 @@ pub mod test_helpers {
         }
         // we cannot verify the signature now, because we don't know the stake table
         client
-            .get::<LCV2StateSignatureRequestBody>(&format!("state-signature/block/{height}"))
+            .get::<LCV3StateSignatureRequestBody>(&format!("state-signature/block/{height}"))
             .send()
             .await
             .unwrap();
@@ -1497,7 +1529,7 @@ pub mod test_helpers {
             .unwrap()
             .block_merkle_tree
             .commitment();
-        BlockMerkleTree::verify(root.digest(), root.size() - 1, res)
+        BlockMerkleTree::verify(root, root.size() - 1, res)
             .unwrap()
             .unwrap();
     }
@@ -3016,21 +3048,15 @@ mod test {
     }
 
     async fn run_hotshot_event_streaming_test(url_suffix: &str) {
-        let hotshot_event_streaming_port =
-            pick_unused_port().expect("No ports free for hotshot event streaming");
         let query_service_port = pick_unused_port().expect("No ports free for query service");
 
-        let url = format!("http://localhost:{hotshot_event_streaming_port}{url_suffix}")
+        let url = format!("http://localhost:{query_service_port}{url_suffix}")
             .parse()
             .unwrap();
 
-        let hotshot_events = HotshotEvents {
-            events_service_port: hotshot_event_streaming_port,
-        };
-
         let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
 
-        let options = Options::with_port(query_service_port).hotshot_events(hotshot_events);
+        let options = Options::with_port(query_service_port).hotshot_events(HotshotEvents);
 
         let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::default()
@@ -3086,20 +3112,14 @@ mod test {
             .epoch_height(epoch_height)
             .build();
 
-        let hotshot_event_streaming_port =
-            pick_unused_port().expect("No ports free for hotshot event streaming");
-        let hotshot_url = format!("http://localhost:{hotshot_event_streaming_port}")
+        let query_service_port = pick_unused_port().expect("No ports free for query service");
+
+        let hotshot_url = format!("http://localhost:{query_service_port}")
             .parse()
             .unwrap();
 
-        let query_service_port = pick_unused_port().expect("No ports free for query service");
-
-        let hotshot_events = HotshotEvents {
-            events_service_port: hotshot_event_streaming_port,
-        };
-
         let client: Client<ServerError, SequencerApiVersion> = Client::new(hotshot_url);
-        let options = Options::with_port(query_service_port).hotshot_events(hotshot_events);
+        let options = Options::with_port(query_service_port).hotshot_events(HotshotEvents);
 
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
@@ -3246,7 +3266,7 @@ mod test {
         let node_state = network.server.node_state();
         let membership = node_state.coordinator.membership().read().await;
         let block_reward = membership
-            .block_reward(None)
+            .fixed_block_reward()
             .expect("block reward is not None");
         drop(membership);
 
@@ -3306,7 +3326,7 @@ mod test {
         let node_state = network.server.node_state();
         let membership = node_state.coordinator.membership().read().await;
         let block_reward = membership
-            .block_reward(None)
+            .fixed_block_reward()
             .expect("block reward is not None");
         drop(membership);
         let client: Client<ServerError, SequencerApiVersion> =
@@ -3613,7 +3633,7 @@ mod test {
 
         let membership = coordinator.membership().read().await;
         let block_reward = membership
-            .block_reward(None)
+            .fixed_block_reward()
             .expect("block reward is not None");
 
         drop(membership);
@@ -3829,7 +3849,7 @@ mod test {
             let epoch_number =
                 EpochNumber::new(epoch_from_block_number(leaf.height(), EPOCH_HEIGHT));
 
-            assert!(membership.block_reward(Some(epoch_number)).is_none());
+            assert!(membership.epoch_block_reward(epoch_number).is_none());
 
             let height = header.height();
             for address in addresses.clone() {
@@ -3869,7 +3889,7 @@ mod test {
             let epoch_number =
                 EpochNumber::new(epoch_from_block_number(leaf.height(), EPOCH_HEIGHT));
 
-            let block_reward = membership.block_reward(Some(epoch_number)).unwrap();
+            let block_reward = membership.epoch_block_reward(epoch_number).unwrap();
             let leader = membership
                 .leader(leaf.leaf().view_number(), Some(epoch_number))
                 .expect("leader");
@@ -5640,8 +5660,11 @@ mod test {
 
             // verify auth root if the consensus version is v4
             if header.version() == DrbAndHeaderUpgradeVersion::VERSION {
-                let auth_root = state_cert_v2.auth_root.expect("auth root is not None");
-                let header_auth_root = header.auth_root().unwrap().unwrap();
+                let auth_root = state_cert_v2.auth_root;
+                let header_auth_root = header.auth_root().unwrap();
+                if auth_root.is_zero() || header_auth_root.is_zero() {
+                    panic!("auth root shouldn't be zero");
+                }
 
                 assert_eq!(auth_root, header_auth_root, "auth root mismatch");
             }

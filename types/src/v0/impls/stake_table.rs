@@ -14,9 +14,11 @@ use alloy::{
     rpc::types::Log,
 };
 use anyhow::{bail, ensure, Context};
+use ark_ec::AffineRepr;
+use ark_serialize::CanonicalSerialize;
 use async_lock::{Mutex, RwLock, RwLockUpgradableReadGuard};
 use bigdecimal::BigDecimal;
-use committable::Committable;
+use committable::{Commitment, Committable, RawCommitmentBuilder};
 use futures::{
     future::BoxFuture,
     stream::{self, StreamExt},
@@ -35,17 +37,19 @@ use hotshot_types::{
         election::{generate_stake_cdf, select_randomized_leader, RandomizedCommittee},
         DrbResult,
     },
+    epoch_membership::EpochMembershipCoordinator,
     stake_table::{HSStakeTable, StakeTableEntry},
     traits::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeType},
         signature_key::StakeTableEntryType,
     },
-    utils::{epoch_from_block_number, transition_block_for_epoch},
+    utils::{epoch_from_block_number, root_block_in_epoch, transition_block_for_epoch},
     PeerConfig,
 };
 use humantime::format_duration;
 use indexmap::IndexMap;
+use itertools::Itertools;
 use num_traits::{FromPrimitive, Zero};
 use thiserror::Error;
 use tokio::{spawn, time::sleep};
@@ -72,6 +76,8 @@ use crate::{
 
 type Epoch = <SeqTypes as NodeType>::Epoch;
 pub type ValidatorMap = IndexMap<Address, Validator<BLSPubKey>>;
+
+pub type StakeTableHash = Commitment<StakeTableState>;
 
 /// The result of applying a stake table event:
 /// - `Ok(Ok(()))`: success
@@ -206,17 +212,58 @@ impl StakeTableEvents {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct StakeTableState {
     validators: ValidatorMap,
+    validator_exits: HashSet<Address>,
     used_bls_keys: HashSet<BLSPubKey>,
     used_schnorr_keys: HashSet<SchnorrPubKey>,
+}
+
+impl Committable for StakeTableState {
+    fn commit(&self) -> committable::Commitment<Self> {
+        let mut builder = RawCommitmentBuilder::new(&Self::tag());
+
+        for (_, validator) in self.validators.iter().sorted_by_key(|(a, _)| *a) {
+            builder = builder.field("validator", validator.commit());
+        }
+
+        builder = builder.constant_str("used_bls_keys");
+        for key in self.used_bls_keys.iter().sorted() {
+            builder = builder.var_size_bytes(&key.to_bytes());
+        }
+
+        builder = builder.constant_str("used_schnorr_keys");
+        for key in self
+            .used_schnorr_keys
+            .iter()
+            .sorted_by(|a, b| a.to_affine().xy().cmp(&b.to_affine().xy()))
+        {
+            let mut schnorr_key_bytes = vec![];
+            key.serialize_with_mode(&mut schnorr_key_bytes, ark_serialize::Compress::Yes)
+                .unwrap();
+            builder = builder.var_size_bytes(&schnorr_key_bytes);
+        }
+
+        builder = builder.constant_str("validator_exits");
+
+        for key in self.validator_exits.iter().sorted() {
+            builder = builder.fixed_size_bytes(&key.into_array());
+        }
+
+        builder.finalize()
+    }
+
+    fn tag() -> String {
+        "STAKE_TABLE".to_string()
+    }
 }
 
 impl StakeTableState {
     pub fn new() -> Self {
         Self {
             validators: IndexMap::new(),
+            validator_exits: HashSet::new(),
             used_bls_keys: HashSet::new(),
             used_schnorr_keys: HashSet::new(),
         }
@@ -236,6 +283,10 @@ impl StakeTableState {
             }) => {
                 let stake_table_key: BLSPubKey = blsVk.into();
                 let state_ver_key: SchnorrPubKey = schnorrVk.into();
+
+                if self.validator_exits.contains(&account) {
+                    return Err(StakeTableError::ValidatorAlreadyExited(account));
+                }
 
                 let entry = self.validators.entry(account);
                 if let indexmap::map::Entry::Occupied(_) = entry {
@@ -283,6 +334,11 @@ impl StakeTableState {
                 let stake_table_key: BLSPubKey = blsVK.into();
                 let state_ver_key: SchnorrPubKey = schnorrVK.into();
 
+                // Reject if validator already exited
+                if self.validator_exits.contains(&account) {
+                    return Err(StakeTableError::ValidatorAlreadyExited(account));
+                }
+
                 let entry = self.validators.entry(account);
                 if let indexmap::map::Entry::Occupied(_) = entry {
                     return Err(StakeTableError::AlreadyRegistered(account));
@@ -313,6 +369,7 @@ impl StakeTableState {
             },
 
             StakeTableEvent::Deregister(exit) => {
+                self.validator_exits.insert(exit.validator);
                 self.validators
                     .shift_remove(&exit.validator)
                     .ok_or(StakeTableError::ValidatorNotFound(exit.validator))?;
@@ -455,7 +512,7 @@ impl StakeTableState {
 
 pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
     events: I,
-) -> Result<ValidatorMap, StakeTableError> {
+) -> Result<(ValidatorMap, StakeTableHash), StakeTableError> {
     let mut state = StakeTableState::new();
     for event in events {
         match state.apply_event(event.clone()) {
@@ -471,7 +528,8 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
             },
         }
     }
-    Ok(state.get_validators())
+    let commit = state.commit();
+    Ok((state.get_validators(), commit))
 }
 
 /// Select active validators
@@ -553,10 +611,10 @@ pub(crate) fn select_active_validator_set(
 /// Extract the active validator set from the L1 stake table events.
 pub(crate) fn active_validator_set_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
     events: I,
-) -> Result<ValidatorMap, StakeTableError> {
-    let mut validators = validators_from_l1_events(events)?;
+) -> Result<(ValidatorMap, StakeTableHash), StakeTableError> {
+    let (mut validators, stake_table_hash) = validators_from_l1_events(events)?;
     select_active_validator_set(&mut validators)?;
-    Ok(validators)
+    Ok((validators, stake_table_hash))
 }
 
 impl std::fmt::Debug for StakeTableEvent {
@@ -584,7 +642,9 @@ pub struct EpochCommittees {
     randomized_committees: BTreeMap<Epoch, RandomizedCommittee<StakeTableEntry<PubKey>>>,
     first_epoch: Option<Epoch>,
     epoch_height: u64,
-    block_reward: Option<RewardAmount>,
+    /// Fixed block reward (used only in V3).
+    /// starting from V4, block reward is dynamic
+    fixed_block_reward: Option<RewardAmount>,
     fetcher: Arc<Fetcher>,
 }
 
@@ -1060,7 +1120,7 @@ impl Fetcher {
         l1_client: L1Client,
         contract: Address,
         to_block: u64,
-    ) -> anyhow::Result<ValidatorMap> {
+    ) -> anyhow::Result<(ValidatorMap, StakeTableHash)> {
         let events = Self::fetch_events_from_contract(l1_client, contract, None, to_block).await;
         let sorted = events.sort_events()?;
         // Process the sorted events and return the resulting stake table.
@@ -1273,7 +1333,11 @@ impl Fetcher {
         Ok(())
     }
 
-    pub async fn fetch(&self, epoch: Epoch, header: &Header) -> anyhow::Result<ValidatorMap> {
+    pub async fn fetch(
+        &self,
+        epoch: Epoch,
+        header: &Header,
+    ) -> anyhow::Result<(ValidatorMap, StakeTableHash)> {
         let chain_config = *self.chain_config.lock().await;
         let Some(address) = chain_config.stake_table_contract else {
             bail!("No stake table contract address found in Chain config");
@@ -1416,6 +1480,8 @@ pub struct EpochCommittee {
     validators: ValidatorMap,
     address_mapping: HashMap<BLSPubKey, Address>,
     block_reward: Option<RewardAmount>,
+    stake_table_hash: Option<StakeTableHash>,
+    header: Option<Header>,
 }
 
 impl EpochCommittees {
@@ -1427,6 +1493,10 @@ impl EpochCommittees {
         &self.fetcher
     }
 
+    pub fn fixed_block_reward(&self) -> Option<RewardAmount> {
+        self.fixed_block_reward
+    }
+
     /// Fetch the block reward and update it if its None.
     /// We used a fixed block reward for version v3
     /// Version v4 uses the dynamic block reward based
@@ -1436,13 +1506,13 @@ impl EpochCommittees {
     /// the `fetch_block_reward` logic can be updated to support per-epoch rewards.
     /// Initially, the block reward is zero if the node starts on pre-epoch version
     /// but it is updated on the first call to `add_epoch_root()`
-    async fn update_fixed_block_reward(
+    async fn fetch_and_update_fixed_block_reward(
         membership: Arc<RwLock<Self>>,
         epoch: EpochNumber,
     ) -> anyhow::Result<RewardAmount> {
         let membership_reader = membership.upgradable_read().await;
         let fetcher = membership_reader.fetcher.clone();
-        match membership_reader.block_reward {
+        match membership_reader.fixed_block_reward {
             Some(reward) => Ok(reward),
             None => {
                 tracing::warn!(%epoch,
@@ -1456,7 +1526,7 @@ impl EpochCommittees {
                         tracing::error!(?epoch, ?err, "failed to fetch block_reward");
                     })?;
                 let mut writer = RwLockUpgradableReadGuard::upgrade(membership_reader).await;
-                writer.block_reward = Some(block_reward);
+                writer.fixed_block_reward = Some(block_reward);
                 Ok(block_reward)
             },
         }
@@ -1495,6 +1565,104 @@ impl EpochCommittees {
         Ok(block_reward_u256.into())
     }
 
+    /// returns the block reward for the given epoch.
+    ///
+    /// Reward depends on the epoch root header version:
+    /// V3: Returns the fixed block reward as V3 only supports fixed reward
+    /// >= V4 : Returns the dynamic block reward
+    ///
+    /// It also attempts catchup for the root header if not present in the committee,
+    /// and also for the stake table of the previous epoch
+    /// before computing the dynamic block reward
+    pub async fn fetch_and_calculate_block_reward(
+        current_epoch: Epoch,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
+    ) -> anyhow::Result<RewardAmount> {
+        let membership_read = coordinator.membership().read().await;
+        let epoch_height = membership_read.epoch_height;
+        let fixed_block_reward = membership_read.fixed_block_reward;
+
+        let committee = membership_read
+            .state
+            .get(&current_epoch)
+            .context(format!("committee not found for epoch={current_epoch:?}"))?
+            .clone();
+
+        // Return early if committee has a reward already
+        if let Some(reward) = committee.block_reward {
+            return Ok(reward);
+        }
+
+        let first_epoch = *membership_read.first_epoch().context(format!(
+            "First epoch not initialized (current_epoch={current_epoch})"
+        ))?;
+
+        drop(membership_read);
+
+        if *current_epoch <= first_epoch + 1 {
+            bail!(
+                "epoch is in first two epochs: current_epoch={current_epoch}, \
+                 first_epoch={first_epoch}"
+            );
+        }
+
+        let header = match committee.header.clone() {
+            Some(header) => header,
+            None => {
+                let root_epoch = current_epoch.checked_sub(2).context(format!(
+                    "Epoch calculation underflow (current_epoch={current_epoch})"
+                ))?;
+
+                tracing::info!(?root_epoch, "catchup epoch root header");
+
+                let membership = coordinator.membership();
+                let leaf = Self::get_epoch_root(
+                    membership.clone(),
+                    root_block_in_epoch(root_epoch, epoch_height),
+                    current_epoch,
+                )
+                .await
+                .with_context(|| format!("Failed to get epoch root for root_epoch={root_epoch}"))?;
+                leaf.block_header().clone()
+            },
+        };
+
+        if header.version() <= EpochVersion::version() {
+            return fixed_block_reward.context(format!(
+                "Fixed block reward not found for current_epoch={current_epoch}"
+            ));
+        }
+
+        let prev_epoch_u64 = current_epoch.checked_sub(1).context(format!(
+            "Underflow: cannot compute previous epoch when current_epoch={current_epoch}"
+        ))?;
+
+        let prev_epoch = EpochNumber::new(prev_epoch_u64);
+
+        // If the previous epoch is not in the first two epochs,
+        // there should be a stake table for it
+        if *prev_epoch > first_epoch + 1 {
+            if let Err(err) = coordinator.stake_table_for_epoch(Some(prev_epoch)).await {
+                tracing::info!("failed to get membership for epoch={prev_epoch:?}: {err:#}");
+
+                coordinator
+                    .wait_for_catchup(prev_epoch)
+                    .await
+                    .context(format!("failed to catch up for epoch={prev_epoch}"))?;
+            }
+        }
+
+        let membership_read = coordinator.membership().read().await;
+
+        membership_read
+            .calculate_dynamic_block_reward(&current_epoch, &header, &committee.validators)
+            .await
+            .with_context(|| {
+                format!("dynamic block reward calculation failed for epoch={current_epoch}")
+            })?
+            .with_context(|| format!("dynamic block reward returned None. epoch={current_epoch}"))
+    }
+
     /// Calculates the dynamic block reward for a given block header within an epoch.
     ///
     /// The reward is based on a dynamic inflation rate computed from the current stake ratio (p),
@@ -1504,11 +1672,29 @@ impl EpochCommittees {
     async fn calculate_dynamic_block_reward(
         &self,
         epoch: &Epoch,
-        header: Header,
+        header: &Header,
         validators: &ValidatorMap,
-    ) -> anyhow::Result<RewardAmount> {
-        let fetcher = self.fetcher.clone();
+    ) -> anyhow::Result<Option<RewardAmount>> {
         let epoch_height = self.epoch_height;
+        let current_epoch = epoch_from_block_number(header.height(), epoch_height);
+        let previous_epoch = current_epoch
+            .checked_sub(1)
+            .context("underflow: cannot get previous epoch when current_epoch is 0")?;
+        tracing::debug!(?epoch, "previous_epoch={previous_epoch:?}");
+
+        let first_epoch = *self.first_epoch().context("first epoch is None")?;
+
+        // return early if previous epoch is not the first two epochs
+        // and we don't have the stake table
+        if previous_epoch > first_epoch + 1
+            && !self.has_stake_table(EpochNumber::new(previous_epoch))
+        {
+            tracing::warn!(?previous_epoch, "missing stake table for previous epoch");
+            return Ok(None);
+        }
+
+        let fetcher = self.fetcher.clone();
+
         let previous_reward_distributed = header
             .total_reward_distributed()
             .context("Invalid block header: missing total_reward_distributed field")?;
@@ -1528,18 +1714,10 @@ impl EpochCommittees {
         let curr_ts = header.timestamp_millis_internal();
         tracing::debug!(?epoch, "curr_ts={curr_ts:?}");
 
-        let current_epoch = epoch_from_block_number(header.height(), epoch_height);
-        let previous_epoch = current_epoch
-            .checked_sub(1)
-            .context("underflow: cannot get previous epoch when current_epoch is 0")?;
-        tracing::debug!(?epoch, "previous_epoch={previous_epoch:?}");
-
-        let first_epoch = *self.first_epoch().context("first epoch is None")?;
-
         // If the node starts from epoch version V4, there is no previous epoch root available.
         // In this case, we assume a fixed average block time of 2000 milli seconds (2s)
         // for the first epoch in which reward id distributed
-        let average_block_time = if previous_epoch <= first_epoch + 1 {
+        let average_block_time_ms = if previous_epoch <= first_epoch + 1 {
             ASSUMED_BLOCK_TIME_SECONDS as u64 * 1000 // 2 seconds in milliseconds
         } else {
             let prev_stake_table = self
@@ -1569,14 +1747,20 @@ impl EpochCommittees {
                 .checked_div(epoch_height)
                 .context("Epoch height is zero. cannot compute average block time")?
         };
-        tracing::info!(?epoch, %total_supply, %total_stake, %average_block_time);
+        tracing::info!(?epoch, %total_supply, %total_stake, %average_block_time_ms, "dynamic block reward parameters");
 
         let block_reward =
-            Self::compute_block_reward(epoch, total_supply, total_stake, average_block_time)?;
+            Self::compute_block_reward(epoch, total_supply, total_stake, average_block_time_ms)?;
 
-        Ok(block_reward)
+        Ok(Some(block_reward))
     }
 
+    /// This function just returns the stored block reward in epoch committee
+    pub fn epoch_block_reward(&self, epoch: EpochNumber) -> Option<RewardAmount> {
+        self.state
+            .get(&epoch)
+            .and_then(|committee| committee.block_reward)
+    }
     /// Updates `Self.stake_table` with stake_table for
     /// `Self.contract_address` at `l1_block_height`. This is intended
     /// to be called before calling `self.stake()` so that
@@ -1587,6 +1771,8 @@ impl EpochCommittees {
         epoch: EpochNumber,
         validators: ValidatorMap,
         block_reward: Option<RewardAmount>,
+        hash: Option<StakeTableHash>,
+        header: Option<Header>,
     ) {
         let mut address_mapping = HashMap::new();
         let stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>> = validators
@@ -1617,6 +1803,8 @@ impl EpochCommittees {
                 validators,
                 address_mapping,
                 block_reward,
+                stake_table_hash: hash,
+                header,
             },
         );
     }
@@ -1656,23 +1844,13 @@ impl EpochCommittees {
             .cloned()
     }
 
-    pub fn block_reward(&self, epoch: Option<EpochNumber>) -> Option<RewardAmount> {
-        match epoch {
-            None => self.block_reward,
-            Some(e) => self
-                .state
-                .get(&e)
-                .and_then(|committee| committee.block_reward),
-        }
-    }
-
     // We need a constructor to match our concrete type.
     pub fn new_stake(
         // TODO remove `new` from trait and rename this to `new`.
         // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
         committee_members: Vec<PeerConfig<SeqTypes>>,
         da_members: Vec<PeerConfig<SeqTypes>>,
-        block_reward: Option<RewardAmount>,
+        fixed_block_reward: Option<RewardAmount>,
         fetcher: Fetcher,
         epoch_height: u64,
     ) -> Self {
@@ -1732,6 +1910,8 @@ impl EpochCommittees {
             validators: Default::default(),
             address_mapping: HashMap::new(),
             block_reward: Default::default(),
+            stake_table_hash: None,
+            header: None,
         };
         map.insert(Epoch::genesis(), epoch_committee.clone());
         // TODO: remove this, workaround for hotshot asking for stake tables from epoch 1
@@ -1742,7 +1922,7 @@ impl EpochCommittees {
             state: map,
             randomized_committees: BTreeMap::new(),
             first_epoch: None,
-            block_reward,
+            fixed_block_reward,
             fetcher: Arc::new(fetcher),
             epoch_height,
         }
@@ -1752,13 +1932,12 @@ impl EpochCommittees {
         match self.fetcher.fetch_fixed_block_reward().await {
             Ok(block_reward) => {
                 tracing::info!("Fetched block reward: {block_reward}");
-                self.block_reward = Some(block_reward);
+                self.fixed_block_reward = Some(block_reward);
             },
             Err(err) => {
                 tracing::warn!(
                     "Failed to fetch the block reward when reloading the stake tables: {err}"
                 );
-                return;
             },
         }
 
@@ -1782,8 +1961,8 @@ impl EpochCommittees {
             },
         };
 
-        for (epoch, (stake_table, block_reward)) in loaded_stake {
-            self.insert_committee(epoch, stake_table, block_reward);
+        for (epoch, (stake_table, block_reward), stake_table_hash) in loaded_stake {
+            self.insert_committee(epoch, stake_table, block_reward, stake_table_hash, None);
         }
     }
 
@@ -1850,6 +2029,7 @@ pub struct LeaderLookupError;
 // #[async_trait]
 impl Membership<SeqTypes> for EpochCommittees {
     type Error = LeaderLookupError;
+    type StakeTableHash = StakeTableState;
     // DO NOT USE. Dummy constructor to comply w/ trait.
     fn new(
         // TODO remove `new` from trait and remove this fn as well.
@@ -2076,7 +2256,8 @@ impl Membership<SeqTypes> for EpochCommittees {
         // Even if the current header is the root of the epoch which falls in the post upgrade
         // we use the fixed block reward
         if version == EpochVersion::version() {
-            let reward = Self::update_fixed_block_reward(membership.clone(), epoch).await?;
+            let reward =
+                Self::fetch_and_update_fixed_block_reward(membership.clone(), epoch).await?;
             block_reward = Some(reward);
         }
 
@@ -2086,46 +2267,59 @@ impl Membership<SeqTypes> for EpochCommittees {
         };
 
         // If the epoch committee:
-        // - exists and has a block reward, skip.
+        // - exists and has a header and block reward, return early.
         // - exists without a reward, reuse validators and update reward.
         // - doesn't exist, fetch it from L1.
-        let validators = match epoch_committee {
+        let (validators, stake_table_hash) = match epoch_committee {
             Some(ref committee) => {
-                if committee.block_reward.is_some() {
+                if committee.block_reward.is_some() && committee.header.is_some() {
                     tracing::info!(
-                        "Stake table and block reward already exist for epoch {epoch}. Skipping."
+                        ?epoch,
+                        "committee already has block reward and header, skipping add_epoch_root"
                     );
                     return Ok(());
                 }
-                tracing::info!("Stake table exists for epoch {epoch}, updating block reward.");
-                committee.validators.clone()
+
+                if let Some(reward) = committee.block_reward {
+                    block_reward = Some(reward);
+                }
+
+                (committee.validators.clone(), committee.stake_table_hash)
             },
             None => {
                 tracing::info!("Stake table missing for epoch {epoch}. Fetching from L1.");
-                fetcher.fetch(epoch, &block_header).await?
+                let (map, hash) = fetcher.fetch(epoch, &block_header).await?;
+                (map, Some(hash))
             },
         };
 
         // If we are past the DRB+Header upgrade point,
+        // and don't have block reward
         // calculate the dynamic block reward based on validator info and block header.
-        if version >= DrbAndHeaderUpgradeVersion::version() {
+        if block_reward.is_none() && version >= DrbAndHeaderUpgradeVersion::version() {
             tracing::info!(?epoch, "calculating dynamic block reward");
             let reader = membership.read().await;
             let reward = reader
-                .calculate_dynamic_block_reward(&epoch, block_header, &validators)
+                .calculate_dynamic_block_reward(&epoch, &block_header, &validators)
                 .await?;
 
             tracing::info!(?epoch, "calculated dynamic block reward = {reward:?}");
-            block_reward = Some(reward);
+            block_reward = reward;
         }
 
         let mut membership_writer = membership.write().await;
-        membership_writer.insert_committee(epoch, validators.clone(), block_reward);
+        membership_writer.insert_committee(
+            epoch,
+            validators.clone(),
+            block_reward,
+            stake_table_hash,
+            Some(block_header),
+        );
         drop(membership_writer);
 
         let persistence_lock = fetcher.persistence.lock().await;
         if let Err(e) = persistence_lock
-            .store_stake(epoch, validators, block_reward)
+            .store_stake(epoch, validators, block_reward, stake_table_hash)
             .await
         {
             tracing::error!(?e, "`add_epoch_root`, error storing stake table");
@@ -2198,7 +2392,7 @@ impl Membership<SeqTypes> for EpochCommittees {
 
         // Otherwise, we try to fetch the epoch root leaf
         let previous_epoch = match epoch.checked_sub(1) {
-            Some(epoch) => epoch,
+            Some(epoch) => EpochNumber::new(epoch),
             None => {
                 return membership_reader
                     .randomized_committees
@@ -2208,11 +2402,11 @@ impl Membership<SeqTypes> for EpochCommittees {
             },
         };
 
-        let stake_table = membership_reader.stake_table(Some(epoch)).clone();
-        let success_threshold = membership_reader.success_threshold(Some(epoch));
+        let stake_table = membership_reader.stake_table(Some(previous_epoch)).clone();
+        let success_threshold = membership_reader.success_threshold(Some(previous_epoch));
 
         let block_height =
-            transition_block_for_epoch(previous_epoch, membership_reader.epoch_height);
+            transition_block_for_epoch(*previous_epoch, membership_reader.epoch_height);
 
         drop(membership_reader);
 
@@ -2271,6 +2465,11 @@ impl Membership<SeqTypes> for EpochCommittees {
 
     fn first_epoch(&self) -> Option<<SeqTypes as NodeType>::Epoch> {
         self.first_epoch
+    }
+
+    fn stake_table_hash(&self, epoch: Epoch) -> Option<StakeTableHash> {
+        let committee = self.state.get(&epoch)?;
+        committee.stake_table_hash
     }
 }
 
@@ -2488,7 +2687,7 @@ mod tests {
         ]
         .to_vec();
 
-        let st = active_validator_set_from_l1_events(events.iter().cloned())?;
+        let (st, _) = active_validator_set_from_l1_events(events.iter().cloned())?;
         let st_val_1 = st.get(&val_1.account).unwrap();
         // final staked amount should be 10 (delegated) - 7 (undelegated) + 5 (Delegated)
         assert_eq!(st_val_1.stake, U256::from(8));
@@ -2504,7 +2703,7 @@ mod tests {
 
         events.push(ValidatorExit::from(&val_1).into());
 
-        let st = active_validator_set_from_l1_events(events.iter().cloned())?;
+        let (st, _) = active_validator_set_from_l1_events(events.iter().cloned())?;
         // The first validator should have been removed
         assert_eq!(st.get(&val_1.account), None);
 
@@ -2651,6 +2850,22 @@ mod tests {
 
         let bls: BLSPubKey = val.bls_vk.into();
         assert!(matches!(err, StakeTableError::BlsKeyAlreadyUsed(addr) if addr == bls.to_string()));
+    }
+
+    // Test that the GCL does not
+    // allow re-registration for the same Ethereum account.
+    #[test]
+    fn test_regression_reregister_eth_account() {
+        let val1 = TestValidator::random();
+        let val2 = val1.randomize_keys();
+        let account = val1.account;
+
+        let register1 = ValidatorRegisteredV2::from(&val1).into();
+        let deregister1 = ValidatorExit::from(&val1).into();
+        let register2 = ValidatorRegisteredV2::from(&val2).into();
+        let events = vec![register1, deregister1, register2];
+        let error = validators_from_l1_events(events.iter().cloned()).unwrap_err();
+        assert_matches!(error, StakeTableError::ValidatorAlreadyExited(addr) if addr == account);
     }
 
     #[test]
@@ -2968,7 +3183,7 @@ mod tests {
         let events: Vec<(EventKey, StakeTableEvent)> = serde_json::from_str(&events_json).unwrap();
 
         // Reconstruct stake table from events
-        let reconstructed_stake_table =
+        let (reconstructed_stake_table, _) =
             active_validator_set_from_l1_events(events.into_iter().map(|(_, e)| e)).unwrap();
 
         let stake_table_json =
