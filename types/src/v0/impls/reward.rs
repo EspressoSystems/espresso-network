@@ -829,7 +829,7 @@ pub async fn distribute_block_reward(
 
     // Decide whether to use a fixed or dynamic block reward.
     let block_reward = if version >= DrbAndHeaderUpgradeVersion::version() {
-        let block_reward = instance_state
+        let dynamic_reward = instance_state
             .block_reward(EpochNumber::new(*epoch))
             .await
             .with_context(|| format!("block reward is None for epoch {epoch}"))?;
@@ -850,25 +850,31 @@ pub async fn distribute_block_reward(
             //   epoch_height = 10, first_epoch = 1
             // first_reward_block = 21
             let first_reward_block = (*first_epoch + 1) * epoch_height + 1;
-
-            // If v4 upgrade started at block 101, and first_reward_block is 21:
-            // total_distributed = (101 - 21) * fixed_block_reward
-            let blocks = height.checked_sub(first_reward_block).with_context(|| {
-                format!("height ({height}) - first_reward_block ({first_reward_block}) underflowed")
-            })?;
-            previously_distributed = U256::from(blocks)
-                .checked_mul(fixed_block_reward.0)
-                .with_context(|| {
+            // We only compute fixed reward distribured so far
+            // once the current block
+            // is beyond the first rewardable block.
+            if height > first_reward_block {
+                // If v4 upgrade started at block 101, and first_reward_block is 21:
+                // total_distributed = (101 - 21) * fixed_block_reward
+                let blocks = height.checked_sub(first_reward_block).with_context(|| {
                     format!(
-                        "overflow during total_distributed calculation: blocks={blocks}, \
-                         fixed_block_reward={}",
-                        fixed_block_reward.0
+                        "height ({height}) - first_reward_block ({first_reward_block}) underflowed"
                     )
-                })?
-                .into();
+                })?;
+                previously_distributed = U256::from(blocks)
+                    .checked_mul(fixed_block_reward.0)
+                    .with_context(|| {
+                        format!(
+                            "overflow during total_distributed calculation: blocks={blocks}, \
+                             fixed_block_reward={}",
+                            fixed_block_reward.0
+                        )
+                    })?
+                    .into();
+            }
         }
 
-        block_reward
+        dynamic_reward
     } else {
         instance_state.fixed_block_reward().await?
     };
