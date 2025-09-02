@@ -384,8 +384,13 @@ impl Transaction<Write> {
         let columns_str = columns.iter().map(|col| format!("\"{col}\"")).join(",");
 
         let pk = pk.into_iter().join(",");
-        let mut num_rows = 0;
+
         let rows: Vec<_> = rows.into_iter().collect();
+        let num_rows = rows.len();
+
+        if num_rows == 0 {
+            bail!("no rows provided for upsert into table {table}");
+        }
 
         let interval = Duration::from_secs(1);
         let mut retries = 5;
@@ -401,7 +406,6 @@ impl Transaction<Write> {
             let query_builder = query_builder.reset();
 
             query_builder.push_values(rows.clone(), |mut b, row| {
-                num_rows += 1;
                 row.bind(&mut b);
             });
 
