@@ -1929,7 +1929,7 @@ mod test {
         // calling `.reset()`and according to the sqlx docs, that always panics.
         // Now, since we are properly calling `.reset()` inside `upsert()` for
         // the query builder, the function returns an error instead of panicking.
-        tx.upsert("does_not_exist", ["test"], ["test"], [(1 as i64,)])
+        tx.upsert("does_not_exist", ["test"], ["test"], [(1_i64,)])
             .await
             .unwrap_err();
     }
