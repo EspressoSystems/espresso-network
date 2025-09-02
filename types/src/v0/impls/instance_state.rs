@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use alloy::primitives::Address;
-use anyhow::bail;
+use anyhow::{bail, Context};
 #[cfg(any(test, feature = "testing"))]
 use async_lock::RwLock;
 use async_trait::async_trait;
@@ -20,15 +20,13 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
     SeqTypes, UpgradeType, ViewBasedUpgrade,
 };
-#[cfg(any(test, feature = "testing"))]
-use crate::EpochCommittees;
 use crate::{
     v0::{
-        traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
-        Upgrade, UpgradeMode,
+        impls::StakeTableHash, traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo,
+        L1Client, Timestamp, Upgrade, UpgradeMode,
     },
     v0_3::RewardAmount,
-    ValidatorMap,
+    EpochCommittees, ValidatorMap,
 };
 
 /// Represents the immutable state of a node.
@@ -69,10 +67,16 @@ pub struct NodeState {
 }
 
 impl NodeState {
-    pub async fn block_reward(&self, epoch: Option<EpochNumber>) -> Option<RewardAmount> {
+    pub async fn block_reward(&self, epoch: EpochNumber) -> anyhow::Result<RewardAmount> {
+        EpochCommittees::fetch_and_calculate_block_reward(epoch, self.coordinator.clone()).await
+    }
+
+    pub async fn fixed_block_reward(&self) -> anyhow::Result<RewardAmount> {
         let coordinator = self.coordinator.clone();
         let membership = coordinator.membership().read().await;
-        membership.block_reward(epoch)
+        membership
+            .fixed_block_reward()
+            .context("fixed block reward not found")
     }
 }
 
@@ -81,7 +85,7 @@ impl MembershipPersistence for NoStorage {
     async fn load_stake(
         &self,
         _epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>)>> {
+    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>> {
         Ok(None)
     }
 
@@ -94,6 +98,7 @@ impl MembershipPersistence for NoStorage {
         _epoch: EpochNumber,
         _stake: ValidatorMap,
         _block_reward: Option<RewardAmount>,
+        _stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()> {
         Ok(())
     }

@@ -2,9 +2,7 @@
   "ns_proof": {
     "V1": {
       "ns_index": 1,
-      "ns_payload": [
-        3, 0, 0, 0, 1, 0, 0, 0, 3, 0, 0, 0, 6, 0, 0, 0, 20, 26, 250, 111, 72, 40
-      ],
+      "ns_payload": "AwAAAAEAAAADAAAABgAAABQa+m9IKA==",
       "ns_proof": "MERKLE_PROOF~AQAAAAAAAAACAAAAAAAAAOiGF-SEiGzWEIFAHfElj12MUBXIWWp32MinBDi2H53ZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAO"
     }
   },

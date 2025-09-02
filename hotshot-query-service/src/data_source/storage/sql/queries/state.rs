@@ -854,7 +854,10 @@ mod test {
                 .await
                 .unwrap();
             assert_eq!(proof.elem(), None);
-            assert!(test_tree.non_membership_verify(100, proof).unwrap());
+
+            assert!(
+                MockMerkleTree::non_membership_verify(test_tree.commitment(), 100, proof).unwrap()
+            );
 
             // insert an additional node into the tree.
             test_tree.update(i, i).unwrap();
@@ -1236,11 +1239,14 @@ mod test {
                 assert_eq!(val.as_ref(), proof.elem());
                 // Check path is valid for test_tree
                 if val.is_some() {
-                    MockMerkleTree::verify(tree.commitment().digest(), key, proof)
+                    MockMerkleTree::verify(tree.commitment(), key, proof)
                         .unwrap()
                         .unwrap();
                 } else {
-                    assert!(tree.non_membership_verify(key, proof).unwrap());
+                    assert!(
+                        MockMerkleTree::non_membership_verify(tree.commitment(), key, proof)
+                            .unwrap()
+                    );
                 }
             }
 
@@ -1262,7 +1268,10 @@ mod test {
             );
             assert_eq!(proof.elem(), None);
             // Check path is valid for test_tree
-            assert!(tree.non_membership_verify(RESERVED_KEY, proof).unwrap());
+            assert!(
+                MockMerkleTree::non_membership_verify(tree.commitment(), RESERVED_KEY, proof)
+                    .unwrap()
+            );
         }
 
         // Create a randomized Merkle tree.

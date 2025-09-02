@@ -184,6 +184,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             first_epoch: None,
             highest_finalized_epoch_view: (None, TYPES::View::new(0)),
+            epoch_height: handle.epoch_height,
         }
     }
 }

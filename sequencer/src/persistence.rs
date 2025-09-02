@@ -1460,6 +1460,7 @@ mod tests {
             .genesis_st_state(genesis_stake)
             .blocks_per_epoch(blocks_per_epoch)
             .epoch_start_block(1)
+            .exit_escrow_period(U256::from(blocks_per_epoch * 15 + 100))
             .multisig_pauser(network_config.signer().address())
             .token_name("Espresso".to_string())
             .token_symbol("ESP".to_string())
@@ -1591,53 +1592,56 @@ mod tests {
         st.insert(validator.account, validator);
 
         storage
-            .store_stake(EpochNumber::new(10), st.clone(), None)
+            .store_stake(EpochNumber::new(10), st.clone(), None, None)
             .await?;
 
-        let (table, _) = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
+        let (table, ..) = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
         assert_eq!(st, table);
 
         let val2 = Validator::mock();
         let mut st2 = IndexMap::new();
         st2.insert(val2.account, val2);
         storage
-            .store_stake(EpochNumber::new(11), st2.clone(), None)
+            .store_stake(EpochNumber::new(11), st2.clone(), None, None)
             .await?;
 
         let tables = storage.load_latest_stake(4).await?.unwrap();
         let mut iter = tables.iter();
         assert_eq!(
-            Some(&(EpochNumber::new(11), (st2.clone(), None))),
+            Some(&(EpochNumber::new(11), (st2.clone(), None), None)),
             iter.next()
         );
-        assert_eq!(Some(&(EpochNumber::new(10), (st, None))), iter.next());
+        assert_eq!(Some(&(EpochNumber::new(10), (st, None), None)), iter.next());
         assert_eq!(None, iter.next());
 
         for i in 0..=20 {
             storage
-                .store_stake(EpochNumber::new(i), st2.clone(), None)
+                .store_stake(EpochNumber::new(i), st2.clone(), None, None)
                 .await?;
         }
 
         let tables = storage.load_latest_stake(5).await?.unwrap();
         let mut iter = tables.iter();
         assert_eq!(
-            Some(&(EpochNumber::new(20), (st2.clone(), None))),
+            Some(&(EpochNumber::new(20), (st2.clone(), None), None)),
             iter.next()
         );
         assert_eq!(
-            Some(&(EpochNumber::new(19), (st2.clone(), None))),
+            Some(&(EpochNumber::new(19), (st2.clone(), None), None)),
             iter.next()
         );
         assert_eq!(
-            Some(&(EpochNumber::new(18), (st2.clone(), None))),
+            Some(&(EpochNumber::new(18), (st2.clone(), None), None)),
             iter.next()
         );
         assert_eq!(
-            Some(&(EpochNumber::new(17), (st2.clone(), None))),
+            Some(&(EpochNumber::new(17), (st2.clone(), None), None)),
             iter.next()
         );
-        assert_eq!(Some(&(EpochNumber::new(16), (st2, None))), iter.next());
+        assert_eq!(
+            Some(&(EpochNumber::new(16), (st2, None), None)),
+            iter.next()
+        );
         assert_eq!(None, iter.next());
 
         Ok(())
