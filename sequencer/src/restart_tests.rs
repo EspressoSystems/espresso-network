@@ -646,8 +646,10 @@ impl TestNetwork {
         let tmp = TempDir::new().unwrap();
         let genesis_file_path = tmp.path().join("genesis.toml");
 
+        let mut chain_config = ChainConfig::default();
+        chain_config.fee_contract = Some(Address::random());
         let mut genesis = Genesis {
-            chain_config: Default::default(),
+            chain_config,
             // TODO we apparently have two `capacity` configurations
             stake_table: StakeTableConfig {
                 capacity: STAKE_TABLE_CAPACITY_FOR_TEST,
