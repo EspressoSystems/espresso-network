@@ -1368,7 +1368,7 @@ contract StakeTableUpgradeV2Test is Test {
         assertEq(
             stakeTable.token().balanceOf(delegator),
             remainderDelegation,
-            "delegator should have received the remaininder delegation"
+            "delegator should have received the remainder delegation"
         );
         assertEq(
             stakeTable.token().balanceOf(address(stakeTable)),
@@ -1412,7 +1412,6 @@ contract StakeTableUpgradeV2Test is Test {
     }
 
     function test_WithdrawalAfterValidatorExit() public {
-        // Should test withdrawing after validator exit
         stakeTableRegisterTest.setUp();
         vm.startPrank(stakeTableRegisterTest.admin());
         stakeTableRegisterTest.stakeTable().upgradeToAndCall(address(new StakeTableV2()), "");
@@ -1463,7 +1462,6 @@ contract StakeTableUpgradeV2Test is Test {
         vm.expectRevert(abi.encodeWithSelector(S.ValidatorAlreadyExited.selector));
         stakeTable.undelegate(validator, amountDelegated);
 
-        //validator already exited so call claim withdaral exit
         vm.warp(block.timestamp + stakeTable.exitEscrowPeriod());
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.Withdrawal(delegator, amountDelegated);
