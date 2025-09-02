@@ -228,7 +228,7 @@ jf-vid = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfis
     "std",
     "parallel",
 ] }
-libp2p = { package = "libp2p", version = "0.54", default-features = false, features = [
+libp2p = { package = "libp2p", version = "0.56", default-features = false, features = [
     "macros",
     "autonat",
     "cbor",

@@ -212,7 +212,7 @@ impl NodeState {
             Arc::new(mock::MockStateCatchup::default()),
             StaticVersion::<0, 2>::version(),
             coordinator,
-            Version { major: 0, minor: 1 },
+            Version { major: 0, minor: 2 },
         )
     }
 
@@ -242,7 +242,7 @@ impl NodeState {
             mock::MockStateCatchup::default(),
             StaticVersion::<0, 3>::version(),
             coordinator,
-            Version { major: 0, minor: 1 },
+            Version { major: 0, minor: 3 },
         )
     }
 
@@ -268,6 +268,11 @@ impl NodeState {
 
     pub fn with_current_version(mut self, version: Version) -> Self {
         self.current_version = version;
+        self
+    }
+
+    pub fn with_genesis_version(mut self, version: Version) -> Self {
+        self.genesis_version = version;
         self
     }
 

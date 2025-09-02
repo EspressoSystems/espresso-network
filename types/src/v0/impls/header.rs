@@ -1100,7 +1100,7 @@ impl BlockHeader<SeqTypes> for Header {
             vec![FeeInfo::genesis()],
             vec![],
             None,
-            instance_state.current_version,
+            instance_state.genesis_version,
             None,
         )
     }
