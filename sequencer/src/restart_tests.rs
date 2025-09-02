@@ -646,13 +646,8 @@ impl TestNetwork {
         let tmp = TempDir::new().unwrap();
         let genesis_file_path = tmp.path().join("genesis.toml");
 
-        let chain_config = ChainConfig {
-            fee_contract: Some(Address::random()),
-            ..Default::default()
-        };
-
         let mut genesis = Genesis {
-            chain_config,
+            chain_config: ChainConfig::default(),
             // TODO we apparently have two `capacity` configurations
             stake_table: StakeTableConfig {
                 capacity: STAKE_TABLE_CAPACITY_FOR_TEST,
@@ -747,12 +742,13 @@ impl TestNetwork {
         };
 
         // Deploy stake contracts and delegate.
-        let stake_table_address = network.deploy(&genesis).await.unwrap();
+        let (fee_proxy, stake_table_address) = network.deploy(&genesis).await.unwrap();
 
         // Add contract address to `ChainConfig`.
         let chain_config = ChainConfig {
             base_fee: 1.into(),
             stake_table_contract: Some(stake_table_address),
+            fee_contract: Some(fee_proxy),
             ..Default::default()
         };
         genesis.chain_config = chain_config;
@@ -788,7 +784,7 @@ impl TestNetwork {
     }
 
     /// Deploy stake contracts and delegate.
-    async fn deploy(&self, genesis: &Genesis) -> anyhow::Result<Address> {
+    async fn deploy(&self, genesis: &Genesis) -> anyhow::Result<(Address, Address)> {
         let stake_table_version = StakeTableContractVersion::V2;
         let delegation_config = DelegationConfig::EqualAmounts;
 
@@ -862,6 +858,9 @@ impl TestNetwork {
         }
         .context("failed to deploy contracts")?;
 
+        let fee = contracts
+            .address(Contract::FeeContractProxy)
+            .expect("FeeContractProxy address not found ");
         let stake_table_address = contracts
             .address(Contract::StakeTableProxy)
             .expect("StakeTableProxy address not found");
@@ -886,7 +885,7 @@ impl TestNetwork {
             .await
             .expect("interval mining");
 
-        Ok(stake_table_address)
+        Ok((fee, stake_table_address))
     }
 
     async fn wait_for_epoch(&self) {
