@@ -824,60 +824,61 @@ pub async fn distribute_block_reward(
     .await?;
 
     let parent_header = parent_leaf.block_header();
+
     // Initialize the total rewards distributed so far in this block.
     let mut previously_distributed = parent_header.total_reward_distributed().unwrap_or_default();
 
     // Decide whether to use a fixed or dynamic block reward.
     let block_reward = if version >= DrbAndHeaderUpgradeVersion::version() {
-        let dynamic_reward = instance_state
+        instance_state
             .block_reward(EpochNumber::new(*epoch))
             .await
-            .with_context(|| format!("block reward is None for epoch {epoch}"))?;
-
-        // If the current block is the start block of the new v4 version,
-        // we use *fixed block reward* for calculating the total rewards distributed so far.
-        if parent_header.version() == EpochVersion::version() {
-            ensure!(
-                instance_state.epoch_start_block != 0,
-                "epoch_start_block is zero"
-            );
-
-            let fixed_block_reward = instance_state.fixed_block_reward().await?;
-
-            // Compute the first block where rewards start being distributed.
-            // Rewards begin only after the first two epochs
-            // Example:
-            //   epoch_height = 10, first_epoch = 1
-            // first_reward_block = 21
-            let first_reward_block = (*first_epoch + 1) * epoch_height + 1;
-            // We only compute fixed reward distribured so far
-            // once the current block
-            // is beyond the first rewardable block.
-            if height > first_reward_block {
-                // If v4 upgrade started at block 101, and first_reward_block is 21:
-                // total_distributed = (101 - 21) * fixed_block_reward
-                let blocks = height.checked_sub(first_reward_block).with_context(|| {
-                    format!(
-                        "height ({height}) - first_reward_block ({first_reward_block}) underflowed"
-                    )
-                })?;
-                previously_distributed = U256::from(blocks)
-                    .checked_mul(fixed_block_reward.0)
-                    .with_context(|| {
-                        format!(
-                            "overflow during total_distributed calculation: blocks={blocks}, \
-                             fixed_block_reward={}",
-                            fixed_block_reward.0
-                        )
-                    })?
-                    .into();
-            }
-        }
-
-        dynamic_reward
+            .with_context(|| format!("block reward is None for epoch {epoch}"))?
     } else {
         instance_state.fixed_block_reward().await?
     };
+
+    // If we are in the DRB + header upgrade
+    // and the parent block is from V3 (which does not have a previously distributed reward field),
+    // we need to recompute the previously distributed rewards
+    // using the fixed block reward and the number of blocks over which it was distributed.
+    if version >= DrbAndHeaderUpgradeVersion::version()
+        && parent_header.version() == EpochVersion::version()
+    {
+        ensure!(
+            instance_state.epoch_start_block != 0,
+            "epoch_start_block is zero"
+        );
+
+        let fixed_block_reward = instance_state.fixed_block_reward().await?;
+
+        // Compute the first block where rewards start being distributed.
+        // Rewards begin only after the first two epochs
+        // Example:
+        //   epoch_height = 10, first_epoch = 1
+        // first_reward_block = 21
+        let first_reward_block = (*first_epoch + 1) * epoch_height + 1;
+        // We only compute fixed reward distribured so far
+        // once the current block
+        // is beyond the first rewardable block.
+        if height > first_reward_block {
+            // If v4 upgrade started at block 101, and first_reward_block is 21:
+            // total_distributed = (101 - 21) * fixed_block_reward
+            let blocks = height.checked_sub(first_reward_block).with_context(|| {
+                format!("height ({height}) - first_reward_block ({first_reward_block}) underflowed")
+            })?;
+            previously_distributed = U256::from(blocks)
+                .checked_mul(fixed_block_reward.0)
+                .with_context(|| {
+                    format!(
+                        "overflow during total_distributed calculation: blocks={blocks}, \
+                         fixed_block_reward={}",
+                        fixed_block_reward.0
+                    )
+                })?
+                .into();
+        }
+    }
 
     if block_reward.0.is_zero() {
         tracing::info!("block reward is zero. height={height}. epoch={epoch}");
