@@ -475,20 +475,12 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// @notice Update the consensus keys for a validator
     /// @dev This function is used to update the consensus keys for a validator
     /// @dev This function can only be called by the validator itself when it hasn't exited
-    ///      TODO: MA: is this a good idea? Why should key rotation be blocked for an exiting
-    ///      validator?
     /// @dev The validator will need to give up either its old BLS key and/or old Schnorr key
     /// @dev The validator will need to provide a BLS signature to prove that the account owns the
     /// new BLS key
     /// @param newBlsVK The new BLS verification key
     /// @param newSchnorrVK The new Schnorr verification key
     /// @param newBlsSig The BLS signature that the account owns the new BLS key
-    ///
-    /// TODO: MA: I think this function should be reworked. Is it fine to always force updating both
-    /// keys? If not we should probably rather have two functions for updating the keys. But this
-    /// would also mean two separate events, or storing the keys in the contract only for this
-    /// update function to remit the old keys, or throw errors if the keys are not changed. None of
-    /// that seems useful enough to warrant the extra complexity in the contract and GCL.
     function updateConsensusKeys(
         BN254.G2Point memory newBlsVK,
         EdOnBN254.EdOnBN254Point memory newSchnorrVK,

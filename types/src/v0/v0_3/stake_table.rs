@@ -162,6 +162,10 @@ pub enum StakeTableError {
     ZeroDelegatorStake(Address),
     #[error("Failed to hash stake table: {0}")]
     HashError(#[from] bincode::Error),
+    #[error("Validator {0:#x} already exited and cannot be re-registered")]
+    ValidatorAlreadyExited(Address),
+    #[error("Schnorr key already used: {0}")]
+    SchnorrKeyAlreadyUsed(String),
 }
 
 #[derive(Debug, Error)]

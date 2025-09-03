@@ -730,4 +730,28 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         require(testState.totalPendingWithdrawal == 0, "No pending withdrawals should remain");
         require(testState.totalDelegated == 0, "No delegations should remain");
     }
+
+    /// @dev Assert sum of delegated amounts to a validator equals validator.delegatedAmount
+    ///
+    /// Iterates over all validators and their delegators, and is therefore very slow.
+    function assertValidatorDelegatedAmountSum() public view {
+        for (uint256 i = 0; i < validators.all.length(); i++) {
+            address val = validators.all.at(i);
+
+            // Get the validator's delegatedAmount from the contract
+            (uint256 validatorDelegatedAmount,) = stakeTable.validators(val);
+
+            // Calculate sum of all individual delegations to this validator
+            uint256 sumOfDelegations = 0;
+            EnumerableSet.AddressSet storage validatorDelegators = delegators.delegators[val];
+            for (uint256 j = 0; j < validatorDelegators.length(); j++) {
+                address delegator = validatorDelegators.at(j);
+                sumOfDelegations += stakeTable.delegations(val, delegator);
+            }
+
+            require(
+                validatorDelegatedAmount == sumOfDelegations, "Validator delegatedAmount mismatch"
+            );
+        }
+    }
 }
