@@ -208,7 +208,6 @@ where
     ) {
         // We need to fetch the requested epoch, that's for sure
         let mut fetch_epochs = vec![];
-        fetch_epochs.push((epoch, epoch_tx));
 
         let mut try_epoch = TYPES::Epoch::new(epoch.saturating_sub(1));
         let maybe_first_epoch = self.membership.read().await.first_epoch();
@@ -216,7 +215,8 @@ where
             let err = anytrace::error!(
                 "We got a catchup request for epoch {epoch:?} but the first epoch is not set"
             );
-            self.catchup_cleanup(epoch, fetch_epochs, err).await;
+            self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
+                .await;
             return;
         };
 
@@ -235,7 +235,8 @@ where
                         "We are trying to catchup to an epoch lower than the second epoch! This \
                          means the initial stake table is missing!"
                     );
-                    self.catchup_cleanup(epoch, fetch_epochs, err).await;
+                    self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
+                        .await;
                     return;
                 }
                 // Lock the catchup map
@@ -264,47 +265,13 @@ where
 
         // Iterate through the epochs we need to fetch in reverse, i.e. from the oldest to the newest
         while let Some((current_fetch_epoch, tx)) = fetch_epochs.pop() {
-            let root_leaf = match self.fetch_stake_table(current_fetch_epoch).await {
-                Ok(root_leaf) => root_leaf,
+            match self.fetch_stake_table(current_fetch_epoch).await {
+                Ok(_) => {},
                 Err(err) => {
                     fetch_epochs.push((current_fetch_epoch, tx));
-                    self.catchup_cleanup(epoch, fetch_epochs, err).await;
+                    self.catchup_cleanup(epoch, epoch_tx, fetch_epochs, err)
+                        .await;
                     return;
-                },
-            };
-            match <TYPES::Membership as Membership<TYPES>>::get_epoch_drb(
-                self.membership.clone(),
-                epoch,
-            )
-            .await
-            {
-                Ok(drb_result) => {
-                    self.membership
-                        .write()
-                        .await
-                        .add_drb_result(current_fetch_epoch, drb_result);
-                },
-                Err(err) => {
-                    tracing::warn!(
-                        "DRB result for epoch {} missing from membership. Beginning catchup to \
-                         recalculate it. Error: {}",
-                        current_fetch_epoch,
-                        err
-                    );
-
-                    if let Err(err) = self
-                        .compute_drb_result(current_fetch_epoch, root_leaf)
-                        .await
-                    {
-                        tracing::info!(
-                            "DRB calculation for epoch {} failed . Error: {}",
-                            current_fetch_epoch,
-                            err
-                        );
-                        fetch_epochs.push((current_fetch_epoch, tx));
-                        self.catchup_cleanup(epoch, fetch_epochs, err).await;
-                        return;
-                    }
                 },
             };
 
@@ -323,6 +290,62 @@ where
             // Remove the epoch from the catchup map to indicate that the catchup is complete
             self.catchup_map.lock().await.remove(&current_fetch_epoch);
         }
+
+        let root_leaf = match self.fetch_stake_table(epoch).await {
+            Ok(root_leaf) => root_leaf,
+            Err(err) => {
+                self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
+                    .await;
+                return;
+            },
+        };
+
+        match <TYPES::Membership as Membership<TYPES>>::get_epoch_drb(
+            self.membership.clone(),
+            epoch,
+        )
+        .await
+        {
+            Ok(drb_result) => {
+                self.membership
+                    .write()
+                    .await
+                    .add_drb_result(epoch, drb_result);
+            },
+            Err(err) => {
+                tracing::warn!(
+                    "DRB result for epoch {} missing from membership. Beginning catchup to \
+                     recalculate it. Error: {}",
+                    epoch,
+                    err
+                );
+
+                if let Err(err) = self.compute_drb_result(epoch, root_leaf).await {
+                    tracing::error!(
+                        "DRB calculation for epoch {} failed . Error: {}",
+                        epoch,
+                        err
+                    );
+                    self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
+                        .await;
+                }
+            },
+        };
+
+        // Signal the other tasks about the success
+        if let Ok(Some(res)) = epoch_tx.try_broadcast(Ok(EpochMembership {
+            epoch: Some(epoch),
+            coordinator: self.clone(),
+        })) {
+            tracing::warn!(
+                "The catchup channel for epoch {} was overflown, dropped message {:?}",
+                epoch,
+                res.map(|em| em.epoch)
+            );
+        }
+
+        // Remove the epoch from the catchup map to indicate that the catchup is complete
+        self.catchup_map.lock().await.remove(&epoch);
     }
 
     /// Call this method if you think catchup is in progress for a given epoch
@@ -364,10 +387,17 @@ where
     async fn catchup_cleanup(
         &mut self,
         req_epoch: TYPES::Epoch,
-        cancel_epochs: Vec<EpochSender<TYPES>>,
+        epoch_tx: Sender<Result<EpochMembership<TYPES>>>,
+        mut cancel_epochs: Vec<EpochSender<TYPES>>,
         err: Error,
     ) {
         // Cleanup in case of error
+        cancel_epochs.push((req_epoch, epoch_tx));
+
+        tracing::error!(
+            "catchup for epoch {req_epoch:?} failed: {err:?}. Canceling catchup for epochs: {:?}",
+            cancel_epochs.iter().map(|(e, _)| e).collect::<Vec<_>>()
+        );
         let mut map_lock = self.catchup_map.lock().await;
         for (epoch, _) in cancel_epochs.iter() {
             // Remove the failed epochs from the catchup map
@@ -385,7 +415,6 @@ where
                 );
             }
         }
-        tracing::error!("catchup for epoch {req_epoch:?} failed: {err:?}");
     }
 
     /// A helper method to the `catchup` method.
@@ -458,7 +487,8 @@ where
             ));
         };
 
-        let Some(ref drb_difficulty_selector) = *self.drb_difficulty_selector.read().await else {
+        let Some(drb_difficulty_selector) = self.drb_difficulty_selector.read().await.clone()
+        else {
             return Err(anytrace::error!(
                 "The DRB difficulty selector is missing from the epoch membership coordinator. \
                  This node will not be able to spawn any DRB calculation tasks from catchup."
