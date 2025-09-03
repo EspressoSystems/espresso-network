@@ -1928,7 +1928,6 @@ impl EpochCommittees {
     }
 
     pub async fn reload_stake(&mut self, limit: u64) {
-        return;
         match self.fetcher.fetch_fixed_block_reward().await {
             Ok(block_reward) => {
                 tracing::info!("Fetched block reward: {block_reward}");
