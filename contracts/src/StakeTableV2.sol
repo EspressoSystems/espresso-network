@@ -68,7 +68,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// The function is deprecated as it was replaced by a new function
     error DeprecatedFunction();
 
-    ///
+    /// The Schnorr key has been previously registered in the contract.
     error SchnorrKeyAlreadyUsed();
 
     /// Variables
@@ -149,7 +149,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
         ensureValidatorNotRegistered(validator);
         ensureNonZeroSchnorrKey(schnorrVK);
-        ensureNewKey(blsVK, schnorrVK);
+        ensureNewKeys(blsVK, schnorrVK);
 
         // Verify that the validator can sign for that blsVK. This prevents rogue public-key
         // attacks.
@@ -188,7 +188,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
         ensureValidatorActive(validator);
         ensureNonZeroSchnorrKey(schnorrVK);
-        ensureNewKey(blsVK, schnorrVK);
+        ensureNewKeys(blsVK, schnorrVK);
 
         // Verify that the validator can sign for that blsVK. This prevents rogue public-key
         // attacks.
@@ -221,8 +221,10 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         return keccak256(abi.encode(schnorrVK.x, schnorrVK.y));
     }
 
-    // override the ensureNewKey function to check the schnorr key
-    function ensureNewKey(BN254.G2Point memory blsVK, EdOnBN254.EdOnBN254Point memory schnorrVK)
+    /// @notice Ensure that the BLS and Schnorr keys are not already used
+    /// @param blsVK The BLS verification key
+    /// @param schnorrVK The Schnorr verification key
+    function ensureNewKeys(BN254.G2Point memory blsVK, EdOnBN254.EdOnBN254Point memory schnorrVK)
         internal
         view
     {
