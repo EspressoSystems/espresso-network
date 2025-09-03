@@ -76,7 +76,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     /// Schnorr keys that have been seen by the contract
     ///
-    /// @dev to simplify the reasoning about what keys and prevent some errors due to
+    /// @dev ensures a bijective mapping between schnorr key and ethereum account and prevents some errors due to
     /// misconfigurations of validators the contract currently marks keys as used and only allow
     /// them to be used once. This for example prevents callers from accidentally registering the
     /// same Schnorr key twice.
