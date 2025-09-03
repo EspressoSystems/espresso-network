@@ -4,13 +4,13 @@ use std::{
 };
 
 use alloy::primitives::Address;
-use anyhow::{Context, Ok};
+use anyhow::{ensure, Context, Ok};
 use espresso_types::{
-    v0_3::ChainConfig, FeeAccount, FeeAmount, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
-    Upgrade,
+    v0_3::ChainConfig, EpochVersion, FeeAccount, FeeAmount, FeeVersion, GenesisHeader, L1BlockInfo,
+    L1Client, Timestamp, Upgrade,
 };
 use serde::{Deserialize, Serialize};
-use vbs::version::Version;
+use vbs::version::{StaticVersionType, Version};
 
 /// Initial configuration of an Espresso stake table.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -130,6 +130,87 @@ impl Genesis {
         }
         // TODO: it's optional for the fee contract to be included in a proxy in v1 so no need to panic but revisit this after v1 https://github.com/EspressoSystems/espresso-sequencer/pull/2000#discussion_r1765174702
         Ok(())
+    }
+
+    pub async fn validate(&self, l1: &L1Client) -> anyhow::Result<()> {
+        self.validate_fee_contract(l1).await?;
+        self.validate_base_version_config()?;
+        self.validate_upgrades_config()?;
+        Ok(())
+    }
+
+    fn validate_base_version_config(&self) -> anyhow::Result<()> {
+        if self.base_version >= FeeVersion::version() {
+            Self::validate_address(
+                self.chain_config.fee_contract,
+                "fee_contract",
+                "base_version",
+                &self.base_version,
+            )?;
+        }
+
+        if self.base_version >= EpochVersion::version() {
+            ensure!(
+                self.epoch_height.is_some(),
+                "epoch_height must be provided for base_version {} and above",
+                self.base_version
+            );
+
+            ensure!(
+                self.epoch_start_block.is_some(),
+                "epoch_start_block must be provided for base_version {} and above",
+                self.base_version
+            );
+
+            Self::validate_address(
+                self.chain_config.stake_table_contract,
+                "stake_table_contract",
+                "base_version",
+                &self.base_version,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn validate_upgrades_config(&self) -> anyhow::Result<()> {
+        for (version, upgrade) in &self.upgrades {
+            let chain_config = upgrade.upgrade_type.chain_config();
+
+            if *version >= FeeVersion::version() {
+                Self::validate_address(
+                    chain_config.and_then(|c| c.fee_contract),
+                    "fee_contract",
+                    "upgrade version",
+                    version,
+                )?;
+            }
+
+            if *version >= EpochVersion::version() {
+                Self::validate_address(
+                    chain_config.and_then(|c| c.stake_table_contract),
+                    "stake_table_contract",
+                    "upgrade version",
+                    version,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_address(
+        opt: Option<Address>,
+        field: &str,
+        kind: &str,
+        version: &Version,
+    ) -> anyhow::Result<()> {
+        match opt {
+            Some(addr) if addr == Address::default() => {
+                anyhow::bail!("{field} cannot be the zero address in {kind} {version} and above")
+            },
+            Some(_) => Ok(()),
+            None => anyhow::bail!("{field} must be provided in {kind} {version} and above"),
+        }
     }
 }
 
@@ -1129,5 +1210,124 @@ mod test {
         .to_string();
 
         toml::from_str::<Genesis>(&toml).unwrap();
+    }
+
+    fn mock_genesis() -> Genesis {
+        Genesis {
+            base_version: Version { major: 0, minor: 0 },
+            upgrade_version: Version { major: 0, minor: 0 },
+            genesis_version: Version { major: 0, minor: 0 },
+            epoch_height: None,
+            drb_difficulty: None,
+            drb_upgrade_difficulty: None,
+            epoch_start_block: None,
+            stake_table_capacity: None,
+            chain_config: Default::default(),
+            stake_table: StakeTableConfig { capacity: 10 },
+            accounts: HashMap::new(),
+            l1_finalized: L1Finalized::Number { number: 0 },
+            header: GenesisHeader::default(),
+            upgrades: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_base_version_fee_contract_missing_should_fail() {
+        let mut genesis = mock_genesis();
+        genesis.base_version = FeeVersion::version();
+        genesis.chain_config.fee_contract = None;
+
+        assert!(genesis.validate_base_version_config().is_err())
+    }
+
+    #[test]
+    fn test_base_version_fee_contract_zero_should_fail() {
+        let mut genesis = mock_genesis();
+        genesis.base_version = FeeVersion::version();
+        genesis.chain_config.fee_contract = Some(Address::default());
+
+        assert!(genesis.validate_base_version_config().is_err());
+    }
+
+    #[test]
+    fn test_base_version_fee_contract_ok() {
+        let mut genesis = mock_genesis();
+        genesis.base_version = FeeVersion::version();
+        genesis.chain_config.fee_contract = Some(Address::random());
+
+        assert!(genesis.validate_base_version_config().is_ok());
+    }
+
+    #[test]
+    fn test_base_version_epoch_fields_missing_should_fail() {
+        let mut genesis = mock_genesis();
+        genesis.base_version = EpochVersion::version();
+        genesis.chain_config.stake_table_contract = Some(Address::random());
+
+        assert!(genesis.validate_base_version_config().is_err());
+    }
+
+    #[test]
+    fn test_base_version_epoch_fields_ok() {
+        let mut genesis = mock_genesis();
+        genesis.base_version = EpochVersion::version();
+        genesis.epoch_height = Some(10);
+        genesis.epoch_start_block = Some(5);
+        genesis.chain_config.stake_table_contract = Some(Address::random());
+        genesis.chain_config.fee_contract = Some(Address::random());
+
+        assert!(genesis.validate_base_version_config().is_ok());
+    }
+
+    #[test]
+    fn test_upgrade_with_zero_stake_table_should_fail() {
+        let mut genesis = mock_genesis();
+        genesis.upgrades.insert(
+            EpochVersion::version(),
+            Upgrade {
+                mode: UpgradeMode::View(ViewBasedUpgrade {
+                    start_proposing_view: 0,
+                    stop_proposing_view: 0,
+                    start_voting_view: None,
+                    stop_voting_view: None,
+                }),
+                upgrade_type: UpgradeType::Epoch {
+                    chain_config: ChainConfig {
+                        base_fee: 1.into(),
+                        fee_contract: Some(Address::random()),
+                        stake_table_contract: Some(Address::default()),
+                        ..Default::default()
+                    },
+                },
+            },
+        );
+
+        assert!(genesis.validate_upgrades_config().is_err());
+    }
+
+    #[test]
+    fn test_upgrade_with_valid_stake_table_should_pass() {
+        let mut genesis = mock_genesis();
+        genesis.upgrades.insert(
+            EpochVersion::version(),
+            Upgrade {
+                mode: UpgradeMode::View(ViewBasedUpgrade {
+                    start_proposing_view: 0,
+                    stop_proposing_view: 0,
+                    start_voting_view: None,
+                    stop_voting_view: None,
+                }),
+                upgrade_type: UpgradeType::Epoch {
+                    chain_config: ChainConfig {
+                        base_fee: 1.into(),
+                        fee_contract: Some(Address::random()),
+                        stake_table_contract: Some(Address::random()),
+                        ..Default::default()
+                    },
+                },
+            },
+        );
+
+        assert!(genesis.validate_upgrades_config().is_ok());
     }
 }
