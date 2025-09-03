@@ -841,7 +841,7 @@ pub async fn distribute_block_reward(
     // If we are in the DRB + header upgrade
     // and the parent block is from V3 (which does not have a previously distributed reward field),
     // we need to recompute the previously distributed rewards
-    // using the fixed block reward and the number of blocks over which it was distributed.
+    // using the fixed block reward and the number of blocks in which fixed reward was distributed
     if version >= DrbAndHeaderUpgradeVersion::version()
         && parent_header.version() == EpochVersion::version()
     {
