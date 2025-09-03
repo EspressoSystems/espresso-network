@@ -142,6 +142,9 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// A zero amount would lead to a no-op.
     error ZeroAmount();
 
+    /// The exit escrow period is invalid (either too short or too long)
+    error ExitEscrowPeriodInvalid();
+
     // === Structs ===
 
     /// @notice Represents an Espresso validator and tracks funds currently delegated to them.
@@ -229,6 +232,11 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         initializeState(_tokenAddress, _lightClientAddress, _exitEscrowPeriod);
     }
 
+    /// @notice Initialize the state of the contract
+    /// @param _tokenAddress The address of the staking token
+    /// @param _lightClientAddress The address of the light client
+    /// @param _exitEscrowPeriod The exit escrow period. Set to uint64.max to disable the exit
+    /// escrow period.
     function initializeState(
         address _tokenAddress,
         address _lightClientAddress,
@@ -242,6 +250,12 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         }
         token = ERC20(_tokenAddress);
         lightClient = ILightClient(_lightClientAddress);
+
+        uint256 minExitEscrowPeriod = 90 seconds; // assuming 15s per block and min blocks per epoch
+            // is 6 in the light client
+        if (_exitEscrowPeriod < minExitEscrowPeriod) {
+            revert ExitEscrowPeriodInvalid();
+        }
         exitEscrowPeriod = _exitEscrowPeriod;
     }
 
@@ -461,20 +475,12 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// @notice Update the consensus keys for a validator
     /// @dev This function is used to update the consensus keys for a validator
     /// @dev This function can only be called by the validator itself when it hasn't exited
-    ///      TODO: MA: is this a good idea? Why should key rotation be blocked for an exiting
-    ///      validator?
     /// @dev The validator will need to give up either its old BLS key and/or old Schnorr key
     /// @dev The validator will need to provide a BLS signature to prove that the account owns the
     /// new BLS key
     /// @param newBlsVK The new BLS verification key
     /// @param newSchnorrVK The new Schnorr verification key
     /// @param newBlsSig The BLS signature that the account owns the new BLS key
-    ///
-    /// TODO: MA: I think this function should be reworked. Is it fine to always force updating both
-    /// keys? If not we should probably rather have two functions for updating the keys. But this
-    /// would also mean two separate events, or storing the keys in the contract only for this
-    /// update function to remit the old keys, or throw errors if the keys are not changed. None of
-    /// that seems useful enough to warrant the extra complexity in the contract and GCL.
     function updateConsensusKeys(
         BN254.G2Point memory newBlsVK,
         EdOnBN254.EdOnBN254Point memory newSchnorrVK,

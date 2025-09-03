@@ -268,6 +268,7 @@ where
             match self.fetch_stake_table(current_fetch_epoch).await {
                 Ok(_) => {},
                 Err(err) => {
+                    fetch_epochs.push((current_fetch_epoch, tx));
                     self.catchup_cleanup(epoch, epoch_tx, fetch_epochs, err)
                         .await;
                     return;
@@ -392,6 +393,11 @@ where
     ) {
         // Cleanup in case of error
         cancel_epochs.push((req_epoch, epoch_tx));
+
+        tracing::error!(
+            "catchup for epoch {req_epoch:?} failed: {err:?}. Canceling catchup for epochs: {:?}",
+            cancel_epochs.iter().map(|(e, _)| e).collect::<Vec<_>>()
+        );
         let mut map_lock = self.catchup_map.lock().await;
         for (epoch, _) in cancel_epochs.iter() {
             // Remove the failed epochs from the catchup map
@@ -409,7 +415,6 @@ where
                 );
             }
         }
-        tracing::error!("catchup for epoch {req_epoch:?} failed: {err:?}");
     }
 
     /// A helper method to the `catchup` method.
