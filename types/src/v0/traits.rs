@@ -679,7 +679,7 @@ pub trait SequencerPersistence:
             .await
             .context("loading light client state update certificate")?;
 
-        tracing::info!(
+        tracing::warn!(
             ?leaf,
             ?restart_view,
             ?epoch,

@@ -242,6 +242,7 @@ pub struct NsProof {
     /// The index of the namespace.
     pub ns_index: usize,
     /// The namespace payload.
+    #[serde(with = "base64_bytes")]
     pub ns_payload: Vec<u8>,
     /// The merkle proof of the namespace payload against the namespaced VID commitment.
     pub ns_proof: MerkleProof,

@@ -64,7 +64,7 @@ impl TestSystem {
     pub async fn deploy_version(
         stake_table_contract_version: StakeTableContractVersion,
     ) -> Result<Self> {
-        let exit_escrow_period = Duration::from_secs(1);
+        let exit_escrow_period = Duration::from_secs(250);
         let port = portpicker::pick_unused_port().unwrap();
         // Spawn anvil
         let provider = ProviderBuilder::new().on_anvil_with_wallet_and_config(|anvil| {
