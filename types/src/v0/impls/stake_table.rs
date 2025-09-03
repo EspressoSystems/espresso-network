@@ -3084,7 +3084,7 @@ mod tests {
             bls_vk: bls_key_pair.ver_key().to_affine().into(),
             schnorr_vk: val1.schnorr_vk,
             commission: val1.commission,
-            bls_sig: sign_address_bls(&bls_key_pair, val1.account),
+            bls_sig: sign_address_bls(&bls_key_pair, val1.account).into(),
             schnorr_sig: val1.clone().schnorr_sig,
         };
         let event1 = StakeTableEvent::RegisterV2((&val1).into());
