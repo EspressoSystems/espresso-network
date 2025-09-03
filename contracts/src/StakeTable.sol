@@ -19,13 +19,6 @@ using EdOnBN254 for EdOnBN254.EdOnBN254Point;
 /// @dev All functions are marked as virtual so that future upgrades can override them.
 contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpgradeable {
     // === Events ===
-
-    /// @notice upgrade event when the proxy updates the implementation it's pointing to
-
-    // TODO: is this event useful, it currently emits the same data as the UUPSUpgradeable Upgraded
-    // event. Consider making it more useful or removing it.
-    event Upgrade(address implementation);
-
     /// @notice A registration of a new validator.
     ///
     /// @notice Signals to the confirmation layer that a new validator is ready to receive
@@ -273,8 +266,10 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     }
 
     /// @notice only the timelock can authorize an upgrade
+    // solhint-disable-next-line no-empty-blocks
     function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner {
-        emit Upgrade(newImplementation);
+        // Only the owner (timelock) can authorize upgrades
+        // No additional checks needed beyond the onlyOwner modifier
     }
 
     /// @dev Computes a hash value of some G2 point.
