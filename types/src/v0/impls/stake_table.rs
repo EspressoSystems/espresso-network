@@ -911,8 +911,10 @@ impl Fetcher {
                 if let Ok(event) = ValidatorRegisteredV2::decode_log(&log_clone, false) {
                     match event.authenticate() {
                         Ok(_) => registrations_v2.push((event.data, log)),
-                        Err(_) => tracing::warn!(
-                            "Failed to authenticate ValidatorRegisteredV2 event: {log:?}",
+                        Err(e) => tracing::warn!(
+                            %e,
+                            "Failed to authenticate ValidatorRegisteredV2 event: {}",
+                            log.display()
                         ),
                     }
                     continue;
@@ -946,8 +948,10 @@ impl Fetcher {
                 if let Ok(event) = ConsensusKeysUpdatedV2::decode_log(&log_clone, false) {
                     match event.authenticate() {
                         Ok(_) => keys_v2.push((event.data, log)),
-                        Err(_) => tracing::warn!(
-                            "Failed to authenticate ConsensusKeysUpdatedV2 event: {log:?}",
+                        Err(e) => tracing::warn!(
+                            %e,
+                            "Failed to authenticate ConsensusKeysUpdatedV2 event {:?}",
+                            log.display()
                         ),
                     }
                 }
