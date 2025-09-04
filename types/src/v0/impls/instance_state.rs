@@ -41,6 +41,7 @@ pub struct NodeState {
     pub state_catchup: Arc<dyn StateCatchup>,
     pub genesis_header: GenesisHeader,
     pub genesis_state: ValidatedState,
+    pub genesis_chain_config: ChainConfig,
     pub l1_genesis: Option<L1BlockInfo>,
     #[debug(skip)]
     pub coordinator: EpochMembershipCoordinator<SeqTypes>,
@@ -135,6 +136,7 @@ impl NodeState {
         Self {
             node_id,
             chain_config,
+            genesis_chain_config: chain_config,
             l1_client,
             state_catchup: Arc::new(catchup),
             genesis_header: Default::default(),

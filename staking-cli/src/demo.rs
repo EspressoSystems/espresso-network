@@ -27,6 +27,7 @@ use crate::{
     info::fetch_token_address,
     parse::{parse_bls_priv_key, parse_state_priv_key, Commission},
     registration::register_validator,
+    signature::NodeSignatures,
     Config,
 };
 
@@ -138,13 +139,12 @@ pub async fn setup_stake_table_contract_for_test(
         assert!(receipt.status());
 
         tracing::info!("deploy validator {val_index} with commission {commission}");
+        let payload = NodeSignatures::create(validator_address, &bls_key_pair, &state_key_pair);
         let receipt = register_validator(
             &validator_provider,
             stake_table_address,
             commission,
-            validator_address,
-            bls_key_pair,
-            state_key_pair,
+            payload,
         )
         .await?;
         assert!(receipt.status());
