@@ -139,7 +139,10 @@ impl NodeState {
             genesis_chain_config: chain_config,
             l1_client,
             state_catchup: Arc::new(catchup),
-            genesis_header: Default::default(),
+            genesis_header: GenesisHeader {
+                timestamp: Default::default(),
+                chain_config,
+            },
             genesis_state: ValidatedState {
                 chain_config: chain_config.into(),
                 ..Default::default()
