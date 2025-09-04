@@ -322,7 +322,6 @@ mod test {
 
         let genesis_file = tmp.path().join("genesis.toml");
         let genesis = Genesis {
-            genesis_chain_config: None,
             chain_config: Default::default(),
             stake_table: StakeTableConfig { capacity: 10 },
             accounts: Default::default(),

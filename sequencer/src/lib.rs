@@ -480,7 +480,7 @@ where
         },
     };
 
-    let genesis_chain_config = genesis.genesis_chain_config.unwrap_or(genesis.chain_config);
+    let genesis_chain_config = genesis.header.chain_config;
     let mut genesis_state = ValidatedState {
         chain_config: genesis_chain_config.into(),
         ..Default::default()

@@ -58,7 +58,6 @@ pub struct Genesis {
     pub drb_upgrade_difficulty: Option<u64>,
     pub epoch_start_block: Option<u64>,
     pub stake_table_capacity: Option<usize>,
-    pub genesis_chain_config: Option<ChainConfig>,
     pub chain_config: ChainConfig,
     pub stake_table: StakeTableConfig,
     #[serde(default)]
@@ -359,6 +358,12 @@ mod test {
 
             [header]
             timestamp = 123456
+            [header.chain_config]
+            chain_id = 33
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [accounts]
             "0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f" = 100000
@@ -389,6 +394,7 @@ mod test {
             genesis.header,
             GenesisHeader {
                 timestamp: Timestamp::from_integer(123456).unwrap(),
+                chain_config: ChainConfig::default(),
             }
         );
         assert_eq!(
@@ -439,6 +445,12 @@ mod test {
 
             [header]
             timestamp = 123456
+            [header.chain_config]
+            chain_id = 33
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [l1_finalized]
             number = 0
@@ -463,6 +475,7 @@ mod test {
             genesis.header,
             GenesisHeader {
                 timestamp: Timestamp::from_integer(123456).unwrap(),
+                chain_config: ChainConfig::default(),
             }
         );
         assert_eq!(genesis.accounts, HashMap::default());
@@ -487,6 +500,13 @@ mod test {
 
             [header]
             timestamp = 123456
+
+            [header.chain_config]
+            chain_id = 33
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [l1_finalized]
             number = 42
@@ -515,6 +535,13 @@ mod test {
 
             [header]
             timestamp = 123456
+
+            [header.chain_config]
+            chain_id = 33
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [l1_finalized]
             timestamp = "2024-01-02T00:00:00Z"
@@ -567,6 +594,13 @@ mod test {
             [header]
             timestamp = 123456
 
+            [header.chain_config]
+            chain_id = 33
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
+
             [l1_finalized]
             number = 42
         "#,
@@ -618,6 +652,13 @@ mod test {
 
             [header]
             timestamp = 123456
+
+            [header.chain_config]
+            chain_id = 33
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [l1_finalized]
             number = 42
@@ -673,6 +714,13 @@ mod test {
 
             [header]
             timestamp = 123456
+
+            [header.chain_config]
+            chain_id = 33
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [l1_finalized]
             number = 42
@@ -743,6 +791,13 @@ mod test {
 
             [header]
             timestamp = 123456
+
+            [header.chain_config]
+            chain_id = 33
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [l1_finalized]
             number = 42
@@ -817,6 +872,13 @@ mod test {
             [header]
             timestamp = 123456
 
+            [header.chain_config]
+            chain_id = 33
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
+
             [l1_finalized]
             number = 42
         "#
@@ -857,6 +919,20 @@ mod test {
             [header]
             timestamp = "2024-05-16T11:20:28-04:00"
 
+            [header.chain_config]
+            chain_id = 33
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
+
+            [header.chain_config]
+            chain_id = 33
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
+
             [l1_finalized]
             number = 0
         }
@@ -870,6 +946,7 @@ mod test {
             genesis.header,
             GenesisHeader {
                 timestamp: Timestamp::from_integer(1715872828).unwrap(),
+                chain_config: ChainConfig::default(),
             }
         )
     }
@@ -895,6 +972,13 @@ mod test {
 
             [header]
             timestamp = 123456
+
+            [header.chain_config]
+            chain_id = 33
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [accounts]
             "0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f" = 100000
@@ -964,6 +1048,13 @@ mod test {
 
             [header]
             timestamp = 123456
+
+            [header.chain_config]
+            chain_id = 33
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [accounts]
             "0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f" = 100000
@@ -1035,6 +1126,13 @@ mod test {
             [header]
             timestamp = 123456
 
+            [header.chain_config]
+            chain_id = 33
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
+
             [accounts]
             "0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f" = 100000
             "0x0000000000000000000000000000000000000000" = 42
@@ -1089,6 +1187,13 @@ mod test {
 
             [header]
             timestamp = 123456
+
+            [header.chain_config]
+            chain_id = 33
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [accounts]
             "0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f" = 100000
@@ -1164,6 +1269,13 @@ mod test {
             [header]
             timestamp = 123456
 
+            [header.chain_config]
+            chain_id = 33
+            max_block_size = 5000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
+
             [accounts]
             "0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f" = 100000
             "0x0000000000000000000000000000000000000000" = 42
@@ -1205,11 +1317,11 @@ mod test {
 
         let genesis = toml::from_str::<Genesis>(&toml).unwrap();
 
-        assert_eq!(genesis.genesis_chain_config.unwrap().chain_id, 33.into());
+        assert_eq!(genesis.header.chain_config.chain_id, 33.into());
         assert_eq!(genesis.chain_config.chain_id, 12345.into());
 
         assert_eq!(
-            genesis.genesis_chain_config.unwrap().max_block_size,
+            genesis.header.chain_config.max_block_size,
             5000.into()
         );
         assert_eq!(genesis.chain_config.max_block_size, 30000.into());
