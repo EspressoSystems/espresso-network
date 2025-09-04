@@ -1320,10 +1320,7 @@ mod test {
         assert_eq!(genesis.header.chain_config.chain_id, 33.into());
         assert_eq!(genesis.chain_config.chain_id, 12345.into());
 
-        assert_eq!(
-            genesis.header.chain_config.max_block_size,
-            5000.into()
-        );
+        assert_eq!(genesis.header.chain_config.max_block_size, 5000.into());
         assert_eq!(genesis.chain_config.max_block_size, 30000.into());
     }
 }
