@@ -480,8 +480,9 @@ where
         },
     };
 
+    let genesis_chain_config = genesis.header.chain_config;
     let mut genesis_state = ValidatedState {
-        chain_config: genesis.chain_config.into(),
+        chain_config: genesis_chain_config.into(),
         ..Default::default()
     };
     for (address, amount) in genesis.accounts {
@@ -545,6 +546,7 @@ where
 
     let instance_state = NodeState {
         chain_config: genesis.chain_config,
+        genesis_chain_config,
         l1_client,
         genesis_header: genesis.header,
         genesis_state,
