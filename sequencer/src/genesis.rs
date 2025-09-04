@@ -358,12 +358,12 @@ mod test {
 
             [header]
             timestamp = 123456
+
             [header.chain_config]
-            chain_id = 33
-            max_block_size = 30000
-            base_fee = 1
+            chain_id = 35353
+            max_block_size = 30720
+            base_fee = 0
             fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [accounts]
             "0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f" = 100000
@@ -445,12 +445,11 @@ mod test {
 
             [header]
             timestamp = 123456
-            [header.chain_config]
-            chain_id = 33
-            max_block_size = 30000
-            base_fee = 1
+           [header.chain_config]
+            chain_id = 35353
+            max_block_size = 30720
+            base_fee = 0
             fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [l1_finalized]
             number = 0
@@ -502,11 +501,10 @@ mod test {
             timestamp = 123456
 
             [header.chain_config]
-            chain_id = 33
-            max_block_size = 30000
-            base_fee = 1
+            chain_id = 35353
+            max_block_size = 30720
+            base_fee = 0
             fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [l1_finalized]
             number = 42
@@ -537,11 +535,10 @@ mod test {
             timestamp = 123456
 
             [header.chain_config]
-            chain_id = 33
-            max_block_size = 30000
-            base_fee = 1
+            chain_id = 35353
+            max_block_size = 30720
+            base_fee = 0
             fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [l1_finalized]
             timestamp = "2024-01-02T00:00:00Z"
@@ -595,11 +592,10 @@ mod test {
             timestamp = 123456
 
             [header.chain_config]
-            chain_id = 33
-            max_block_size = 30000
-            base_fee = 1
+            chain_id = 35353
+            max_block_size = 30720
+            base_fee = 0
             fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [l1_finalized]
             number = 42
@@ -654,11 +650,10 @@ mod test {
             timestamp = 123456
 
             [header.chain_config]
-            chain_id = 33
-            max_block_size = 30000
-            base_fee = 1
+            chain_id = 35353
+            max_block_size = 30720
+            base_fee = 0
             fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [l1_finalized]
             number = 42
@@ -716,11 +711,10 @@ mod test {
             timestamp = 123456
 
             [header.chain_config]
-            chain_id = 33
-            max_block_size = 30000
-            base_fee = 1
+            chain_id = 35353
+            max_block_size = 30720
+            base_fee = 0
             fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [l1_finalized]
             number = 42
@@ -793,11 +787,10 @@ mod test {
             timestamp = 123456
 
             [header.chain_config]
-            chain_id = 33
-            max_block_size = 30000
-            base_fee = 1
+            chain_id = 35353
+            max_block_size = 30720
+            base_fee = 0
             fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [l1_finalized]
             number = 42
@@ -873,11 +866,10 @@ mod test {
             timestamp = 123456
 
             [header.chain_config]
-            chain_id = 33
-            max_block_size = 30000
-            base_fee = 1
+            chain_id = 35353
+            max_block_size = 30720
+            base_fee = 0
             fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [l1_finalized]
             number = 42
@@ -919,19 +911,13 @@ mod test {
             [header]
             timestamp = "2024-05-16T11:20:28-04:00"
 
-            [header.chain_config]
-            chain_id = 33
-            max_block_size = 30000
-            base_fee = 1
-            fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "0x0000000000000000000000000000000000000000"
 
-            [header.chain_config]
-            chain_id = 33
-            max_block_size = 30000
-            base_fee = 1
+
+           [header.chain_config]
+            chain_id = 35353
+            max_block_size = 30720
+            base_fee = 0
             fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [l1_finalized]
             number = 0
@@ -974,11 +960,10 @@ mod test {
             timestamp = 123456
 
             [header.chain_config]
-            chain_id = 33
-            max_block_size = 30000
-            base_fee = 1
+            chain_id = 35353
+            max_block_size = 30720
+            base_fee = 0
             fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [accounts]
             "0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f" = 100000
@@ -1050,11 +1035,10 @@ mod test {
             timestamp = 123456
 
             [header.chain_config]
-            chain_id = 33
-            max_block_size = 30000
-            base_fee = 1
+            chain_id = 35353
+            max_block_size = 30720
+            base_fee = 0
             fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [accounts]
             "0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f" = 100000
@@ -1127,11 +1111,10 @@ mod test {
             timestamp = 123456
 
             [header.chain_config]
-            chain_id = 33
-            max_block_size = 30000
-            base_fee = 1
+            chain_id = 35353
+            max_block_size = 30720
+            base_fee = 0
             fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [accounts]
             "0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f" = 100000
@@ -1188,12 +1171,11 @@ mod test {
             [header]
             timestamp = 123456
 
-            [header.chain_config]
-            chain_id = 33
-            max_block_size = 30000
-            base_fee = 1
+         [header.chain_config]
+            chain_id = 35353
+            max_block_size = 30720
+            base_fee = 0
             fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "0x0000000000000000000000000000000000000000"
 
             [accounts]
             "0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f" = 100000
