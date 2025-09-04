@@ -647,6 +647,7 @@ impl TestNetwork {
         let genesis_file_path = tmp.path().join("genesis.toml");
 
         let mut genesis = Genesis {
+            genesis_chain_config: None,
             chain_config: Default::default(),
             // TODO we apparently have two `capacity` configurations
             stake_table: StakeTableConfig {
