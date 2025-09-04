@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["StakeTableContractVersion","StakeTableSolError"],"fn":["authenticate_bls_sig","authenticate_schnorr_sig","authenticate_stake_table_validator_event","sign_address_bls","sign_address_schnorr"]};
+window.SIDEBAR_ITEMS = {"enum":["StakeTableContractVersion","StakeTableSolError"],"fn":["authenticate_bls_sig","authenticate_schnorr_sig","authenticate_stake_table_validator_event","sign_address_bls","sign_address_schnorr"],"struct":["StateSignatureSol"]};

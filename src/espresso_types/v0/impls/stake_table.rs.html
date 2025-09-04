@@ -2501,7 +2501,7 @@
 <a href=#2501 id=2501 data-nosnippet>2501</a>    <span class="kw">use </span>alloy::primitives::Bytes;
 <a href=#2502 id=2502 data-nosnippet>2502</a>    <span class="kw">use </span>hotshot_contract_adapter::{
 <a href=#2503 id=2503 data-nosnippet>2503</a>        sol_types::{EdOnBN254PointSol, G1PointSol, G2PointSol},
-<a href=#2504 id=2504 data-nosnippet>2504</a>        stake_table::{sign_address_bls, sign_address_schnorr},
+<a href=#2504 id=2504 data-nosnippet>2504</a>        stake_table::{sign_address_bls, sign_address_schnorr, StateSignatureSol},
 <a href=#2505 id=2505 data-nosnippet>2505</a>    };
 <a href=#2506 id=2506 data-nosnippet>2506</a>    <span class="kw">use </span>hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
 <a href=#2507 id=2507 data-nosnippet>2507</a>    <span class="kw">use </span>rand::{Rng <span class="kw">as _</span>, RngCore <span class="kw">as _</span>};
@@ -2544,8 +2544,8 @@
 <a href=#2544 id=2544 data-nosnippet>2544</a>                bls_vk: bls_key_pair.ver_key().to_affine().into(),
 <a href=#2545 id=2545 data-nosnippet>2545</a>                schnorr_vk: schnorr_key_pair.ver_key().to_affine().into(),
 <a href=#2546 id=2546 data-nosnippet>2546</a>                commission,
-<a href=#2547 id=2547 data-nosnippet>2547</a>                bls_sig,
-<a href=#2548 id=2548 data-nosnippet>2548</a>                schnorr_sig,
+<a href=#2547 id=2547 data-nosnippet>2547</a>                bls_sig: bls_sig.into(),
+<a href=#2548 id=2548 data-nosnippet>2548</a>                schnorr_sig: StateSignatureSol::from(schnorr_sig).into(),
 <a href=#2549 id=2549 data-nosnippet>2549</a>            }
 <a href=#2550 id=2550 data-nosnippet>2550</a>        }
 <a href=#2551 id=2551 data-nosnippet>2551</a>    }
@@ -3084,7 +3084,7 @@
 <a href=#3084 id=3084 data-nosnippet>3084</a>            bls_vk: bls_key_pair.ver_key().to_affine().into(),
 <a href=#3085 id=3085 data-nosnippet>3085</a>            schnorr_vk: val1.schnorr_vk,
 <a href=#3086 id=3086 data-nosnippet>3086</a>            commission: val1.commission,
-<a href=#3087 id=3087 data-nosnippet>3087</a>            bls_sig: sign_address_bls(<span class="kw-2">&amp;</span>bls_key_pair, val1.account),
+<a href=#3087 id=3087 data-nosnippet>3087</a>            bls_sig: sign_address_bls(<span class="kw-2">&amp;</span>bls_key_pair, val1.account).into(),
 <a href=#3088 id=3088 data-nosnippet>3088</a>            schnorr_sig: val1.clone().schnorr_sig,
 <a href=#3089 id=3089 data-nosnippet>3089</a>        };
 <a href=#3090 id=3090 data-nosnippet>3090</a>        <span class="kw">let </span>event1 = StakeTableEvent::RegisterV2((<span class="kw-2">&amp;</span>val1).into());
