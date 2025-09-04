@@ -287,7 +287,7 @@ mod test {
             Some(0),
             receipt.block_number.unwrap(),
         )
-        .await
+        .await?
         .sort_events()?;
 
         // verify that we only have the first RegisterV2 event
@@ -345,7 +345,7 @@ mod test {
             Some(0),
             receipt.block_number.unwrap(),
         )
-        .await
+        .await?
         .sort_events()?;
 
         // verify that we only have the RegisterV2 event

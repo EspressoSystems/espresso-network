@@ -1272,7 +1272,7 @@ mod tests {
             None,
             block,
         )
-        .await
+        .await?
         .sort_events()?;
         assert_eq!(
             contract_events, events,
@@ -1567,7 +1567,7 @@ mod tests {
 
             let contract_events =
                 Fetcher::fetch_events_from_contract(l1_client.clone(), st_addr, None, l1_block)
-                    .await
+                    .await?
                     .sort_events()?;
             assert_eq!(persisted_events, contract_events);
 

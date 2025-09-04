@@ -3478,7 +3478,7 @@ mod test {
                 None,
                 l1_block.number(),
             )
-            .await;
+            .await?;
             let sorted_events = events.sort_events().expect("failed to sort");
 
             let mut sorted_dedup_removed = sorted_events.clone();

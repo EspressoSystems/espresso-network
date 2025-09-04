@@ -12,7 +12,7 @@ use alloy::{
     primitives::{utils::format_ether, Address, U256},
     providers::Provider,
     rpc::types::{Filter, Log},
-    sol_types::SolEvent,
+    sol_types::{SolEvent, SolEventInterface},
 };
 use anyhow::{bail, ensure, Context};
 use ark_ec::AffineRepr;
@@ -25,8 +25,8 @@ use hotshot::types::{BLSPubKey, SchnorrPubKey, SignatureKey as _};
 use hotshot_contract_adapter::sol_types::{
     EspToken::{self, EspTokenInstance},
     StakeTableV2::{
-        self, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit,
-        ValidatorRegistered, ValidatorRegisteredV2,
+        self, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, StakeTableV2Events,
+        Undelegated, ValidatorExit, ValidatorRegistered, ValidatorRegisteredV2,
     },
 };
 use hotshot_types::{
@@ -781,7 +781,7 @@ impl Fetcher {
             from_block,
             to_block,
         )
-        .await;
+        .await?;
 
         let contract_events = contract_events.sort_events()?;
         let mut events = match from_block {
@@ -812,7 +812,7 @@ impl Fetcher {
         contract: Address,
         from_block: Option<u64>,
         to_block: u64,
-    ) -> StakeTableEvents {
+    ) -> anyhow::Result<StakeTableEvents> {
         let stake_table_contract = StakeTableV2::new(contract, l1_client.provider.clone());
         let max_retry_duration = l1_client.options().l1_events_max_retry_duration;
         // get the block number when the contract was initialized
@@ -899,66 +899,55 @@ impl Fetcher {
             .await;
 
             for log in logs {
-                let log_clone = log.clone().into();
+                let event =
+                    StakeTableV2Events::decode_raw_log(log.topics(), &log.data().data, false)?;
 
-                // ValidatorRegistered v1
-                if let Ok(event) = ValidatorRegistered::decode_log(&log_clone, false) {
-                    registrations.push((event.data, log));
-                    continue;
-                }
-
-                // ValidatorRegistered v2
-                if let Ok(event) = ValidatorRegisteredV2::decode_log(&log_clone, false) {
-                    match event.authenticate() {
-                        Ok(_) => registrations_v2.push((event.data, log)),
-                        Err(e) => tracing::warn!(
-                            %e,
-                            "Failed to authenticate ValidatorRegisteredV2 event: {}",
-                            log.display()
-                        ),
-                    }
-                    continue;
-                }
-
-                // ValidatorExit
-                if let Ok(event) = ValidatorExit::decode_log(&log_clone, false) {
-                    deregistrations.push((event.data, log));
-                    continue;
-                }
-
-                // Delegated
-                if let Ok(event) = Delegated::decode_log(&log_clone, false) {
-                    delegated.push((event.data, log));
-                    continue;
-                }
-
-                // Undelegated
-                if let Ok(event) = Undelegated::decode_log(&log_clone, false) {
-                    undelegated.push((event.data, log));
-                    continue;
-                }
-
-                // ConsensusKeysUpdated v1
-                if let Ok(event) = ConsensusKeysUpdated::decode_log(&log_clone, false) {
-                    keys.push((event.data, log));
-                    continue;
-                }
-
-                // ConsensusKeysUpdated v2
-                if let Ok(event) = ConsensusKeysUpdatedV2::decode_log(&log_clone, false) {
-                    match event.authenticate() {
-                        Ok(_) => keys_v2.push((event.data, log)),
-                        Err(e) => tracing::warn!(
-                            %e,
-                            "Failed to authenticate ConsensusKeysUpdatedV2 event {:?}",
-                            log.display()
-                        ),
-                    }
+                match event {
+                    StakeTableV2Events::ValidatorRegistered(event) => {
+                        registrations.push((event, log));
+                    },
+                    StakeTableV2Events::ValidatorRegisteredV2(event) => {
+                        match event.authenticate() {
+                            Ok(_) => registrations_v2.push((event, log)),
+                            Err(e) => tracing::warn!(
+                                %e,
+                                "Failed to authenticate ValidatorRegisteredV2 event: {}",
+                                log.display()
+                            ),
+                        }
+                    },
+                    StakeTableV2Events::ValidatorExit(event) => {
+                        deregistrations.push((event, log));
+                    },
+                    StakeTableV2Events::Delegated(event) => {
+                        delegated.push((event, log));
+                    },
+                    StakeTableV2Events::Undelegated(event) => {
+                        undelegated.push((event, log));
+                    },
+                    StakeTableV2Events::ConsensusKeysUpdated(event) => {
+                        keys.push((event, log));
+                    },
+                    StakeTableV2Events::ConsensusKeysUpdatedV2(event) => {
+                        match event.authenticate() {
+                            Ok(_) => keys_v2.push((event, log)),
+                            Err(e) => tracing::warn!(
+                                %e,
+                                "Failed to authenticate ConsensusKeysUpdatedV2 event: {}",
+                                log.display()
+                            ),
+                        }
+                    },
+                    // ignore events you don’t care about
+                    _ => {
+                        tracing::error!("Unexpected StakeTableV2 event {}", log.display());
+                        bail!(format!("Unexpected event {}", log.display()));
+                    },
                 }
             }
         }
 
-        StakeTableEvents::from_l1_logs(
+        Ok(StakeTableEvents::from_l1_logs(
             registrations,
             registrations_v2,
             deregistrations,
@@ -966,7 +955,7 @@ impl Fetcher {
             undelegated,
             keys,
             keys_v2,
-        )
+        ))
     }
 
     /// Get `StakeTable` at specific l1 block height.
@@ -1000,7 +989,7 @@ impl Fetcher {
         contract: Address,
         to_block: u64,
     ) -> anyhow::Result<(ValidatorMap, StakeTableHash)> {
-        let events = Self::fetch_events_from_contract(l1_client, contract, None, to_block).await;
+        let events = Self::fetch_events_from_contract(l1_client, contract, None, to_block).await?;
         let sorted = events.sort_events()?;
         // Process the sorted events and return the resulting stake table.
         validators_from_l1_events(sorted.into_iter().map(|(_, e)| e))
@@ -3072,7 +3061,7 @@ mod tests {
             None,
             8582328,
         )
-        .await;
+        .await?;
 
         let sorted_events = events.sort_events().expect("failed to sort");
 
@@ -3134,7 +3123,8 @@ mod tests {
             None,
             latest_block,
         )
-        .await;
+        .await
+        .unwrap();
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
