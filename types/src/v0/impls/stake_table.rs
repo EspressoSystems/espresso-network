@@ -2501,7 +2501,7 @@ pub mod testing {
     use alloy::primitives::Bytes;
     use hotshot_contract_adapter::{
         sol_types::{EdOnBN254PointSol, G1PointSol, G2PointSol},
-        stake_table::{sign_address_bls, sign_address_schnorr},
+        stake_table::{sign_address_bls, sign_address_schnorr, StateSignatureSol},
     };
     use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
     use rand::{Rng as _, RngCore as _};
@@ -2544,8 +2544,8 @@ pub mod testing {
                 bls_vk: bls_key_pair.ver_key().to_affine().into(),
                 schnorr_vk: schnorr_key_pair.ver_key().to_affine().into(),
                 commission,
-                bls_sig,
-                schnorr_sig,
+                bls_sig: bls_sig.into(),
+                schnorr_sig: StateSignatureSol::from(schnorr_sig).into(),
             }
         }
     }
@@ -3084,7 +3084,7 @@ mod tests {
             bls_vk: bls_key_pair.ver_key().to_affine().into(),
             schnorr_vk: val1.schnorr_vk,
             commission: val1.commission,
-            bls_sig: sign_address_bls(&bls_key_pair, val1.account),
+            bls_sig: sign_address_bls(&bls_key_pair, val1.account).into(),
             schnorr_sig: val1.clone().schnorr_sig,
         };
         let event1 = StakeTableEvent::RegisterV2((&val1).into());
