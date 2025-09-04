@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import { OwnableUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { PausableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import { AccessControlUpgradeable } from
@@ -12,7 +9,7 @@ import { StakeTable } from "./StakeTable.sol";
 import { EdOnBN254 } from "./libraries/EdOnBn254.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { BLSSig } from "./libraries/BLSSig.sol";
-import { SafeTransferLib, ERC20 } from "solmate/utils/SafeTransferLib.sol";
+import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 
 /// @title Ethereum L1 component of the Espresso Global Confirmation Layer (GCL) stake table.
 ///
@@ -61,8 +58,6 @@ import { SafeTransferLib, ERC20 } from "solmate/utils/SafeTransferLib.sol";
 /// @notice The StakeTableV2 contract ABI is a superset of the original ABI. Consumers of the
 /// contract can use the V2 ABI, even if they would like to maintain backwards compatibility.
 contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeable {
-    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
-
     // === Events ===
 
     /// @notice A validator is registered in the stake table
@@ -96,6 +91,21 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     /// The function is deprecated as it was replaced by a new function
     error DeprecatedFunction();
+
+    /// The Schnorr key has been previously registered in the contract.
+    error SchnorrKeyAlreadyUsed();
+
+    /// Variables
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+
+    /// Schnorr keys that have been seen by the contract
+    ///
+    /// @dev ensures a bijective mapping between schnorr key and ethereum account and prevents some
+    /// errors due to
+    /// misconfigurations of validators the contract currently marks keys as used and only allow
+    /// them to be used once. This for example prevents callers from accidentally registering the
+    /// same Schnorr key twice.
+    mapping(bytes32 schnorrKey => bool used) public schnorrKeys;
 
     /// @notice Constructor
     /// @dev This function is overridden to disable initializers
@@ -227,7 +237,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
         ensureValidatorNotRegistered(validator);
         ensureNonZeroSchnorrKey(schnorrVK);
-        ensureNewKey(blsVK);
+        ensureNewKeys(blsVK, schnorrVK);
 
         // Verify that the validator can sign for that blsVK. This prevents rogue public-key
         // attacks.
@@ -244,6 +254,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         }
 
         blsKeys[_hashBlsKey(blsVK)] = true;
+        schnorrKeys[_hashSchnorrKey(schnorrVK)] = true;
         validators[validator] = Validator({ status: ValidatorStatus.Active, delegatedAmount: 0 });
 
         emit ValidatorRegisteredV2(validator, blsVK, schnorrVK, commission, blsSig, schnorrSig);
@@ -267,7 +278,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
         ensureValidatorActive(validator);
         ensureNonZeroSchnorrKey(schnorrVK);
-        ensureNewKey(blsVK);
+        ensureNewKeys(blsVK, schnorrVK);
 
         // Verify that the validator can sign for that blsVK. This prevents rogue public-key
         // attacks.
@@ -297,6 +308,31 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         emit ExitEscrowPeriodUpdated(newExitEscrowPeriod);
     }
 
+    function _hashSchnorrKey(EdOnBN254.EdOnBN254Point memory schnorrVK)
+        internal
+        pure
+        returns (bytes32)
+    {
+        return keccak256(abi.encode(schnorrVK.x, schnorrVK.y));
+    }
+
+    /// @notice Ensure that the BLS and Schnorr keys are not already used
+    /// @param blsVK The BLS verification key
+    /// @param schnorrVK The Schnorr verification key
+    function ensureNewKeys(BN254.G2Point memory blsVK, EdOnBN254.EdOnBN254Point memory schnorrVK)
+        internal
+        view
+    {
+        if (blsKeys[_hashBlsKey(blsVK)]) {
+            revert BlsKeyAlreadyUsed();
+        }
+
+        if (schnorrKeys[_hashSchnorrKey(schnorrVK)]) {
+            revert SchnorrKeyAlreadyUsed();
+        }
+    }
+
+    // deprecate previous registration function
     /// @notice Deprecate previous registration function
     /// @dev This function is overridden to revert with a DeprecatedFunction error
     /// @dev users must call registerValidatorV2 instead

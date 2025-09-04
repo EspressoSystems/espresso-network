@@ -300,7 +300,7 @@ impl StakeTableState {
                     ));
                 }
 
-                // The contract does *not* enforce that each schnorr key is only used once.
+                // The stake table v1 contract does *not* enforce that each schnorr key is only used once.
                 if !self.used_schnorr_keys.insert(state_ver_key.clone()) {
                     return Ok(Err(ExpectedStakeTableError::SchnorrKeyAlreadyUsed(
                         state_ver_key.to_string(),
@@ -344,18 +344,18 @@ impl StakeTableState {
                     return Err(StakeTableError::AlreadyRegistered(account));
                 }
 
-                // The stake table contract enforces that each bls key is only used once.
+                // The stake table v2 contract enforces that each bls key is only used once.
                 if !self.used_bls_keys.insert(stake_table_key) {
                     return Err(StakeTableError::BlsKeyAlreadyUsed(
                         stake_table_key.to_string(),
                     ));
                 }
 
-                // The contract does *not* enforce that each schnorr key is only used once.
+                // The stake table v2 contract enforces schnorr key is only used once.
                 if !self.used_schnorr_keys.insert(state_ver_key.clone()) {
-                    return Ok(Err(ExpectedStakeTableError::SchnorrKeyAlreadyUsed(
+                    return Err(StakeTableError::SchnorrKeyAlreadyUsed(
                         state_ver_key.to_string(),
-                    )));
+                    ));
                 }
 
                 entry.or_insert(Validator {
@@ -452,7 +452,7 @@ impl StakeTableState {
                     ));
                 }
 
-                // The contract does *not* enforce that each schnorr key is only used once,
+                // The stake table v1 contract does *not* enforce that each schnorr key is only used once,
                 // therefore it's possible to have multiple validators with the same schnorr key.
                 if !self.used_schnorr_keys.insert(state_ver_key.clone()) {
                     return Ok(Err(ExpectedStakeTableError::SchnorrKeyAlreadyUsed(
@@ -493,12 +493,11 @@ impl StakeTableState {
                     ));
                 }
 
-                // The contract does *not* enforce that each schnorr key is only used once,
-                // therefore it's possible to have multiple validators with the same schnorr key.
+                // The stake table v2 contract enforces that each schnorr key is only used once
                 if !self.used_schnorr_keys.insert(state_ver_key.clone()) {
-                    return Ok(Err(ExpectedStakeTableError::SchnorrKeyAlreadyUsed(
+                    return Err(StakeTableError::SchnorrKeyAlreadyUsed(
                         state_ver_key.to_string(),
-                    )));
+                    ));
                 }
 
                 validator.stake_table_key = stake_table_key;
@@ -2638,7 +2637,8 @@ pub mod testing {
 mod tests {
 
     use alloy::{primitives::Address, rpc::types::Log};
-    use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
+    use hotshot_contract_adapter::stake_table::{sign_address_bls, StakeTableContractVersion};
+    use hotshot_types::signature_key::BLSKeyPair;
     use pretty_assertions::assert_matches;
     use rstest::rstest;
 
@@ -3067,6 +3067,38 @@ mod tests {
                 if key == schnorr.to_string(),
             "Expected SchnorrKeyAlreadyUsed({schnorr}), but got: {result:?}",
 
+        );
+    }
+
+    #[test]
+    fn test_duplicate_schnorr_key_v2_during_update() {
+        let mut state = StakeTableState::new();
+
+        let val1 = TestValidator::random();
+
+        let mut rng = &mut rand::thread_rng();
+        let bls_key_pair = BLSKeyPair::generate(&mut rng);
+
+        let val2 = TestValidator {
+            account: val1.account,
+            bls_vk: bls_key_pair.ver_key().to_affine().into(),
+            schnorr_vk: val1.schnorr_vk,
+            commission: val1.commission,
+            bls_sig: sign_address_bls(&bls_key_pair, val1.account),
+            schnorr_sig: val1.clone().schnorr_sig,
+        };
+        let event1 = StakeTableEvent::RegisterV2((&val1).into());
+        let event2 = StakeTableEvent::KeyUpdateV2((&val2).into());
+
+        assert!(state.apply_event(event1).unwrap().is_ok());
+        let result = state.apply_event(event2);
+
+        let schnorr: SchnorrPubKey = val1.schnorr_vk.into();
+        assert_matches!(
+            result,
+            Err(StakeTableError::SchnorrKeyAlreadyUsed(key))
+                if key == schnorr.to_string(),
+            "Expected SchnorrKeyAlreadyUsed({schnorr}), but got: {result:?}",
         );
     }
 

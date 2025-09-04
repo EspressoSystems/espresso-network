@@ -164,6 +164,8 @@ pub enum StakeTableError {
     HashError(#[from] bincode::Error),
     #[error("Validator {0:#x} already exited and cannot be re-registered")]
     ValidatorAlreadyExited(Address),
+    #[error("Schnorr key already used: {0}")]
+    SchnorrKeyAlreadyUsed(String),
 }
 
 #[derive(Debug, Error)]
