@@ -751,6 +751,7 @@ impl TestNetwork {
             ..Default::default()
         };
         genesis.chain_config = chain_config;
+        genesis.header.chain_config = chain_config;
         genesis.to_file(&genesis_file_path).unwrap();
 
         let finalized = l1_client
