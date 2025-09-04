@@ -1,11 +1,12 @@
 use alloy::{
-    primitives::{Address, Bytes},
+    primitives::{Address, Bytes, U256},
     sol_types::SolValue,
 };
 use ark_bn254::G2Affine;
 use ark_ec::{AffineRepr, CurveGroup as _};
 use ark_ed_on_bn254::EdwardsConfig;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use derive_more::{Add, From};
 use hotshot_types::{
     light_client::{hash_bytes_to_field, StateKeyPair, StateSignature, StateVerKey},
     signature_key::{BLSKeyPair, BLSPubKey, BLSSignature},
@@ -16,6 +17,7 @@ use jf_signature::{
     constants::{CS_ID_BLS_BN254, CS_ID_SCHNORR},
     schnorr,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::sol_types::{
     StakeTableV2::{getVersionReturn, ConsensusKeysUpdatedV2, ValidatorRegisteredV2},
@@ -32,6 +34,11 @@ pub enum StakeTableContractVersion {
     #[default]
     V2,
 }
+
+#[derive(
+    Debug, Clone, Copy, Default, From, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd, Add,
+)]
+pub struct EthTimestamp(U256);
 
 impl TryFrom<getVersionReturn> for StakeTableContractVersion {
     type Error = anyhow::Error;
@@ -197,6 +204,15 @@ impl ConsensusKeysUpdatedV2 {
             &self.schnorrSig,
         )?;
         Ok(())
+    }
+}
+
+impl From<StakeTable::ValidatorRegistered> for StakeTableV2::InitialCommission {
+    fn from(value: StakeTable::ValidatorRegistered) -> Self {
+        Self {
+            validator: value.account,
+            commission: value.commission,
+        }
     }
 }
 

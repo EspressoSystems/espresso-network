@@ -246,6 +246,20 @@ impl TestSystem {
         Ok(())
     }
 
+    pub async fn warp_time(&self, seconds: U256) -> Result<()> {
+        self.provider
+            .anvil_increase_time(seconds.to::<u64>())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_min_commission_update_interval(&self) -> Result<U256> {
+        use hotshot_contract_adapter::sol_types::StakeTableV2;
+        let stake_table = StakeTableV2::new(self.stake_table, &self.provider);
+        let interval = stake_table.minCommissionUpdateInterval().call().await?._0;
+        Ok(interval)
+    }
+
     pub async fn balance(&self, address: Address) -> Result<U256> {
         let token = EspToken::new(self.token, &self.provider);
         Ok(token.balanceOf(address).call().await?._0)

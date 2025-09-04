@@ -934,9 +934,9 @@ contract StakeTable_register_Test is LightClientCommonTest {
             admin
         );
         proxy = new ERC1967Proxy(address(staketableImpl), initData);
-        S stakeTable = S(payable(address(proxy)));
+        S st = S(payable(address(proxy)));
 
-        assertEq(stakeTable.exitEscrowPeriod(), validEscrowPeriod);
+        assertEq(st.exitEscrowPeriod(), validEscrowPeriod);
     }
 }
 
@@ -1018,6 +1018,14 @@ contract StakeTableUpgradeV2Test is Test {
     function setUp() public virtual {
         stakeTableRegisterTest = new StakeTable_register_Test();
         stakeTableRegisterTest.setUp();
+    }
+
+    function admin() public view returns (address) {
+        return stakeTableRegisterTest.admin();
+    }
+
+    function getStakeTable() public view returns (S) {
+        return stakeTableRegisterTest.stakeTable();
     }
 
     function registerValidatorOnStakeTableV2(
@@ -2161,8 +2169,10 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         vm.startPrank(stakeTableRegisterTest.admin());
         S proxy = S(address(stakeTableRegisterTest.proxy()));
         address admin = proxy.owner();
-        bytes memory initData =
-            abi.encodeWithSelector(StakeTableV2.initializeV2.selector, pauser, admin);
+        StakeTableV2.InitialCommission[] memory emptyCommissions;
+        bytes memory initData = abi.encodeWithSelector(
+            StakeTableV2.initializeV2.selector, pauser, admin, emptyCommissions
+        );
         proxy.upgradeToAndCall(address(new StakeTableV2()), initData);
 
         (uint8 majorVersionNew,,) = StakeTableV2(address(proxy)).getVersion();
@@ -2181,7 +2191,8 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
 
         address admin = stakeTableV2.owner();
         vm.expectRevert();
-        stakeTableV2.initializeV2(pauser, admin);
+        StakeTableV2.InitialCommission[] memory emptyCommissions;
+        stakeTableV2.initializeV2(pauser, admin, emptyCommissions);
     }
 
     function test_StorageLayout_IsCompatible_V1V2() public {

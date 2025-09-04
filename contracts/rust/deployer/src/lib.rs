@@ -19,7 +19,7 @@ use alloy::{
     },
     transports::http::reqwest::Url,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::{builder::OsStr, Parser};
 use derive_more::{derive::Deref, Display};
 use hotshot_contract_adapter::sol_types::*;
@@ -915,7 +915,131 @@ pub async fn deploy_stake_table_proxy(
     Ok(st_proxy_addr)
 }
 
-/// Upgrade the stake table proxy to use StakeTableV2.
+/// Read commission values from L1 StakeTable V1 ValidatorRegistered events for V2 migration
+///
+/// This function can be removed once all stake table contracts in use are on V2 or later.
+pub async fn fetch_commissions_for_stake_table_storage_migration(
+    l1_provider: impl Provider,
+    stake_table_address: Address,
+) -> Result<Vec<StakeTableV2::InitialCommission>> {
+    let stake_table = StakeTable::new(stake_table_address, &l1_provider);
+
+    // Verify this is a V1 contract
+    let version = stake_table.getVersion().call().await?;
+    if version.majorVersion != 1 {
+        anyhow::bail!(
+            "Expected StakeTable V1 for commission migration, found V{}",
+            version.majorVersion
+        );
+    }
+
+    let start_block = stake_table
+        .initializedAtBlock()
+        .call()
+        .await?
+        ._0
+        .to::<u64>();
+
+    tracing::info!(
+        "Reading ValidatorRegistered events from L1 StakeTable V1 starting at block {}",
+        start_block
+    );
+
+    // Query ValidatorRegistered events (V1) to get initial commission values
+    let registration_events = stake_table
+        .ValidatorRegistered_filter()
+        .from_block(start_block)
+        .query()
+        .await
+        .context("Failed to query ValidatorRegistered events from V1 contract")?;
+
+    // Create a vec to store commissions in chronological order
+    // Note: V1 events only have initial registration, no updates
+    let mut initial_commissions = Vec::<StakeTableV2::InitialCommission>::new();
+
+    for (event, _log) in registration_events {
+        tracing::debug!(
+            "ValidatorRegistered: validator={:?}, commission={}",
+            event.account,
+            event.commission
+        );
+        initial_commissions.push(event.into());
+    }
+
+    tracing::info!(
+        "Found {} validators with commissions to migrate from V1",
+        initial_commissions.len()
+    );
+
+    Ok(initial_commissions)
+}
+
+/// Prepare the upgrade data for StakeTable V2, checking version and fetching commissions if needed.
+///
+/// Returns:
+/// - The initialization commissions (maybe used for post deployment verification)
+/// - The initialization calldata (if initialization is needed)
+pub async fn prepare_stake_table_v2_upgrade(
+    provider: impl Provider,
+    proxy_addr: Address,
+    pauser: Address,
+    admin: Address,
+) -> Result<(Option<Vec<StakeTableV2::InitialCommission>>, Option<Bytes>)> {
+    let proxy = StakeTable::new(proxy_addr, &provider);
+
+    let current_version = proxy.getVersion().call().await?;
+    let target_version = 2;
+    if current_version.majorVersion > target_version {
+        anyhow::bail!(
+            "Expected StakeTable V1 or V2, found V{}",
+            current_version.majorVersion
+        );
+    }
+
+    // For a non-major version upgrade the proxy storage must already be initialized.
+    let needs_initialization = !already_initialized(
+        &provider,
+        proxy_addr,
+        Contract::StakeTableV2,
+        target_version,
+    )
+    .await?;
+    assert_eq!(
+        needs_initialization,
+        current_version.majorVersion < target_version,
+        "unexpected version initialized"
+    );
+
+    if needs_initialization {
+        tracing::info!("Fetching commissions from V1 contract for migration");
+        let commissions =
+            fetch_commissions_for_stake_table_storage_migration(&provider, proxy_addr).await?;
+        tracing::info!("Fetched {} commissions from V1 contract", commissions.len());
+
+        tracing::info!(
+            %pauser,
+            %admin,
+            commission_count = commissions.len(),
+            "Init Data to be signed. Function: initializeV2",
+        );
+
+        // We can use any address here since we're just building calldata
+        let data = StakeTableV2::new(Address::ZERO, &provider)
+            .initializeV2(pauser, admin, commissions.clone())
+            .calldata()
+            .to_owned();
+
+        Ok((Some(commissions), Some(data)))
+    } else {
+        tracing::info!(
+            "Proxy was already initialized for version {}",
+            target_version
+        );
+        Ok((None, None))
+    }
+}
+
+/// Upgrade the stake table proxy from V1 to V2, or patch V2
 async fn upgrade_stake_table_v2(
     provider: impl Provider,
     contracts: &mut Contracts,
@@ -927,8 +1051,11 @@ async fn upgrade_stake_table_v2(
         anyhow::bail!("StakeTableProxy not found, can't upgrade")
     };
 
-    let proxy = StakeTable::new(proxy_addr, &provider);
-    // Deploy the new implementation
+    // First prepare upgrade data (including fetching commissions if needed)
+    let (init_commissions, init_data) =
+        prepare_stake_table_v2_upgrade(&provider, proxy_addr, pauser, admin).await?;
+
+    // Then deploy the new implementation
     let v2_addr = contracts
         .deploy(
             Contract::StakeTableV2,
@@ -936,41 +1063,10 @@ async fn upgrade_stake_table_v2(
         )
         .await?;
 
-    if !is_contract(&provider, v2_addr).await? {
-        anyhow::bail!("StakeTableV2 is not a contract, can't upgrade");
-    }
+    let proxy = StakeTable::new(proxy_addr, &provider);
 
-    // Prepare init data
-    let expected_major_version = 2;
-    let init_data = if already_initialized(
-        &provider,
-        proxy_addr,
-        Contract::StakeTableV2,
-        expected_major_version,
-    )
-    .await?
-    {
-        tracing::info!(
-            "Proxy was already initialized for version {}",
-            expected_major_version
-        );
-        vec![].into()
-    } else {
-        tracing::info!(
-            "Init Data to be signed.\n Function: initializeV2\n Arguments:\n pauser: {:?}\n \
-             admin: {:?}",
-            pauser,
-            admin
-        );
-        StakeTableV2::new(v2_addr, &provider)
-            .initializeV2(pauser, admin)
-            .calldata()
-            .to_owned()
-    };
-
-    // invoke upgrade on proxy
     let receipt = proxy
-        .upgradeToAndCall(v2_addr, init_data)
+        .upgradeToAndCall(v2_addr, init_data.unwrap_or_default())
         .send()
         .await?
         .get_receipt()
@@ -980,13 +1076,25 @@ async fn upgrade_stake_table_v2(
         // post deploy verification checks
         let proxy_as_v2 = StakeTableV2::new(proxy_addr, &provider);
         assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
-        // get pauser role
+
         let pauser_role = proxy_as_v2.PAUSER_ROLE().call().await?._0;
         assert!(proxy_as_v2.hasRole(pauser_role, pauser).call().await?._0,);
-        // get admin role
+
         let admin_role = proxy_as_v2.DEFAULT_ADMIN_ROLE().call().await?._0;
         assert!(proxy_as_v2.hasRole(admin_role, admin).call().await?._0,);
-        tracing::info!(%v2_addr, "StakeTable successfully upgraded to")
+
+        if let Some(migrated) = init_commissions {
+            tracing::info!("Verifying migrated commissions, may take a minute");
+            for init_comm in migrated {
+                let tracking = proxy_as_v2
+                    .commissionTracking(init_comm.validator)
+                    .call()
+                    .await?;
+                assert_eq!(tracking.commission, init_comm.commission);
+            }
+        }
+
+        tracing::info!(%v2_addr, "StakeTable successfully upgraded to");
     } else {
         anyhow::bail!("StakeTable upgrade failed: {:?}", receipt);
     }
@@ -1049,6 +1157,11 @@ pub async fn transfer_ownership(
 
 /// helper function to decide if the contract at given address `addr` is a proxy contract
 pub async fn is_proxy_contract(provider: impl Provider, addr: Address) -> Result<bool> {
+    // when the implementation address is not equal to zero, it's a proxy
+    Ok(read_proxy_impl(provider, addr).await? != Address::default())
+}
+
+pub async fn read_proxy_impl(provider: impl Provider, addr: Address) -> Result<Address> {
     // confirm that the proxy_address is a proxy
     // using the implementation slot, 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc, which is the keccak-256 hash of "eip1967.proxy.implementation" subtracted by 1
     let impl_slot = U256::from_str_radix(
@@ -1056,23 +1169,14 @@ pub async fn is_proxy_contract(provider: impl Provider, addr: Address) -> Result
         16,
     )?;
     let storage = provider.get_storage_at(addr, impl_slot).await?;
-    let impl_address = Address::from_slice(&storage.to_be_bytes_vec()[12..]);
-
-    // when the implementation address is not equal to zero, it's a proxy
-    Ok(impl_address != Address::default())
+    Ok(Address::from_slice(&storage.to_be_bytes_vec()[12..]))
 }
 
 pub async fn is_contract(provider: impl Provider, address: Address) -> Result<bool> {
     if address == Address::ZERO {
         return Ok(false);
     }
-
-    let code = provider.get_code_at(address).await?;
-    if code.is_empty() {
-        return Ok(false);
-    }
-
-    Ok(true)
+    Ok(!provider.get_code_at(address).await?.is_empty())
 }
 
 pub async fn get_proxy_initialized_version(
@@ -1279,6 +1383,12 @@ mod tests {
         node_bindings::Anvil, primitives::utils::parse_ether, providers::ProviderBuilder,
         sol_types::SolValue,
     };
+    use hotshot_contract_adapter::{
+        sol_types::{EdOnBN254PointSol, G1PointSol, G2PointSol, StakeTableV2},
+        stake_table::sign_address_bls,
+    };
+    use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
+    use rand::{rngs::StdRng, Rng, SeedableRng};
 
     use super::*;
     use crate::proposals::{
@@ -1568,6 +1678,133 @@ mod tests {
         test_upgrade_light_client_to_v2_helper(true).await
     }
 
+    #[test_log::test(tokio::test)]
+    async fn test_fetch_commissions_for_stake_table_storage_migration() -> Result<()> {
+        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+        let owner = provider.get_accounts().await?[0];
+
+        let token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            owner,
+            owner,
+            U256::from(10_000_000u64),
+            "Test Token",
+            "TEST",
+        )
+        .await?;
+        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+        let exit_escrow_period = U256::from(1000);
+
+        let stake_table_proxy_addr = deploy_stake_table_proxy(
+            &provider,
+            &mut contracts,
+            token_addr,
+            lc_addr,
+            exit_escrow_period,
+            owner,
+        )
+        .await?;
+
+        // Use V2 interface even for V1 contract (V2 ABI is a superset of V1)
+        let stake_table = StakeTableV2::new(stake_table_proxy_addr, &provider);
+
+        let accounts = provider.get_accounts().await?;
+        let test_validators = [
+            (accounts[0], 0u16),
+            (accounts[1], 100u16),
+            (accounts[2], 10_000u16),
+        ];
+
+        let mut rng = StdRng::from_seed([42u8; 32]);
+        for (validator_addr, commission) in test_validators.iter() {
+            let bls_key_pair = BLSKeyPair::generate(&mut rng);
+            let state_key_pair = StateKeyPair::generate_from_seed(rng.gen());
+            let bls_vk_sol: G2PointSol = bls_key_pair.ver_key().to_affine().into();
+            let bls_sig_sol: G1PointSol = sign_address_bls(&bls_key_pair, *validator_addr).into();
+            let schnorr_vk_sol: EdOnBN254PointSol = state_key_pair.ver_key().to_affine().into();
+
+            let receipt = stake_table
+                .registerValidator(bls_vk_sol, schnorr_vk_sol, bls_sig_sol.into(), *commission)
+                .from(*validator_addr)
+                .send()
+                .await?
+                .get_receipt()
+                .await?;
+            assert!(receipt.status());
+        }
+
+        let fetched_commissions =
+            fetch_commissions_for_stake_table_storage_migration(&provider, stake_table_proxy_addr)
+                .await?;
+
+        assert_eq!(fetched_commissions.len(), test_validators.len(),);
+
+        for ((validator, commission), fetched) in test_validators.iter().zip(&fetched_commissions) {
+            assert_eq!(fetched.validator, *validator);
+            assert_eq!(fetched.commission, *commission);
+        }
+
+        // Migration only applies to V1 contract
+        let stake_table_v2 = StakeTableV2::deploy(&provider).await?;
+        let err = fetch_commissions_for_stake_table_storage_migration(
+            &provider,
+            *stake_table_v2.address(),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("Expected StakeTable V1"));
+
+        Ok(())
+    }
+
+    /// Check that we can fetch the commissions on sepolia where we will do the
+    /// commission migration.
+    ///
+    /// We assume either an infura API key is used. Other RPC may not allow
+    /// fetching all events at once, also depends on the plan.
+    ///
+    /// env RPC_URL=... cargo test -p espresso-contract-deployer -- --ignored test_fetch_commissions_sepolia
+    #[ignore]
+    #[test_log::test(tokio::test)]
+    async fn test_fetch_commissions_sepolia() -> Result<()> {
+        let rpc_url = std::env::var("RPC_URL")
+            .expect("RPC_URL environment variable not set")
+            .parse()?;
+        let provider = ProviderBuilder::new().on_http(rpc_url);
+
+        let stake_table_address: Address = "0x40304FbE94D5E7D1492Dd90c53a2D63E8506a037".parse()?;
+        let fetched_commissions =
+            fetch_commissions_for_stake_table_storage_migration(&provider, stake_table_address)
+                .await?;
+        assert!(!fetched_commissions.is_empty());
+
+        println!(
+            "Fetched {} commissions from Sepolia StakeTable",
+            fetched_commissions.len()
+        );
+        for commission in &fetched_commissions {
+            println!(
+                "  Validator: {}, Commission: {}",
+                commission.validator, commission.commission
+            );
+        }
+
+        let pauser = Address::random();
+        let admin = Address::random();
+        let init_v2_calldata = StakeTableV2::new(stake_table_address, &provider)
+            .initializeV2(pauser, admin, fetched_commissions)
+            .calldata()
+            .clone();
+        println!("Calldata size: {} bytes", init_v2_calldata.len());
+
+        // The max calldata size is 128 kB per tx, but at the time of writing we
+        // only need about 7 kB therefore applying a stricter limit of 32 kB
+        assert!(init_v2_calldata.len() < 32 * 1024);
+        Ok(())
+    }
+
     async fn test_upgrade_light_client_to_v3_helper(options: UpgradeTestOptions) -> Result<()> {
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
@@ -1792,7 +2029,7 @@ mod tests {
         assert_eq!(lc.owner().call().await?._0, multisig_admin);
 
         // then send upgrade proposal to the multisig wallet
-        let (result, success) = upgrade_light_client_v2_multisig_owner(
+        let result = upgrade_light_client_v2_multisig_owner(
             &provider,
             &mut contracts,
             LightClientV2UpgradeParams {
@@ -1808,7 +2045,6 @@ mod tests {
             "Result when trying to upgrade LightClientProxy via the multisig wallet: {:?}",
             result
         );
-        assert!(success);
         if dry_run {
             let data: serde_json::Value = serde_json::from_str(&result)?;
             assert_eq!(data["rpcUrl"], sepolia_rpc_url);
@@ -2012,6 +2248,10 @@ mod tests {
         let stake_table_v1 = StakeTable::new(stake_table_addr, &provider);
         assert_eq!(stake_table_v1.getVersion().call().await?, (1, 0, 0).into());
 
+        // snapshot for later patch upgrade, the upgrade will skip the v2
+        // deployment if contracts already contains a v2
+        let mut contracts_v1 = contracts.clone();
+
         // upgrade to v2
         let pauser = Address::random();
         upgrade_stake_table_v2(&provider, &mut contracts, pauser, owner).await?;
@@ -2030,6 +2270,15 @@ mod tests {
         // get admin role
         let admin_role = stake_table_v2.DEFAULT_ADMIN_ROLE().call().await?._0;
         assert!(stake_table_v2.hasRole(admin_role, owner).call().await?._0,);
+
+        // ensure we can upgrade (again) to a V2 patch version
+        let current_impl = read_proxy_impl(&provider, stake_table_addr).await?;
+        upgrade_stake_table_v2(&provider, &mut contracts_v1, pauser, owner).await?;
+        assert_ne!(
+            read_proxy_impl(&provider, stake_table_addr).await?,
+            current_impl
+        );
+
         Ok(())
     }
 
@@ -2115,7 +2364,7 @@ mod tests {
         assert_eq!(stake_table.owner().call().await?._0, multisig_admin);
         // then send upgrade proposal to the multisig wallet
         let pauser = Address::random();
-        let (result, success) = upgrade_stake_table_v2_multisig_owner(
+        upgrade_stake_table_v2_multisig_owner(
             &provider,
             &mut contracts,
             sepolia_rpc_url,
@@ -2124,11 +2373,6 @@ mod tests {
             Some(dry_run),
         )
         .await?;
-        tracing::info!(
-            "Result when trying to upgrade StakeTableProxy via the multisig wallet: {:?}",
-            result
-        );
-        assert!(success);
 
         // v1 state persistence cannot be tested here because the upgrade proposal is not yet executed
         // One has to test that the upgrade proposal is available via the Safe UI
@@ -2407,7 +2651,7 @@ mod tests {
         assert_eq!(esp_token.owner().call().await?._0, multisig_admin);
 
         // then send upgrade proposal to the multisig wallet
-        let (result, success) = upgrade_esp_token_v2_multisig_owner(
+        let result = upgrade_esp_token_v2_multisig_owner(
             &provider,
             &mut contracts,
             sepolia_rpc_url.clone(),
@@ -2418,7 +2662,6 @@ mod tests {
             "Result when trying to upgrade EspTokenProxy via the multisig wallet: {:?}",
             result
         );
-        assert!(success);
         if dry_run {
             let data: serde_json::Value = serde_json::from_str(&result)?;
             assert_eq!(data["rpcUrl"], sepolia_rpc_url);
