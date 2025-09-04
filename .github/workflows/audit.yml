@@ -53,7 +53,19 @@ jobs:
         run: cargo install cargo-audit --locked --features=fix
 
       - name: Run cargo audit fix
-        run: cargo audit fix
+        run: |
+          set -o pipefail
+          cat > /tmp/pr-body.txt << 'EOF'
+          Changes from `cargo audit fix`.
+
+          To trigger the CI, close and re-open the PR.
+
+          ### cargo audit fix output:
+
+          ```
+          EOF
+          cargo audit fix 2>&1 | tee -a /tmp/pr-body.txt
+          echo '```' >> /tmp/pr-body.txt
 
       - name: Create Pull Request
         id: create-pull-request
@@ -63,8 +75,7 @@ jobs:
           branch: bot/cargo-audit
           title: "[Bot] Audit fixes"
           commit-message: Cargo audit fixes
-          body: >
-            Updates to Cargo.toml and/or Cargo.lock with security fixes.
+          body-path: /tmp/pr-body.txt
 
       - name: Comment about audit fix PR on original PR
         if: github.event_name == 'pull_request' && steps.create-pull-request.outputs.pull-request-number
