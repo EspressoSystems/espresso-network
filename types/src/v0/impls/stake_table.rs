@@ -938,7 +938,7 @@ impl Fetcher {
                             ),
                         }
                     },
-                    // ignore events you don’t care about
+                    // unexpected event
                     _ => {
                         tracing::error!("Unexpected StakeTableV2 event {}", log.display());
                         bail!(format!("Unexpected event {}", log.display()));
