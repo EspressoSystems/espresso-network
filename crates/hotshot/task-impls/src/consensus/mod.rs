@@ -229,6 +229,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     .update_next_epoch_high_qc2(next_epoch_high_qc.clone())
                     .await
                     .map_err(|_| warn!("Failed to update next epoch high QC"))?;
+                self.storage
+                    .update_eqc(high_qc.clone(), next_epoch_high_qc.clone())
+                    .await
+                    .map_err(|_| warn!("Failed to store eQC"))?;
 
                 tracing::debug!(
                     "Received Extended QC for view {} and epoch {:?}.",
