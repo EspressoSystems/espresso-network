@@ -31,7 +31,7 @@ jobs:
     steps:
       - uses: rui314/setup-mold@v1
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install nextest
         uses: taiki-e/install-action@nextest
@@ -70,7 +70,7 @@ jobs:
     steps:
       - uses: rui314/setup-mold@v1
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
         
@@ -110,7 +110,7 @@ jobs:
     steps:
       - uses: rui314/setup-mold@v1
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -156,7 +156,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: rui314/setup-mold@v1
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -185,7 +185,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: rui314/setup-mold@v1
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -219,7 +219,7 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install node deps
         uses: nick-fields/retry@v3
@@ -233,7 +233,7 @@ jobs:
       - name: Install nextest
         uses: taiki-e/install-action@nextest
       - name: Download archive
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: nextest-archive-postgres
 
@@ -257,7 +257,7 @@ jobs:
         with:
           version: nightly
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
 
@@ -273,7 +273,7 @@ jobs:
       - name: Install nextest
         uses: taiki-e/install-action@nextest
       - name: Download archive
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: nextest-archive-sqlite
 
@@ -300,7 +300,7 @@ jobs:
           extraPullNames: nix-community
           skipPush: ${{ github.actor == 'dependabot[bot]' }}
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Build espresso-dev-node
         run: |
@@ -334,12 +334,12 @@ jobs:
       - name: Configure PATH
         run: PATH="$PWD/target/debug:$PATH"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: taiki-e/install-action@nextest
 
       - name: Download archive
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
 
       - name: Move files
         run: |
@@ -384,12 +384,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: cachix/install-nix-action@v31
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
         # TODO: this downloads all (available) artifacts, which is a bit wasteful but artifact
         # downloads always fail if I try to select a subset.
       - name: Download archive
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
 
       - name: Move files
         run: |

@@ -20,7 +20,7 @@ jobs:
       - uses: taiki-e/install-action@just
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -66,7 +66,7 @@ jobs:
     runs-on: buildjet-16vcpu-ubuntu-2204-arm
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -125,16 +125,16 @@ jobs:
       bridge-tag: ${{ steps.bridge.outputs.tags }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download executables AMD
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: x86_64-unknown-linux-gnu-services-bench
           path: target/amd64/release
 
       - name: Download executables ARM
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: aarch64-unknown-linux-gnu-services-bench
           path: target/arm64/release
@@ -378,7 +378,7 @@ jobs:
       - uses: taiki-e/install-action@just
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Pull docker images
         run: |
