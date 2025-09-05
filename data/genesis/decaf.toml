@@ -1,6 +1,6 @@
 base_version = "0.3"
 upgrade_version = "0.4"
-genesis_version = "0.1"
+genesis_version = "0.2"
 epoch_height = 3000
 drb_difficulty = 10
 drb_upgrade_difficulty = 5000000000
@@ -20,6 +20,13 @@ stake_table_contract = "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037"
 [header]
 timestamp = "1970-01-01T00:00:00Z"
 
+[header.chain_config]
+chain_id = 0xdecaf
+base_fee = '1 wei'
+max_block_size = '1mb'
+fee_recipient = '0x0000000000000000000000000000000000000000'
+fee_contract = '0x42835083fd1d3fc5d799b5f6815ae4bf2623e6d0'
+
 [l1_finalized]
 number = 6758037 # Block where fee contract is deployed
 
@@ -28,7 +35,6 @@ start_voting_view = 0
 stop_voting_view = 999999999
 start_proposing_view = 0
 stop_proposing_view = 1
-
 
 version = "0.4"
 [upgrade.drb_and_header]
@@ -39,9 +45,3 @@ max_block_size = "10mb"
 fee_recipient = "0x0000000000000000000000000000000000000000"
 fee_contract = "0x42835083fd1d3fc5d799b5f6815ae4bf2623e6d0"
 stake_table_contract = "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037"
-
-
-
-
-
-
