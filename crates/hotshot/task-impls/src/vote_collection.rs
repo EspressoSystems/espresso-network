@@ -19,9 +19,9 @@ use hotshot_types::{
     epoch_membership::EpochMembership,
     message::UpgradeLock,
     simple_certificate::{
-        DaCertificate2, EpochRootQuorumCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
-        QuorumCertificate2, TimeoutCertificate2, UpgradeCertificate, ViewSyncCommitCertificate2,
-        ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
+        DaCertificate2, EpochRootQuorumCertificateV2, NextEpochQuorumCertificate2,
+        QuorumCertificate, QuorumCertificate2, TimeoutCertificate2, UpgradeCertificate,
+        ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
         DaVote2, EpochRootQuorumVote, NextEpochQuorumVote2, QuorumVote, QuorumVote2, TimeoutVote2,
@@ -688,7 +688,7 @@ impl<TYPES: NodeType, V: Versions> EpochRootVoteCollectionTaskState<TYPES, V> {
         &mut self,
         event: Arc<HotShotEvent<TYPES>>,
         sender: &Sender<Arc<HotShotEvent<TYPES>>>,
-    ) -> Result<Option<EpochRootQuorumCertificate<TYPES>>> {
+    ) -> Result<Option<EpochRootQuorumCertificateV2<TYPES>>> {
         match event.as_ref() {
             HotShotEvent::EpochRootQuorumVoteRecv(vote) => self.accumulate_vote(vote, sender).await,
             _ => Ok(None),
@@ -700,7 +700,7 @@ impl<TYPES: NodeType, V: Versions> EpochRootVoteCollectionTaskState<TYPES, V> {
         &mut self,
         vote: &EpochRootQuorumVote<TYPES>,
         event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,
-    ) -> Result<Option<EpochRootQuorumCertificate<TYPES>>> {
+    ) -> Result<Option<EpochRootQuorumCertificateV2<TYPES>>> {
         let EpochRootQuorumVote { vote, state_vote } = vote;
         ensure!(
             vote.view_number() == self.view,
@@ -728,7 +728,7 @@ impl<TYPES: NodeType, V: Versions> EpochRootVoteCollectionTaskState<TYPES, V> {
         ) {
             (None, None) => Ok(None),
             (Some(cert), Some(state_cert)) => {
-                let root_qc = EpochRootQuorumCertificate {
+                let root_qc = EpochRootQuorumCertificateV2 {
                     qc: cert,
                     state_cert,
                 };
