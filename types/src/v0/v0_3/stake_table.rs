@@ -226,4 +226,7 @@ pub enum EventSortingError {
 
     #[error("Missing log index in log")]
     MissingLogIndex,
+
+    #[error("Invalid stake table V2 event")]
+    InvalidStakeTableV2Event
 }

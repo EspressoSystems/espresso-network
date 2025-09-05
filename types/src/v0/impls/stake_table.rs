@@ -100,114 +100,46 @@ impl DisplayLog for Log {
     }
 }
 
-#[derive(Clone, PartialEq)]
-pub struct StakeTableEvents {
-    registrations: Vec<(ValidatorRegistered, Log)>,
-    registrations_v2: Vec<(ValidatorRegisteredV2, Log)>,
-    deregistrations: Vec<(ValidatorExit, Log)>,
-    delegated: Vec<(Delegated, Log)>,
-    undelegated: Vec<(Undelegated, Log)>,
-    keys: Vec<(ConsensusKeysUpdated, Log)>,
-    keys_v2: Vec<(ConsensusKeysUpdatedV2, Log)>,
+impl TryFrom<StakeTableV2Events> for StakeTableEvent {
+    type Error = anyhow::Error;
+
+    fn try_from(value: StakeTableV2Events) -> anyhow::Result<Self> {
+        match value {
+            StakeTableV2Events::ValidatorRegistered(v) => Ok(StakeTableEvent::Register(v)),
+            StakeTableV2Events::ValidatorRegisteredV2(v) => Ok(StakeTableEvent::RegisterV2(v)),
+            StakeTableV2Events::ValidatorExit(v) => Ok(StakeTableEvent::Deregister(v)),
+            StakeTableV2Events::Delegated(v) => Ok(StakeTableEvent::Delegate(v)),
+            StakeTableV2Events::Undelegated(v) => Ok(StakeTableEvent::Undelegate(v)),
+            StakeTableV2Events::ConsensusKeysUpdated(v) => Ok(StakeTableEvent::KeyUpdate(v)),
+            StakeTableV2Events::ConsensusKeysUpdatedV2(v) => Ok(StakeTableEvent::KeyUpdateV2(v)),
+            _ => Err(anyhow::anyhow!("Unsupported StakeTableV2Events variant")),
+        }
+    }
 }
 
-impl StakeTableEvents {
-    /// Creates a new instance of `StakeTableEvents` with the provided events.
-    ///
-    /// Remove unauthenticated registration and key update events
-    fn from_l1_logs(
-        registrations: Vec<(ValidatorRegistered, Log)>,
-        registrations_v2: Vec<(ValidatorRegisteredV2, Log)>,
-        deregistrations: Vec<(ValidatorExit, Log)>,
-        delegated: Vec<(Delegated, Log)>,
-        undelegated: Vec<(Undelegated, Log)>,
-        keys: Vec<(ConsensusKeysUpdated, Log)>,
-        keys_v2: Vec<(ConsensusKeysUpdatedV2, Log)>,
-    ) -> Self {
-        let registrations_v2 = registrations_v2
-            .into_iter()
-            .filter(|(event, log)| {
-                event
-                    .authenticate()
-                    .map_err(|_| {
-                        tracing::warn!(
-                            "Failed to authenticate ValidatorRegisteredV2 event {}",
-                            log.display()
-                        );
-                    })
-                    .is_ok()
-            })
-            .collect();
-        let keys_v2 = keys_v2
-            .into_iter()
-            .filter(|(event, log)| {
-                event
-                    .authenticate()
-                    .map_err(|_| {
-                        tracing::warn!(
-                            "Failed to authenticate ConsensusKeysUpdatedV2 event {}",
-                            log.display()
-                        );
-                    })
-                    .is_ok()
-            })
-            .collect();
-        Self {
-            registrations,
-            registrations_v2,
-            deregistrations,
-            delegated,
-            undelegated,
-            keys,
-            keys_v2,
-        }
+pub fn sort_stake_table_events(
+    event_logs: Vec<(StakeTableV2Events, Log)>,
+) -> Result<Vec<(EventKey, StakeTableEvent)>, EventSortingError> {
+    let mut events: Vec<(EventKey, StakeTableEvent)> = Vec::new();
+
+    let key = |log: &Log| -> Result<EventKey, EventSortingError> {
+        let block_number = log
+            .block_number
+            .ok_or(EventSortingError::MissingBlockNumber)?;
+        let log_index = log.log_index.ok_or(EventSortingError::MissingLogIndex)?;
+        Ok((block_number, log_index))
+    };
+
+    for (e, log) in event_logs {
+        let k = key(&log)?;
+        let evt: StakeTableEvent = e
+            .try_into()
+            .map_err(|_| EventSortingError::InvalidStakeTableV2Event)?;
+        events.push((k, evt));
     }
 
-    pub fn sort_events(self) -> Result<Vec<(EventKey, StakeTableEvent)>, EventSortingError> {
-        let mut events: Vec<(EventKey, StakeTableEvent)> = Vec::new();
-        let Self {
-            registrations,
-            registrations_v2,
-            deregistrations,
-            delegated,
-            undelegated,
-            keys,
-            keys_v2,
-        } = self;
-
-        let key = |log: &Log| -> Result<EventKey, EventSortingError> {
-            let block_number = log
-                .block_number
-                .ok_or(EventSortingError::MissingBlockNumber)?;
-            let log_index = log.log_index.ok_or(EventSortingError::MissingLogIndex)?;
-            Ok((block_number, log_index))
-        };
-
-        for (registration, log) in registrations {
-            events.push((key(&log)?, registration.into()));
-        }
-        for (registration, log) in registrations_v2 {
-            events.push((key(&log)?, registration.into()));
-        }
-        for (dereg, log) in deregistrations {
-            events.push((key(&log)?, dereg.into()));
-        }
-        for (delegation, log) in delegated {
-            events.push((key(&log)?, delegation.into()));
-        }
-        for (undelegated, log) in undelegated {
-            events.push((key(&log)?, undelegated.into()));
-        }
-        for (update, log) in keys {
-            events.push((key(&log)?, update.into()));
-        }
-        for (update, log) in keys_v2 {
-            events.push((key(&log)?, update.into()));
-        }
-
-        events.sort_by_key(|(key, _)| *key);
-        Ok(events)
-    }
+    events.sort_by_key(|(key, _)| *key);
+    Ok(events)
 }
 
 #[derive(Debug, Default)]
@@ -783,7 +715,7 @@ impl Fetcher {
         )
         .await?;
 
-        let contract_events = contract_events.sort_events()?;
+        let contract_events = sort_stake_table_events(contract_events)?;
         let mut events = match from_block {
             Some(_) => persistence_events
                 .into_iter()
@@ -812,7 +744,7 @@ impl Fetcher {
         contract: Address,
         from_block: Option<u64>,
         to_block: u64,
-    ) -> anyhow::Result<StakeTableEvents> {
+    ) -> anyhow::Result<Vec<(StakeTableV2Events, Log)>> {
         let stake_table_contract = StakeTableV2::new(contract, l1_client.provider.clone());
         let max_retry_duration = l1_client.options().l1_events_max_retry_duration;
         // get the block number when the contract was initialized
@@ -857,13 +789,7 @@ impl Fetcher {
 
         let retry_delay = l1_client.options().l1_retry_delay;
 
-        let mut registrations = vec![];
-        let mut registrations_v2 = vec![];
-        let mut deregistrations = vec![];
-        let mut delegated = vec![];
-        let mut undelegated = vec![];
-        let mut keys = vec![];
-        let mut keys_v2 = vec![];
+        let mut events = vec![];
 
         for (from, to) in chunks {
             let provider = l1_client.provider.clone();
@@ -902,13 +828,10 @@ impl Fetcher {
                 let event =
                     StakeTableV2Events::decode_raw_log(log.topics(), &log.data().data, false)?;
 
-                match event {
-                    StakeTableV2Events::ValidatorRegistered(event) => {
-                        registrations.push((event, log));
-                    },
+                match &event {
                     StakeTableV2Events::ValidatorRegisteredV2(event) => {
                         match event.authenticate() {
-                            Ok(_) => registrations_v2.push((event, log)),
+                            Ok(_) => (),
                             Err(e) => tracing::warn!(
                                 %e,
                                 "Failed to authenticate ValidatorRegisteredV2 event: {}",
@@ -916,21 +839,10 @@ impl Fetcher {
                             ),
                         }
                     },
-                    StakeTableV2Events::ValidatorExit(event) => {
-                        deregistrations.push((event, log));
-                    },
-                    StakeTableV2Events::Delegated(event) => {
-                        delegated.push((event, log));
-                    },
-                    StakeTableV2Events::Undelegated(event) => {
-                        undelegated.push((event, log));
-                    },
-                    StakeTableV2Events::ConsensusKeysUpdated(event) => {
-                        keys.push((event, log));
-                    },
+
                     StakeTableV2Events::ConsensusKeysUpdatedV2(event) => {
                         match event.authenticate() {
-                            Ok(_) => keys_v2.push((event, log)),
+                            Ok(_) => (),
                             Err(e) => tracing::warn!(
                                 %e,
                                 "Failed to authenticate ConsensusKeysUpdatedV2 event: {}",
@@ -939,23 +851,14 @@ impl Fetcher {
                         }
                     },
                     // unexpected event
-                    _ => {
-                        tracing::error!("Unexpected StakeTableV2 event {}", log.display());
-                        bail!(format!("Unexpected event {}", log.display()));
-                    },
+                    _ => {},
                 }
+
+                events.push((event, log.clone()));
             }
         }
 
-        Ok(StakeTableEvents::from_l1_logs(
-            registrations,
-            registrations_v2,
-            deregistrations,
-            delegated,
-            undelegated,
-            keys,
-            keys_v2,
-        ))
+        Ok(events)
     }
 
     /// Get `StakeTable` at specific l1 block height.
@@ -990,7 +893,7 @@ impl Fetcher {
         to_block: u64,
     ) -> anyhow::Result<(ValidatorMap, StakeTableHash)> {
         let events = Self::fetch_events_from_contract(l1_client, contract, None, to_block).await?;
-        let sorted = events.sort_events()?;
+        let sorted = sort_stake_table_events(events)?;
         // Process the sorted events and return the resulting stake table.
         validators_from_l1_events(sorted.into_iter().map(|(_, e)| e))
             .context("failed to construct validators set from l1 events")
@@ -3063,7 +2966,7 @@ mod tests {
         )
         .await?;
 
-        let sorted_events = events.sort_events().expect("failed to sort");
+        let sorted_events = events.sort_stake_table_events().expect("failed to sort");
 
         // Serialize and write sorted events
         let json_events = serde_json::to_string_pretty(&sorted_events)?;
