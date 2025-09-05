@@ -2101,6 +2101,7 @@ mod test {
     };
     use espresso_types::{
         config::PublicHotShotConfig,
+        sort_stake_table_events,
         traits::{NullEventConsumer, PersistenceOptions},
         v0_3::{Fetcher, RewardAmount, COMMISSION_BASIS_POINTS},
         validators_from_l1_events, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAmount, FeeVersion,
@@ -3478,8 +3479,8 @@ mod test {
                 None,
                 l1_block.number(),
             )
-            .await;
-            let sorted_events = events.sort_events().expect("failed to sort");
+            .await?;
+            let sorted_events = sort_stake_table_events(events).unwrap();
 
             let mut sorted_dedup_removed = sorted_events.clone();
             sorted_dedup_removed.dedup();
