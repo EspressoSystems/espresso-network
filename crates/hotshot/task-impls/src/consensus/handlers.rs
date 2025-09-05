@@ -10,7 +10,7 @@ use async_broadcast::Sender;
 use chrono::Utc;
 use hotshot_types::{
     event::{Event, EventType},
-    simple_certificate::EpochRootQuorumCertificate,
+    simple_certificate::EpochRootQuorumCertificateV2,
     simple_vote::{EpochRootQuorumVote, HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
     traits::node_implementation::{ConsensusTime, NodeImplementation, NodeType},
     utils::{is_epoch_root, is_epoch_transition, is_last_block, EpochTransitionIndicator},
@@ -312,7 +312,7 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
             );
             broadcast_event(
                 Arc::new(HotShotEvent::EpochRootQcSend(
-                    EpochRootQuorumCertificate {
+                    EpochRootQuorumCertificateV2 {
                         qc: high_qc,
                         state_cert,
                     },
