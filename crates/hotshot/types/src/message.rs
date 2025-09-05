@@ -36,10 +36,10 @@ use crate::{
     epoch_membership::EpochMembership,
     request_response::ProposalRequestPayload,
     simple_certificate::{
-        DaCertificate, DaCertificate2, EpochRootQuorumCertificate, NextEpochQuorumCertificate2,
-        QuorumCertificate2, UpgradeCertificate, ViewSyncCommitCertificate,
-        ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate, ViewSyncFinalizeCertificate2,
-        ViewSyncPreCommitCertificate, ViewSyncPreCommitCertificate2,
+        DaCertificate, DaCertificate2, EpochRootQuorumCertificateV1, EpochRootQuorumCertificateV2,
+        NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
+        ViewSyncCommitCertificate, ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate,
+        ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate, ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
         DaVote, DaVote2, EpochRootQuorumVote, HasEpoch, QuorumVote, QuorumVote2, TimeoutVote,
@@ -257,7 +257,10 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
     ),
 
     /// Message for the next leader containing the epoch root QC
-    EpochRootQc(EpochRootQuorumCertificate<TYPES>),
+    EpochRootQc(EpochRootQuorumCertificateV2<TYPES>),
+
+    /// Message for the next leader containing the epoch root QC from older consensus version.
+    EpochRootQcV1(EpochRootQuorumCertificateV1<TYPES>),
 
     /// Message with a view sync pre-commit vote
     ViewSyncPreCommitVote2(ViewSyncPreCommitVote2<TYPES>),
@@ -389,6 +392,7 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     | GeneralConsensusMessage::ExtendedQc(qc, _) => qc.view_number(),
                     GeneralConsensusMessage::EpochRootQuorumVote(vote) => vote.view_number(),
                     GeneralConsensusMessage::EpochRootQc(root_qc) => root_qc.view_number(),
+                    GeneralConsensusMessage::EpochRootQcV1(root_qc) => root_qc.view_number(),
                 }
             },
             SequencingMessage::Da(da_message) => {
@@ -462,6 +466,7 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     | GeneralConsensusMessage::ExtendedQc(qc, _) => qc.epoch(),
                     GeneralConsensusMessage::EpochRootQuorumVote(vote) => vote.epoch(),
                     GeneralConsensusMessage::EpochRootQc(root_qc) => root_qc.epoch(),
+                    GeneralConsensusMessage::EpochRootQcV1(root_qc) => root_qc.epoch(),
                 }
             },
             SequencingMessage::Da(da_message) => {
