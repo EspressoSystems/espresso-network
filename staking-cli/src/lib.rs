@@ -219,6 +219,12 @@ pub enum Commands {
     },
     /// Deregister a validator.
     DeregisterValidator {},
+    /// Update validator commission rate.
+    UpdateCommission {
+        /// The new commission rate to set
+        #[clap(long, value_parser = parse::parse_commission, env = "NEW_COMMISSION")]
+        new_commission: Commission,
+    },
     /// Approve stake table contract to move tokens
     Approve {
         #[clap(long, value_parser = parse_ether)]

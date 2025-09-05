@@ -168,6 +168,28 @@ async fn test_cli_update_consensus_keys(#[case] version: StakeTableContractVersi
     Ok(())
 }
 
+#[test_log::test(tokio::test)]
+async fn test_cli_update_commission() -> Result<()> {
+    // Only test on V2 since V1 doesn't support commission updates
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
+    system.register_validator().await?;
+
+    // Fetch the minimum commission update interval and warp past it
+    let min_interval = system.get_min_commission_update_interval().await?;
+    let warp_time = min_interval + U256::from(1);
+    system.warp_time(warp_time).await?;
+
+    let mut cmd = base_cmd();
+    system.args(&mut cmd, Signer::Mnemonic);
+    cmd.arg("update-commission")
+        .arg("--new-commission")
+        .arg("8.50")
+        .output()?
+        .assert_success();
+
+    Ok(())
+}
+
 #[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_delegate(#[case] version: StakeTableContractVersion) -> Result<()> {
     let system = TestSystem::deploy_version(version).await?;

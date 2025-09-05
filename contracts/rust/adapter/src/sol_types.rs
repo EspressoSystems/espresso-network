@@ -269,8 +269,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use self::{
     staketablev2::{EdOnBN254::EdOnBN254Point, BN254::G2Point},
     StakeTableV2::{
-        ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit,
-        ValidatorRegistered, ValidatorRegisteredV2,
+        CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated,
+        ValidatorExit, ValidatorRegistered, ValidatorRegisteredV2,
     },
 };
 
@@ -369,6 +369,30 @@ impl<'de> Deserialize<'de> for ValidatorRegisteredV2 {
             commission,
             blsSig,
             schnorrSig,
+        })
+    }
+}
+
+impl Serialize for CommissionUpdated {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (&self.validator, self.timestamp, self.newCommission).serialize(serializer)
+    }
+}
+
+#[allow(non_snake_case)]
+impl<'de> Deserialize<'de> for CommissionUpdated {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (validator, timestamp, newCommission) = <_>::deserialize(deserializer)?;
+        Ok(Self {
+            validator,
+            timestamp,
+            newCommission,
         })
     }
 }

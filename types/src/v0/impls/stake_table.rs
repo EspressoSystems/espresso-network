@@ -27,8 +27,8 @@ use hotshot::types::{BLSPubKey, SchnorrPubKey, SignatureKey as _};
 use hotshot_contract_adapter::sol_types::{
     EspToken::{self, EspTokenInstance},
     StakeTableV2::{
-        self, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit,
-        ValidatorRegistered, ValidatorRegisteredV2,
+        self, CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated,
+        Undelegated, ValidatorExit, ValidatorRegistered, ValidatorRegisteredV2,
     },
 };
 use hotshot_types::{
@@ -111,12 +111,14 @@ pub struct StakeTableEvents {
     undelegated: Vec<(Undelegated, Log)>,
     keys: Vec<(ConsensusKeysUpdated, Log)>,
     keys_v2: Vec<(ConsensusKeysUpdatedV2, Log)>,
+    commission_updates: Vec<(CommissionUpdated, Log)>,
 }
 
 impl StakeTableEvents {
     /// Creates a new instance of `StakeTableEvents` with the provided events.
     ///
     /// Remove unauthenticated registration and key update events
+    #[allow(clippy::too_many_arguments)]
     fn from_l1_logs(
         registrations: Vec<(ValidatorRegistered, Log)>,
         registrations_v2: Vec<(ValidatorRegisteredV2, Log)>,
@@ -125,6 +127,7 @@ impl StakeTableEvents {
         undelegated: Vec<(Undelegated, Log)>,
         keys: Vec<(ConsensusKeysUpdated, Log)>,
         keys_v2: Vec<(ConsensusKeysUpdatedV2, Log)>,
+        commission_updates: Vec<(CommissionUpdated, Log)>,
     ) -> Self {
         let registrations_v2 = registrations_v2
             .into_iter()
@@ -162,6 +165,7 @@ impl StakeTableEvents {
             undelegated,
             keys,
             keys_v2,
+            commission_updates,
         }
     }
 
@@ -175,6 +179,7 @@ impl StakeTableEvents {
             undelegated,
             keys,
             keys_v2,
+            commission_updates,
         } = self;
 
         let key = |log: &Log| -> Result<EventKey, EventSortingError> {
@@ -205,6 +210,9 @@ impl StakeTableEvents {
         }
         for (update, log) in keys_v2 {
             events.push((key(&log)?, update.into()));
+        }
+        for (commission_update, log) in commission_updates {
+            events.push((key(&log)?, commission_update.into()));
         }
 
         events.sort_by_key(|(key, _)| *key);
@@ -314,6 +322,7 @@ impl StakeTableState {
                     stake: U256::ZERO,
                     commission,
                     delegators: HashMap::new(),
+                    last_commission_increase_time: None,
                 });
             },
 
@@ -365,6 +374,7 @@ impl StakeTableState {
                     stake: U256::ZERO,
                     commission,
                     delegators: HashMap::new(),
+                    last_commission_increase_time: None,
                 });
             },
 
@@ -503,6 +513,32 @@ impl StakeTableState {
                 validator.stake_table_key = stake_table_key;
                 validator.state_ver_key = state_ver_key;
             },
+
+            StakeTableEvent::CommissionUpdate(CommissionUpdated {
+                validator,
+                timestamp,
+                newCommission,
+            }) => {
+                if newCommission > COMMISSION_BASIS_POINTS {
+                    return Err(StakeTableError::InvalidCommission(validator, newCommission));
+                }
+
+                // NOTE: currently we are not enforcing changes to the
+                // commission increase rates: last_commission_increase_time and
+                // the maximum value by which a commission increases. I think
+                // this is fine because consensus will work correctly as long as
+                // the commission values are sound. In the event we want to add
+                // these checks later the timestamps are already stored in the
+                // Validator struct.
+
+                let val = self
+                    .validators
+                    .get_mut(&validator)
+                    .ok_or(StakeTableError::ValidatorNotFound(validator))?;
+
+                val.commission = newCommission;
+                val.last_commission_increase_time = Some(timestamp.into())
+            },
         }
 
         Ok(Ok(()))
@@ -626,6 +662,9 @@ impl std::fmt::Debug for StakeTableEvent {
             StakeTableEvent::Undelegate(event) => write!(f, "Undelegate({:?})", event.delegator),
             StakeTableEvent::KeyUpdate(event) => write!(f, "KeyUpdate({:?})", event.account),
             StakeTableEvent::KeyUpdateV2(event) => write!(f, "KeyUpdateV2({:?})", event.account),
+            StakeTableEvent::CommissionUpdate(event) => {
+                write!(f, "CommissionUpdate({:?})", event.validator)
+            },
         }
     }
 }
@@ -1034,7 +1073,7 @@ impl Fetcher {
             }
         });
         // fetch consensus keys updated v2 events
-        let keys_update_events_v2 = stream::iter(chunks).then(|(from, to)| {
+        let keys_update_events_v2 = stream::iter(chunks.clone()).then(|(from, to)| {
             let retry_delay = l1_client.options().l1_retry_delay;
             let stake_table_contract = stake_table_contract.clone();
             async move {
@@ -1070,6 +1109,34 @@ impl Fetcher {
                 }))
             }
         });
+
+        // fetch commission updated events
+        let commission_updated_events = stream::iter(chunks.clone()).then(|(from, to)| {
+            let retry_delay = l1_client.options().l1_retry_delay;
+            let stake_table_contract = stake_table_contract.clone();
+            async move {
+                tracing::debug!(from, to, "fetch CommissionUpdated events in range");
+                let events = retry(
+                    retry_delay,
+                    max_retry_duration,
+                    "CommissionUpdated event fetch",
+                    move || {
+                        let stake_table_contract = stake_table_contract.clone();
+                        Box::pin(async move {
+                            stake_table_contract
+                                .CommissionUpdated_filter()
+                                .from_block(from)
+                                .to_block(to)
+                                .query()
+                                .await
+                        })
+                    },
+                )
+                .await;
+                stream::iter(events)
+            }
+        });
+
         let registrations = registered_events.flatten().collect().await;
         let registrations_v2 = registered_events_v2.flatten().collect().await;
         let deregistrations = deregistered_events.flatten().collect().await;
@@ -1077,6 +1144,7 @@ impl Fetcher {
         let undelegated = undelegated_events.flatten().collect().await;
         let keys = keys_update_events.flatten().collect().await;
         let keys_v2 = keys_update_events_v2.flatten().collect().await;
+        let commission_updates = commission_updated_events.flatten().collect().await;
 
         StakeTableEvents::from_l1_logs(
             registrations,
@@ -1086,6 +1154,7 @@ impl Fetcher {
             undelegated,
             keys,
             keys_v2,
+            commission_updates,
         )
     }
 
@@ -1202,8 +1271,8 @@ impl Fetcher {
         // during the token contract initialization. The initialization transaction also transfers initial supply minted
         // from the zero address. Since the result set is small (a single event),
         // most RPC providers like Infura and Alchemy allow querying across the full block range
-        // If this fails because provider does not allow the query due to rate limiting (or some other error), we fall back to scanning over
-        // a fixed block range.
+        // If this fails because provider does not allow the query due to rate limiting (or some other error), we fall
+        // back to scanning over a fixed block range.
         let init_logs = token
             .Initialized_filter()
             .from_block(0u64)
@@ -1429,11 +1498,13 @@ where
 
                     This might be caused by:
                     - The current block range being too large for your RPC provider.
-                    - The event query returning more data than your RPC allows as some RPC providers limit the number of events returned.
+                    - The event query returning more data than your RPC allows as
+                      some RPC providers limit the number of events returned.
                     - RPC provider outage
 
                     Suggested solution:
-                    - Reduce the value of the environment variable `ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE` to query smaller ranges.
+                    - Reduce the value of the environment variable
+                      `ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE` to query smaller ranges.
                     - Add multiple RPC providers
                     - Use a different RPC provider with higher rate limits."#,
                         format_duration(max_duration)
@@ -1500,9 +1571,10 @@ impl EpochCommittees {
     /// We used a fixed block reward for version v3
     /// Version v4 uses the dynamic block reward based
     /// Assumes the stake table contract proxy address does not change
-    /// In the future, if we want to support updates to the stake table contract address via chain config,
-    /// or allow the contract to handle additional block reward calculation parameters (e.g., inflation, block time),
-    /// the `fetch_block_reward` logic can be updated to support per-epoch rewards.
+    /// In the future, if we want to support updates to the stake table contract address
+    /// via chain config, or allow the contract to handle additional block reward calculation
+    /// parameters (e.g., inflation, block time), the `fetch_block_reward` logic can be
+    /// updated to support per-epoch rewards.
     /// Initially, the block reward is zero if the node starts on pre-epoch version
     /// but it is updated on the first call to `add_epoch_root()`
     async fn fetch_and_update_fixed_block_reward(
@@ -1746,7 +1818,8 @@ impl EpochCommittees {
                 .checked_div(epoch_height)
                 .context("Epoch height is zero. cannot compute average block time")?
         };
-        tracing::info!(?epoch, %total_supply, %total_stake, %average_block_time_ms, "dynamic block reward parameters");
+        tracing::info!(?epoch, %total_supply, %total_stake, %average_block_time_ms,
+                       "dynamic block reward parameters");
 
         let block_reward =
             Self::compute_block_reward(epoch, total_supply, total_stake, average_block_time_ms)?;
@@ -2628,6 +2701,7 @@ pub mod testing {
                 stake: validator_stake,
                 commission: val.commission,
                 delegators,
+                last_commission_increase_time: Default::default(),
             }
         }
     }
@@ -2870,7 +2944,13 @@ mod tests {
 
     #[test]
     fn test_display_log() {
-        let serialized = r#"{"address":"0x0000000000000000000000000000000000000069","topics":["0x0000000000000000000000000000000000000000000000000000000000000069"],"data":"0x69","blockHash":"0x0000000000000000000000000000000000000000000000000000000000000069","blockNumber":"0x69","blockTimestamp":"0x69","transactionHash":"0x0000000000000000000000000000000000000000000000000000000000000069","transactionIndex":"0x69","logIndex":"0x70","removed":false}"#;
+        let serialized = r#"{"address":"0x0000000000000000000000000000000000000069",
+            "topics":["0x0000000000000000000000000000000000000000000000000000000000000069"],
+            "data":"0x69",
+            "blockHash":"0x0000000000000000000000000000000000000000000000000000000000000069",
+            "blockNumber":"0x69","blockTimestamp":"0x69",
+            "transactionHash":"0x0000000000000000000000000000000000000000000000000000000000000069",
+            "transactionIndex":"0x69","logIndex":"0x70","removed":false}"#;
         let log: Log = serde_json::from_str(serialized).unwrap();
         assert_eq!(
             log.display(),
@@ -2922,7 +3002,8 @@ mod tests {
             stake_table_state.apply_event(StakeTableEvent::Register((&test_validator).into()));
 
         pretty_assertions::assert_matches!(
-           v1_already_registered_result,  Err(StakeTableError::AlreadyRegistered(account)) if account == test_validator.account,
+           v1_already_registered_result,  Err(StakeTableError::AlreadyRegistered(account))
+                if account == test_validator.account,
            "Expected AlreadyRegistered error. version ={version:?} result={v1_already_registered_result:?}",
         );
 
@@ -3111,6 +3192,46 @@ mod tests {
 
         let deregister_event = StakeTableEvent::Deregister((&validator).into());
         assert!(state.apply_event(deregister_event).unwrap().is_ok());
+    }
+
+    #[test]
+    fn test_commission_validation_exceeds_basis_points() {
+        // Create a simple stake table with one validator
+        let validator = TestValidator::random();
+        let mut stake_table = StakeTableState::new();
+
+        // Register the validator first
+        let registration_event = ValidatorRegistered::from(&validator).into();
+        stake_table
+            .apply_event(registration_event)
+            .unwrap()
+            .unwrap();
+
+        // Test that a commission exactly at the limit is allowed
+        let valid_commission_event = CommissionUpdated {
+            validator: validator.account,
+            timestamp: Default::default(),
+            newCommission: COMMISSION_BASIS_POINTS, // Exactly at the limit
+        }
+        .into();
+        assert!(stake_table.apply_event(valid_commission_event).is_ok());
+
+        let invalid_commission = COMMISSION_BASIS_POINTS + 1;
+        let invalid_commission_event = CommissionUpdated {
+            validator: validator.account,
+            timestamp: Default::default(),
+            newCommission: invalid_commission,
+        }
+        .into();
+
+        let err = stake_table
+            .apply_event(invalid_commission_event)
+            .unwrap_err();
+
+        assert_matches!(
+            err,
+            StakeTableError::InvalidCommission(addr, invalid_commission)
+                if addr == addr && invalid_commission == invalid_commission);
     }
 
     #[test]

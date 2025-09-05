@@ -120,9 +120,24 @@ pub async fn deregister_validator(
         .await?)
 }
 
+pub async fn update_commission(
+    provider: impl Provider,
+    stake_table_addr: Address,
+    new_commission: Commission,
+) -> Result<TransactionReceipt> {
+    let stake_table = StakeTableV2::new(stake_table_addr, &provider);
+    Ok(stake_table
+        .updateCommission(new_commission.to_evm())
+        .send()
+        .await
+        .maybe_decode_revert::<StakeTableV2Errors>()?
+        .get_receipt()
+        .await?)
+}
+
 #[cfg(test)]
 mod test {
-    use alloy::providers::WalletProvider as _;
+    use alloy::{primitives::U256, providers::WalletProvider as _};
     use espresso_contract_deployer::build_provider;
     use espresso_types::{
         v0_3::{Fetcher, StakeTableEvent},
@@ -206,6 +221,40 @@ mod test {
         assert_eq!(event.schnorrVK, new_schnorr.ver_key().into());
 
         event.data.authenticate()?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_update_commission() -> Result<()> {
+        let system = TestSystem::deploy().await?;
+
+        // Set commission update interval to 1 second for testing
+        let stake_table = StakeTableV2::new(system.stake_table, &system.provider);
+        let receipt = stake_table
+            .setMinCommissionUpdateInterval(U256::from(1)) // 1 second
+            .send()
+            .await?
+            .get_receipt()
+            .await?;
+        assert!(receipt.status());
+
+        system.register_validator().await?;
+        let validator_address = system.deployer_address;
+        let new_commission = Commission::try_from("10.50")?;
+
+        // Wait 2 seconds to ensure we're past the interval
+        system.warp_time(U256::from(2)).await?;
+
+        let receipt =
+            update_commission(&system.provider, system.stake_table, new_commission).await?;
+        assert!(receipt.status());
+
+        let event = receipt
+            .decoded_log::<StakeTableV2::CommissionUpdated>()
+            .unwrap();
+        assert_eq!(event.validator, validator_address);
+        assert_eq!(event.newCommission, new_commission.to_evm());
 
         Ok(())
     }

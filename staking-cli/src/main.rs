@@ -20,7 +20,9 @@ use staking_cli::{
     delegation::{approve, delegate, undelegate},
     demo::stake_for_demo,
     info::{display_stake_table, fetch_token_address, stake_table_info},
-    registration::{deregister_validator, register_validator, update_consensus_keys},
+    registration::{
+        deregister_validator, register_validator, update_commission, update_consensus_keys,
+    },
     signature::{NodeSignatureDestination, NodeSignatureInput, NodeSignatures},
     Commands, Config, ValidSignerConfig,
 };
@@ -312,6 +314,10 @@ pub async fn main() -> Result<()> {
         Commands::DeregisterValidator {} => {
             tracing::info!("Deregistering validator {account}");
             deregister_validator(&provider, stake_table_addr).await
+        },
+        Commands::UpdateCommission { new_commission } => {
+            tracing::info!("Updating validator {account} commission to {new_commission}");
+            update_commission(&provider, stake_table_addr, new_commission).await
         },
         Commands::Approve { amount } => {
             tracing::info!(
