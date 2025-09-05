@@ -259,9 +259,6 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
     /// Message for the next leader containing the epoch root QC
     EpochRootQc(EpochRootQuorumCertificateV2<TYPES>),
 
-    /// Message for the next leader containing the epoch root QC from older consensus version.
-    EpochRootQcV1(EpochRootQuorumCertificateV1<TYPES>),
-
     /// Message with a view sync pre-commit vote
     ViewSyncPreCommitVote2(ViewSyncPreCommitVote2<TYPES>),
 
@@ -282,6 +279,9 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
 
     /// Message with a Timeout vote
     TimeoutVote2(TimeoutVote2<TYPES>),
+
+    /// Message for the next leader containing the epoch root QC from older consensus version.
+    EpochRootQcV1(EpochRootQuorumCertificateV1<TYPES>),
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Hash, Eq)]
