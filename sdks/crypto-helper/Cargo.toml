@@ -16,11 +16,11 @@ ark-ff = { workspace = true }
 ark-serialize = { workspace = true }
 committable = { version = "0.2", features = ["ark-serialize"] }
 espresso-types = { path = "../../types" }
-ethers = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
 jf-crhf = { workspace = true }
 jf-merkle-tree = { workspace = true, features = ["std"] }
+primitive-types = { version = "0.13" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
