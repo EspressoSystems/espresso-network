@@ -179,13 +179,12 @@ async fn test_cli_update_commission() -> Result<()> {
     let warp_time = min_interval + U256::from(1);
     system.warp_time(warp_time).await?;
 
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Mnemonic);
+    let mut cmd = system.cmd(Signer::Mnemonic);
     cmd.arg("update-commission")
         .arg("--new-commission")
         .arg("8.50")
-        .output()?
-        .assert_success();
+        .assert()
+        .success();
 
     Ok(())
 }
