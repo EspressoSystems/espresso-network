@@ -25,6 +25,7 @@ use derive_more::{derive::Deref, Display};
 use hotshot_contract_adapter::sol_types::*;
 
 pub mod builder;
+pub mod impersonate_filler;
 pub mod network_config;
 pub mod proposals;
 pub mod provider;
@@ -917,7 +918,7 @@ pub async fn deploy_stake_table_proxy(
 
 /// Read commission values from L1 StakeTable V1 ValidatorRegistered events for V2 migration
 ///
-/// This function can be removed once all stake table contracts in use are on V2 or later.
+/// Assumes an infura RPC is used, otherwise it may hit other rate limits.
 pub async fn fetch_commissions_for_stake_table_storage_migration(
     l1_provider: impl Provider,
     stake_table_address: Address,
@@ -1379,8 +1380,12 @@ pub fn encode_function_call(signature: &str, args: Vec<String>) -> Result<Bytes>
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use alloy::{
-        node_bindings::Anvil, primitives::utils::parse_ether, providers::ProviderBuilder,
+        node_bindings::Anvil,
+        primitives::utils::parse_ether,
+        providers::{ext::AnvilApi, layers::AnvilProvider, ProviderBuilder},
         sol_types::SolValue,
     };
     use hotshot_contract_adapter::{
@@ -1391,15 +1396,18 @@ mod tests {
     use rand::{rngs::StdRng, Rng, SeedableRng};
 
     use super::*;
-    use crate::proposals::{
-        multisig::{
-            transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
-            upgrade_light_client_v2_multisig_owner, upgrade_stake_table_v2_multisig_owner,
-            LightClientV2UpgradeParams, TransferOwnershipParams,
-        },
-        timelock::{
-            cancel_timelock_operation, execute_timelock_operation, schedule_timelock_operation,
-            TimelockOperationData,
+    use crate::{
+        impersonate_filler::ImpersonateFiller,
+        proposals::{
+            multisig::{
+                transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
+                upgrade_light_client_v2_multisig_owner, upgrade_stake_table_v2_multisig_owner,
+                LightClientV2UpgradeParams, TransferOwnershipParams,
+            },
+            timelock::{
+                cancel_timelock_operation, execute_timelock_operation, schedule_timelock_operation,
+                TimelockOperationData,
+            },
         },
     };
 
@@ -1762,8 +1770,7 @@ mod tests {
     /// Check that we can fetch the commissions on sepolia where we will do the
     /// commission migration.
     ///
-    /// We assume either an infura API key is used. Other RPC may not allow
-    /// fetching all events at once, also depends on the plan.
+    /// Assumes an infura RPC is used, otherwise fetching commissions may hit other rate limits.
     ///
     /// env RPC_URL=... cargo test -p espresso-contract-deployer -- --ignored test_fetch_commissions_sepolia
     #[ignore]
@@ -1802,6 +1809,57 @@ mod tests {
         // The max calldata size is 128 kB per tx, but at the time of writing we
         // only need about 7 kB therefore applying a stricter limit of 32 kB
         assert!(init_v2_calldata.len() < 32 * 1024);
+        Ok(())
+    }
+
+    impl Contracts {
+        fn insert(&mut self, name: Contract, address: Address) -> Option<Address> {
+            self.0.insert(name, address)
+        }
+    }
+
+    /// Fork test to test if we can upgrade the decaf stake table from V1 to V2
+    /// This test forks Sepolia (where decaf runs) using anvil, fetches existing commissions,
+    /// impersonates the proxy owner, and performs the upgrade.
+    ///
+    /// Assumes an infura RPC is used, otherwise fetching commissions may hit other rate limits.
+    ///
+    /// env RPC_URL=... cargo test -p espresso-contract-deployer -- --ignored test_upgrade_decaf_stake_table_fork
+    #[ignore]
+    #[test_log::test(tokio::test)]
+    async fn test_upgrade_decaf_stake_table_fork() -> Result<()> {
+        let rpc_url = std::env::var("RPC_URL").expect("RPC_URL environment variable not set");
+
+        // Decaf / sepolia stake table address
+        let stake_table_address: Address = "0x40304FbE94D5E7D1492Dd90c53a2D63E8506a037".parse()?;
+        let anvil = Anvil::new()
+            .fork(rpc_url)
+            .arg("--retries")
+            .arg("20")
+            .spawn();
+
+        let provider = ProviderBuilder::new().on_http(anvil.endpoint().parse()?);
+        let proxy = StakeTable::new(stake_table_address, &provider);
+        let proxy_owner = proxy.owner().call().await?._0;
+        tracing::info!("Proxy owner address: {proxy_owner:#x}");
+
+        // Enable impersonation for the proxy owner
+        let provider = ProviderBuilder::new()
+            .filler(ImpersonateFiller::new(proxy_owner))
+            .on_http(anvil.endpoint().parse()?);
+        let anvil_provider = AnvilProvider::new(provider.clone(), Arc::new(anvil));
+        anvil_provider.anvil_auto_impersonate_account(true).await?;
+        anvil_provider
+            .anvil_set_balance(proxy_owner, parse_ether("100")?)
+            .await?;
+
+        // We need a Contracts instance with proxy deployed
+        let mut contracts = Contracts::new();
+        contracts.insert(Contract::StakeTableProxy, stake_table_address);
+        let pauser = Address::random();
+        let admin = proxy_owner;
+
+        upgrade_stake_table_v2(&provider, &mut contracts, pauser, admin).await?;
         Ok(())
     }
 
