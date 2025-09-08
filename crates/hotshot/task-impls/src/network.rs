@@ -447,6 +447,21 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                             }
                             HotShotEvent::EpochRootQcRecv(root_qc, sender)
                         },
+                        GeneralConsensusMessage::EpochRootQcV1(root_qc) => {
+                            if !self
+                                .upgrade_lock
+                                .epochs_enabled(root_qc.view_number())
+                                .await
+                            {
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::EpochRootQc for view {} \
+                                     but epochs are not enabled for that view",
+                                    root_qc.view_number()
+                                );
+                                return;
+                            }
+                            HotShotEvent::EpochRootQcRecv(root_qc.into(), sender)
+                        },
                     },
                     SequencingMessage::Da(da_message) => match da_message {
                         DaConsensusMessage::DaProposal(proposal) => {
