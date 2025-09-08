@@ -29,7 +29,7 @@ contract MockStakeTableV2 is StakeTableV2 {
 
         // Store the initial commission for this validator
         commissionTracking[validator] =
-            CommissionTracking({ commission: commission, lastIncreaseTime: block.timestamp });
+            CommissionTracking({ commission: commission, lastIncreaseTime: 0 });
 
         emit ValidatorRegisteredV2(validator, blsVK, schnorrVK, commission, blsSig, schnorrSig);
     }
