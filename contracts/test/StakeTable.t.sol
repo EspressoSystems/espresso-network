@@ -22,8 +22,6 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import { OwnableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { OpsTimelock } from "../src/OpsTimelock.sol";
-import { OwnableUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";

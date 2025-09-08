@@ -11,6 +11,8 @@ import { BN254 } from "bn254/BN254.sol";
 import { EdOnBN254 } from "../src/libraries/EdOnBn254.sol";
 import { PausableUpgradeable } from
     "openzeppelin-contracts-upgradeable/contracts/utils/PausableUpgradeable.sol";
+import { OwnableUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { StakeTable as S } from "../src/StakeTable.sol";
 
 contract StakeTableV2CommissionTest is Test {
@@ -175,21 +177,25 @@ contract StakeTableV2CommissionTest is Test {
     }
 
     function test_SetMinCommissionUpdateInterval_RevertWhenNotOwner() public {
-        address notOwner = makeAddr("notOwner");
+        address notAdmin = makeAddr("notAdmin");
         uint256 newInterval = 14 days;
 
-        vm.startPrank(notOwner);
-        vm.expectRevert();
+        vm.startPrank(notAdmin);
+        vm.expectRevert(
+            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, notAdmin)
+        );
         proxy.setMinCommissionUpdateInterval(newInterval);
         vm.stopPrank();
     }
 
     function test_SetMaxCommissionIncrease_RevertWhenNotOwner() public {
-        address notOwner = makeAddr("notOwner");
+        address notAdmin = makeAddr("notAdmin");
         uint16 newMaxIncrease = 1000;
 
-        vm.startPrank(notOwner);
-        vm.expectRevert();
+        vm.startPrank(notAdmin);
+        vm.expectRevert(
+            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, notAdmin)
+        );
         proxy.setMaxCommissionIncrease(newMaxIncrease);
         vm.stopPrank();
     }
