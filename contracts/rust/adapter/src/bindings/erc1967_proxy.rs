@@ -116,7 +116,6 @@ pub mod ERC1967Proxy {
     pub static DEPLOYED_BYTECODE: alloy_sol_types::private::Bytes = alloy_sol_types::private::Bytes::from_static(
         b"`\x80`@R`\n`\x0CV[\0[`\x18`\x14`\x1AV[`PV[V[_`K\x7F6\x08\x94\xA1;\xA1\xA3!\x06g\xC8(I-\xB9\x8D\xCA> v\xCC75\xA9 \xA3\xCAP]8+\xBCT`\x01`\x01`\xA0\x1B\x03\x16\x90V[\x90P\x90V[6__7__6_\x84Z\xF4=__>\x80\x80\x15`iW=_\xF3[=_\xFD\xFE\xA1dsolcC\0\x08\x1C\0\n",
     );
-    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `AddressEmptyCode(address)` and selector `0x9996b315`.
 ```solidity
 error AddressEmptyCode(address target);
@@ -136,6 +135,7 @@ error AddressEmptyCode(address target);
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
+        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Address,);
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = (alloy::sol_types::private::Address,);
@@ -186,9 +186,15 @@ error AddressEmptyCode(address target);
                     ),
                 )
             }
+            #[inline]
+            fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
+                <Self::Parameters<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                    .map(Self::new)
+            }
         }
     };
-    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ERC1967InvalidImplementation(address)` and selector `0x4c9c8ce3`.
 ```solidity
 error ERC1967InvalidImplementation(address implementation);
@@ -208,6 +214,7 @@ error ERC1967InvalidImplementation(address implementation);
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
+        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Address,);
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = (alloy::sol_types::private::Address,);
@@ -260,16 +267,22 @@ error ERC1967InvalidImplementation(address implementation);
                     ),
                 )
             }
+            #[inline]
+            fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
+                <Self::Parameters<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                    .map(Self::new)
+            }
         }
     };
-    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ERC1967NonPayable()` and selector `0xb398979f`.
 ```solidity
 error ERC1967NonPayable();
 ```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
-    pub struct ERC1967NonPayable {}
+    pub struct ERC1967NonPayable;
     #[allow(
         non_camel_case_types,
         non_snake_case,
@@ -279,6 +292,7 @@ error ERC1967NonPayable();
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
+        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = ();
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = ();
@@ -304,7 +318,7 @@ error ERC1967NonPayable();
         #[doc(hidden)]
         impl ::core::convert::From<UnderlyingRustTuple<'_>> for ERC1967NonPayable {
             fn from(tuple: UnderlyingRustTuple<'_>) -> Self {
-                Self {}
+                Self
             }
         }
         #[automatically_derived]
@@ -325,16 +339,22 @@ error ERC1967NonPayable();
             fn tokenize(&self) -> Self::Token<'_> {
                 ()
             }
+            #[inline]
+            fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
+                <Self::Parameters<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                    .map(Self::new)
+            }
         }
     };
-    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `FailedInnerCall()` and selector `0x1425ea42`.
 ```solidity
 error FailedInnerCall();
 ```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
-    pub struct FailedInnerCall {}
+    pub struct FailedInnerCall;
     #[allow(
         non_camel_case_types,
         non_snake_case,
@@ -344,6 +364,7 @@ error FailedInnerCall();
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
+        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = ();
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = ();
@@ -369,7 +390,7 @@ error FailedInnerCall();
         #[doc(hidden)]
         impl ::core::convert::From<UnderlyingRustTuple<'_>> for FailedInnerCall {
             fn from(tuple: UnderlyingRustTuple<'_>) -> Self {
-                Self {}
+                Self
             }
         }
         #[automatically_derived]
@@ -390,9 +411,15 @@ error FailedInnerCall();
             fn tokenize(&self) -> Self::Token<'_> {
                 ()
             }
+            #[inline]
+            fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
+                <Self::Parameters<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                    .map(Self::new)
+            }
         }
     };
-    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `Upgraded(address)` and selector `0xbc7cd75a20ee27fd9adebab32041f755214dbc6bffa90cc0225b39da2e5c2d3b`.
 ```solidity
 event Upgraded(address indexed implementation);
@@ -514,6 +541,7 @@ constructor(address implementation, bytes _data) payable;
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
+            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (
                 alloy::sol_types::sol_data::Address,
                 alloy::sol_types::sol_data::Bytes,
@@ -581,7 +609,6 @@ constructor(address implementation, bytes _data) payable;
         }
     };
     ///Container for all the [`ERC1967Proxy`](self) custom errors.
-    #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum ERC1967ProxyErrors {
         #[allow(missing_docs)]
         AddressEmptyCode(AddressEmptyCode),
@@ -642,20 +669,16 @@ constructor(address implementation, bytes _data) payable;
         fn abi_decode_raw(
             selector: [u8; 4],
             data: &[u8],
-            validate: bool,
         ) -> alloy_sol_types::Result<Self> {
             static DECODE_SHIMS: &[fn(
                 &[u8],
-                bool,
             ) -> alloy_sol_types::Result<ERC1967ProxyErrors>] = &[
                 {
                     fn FailedInnerCall(
                         data: &[u8],
-                        validate: bool,
                     ) -> alloy_sol_types::Result<ERC1967ProxyErrors> {
                         <FailedInnerCall as alloy_sol_types::SolError>::abi_decode_raw(
                                 data,
-                                validate,
                             )
                             .map(ERC1967ProxyErrors::FailedInnerCall)
                     }
@@ -664,11 +687,9 @@ constructor(address implementation, bytes _data) payable;
                 {
                     fn ERC1967InvalidImplementation(
                         data: &[u8],
-                        validate: bool,
                     ) -> alloy_sol_types::Result<ERC1967ProxyErrors> {
                         <ERC1967InvalidImplementation as alloy_sol_types::SolError>::abi_decode_raw(
                                 data,
-                                validate,
                             )
                             .map(ERC1967ProxyErrors::ERC1967InvalidImplementation)
                     }
@@ -677,11 +698,9 @@ constructor(address implementation, bytes _data) payable;
                 {
                     fn AddressEmptyCode(
                         data: &[u8],
-                        validate: bool,
                     ) -> alloy_sol_types::Result<ERC1967ProxyErrors> {
                         <AddressEmptyCode as alloy_sol_types::SolError>::abi_decode_raw(
                                 data,
-                                validate,
                             )
                             .map(ERC1967ProxyErrors::AddressEmptyCode)
                     }
@@ -690,11 +709,9 @@ constructor(address implementation, bytes _data) payable;
                 {
                     fn ERC1967NonPayable(
                         data: &[u8],
-                        validate: bool,
                     ) -> alloy_sol_types::Result<ERC1967ProxyErrors> {
                         <ERC1967NonPayable as alloy_sol_types::SolError>::abi_decode_raw(
                                 data,
-                                validate,
                             )
                             .map(ERC1967ProxyErrors::ERC1967NonPayable)
                     }
@@ -709,7 +726,71 @@ constructor(address implementation, bytes _data) payable;
                     ),
                 );
             };
-            DECODE_SHIMS[idx](data, validate)
+            DECODE_SHIMS[idx](data)
+        }
+        #[inline]
+        #[allow(non_snake_case)]
+        fn abi_decode_raw_validate(
+            selector: [u8; 4],
+            data: &[u8],
+        ) -> alloy_sol_types::Result<Self> {
+            static DECODE_VALIDATE_SHIMS: &[fn(
+                &[u8],
+            ) -> alloy_sol_types::Result<ERC1967ProxyErrors>] = &[
+                {
+                    fn FailedInnerCall(
+                        data: &[u8],
+                    ) -> alloy_sol_types::Result<ERC1967ProxyErrors> {
+                        <FailedInnerCall as alloy_sol_types::SolError>::abi_decode_raw_validate(
+                                data,
+                            )
+                            .map(ERC1967ProxyErrors::FailedInnerCall)
+                    }
+                    FailedInnerCall
+                },
+                {
+                    fn ERC1967InvalidImplementation(
+                        data: &[u8],
+                    ) -> alloy_sol_types::Result<ERC1967ProxyErrors> {
+                        <ERC1967InvalidImplementation as alloy_sol_types::SolError>::abi_decode_raw_validate(
+                                data,
+                            )
+                            .map(ERC1967ProxyErrors::ERC1967InvalidImplementation)
+                    }
+                    ERC1967InvalidImplementation
+                },
+                {
+                    fn AddressEmptyCode(
+                        data: &[u8],
+                    ) -> alloy_sol_types::Result<ERC1967ProxyErrors> {
+                        <AddressEmptyCode as alloy_sol_types::SolError>::abi_decode_raw_validate(
+                                data,
+                            )
+                            .map(ERC1967ProxyErrors::AddressEmptyCode)
+                    }
+                    AddressEmptyCode
+                },
+                {
+                    fn ERC1967NonPayable(
+                        data: &[u8],
+                    ) -> alloy_sol_types::Result<ERC1967ProxyErrors> {
+                        <ERC1967NonPayable as alloy_sol_types::SolError>::abi_decode_raw_validate(
+                                data,
+                            )
+                            .map(ERC1967ProxyErrors::ERC1967NonPayable)
+                    }
+                    ERC1967NonPayable
+                },
+            ];
+            let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
+                return Err(
+                    alloy_sol_types::Error::unknown_selector(
+                        <Self as alloy_sol_types::SolInterface>::NAME,
+                        selector,
+                    ),
+                );
+            };
+            DECODE_VALIDATE_SHIMS[idx](data)
         }
         #[inline]
         fn abi_encoded_size(&self) -> usize {
@@ -767,7 +848,6 @@ constructor(address implementation, bytes _data) payable;
         }
     }
     ///Container for all the [`ERC1967Proxy`](self) events.
-    #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum ERC1967ProxyEvents {
         #[allow(missing_docs)]
         Upgraded(Upgraded),
@@ -795,15 +875,10 @@ constructor(address implementation, bytes _data) payable;
         fn decode_raw_log(
             topics: &[alloy_sol_types::Word],
             data: &[u8],
-            validate: bool,
         ) -> alloy_sol_types::Result<Self> {
             match topics.first().copied() {
                 Some(<Upgraded as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
-                    <Upgraded as alloy_sol_types::SolEvent>::decode_raw_log(
-                            topics,
-                            data,
-                            validate,
-                        )
+                    <Upgraded as alloy_sol_types::SolEvent>::decode_raw_log(topics, data)
                         .map(Self::Upgraded)
                 }
                 _ => {
@@ -843,14 +918,13 @@ constructor(address implementation, bytes _data) payable;
 See the [wrapper's documentation](`ERC1967ProxyInstance`) for more details.*/
     #[inline]
     pub const fn new<
-        T: alloy_contract::private::Transport + ::core::clone::Clone,
-        P: alloy_contract::private::Provider<T, N>,
+        P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
     >(
         address: alloy_sol_types::private::Address,
-        provider: P,
-    ) -> ERC1967ProxyInstance<T, P, N> {
-        ERC1967ProxyInstance::<T, P, N>::new(address, provider)
+        __provider: P,
+    ) -> ERC1967ProxyInstance<P, N> {
+        ERC1967ProxyInstance::<P, N>::new(address, __provider)
     }
     /**Deploys this contract using the given `provider` and constructor arguments, if any.
 
@@ -859,17 +933,16 @@ Returns a new instance of the contract, if the deployment was successful.
 For more fine-grained control over the deployment process, use [`deploy_builder`] instead.*/
     #[inline]
     pub fn deploy<
-        T: alloy_contract::private::Transport + ::core::clone::Clone,
-        P: alloy_contract::private::Provider<T, N>,
+        P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
     >(
-        provider: P,
+        __provider: P,
         implementation: alloy::sol_types::private::Address,
         _data: alloy::sol_types::private::Bytes,
     ) -> impl ::core::future::Future<
-        Output = alloy_contract::Result<ERC1967ProxyInstance<T, P, N>>,
+        Output = alloy_contract::Result<ERC1967ProxyInstance<P, N>>,
     > {
-        ERC1967ProxyInstance::<T, P, N>::deploy(provider, implementation, _data)
+        ERC1967ProxyInstance::<P, N>::deploy(__provider, implementation, _data)
     }
     /**Creates a `RawCallBuilder` for deploying this contract using the given `provider`
 and constructor arguments, if any.
@@ -878,15 +951,14 @@ This is a simple wrapper around creating a `RawCallBuilder` with the data set to
 the bytecode concatenated with the constructor's ABI-encoded arguments.*/
     #[inline]
     pub fn deploy_builder<
-        T: alloy_contract::private::Transport + ::core::clone::Clone,
-        P: alloy_contract::private::Provider<T, N>,
+        P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
     >(
-        provider: P,
+        __provider: P,
         implementation: alloy::sol_types::private::Address,
         _data: alloy::sol_types::private::Bytes,
-    ) -> alloy_contract::RawCallBuilder<T, P, N> {
-        ERC1967ProxyInstance::<T, P, N>::deploy_builder(provider, implementation, _data)
+    ) -> alloy_contract::RawCallBuilder<P, N> {
+        ERC1967ProxyInstance::<P, N>::deploy_builder(__provider, implementation, _data)
     }
     /**A [`ERC1967Proxy`](self) instance.
 
@@ -900,13 +972,13 @@ be used to deploy a new instance of the contract.
 
 See the [module-level documentation](self) for all the available methods.*/
     #[derive(Clone)]
-    pub struct ERC1967ProxyInstance<T, P, N = alloy_contract::private::Ethereum> {
+    pub struct ERC1967ProxyInstance<P, N = alloy_contract::private::Ethereum> {
         address: alloy_sol_types::private::Address,
         provider: P,
-        _network_transport: ::core::marker::PhantomData<(N, T)>,
+        _network: ::core::marker::PhantomData<N>,
     }
     #[automatically_derived]
-    impl<T, P, N> ::core::fmt::Debug for ERC1967ProxyInstance<T, P, N> {
+    impl<P, N> ::core::fmt::Debug for ERC1967ProxyInstance<P, N> {
         #[inline]
         fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
             f.debug_tuple("ERC1967ProxyInstance").field(&self.address).finish()
@@ -915,22 +987,21 @@ See the [module-level documentation](self) for all the available methods.*/
     /// Instantiation and getters/setters.
     #[automatically_derived]
     impl<
-        T: alloy_contract::private::Transport + ::core::clone::Clone,
-        P: alloy_contract::private::Provider<T, N>,
+        P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
-    > ERC1967ProxyInstance<T, P, N> {
+    > ERC1967ProxyInstance<P, N> {
         /**Creates a new wrapper around an on-chain [`ERC1967Proxy`](self) contract instance.
 
 See the [wrapper's documentation](`ERC1967ProxyInstance`) for more details.*/
         #[inline]
         pub const fn new(
             address: alloy_sol_types::private::Address,
-            provider: P,
+            __provider: P,
         ) -> Self {
             Self {
                 address,
-                provider,
-                _network_transport: ::core::marker::PhantomData,
+                provider: __provider,
+                _network: ::core::marker::PhantomData,
             }
         }
         /**Deploys this contract using the given `provider` and constructor arguments, if any.
@@ -940,11 +1011,11 @@ Returns a new instance of the contract, if the deployment was successful.
 For more fine-grained control over the deployment process, use [`deploy_builder`] instead.*/
         #[inline]
         pub async fn deploy(
-            provider: P,
+            __provider: P,
             implementation: alloy::sol_types::private::Address,
             _data: alloy::sol_types::private::Bytes,
-        ) -> alloy_contract::Result<ERC1967ProxyInstance<T, P, N>> {
-            let call_builder = Self::deploy_builder(provider, implementation, _data);
+        ) -> alloy_contract::Result<ERC1967ProxyInstance<P, N>> {
+            let call_builder = Self::deploy_builder(__provider, implementation, _data);
             let contract_address = call_builder.deploy().await?;
             Ok(Self::new(contract_address, call_builder.provider))
         }
@@ -955,12 +1026,12 @@ This is a simple wrapper around creating a `RawCallBuilder` with the data set to
 the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         #[inline]
         pub fn deploy_builder(
-            provider: P,
+            __provider: P,
             implementation: alloy::sol_types::private::Address,
             _data: alloy::sol_types::private::Bytes,
-        ) -> alloy_contract::RawCallBuilder<T, P, N> {
+        ) -> alloy_contract::RawCallBuilder<P, N> {
             alloy_contract::RawCallBuilder::new_raw_deploy(
-                provider,
+                __provider,
                 [
                     &BYTECODE[..],
                     &alloy_sol_types::SolConstructor::abi_encode(
@@ -995,24 +1066,23 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
             &self.provider
         }
     }
-    impl<T, P: ::core::clone::Clone, N> ERC1967ProxyInstance<T, &P, N> {
+    impl<P: ::core::clone::Clone, N> ERC1967ProxyInstance<&P, N> {
         /// Clones the provider and returns a new instance with the cloned provider.
         #[inline]
-        pub fn with_cloned_provider(self) -> ERC1967ProxyInstance<T, P, N> {
+        pub fn with_cloned_provider(self) -> ERC1967ProxyInstance<P, N> {
             ERC1967ProxyInstance {
                 address: self.address,
                 provider: ::core::clone::Clone::clone(&self.provider),
-                _network_transport: ::core::marker::PhantomData,
+                _network: ::core::marker::PhantomData,
             }
         }
     }
     /// Function calls.
     #[automatically_derived]
     impl<
-        T: alloy_contract::private::Transport + ::core::clone::Clone,
-        P: alloy_contract::private::Provider<T, N>,
+        P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
-    > ERC1967ProxyInstance<T, P, N> {
+    > ERC1967ProxyInstance<P, N> {
         /// Creates a new call builder using this contract instance's provider and address.
         ///
         /// Note that the call can be any function call, not just those defined in this
@@ -1020,28 +1090,27 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         pub fn call_builder<C: alloy_sol_types::SolCall>(
             &self,
             call: &C,
-        ) -> alloy_contract::SolCallBuilder<T, &P, C, N> {
+        ) -> alloy_contract::SolCallBuilder<&P, C, N> {
             alloy_contract::SolCallBuilder::new_sol(&self.provider, &self.address, call)
         }
     }
     /// Event filters.
     #[automatically_derived]
     impl<
-        T: alloy_contract::private::Transport + ::core::clone::Clone,
-        P: alloy_contract::private::Provider<T, N>,
+        P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
-    > ERC1967ProxyInstance<T, P, N> {
+    > ERC1967ProxyInstance<P, N> {
         /// Creates a new event filter using this contract instance's provider and address.
         ///
         /// Note that the type can be any event, not just those defined in this contract.
         /// Prefer using the other methods for building type-safe event filters.
         pub fn event_filter<E: alloy_sol_types::SolEvent>(
             &self,
-        ) -> alloy_contract::Event<T, &P, E, N> {
+        ) -> alloy_contract::Event<&P, E, N> {
             alloy_contract::Event::new_sol(&self.provider, &self.address)
         }
         ///Creates a new event filter for the [`Upgraded`] event.
-        pub fn Upgraded_filter(&self) -> alloy_contract::Event<T, &P, Upgraded, N> {
+        pub fn Upgraded_filter(&self) -> alloy_contract::Event<&P, Upgraded, N> {
             self.event_filter::<Upgraded>()
         }
     }

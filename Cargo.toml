@@ -89,7 +89,7 @@ edition = "2021"
 [workspace.dependencies]
 # The --alloy-version in the justfile gen-bindings recipe should match the version here.
 # TODO: to update past 0.13 we need https://github.com/foundry-rs/foundry/issues/10321
-alloy = { version = "0.13", default-features = false, features = [
+alloy = { version = "1.0.30", default-features = false, features = [
     "contract",
     "eips",
     "json-rpc",
@@ -247,6 +247,7 @@ portpicker = "0.1.1"
 pretty_assertions = { version = "1.4", features = ["unstable"] }
 priority-queue = "2"
 rand = "0.8.5"
+rand_0_9 = { package = "rand", version = "0.9" }
 rand_chacha = "0.3"
 rand_distr = "0.4"
 reqwest = "0.12"

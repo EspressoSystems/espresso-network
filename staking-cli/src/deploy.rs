@@ -67,7 +67,7 @@ impl TestSystem {
         let exit_escrow_period = Duration::from_secs(250);
         let port = portpicker::pick_unused_port().unwrap();
         // Spawn anvil
-        let provider = ProviderBuilder::new().on_anvil_with_wallet_and_config(|anvil| {
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
             anvil.port(port).arg("--accounts").arg("20")
         })?;
         let rpc_url = format!("http://localhost:{port}").parse()?;
@@ -248,12 +248,12 @@ impl TestSystem {
 
     pub async fn balance(&self, address: Address) -> Result<U256> {
         let token = EspToken::new(self.token, &self.provider);
-        Ok(token.balanceOf(address).call().await?._0)
+        Ok(token.balanceOf(address).call().await?)
     }
 
     pub async fn allowance(&self, owner: Address) -> Result<U256> {
         let token = EspToken::new(self.token, &self.provider);
-        Ok(token.allowance(owner, self.stake_table).call().await?._0)
+        Ok(token.allowance(owner, self.stake_table).call().await?)
     }
 
     pub async fn approve(&self, amount: U256) -> Result<()> {
@@ -279,7 +279,7 @@ mod test {
         let stake_table = StakeTable::new(system.stake_table, &system.provider);
         // sanity check that we can fetch the exit escrow period
         assert_eq!(
-            stake_table.exitEscrowPeriod().call().await?._0,
+            stake_table.exitEscrowPeriod().call().await?,
             U256::from(system.exit_escrow_period.as_secs())
         );
 

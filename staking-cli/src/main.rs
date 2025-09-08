@@ -221,7 +221,7 @@ pub async fn main() -> Result<()> {
         compact,
     } = config.commands
     {
-        let provider = ProviderBuilder::new().on_http(config.rpc_url.clone());
+        let provider = ProviderBuilder::new().connect_http(config.rpc_url.clone());
         let query_block = l1_block_number.unwrap_or(BlockId::latest());
         let l1_block = provider.get_block(query_block).await?.unwrap_or_else(|| {
             exit_err("Failed to get block {query_block}", "Block not found");
@@ -254,7 +254,7 @@ pub async fn main() -> Result<()> {
 
     let provider = ProviderBuilder::new()
         .wallet(wallet.clone())
-        .on_http(config.rpc_url.clone());
+        .connect_http(config.rpc_url.clone());
     let stake_table_addr = config.stake_table_address;
     let token_addr = fetch_token_address(config.rpc_url.clone(), stake_table_addr).await?;
     let token = EspToken::new(token_addr, &provider);
@@ -263,7 +263,7 @@ pub async fn main() -> Result<()> {
     match config.commands {
         Commands::TokenBalance { address } => {
             let address = address.unwrap_or(account);
-            let balance = format_ether(token.balanceOf(address).call().await?._0);
+            let balance = format_ether(token.balanceOf(address).call().await?);
             tracing::info!("Token balance for {address}: {balance} ESP");
             return Ok(());
         },
@@ -273,8 +273,7 @@ pub async fn main() -> Result<()> {
                 token
                     .allowance(owner, config.stake_table_address)
                     .call()
-                    .await?
-                    ._0,
+                    .await?,
             );
             tracing::info!("Stake table token allowance for {owner}: {allowance} ESP");
             return Ok(());

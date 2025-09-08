@@ -66,7 +66,7 @@ pub async fn setup_stake_table_contract_for_test(
 
     tracing::info!("ESP token address: {token_address}");
     let token = EspToken::new(token_address, token_holder);
-    let token_balance = token.balanceOf(token_holder_addr).call().await?._0;
+    let token_balance = token.balanceOf(token_holder_addr).call().await?;
     tracing::info!(
         "token distributor account {} balance: {} ESP",
         token_holder_addr,
@@ -88,7 +88,7 @@ pub async fn setup_stake_table_contract_for_test(
         let validator_wallet: EthereumWallet = EthereumWallet::from(signer);
         let validator_provider = ProviderBuilder::new()
             .wallet(validator_wallet)
-            .on_http(rpc_url.clone());
+            .connect_http(rpc_url.clone());
 
         tracing::info!("fund val {val_index} address: {validator_address}, {fund_amount_eth} ETH");
         let tx = TransactionRequest::default()

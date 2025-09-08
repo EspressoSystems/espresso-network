@@ -1107,7 +1107,7 @@ pub mod test_helpers {
             let signer = network_config.signer();
             let deployer = ProviderBuilder::new()
                 .wallet(EthereumWallet::from(signer.clone()))
-                .on_http(l1_url.clone());
+                .connect_http(l1_url.clone());
 
             let blocks_per_epoch = network_config.hotshot_config().epoch_height;
             let epoch_start_block = network_config.hotshot_config().epoch_start_block;
@@ -4996,7 +4996,7 @@ mod test {
 
         let deployer = ProviderBuilder::new()
             .wallet(EthereumWallet::from(network_config.signer().clone()))
-            .on_http(network_config.l1_url().clone());
+            .connect_http(network_config.l1_url().clone());
 
         let mut contracts = Contracts::new();
         let args = DeployerArgsBuilder::default()
@@ -5062,7 +5062,6 @@ mod test {
             .block(BlockId::finalized())
             .call()
             .await?
-            ._0
             .to::<u64>();
 
         tracing::info!("stake table init block = {stake_table_init_block}");
@@ -5072,8 +5071,7 @@ mod test {
             .block(BlockId::finalized())
             .call()
             .await
-            .context("Failed to get token address")?
-            ._0;
+            .context("Failed to get token address")?;
 
         let token = EspToken::new(token_address, provider.clone());
 

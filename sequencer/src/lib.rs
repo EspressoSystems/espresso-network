@@ -906,7 +906,7 @@ pub mod testing {
 
                     let deployer = ProviderBuilder::new()
                         .wallet(EthereumWallet::from(self.signer.clone()))
-                        .on_http(self.l1_url.clone());
+                        .connect_http(self.l1_url.clone());
 
                     let mut contracts = Contracts::new();
                     let args = DeployerArgsBuilder::default()

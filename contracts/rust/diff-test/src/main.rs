@@ -133,8 +133,7 @@ fn main() {
 
             let log_size = cli.args[0].parse::<u32>().unwrap();
             let zeta = u256_to_field::<Fr>(cli.args[1].parse::<U256>().unwrap());
-            let pi_u256 =
-                <[U256; 5]>::abi_decode(&hex::decode(&cli.args[2]).unwrap(), true).unwrap();
+            let pi_u256 = <[U256; 5]>::abi_decode(&hex::decode(&cli.args[2]).unwrap()).unwrap();
             let pi: Vec<Fr> = pi_u256.into_iter().map(u256_to_field).collect();
 
             let verifier = Verifier::<Bn254>::new(2u32.pow(log_size) as usize).unwrap();
@@ -153,10 +152,10 @@ fn main() {
                 panic!("Should provide arg1=transcript, arg2=message");
             }
             let mut t: SolidityTranscript =
-                TranscriptDataSol::abi_decode(&hex::decode(&cli.args[0]).unwrap(), true)
+                TranscriptDataSol::abi_decode(&hex::decode(&cli.args[0]).unwrap())
                     .unwrap()
                     .into();
-            let msg = Bytes::abi_decode(&hex::decode(&cli.args[1]).unwrap(), true)
+            let msg = Bytes::abi_decode(&hex::decode(&cli.args[1]).unwrap())
                 .unwrap()
                 .to_vec();
 
@@ -169,7 +168,7 @@ fn main() {
                 panic!("Should provide arg1=transcript, arg2=fieldElement");
             }
             let mut t: SolidityTranscript =
-                TranscriptDataSol::abi_decode(&hex::decode(&cli.args[0]).unwrap(), true)
+                TranscriptDataSol::abi_decode(&hex::decode(&cli.args[0]).unwrap())
                     .unwrap()
                     .into();
             let field = u256_to_field::<Fr>(cli.args[1].parse::<U256>().unwrap());
@@ -184,10 +183,10 @@ fn main() {
             }
 
             let mut t: SolidityTranscript =
-                TranscriptDataSol::abi_decode(&hex::decode(&cli.args[0]).unwrap(), true)
+                TranscriptDataSol::abi_decode(&hex::decode(&cli.args[0]).unwrap())
                     .unwrap()
                     .into();
-            let point: G1Affine = G1PointSol::abi_decode(&hex::decode(&cli.args[1]).unwrap(), true)
+            let point: G1Affine = G1PointSol::abi_decode(&hex::decode(&cli.args[1]).unwrap())
                 .unwrap()
                 .into();
 
@@ -201,7 +200,7 @@ fn main() {
                 panic!("Should provide arg1=transcript");
             }
             let mut t: SolidityTranscript =
-                TranscriptDataSol::abi_decode(&hex::decode(&cli.args[0]).unwrap(), true)
+                TranscriptDataSol::abi_decode(&hex::decode(&cli.args[0]).unwrap())
                     .unwrap()
                     .into();
             let chal = t.get_challenge::<Bn254>(&[]).unwrap();
@@ -216,15 +215,14 @@ fn main() {
             }
 
             let mut t: SolidityTranscript =
-                TranscriptDataSol::abi_decode(&hex::decode(&cli.args[0]).unwrap(), true)
+                TranscriptDataSol::abi_decode(&hex::decode(&cli.args[0]).unwrap())
                     .unwrap()
                     .into();
             let vk: VerifyingKey<Bn254> =
-                VerifyingKeySol::abi_decode(&hex::decode(&cli.args[1]).unwrap(), true)
+                VerifyingKeySol::abi_decode(&hex::decode(&cli.args[1]).unwrap())
                     .unwrap()
                     .into();
-            let pi_u256 =
-                <Vec<U256>>::abi_decode(&hex::decode(&cli.args[2]).unwrap(), true).unwrap();
+            let pi_u256 = <Vec<U256>>::abi_decode(&hex::decode(&cli.args[2]).unwrap()).unwrap();
             let pi: Vec<Fr> = pi_u256.into_iter().map(u256_to_field).collect();
 
             t.append_vk_and_pub_input(&vk, &pi).unwrap();
@@ -240,7 +238,7 @@ fn main() {
             let mut rng = jf_utils::test_rng();
 
             let mut t: SolidityTranscript =
-                TranscriptDataSol::abi_decode(&hex::decode(&cli.args[0]).unwrap(), true)
+                TranscriptDataSol::abi_decode(&hex::decode(&cli.args[0]).unwrap())
                     .unwrap()
                     .into();
 
@@ -281,16 +279,15 @@ fn main() {
             }
 
             let vk: VerifyingKey<Bn254> =
-                VerifyingKeySol::abi_decode(&hex::decode(&cli.args[0]).unwrap(), true)
+                VerifyingKeySol::abi_decode(&hex::decode(&cli.args[0]).unwrap())
                     .unwrap()
                     .into();
 
-            let pi_u256 =
-                <[U256; 5]>::abi_decode(&hex::decode(&cli.args[1]).unwrap(), true).unwrap();
+            let pi_u256 = <[U256; 5]>::abi_decode(&hex::decode(&cli.args[1]).unwrap()).unwrap();
             let pi: Vec<Fr> = pi_u256.into_iter().map(u256_to_field).collect();
 
             let proof: Proof<Bn254> =
-                PlonkProofSol::abi_decode(&hex::decode(&cli.args[2]).unwrap(), true)
+                PlonkProofSol::abi_decode(&hex::decode(&cli.args[2]).unwrap())
                     .unwrap()
                     .into();
 
