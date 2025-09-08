@@ -125,6 +125,7 @@ mod test {
     use alloy::providers::WalletProvider as _;
     use espresso_contract_deployer::build_provider;
     use espresso_types::{
+        sort_stake_table_events,
         v0_3::{Fetcher, StakeTableEvent},
         L1Client,
     };
@@ -269,8 +270,9 @@ mod test {
             Some(0),
             receipt.block_number.unwrap(),
         )
-        .await
-        .sort_events()?;
+        .await?;
+
+        let events = sort_stake_table_events(events)?;
 
         // verify that we only have the first RegisterV2 event
         assert_eq!(events.len(), 1);
@@ -331,8 +333,8 @@ mod test {
             Some(0),
             receipt.block_number.unwrap(),
         )
-        .await
-        .sort_events()?;
+        .await?;
+        let events = sort_stake_table_events(events)?;
 
         // verify that we only have the RegisterV2 event
         assert_eq!(events.len(), 1);
