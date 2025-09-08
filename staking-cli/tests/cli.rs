@@ -4,7 +4,7 @@ use alloy::primitives::{
 };
 use anyhow::Result;
 use common::{base_cmd, Signer, TestSystemExt};
-use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
+use hotshot_contract_adapter::{sol_types::StakeTableV2, stake_table::StakeTableContractVersion};
 use predicates::str;
 use rand::{rngs::StdRng, SeedableRng as _};
 use staking_cli::{
@@ -174,10 +174,13 @@ async fn test_cli_update_commission() -> Result<()> {
     let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
     system.register_validator().await?;
 
-    // Fetch the minimum commission update interval and warp past it
-    let min_interval = system.get_min_commission_update_interval().await?;
-    let warp_time = min_interval + U256::from(1);
-    system.warp_time(warp_time).await?;
+    let stake_table = StakeTableV2::new(system.stake_table, &system.provider);
+    let commission = stake_table
+        .commissionTracking(system.deployer_address)
+        .call()
+        .await?
+        .commission;
+    assert_ne!(commission, 850);
 
     let mut cmd = system.cmd(Signer::Mnemonic);
     cmd.arg("update-commission")
@@ -185,6 +188,13 @@ async fn test_cli_update_commission() -> Result<()> {
         .arg("8.50")
         .assert()
         .success();
+
+    let commission = stake_table
+        .commissionTracking(system.deployer_address)
+        .call()
+        .await?
+        .commission;
+    assert_eq!(commission, 850);
 
     Ok(())
 }
