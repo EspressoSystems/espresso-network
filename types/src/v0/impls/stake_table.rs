@@ -830,27 +830,26 @@ impl Fetcher {
 
                 match &event {
                     StakeTableV2Events::ValidatorRegisteredV2(event) => {
-                        match event.authenticate() {
-                            Ok(_) => (),
-                            Err(e) => tracing::warn!(
-                                %e,
+                        if let Err(err) = event.authenticate() {
+                            tracing::warn!(
+                                %err,
                                 "Failed to authenticate ValidatorRegisteredV2 event: {}",
                                 log.display()
-                            ),
+                            );
+                            continue;
                         }
                     },
 
                     StakeTableV2Events::ConsensusKeysUpdatedV2(event) => {
-                        match event.authenticate() {
-                            Ok(_) => (),
-                            Err(e) => tracing::warn!(
-                                %e,
+                        if let Err(err) = event.authenticate() {
+                            tracing::warn!(
+                                %err,
                                 "Failed to authenticate ConsensusKeysUpdatedV2 event: {}",
                                 log.display()
-                            ),
+                            );
+                            continue;
                         }
                     },
-                    // unexpected event
                     _ => {},
                 }
 
