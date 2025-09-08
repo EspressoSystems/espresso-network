@@ -103,15 +103,30 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                             }
                             HotShotEvent::QuorumProposalRecv(convert_proposal(proposal), sender)
                         },
+                        GeneralConsensusMessage::Proposal2Legacy(proposal) => {
+                            if !self
+                                .upgrade_lock
+                                .proposal2_legacy_version(proposal.data.view_number())
+                                .await
+                            {
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::Proposal2Legacy for view \
+                                     {} but we are in the wrong version for that message type",
+                                    proposal.data.view_number()
+                                );
+                                return;
+                            }
+                            HotShotEvent::QuorumProposalRecv(convert_proposal(proposal), sender)
+                        },
                         GeneralConsensusMessage::Proposal2(proposal) => {
                             if !self
                                 .upgrade_lock
-                                .epochs_enabled(proposal.data.view_number())
+                                .proposal2_version(proposal.data.view_number())
                                 .await
                             {
                                 tracing::warn!(
                                     "received GeneralConsensusMessage::Proposal2 for view {} but \
-                                     epochs are not enabled for that view",
+                                     we are in the wrong version for that message type",
                                     proposal.data.view_number()
                                 );
                                 return;
@@ -129,7 +144,23 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                             {
                                 tracing::warn!(
                                     "received GeneralConsensusMessage::ProposalResponse for view \
-                                     {} but epochs are enabled for that view",
+                                     {} but we are in the wrong version for that message type",
+                                    proposal.data.view_number()
+                                );
+                                return;
+                            }
+                            HotShotEvent::QuorumProposalResponseRecv(convert_proposal(proposal))
+                        },
+                        GeneralConsensusMessage::ProposalResponse2Legacy(proposal) => {
+                            if !self
+                                .upgrade_lock
+                                .proposal2_legacy_version(proposal.data.view_number())
+                                .await
+                            {
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::ProposalResponse2Legacy \
+                                     for view {} but we are in the wrong version for that message \
+                                     type",
                                     proposal.data.view_number()
                                 );
                                 return;
@@ -139,7 +170,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                         GeneralConsensusMessage::ProposalResponse2(proposal) => {
                             if !self
                                 .upgrade_lock
-                                .epochs_enabled(proposal.data.view_number())
+                                .proposal2_version(proposal.data.view_number())
                                 .await
                             {
                                 tracing::warn!(
@@ -843,11 +874,19 @@ impl<
 
                 let message = if self
                     .upgrade_lock
-                    .epochs_enabled(proposal.data.view_number())
+                    .proposal2_version(proposal.data.view_number())
                     .await
                 {
                     MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
                         GeneralConsensusMessage::Proposal2(convert_proposal(proposal)),
+                    ))
+                } else if self
+                    .upgrade_lock
+                    .proposal2_legacy_version(proposal.data.view_number())
+                    .await
+                {
+                    MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
+                        GeneralConsensusMessage::Proposal2Legacy(convert_proposal(proposal)),
                     ))
                 } else {
                     MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
@@ -954,11 +993,21 @@ impl<
             HotShotEvent::QuorumProposalResponseSend(sender_key, proposal) => {
                 let message = if self
                     .upgrade_lock
-                    .epochs_enabled(proposal.data.view_number())
+                    .proposal2_version(proposal.data.view_number())
                     .await
                 {
                     MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
                         GeneralConsensusMessage::ProposalResponse2(convert_proposal(proposal)),
+                    ))
+                } else if self
+                    .upgrade_lock
+                    .proposal2_legacy_version(proposal.data.view_number())
+                    .await
+                {
+                    MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
+                        GeneralConsensusMessage::ProposalResponse2Legacy(convert_proposal(
+                            proposal,
+                        )),
                     ))
                 } else {
                     MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
