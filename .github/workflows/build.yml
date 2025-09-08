@@ -447,7 +447,11 @@ jobs:
 
       - name: Set docker image tag for compose
         run: |
-          DOCKER_TAG=$(./scripts/derive-docker-tag)
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            DOCKER_TAG="pr-${{ github.event.pull_request.number }}"
+          else
+            DOCKER_TAG=$(echo "${{ github.ref_name }}" | tr '/' '-')
+          fi
           echo DOCKER_TAG=$DOCKER_TAG >> $GITHUB_ENV
 
       - name: Pull remaining docker images
@@ -472,7 +476,11 @@ jobs:
 
       - name: Set docker image tag for compose
         run: |
-          DOCKER_TAG=$(./scripts/derive-docker-tag)
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            DOCKER_TAG="pr-${{ github.event.pull_request.number }}"
+          else
+            DOCKER_TAG=$(echo "${{ github.ref_name }}" | tr '/' '-')
+          fi
           echo DOCKER_TAG=$DOCKER_TAG >> $GITHUB_ENV
 
       - name: Pull the docker images
