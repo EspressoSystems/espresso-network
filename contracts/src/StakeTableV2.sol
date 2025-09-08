@@ -85,7 +85,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     uint16 public maxCommissionIncrease;
 
     /// @notice Commission tracking for each validator
-    mapping(address validator => CommissionTracking) public commissionTracking;
+    mapping(address validator => CommissionTracking tracking) public commissionTracking;
 
     /// Schnorr keys that have been seen by the contract
     ///
