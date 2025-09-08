@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Derive Docker tag from GitHub Actions context
+# Usage: ./scripts/derive-docker-tag
+#
+# See: https://github.com/docker/metadata-action?tab=readme-ov-file#basic
+set -euo pipefail
+
+if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
+    # For pull requests: pr-<number>
+    echo "pr-$GITHUB_EVENT_PULL_REQUEST_NUMBER"
+else
+    # The short ref name of the branch or tag that triggered the workflow run. This
+    # value matches the branch or tag name shown on GitHub.
+    # Replace slashes with dashes for valid Docker tags (e.g., releases/v1 -> releases-v1)
+    echo "$GITHUB_REF_NAME" | tr '/' '-'
+fi
