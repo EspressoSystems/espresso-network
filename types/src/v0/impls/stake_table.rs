@@ -322,7 +322,6 @@ impl StakeTableState {
                     stake: U256::ZERO,
                     commission,
                     delegators: HashMap::new(),
-                    last_commission_increase_time: None,
                 });
             },
 
@@ -374,7 +373,6 @@ impl StakeTableState {
                     stake: U256::ZERO,
                     commission,
                     delegators: HashMap::new(),
-                    last_commission_increase_time: None,
                 });
             },
 
@@ -2696,7 +2694,6 @@ pub mod testing {
                 stake: validator_stake,
                 commission: val.commission,
                 delegators,
-                last_commission_increase_time: Default::default(),
             }
         }
     }
