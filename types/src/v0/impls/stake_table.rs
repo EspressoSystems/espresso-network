@@ -524,12 +524,8 @@ impl StakeTableState {
                 }
 
                 // NOTE: currently we are not enforcing changes to the
-                // commission increase rates: last_commission_increase_time and
-                // the maximum value by which a commission increases. I think
-                // this is fine because consensus will work correctly as long as
-                // the commission values are sound. In the event we want to add
-                // these checks later the timestamps are already stored in the
-                // Validator struct.
+                // commission increase rates and leave this enforcement to the
+                // stake table contract.
 
                 let val = self
                     .validators
@@ -537,7 +533,6 @@ impl StakeTableState {
                     .ok_or(StakeTableError::ValidatorNotFound(validator))?;
 
                 val.commission = newCommission;
-                val.last_commission_increase_time = Some(timestamp.into())
             },
         }
 

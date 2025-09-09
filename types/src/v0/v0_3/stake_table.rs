@@ -8,12 +8,9 @@ use async_lock::{Mutex, RwLock};
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use derive_more::derive::{From, Into};
 use hotshot::types::SignatureKey;
-use hotshot_contract_adapter::{
-    sol_types::StakeTableV2::{
-        CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated,
-        ValidatorExit, ValidatorRegistered, ValidatorRegisteredV2,
-    },
-    stake_table::EthTimestamp,
+use hotshot_contract_adapter::sol_types::StakeTableV2::{
+    CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated,
+    ValidatorExit, ValidatorRegistered, ValidatorRegisteredV2,
 };
 use hotshot_types::{
     data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, PeerConfig,
@@ -57,10 +54,6 @@ pub struct Validator<KEY: SignatureKey> {
     // TODO: MA commission is only valid from 0 to 10_000. Add newtype to enforce this.
     pub commission: u16,
     pub delegators: HashMap<Address, U256>,
-    /// Timestamp of the last commission increase (in seconds since epoch)
-    ///
-    /// An absent value indicates the validator never increased their commission.
-    pub last_commission_increase_time: Option<EthTimestamp>,
 }
 
 pub(crate) fn to_fixed_bytes(value: U256) -> [u8; std::mem::size_of::<U256>()] {
