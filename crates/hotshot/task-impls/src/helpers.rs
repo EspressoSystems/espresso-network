@@ -1360,7 +1360,7 @@ pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
                 key,
                 sig,
                 signed_state_digest,
-            ) || !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
+            ) && !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
                 key,
                 sig_v2,
                 &state_cert.light_client_state,
