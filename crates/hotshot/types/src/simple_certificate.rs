@@ -890,3 +890,14 @@ impl<TYPES: NodeType> From<EpochRootQuorumCertificateV1<TYPES>>
         }
     }
 }
+
+impl<TYPES: NodeType> From<EpochRootQuorumCertificateV2<TYPES>>
+    for EpochRootQuorumCertificateV1<TYPES>
+{
+    fn from(root_qc: EpochRootQuorumCertificateV2<TYPES>) -> Self {
+        Self {
+            qc: root_qc.qc,
+            state_cert: root_qc.state_cert.into(),
+        }
+    }
+}
