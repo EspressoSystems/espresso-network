@@ -135,6 +135,24 @@ pub async fn update_commission(
         .await?)
 }
 
+pub async fn fetch_commission(
+    provider: impl Provider,
+    stake_table_addr: Address,
+    validator: Address,
+) -> Result<Commission> {
+    let stake_table = StakeTableV2::new(stake_table_addr, &provider);
+    let version: StakeTableContractVersion = stake_table.getVersion().call().await?.try_into()?;
+    if matches!(version, StakeTableContractVersion::V1) {
+        anyhow::bail!("fetching commission is not supported with stake table V1");
+    }
+    Ok(stake_table
+        .commissionTracking(validator)
+        .call()
+        .await?
+        .commission
+        .try_into()?)
+}
+
 #[cfg(test)]
 mod test {
     use alloy::{primitives::U256, providers::WalletProvider as _};
@@ -255,6 +273,10 @@ mod test {
             .unwrap();
         assert_eq!(event.validator, validator_address);
         assert_eq!(event.newCommission, new_commission.to_evm());
+
+        let fetched_commission =
+            fetch_commission(&system.provider, system.stake_table, validator_address).await?;
+        assert_eq!(fetched_commission, new_commission);
 
         Ok(())
     }

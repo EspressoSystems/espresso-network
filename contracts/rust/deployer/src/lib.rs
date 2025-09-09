@@ -1041,7 +1041,7 @@ pub async fn prepare_stake_table_v2_upgrade(
 }
 
 /// Upgrade the stake table proxy from V1 to V2, or patch V2
-async fn upgrade_stake_table_v2(
+pub async fn upgrade_stake_table_v2(
     provider: impl Provider,
     contracts: &mut Contracts,
     pauser: Address,

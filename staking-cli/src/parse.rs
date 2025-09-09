@@ -14,7 +14,7 @@ pub fn parse_state_priv_key(s: &str) -> Result<StateSignKey, Tb64Error> {
     TaggedBase64::parse(s)?.try_into()
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Commission(u16);
 
 impl Commission {
