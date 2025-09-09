@@ -514,8 +514,8 @@ impl StakeTableState {
 
             StakeTableEvent::CommissionUpdate(CommissionUpdated {
                 validator,
-                timestamp,
                 newCommission,
+                ..
             }) => {
                 if newCommission > COMMISSION_BASIS_POINTS {
                     return Err(StakeTableError::InvalidCommission(validator, newCommission));
