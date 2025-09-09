@@ -998,7 +998,7 @@ impl<TYPES: NodeType> LightClientStateUpdateVote2<TYPES> {
             epoch: self.epoch,
             light_client_state: self.light_client_state,
             next_stake_table_state: self.next_stake_table_state,
-            signature: self.signature.clone(),
+            signature: self.v2_signature.clone(),
         }
     }
 }
