@@ -4,12 +4,13 @@ use alloy::primitives::{
 };
 use anyhow::Result;
 use common::{base_cmd, Signer, TestSystemExt};
-use hotshot_contract_adapter::{sol_types::StakeTableV2, stake_table::StakeTableContractVersion};
+use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use predicates::str;
 use rand::{rngs::StdRng, SeedableRng as _};
 use staking_cli::{
     demo::DelegationConfig,
     deploy::{self},
+    registration::fetch_commission,
     Config,
 };
 
@@ -174,13 +175,14 @@ async fn test_cli_update_commission() -> Result<()> {
     let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
     system.register_validator().await?;
 
-    let stake_table = StakeTableV2::new(system.stake_table, &system.provider);
-    let commission = stake_table
-        .commissionTracking(system.deployer_address)
-        .call()
-        .await?
-        .commission;
-    assert_ne!(commission, 850);
+    let new_commission = "8.5".try_into()?;
+    let commission = fetch_commission(
+        &system.provider,
+        system.stake_table,
+        system.deployer_address,
+    )
+    .await?;
+    assert_ne!(commission, new_commission);
 
     let mut cmd = system.cmd(Signer::Mnemonic);
     cmd.arg("update-commission")
@@ -189,12 +191,13 @@ async fn test_cli_update_commission() -> Result<()> {
         .assert()
         .success();
 
-    let commission = stake_table
-        .commissionTracking(system.deployer_address)
-        .call()
-        .await?
-        .commission;
-    assert_eq!(commission, 850);
+    let commission = fetch_commission(
+        &system.provider,
+        system.stake_table,
+        system.deployer_address,
+    )
+    .await?;
+    assert_eq!(commission, new_commission);
 
     Ok(())
 }
