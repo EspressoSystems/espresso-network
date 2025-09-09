@@ -78,10 +78,10 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
-    /// @notice Minimum time interval between commission updates (in seconds)
-    uint256 public minCommissionUpdateInterval;
+    /// @notice Minimum time interval between commission increases (in seconds)
+    uint256 public minCommissionIncreaseInterval;
 
-    /// @notice Maximum commission increase allowed per update (in basis points)
+    /// @notice Maximum commission increase allowed per increase (in basis points)
     uint16 public maxCommissionIncrease;
 
     /// @notice Commission tracking for each validator
@@ -128,7 +128,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @param newCommission The new commission rate
     ///
     /// @dev the timestamp is emitted to simplify processing in the GCL
-    event CommissionUpdated(address indexed validator, uint256 timestamp, uint16 newCommission);
+    event CommissionUpdated(
+        address indexed validator, uint256 timestamp, uint16 oldCommission, uint16 newCommission
+    );
 
     /// @notice The minimum commission update interval is updated
     /// @param newInterval The new minimum update interval in seconds
@@ -194,7 +196,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
         // Default values found to be reasonable in internal discussion, may be
         // adjusted before release and updated after release.
-        minCommissionUpdateInterval = 7 days;
+        minCommissionIncreaseInterval = 7 days;
         maxCommissionIncrease = 500; // 5%
 
         // initialize commissions (if the contract under upgrade has existing state)
@@ -377,7 +379,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @param newCommission The new commission rate in % with 2 decimals (0 to 10_000)
     /// @notice
     ///
-    ///   1. Only one commission *increase* per minCommissionUpdateInterval is allowed.
+    ///   1. Only one commission *increase* per minCommissionIncreaseInterval is allowed.
     ///   2. The commission increase cannot exceed maxCommissionIncrease.
     ///
     /// These limits protect stakers from sudden large commission increases,
@@ -389,8 +391,6 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
         CommissionTracking storage tracking = commissionTracking[validator];
         uint16 currentCommission = tracking.commission;
-        uint256 lastIncreaseTime = tracking.lastIncreaseTime;
-
         require(newCommission != currentCommission, CommissionUnchanged());
 
         // NOTE: Limits exist to protect stakers from sudden loss of revenue due
@@ -400,26 +400,31 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         // 2. Time of last change only tracked for commission *increase*.
         if (newCommission > currentCommission) {
             // Allow immediate first increase or after interval has passed
+            uint256 lastIncreaseTime = tracking.lastIncreaseTime;
             require(
                 lastIncreaseTime == 0
-                    || block.timestamp >= lastIncreaseTime + minCommissionUpdateInterval,
+                    || block.timestamp >= lastIncreaseTime + minCommissionIncreaseInterval,
                 CommissionUpdateTooSoon()
             );
 
-            uint16 increase = newCommission - currentCommission;
-            require(increase <= maxCommissionIncrease, CommissionIncreaseExceedsMax());
+            // both maxCommissionIncrease and newCommission are <= 10_000
+            require(
+                newCommission <= currentCommission + maxCommissionIncrease,
+                CommissionIncreaseExceedsMax()
+            );
             tracking.lastIncreaseTime = block.timestamp;
         }
+
         tracking.commission = newCommission;
 
-        emit CommissionUpdated(validator, block.timestamp, newCommission);
+        emit CommissionUpdated(validator, block.timestamp, currentCommission, newCommission);
     }
 
     /// @notice Set the minimum interval between commission updates
     /// @param newInterval The new minimum interval in seconds
     function setMinCommissionUpdateInterval(uint256 newInterval) external virtual onlyOwner {
         require(newInterval > 0 && newInterval <= 365 days, InvalidRateLimitParameters());
-        minCommissionUpdateInterval = newInterval;
+        minCommissionIncreaseInterval = newInterval;
         emit MinCommissionUpdateIntervalUpdated(newInterval);
     }
 
@@ -448,12 +453,11 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
             ValidatorStatus status = validators[validator].status;
             require(status != ValidatorStatus.Unknown, ValidatorInactive());
 
-            if (
-                commissionTracking[validator].lastIncreaseTime != 0
-                    || commissionTracking[validator].commission != 0
-            ) {
-                revert CommissionAlreadyInitialized(validator);
-            }
+            require(
+                commissionTracking[validator].lastIncreaseTime == 0
+                    && commissionTracking[validator].commission == 0,
+                CommissionAlreadyInitialized(validator)
+            );
 
             commissionTracking[validator] =
                 CommissionTracking({ commission: commission, lastIncreaseTime: 0 });

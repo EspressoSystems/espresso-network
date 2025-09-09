@@ -270,7 +270,7 @@ impl TestSystem {
     pub async fn get_min_commission_update_interval(&self) -> Result<U256> {
         use hotshot_contract_adapter::sol_types::StakeTableV2;
         let stake_table = StakeTableV2::new(self.stake_table, &self.provider);
-        let interval = stake_table.minCommissionUpdateInterval().call().await?._0;
+        let interval = stake_table.minCommissionIncreaseInterval().call().await?._0;
         Ok(interval)
     }
 

@@ -1026,6 +1026,25 @@ contract StakeTableUpgradeV2Test is Test {
         return stakeTableRegisterTest.stakeTable();
     }
 
+    function registerValidatorOnStakeTableV1(
+        address _validator,
+        string memory _seed,
+        uint16 _commission,
+        S _stakeTable
+    ) public {
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory sig
+        ) = stakeTableRegisterTest.genClientWallet(_validator, _seed);
+
+        vm.startPrank(_validator);
+        vm.expectEmit(false, false, false, true, address(_stakeTable));
+        emit S.ValidatorRegistered(_validator, blsVK, schnorrVK, _commission);
+        _stakeTable.registerValidator(blsVK, schnorrVK, sig, _commission);
+        vm.stopPrank();
+    }
+
     function registerValidatorOnStakeTableV2(
         address _validator,
         string memory _seed,

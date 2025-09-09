@@ -388,11 +388,12 @@ impl<'de> Deserialize<'de> for CommissionUpdated {
     where
         D: Deserializer<'de>,
     {
-        let (validator, timestamp, newCommission) = <_>::deserialize(deserializer)?;
+        let (validator, timestamp, oldCommission, newCommission) = <_>::deserialize(deserializer)?;
         Ok(Self {
             validator,
             timestamp,
             newCommission,
+            oldCommission,
         })
     }
 }

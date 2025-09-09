@@ -49,14 +49,18 @@ contract StakeTableV2CommissionTest is Test {
 
         uint16 newCommission = initialCommission + proxy.maxCommissionIncrease();
         vm.expectEmit(true, false, false, true);
-        emit StakeTableV2.CommissionUpdated(validator, block.timestamp, newCommission);
+        emit StakeTableV2.CommissionUpdated(
+            validator, block.timestamp, initialCommission, newCommission
+        );
         proxy.updateCommission(newCommission);
 
         // Wait until the time limit expires and increase again
-        vm.warp(block.timestamp + proxy.minCommissionUpdateInterval() + 1);
+        vm.warp(block.timestamp + proxy.minCommissionIncreaseInterval() + 1);
         uint16 thirdCommission = newCommission + proxy.maxCommissionIncrease();
         vm.expectEmit(true, false, false, true);
-        emit StakeTableV2.CommissionUpdated(validator, block.timestamp, thirdCommission);
+        emit StakeTableV2.CommissionUpdated(
+            validator, block.timestamp, newCommission, thirdCommission
+        );
         proxy.updateCommission(thirdCommission);
         vm.stopPrank();
     }
@@ -70,7 +74,7 @@ contract StakeTableV2CommissionTest is Test {
 
         vm.startPrank(validator);
 
-        vm.warp(block.timestamp + proxy.minCommissionUpdateInterval() + 1);
+        vm.warp(block.timestamp + proxy.minCommissionIncreaseInterval() + 1);
 
         uint16 tooHighCommission = initialCommission + proxy.maxCommissionIncrease() + 1;
         vm.expectRevert(StakeTableV2.CommissionIncreaseExceedsMax.selector);
@@ -147,7 +151,9 @@ contract StakeTableV2CommissionTest is Test {
 
         vm.expectEmit(true, false, false, true);
         uint16 minCommission = 0;
-        emit StakeTableV2.CommissionUpdated(validator, block.timestamp, minCommission);
+        emit StakeTableV2.CommissionUpdated(
+            validator, block.timestamp, maxCommission, minCommission
+        );
         proxy.updateCommission(minCommission);
         vm.stopPrank();
     }
@@ -160,7 +166,7 @@ contract StakeTableV2CommissionTest is Test {
         emit StakeTableV2.MinCommissionUpdateIntervalUpdated(newInterval);
         proxy.setMinCommissionUpdateInterval(newInterval);
 
-        assertEq(proxy.minCommissionUpdateInterval(), newInterval);
+        assertEq(proxy.minCommissionIncreaseInterval(), newInterval);
         vm.stopPrank();
     }
 
@@ -203,7 +209,60 @@ contract StakeTableV2CommissionTest is Test {
     function test_DefaultValues() public view {
         // This is the only test that checks default values - if defaults change, only this test
         // should fail
-        assertEq(proxy.minCommissionUpdateInterval(), 7 days);
+        assertEq(proxy.minCommissionIncreaseInterval(), 7 days);
         assertEq(proxy.maxCommissionIncrease(), 500);
+    }
+
+    function test_InitializeV2_RevertWhenInitialValidatorNotRegistered() public {
+        StakeTableUpgradeV2Test upgradeTest = new StakeTableUpgradeV2Test();
+        upgradeTest.setUp();
+        S baseProxy = upgradeTest.getStakeTable();
+
+        address validator = makeAddr("validator");
+        // validator does not register
+
+        StakeTableV2.InitialCommission[] memory wrongCommissions =
+            new StakeTableV2.InitialCommission[](1);
+        wrongCommissions[0] =
+            StakeTableV2.InitialCommission({ validator: validator, commission: 500 });
+
+        bytes memory initData = abi.encodeWithSelector(
+            StakeTableV2.initializeV2.selector, pauser, upgradeTest.admin(), wrongCommissions
+        );
+
+        vm.startPrank(upgradeTest.admin());
+        StakeTableV2 implV2 = new StakeTableV2();
+        vm.expectRevert(abi.encodeWithSelector(S.ValidatorInactive.selector));
+        baseProxy.upgradeToAndCall(address(implV2), initData);
+        vm.stopPrank();
+    }
+
+    function test_InitializeV2_RevertWhenDuplicateValidator() public {
+        StakeTableUpgradeV2Test upgradeTest = new StakeTableUpgradeV2Test();
+        upgradeTest.setUp();
+        S baseProxy = upgradeTest.getStakeTable();
+
+        address validator = makeAddr("validator");
+        upgradeTest.registerValidatorOnStakeTableV1(validator, "123", 500, baseProxy);
+
+        StakeTableV2.InitialCommission[] memory duplicateCommissions =
+            new StakeTableV2.InitialCommission[](2);
+        duplicateCommissions[0] =
+            StakeTableV2.InitialCommission({ validator: validator, commission: 500 });
+        // Duplicate validator
+        duplicateCommissions[1] =
+            StakeTableV2.InitialCommission({ validator: validator, commission: 500 });
+
+        bytes memory initData = abi.encodeWithSelector(
+            StakeTableV2.initializeV2.selector, pauser, upgradeTest.admin(), duplicateCommissions
+        );
+
+        vm.startPrank(upgradeTest.admin());
+        StakeTableV2 implV2 = new StakeTableV2();
+        vm.expectRevert(
+            abi.encodeWithSelector(StakeTableV2.CommissionAlreadyInitialized.selector, validator)
+        );
+        baseProxy.upgradeToAndCall(address(implV2), initData);
+        vm.stopPrank();
     }
 }

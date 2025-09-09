@@ -187,7 +187,7 @@ async fn test_cli_update_commission() -> Result<()> {
     let mut cmd = system.cmd(Signer::Mnemonic);
     cmd.arg("update-commission")
         .arg("--new-commission")
-        .arg("8.50")
+        .arg("8.5")
         .assert()
         .success();
 
