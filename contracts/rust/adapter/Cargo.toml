@@ -36,6 +36,7 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+bincode = { workspace = true }
 tokio = { workspace = true }
 
 [lints]

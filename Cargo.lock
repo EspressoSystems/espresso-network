@@ -5294,6 +5294,7 @@ dependencies = [
  "ark-poly",
  "ark-serialize 0.4.2",
  "ark-std 0.4.0",
+ "bincode",
  "derive_more 2.0.1",
  "hotshot-types",
  "jf-pcs",
