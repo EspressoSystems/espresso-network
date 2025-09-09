@@ -1326,11 +1326,23 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
 }
 
 /// Validates the light client state update certificate
-pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
+pub async fn validate_light_client_state_update_certificate<TYPES: NodeType, V: Versions>(
     state_cert: &LightClientStateUpdateCertificateV2<TYPES>,
     membership_coordinator: &EpochMembershipCoordinator<TYPES>,
+    view_number: TYPES::View,
+    upgrade_lock: &UpgradeLock<TYPES, V>,
 ) -> Result<()> {
     tracing::debug!("Validating light client state update certificate");
+
+    if !upgrade_lock.proposal2_version(view_number).await {
+        ensure!(
+            state_cert.auth_root == <FixedBytes<32> as Default>::default(),
+            warn!(
+                "Failed to validate light client state update certificate: expected an auth_root \
+                 of 0 for the current version"
+            )
+        )
+    }
 
     let epoch_membership = membership_coordinator
         .membership_for_epoch(state_cert.epoch())

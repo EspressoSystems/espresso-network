@@ -167,6 +167,8 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                         if validate_light_client_state_update_certificate(
                             state_cert,
                             &self.membership.coordinator,
+                            self.view_number,
+                            &self.upgrade_lock,
                         )
                         .await
                         .is_err()
@@ -374,6 +376,8 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                         if validate_light_client_state_update_certificate(
                             state_cert,
                             &self.membership.coordinator,
+                            self.view_number,
+                            &self.upgrade_lock,
                         )
                         .await
                         .is_err()
