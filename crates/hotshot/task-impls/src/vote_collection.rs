@@ -24,7 +24,7 @@ use hotshot_types::{
         ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
-        DaVote2, EpochRootQuorumVote, NextEpochQuorumVote2, QuorumVote, QuorumVote2, TimeoutVote2,
+        DaVote2, EpochRootQuorumVote2, NextEpochQuorumVote2, QuorumVote, QuorumVote2, TimeoutVote2,
         UpgradeVote, ViewSyncCommitVote2, ViewSyncFinalizeVote2, ViewSyncPreCommitVote2,
     },
     traits::node_implementation::{ConsensusTime, NodeType, Versions},
@@ -698,10 +698,10 @@ impl<TYPES: NodeType, V: Versions> EpochRootVoteCollectionTaskState<TYPES, V> {
     /// Accumulate a vote and return the certificates if formed
     async fn accumulate_vote(
         &mut self,
-        vote: &EpochRootQuorumVote<TYPES>,
+        vote: &EpochRootQuorumVote2<TYPES>,
         event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,
     ) -> Result<Option<EpochRootQuorumCertificateV2<TYPES>>> {
-        let EpochRootQuorumVote { vote, state_vote } = vote;
+        let EpochRootQuorumVote2 { vote, state_vote } = vote;
         ensure!(
             vote.view_number() == self.view,
             error!(
@@ -790,7 +790,7 @@ async fn create_epoch_root_vote_collection_task_state<TYPES: NodeType, V: Versio
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_epoch_root_vote<TYPES: NodeType, V: Versions>(
     collectors: &mut EpochRootVoteCollectorsMap<TYPES, V>,
-    vote: &EpochRootQuorumVote<TYPES>,
+    vote: &EpochRootQuorumVote2<TYPES>,
     public_key: TYPES::SignatureKey,
     membership: &EpochMembership<TYPES>,
     id: u64,

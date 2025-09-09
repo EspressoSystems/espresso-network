@@ -1356,17 +1356,29 @@ pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
     for (key, sig, sig_v2) in state_cert.signatures.iter() {
         if let Some(stake) = state_key_map.get(key) {
             accumulated_stake += *stake;
-            if !<TYPES::StateSignatureKey as LCV3StateSignatureKey>::verify_state_sig(
-                key,
-                sig,
-                signed_state_digest,
-            ) && !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
-                key,
-                sig_v2,
-                &state_cert.light_client_state,
-                &state_cert.next_stake_table_state,
-            ) {
-                bail!("Invalid light client state update certificate signature");
+            // If the auth_root is `Default`, the state_cert was cast from an older version of the struct. We only perform the second signature check.
+            if state_cert.auth_root == <FixedBytes<32> as Default>::default() {
+                if !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
+                    key,
+                    sig_v2,
+                    &state_cert.light_client_state,
+                    &state_cert.next_stake_table_state,
+                ) {
+                    bail!("Invalid light client state update certificate signature");
+                }
+            } else {
+                if !<TYPES::StateSignatureKey as LCV3StateSignatureKey>::verify_state_sig(
+                    key,
+                    sig,
+                    signed_state_digest,
+                ) || !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
+                    key,
+                    sig_v2,
+                    &state_cert.light_client_state,
+                    &state_cert.next_stake_table_state,
+                ) {
+                    bail!("Invalid light client state update certificate signature");
+                }
             }
         } else {
             bail!("Invalid light client state update certificate signature");
