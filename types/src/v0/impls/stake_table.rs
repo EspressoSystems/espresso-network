@@ -3203,6 +3203,7 @@ mod tests {
         let valid_commission_event = CommissionUpdated {
             validator: validator.account,
             timestamp: Default::default(),
+            oldCommission: 0,
             newCommission: COMMISSION_BASIS_POINTS, // Exactly at the limit
         }
         .into();
@@ -3212,6 +3213,7 @@ mod tests {
         let invalid_commission_event = CommissionUpdated {
             validator: validator.account,
             timestamp: Default::default(),
+            oldCommission: 0,
             newCommission: invalid_commission,
         }
         .into();
