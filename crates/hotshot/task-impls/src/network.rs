@@ -422,10 +422,29 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                             HotShotEvent::ExtendedQcRecv(qc, next_epoch_qc, sender)
                         },
                         GeneralConsensusMessage::EpochRootQuorumVote(vote) => {
-                            if !self.upgrade_lock.epochs_enabled(vote.view_number()).await {
+                            if !self
+                                .upgrade_lock
+                                .proposal2_legacy_version(vote.view_number())
+                                .await
+                            {
                                 tracing::warn!(
-                                    "received GeneralConsensusMessage::EpochRootVote for view {} \
-                                     but epochs are not enabled for that view",
+                                    "received GeneralConsensusMessage::EpochRootQuorumVote for \
+                                     view {} but we do not expect this message in this version",
+                                    vote.view_number()
+                                );
+                                return;
+                            }
+                            HotShotEvent::EpochRootQuorumVoteRecv(vote.to_vote2())
+                        },
+                        GeneralConsensusMessage::EpochRootQuorumVote2(vote) => {
+                            if !self
+                                .upgrade_lock
+                                .proposal2_version(vote.view_number())
+                                .await
+                            {
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::EpochRootQuorumVote2 for \
+                                     view {} but we do not expect this message in this version",
                                     vote.view_number()
                                 );
                                 return;
@@ -968,9 +987,21 @@ impl<
                     },
                 };
 
-                let message = if self.upgrade_lock.epochs_enabled(vote.view_number()).await {
+                let message = if self
+                    .upgrade_lock
+                    .proposal2_version(vote.view_number())
+                    .await
+                {
                     MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
-                        GeneralConsensusMessage::EpochRootQuorumVote(vote.clone()),
+                        GeneralConsensusMessage::EpochRootQuorumVote2(vote.clone()),
+                    ))
+                } else if self
+                    .upgrade_lock
+                    .proposal2_legacy_version(vote.view_number())
+                    .await
+                {
+                    MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
+                        GeneralConsensusMessage::EpochRootQuorumVote(vote.clone().to_vote()),
                     ))
                 } else {
                     MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(

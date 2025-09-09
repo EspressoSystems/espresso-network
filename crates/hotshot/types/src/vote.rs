@@ -12,7 +12,7 @@ use std::{
     marker::PhantomData,
 };
 
-use alloy::primitives::U256;
+use alloy::primitives::{FixedBytes, U256};
 use bitvec::{bitvec, vec::BitVec};
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::*;
@@ -23,7 +23,7 @@ use crate::{
     light_client::{LightClientState, StakeTableState},
     message::UpgradeLock,
     simple_certificate::{LightClientStateUpdateCertificateV2, Threshold},
-    simple_vote::{LightClientStateUpdateVote, VersionedVoteData, Voteable},
+    simple_vote::{LightClientStateUpdateVote2, VersionedVoteData, Voteable},
     stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
         node_implementation::{NodeType, Versions},
@@ -272,7 +272,7 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
     pub async fn accumulate(
         &mut self,
         key: &TYPES::SignatureKey,
-        vote: &LightClientStateUpdateVote<TYPES>,
+        vote: &LightClientStateUpdateVote2<TYPES>,
         membership: &EpochMembership<TYPES>,
     ) -> Option<LightClientStateUpdateCertificateV2<TYPES>> {
         let epoch = membership.epoch()?;
@@ -291,11 +291,14 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
             error!("Invalid light client state update vote {vote:?}");
             return None;
         }
-        if !<TYPES::StateSignatureKey as LCV3StateSignatureKey>::verify_state_sig(
-            &state_ver_key,
-            &vote.signature,
-            vote.signed_state_digest,
-        ) {
+        // only verify the new state signature if the auth_root is not default, indicating a vote that was cast from an older vote
+        if vote.auth_root != <FixedBytes<32> as Default>::default()
+            && !<TYPES::StateSignatureKey as LCV3StateSignatureKey>::verify_state_sig(
+                &state_ver_key,
+                &vote.signature,
+                vote.signed_state_digest,
+            )
+        {
             error!("Invalid light client state update vote {vote:?}");
             return None;
         }

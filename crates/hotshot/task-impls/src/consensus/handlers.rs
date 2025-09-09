@@ -11,7 +11,7 @@ use chrono::Utc;
 use hotshot_types::{
     event::{Event, EventType},
     simple_certificate::EpochRootQuorumCertificateV2,
-    simple_vote::{EpochRootQuorumVote, HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
+    simple_vote::{EpochRootQuorumVote2, HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
     traits::node_implementation::{ConsensusTime, NodeImplementation, NodeType},
     utils::{is_epoch_root, is_epoch_transition, is_last_block, EpochTransitionIndicator},
     vote::{HasViewNumber, Vote},
@@ -120,7 +120,7 @@ pub(crate) async fn handle_epoch_root_quorum_vote_recv<
     I: NodeImplementation<TYPES>,
     V: Versions,
 >(
-    vote: &EpochRootQuorumVote<TYPES>,
+    vote: &EpochRootQuorumVote2<TYPES>,
     event: Arc<HotShotEvent<TYPES>>,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
     task_state: &mut ConsensusTaskState<TYPES, I, V>,

@@ -42,9 +42,10 @@ use crate::{
         ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate, ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
-        DaVote, DaVote2, EpochRootQuorumVote, HasEpoch, QuorumVote, QuorumVote2, TimeoutVote,
-        TimeoutVote2, UpgradeVote, ViewSyncCommitVote, ViewSyncCommitVote2, ViewSyncFinalizeVote,
-        ViewSyncFinalizeVote2, ViewSyncPreCommitVote, ViewSyncPreCommitVote2,
+        DaVote, DaVote2, EpochRootQuorumVote, EpochRootQuorumVote2, HasEpoch, QuorumVote,
+        QuorumVote2, TimeoutVote, TimeoutVote2, UpgradeVote, ViewSyncCommitVote,
+        ViewSyncCommitVote2, ViewSyncFinalizeVote, ViewSyncFinalizeVote2, ViewSyncPreCommitVote,
+        ViewSyncPreCommitVote2,
     },
     traits::{
         election::Membership,
@@ -288,6 +289,9 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
 
     /// A replica has responded with a valid proposal.
     ProposalResponse2(Proposal<TYPES, QuorumProposal2<TYPES>>),
+
+    /// Message with an epoch root quorum vote.
+    EpochRootQuorumVote2(EpochRootQuorumVote2<TYPES>),
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Hash, Eq)]
@@ -405,6 +409,7 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     GeneralConsensusMessage::HighQc(qc, _)
                     | GeneralConsensusMessage::ExtendedQc(qc, _) => qc.view_number(),
                     GeneralConsensusMessage::EpochRootQuorumVote(vote) => vote.view_number(),
+                    GeneralConsensusMessage::EpochRootQuorumVote2(vote) => vote.view_number(),
                     GeneralConsensusMessage::EpochRootQc(root_qc) => root_qc.view_number(),
                     GeneralConsensusMessage::EpochRootQcV1(root_qc) => root_qc.view_number(),
                 }
@@ -487,6 +492,7 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     GeneralConsensusMessage::HighQc(qc, _)
                     | GeneralConsensusMessage::ExtendedQc(qc, _) => qc.epoch(),
                     GeneralConsensusMessage::EpochRootQuorumVote(vote) => vote.epoch(),
+                    GeneralConsensusMessage::EpochRootQuorumVote2(vote) => vote.epoch(),
                     GeneralConsensusMessage::EpochRootQc(root_qc) => root_qc.epoch(),
                     GeneralConsensusMessage::EpochRootQcV1(root_qc) => root_qc.epoch(),
                 }

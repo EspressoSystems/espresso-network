@@ -23,7 +23,7 @@ use hotshot_types::{
         ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
-        DaVote2, EpochRootQuorumVote, QuorumVote2, TimeoutVote2, UpgradeVote, ViewSyncCommitVote2,
+        DaVote2, EpochRootQuorumVote2, QuorumVote2, TimeoutVote2, UpgradeVote, ViewSyncCommitVote2,
         ViewSyncFinalizeVote2, ViewSyncPreCommitVote2,
     },
     traits::{
@@ -80,7 +80,7 @@ pub enum HotShotEvent<TYPES: NodeType> {
     QuorumVoteRecv(QuorumVote2<TYPES>),
     /// A quorum vote for the epoch root has been received from the network; handled by the consensus task
     /// An additional light client state update vote is bundled with the quorum vote
-    EpochRootQuorumVoteRecv(EpochRootQuorumVote<TYPES>),
+    EpochRootQuorumVoteRecv(EpochRootQuorumVote2<TYPES>),
     /// A timeout vote received from the network; handled by consensus task
     TimeoutVoteRecv(TimeoutVote2<TYPES>),
     /// Send a timeout vote to the network; emitted by consensus task replicas
@@ -105,7 +105,7 @@ pub enum HotShotEvent<TYPES: NodeType> {
     /// Broadcast a quorum vote to form an eQC; emitted by a replica in the consensus task after seeing a valid quorum proposal
     ExtendedQuorumVoteSend(QuorumVote2<TYPES>),
     /// Send a epoch root quorum vote to the next leader; emitted by a replica in the consensus task after seeing a valid quorum proposal
-    EpochRootQuorumVoteSend(EpochRootQuorumVote<TYPES>),
+    EpochRootQuorumVoteSend(EpochRootQuorumVote2<TYPES>),
     /// A quorum proposal with the given parent leaf is validated.
     /// The full validation checks include:
     /// 1. The proposal is not for an old view
