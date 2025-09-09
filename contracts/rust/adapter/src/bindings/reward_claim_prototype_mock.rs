@@ -16,6 +16,8 @@ library RewardMerkleTreeVerifier {
 pub mod RewardMerkleTreeVerifier {
     use super::*;
     use alloy::sol_types as alloy_sol_types;
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**```solidity
 struct AccruedRewardsProof { bytes32[] siblings; }
 ```*/
@@ -447,6 +449,8 @@ pub mod RewardClaimPrototypeMock {
     pub static DEPLOYED_BYTECODE: alloy_sol_types::private::Bytes = alloy_sol_types::private::Bytes::from_static(
         b"`\x80`@R4\x80\x15a\0\x0FW__\xFD[P`\x046\x10a\0)W_5`\xE0\x1C\x80cLm \xD2\x14a\0-W[__\xFD[a\0@a\0;6`\x04a\x01jV[a\0TV[`@Q\x90\x15\x15\x81R` \x01`@Q\x80\x91\x03\x90\xF3[_a\0a\x85\x85\x85\x85a\0jV[\x95\x94PPPPPV[_6\x81a\0w\x84\x80a\x01\xD8V[\x90\x92P\x90P`\xA0\x81\x14a\0\x9DW`@Qc\x13q}\xA9`\xE2\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[_a\0\xA7\x86a\x01\x1EV[\x90P_[`\xA0\x81\x10\x15a\x01\x10W_\x84\x84\x83\x81\x81\x10a\0\xC7Wa\0\xC7a\x02%V[` \x02\x91\x90\x91\x015\x91PP`\x01\x89\x83\x1C\x16\x80\x15a\0\xF4W`@\x80Q\x83\x81R` \x81\x01\x86\x90R \x93Pa\x01\x06V[`@\x80Q\x85\x81R` \x81\x01\x84\x90R \x93P[PP`\x01\x01a\0\xABV[P\x90\x96\x14\x96\x95PPPPPPV[__\x82`@Q` \x01a\x013\x91\x81R` \x01\x90V[`@\x80Q\x80\x83\x03`\x1F\x19\x01\x81R\x82\x82R\x80Q` \x91\x82\x01 \x81\x84\x01R\x81Q\x80\x84\x03\x82\x01\x81R\x92\x82\x01\x90\x91R\x81Q\x91\x01 \x93\x92PPPV[____`\x80\x85\x87\x03\x12\x15a\x01}W__\xFD[\x845\x93P` \x85\x015`\x01`\x01`\xA0\x1B\x03\x81\x16\x81\x14a\x01\x9AW__\xFD[\x92P`@\x85\x015\x91P``\x85\x015g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x15a\x01\xBCW__\xFD[\x85\x01` \x81\x88\x03\x12\x15a\x01\xCDW__\xFD[\x93\x96\x92\x95P\x90\x93PPV[__\x835`\x1E\x19\x846\x03\x01\x81\x12a\x01\xEDW__\xFD[\x83\x01\x805\x91Pg\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x82\x11\x15a\x02\x07W__\xFD[` \x01\x91P`\x05\x81\x90\x1B6\x03\x82\x13\x15a\x02\x1EW__\xFD[\x92P\x92\x90PV[cNH{q`\xE0\x1B_R`2`\x04R`$_\xFD\xFE\xA1dsolcC\0\x08\x1C\0\n",
     );
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `InvalidProofLength()` and selector `0x4dc5f6a4`.
 ```solidity
 error InvalidProofLength();
@@ -519,6 +523,8 @@ error InvalidProofLength();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `verifyRewardClaim(bytes32,address,uint256,(bytes32[]))` and selector `0x4c6d20d2`.
 ```solidity
 function verifyRewardClaim(bytes32 root, address account, uint256 amount, RewardMerkleTreeVerifier.AccruedRewardsProof memory proof) external pure returns (bool);
@@ -535,6 +541,8 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
         #[allow(missing_docs)]
         pub proof: <RewardMerkleTreeVerifier::AccruedRewardsProof as alloy::sol_types::SolType>::RustType,
     }
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`verifyRewardClaim(bytes32,address,uint256,(bytes32[]))`](verifyRewardClaimCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -707,6 +715,8 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
         }
     };
     ///Container for all the [`RewardClaimPrototypeMock`](self) function calls.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive()]
     pub enum RewardClaimPrototypeMockCalls {
         #[allow(missing_docs)]
         verifyRewardClaim(verifyRewardClaimCall),
@@ -827,6 +837,8 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
         }
     }
     ///Container for all the [`RewardClaimPrototypeMock`](self) custom errors.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum RewardClaimPrototypeMockErrors {
         #[allow(missing_docs)]
         InvalidProofLength(InvalidProofLength),

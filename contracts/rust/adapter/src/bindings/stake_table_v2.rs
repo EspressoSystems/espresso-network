@@ -18,6 +18,8 @@ library BN254 {
 pub mod BN254 {
     use super::*;
     use alloy::sol_types as alloy_sol_types;
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct BaseField(alloy::sol_types::private::primitives::aliases::U256);
@@ -161,6 +163,8 @@ pub mod BN254 {
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**```solidity
 struct G1Point { BaseField x; BaseField y; }
 ```*/
@@ -362,6 +366,8 @@ struct G1Point { BaseField x; BaseField y; }
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**```solidity
 struct G2Point { BaseField x0; BaseField x1; BaseField y0; BaseField y1; }
 ```*/
@@ -736,6 +742,8 @@ library EdOnBN254 {
 pub mod EdOnBN254 {
     use super::*;
     use alloy::sol_types as alloy_sol_types;
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**```solidity
 struct EdOnBN254Point { uint256 x; uint256 y; }
 ```*/
@@ -1092,6 +1100,8 @@ library StakeTable {
 pub mod StakeTable {
     use super::*;
     use alloy::sol_types as alloy_sol_types;
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct ValidatorStatus(u8);
@@ -3200,6 +3210,8 @@ pub mod StakeTableV2 {
     pub static DEPLOYED_BYTECODE: alloy_sol_types::private::Bytes = alloy_sol_types::private::Bytes::from_static(
         b"`\x80`@R`\x046\x10a\x02>W_5`\xE0\x1C\x80cqP\x18\xA6\x11a\x014W\x80c\xAD<\xB1\xCC\x11a\0\xB3W\x80c\xC6H\x14\xDD\x11a\0xW\x80c\xC6H\x14\xDD\x14a\x06\xF7W\x80c\xD5Gt\x1F\x14a\x07-W\x80c\xE6:\xB1\xE9\x14a\x07LW\x80c\xF2\xFD\xE3\x8B\x14a\x07lW\x80c\xFAR\xC7\xD8\x14a\x07\x8BW\x80c\xFC\x0CTj\x14a\x07\xCEW__\xFD[\x80c\xAD<\xB1\xCC\x14a\x06#W\x80c\xB3\xE6\xEB\xD5\x14a\x06`W\x80c\xB5p\x0Eh\x14a\x06\x8EW\x80c\xB5\xEC\xB3D\x14a\x06\xADW\x80c\xBE 0\x94\x14a\x06\xD8W__\xFD[\x80c\x9E\x9A\x8F1\x11a\0\xF9W\x80c\x9E\x9A\x8F1\x14a\x05kW\x80c\xA2\x17\xFD\xDF\x14a\x05\x80W\x80c\xA2\xD7\x8D\xD5\x14a\x05\x93W\x80c\xA3\x06j\xAB\x14a\x05\xE5W\x80c\xAC\\*\xD0\x14a\x06\x04W__\xFD[\x80cqP\x18\xA6\x14a\x04\xB5W\x80c\x84V\xCBY\x14a\x04\xC9W\x80c\x8D\xA5\xCB[\x14a\x04\xDDW\x80c\x91\xD1HT\x14a\x05-W\x80c\x9B0\xA5\xE6\x14a\x05LW__\xFD[\x80c6V\x8A\xBE\x11a\x01\xC0W\x80cR\xD1\x90-\x11a\x01\x85W\x80cR\xD1\x90-\x14a\x04\"W\x80cUD\xC2\xF1\x14a\x046W\x80c\\\x97Z\xBB\x14a\x04PW\x80c_\x87T\xA6\x14a\x04sW\x80cj\x91\x1C\xCF\x14a\x04\xA1W__\xFD[\x80c6V\x8A\xBE\x14a\x03\xA9W\x80c>\x9D\xF9\xB5\x14a\x03\xC8W\x80c?K\xA8:\x14a\x03\xDCW\x80cM\x99\xDD\x16\x14a\x03\xF0W\x80cO\x1E\xF2\x86\x14a\x04\x0FW__\xFD[\x80c\x1A \xCDc\x11a\x02\x06W\x80c\x1A \xCDc\x14a\x03\0W\x80c!@\xFE\xCD\x14a\x03\x1FW\x80c$\x8A\x9C\xA3\x14a\x03>W\x80c//\xF1]\x14a\x03kW\x80c0B@\xBF\x14a\x03\x8AW__\xFD[\x80c\x01\xFF\xC9\xA7\x14a\x02BW\x80c\x02n@+\x14a\x02vW\x80c\x08@\xBAr\x14a\x02\x97W\x80c\r\x8En,\x14a\x02\xB6W\x80c\x13\xB9\x05z\x14a\x02\xE1W[__\xFD[4\x80\x15a\x02MW__\xFD[Pa\x02aa\x02\\6`\x04a,\xC7V[a\x07\xEDV[`@Q\x90\x15\x15\x81R` \x01[`@Q\x80\x91\x03\x90\xF3[4\x80\x15a\x02\x81W__\xFD[Pa\x02\x95a\x02\x906`\x04a-\tV[a\x08#V[\0[4\x80\x15a\x02\xA2W__\xFD[Pa\x02\x95a\x02\xB16`\x04a-1V[a\x089V[4\x80\x15a\x02\xC1W__\xFD[P`@\x80Q`\x02\x81R_` \x82\x01\x81\x90R\x91\x81\x01\x91\x90\x91R``\x01a\x02mV[4\x80\x15a\x02\xECW__\xFD[Pa\x02\x95a\x02\xFB6`\x04a.>V[a\t&V[4\x80\x15a\x03\x0BW__\xFD[Pa\x02\x95a\x03\x1A6`\x04a.\xA8V[a\t?V[4\x80\x15a\x03*W__\xFD[Pa\x02\x95a\x0396`\x04a.\xC3V[a\nSV[4\x80\x15a\x03IW__\xFD[Pa\x03]a\x03X6`\x04a.\xDCV[a\x0B\xA7V[`@Q\x90\x81R` \x01a\x02mV[4\x80\x15a\x03vW__\xFD[Pa\x02\x95a\x03\x856`\x04a.\xF3V[a\x0B\xC7V[4\x80\x15a\x03\x95W__\xFD[Pa\x02\x95a\x03\xA46`\x04a/\x9DV[a\x0B\xE9V[4\x80\x15a\x03\xB4W__\xFD[Pa\x02\x95a\x03\xC36`\x04a.\xF3V[a\r\xAFV[4\x80\x15a\x03\xD3W__\xFD[Pa\x03]_T\x81V[4\x80\x15a\x03\xE7W__\xFD[Pa\x02\x95a\r\xE7V[4\x80\x15a\x03\xFBW__\xFD[Pa\x02\x95a\x04\n6`\x04a-\tV[a\x0E\tV[a\x02\x95a\x04\x1D6`\x04a0\x1DV[a\x0E\x1BV[4\x80\x15a\x04-W__\xFD[Pa\x03]a\x0E6V[4\x80\x15a\x04AW__\xFD[Pa\x02\x95a\x02\xFB6`\x04a0gV[4\x80\x15a\x04[W__\xFD[P_Q` a6]_9_Q\x90_RT`\xFF\x16a\x02aV[4\x80\x15a\x04~W__\xFD[Pa\x02aa\x04\x8D6`\x04a.\xDCV[`\t` R_\x90\x81R`@\x90 T`\xFF\x16\x81V[4\x80\x15a\x04\xACW__\xFD[Pa\x02\x95a\x0EQV[4\x80\x15a\x04\xC0W__\xFD[Pa\x02\x95a\x0E\xDBV[4\x80\x15a\x04\xD4W__\xFD[Pa\x02\x95a\x0E\xEEV[4\x80\x15a\x04\xE8W__\xFD[P\x7F\x90\x16\xD0\x9Dr\xD4\x0F\xDA\xE2\xFD\x8C\xEA\xC6\xB6#Lw\x06!O\xD3\x9C\x1C\xD1\xE6\t\xA0R\x8C\x19\x93\0T`\x01`\x01`\xA0\x1B\x03\x16[`@Q`\x01`\x01`\xA0\x1B\x03\x90\x91\x16\x81R` \x01a\x02mV[4\x80\x15a\x058W__\xFD[Pa\x02aa\x05G6`\x04a.\xF3V[a\x0F\rV[4\x80\x15a\x05WW__\xFD[Pa\x03]a\x05f6`\x04a0\xABV[a\x0FCV[4\x80\x15a\x05vW__\xFD[Pa\x03]`\x08T\x81V[4\x80\x15a\x05\x8BW__\xFD[Pa\x03]_\x81V[4\x80\x15a\x05\x9EW__\xFD[Pa\x05\xD0a\x05\xAD6`\x04a-1V[`\x07` \x90\x81R_\x92\x83R`@\x80\x84 \x90\x91R\x90\x82R\x90 \x80T`\x01\x90\x91\x01T\x82V[`@\x80Q\x92\x83R` \x83\x01\x91\x90\x91R\x01a\x02mV[4\x80\x15a\x05\xF0W__\xFD[Pa\x02\x95a\x05\xFF6`\x04a.\xC3V[a\x0F\x9DV[4\x80\x15a\x06\x0FW__\xFD[Pa\x02\x95a\x06\x1E6`\x04a0\xC5V[a\x0F\xAEV[4\x80\x15a\x06.W__\xFD[Pa\x06S`@Q\x80`@\x01`@R\x80`\x05\x81R` \x01d\x03R\xE3\x02\xE3`\xDC\x1B\x81RP\x81V[`@Qa\x02m\x91\x90a1bV[4\x80\x15a\x06kW__\xFD[Pa\x02aa\x06z6`\x04a.\xDCV[`\x04` R_\x90\x81R`@\x90 T`\xFF\x16\x81V[4\x80\x15a\x06\x99W__\xFD[P`\x01Ta\x05\x15\x90`\x01`\x01`\xA0\x1B\x03\x16\x81V[4\x80\x15a\x06\xB8W__\xFD[Pa\x03]a\x06\xC76`\x04a.\xC3V[`\x05` R_\x90\x81R`@\x90 T\x81V[4\x80\x15a\x06\xE3W__\xFD[Pa\x02\x95a\x06\xF26`\x04a1tV[a\x10\x85V[4\x80\x15a\x07\x02W__\xFD[Pa\x03]a\x07\x116`\x04a-1V[`\x06` \x90\x81R_\x92\x83R`@\x80\x84 \x90\x91R\x90\x82R\x90 T\x81V[4\x80\x15a\x078W__\xFD[Pa\x02\x95a\x07G6`\x04a.\xF3V[a\x11\x9CV[4\x80\x15a\x07WW__\xFD[Pa\x03]_Q` a6\x1D_9_Q\x90_R\x81V[4\x80\x15a\x07wW__\xFD[Pa\x02\x95a\x07\x866`\x04a.\xC3V[a\x11\xB8V[4\x80\x15a\x07\x96W__\xFD[Pa\x07\xC0a\x07\xA56`\x04a.\xC3V[`\x03` R_\x90\x81R`@\x90 \x80T`\x01\x90\x91\x01T`\xFF\x16\x82V[`@Qa\x02m\x92\x91\x90a1\xC7V[4\x80\x15a\x07\xD9W__\xFD[P`\x02Ta\x05\x15\x90`\x01`\x01`\xA0\x1B\x03\x16\x81V[_`\x01`\x01`\xE0\x1B\x03\x19\x82\x16cye\xDB\x0B`\xE0\x1B\x14\x80a\x08\x1DWPc\x01\xFF\xC9\xA7`\xE0\x1B`\x01`\x01`\xE0\x1B\x03\x19\x83\x16\x14[\x92\x91PPV[a\x08+a\x11\xF7V[a\x085\x82\x82a\x12'V[PPV[_Q` a6}_9_Q\x90_R\x80T`\x02\x91\x90`\x01`@\x1B\x90\x04`\xFF\x16\x80a\x08oWP\x80T`\x01`\x01`@\x1B\x03\x80\x84\x16\x91\x16\x10\x15[\x15a\x08\x8DW`@Qc\xF9.\xE8\xA9`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[\x80Th\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x19\x16`\x01`\x01`@\x1B\x03\x83\x16\x17`\x01`@\x1B\x17\x81Ua\x08\xB6a\x13\xC5V[a\x08\xC0_\x84a\x13\xCDV[Pa\x08\xD8_Q` a6\x1D_9_Q\x90_R\x85a\x13\xCDV[P\x80T`\xFF`@\x1B\x19\x16\x81U`@Q`\x01`\x01`@\x1B\x03\x83\x16\x81R\x7F\xC7\xF5\x05\xB2\xF3q\xAE!u\xEEI\x13\xF4I\x9E\x1F&3\xA7\xB5\x93c!\xEE\xD1\xCD\xAE\xB6\x11Q\x81\xD2\x90` \x01`@Q\x80\x91\x03\x90\xA1PPPPV[`@Qc\xC2\xD7\xF8\x13`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[a\tGa\x14uV[`\x01T`@\x80Qc<\x1A\x08\x15`\xE2\x1B\x81R\x90Q_\x92`\x01`\x01`\xA0\x1B\x03\x16\x91c\xF0h T\x91`\x04\x80\x83\x01\x92` \x92\x91\x90\x82\x90\x03\x01\x81\x86Z\xFA\x15\x80\x15a\t\x8EW=__>=_\xFD[PPPP`@Q=`\x1F\x19`\x1F\x82\x01\x16\x82\x01\x80`@RP\x81\x01\x90a\t\xB2\x91\x90a1\xF7V[a\t\xBD\x90`\x0Fa2&V[\x90Pb\x12u\0`\x01`\x01`@\x1B\x03\x80\x83\x16\x90\x84\x16\x10\x80a\t\xEEWP\x80`\x01`\x01`@\x1B\x03\x16\x83`\x01`\x01`@\x1B\x03\x16\x11[\x15a\n\x0CW`@Qc\xB5~!\xDF`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`\x01`\x01`@\x1B\x03\x83\x16`\x08\x81\x90U`@Q\x90\x81R\x7Fy>;\x1E\x1B\xCDg{\xB1\x19\0\xC81$\xD3\xC4L\x99F\xEA\x8D\xDF\x97\x8A\x0C\xA2P\xB04\xEC\x9D\xDE\x90` \x01`@Q\x80\x91\x03\x90\xA1PPPV[a\n[a\x11\xF7V[`\x01`\x01`\xA0\x1B\x03\x81\x16_\x90\x81R`\x05` R`@\x81 T3\x91\x81\x90\x03a\n\x95W`@Qcy)\x8AS`\xE1\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[\x80B\x10\x15a\n\xB6W`@QcZwCW`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`\x01`\x01`\xA0\x1B\x03\x80\x84\x16_\x90\x81R`\x06` \x90\x81R`@\x80\x83 \x93\x86\x16\x83R\x92\x90R\x90\x81 T\x90\x81\x90\x03a\n\xFEW`@Qc\x06\x86\x82{`\xE5\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`\x01`\x01`\xA0\x1B\x03\x80\x85\x16_\x81\x81R`\x06` \x90\x81R`@\x80\x83 \x94\x88\x16\x83R\x93\x81R\x83\x82 \x82\x90U\x91\x81R`\x03\x90\x91R\x90\x81 \x80T\x83\x92\x90a\x0BB\x90\x84\x90a2HV[\x90\x91UPP`\x02Ta\x0B^\x90`\x01`\x01`\xA0\x1B\x03\x16\x84\x83a\x14\xD0V[\x82`\x01`\x01`\xA0\x1B\x03\x16\x7F\x7F\xCFS,\x15\xF0\xA6\xDB\x0B\xD6\xD0\xE08\xBE\xA7\x1D0\xD8\x08\xC7\xD9\x8C\xB3\xBFrh\xA9[\xF5\x08\x1Be\x82`@Qa\x0B\x99\x91\x81R` \x01\x90V[`@Q\x80\x91\x03\x90\xA2PPPPV[_\x90\x81R_Q` a6=_9_Q\x90_R` R`@\x90 `\x01\x01T\x90V[a\x0B\xD0\x82a\x0B\xA7V[a\x0B\xD9\x81a\x15YV[a\x0B\xE3\x83\x83a\x13\xCDV[PPPPV[a\x0B\xF1a\x11\xF7V[3a\x0B\xFB\x81a\x15cV[a\x0C\x04\x85a\x15\xB0V[a\x0C\x0E\x86\x86a\x15\xEBV[`@\x80Q`\x01`\x01`\xA0\x1B\x03\x83\x16` \x82\x01R_\x91\x01`@Q` \x81\x83\x03\x03\x81R\x90`@R\x90Pa\x0C@\x81\x86\x89a\x16dV[\x83Q`@\x14a\x0CbW`@QcBG\x06\x87`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[a'\x10\x83a\xFF\xFF\x16\x11\x15a\x0C\x89W`@Qc\xDC\x81\xDB\x85`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`\x01`\x04_a\x0C\x97\x8Aa\x0FCV[\x81R` \x01\x90\x81R` \x01_ _a\x01\0\n\x81T\x81`\xFF\x02\x19\x16\x90\x83\x15\x15\x02\x17\x90UP`\x01`\t_a\x0C\xC8\x89a\x16\xF9V[\x81R` \x01\x90\x81R` \x01_ _a\x01\0\n\x81T\x81`\xFF\x02\x19\x16\x90\x83\x15\x15\x02\x17\x90UP`@Q\x80`@\x01`@R\x80_\x81R` \x01`\x01`\x02\x81\x11\x15a\r\x0FWa\r\x0Fa1\xB3V[\x90R`\x01`\x01`\xA0\x1B\x03\x83\x16_\x90\x81R`\x03` \x90\x81R`@\x90\x91 \x82Q\x81U\x90\x82\x01Q`\x01\x80\x83\x01\x80T\x90\x91`\xFF\x19\x90\x91\x16\x90\x83`\x02\x81\x11\x15a\rUWa\rUa1\xB3V[\x02\x17\x90UP\x90PP\x81`\x01`\x01`\xA0\x1B\x03\x16\x7F\xF0W\xD4\xEA\x81\xE9\x86(e:\x8F\x90x\x85A\x97 x\x13s4\xA9+B4~\xAC\xCD\xA8\x0F\xC4\n\x88\x88\x86\x89\x89`@Qa\r\x9E\x95\x94\x93\x92\x91\x90a2[V[`@Q\x80\x91\x03\x90\xA2PPPPPPPV[`\x01`\x01`\xA0\x1B\x03\x81\x163\x14a\r\xD8W`@Qc3K\xD9\x19`\xE1\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[a\r\xE2\x82\x82a\x17\x1DV[PPPV[_Q` a6\x1D_9_Q\x90_Ra\r\xFE\x81a\x15YV[a\x0E\x06a\x17\x96V[PV[a\x0E\x11a\x11\xF7V[a\x085\x82\x82a\x17\xF5V[a\x0E#a\x19\xA7V[a\x0E,\x82a\x1AKV[a\x085\x82\x82a\x1ASV[_a\x0E?a\x1B\x0FV[P_Q` a5\xFD_9_Q\x90_R\x90V[a\x0EYa\x11\xF7V[3a\x0Ec\x81a\x1BXV[`\x01`\x01`\xA0\x1B\x03\x81\x16_\x90\x81R`\x03` R`@\x90 `\x01\x01\x80T`\xFF\x19\x16`\x02\x17\x90U`\x08Ta\x0E\x95\x90Ba2\xCDV[`\x01`\x01`\xA0\x1B\x03\x82\x16_\x81\x81R`\x05` R`@\x80\x82 \x93\x90\x93U\x91Q\x90\x91\x7F\xFB$0ST\xC8wb\xD5WHz\xE4\xA5d\xE8\xD0>\xCB\xB9\xA9}\xD8\xAF\xFF\x8E\x1Fo\xCA\xF0\xDD\x16\x91\xA2PV[a\x0E\xE3a\x14uV[a\x0E\xEC_a\x1B\xD9V[V[_Q` a6\x1D_9_Q\x90_Ra\x0F\x05\x81a\x15YV[a\x0E\x06a\x1CIV[_\x91\x82R_Q` a6=_9_Q\x90_R` \x90\x81R`@\x80\x84 `\x01`\x01`\xA0\x1B\x03\x93\x90\x93\x16\x84R\x91\x90R\x90 T`\xFF\x16\x90V[_\x81_\x01Q\x82` \x01Q\x83`@\x01Q\x84``\x01Q`@Q` \x01a\x0F\x80\x94\x93\x92\x91\x90\x93\x84R` \x84\x01\x92\x90\x92R`@\x83\x01R``\x82\x01R`\x80\x01\x90V[`@Q` \x81\x83\x03\x03\x81R\x90`@R\x80Q\x90` \x01 \x90P\x91\x90PV[a\x0F\xA5a\x11\xF7V[a\x0E\x06\x81a\x1C\x91V[a\x0F\xB6a\x11\xF7V[3a\x0F\xC0\x81a\x1BXV[a\x0F\xC9\x84a\x15\xB0V[a\x0F\xD3\x85\x85a\x15\xEBV[`@\x80Q`\x01`\x01`\xA0\x1B\x03\x83\x16` \x82\x01R_\x91\x01`@Q` \x81\x83\x03\x03\x81R\x90`@R\x90Pa\x10\x05\x81\x85\x88a\x16dV[`\x01`\x04_a\x10\x13\x89a\x0FCV[\x81R` \x01\x90\x81R` \x01_ _a\x01\0\n\x81T\x81`\xFF\x02\x19\x16\x90\x83\x15\x15\x02\x17\x90UP\x81`\x01`\x01`\xA0\x1B\x03\x16\x7F\xC8\xC5\xB3z\xEC\x7F-\xDB\xD3\xA1<Q6\x1ET\xA0\xA8\xDF;\xCA%j\xB7X\xA7\x7FZ\xD7A\xD2\x81\xE5\x87\x87\x87\x87`@Qa\x10u\x94\x93\x92\x91\x90a2\xE0V[`@Q\x80\x91\x03\x90\xA2PPPPPPV[_Q` a6}_9_Q\x90_R\x80T`\x01`@\x1B\x81\x04`\xFF\x16\x15\x90`\x01`\x01`@\x1B\x03\x16_\x81\x15\x80\x15a\x10\xB6WP\x82[\x90P_\x82`\x01`\x01`@\x1B\x03\x16`\x01\x14\x80\x15a\x10\xD1WP0;\x15[\x90P\x81\x15\x80\x15a\x10\xDFWP\x80\x15[\x15a\x10\xFDW`@Qc\xF9.\xE8\xA9`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[\x84Tg\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x19\x16`\x01\x17\x85U\x83\x15a\x11'W\x84T`\xFF`@\x1B\x19\x16`\x01`@\x1B\x17\x85U[a\x110\x86a\x1D\xA1V[a\x118a\x13\xC5V[a\x11@a\x1D\xB2V[a\x11K\x89\x89\x89a\x1E\xA4V[\x83\x15a\x11\x91W\x84T`\xFF`@\x1B\x19\x16\x85U`@Q`\x01\x81R\x7F\xC7\xF5\x05\xB2\xF3q\xAE!u\xEEI\x13\xF4I\x9E\x1F&3\xA7\xB5\x93c!\xEE\xD1\xCD\xAE\xB6\x11Q\x81\xD2\x90` \x01`@Q\x80\x91\x03\x90\xA1[PPPPPPPPPV[a\x11\xA5\x82a\x0B\xA7V[a\x11\xAE\x81a\x15YV[a\x0B\xE3\x83\x83a\x17\x1DV[a\x11\xC0a\x14uV[`\x01`\x01`\xA0\x1B\x03\x81\x16a\x11\xEEW`@Qc\x1EO\xBD\xF7`\xE0\x1B\x81R_`\x04\x82\x01R`$\x01[`@Q\x80\x91\x03\x90\xFD[a\x0E\x06\x81a\x1B\xD9V[_Q` a6]_9_Q\x90_RT`\xFF\x16\x15a\x0E\xECW`@Qc\xD9<\x06e`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[a\x120\x82a\x1BXV[3_\x82\x90\x03a\x12RW`@Qc\x1F* \x05`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`\x02T`@Qcn\xB1v\x9F`\xE1\x1B\x81R`\x01`\x01`\xA0\x1B\x03\x83\x81\x16`\x04\x83\x01R0`$\x83\x01R_\x92\x16\x90c\xDDb\xED>\x90`D\x01` `@Q\x80\x83\x03\x81\x86Z\xFA\x15\x80\x15a\x12\xA0W=__>=_\xFD[PPPP`@Q=`\x1F\x19`\x1F\x82\x01\x16\x82\x01\x80`@RP\x81\x01\x90a\x12\xC4\x91\x90a3FV[\x90P\x82\x81\x10\x15a\x12\xF1W`@Qc\x05Ce\xBB`\xE3\x1B\x81R`\x04\x81\x01\x82\x90R`$\x81\x01\x84\x90R`D\x01a\x11\xE5V[`\x02Ta\x13\t\x90`\x01`\x01`\xA0\x1B\x03\x16\x830\x86a\x1FMV[`\x01`\x01`\xA0\x1B\x03\x84\x16_\x90\x81R`\x03` R`@\x81 \x80T\x85\x92\x90a\x130\x90\x84\x90a2\xCDV[\x90\x91UPP`\x01`\x01`\xA0\x1B\x03\x80\x85\x16_\x90\x81R`\x06` \x90\x81R`@\x80\x83 \x93\x86\x16\x83R\x92\x90R\x90\x81 \x80T\x85\x92\x90a\x13k\x90\x84\x90a2\xCDV[\x92PP\x81\x90UP\x83`\x01`\x01`\xA0\x1B\x03\x16\x82`\x01`\x01`\xA0\x1B\x03\x16\x7F\xE5T\x1Aka\x03\xD4\xFA~\x02\x1E\xD5O\xAD9\xC6o'\xA7k\xD1=7L\xF6$\n\xE6\xBD\x0B\xB7+\x85`@Qa\x13\xB7\x91\x81R` \x01\x90V[`@Q\x80\x91\x03\x90\xA3PPPPV[a\x0E\xECa\x1F\xEAV[__Q` a6=_9_Q\x90_Ra\x13\xE6\x84\x84a\x0F\rV[a\x14eW_\x84\x81R` \x82\x81R`@\x80\x83 `\x01`\x01`\xA0\x1B\x03\x87\x16\x84R\x90\x91R\x90 \x80T`\xFF\x19\x16`\x01\x17\x90Ua\x14\x1B3\x90V[`\x01`\x01`\xA0\x1B\x03\x16\x83`\x01`\x01`\xA0\x1B\x03\x16\x85\x7F/\x87\x88\x11~~\xFF\x1D\x82\xE9&\xECyI\x01\xD1|x\x02JP'\t@0E@\xA73eo\r`@Q`@Q\x80\x91\x03\x90\xA4`\x01\x91PPa\x08\x1DV[_\x91PPa\x08\x1DV[P\x92\x91PPV[3a\x14\xA7\x7F\x90\x16\xD0\x9Dr\xD4\x0F\xDA\xE2\xFD\x8C\xEA\xC6\xB6#Lw\x06!O\xD3\x9C\x1C\xD1\xE6\t\xA0R\x8C\x19\x93\0T`\x01`\x01`\xA0\x1B\x03\x16\x90V[`\x01`\x01`\xA0\x1B\x03\x16\x14a\x0E\xECW`@Qc\x11\x8C\xDA\xA7`\xE0\x1B\x81R3`\x04\x82\x01R`$\x01a\x11\xE5V[_`@Qc\xA9\x05\x9C\xBB`\xE0\x1B\x81R`\x01`\x01`\xA0\x1B\x03\x84\x16`\x04\x82\x01R\x82`$\x82\x01R` _`D\x83_\x89Z\xF1\x91PP\x80`\x1F=\x11`\x01_Q\x14\x16\x15\x16\x15a\x15\x1AWP\x82;\x15=\x17\x15[\x80a\x0B\xE3W`@QbF\x1B\xCD`\xE5\x1B\x81R` `\x04\x82\x01R`\x0F`$\x82\x01Rn\x15\x14\x90S\x94\xD1\x91T\x97\xD1\x90RS\x11Q`\x8A\x1B`D\x82\x01R`d\x01a\x11\xE5V[a\x0E\x06\x813a  V[`\x01`\x01`\xA0\x1B\x03\x81\x16_\x90\x81R`\x03` R`@\x81 `\x01\x01T`\xFF\x16`\x02\x81\x11\x15a\x15\x92Wa\x15\x92a1\xB3V[\x14a\x0E\x06W`@Qc\x13.~\xFB`\xE3\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`@\x80Q\x80\x82\x01\x90\x91R_\x80\x82R` \x82\x01Ra\x15\xCD\x82\x82a YV[\x15a\x085W`@Qc\x06\xCFC\x8F`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`\x04_a\x15\xF7\x84a\x0FCV[\x81R` \x81\x01\x91\x90\x91R`@\x01_ T`\xFF\x16\x15a\x16'W`@Qb\xDA\x8AW`\xE1\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`\t_a\x163\x83a\x16\xF9V[\x81R` \x81\x01\x91\x90\x91R`@\x01_ T`\xFF\x16\x15a\x085W`@Qc\xAEI;\x03`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[a\x16m\x82a zV[_`@Q\x80``\x01`@R\x80`$\x81R` \x01a5\xB9`$\x919\x90P_\x84\x82`@Q` \x01a\x16\x9D\x92\x91\x90a3tV[`@Q` \x81\x83\x03\x03\x81R\x90`@R\x90P_a\x16\xB8\x82a!\x10V[\x90Pa\x16\xD5\x81\x85a\x16\xC8\x88a!\xFDV[a\x16\xD0a\"tV[a#AV[a\x16\xF1W`@Qb\xCE\xD3\xE5`\xE4\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[PPPPPPV[_\x81_\x01Q\x82` \x01Q`@Q` \x01a\x0F\x80\x92\x91\x90\x91\x82R` \x82\x01R`@\x01\x90V[__Q` a6=_9_Q\x90_Ra\x176\x84\x84a\x0F\rV[\x15a\x14eW_\x84\x81R` \x82\x81R`@\x80\x83 `\x01`\x01`\xA0\x1B\x03\x87\x16\x80\x85R\x92R\x80\x83 \x80T`\xFF\x19\x16\x90UQ3\x92\x87\x91\x7F\xF69\x1F\\2\xD9\xC6\x9D*G\xEAg\x0BD)t\xB595\xD1\xED\xC7\xFDd\xEB!\xE0G\xA89\x17\x1B\x91\x90\xA4`\x01\x91PPa\x08\x1DV[a\x17\x9Ea$\x1FV[_Q` a6]_9_Q\x90_R\x80T`\xFF\x19\x16\x81U\x7F]\xB9\xEE\nI[\xF2\xE6\xFF\x9C\x91\xA7\x83L\x1B\xA4\xFD\xD2D\xA5\xE8\xAANS{\xD3\x8A\xEA\xE4\xB0s\xAA3[`@Q`\x01`\x01`\xA0\x1B\x03\x90\x91\x16\x81R` \x01`@Q\x80\x91\x03\x90\xA1PV[a\x17\xFE\x82a\x1BXV[3_\x82\x90\x03a\x18 W`@Qc\x1F* \x05`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`\x01`\x01`\xA0\x1B\x03\x80\x84\x16_\x90\x81R`\x07` \x90\x81R`@\x80\x83 \x93\x85\x16\x83R\x92\x90R T\x15a\x18cW`@Qc\xD4#\xA4\xF1`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`\x01`\x01`\xA0\x1B\x03\x80\x84\x16_\x90\x81R`\x06` \x90\x81R`@\x80\x83 \x93\x85\x16\x83R\x92\x90R T\x82\x81\x10\x15a\x18\xACW`@Qc\x92fSQ`\xE0\x1B\x81R`\x04\x81\x01\x82\x90R`$\x01a\x11\xE5V[`\x01`\x01`\xA0\x1B\x03\x80\x85\x16_\x90\x81R`\x06` \x90\x81R`@\x80\x83 \x93\x86\x16\x83R\x92\x90R\x90\x81 \x80T\x85\x92\x90a\x18\xE2\x90\x84\x90a2HV[\x92PP\x81\x90UP`@Q\x80`@\x01`@R\x80\x84\x81R` \x01`\x08TBa\x19\x08\x91\x90a2\xCDV[\x90R`\x01`\x01`\xA0\x1B\x03\x80\x86\x16_\x81\x81R`\x07` \x90\x81R`@\x80\x83 \x94\x88\x16\x83R\x93\x81R\x83\x82 \x85Q\x81U\x94\x81\x01Q`\x01\x90\x95\x01\x94\x90\x94U\x90\x81R`\x03\x90\x92R\x81 \x80T\x85\x92\x90a\x19[\x90\x84\x90a2HV[\x92PP\x81\x90UP\x83`\x01`\x01`\xA0\x1B\x03\x16\x82`\x01`\x01`\xA0\x1B\x03\x16\x7FM\x10\xBD\x04\x97u\xC7{\xD7\xF2U\x19Z\xFB\xA5\x08\x80(\xEC\xB3\xC7\xC2w\xD3\x93\xCC\xFFy4\xF2\xF9,\x85`@Qa\x13\xB7\x91\x81R` \x01\x90V[0`\x01`\x01`\xA0\x1B\x03\x7F\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x16\x14\x80a\x1A-WP\x7F\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0`\x01`\x01`\xA0\x1B\x03\x16a\x1A!_Q` a5\xFD_9_Q\x90_RT`\x01`\x01`\xA0\x1B\x03\x16\x90V[`\x01`\x01`\xA0\x1B\x03\x16\x14\x15[\x15a\x0E\xECW`@Qcp>F\xDD`\xE1\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[a\x0E\x06a\x14uV[\x81`\x01`\x01`\xA0\x1B\x03\x16cR\xD1\x90-`@Q\x81c\xFF\xFF\xFF\xFF\x16`\xE0\x1B\x81R`\x04\x01` `@Q\x80\x83\x03\x81\x86Z\xFA\x92PPP\x80\x15a\x1A\xADWP`@\x80Q`\x1F=\x90\x81\x01`\x1F\x19\x16\x82\x01\x90\x92Ra\x1A\xAA\x91\x81\x01\x90a3FV[`\x01[a\x1A\xD5W`@QcL\x9C\x8C\xE3`\xE0\x1B\x81R`\x01`\x01`\xA0\x1B\x03\x83\x16`\x04\x82\x01R`$\x01a\x11\xE5V[_Q` a5\xFD_9_Q\x90_R\x81\x14a\x1B\x05W`@Qc*\x87Ri`\xE2\x1B\x81R`\x04\x81\x01\x82\x90R`$\x01a\x11\xE5V[a\r\xE2\x83\x83a$NV[0`\x01`\x01`\xA0\x1B\x03\x7F\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x16\x14a\x0E\xECW`@Qcp>F\xDD`\xE1\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`\x01`\x01`\xA0\x1B\x03\x81\x16_\x90\x81R`\x03` R`@\x81 `\x01\x01T`\xFF\x16\x90\x81`\x02\x81\x11\x15a\x1B\x89Wa\x1B\x89a1\xB3V[\x03a\x1B\xA7W`@QcP\x8Ay?`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`\x02\x81`\x02\x81\x11\x15a\x1B\xBBWa\x1B\xBBa1\xB3V[\x03a\x085W`@Qc\xEA\xB4\xA9c`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[\x7F\x90\x16\xD0\x9Dr\xD4\x0F\xDA\xE2\xFD\x8C\xEA\xC6\xB6#Lw\x06!O\xD3\x9C\x1C\xD1\xE6\t\xA0R\x8C\x19\x93\0\x80T`\x01`\x01`\xA0\x1B\x03\x19\x81\x16`\x01`\x01`\xA0\x1B\x03\x84\x81\x16\x91\x82\x17\x84U`@Q\x92\x16\x91\x82\x90\x7F\x8B\xE0\x07\x9CS\x16Y\x14\x13D\xCD\x1F\xD0\xA4\xF2\x84\x19I\x7F\x97\"\xA3\xDA\xAF\xE3\xB4\x18okdW\xE0\x90_\x90\xA3PPPV[a\x1CQa\x11\xF7V[_Q` a6]_9_Q\x90_R\x80T`\xFF\x19\x16`\x01\x17\x81U\x7Fb\xE7\x8C\xEA\x01\xBE\xE3 \xCDNB\x02p\xB5\xEAt\0\r\x11\xB0\xC9\xF7GT\xEB\xDB\xFCTK\x05\xA2X3a\x17\xD7V[`\x01`\x01`\xA0\x1B\x03\x81\x16_\x90\x81R`\x07` \x90\x81R`@\x80\x83 3\x80\x85R\x92R\x82 T\x90\x91\x81\x90\x03a\x1C\xD6W`@Qc\x06\x86\x82{`\xE5\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`\x01`\x01`\xA0\x1B\x03\x80\x84\x16_\x90\x81R`\x07` \x90\x81R`@\x80\x83 \x93\x86\x16\x83R\x92\x90R `\x01\x01TB\x10\x15a\x1D\x1EW`@QcZwCW`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`\x01`\x01`\xA0\x1B\x03\x80\x84\x16_\x90\x81R`\x07` \x90\x81R`@\x80\x83 \x86\x85\x16\x84R\x90\x91R\x81 \x81\x81U`\x01\x01U`\x02Ta\x1DY\x91\x16\x83\x83a\x14\xD0V[\x81`\x01`\x01`\xA0\x1B\x03\x16\x7F\x7F\xCFS,\x15\xF0\xA6\xDB\x0B\xD6\xD0\xE08\xBE\xA7\x1D0\xD8\x08\xC7\xD9\x8C\xB3\xBFrh\xA9[\xF5\x08\x1Be\x82`@Qa\x1D\x94\x91\x81R` \x01\x90V[`@Q\x80\x91\x03\x90\xA2PPPV[a\x1D\xA9a\x1F\xEAV[a\x0E\x06\x81a$\xA3V[_Q` a6}_9_Q\x90_R\x80T`\x01`@\x1B\x81\x04`\xFF\x16\x15\x90`\x01`\x01`@\x1B\x03\x16_\x81\x15\x80\x15a\x1D\xE3WP\x82[\x90P_\x82`\x01`\x01`@\x1B\x03\x16`\x01\x14\x80\x15a\x1D\xFEWP0;\x15[\x90P\x81\x15\x80\x15a\x1E\x0CWP\x80\x15[\x15a\x1E*W`@Qc\xF9.\xE8\xA9`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[\x84Tg\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x19\x16`\x01\x17\x85U\x83\x15a\x1ETW\x84T`\xFF`@\x1B\x19\x16`\x01`@\x1B\x17\x85U[C_U\x83\x15a\x1E\x9DW\x84T`\xFF`@\x1B\x19\x16\x85U`@Q`\x01\x81R\x7F\xC7\xF5\x05\xB2\xF3q\xAE!u\xEEI\x13\xF4I\x9E\x1F&3\xA7\xB5\x93c!\xEE\xD1\xCD\xAE\xB6\x11Q\x81\xD2\x90` \x01`@Q\x80\x91\x03\x90\xA1[PPPPPV[`\x01`\x01`\xA0\x1B\x03\x83\x16a\x1E\xCBW`@Qc\xD9.#=`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`\x01`\x01`\xA0\x1B\x03\x82\x16a\x1E\xF2W`@Qc\xD9.#=`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`\x02\x80T`\x01`\x01`\xA0\x1B\x03\x80\x86\x16`\x01`\x01`\xA0\x1B\x03\x19\x92\x83\x16\x17\x90\x92U`\x01\x80T\x92\x85\x16\x92\x90\x91\x16\x91\x90\x91\x17\x90U`Z\x80\x82\x10\x15a\x1FEW`@Qc\xB5~!\xDF`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[P`\x08UPPV[_`@Qc#\xB8r\xDD`\xE0\x1B\x81R`\x01`\x01`\xA0\x1B\x03\x85\x16`\x04\x82\x01R`\x01`\x01`\xA0\x1B\x03\x84\x16`$\x82\x01R\x82`D\x82\x01R` _`d\x83_\x8AZ\xF1\x91PP\x80`\x1F=\x11`\x01_Q\x14\x16\x15\x16\x15a\x1F\xA6WP\x83;\x15=\x17\x15[\x80a\x1E\x9DW`@QbF\x1B\xCD`\xE5\x1B\x81R` `\x04\x82\x01R`\x14`$\x82\x01Rs\x15\x14\x90S\x94\xD1\x91T\x97\xD1\x94\x93\xD3W\xD1\x90RS\x11Q`b\x1B`D\x82\x01R`d\x01a\x11\xE5V[_Q` a6}_9_Q\x90_RT`\x01`@\x1B\x90\x04`\xFF\x16a\x0E\xECW`@Qc\x1A\xFC\xD7\x9F`\xE3\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[a *\x82\x82a\x0F\rV[a\x085W`@Qc\xE2Q}?`\xE0\x1B\x81R`\x01`\x01`\xA0\x1B\x03\x82\x16`\x04\x82\x01R`$\x81\x01\x83\x90R`D\x01a\x11\xE5V[\x80Q\x82Q_\x91\x14\x80\x15a sWP\x81` \x01Q\x83` \x01Q\x14[\x93\x92PPPV[\x80Q` \x82\x01Q_\x91_Q` a5\xDD_9_Q\x90_R\x91\x15\x90\x15\x16\x15a \xA0WPPPV[\x82Q` \x84\x01Q\x82`\x03\x84\x85\x85\x86\t\x85\t\x08\x83\x82\x83\t\x14\x83\x82\x10\x84\x84\x10\x16\x16\x93PPP\x81a\r\xE2W`@QbF\x1B\xCD`\xE5\x1B\x81R` `\x04\x82\x01R`\x17`$\x82\x01R\x7FBn254: invalid G1 point\0\0\0\0\0\0\0\0\0`D\x82\x01R`d\x01a\x11\xE5V[`@\x80Q\x80\x82\x01\x90\x91R_\x80\x82R` \x82\x01R_a!-\x83a$\xABV[\x90P_Q` a5\xDD_9_Q\x90_R`\x03_\x82\x84\x85\t\x90P\x82\x80a!TWa!Ta3\x90V[\x84\x82\t\x90P\x82\x80a!gWa!ga3\x90V[\x82\x82\x08\x90P__a!w\x83a&\xB3V[\x92P\x90P[\x80a!\xE0W\x84\x80a!\x8FWa!\x8Fa3\x90V[`\x01\x87\x08\x95P\x84\x80a!\xA3Wa!\xA3a3\x90V[\x86\x87\t\x92P\x84\x80a!\xB6Wa!\xB6a3\x90V[\x86\x84\t\x92P\x84\x80a!\xC9Wa!\xC9a3\x90V[\x84\x84\x08\x92Pa!\xD7\x83a&\xB3V[\x92P\x90Pa!|V[P`@\x80Q\x80\x82\x01\x90\x91R\x94\x85R` \x85\x01RP\x91\x94\x93PPPPV[`@\x80Q\x80\x82\x01\x90\x91R_\x80\x82R` \x82\x01R\x81Q` \x83\x01Q\x15\x90\x15\x16\x15a\"$WP\x90V[`@Q\x80`@\x01`@R\x80\x83_\x01Q\x81R` \x01_Q` a5\xDD_9_Q\x90_R\x84` \x01Qa\"U\x91\x90a3\xA4V[a\"l\x90_Q` a5\xDD_9_Q\x90_Ra2HV[\x90R\x92\x91PPV[a\"\x9B`@Q\x80`\x80\x01`@R\x80_\x81R` \x01_\x81R` \x01_\x81R` \x01_\x81RP\x90V[`@Q\x80`\x80\x01`@R\x80\x7F\x18\0\xDE\xEF\x12\x1F\x1EvBj\0f^\\DygC\"\xD4\xF7^\xDA\xDDF\xDE\xBD\\\xD9\x92\xF6\xED\x81R` \x01\x7F\x19\x8E\x93\x93\x92\rH:r`\xBF\xB71\xFB]%\xF1\xAAI35\xA9\xE7\x12\x97\xE4\x85\xB7\xAE\xF3\x12\xC2\x81R` \x01\x7F\x12\xC8^\xA5\xDB\x8Cm\xEBJ\xABq\x80\x8D\xCB@\x8F\xE3\xD1\xE7i\x0CC\xD3{L\xE6\xCC\x01f\xFA}\xAA\x81R` \x01\x7F\t\x06\x89\xD0X_\xF0u\xEC\x9E\x99\xADi\x0C3\x95\xBCK13p\xB3\x8E\xF3U\xAC\xDA\xDC\xD1\"\x97[\x81RP\x90P\x90V[___`@Q\x87Q\x81R` \x88\x01Q` \x82\x01R` \x87\x01Q`@\x82\x01R\x86Q``\x82\x01R``\x87\x01Q`\x80\x82\x01R`@\x87\x01Q`\xA0\x82\x01R\x85Q`\xC0\x82\x01R` \x86\x01Q`\xE0\x82\x01R` \x85\x01Qa\x01\0\x82\x01R\x84Qa\x01 \x82\x01R``\x85\x01Qa\x01@\x82\x01R`@\x85\x01Qa\x01`\x82\x01R` _a\x01\x80\x83`\x08Z\xFA\x91PP_Q\x91P\x80a$\x13W`@QbF\x1B\xCD`\xE5\x1B\x81R` `\x04\x82\x01R`\x1C`$\x82\x01R\x7FBn254: Pairing check failed!\0\0\0\0`D\x82\x01R`d\x01a\x11\xE5V[P\x15\x15\x95\x94PPPPPV[_Q` a6]_9_Q\x90_RT`\xFF\x16a\x0E\xECW`@Qc\x8D\xFC +`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[a$W\x82a'\xAAV[`@Q`\x01`\x01`\xA0\x1B\x03\x83\x16\x90\x7F\xBC|\xD7Z \xEE'\xFD\x9A\xDE\xBA\xB3 A\xF7U!M\xBCk\xFF\xA9\x0C\xC0\"[9\xDA.\\-;\x90_\x90\xA2\x80Q\x15a$\x9BWa\r\xE2\x82\x82a(\rV[a\x085a(\x7FV[a\x11\xC0a\x1F\xEAV[__a$\xB6\x83a(\x9EV[\x80Q\x90\x91P`0\x81\x14a$\xCBWa$\xCBa3\xC3V[_\x81`\x01`\x01`@\x1B\x03\x81\x11\x15a$\xE4Wa$\xE4a-bV[`@Q\x90\x80\x82R\x80`\x1F\x01`\x1F\x19\x16` \x01\x82\x01`@R\x80\x15a%\x0EW` \x82\x01\x81\x806\x837\x01\x90P[P\x90P_[\x82\x81\x10\x15a%}W\x83`\x01a%(\x83\x86a2HV[a%2\x91\x90a2HV[\x81Q\x81\x10a%BWa%Ba3\xD7V[` \x01\x01Q`\xF8\x1C`\xF8\x1B\x82\x82\x81Q\x81\x10a%_Wa%_a3\xD7V[` \x01\x01\x90`\x01`\x01`\xF8\x1B\x03\x19\x16\x90\x81_\x1A\x90SP`\x01\x01a%\x13V[P`@\x80Q`\x1F\x80\x82Ra\x04\0\x82\x01\x90\x92R_\x90\x82` \x82\x01a\x03\xE0\x806\x837\x01\x90PP\x90P_[\x82\x81\x10\x15a&\rW\x83\x81a%\xB9\x85\x88a2HV[a%\xC3\x91\x90a2\xCDV[\x81Q\x81\x10a%\xD3Wa%\xD3a3\xD7V[` \x01\x01Q`\xF8\x1C`\xF8\x1B`\xF8\x1C\x82\x82\x81Q\x81\x10a%\xF3Wa%\xF3a3\xD7V[`\xFF\x90\x92\x16` \x92\x83\x02\x91\x90\x91\x01\x90\x91\x01R`\x01\x01a%\xA5V[P_a&\x18\x82a+\xE9V[\x90Pa\x01\0_Q` a5\xDD_9_Q\x90_R_a&6\x86\x89a2HV[\x90P_[\x81\x81\x10\x15a&\xA3W_\x88`\x01a&P\x84\x86a2HV[a&Z\x91\x90a2HV[\x81Q\x81\x10a&jWa&ja3\xD7V[\x01` \x01Q`\xF8\x1C\x90P\x83\x80a&\x82Wa&\x82a3\x90V[\x85\x87\t\x95P\x83\x80a&\x95Wa&\x95a3\x90V[\x81\x87\x08\x95PP`\x01\x01a&:V[P\x92\x9A\x99PPPPPPPPPPV[_____\x7F\x0C\x19\x13\x9C\xB8Lh\nn\x14\x11m\xA0`V\x17e\xE0Z\xA4Z\x1Cr\xA3O\x08#\x05\xB6\x1F?R\x90P__Q` a5\xDD_9_Q\x90_R\x90P`@Q` \x81R` \x80\x82\x01R` `@\x82\x01R\x87``\x82\x01R\x82`\x80\x82\x01R\x81`\xA0\x82\x01R` _`\xC0\x83`\x05Z\xFA\x94PP_Q\x92P\x83a'pW`@QbF\x1B\xCD`\xE5\x1B\x81R` `\x04\x82\x01R`\x1B`$\x82\x01R\x7Fpow precompile call failed!\0\0\0\0\0`D\x82\x01R`d\x01a\x11\xE5V[\x80`\x01\x84\x90\x1B\x11\x15a'\x89Wa'\x86\x83\x82a2HV[\x92P[\x80\x80a'\x97Wa'\x97a3\x90V[\x83\x84\t\x96\x90\x96\x14\x96\x91\x95P\x90\x93PPPPV[\x80`\x01`\x01`\xA0\x1B\x03\x16;_\x03a'\xDFW`@QcL\x9C\x8C\xE3`\xE0\x1B\x81R`\x01`\x01`\xA0\x1B\x03\x82\x16`\x04\x82\x01R`$\x01a\x11\xE5V[_Q` a5\xFD_9_Q\x90_R\x80T`\x01`\x01`\xA0\x1B\x03\x19\x16`\x01`\x01`\xA0\x1B\x03\x92\x90\x92\x16\x91\x90\x91\x17\x90UV[``__\x84`\x01`\x01`\xA0\x1B\x03\x16\x84`@Qa()\x91\x90a3\xEBV[_`@Q\x80\x83\x03\x81\x85Z\xF4\x91PP=\x80_\x81\x14a(aW`@Q\x91P`\x1F\x19`?=\x01\x16\x82\x01`@R=\x82R=_` \x84\x01>a(fV[``\x91P[P\x91P\x91Pa(v\x85\x83\x83a,IV[\x95\x94PPPPPV[4\x15a\x0E\xECW`@Qc\xB3\x98\x97\x9F`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`@\x80Q`0\x80\x82R``\x82\x81\x01\x90\x93R\x90` \x90`\x01`\xF9\x1B\x90_\x90\x84` \x82\x01\x81\x806\x837\x01\x90PP\x90P\x80\x86`@Q` \x01a(\xDE\x92\x91\x90a3tV[`@Q` \x81\x83\x03\x03\x81R\x90`@R\x90P\x80\x84`\xF8\x1B`@Q` \x01a)\x05\x92\x91\x90a3\xF6V[`@Q` \x81\x83\x03\x03\x81R\x90`@R\x90P\x80`@Q` \x01a)'\x91\x90a4 V[`@\x80Q`\x1F\x19\x81\x84\x03\x01\x81R\x90\x82\x90R\x91Pa\x01\x01`\xF0\x1B\x90a)Q\x90\x83\x90\x83\x90` \x01a48V[`@\x80Q\x80\x83\x03`\x1F\x19\x01\x81R\x82\x82R\x80Q` \x91\x82\x01 \x81\x84\x01\x81\x90R`\x01`\xF8\x1B\x84\x84\x01R`\x01`\x01`\xF0\x1B\x03\x19\x85\x16`A\x85\x01R\x82Q`#\x81\x86\x03\x01\x81R`C\x90\x94\x01\x90\x92R\x82Q\x90\x83\x01 \x91\x93P\x90_`\xFF\x88\x16`\x01`\x01`@\x1B\x03\x81\x11\x15a)\xC0Wa)\xC0a-bV[`@Q\x90\x80\x82R\x80`\x1F\x01`\x1F\x19\x16` \x01\x82\x01`@R\x80\x15a)\xEAW` \x82\x01\x81\x806\x837\x01\x90P[P\x90P_\x82`@Q` \x01a*\x01\x91\x81R` \x01\x90V[`@\x80Q`\x1F\x19\x81\x84\x03\x01\x81R\x91\x90R\x90P_[\x81Q\x81\x10\x15a*kW\x81\x81\x81Q\x81\x10a*0Wa*0a3\xD7V[` \x01\x01Q`\xF8\x1C`\xF8\x1B\x83\x82\x81Q\x81\x10a*MWa*Ma3\xD7V[` \x01\x01\x90`\x01`\x01`\xF8\x1B\x03\x19\x16\x90\x81_\x1A\x90SP`\x01\x01a*\x15V[P_\x84`@Q` \x01a*\x80\x91\x81R` \x01\x90V[`@\x80Q`\x1F\x19\x81\x84\x03\x01\x81R` \x83\x01\x90\x91R_\x80\x83R\x91\x98P\x91P[\x89\x81\x10\x15a+\x12W_\x83\x82\x81Q\x81\x10a*\xB9Wa*\xB9a3\xD7V[` \x01\x01Q`\xF8\x1C`\xF8\x1B\x83\x83\x81Q\x81\x10a*\xD6Wa*\xD6a3\xD7V[` \x01\x01Q`\xF8\x1C`\xF8\x1B\x18\x90P\x88\x81`@Q` \x01a*\xF7\x92\x91\x90a4\\V[`@\x80Q`\x1F\x19\x81\x84\x03\x01\x81R\x91\x90R\x98PP`\x01\x01a*\x9EV[P\x86\x88\x87`@Q` \x01a+(\x93\x92\x91\x90a4\x80V[`@Q` \x81\x83\x03\x03\x81R\x90`@R\x96P\x86\x80Q\x90` \x01 \x93P\x83`@Q` \x01a+V\x91\x81R` \x01\x90V[`@\x80Q`\x1F\x19\x81\x84\x03\x01\x81R\x91\x90R\x91P_[a+w\x8A`\xFF\x8D\x16a2HV[\x81\x10\x15a+\xD8W\x82\x81\x81Q\x81\x10a+\x90Wa+\x90a3\xD7V[\x01` \x01Q`\x01`\x01`\xF8\x1B\x03\x19\x16\x84a+\xAA\x83\x8Da2\xCDV[\x81Q\x81\x10a+\xBAWa+\xBAa3\xD7V[` \x01\x01\x90`\x01`\x01`\xF8\x1B\x03\x19\x16\x90\x81_\x1A\x90SP`\x01\x01a+jV[P\x91\x9B\x9APPPPPPPPPPPV[_\x80\x80[\x83Q\x81\x10\x15a\x14nW\x83\x81\x81Q\x81\x10a,\x08Wa,\x08a3\xD7V[` \x02` \x01\x01Q`\xFF\x16\x81`\x08a, \x91\x90a4\xB3V[a,+\x90`\x02a5\xADV[a,5\x91\x90a4\xB3V[a,?\x90\x83a2\xCDV[\x91P`\x01\x01a+\xEDV[``\x82a,^Wa,Y\x82a,\x9EV[a sV[\x81Q\x15\x80\x15a,uWP`\x01`\x01`\xA0\x1B\x03\x84\x16;\x15[\x15a\x14nW`@Qc\x99\x96\xB3\x15`\xE0\x1B\x81R`\x01`\x01`\xA0\x1B\x03\x85\x16`\x04\x82\x01R`$\x01a\x11\xE5V[\x80Q\x15a,\xAEW\x80Q\x80\x82` \x01\xFD[`@Qc\n\x12\xF5!`\xE1\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[_` \x82\x84\x03\x12\x15a,\xD7W__\xFD[\x815`\x01`\x01`\xE0\x1B\x03\x19\x81\x16\x81\x14a sW__\xFD[\x805`\x01`\x01`\xA0\x1B\x03\x81\x16\x81\x14a-\x04W__\xFD[\x91\x90PV[__`@\x83\x85\x03\x12\x15a-\x1AW__\xFD[a-#\x83a,\xEEV[\x94` \x93\x90\x93\x015\x93PPPV[__`@\x83\x85\x03\x12\x15a-BW__\xFD[a-K\x83a,\xEEV[\x91Pa-Y` \x84\x01a,\xEEV[\x90P\x92P\x92\x90PV[cNH{q`\xE0\x1B_R`A`\x04R`$_\xFD[`@\x80Q\x90\x81\x01`\x01`\x01`@\x1B\x03\x81\x11\x82\x82\x10\x17\x15a-\x98Wa-\x98a-bV[`@R\x90V[_`\x80\x82\x84\x03\x12\x15a-\xAEW__\xFD[`@Q`\x80\x81\x01`\x01`\x01`@\x1B\x03\x81\x11\x82\x82\x10\x17\x15a-\xD0Wa-\xD0a-bV[`@\x90\x81R\x835\x82R` \x80\x85\x015\x90\x83\x01R\x83\x81\x015\x90\x82\x01R``\x92\x83\x015\x92\x81\x01\x92\x90\x92RP\x91\x90PV[_`@\x82\x84\x03\x12\x15a.\x0EW__\xFD[a.\x16a-vV[\x825\x81R` \x92\x83\x015\x92\x81\x01\x92\x90\x92RP\x91\x90PV[\x805a\xFF\xFF\x81\x16\x81\x14a-\x04W__\xFD[____a\x01 \x85\x87\x03\x12\x15a.RW__\xFD[a.\\\x86\x86a-\x9EV[\x93Pa.k\x86`\x80\x87\x01a-\xFEV[\x92Pa.z\x86`\xC0\x87\x01a-\xFEV[\x91Pa.\x89a\x01\0\x86\x01a.-V[\x90P\x92\x95\x91\x94P\x92PV[`\x01`\x01`@\x1B\x03\x81\x16\x81\x14a\x0E\x06W__\xFD[_` \x82\x84\x03\x12\x15a.\xB8W__\xFD[\x815a s\x81a.\x94V[_` \x82\x84\x03\x12\x15a.\xD3W__\xFD[a s\x82a,\xEEV[_` \x82\x84\x03\x12\x15a.\xECW__\xFD[P5\x91\x90PV[__`@\x83\x85\x03\x12\x15a/\x04W__\xFD[\x825\x91Pa-Y` \x84\x01a,\xEEV[_\x82`\x1F\x83\x01\x12a/#W__\xFD[\x815`\x01`\x01`@\x1B\x03\x81\x11\x15a/<Wa/<a-bV[`@Q`\x1F\x82\x01`\x1F\x19\x90\x81\x16`?\x01\x16\x81\x01`\x01`\x01`@\x1B\x03\x81\x11\x82\x82\x10\x17\x15a/jWa/ja-bV[`@R\x81\x81R\x83\x82\x01` \x01\x85\x10\x15a/\x81W__\xFD[\x81` \x85\x01` \x83\x017_\x91\x81\x01` \x01\x91\x90\x91R\x93\x92PPPV[_____a\x01@\x86\x88\x03\x12\x15a/\xB2W__\xFD[a/\xBC\x87\x87a-\x9EV[\x94Pa/\xCB\x87`\x80\x88\x01a-\xFEV[\x93Pa/\xDA\x87`\xC0\x88\x01a-\xFEV[\x92Pa\x01\0\x86\x015`\x01`\x01`@\x1B\x03\x81\x11\x15a/\xF5W__\xFD[a0\x01\x88\x82\x89\x01a/\x14V[\x92PPa0\x11a\x01 \x87\x01a.-V[\x90P\x92\x95P\x92\x95\x90\x93PV[__`@\x83\x85\x03\x12\x15a0.W__\xFD[a07\x83a,\xEEV[\x91P` \x83\x015`\x01`\x01`@\x1B\x03\x81\x11\x15a0QW__\xFD[a0]\x85\x82\x86\x01a/\x14V[\x91PP\x92P\x92\x90PV[___a\x01\0\x84\x86\x03\x12\x15a0zW__\xFD[a0\x84\x85\x85a-\x9EV[\x92Pa0\x93\x85`\x80\x86\x01a-\xFEV[\x91Pa0\xA2\x85`\xC0\x86\x01a-\xFEV[\x90P\x92P\x92P\x92V[_`\x80\x82\x84\x03\x12\x15a0\xBBW__\xFD[a s\x83\x83a-\x9EV[____a\x01 \x85\x87\x03\x12\x15a0\xD9W__\xFD[a0\xE3\x86\x86a-\x9EV[\x93Pa0\xF2\x86`\x80\x87\x01a-\xFEV[\x92Pa1\x01\x86`\xC0\x87\x01a-\xFEV[\x91Pa\x01\0\x85\x015`\x01`\x01`@\x1B\x03\x81\x11\x15a1\x1CW__\xFD[a1(\x87\x82\x88\x01a/\x14V[\x91PP\x92\x95\x91\x94P\x92PV[_\x81Q\x80\x84R\x80` \x84\x01` \x86\x01^_` \x82\x86\x01\x01R` `\x1F\x19`\x1F\x83\x01\x16\x85\x01\x01\x91PP\x92\x91PPV[` \x81R_a s` \x83\x01\x84a14V[____`\x80\x85\x87\x03\x12\x15a1\x87W__\xFD[a1\x90\x85a,\xEEV[\x93Pa1\x9E` \x86\x01a,\xEEV[\x92P`@\x85\x015\x91Pa.\x89``\x86\x01a,\xEEV[cNH{q`\xE0\x1B_R`!`\x04R`$_\xFD[\x82\x81R`@\x81\x01`\x03\x83\x10a1\xEAWcNH{q`\xE0\x1B_R`!`\x04R`$_\xFD[\x82` \x83\x01R\x93\x92PPPV[_` \x82\x84\x03\x12\x15a2\x07W__\xFD[\x81Qa s\x81a.\x94V[cNH{q`\xE0\x1B_R`\x11`\x04R`$_\xFD[`\x01`\x01`@\x1B\x03\x81\x81\x16\x83\x82\x16\x02\x90\x81\x16\x90\x81\x81\x14a\x14nWa\x14na2\x12V[\x81\x81\x03\x81\x81\x11\x15a\x08\x1DWa\x08\x1Da2\x12V[\x85Q\x81R` \x80\x87\x01Q\x90\x82\x01R`@\x80\x87\x01Q\x90\x82\x01R``\x80\x87\x01Q\x90\x82\x01R\x84Q`\x80\x82\x01R` \x85\x01Q`\xA0\x82\x01Ra\xFF\xFF\x84\x16`\xC0\x82\x01R\x82Q`\xE0\x82\x01R` \x83\x01Qa\x01\0\x82\x01Ra\x01@a\x01 \x82\x01R_a2\xC2a\x01@\x83\x01\x84a14V[\x97\x96PPPPPPPV[\x80\x82\x01\x80\x82\x11\x15a\x08\x1DWa\x08\x1Da2\x12V[\x84Q\x81R` \x80\x86\x01Q\x90\x82\x01R`@\x80\x86\x01Q\x90\x82\x01R``\x80\x86\x01Q\x90\x82\x01R\x83Q`\x80\x82\x01R` \x84\x01Q`\xA0\x82\x01R\x82Q`\xC0\x82\x01R` \x83\x01Q`\xE0\x82\x01Ra\x01 a\x01\0\x82\x01R_a3<a\x01 \x83\x01\x84a14V[\x96\x95PPPPPPV[_` \x82\x84\x03\x12\x15a3VW__\xFD[PQ\x91\x90PV[_\x81Q\x80` \x84\x01\x85^_\x93\x01\x92\x83RP\x90\x91\x90PV[_a3\x88a3\x82\x83\x86a3]V[\x84a3]V[\x94\x93PPPPV[cNH{q`\xE0\x1B_R`\x12`\x04R`$_\xFD[_\x82a3\xBEWcNH{q`\xE0\x1B_R`\x12`\x04R`$_\xFD[P\x06\x90V[cNH{q`\xE0\x1B_R`\x01`\x04R`$_\xFD[cNH{q`\xE0\x1B_R`2`\x04R`$_\xFD[_a s\x82\x84a3]V[_a4\x01\x82\x85a3]V[_\x81R`\x01`\x01`\xF8\x1B\x03\x19\x93\x90\x93\x16`\x01\x84\x01RPP`\x02\x01\x91\x90PV[_a4+\x82\x84a3]V[_\x81R`\x01\x01\x93\x92PPPV[_a4C\x82\x85a3]V[`\x01`\x01`\xF0\x1B\x03\x19\x93\x90\x93\x16\x83RPP`\x02\x01\x91\x90PV[_a4g\x82\x85a3]V[`\x01`\x01`\xF8\x1B\x03\x19\x93\x90\x93\x16\x83RPP`\x01\x01\x91\x90PV[_a4\x8B\x82\x86a3]V[`\x01`\x01`\xF8\x1B\x03\x19\x94\x90\x94\x16\x84RPP`\x01`\x01`\xF0\x1B\x03\x19\x16`\x01\x82\x01R`\x03\x01\x91\x90PV[\x80\x82\x02\x81\x15\x82\x82\x04\x84\x14\x17a\x08\x1DWa\x08\x1Da2\x12V[`\x01\x81[`\x01\x84\x11\x15a5\x05W\x80\x85\x04\x81\x11\x15a4\xE9Wa4\xE9a2\x12V[`\x01\x84\x16\x15a4\xF7W\x90\x81\x02\x90[`\x01\x93\x90\x93\x1C\x92\x80\x02a4\xCEV[\x93P\x93\x91PPV[_\x82a5\x1BWP`\x01a\x08\x1DV[\x81a5'WP_a\x08\x1DV[\x81`\x01\x81\x14a5=W`\x02\x81\x14a5GWa5cV[`\x01\x91PPa\x08\x1DV[`\xFF\x84\x11\x15a5XWa5Xa2\x12V[PP`\x01\x82\x1Ba\x08\x1DV[P` \x83\x10a\x013\x83\x10\x16`N\x84\x10`\x0B\x84\x10\x16\x17\x15a5\x86WP\x81\x81\na\x08\x1DV[a5\x92_\x19\x84\x84a4\xCAV[\x80_\x19\x04\x82\x11\x15a5\xA5Wa5\xA5a2\x12V[\x02\x93\x92PPPV[_a s\x83\x83a5\rV\xFEBLS_SIG_BN254G1_XMD:KECCAK_NCTH_NUL_0dNr\xE11\xA0)\xB8PE\xB6\x81\x81X]\x97\x81j\x91hq\xCA\x8D< \x8C\x16\xD8|\xFDG6\x08\x94\xA1;\xA1\xA3!\x06g\xC8(I-\xB9\x8D\xCA> v\xCC75\xA9 \xA3\xCAP]8+\xBCe\xD7\xA2\x8E2e\xB3zdt\x92\x9F3e!\xB32\xC1h\x1B\x93?l\xB9\xF37fsD\r\x86*\x02\xDD{\xC7\xDE\xC4\xDC\xEE\xDD\xA7u\xE5\x8D\xD5A\xE0\x8A\x11llS\x81\\\x0B\xD0(\x19/{bh\0\xCD^\xD1\\n\x18~w\xE9\xAE\xE8\x81\x84\xC2\x1FO!\x82\xABX'\xCB;~\x07\xFB\xED\xCDc\xF03\0\xF0\xC5~\x16\x84\r\xF0@\xF1P\x88\xDC/\x81\xFE9\x1C9#\xBE\xC7>#\xA9f.\xFC\x9C\"\x9Cj\0\xA1dsolcC\0\x08\x1C\0\n",
     );
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `AccessControlBadConfirmation()` and selector `0x6697b232`.
 ```solidity
 error AccessControlBadConfirmation();
@@ -3274,6 +3286,8 @@ error AccessControlBadConfirmation();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `AccessControlUnauthorizedAccount(address,bytes32)` and selector `0xe2517d3f`.
 ```solidity
 error AccessControlUnauthorizedAccount(address account, bytes32 neededRole);
@@ -3369,6 +3383,8 @@ error AccessControlUnauthorizedAccount(address account, bytes32 neededRole);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `AddressEmptyCode(address)` and selector `0x9996b315`.
 ```solidity
 error AddressEmptyCode(address target);
@@ -3448,6 +3464,8 @@ error AddressEmptyCode(address target);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `BLSSigVerificationFailed()` and selector `0x0ced3e50`.
 ```solidity
 error BLSSigVerificationFailed();
@@ -3522,6 +3540,8 @@ error BLSSigVerificationFailed();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `BlsKeyAlreadyUsed()` and selector `0x01b514ae`.
 ```solidity
 error BlsKeyAlreadyUsed();
@@ -3594,6 +3614,8 @@ error BlsKeyAlreadyUsed();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `DeprecatedFunction()` and selector `0xc2d7f813`.
 ```solidity
 error DeprecatedFunction();
@@ -3666,6 +3688,8 @@ error DeprecatedFunction();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ERC1967InvalidImplementation(address)` and selector `0x4c9c8ce3`.
 ```solidity
 error ERC1967InvalidImplementation(address implementation);
@@ -3747,6 +3771,8 @@ error ERC1967InvalidImplementation(address implementation);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ERC1967NonPayable()` and selector `0xb398979f`.
 ```solidity
 error ERC1967NonPayable();
@@ -3819,6 +3845,8 @@ error ERC1967NonPayable();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `EnforcedPause()` and selector `0xd93c0665`.
 ```solidity
 error EnforcedPause();
@@ -3891,6 +3919,8 @@ error EnforcedPause();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ExitEscrowPeriodInvalid()` and selector `0xb57e21df`.
 ```solidity
 error ExitEscrowPeriodInvalid();
@@ -3963,6 +3993,8 @@ error ExitEscrowPeriodInvalid();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ExpectedPause()` and selector `0x8dfc202b`.
 ```solidity
 error ExpectedPause();
@@ -4035,6 +4067,8 @@ error ExpectedPause();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `FailedInnerCall()` and selector `0x1425ea42`.
 ```solidity
 error FailedInnerCall();
@@ -4107,6 +4141,8 @@ error FailedInnerCall();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `InsufficientAllowance(uint256,uint256)` and selector `0x2a1b2dd8`.
 ```solidity
 error InsufficientAllowance(uint256, uint256);
@@ -4197,6 +4233,8 @@ error InsufficientAllowance(uint256, uint256);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `InsufficientBalance(uint256)` and selector `0x92665351`.
 ```solidity
 error InsufficientBalance(uint256);
@@ -4277,6 +4315,8 @@ error InsufficientBalance(uint256);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `InvalidCommission()` and selector `0xdc81db85`.
 ```solidity
 error InvalidCommission();
@@ -4349,6 +4389,8 @@ error InvalidCommission();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `InvalidInitialization()` and selector `0xf92ee8a9`.
 ```solidity
 error InvalidInitialization();
@@ -4421,6 +4463,8 @@ error InvalidInitialization();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `InvalidSchnorrSig()` and selector `0x42470687`.
 ```solidity
 error InvalidSchnorrSig();
@@ -4493,6 +4537,8 @@ error InvalidSchnorrSig();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `InvalidSchnorrVK()` and selector `0x06cf438f`.
 ```solidity
 error InvalidSchnorrVK();
@@ -4565,6 +4611,8 @@ error InvalidSchnorrVK();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `NotInitializing()` and selector `0xd7e6bcf8`.
 ```solidity
 error NotInitializing();
@@ -4637,6 +4685,8 @@ error NotInitializing();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `NothingToWithdraw()` and selector `0xd0d04f60`.
 ```solidity
 error NothingToWithdraw();
@@ -4709,6 +4759,8 @@ error NothingToWithdraw();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `OwnableInvalidOwner(address)` and selector `0x1e4fbdf7`.
 ```solidity
 error OwnableInvalidOwner(address owner);
@@ -4788,6 +4840,8 @@ error OwnableInvalidOwner(address owner);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `OwnableUnauthorizedAccount(address)` and selector `0x118cdaa7`.
 ```solidity
 error OwnableUnauthorizedAccount(address account);
@@ -4869,6 +4923,8 @@ error OwnableUnauthorizedAccount(address account);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `PrematureWithdrawal()` and selector `0x5a774357`.
 ```solidity
 error PrematureWithdrawal();
@@ -4941,6 +4997,8 @@ error PrematureWithdrawal();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `SchnorrKeyAlreadyUsed()` and selector `0xae493b03`.
 ```solidity
 error SchnorrKeyAlreadyUsed();
@@ -5013,6 +5071,8 @@ error SchnorrKeyAlreadyUsed();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `UUPSUnauthorizedCallContext()` and selector `0xe07c8dba`.
 ```solidity
 error UUPSUnauthorizedCallContext();
@@ -5087,6 +5147,8 @@ error UUPSUnauthorizedCallContext();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `UUPSUnsupportedProxiableUUID(bytes32)` and selector `0xaa1d49a4`.
 ```solidity
 error UUPSUnsupportedProxiableUUID(bytes32 slot);
@@ -5168,6 +5230,8 @@ error UUPSUnsupportedProxiableUUID(bytes32 slot);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `UndelegationAlreadyExists()` and selector `0xd423a4f1`.
 ```solidity
 error UndelegationAlreadyExists();
@@ -5242,6 +5306,8 @@ error UndelegationAlreadyExists();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ValidatorAlreadyExited()` and selector `0xeab4a963`.
 ```solidity
 error ValidatorAlreadyExited();
@@ -5314,6 +5380,8 @@ error ValidatorAlreadyExited();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ValidatorAlreadyRegistered()` and selector `0x9973f7d8`.
 ```solidity
 error ValidatorAlreadyRegistered();
@@ -5388,6 +5456,8 @@ error ValidatorAlreadyRegistered();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ValidatorInactive()` and selector `0x508a793f`.
 ```solidity
 error ValidatorInactive();
@@ -5460,6 +5530,8 @@ error ValidatorInactive();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ValidatorNotExited()` and selector `0xf25314a6`.
 ```solidity
 error ValidatorNotExited();
@@ -5532,6 +5604,8 @@ error ValidatorNotExited();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ZeroAddress()` and selector `0xd92e233d`.
 ```solidity
 error ZeroAddress();
@@ -5604,6 +5678,8 @@ error ZeroAddress();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ZeroAmount()` and selector `0x1f2a2005`.
 ```solidity
 error ZeroAmount();
@@ -5676,6 +5752,8 @@ error ZeroAmount();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive()]
     /**Event with signature `ConsensusKeysUpdated(address,(uint256,uint256,uint256,uint256),(uint256,uint256))` and selector `0x80d8a4a1663328a998d4555ba21d8bba6ef1576a8c5e9d27f9c545f1a3d52b1d`.
 ```solidity
 event ConsensusKeysUpdated(address indexed account, BN254.G2Point blsVK, EdOnBN254.EdOnBN254Point schnorrVK);
@@ -5794,6 +5872,8 @@ event ConsensusKeysUpdated(address indexed account, BN254.G2Point blsVK, EdOnBN2
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive()]
     /**Event with signature `ConsensusKeysUpdatedV2(address,(uint256,uint256,uint256,uint256),(uint256,uint256),(uint256,uint256),bytes)` and selector `0xc8c5b37aec7f2ddbd3a13c51361e54a0a8df3bca256ab758a77f5ad741d281e5`.
 ```solidity
 event ConsensusKeysUpdatedV2(address indexed account, BN254.G2Point blsVK, EdOnBN254.EdOnBN254Point schnorrVK, BN254.G1Point blsSig, bytes schnorrSig);
@@ -5927,6 +6007,8 @@ event ConsensusKeysUpdatedV2(address indexed account, BN254.G2Point blsVK, EdOnB
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `Delegated(address,address,uint256)` and selector `0xe5541a6b6103d4fa7e021ed54fad39c66f27a76bd13d374cf6240ae6bd0bb72b`.
 ```solidity
 event Delegated(address indexed delegator, address indexed validator, uint256 amount);
@@ -6052,6 +6134,8 @@ event Delegated(address indexed delegator, address indexed validator, uint256 am
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `ExitEscrowPeriodUpdated(uint64)` and selector `0x793e3b1e1bcd677bb11900c83124d3c44c9946ea8ddf978a0ca250b034ec9dde`.
 ```solidity
 event ExitEscrowPeriodUpdated(uint64 newExitEscrowPeriod);
@@ -6159,6 +6243,8 @@ event ExitEscrowPeriodUpdated(uint64 newExitEscrowPeriod);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `Initialized(uint64)` and selector `0xc7f505b2f371ae2175ee4913f4499e1f2633a7b5936321eed1cdaeb6115181d2`.
 ```solidity
 event Initialized(uint64 version);
@@ -6262,6 +6348,8 @@ event Initialized(uint64 version);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `OwnershipTransferred(address,address)` and selector `0x8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e0`.
 ```solidity
 event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
@@ -6380,6 +6468,8 @@ event OwnershipTransferred(address indexed previousOwner, address indexed newOwn
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `Paused(address)` and selector `0x62e78cea01bee320cd4e420270b5ea74000d11b0c9f74754ebdbfc544b05a258`.
 ```solidity
 event Paused(address account);
@@ -6483,6 +6573,8 @@ event Paused(address account);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `RoleAdminChanged(bytes32,bytes32,bytes32)` and selector `0xbd79b86ffe0ab8e8776151514217cd7cacd52c909f66475c3af44e129f0b00ff`.
 ```solidity
 event RoleAdminChanged(bytes32 indexed role, bytes32 indexed previousAdminRole, bytes32 indexed newAdminRole);
@@ -6609,6 +6701,8 @@ event RoleAdminChanged(bytes32 indexed role, bytes32 indexed previousAdminRole, 
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `RoleGranted(bytes32,address,address)` and selector `0x2f8788117e7eff1d82e926ec794901d17c78024a50270940304540a733656f0d`.
 ```solidity
 event RoleGranted(bytes32 indexed role, address indexed account, address indexed sender);
@@ -6735,6 +6829,8 @@ event RoleGranted(bytes32 indexed role, address indexed account, address indexed
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `RoleRevoked(bytes32,address,address)` and selector `0xf6391f5c32d9c69d2a47ea670b442974b53935d1edc7fd64eb21e047a839171b`.
 ```solidity
 event RoleRevoked(bytes32 indexed role, address indexed account, address indexed sender);
@@ -6861,6 +6957,8 @@ event RoleRevoked(bytes32 indexed role, address indexed account, address indexed
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `Undelegated(address,address,uint256)` and selector `0x4d10bd049775c77bd7f255195afba5088028ecb3c7c277d393ccff7934f2f92c`.
 ```solidity
 event Undelegated(address indexed delegator, address indexed validator, uint256 amount);
@@ -6986,6 +7084,8 @@ event Undelegated(address indexed delegator, address indexed validator, uint256 
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `Unpaused(address)` and selector `0x5db9ee0a495bf2e6ff9c91a7834c1ba4fdd244a5e8aa4e537bd38aeae4b073aa`.
 ```solidity
 event Unpaused(address account);
@@ -7089,6 +7189,8 @@ event Unpaused(address account);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `Upgraded(address)` and selector `0xbc7cd75a20ee27fd9adebab32041f755214dbc6bffa90cc0225b39da2e5c2d3b`.
 ```solidity
 event Upgraded(address indexed implementation);
@@ -7194,6 +7296,8 @@ event Upgraded(address indexed implementation);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `ValidatorExit(address)` and selector `0xfb24305354c87762d557487ae4a564e8d03ecbb9a97dd8afff8e1f6fcaf0dd16`.
 ```solidity
 event ValidatorExit(address indexed validator);
@@ -7299,6 +7403,8 @@ event ValidatorExit(address indexed validator);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive()]
     /**Event with signature `ValidatorRegistered(address,(uint256,uint256,uint256,uint256),(uint256,uint256),uint16)` and selector `0xf6e8359c57520b469634736bfc3bb7ec5cbd1a0bd28b10a8275793bb730b797f`.
 ```solidity
 event ValidatorRegistered(address indexed account, BN254.G2Point blsVk, EdOnBN254.EdOnBN254Point schnorrVk, uint16 commission);
@@ -7427,6 +7533,8 @@ event ValidatorRegistered(address indexed account, BN254.G2Point blsVk, EdOnBN25
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive()]
     /**Event with signature `ValidatorRegisteredV2(address,(uint256,uint256,uint256,uint256),(uint256,uint256),uint16,(uint256,uint256),bytes)` and selector `0xf057d4ea81e98628653a8f90788541972078137334a92b42347eaccda80fc40a`.
 ```solidity
 event ValidatorRegisteredV2(address indexed account, BN254.G2Point blsVK, EdOnBN254.EdOnBN254Point schnorrVK, uint16 commission, BN254.G1Point blsSig, bytes schnorrSig);
@@ -7567,6 +7675,8 @@ event ValidatorRegisteredV2(address indexed account, BN254.G2Point blsVK, EdOnBN
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `Withdrawal(address,uint256)` and selector `0x7fcf532c15f0a6db0bd6d0e038bea71d30d808c7d98cb3bf7268a95bf5081b65`.
 ```solidity
 event Withdrawal(address indexed account, uint256 amount);
@@ -7740,6 +7850,8 @@ constructor();
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `DEFAULT_ADMIN_ROLE()` and selector `0xa217fddf`.
 ```solidity
 function DEFAULT_ADMIN_ROLE() external view returns (bytes32);
@@ -7747,6 +7859,8 @@ function DEFAULT_ADMIN_ROLE() external view returns (bytes32);
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct DEFAULT_ADMIN_ROLECall;
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`DEFAULT_ADMIN_ROLE()`](DEFAULT_ADMIN_ROLECall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -7885,6 +7999,8 @@ function DEFAULT_ADMIN_ROLE() external view returns (bytes32);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `PAUSER_ROLE()` and selector `0xe63ab1e9`.
 ```solidity
 function PAUSER_ROLE() external view returns (bytes32);
@@ -7892,6 +8008,8 @@ function PAUSER_ROLE() external view returns (bytes32);
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct PAUSER_ROLECall;
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`PAUSER_ROLE()`](PAUSER_ROLECall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -8026,6 +8144,8 @@ function PAUSER_ROLE() external view returns (bytes32);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `UPGRADE_INTERFACE_VERSION()` and selector `0xad3cb1cc`.
 ```solidity
 function UPGRADE_INTERFACE_VERSION() external view returns (string memory);
@@ -8033,6 +8153,8 @@ function UPGRADE_INTERFACE_VERSION() external view returns (string memory);
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct UPGRADE_INTERFACE_VERSIONCall;
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`UPGRADE_INTERFACE_VERSION()`](UPGRADE_INTERFACE_VERSIONCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -8171,6 +8293,8 @@ function UPGRADE_INTERFACE_VERSION() external view returns (string memory);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive()]
     /**Function with signature `_hashBlsKey((uint256,uint256,uint256,uint256))` and selector `0x9b30a5e6`.
 ```solidity
 function _hashBlsKey(BN254.G2Point memory blsVK) external pure returns (bytes32);
@@ -8181,6 +8305,8 @@ function _hashBlsKey(BN254.G2Point memory blsVK) external pure returns (bytes32)
         #[allow(missing_docs)]
         pub blsVK: <BN254::G2Point as alloy::sol_types::SolType>::RustType,
     }
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`_hashBlsKey((uint256,uint256,uint256,uint256))`](_hashBlsKeyCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -8317,6 +8443,8 @@ function _hashBlsKey(BN254.G2Point memory blsVK) external pure returns (bytes32)
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `blsKeys(bytes32)` and selector `0xb3e6ebd5`.
 ```solidity
 function blsKeys(bytes32 blsKeyHash) external view returns (bool used);
@@ -8327,6 +8455,8 @@ function blsKeys(bytes32 blsKeyHash) external view returns (bool used);
         #[allow(missing_docs)]
         pub blsKeyHash: alloy::sol_types::private::FixedBytes<32>,
     }
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`blsKeys(bytes32)`](blsKeysCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -8465,6 +8595,8 @@ function blsKeys(bytes32 blsKeyHash) external view returns (bool used);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `claimValidatorExit(address)` and selector `0x2140fecd`.
 ```solidity
 function claimValidatorExit(address validator) external;
@@ -8611,6 +8743,8 @@ function claimValidatorExit(address validator) external;
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `claimWithdrawal(address)` and selector `0xa3066aab`.
 ```solidity
 function claimWithdrawal(address validator) external;
@@ -8755,6 +8889,8 @@ function claimWithdrawal(address validator) external;
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `delegate(address,uint256)` and selector `0x026e402b`.
 ```solidity
 function delegate(address validator, uint256 amount) external;
@@ -8914,6 +9050,8 @@ function delegate(address validator, uint256 amount) external;
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `delegations(address,address)` and selector `0xc64814dd`.
 ```solidity
 function delegations(address validator, address delegator) external view returns (uint256 amount);
@@ -8926,6 +9064,8 @@ function delegations(address validator, address delegator) external view returns
         #[allow(missing_docs)]
         pub delegator: alloy::sol_types::private::Address,
     }
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`delegations(address,address)`](delegationsCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -9081,6 +9221,8 @@ function delegations(address validator, address delegator) external view returns
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `deregisterValidator()` and selector `0x6a911ccf`.
 ```solidity
 function deregisterValidator() external;
@@ -9220,6 +9362,8 @@ function deregisterValidator() external;
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `exitEscrowPeriod()` and selector `0x9e9a8f31`.
 ```solidity
 function exitEscrowPeriod() external view returns (uint256);
@@ -9227,6 +9371,8 @@ function exitEscrowPeriod() external view returns (uint256);
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct exitEscrowPeriodCall;
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`exitEscrowPeriod()`](exitEscrowPeriodCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -9367,6 +9513,8 @@ function exitEscrowPeriod() external view returns (uint256);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `getRoleAdmin(bytes32)` and selector `0x248a9ca3`.
 ```solidity
 function getRoleAdmin(bytes32 role) external view returns (bytes32);
@@ -9377,6 +9525,8 @@ function getRoleAdmin(bytes32 role) external view returns (bytes32);
         #[allow(missing_docs)]
         pub role: alloy::sol_types::private::FixedBytes<32>,
     }
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`getRoleAdmin(bytes32)`](getRoleAdminCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -9515,6 +9665,8 @@ function getRoleAdmin(bytes32 role) external view returns (bytes32);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `getVersion()` and selector `0x0d8e6e2c`.
 ```solidity
 function getVersion() external pure returns (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion);
@@ -9522,6 +9674,8 @@ function getVersion() external pure returns (uint8 majorVersion, uint8 minorVers
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct getVersionCall;
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`getVersion()`](getVersionCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -9679,6 +9833,8 @@ function getVersion() external pure returns (uint8 majorVersion, uint8 minorVers
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `grantRole(bytes32,address)` and selector `0x2f2ff15d`.
 ```solidity
 function grantRole(bytes32 role, address account) external;
@@ -9838,6 +9994,8 @@ function grantRole(bytes32 role, address account) external;
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `hasRole(bytes32,address)` and selector `0x91d14854`.
 ```solidity
 function hasRole(bytes32 role, address account) external view returns (bool);
@@ -9850,6 +10008,8 @@ function hasRole(bytes32 role, address account) external view returns (bool);
         #[allow(missing_docs)]
         pub account: alloy::sol_types::private::Address,
     }
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`hasRole(bytes32,address)`](hasRoleCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -10003,6 +10163,8 @@ function hasRole(bytes32 role, address account) external view returns (bool);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `initialize(address,address,uint256,address)` and selector `0xbe203094`.
 ```solidity
 function initialize(address _tokenAddress, address _lightClientAddress, uint256 _exitEscrowPeriod, address _timelock) external;
@@ -10185,6 +10347,8 @@ function initialize(address _tokenAddress, address _lightClientAddress, uint256 
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `initializeV2(address,address)` and selector `0x0840ba72`.
 ```solidity
 function initializeV2(address pauser, address admin) external;
@@ -10344,6 +10508,8 @@ function initializeV2(address pauser, address admin) external;
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `initializedAtBlock()` and selector `0x3e9df9b5`.
 ```solidity
 function initializedAtBlock() external view returns (uint256);
@@ -10351,6 +10517,8 @@ function initializedAtBlock() external view returns (uint256);
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct initializedAtBlockCall;
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`initializedAtBlock()`](initializedAtBlockCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -10491,6 +10659,8 @@ function initializedAtBlock() external view returns (uint256);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `lightClient()` and selector `0xb5700e68`.
 ```solidity
 function lightClient() external view returns (address);
@@ -10498,6 +10668,8 @@ function lightClient() external view returns (address);
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct lightClientCall;
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`lightClient()`](lightClientCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -10632,6 +10804,8 @@ function lightClient() external view returns (address);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `owner()` and selector `0x8da5cb5b`.
 ```solidity
 function owner() external view returns (address);
@@ -10639,6 +10813,8 @@ function owner() external view returns (address);
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct ownerCall;
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`owner()`](ownerCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -10773,6 +10949,8 @@ function owner() external view returns (address);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `pause()` and selector `0x8456cb59`.
 ```solidity
 function pause() external;
@@ -10908,6 +11086,8 @@ function pause() external;
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `paused()` and selector `0x5c975abb`.
 ```solidity
 function paused() external view returns (bool);
@@ -10915,6 +11095,8 @@ function paused() external view returns (bool);
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct pausedCall;
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`paused()`](pausedCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -11049,6 +11231,8 @@ function paused() external view returns (bool);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `proxiableUUID()` and selector `0x52d1902d`.
 ```solidity
 function proxiableUUID() external view returns (bytes32);
@@ -11056,6 +11240,8 @@ function proxiableUUID() external view returns (bytes32);
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct proxiableUUIDCall;
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`proxiableUUID()`](proxiableUUIDCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -11190,6 +11376,8 @@ function proxiableUUID() external view returns (bytes32);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive()]
     /**Function with signature `registerValidator((uint256,uint256,uint256,uint256),(uint256,uint256),(uint256,uint256),uint16)` and selector `0x13b9057a`.
 ```solidity
 function registerValidator(BN254.G2Point memory, EdOnBN254.EdOnBN254Point memory, BN254.G1Point memory, uint16) external pure;
@@ -11367,6 +11555,8 @@ function registerValidator(BN254.G2Point memory, EdOnBN254.EdOnBN254Point memory
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive()]
     /**Function with signature `registerValidatorV2((uint256,uint256,uint256,uint256),(uint256,uint256),(uint256,uint256),bytes,uint16)` and selector `0x304240bf`.
 ```solidity
 function registerValidatorV2(BN254.G2Point memory blsVK, EdOnBN254.EdOnBN254Point memory schnorrVK, BN254.G1Point memory blsSig, bytes memory schnorrSig, uint16 commission) external;
@@ -11559,6 +11749,8 @@ function registerValidatorV2(BN254.G2Point memory blsVK, EdOnBN254.EdOnBN254Poin
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `renounceOwnership()` and selector `0x715018a6`.
 ```solidity
 function renounceOwnership() external;
@@ -11698,6 +11890,8 @@ function renounceOwnership() external;
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `renounceRole(bytes32,address)` and selector `0x36568abe`.
 ```solidity
 function renounceRole(bytes32 role, address callerConfirmation) external;
@@ -11857,6 +12051,8 @@ function renounceRole(bytes32 role, address callerConfirmation) external;
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `revokeRole(bytes32,address)` and selector `0xd547741f`.
 ```solidity
 function revokeRole(bytes32 role, address account) external;
@@ -12016,6 +12212,8 @@ function revokeRole(bytes32 role, address account) external;
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `schnorrKeys(bytes32)` and selector `0x5f8754a6`.
 ```solidity
 function schnorrKeys(bytes32 schnorrKey) external view returns (bool used);
@@ -12026,6 +12224,8 @@ function schnorrKeys(bytes32 schnorrKey) external view returns (bool used);
         #[allow(missing_docs)]
         pub schnorrKey: alloy::sol_types::private::FixedBytes<32>,
     }
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`schnorrKeys(bytes32)`](schnorrKeysCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -12164,6 +12364,8 @@ function schnorrKeys(bytes32 schnorrKey) external view returns (bool used);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `supportsInterface(bytes4)` and selector `0x01ffc9a7`.
 ```solidity
 function supportsInterface(bytes4 interfaceId) external view returns (bool);
@@ -12174,6 +12376,8 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
         #[allow(missing_docs)]
         pub interfaceId: alloy::sol_types::private::FixedBytes<4>,
     }
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`supportsInterface(bytes4)`](supportsInterfaceCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -12316,6 +12520,8 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `token()` and selector `0xfc0c546a`.
 ```solidity
 function token() external view returns (address);
@@ -12323,6 +12529,8 @@ function token() external view returns (address);
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct tokenCall;
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`token()`](tokenCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -12457,6 +12665,8 @@ function token() external view returns (address);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `transferOwnership(address)` and selector `0xf2fde38b`.
 ```solidity
 function transferOwnership(address newOwner) external;
@@ -12603,6 +12813,8 @@ function transferOwnership(address newOwner) external;
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `undelegate(address,uint256)` and selector `0x4d99dd16`.
 ```solidity
 function undelegate(address validator, uint256 amount) external;
@@ -12762,6 +12974,8 @@ function undelegate(address validator, uint256 amount) external;
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `undelegations(address,address)` and selector `0xa2d78dd5`.
 ```solidity
 function undelegations(address validator, address delegator) external view returns (uint256 amount, uint256 unlocksAt);
@@ -12774,6 +12988,8 @@ function undelegations(address validator, address delegator) external view retur
         #[allow(missing_docs)]
         pub delegator: alloy::sol_types::private::Address,
     }
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`undelegations(address,address)`](undelegationsCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -12945,6 +13161,8 @@ function undelegations(address validator, address delegator) external view retur
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `unpause()` and selector `0x3f4ba83a`.
 ```solidity
 function unpause() external;
@@ -13080,6 +13298,8 @@ function unpause() external;
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive()]
     /**Function with signature `updateConsensusKeys((uint256,uint256,uint256,uint256),(uint256,uint256),(uint256,uint256))` and selector `0x5544c2f1`.
 ```solidity
 function updateConsensusKeys(BN254.G2Point memory, EdOnBN254.EdOnBN254Point memory, BN254.G1Point memory) external pure;
@@ -13248,6 +13468,8 @@ function updateConsensusKeys(BN254.G2Point memory, EdOnBN254.EdOnBN254Point memo
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive()]
     /**Function with signature `updateConsensusKeysV2((uint256,uint256,uint256,uint256),(uint256,uint256),(uint256,uint256),bytes)` and selector `0xac5c2ad0`.
 ```solidity
 function updateConsensusKeysV2(BN254.G2Point memory blsVK, EdOnBN254.EdOnBN254Point memory schnorrVK, BN254.G1Point memory blsSig, bytes memory schnorrSig) external;
@@ -13427,6 +13649,8 @@ function updateConsensusKeysV2(BN254.G2Point memory blsVK, EdOnBN254.EdOnBN254Po
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `updateExitEscrowPeriod(uint64)` and selector `0x1a20cd63`.
 ```solidity
 function updateExitEscrowPeriod(uint64 newExitEscrowPeriod) external;
@@ -13577,6 +13801,8 @@ function updateExitEscrowPeriod(uint64 newExitEscrowPeriod) external;
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `upgradeToAndCall(address,bytes)` and selector `0x4f1ef286`.
 ```solidity
 function upgradeToAndCall(address newImplementation, bytes memory data) external payable;
@@ -13740,6 +13966,8 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `validatorExits(address)` and selector `0xb5ecb344`.
 ```solidity
 function validatorExits(address validator) external view returns (uint256 unlocksAt);
@@ -13750,6 +13978,8 @@ function validatorExits(address validator) external view returns (uint256 unlock
         #[allow(missing_docs)]
         pub validator: alloy::sol_types::private::Address,
     }
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`validatorExits(address)`](validatorExitsCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -13892,6 +14122,8 @@ function validatorExits(address validator) external view returns (uint256 unlock
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `validators(address)` and selector `0xfa52c7d8`.
 ```solidity
 function validators(address account) external view returns (uint256 delegatedAmount, StakeTable.ValidatorStatus status);
@@ -13902,6 +14134,8 @@ function validators(address account) external view returns (uint256 delegatedAmo
         #[allow(missing_docs)]
         pub account: alloy::sol_types::private::Address,
     }
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`validators(address)`](validatorsCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -14059,6 +14293,8 @@ function validators(address account) external view returns (uint256 delegatedAmo
         }
     };
     ///Container for all the [`StakeTableV2`](self) function calls.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive()]
     pub enum StakeTableV2Calls {
         #[allow(missing_docs)]
         DEFAULT_ADMIN_ROLE(DEFAULT_ADMIN_ROLECall),
@@ -15646,6 +15882,8 @@ function validators(address account) external view returns (uint256 delegatedAmo
         }
     }
     ///Container for all the [`StakeTableV2`](self) custom errors.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum StakeTableV2Errors {
         #[allow(missing_docs)]
         AccessControlBadConfirmation(AccessControlBadConfirmation),
@@ -17001,6 +17239,8 @@ function validators(address account) external view returns (uint256 delegatedAmo
         }
     }
     ///Container for all the [`StakeTableV2`](self) events.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive()]
     pub enum StakeTableV2Events {
         #[allow(missing_docs)]
         ConsensusKeysUpdated(ConsensusKeysUpdated),

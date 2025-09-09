@@ -264,7 +264,7 @@ impl From<LightClientV3Mock::votingStakeTableStateReturn> for StakeTableStateSol
     }
 }
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize, Serializer};
 
 use self::{
     stake_table_v2::{EdOnBN254::EdOnBN254Point, BN254::G2Point},
@@ -312,237 +312,13 @@ impl PartialEq for ConsensusKeysUpdatedV2 {
     }
 }
 
-impl Serialize for ValidatorRegistered {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        (&self.account, &self.blsVk, &self.schnorrVk, self.commission).serialize(serializer)
-    }
-}
+ 
+ 
+ 
 
 #[allow(non_snake_case)]
-impl<'de> Deserialize<'de> for ValidatorRegistered {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let (account, blsVk, schnorrVk, commission) = <(_, _, _, u16)>::deserialize(deserializer)?;
-        Ok(Self {
-            account,
-            blsVk,
-            schnorrVk,
-            commission,
-        })
-    }
-}
-
-impl Serialize for ValidatorRegisteredV2 {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        (
-            &self.account,
-            &self.blsVK,
-            &self.schnorrVK,
-            self.commission,
-            &self.blsSig,
-            &self.schnorrSig,
-        )
-            .serialize(serializer)
-    }
-}
-
-#[allow(non_snake_case)]
-impl<'de> Deserialize<'de> for ValidatorRegisteredV2 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let (account, blsVK, schnorrVK, commission, blsSig, schnorrSig) =
-            <(_, _, _, u16, _, _)>::deserialize(deserializer)?;
-        Ok(ValidatorRegisteredV2 {
-            account,
-            blsVK,
-            schnorrVK,
-            commission,
-            blsSig,
-            schnorrSig,
-        })
-    }
-}
-
-impl Serialize for EdOnBN254Point {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        (self.x, self.y).serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for EdOnBN254Point {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let (x, y) = Deserialize::deserialize(deserializer)?;
-        Ok(Self { x, y })
-    }
-}
-
-impl Serialize for G2Point {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        (&self.x0, &self.x1, &self.y0, &self.y1).serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for G2Point {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let (x0, x1, y0, y1) = Deserialize::deserialize(deserializer)?;
-
-        Ok(Self { x0, x1, y0, y1 })
-    }
-}
-
-impl Serialize for stake_table_v2::BN254::G1Point {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        (&self.x, &self.y).serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for stake_table_v2::BN254::G1Point {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let (x, y) = Deserialize::deserialize(deserializer)?;
-        Ok(Self { x, y })
-    }
-}
-
-impl Serialize for ValidatorExit {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        (&self.validator,).serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for ValidatorExit {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let (validator,): (alloy::sol_types::private::Address,) =
-            Deserialize::deserialize(deserializer)?;
-        Ok(ValidatorExit { validator })
-    }
-}
-
-impl Serialize for Delegated {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        (&self.delegator, &self.validator, &self.amount).serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for Delegated {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let (delegator, validator, amount) = Deserialize::deserialize(deserializer)?;
-
-        Ok(Delegated {
-            delegator,
-            validator,
-            amount,
-        })
-    }
-}
-
-impl Serialize for Undelegated {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        (&self.delegator, &self.validator, &self.amount).serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for Undelegated {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let (delegator, validator, amount) = Deserialize::deserialize(deserializer)?;
-
-        Ok(Undelegated {
-            delegator,
-            validator,
-            amount,
-        })
-    }
-}
-
-impl Serialize for ConsensusKeysUpdated {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        (&self.account, &self.blsVK, &self.schnorrVK).serialize(serializer)
-    }
-}
-
-#[allow(non_snake_case)]
-impl<'de> Deserialize<'de> for ConsensusKeysUpdated {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let (account, blsVK, schnorrVK) = Deserialize::deserialize(deserializer)?;
-
-        Ok(ConsensusKeysUpdated {
-            account,
-            blsVK,
-            schnorrVK,
-        })
-    }
-}
-
-impl Serialize for ConsensusKeysUpdatedV2 {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        (
-            &self.account,
-            &self.blsVK,
-            &self.schnorrVK,
-            &self.blsSig,
-            &self.schnorrSig,
-        )
-            .serialize(serializer)
-    }
-}
-
-#[allow(non_snake_case)]
-impl<'de> Deserialize<'de> for ConsensusKeysUpdatedV2 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+impl ConsensusKeysUpdatedV2 {
+    fn deserialize_using_tuples<'de, D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -558,3 +334,23 @@ impl<'de> Deserialize<'de> for ConsensusKeysUpdatedV2 {
         })
     }
 }
+
+//  #[allow(
+//         non_camel_case_types,
+//         non_snake_case,
+//         clippy::pub_underscore_fields,
+//         clippy::style
+//     )]
+//     #[derive(Clone)]
+//     pub struct ConsensusKeysUpdatedV2L {
+//         #[allow(missing_docs)]
+//         pub account: alloy::sol_types::private::Address,
+//         #[allow(missing_docs)]
+//         pub blsVK: <BN254::G2Point as alloy::sol_types::SolType>::RustType,
+//         #[allow(missing_docs)]
+//         pub schnorrVK: <EdOnBN254::EdOnBN254Point as alloy::sol_types::SolType>::RustType,
+//         #[allow(missing_docs)]
+//         pub blsSig: <BN254::G1Point as alloy::sol_types::SolType>::RustType,
+//         #[allow(missing_docs)]
+//         pub schnorrSig: alloy::sol_types::private::Bytes,
+//     }
