@@ -378,7 +378,13 @@ impl Serialize for CommissionUpdated {
     where
         S: Serializer,
     {
-        (&self.validator, self.timestamp, self.newCommission).serialize(serializer)
+        (
+            &self.validator,
+            self.timestamp,
+            self.oldCommission,
+            self.newCommission,
+        )
+            .serialize(serializer)
     }
 }
 
