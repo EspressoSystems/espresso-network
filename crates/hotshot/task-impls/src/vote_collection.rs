@@ -669,7 +669,7 @@ pub struct EpochRootVoteCollectionTaskState<TYPES: NodeType, V: Versions> {
         Option<VoteAccumulator<TYPES, QuorumVote2<TYPES>, QuorumCertificate2<TYPES>, V>>,
 
     /// accumulator for light client state update votes
-    pub state_vote_accumulator: Option<LightClientStateUpdateVoteAccumulator<TYPES>>,
+    pub state_vote_accumulator: Option<LightClientStateUpdateVoteAccumulator<TYPES, V>>,
 
     /// The view which we are collecting votes for
     pub view: TYPES::View,
@@ -762,10 +762,11 @@ async fn create_epoch_root_vote_collection_task_state<TYPES: NodeType, V: Versio
             vote_outcomes: HashMap::new(),
             signers: HashMap::new(),
             phantom: PhantomData,
-            upgrade_lock,
+            upgrade_lock: upgrade_lock.clone(),
         };
     let state_vote_accumulator = LightClientStateUpdateVoteAccumulator {
         vote_outcomes: HashMap::new(),
+        upgrade_lock,
     };
 
     let mut state = EpochRootVoteCollectionTaskState::<TYPES, V> {

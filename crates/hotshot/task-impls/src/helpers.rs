@@ -1333,19 +1333,6 @@ pub async fn validate_light_client_state_update_certificate<TYPES: NodeType, V: 
 ) -> Result<()> {
     tracing::debug!("Validating light client state update certificate");
 
-    if !upgrade_lock
-        .proposal2_version(TYPES::View::new(state_cert.light_client_state.view_number))
-        .await
-    {
-        ensure!(
-            state_cert.auth_root == <FixedBytes<32> as Default>::default(),
-            warn!(
-                "Failed to validate light client state update certificate: expected an auth_root \
-                 of 0 for the current version"
-            )
-        )
-    }
-
     let epoch_membership = membership_coordinator
         .membership_for_epoch(state_cert.epoch())
         .await?;
@@ -1371,8 +1358,11 @@ pub async fn validate_light_client_state_update_certificate<TYPES: NodeType, V: 
         if let Some(stake) = state_key_map.get(key) {
             accumulated_stake += *stake;
             #[allow(clippy::collapsible_else_if)]
-            // If the auth_root is `Default`, the state_cert was cast from an older version of the struct. We only perform the second signature check.
-            if state_cert.auth_root == <FixedBytes<32> as Default>::default() {
+            // We only perform the second signature check prior to the DrbAndHeaderUpgrade
+            if !upgrade_lock
+                .proposal2_version(TYPES::View::new(state_cert.light_client_state.view_number))
+                .await
+            {
                 if !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
                     key,
                     sig_v2,

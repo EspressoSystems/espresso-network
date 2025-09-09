@@ -12,7 +12,7 @@ use std::{
     marker::PhantomData,
 };
 
-use alloy::primitives::{FixedBytes, U256};
+use alloy::primitives::U256;
 use bitvec::{bitvec, vec::BitVec};
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::*;
@@ -26,7 +26,7 @@ use crate::{
     simple_vote::{LightClientStateUpdateVote2, VersionedVoteData, Voteable},
     stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
-        node_implementation::{NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::{
             LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StakeTableEntryType,
             StateSignatureKey,
@@ -249,7 +249,7 @@ type VoteMap2<COMMITMENT, PK, SIG> = HashMap<COMMITMENT, (U256, BTreeMap<PK, (SI
 
 /// Accumulator for light client state update vote
 #[allow(clippy::type_complexity)]
-pub struct LightClientStateUpdateVoteAccumulator<TYPES: NodeType> {
+pub struct LightClientStateUpdateVoteAccumulator<TYPES: NodeType, V: Versions> {
     pub vote_outcomes: HashMap<
         (LightClientState, StakeTableState),
         (
@@ -263,9 +263,11 @@ pub struct LightClientStateUpdateVoteAccumulator<TYPES: NodeType> {
             >,
         ),
     >,
+
+    pub upgrade_lock: UpgradeLock<TYPES, V>,
 }
 
-impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
+impl<TYPES: NodeType, V: Versions> LightClientStateUpdateVoteAccumulator<TYPES, V> {
     /// Add a vote to the total accumulated votes for the given epoch.
     /// Returns the accumulator or the certificate if we
     /// have accumulated enough votes to exceed the threshold for creating a certificate.
@@ -291,8 +293,11 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
             error!("Invalid light client state update vote {vote:?}");
             return None;
         }
-        // only verify the new state signature if the auth_root is not default, indicating a vote that was cast from an older vote
-        if vote.auth_root != <FixedBytes<32> as Default>::default()
+        // only verify the new state signature on the new version
+        if self
+            .upgrade_lock
+            .proposal2_version(TYPES::View::new(vote.light_client_state.view_number))
+            .await
             && !<TYPES::StateSignatureKey as LCV3StateSignatureKey>::verify_state_sig(
                 &state_ver_key,
                 &vote.signature,
