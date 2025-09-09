@@ -454,12 +454,12 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                         GeneralConsensusMessage::EpochRootQc(root_qc) => {
                             if !self
                                 .upgrade_lock
-                                .epochs_enabled(root_qc.view_number())
+                                .proposal2_version(root_qc.view_number())
                                 .await
                             {
                                 tracing::warn!(
                                     "received GeneralConsensusMessage::EpochRootQc for view {} \
-                                     but epochs are not enabled for that view",
+                                     but we are in the wrong version for that message types",
                                     root_qc.view_number()
                                 );
                                 return;
@@ -469,12 +469,12 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                         GeneralConsensusMessage::EpochRootQcV1(root_qc) => {
                             if !self
                                 .upgrade_lock
-                                .epochs_enabled(root_qc.view_number())
+                                .proposal2_legacy_version(root_qc.view_number())
                                 .await
                             {
                                 tracing::warn!(
-                                    "received GeneralConsensusMessage::EpochRootQc for view {} \
-                                     but epochs are not enabled for that view",
+                                    "received GeneralConsensusMessage::EpochRootQcV1 for view {} \
+                                     but we are in the wrong version for that message type",
                                     root_qc.view_number()
                                 );
                                 return;
@@ -1422,13 +1422,23 @@ impl<
                 )),
                 TransmitType::Direct(leader),
             )),
-            HotShotEvent::EpochRootQcSend(epoch_root_qc, sender, leader) => Some((
-                sender,
-                MessageKind::Consensus(SequencingMessage::General(
-                    GeneralConsensusMessage::EpochRootQc(epoch_root_qc),
-                )),
-                TransmitType::Direct(leader),
-            )),
+            HotShotEvent::EpochRootQcSend(epoch_root_qc, sender, leader) => {
+                let message = if self
+                    .upgrade_lock
+                    .proposal2_version(epoch_root_qc.view_number())
+                    .await
+                {
+                    MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
+                        GeneralConsensusMessage::EpochRootQc(epoch_root_qc),
+                    ))
+                } else {
+                    MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
+                        GeneralConsensusMessage::EpochRootQcV1(epoch_root_qc.into()),
+                    ))
+                };
+
+                Some((sender, message, TransmitType::Direct(leader)))
+            },
             HotShotEvent::ExtendedQcSend(quorum_cert, next_epoch_qc, sender) => Some((
                 sender,
                 MessageKind::Consensus(SequencingMessage::General(
