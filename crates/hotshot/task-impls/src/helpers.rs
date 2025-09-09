@@ -1329,12 +1329,14 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
 pub async fn validate_light_client_state_update_certificate<TYPES: NodeType, V: Versions>(
     state_cert: &LightClientStateUpdateCertificateV2<TYPES>,
     membership_coordinator: &EpochMembershipCoordinator<TYPES>,
-    view_number: TYPES::View,
     upgrade_lock: &UpgradeLock<TYPES, V>,
 ) -> Result<()> {
     tracing::debug!("Validating light client state update certificate");
 
-    if !upgrade_lock.proposal2_version(view_number).await {
+    if !upgrade_lock
+        .proposal2_version(TYPES::View::new(state_cert.light_client_state.view_number))
+        .await
+    {
         ensure!(
             state_cert.auth_root == <FixedBytes<32> as Default>::default(),
             warn!(
