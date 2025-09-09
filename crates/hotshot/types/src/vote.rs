@@ -12,7 +12,7 @@ use std::{
     marker::PhantomData,
 };
 
-use alloy::primitives::U256;
+use alloy::primitives::{FixedBytes, U256};
 use bitvec::{bitvec, vec::BitVec};
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::*;
@@ -251,7 +251,7 @@ type VoteMap2<COMMITMENT, PK, SIG> = HashMap<COMMITMENT, (U256, BTreeMap<PK, (SI
 #[allow(clippy::type_complexity)]
 pub struct LightClientStateUpdateVoteAccumulator<TYPES: NodeType, V: Versions> {
     pub vote_outcomes: HashMap<
-        (LightClientState, StakeTableState),
+        (LightClientState, StakeTableState, FixedBytes<32>),
         (
             U256,
             HashMap<
@@ -309,7 +309,11 @@ impl<TYPES: NodeType, V: Versions> LightClientStateUpdateVoteAccumulator<TYPES, 
         }
         let (total_stake_casted, vote_map) = self
             .vote_outcomes
-            .entry((vote.light_client_state, vote.next_stake_table_state))
+            .entry((
+                vote.light_client_state,
+                vote.next_stake_table_state,
+                vote.auth_root,
+            ))
             .or_insert_with(|| (U256::from(0), HashMap::new()));
 
         // Check for duplicate vote
