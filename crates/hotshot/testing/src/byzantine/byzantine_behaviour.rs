@@ -26,12 +26,16 @@ use hotshot_types::{
         convert_proposal, GeneralConsensusMessage, Message, MessageKind, Proposal,
         SequencingMessage, UpgradeLock,
     },
-    simple_vote::{HasEpoch, QuorumVote2},
+    simple_vote::{
+        HasEpoch, QuorumVote2, ViewSyncPreCommitData, ViewSyncPreCommitData2,
+        ViewSyncPreCommitVote, ViewSyncPreCommitVote2,
+    },
     traits::{
         election::Membership,
-        network::ConnectedNetwork,
+        network::{ConnectedNetwork, ViewMessage},
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
     },
+    vote::HasViewNumber,
 };
 
 #[derive(Debug)]
@@ -690,6 +694,132 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
                         ),
                         Err(e) => panic!("Failed to send message task: {e:?}"),
                     }
+                }
+                vec![]
+            },
+            _ => vec![event.clone()],
+        }
+    }
+
+    async fn recv_handler(&mut self, event: &HotShotEvent<TYPES>) -> Vec<HotShotEvent<TYPES>> {
+        vec![event.clone()]
+    }
+}
+
+#[derive(Debug)]
+pub struct DishonestViewSyncNextEpoch {
+    pub first_dishonest_view_number: u64,
+}
+
+#[async_trait]
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransformerState<TYPES, I, V>
+    for DishonestViewSyncNextEpoch
+{
+    async fn send_handler(
+        &mut self,
+        event: &HotShotEvent<TYPES>,
+        public_key: &TYPES::SignatureKey,
+        private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
+        upgrade_lock: &UpgradeLock<TYPES, V>,
+        _consensus: OuterConsensus<TYPES>,
+        membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        network: Arc<I::Network>,
+    ) -> Vec<HotShotEvent<TYPES>> {
+        match event {
+            HotShotEvent::QuorumProposalSend(proposal, _) => {
+                if self.first_dishonest_view_number > proposal.data.view_number().u64() {
+                    return vec![event.clone()];
+                }
+                vec![]
+            },
+            HotShotEvent::QuorumVoteSend(vote) => {
+                if self.first_dishonest_view_number > vote.view_number().u64() {
+                    return vec![event.clone()];
+                }
+                vec![]
+            },
+            HotShotEvent::TimeoutVoteSend(vote) => {
+                if self.first_dishonest_view_number > vote.view_number().u64() {
+                    return vec![event.clone()];
+                }
+                vec![]
+            },
+            HotShotEvent::ViewSyncPreCommitVoteSend(vote) => {
+                if self.first_dishonest_view_number > vote.view_number().u64() {
+                    return vec![event.clone()];
+                }
+                let view_number = vote.data.round;
+                let message_kind = if upgrade_lock.epochs_enabled(view_number).await {
+                    let Ok(vote) = ViewSyncPreCommitVote2::<TYPES>::create_signed_vote(
+                        ViewSyncPreCommitData2 {
+                            relay: 0,
+                            round: view_number,
+                            epoch: vote.data.epoch.map(|e| e + 1),
+                        },
+                        view_number,
+                        public_key,
+                        private_key,
+                        upgrade_lock,
+                    )
+                    .await
+                    else {
+                        tracing::error!("Failed to sign pre commit vote!");
+                        return vec![];
+                    };
+                    MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
+                        GeneralConsensusMessage::ViewSyncPreCommitVote2(vote),
+                    ))
+                } else {
+                    let Ok(vote) = ViewSyncPreCommitVote::<TYPES>::create_signed_vote(
+                        ViewSyncPreCommitData {
+                            relay: 0,
+                            round: view_number,
+                        },
+                        view_number,
+                        public_key,
+                        private_key,
+                        upgrade_lock,
+                    )
+                    .await
+                    else {
+                        tracing::error!("Failed to sign pre commit vote!");
+                        return vec![];
+                    };
+                    MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
+                        GeneralConsensusMessage::ViewSyncPreCommitVote(vote),
+                    ))
+                };
+                let message = Message {
+                    sender: public_key.clone(),
+                    kind: message_kind,
+                };
+                let serialized_message = match upgrade_lock.serialize(&message).await {
+                    Ok(serialized) => serialized,
+                    Err(e) => {
+                        panic!("Failed to serialize message: {e}");
+                    },
+                };
+                let Ok(node) = membership_coordinator
+                    .membership()
+                    .read()
+                    .await
+                    .leader(view_number, message.kind.epoch())
+                else {
+                    panic!(
+                        "Failed to find leader for view {} and epoch {:?}",
+                        message.kind.view_number(),
+                        message.kind.epoch()
+                    );
+                };
+                let transmit_result = network
+                    .direct_message(serialized_message.clone(), node.clone())
+                    .await;
+                match transmit_result {
+                    Ok(()) => tracing::info!(
+                        "Sent ViewSyncPreCommitVoteSend for view {} to the leader",
+                        view_number,
+                    ),
+                    Err(e) => panic!("Failed to send message task: {e:?}"),
                 }
                 vec![]
             },

@@ -2,7 +2,7 @@ use std::{collections::HashSet, rc::Rc, sync::Arc, time::Duration};
 
 use async_lock::RwLock;
 use hotshot_example_types::{
-    node_types::{Libp2pImpl, MemoryImpl, PushCdnImpl, TestVersions},
+    node_types::{EpochsTestVersions, Libp2pImpl, MemoryImpl, PushCdnImpl, TestVersions},
     state_types::TestTypes,
 };
 use hotshot_macros::cross_tests;
@@ -13,8 +13,10 @@ use hotshot_testing::{
         DoubleProposeVote, DishonestViewSyncRelay,
     },
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
+    overall_safety_task::OverallSafetyPropertiesDescription,
     test_builder::{Behaviour, TestDescription},
 };
+use hotshot_testing::byzantine::byzantine_behaviour::DishonestViewSyncNextEpoch;
 use hotshot_testing::view_sync_task::ViewSyncTaskDescription;
 use hotshot_types::{
     message::{GeneralConsensusMessage, MessageKind, SequencingMessage},
@@ -277,6 +279,44 @@ cross_tests!(
 
         metadata.test_config.epoch_height = 0;
         metadata.overall_safety_properties.possible_view_failures = (0..50).collect();
+        metadata.overall_safety_properties.decide_timeout = Duration::from_secs(60);
+        metadata
+    },
+);
+
+cross_tests!(
+    TestName: view_sync_next_epoch,
+    Impls: [PushCdnImpl],
+    Types: [TestTypes],
+    Versions: [EpochsTestVersions],
+    Ignore: false,
+    Metadata: {
+        let behaviour = Rc::new(move |node_id| {
+            match node_id {
+                0 | 1 | 9 => Behaviour::Byzantine(Box::new(DishonestViewSyncNextEpoch {
+                    first_dishonest_view_number: 9,
+                })),
+                _ => Behaviour::Standard,
+            }
+        });
+
+        let mut metadata = TestDescription {
+            // allow more time to pass in CI
+            completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
+                TimeBasedCompletionTaskDescription {
+                    duration: Duration::from_secs(120),
+                },
+            ),
+            overall_safety_properties: OverallSafetyPropertiesDescription {
+                num_successful_views: 30,
+                ..OverallSafetyPropertiesDescription::default()
+            },
+            view_sync_properties: ViewSyncTaskDescription::Threshold(0, 13),
+            behaviour,
+            ..TestDescription::default()
+        }.set_num_nodes(10, 10);
+
+        metadata.overall_safety_properties.possible_view_failures = (0..100).collect();
         metadata.overall_safety_properties.decide_timeout = Duration::from_secs(60);
         metadata
     },
