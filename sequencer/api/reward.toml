@@ -8,3 +8,9 @@ PATH = ["reward-balance/:height/:address"]
 ":address" = "Literal"
 ":height" = "Integer"
 DOC = "Get balance in reward state at a specific height. Expected parameters are height which is an integer and an Ethereum address in hex format"
+
+[route.get_reward_account_proof]
+PATH = ["proof/:height/:address"]
+":address" = "Literal"
+":height" = "Integer"
+DOC = "Get reward account merkle proof"

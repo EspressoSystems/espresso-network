@@ -167,10 +167,6 @@ jobs:
   build-dockers-amd:
     needs: build-amd
     runs-on: ubuntu-latest
-    # This is non-deterministic, a limitation of GHA. We but we only need the
-    # tag like (:main) at the end which is the same for each matrix build.
-    outputs:
-      tags: ${{ steps.metadata.outputs.tags }}
     strategy:
       matrix:
         service:
@@ -449,9 +445,13 @@ jobs:
             docker load --input $file
           done
 
-      - name: Match the docker image tag built or pushed to the registry
+      - name: Set docker image tag for compose
         run: |
-          DOCKER_TAG=$(echo ${{ needs.build-dockers-amd.outputs.tags }} | sed 's/.*://')
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            DOCKER_TAG="pr-${{ github.event.pull_request.number }}"
+          else
+            DOCKER_TAG=$(echo "${{ github.ref_name }}" | tr '/' '-')
+          fi
           echo DOCKER_TAG=$DOCKER_TAG >> $GITHUB_ENV
 
       - name: Pull remaining docker images
@@ -474,9 +474,13 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Match the docker image tag built or pushed to the registry
+      - name: Set docker image tag for compose
         run: |
-          DOCKER_TAG=$(echo ${{ needs.build-dockers-amd.outputs.tags }} | sed 's/.*://')
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            DOCKER_TAG="pr-${{ github.event.pull_request.number }}"
+          else
+            DOCKER_TAG=$(echo "${{ github.ref_name }}" | tr '/' '-')
+          fi
           echo DOCKER_TAG=$DOCKER_TAG >> $GITHUB_ENV
 
       - name: Pull the docker images
