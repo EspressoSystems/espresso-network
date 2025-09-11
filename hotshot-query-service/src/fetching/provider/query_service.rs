@@ -80,7 +80,7 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
         ) {
             Ok(common) => common,
             Err(err) => {
-                tracing::warn!(%err, ?req, "failed to deserialize ADVZPayloadQueryData");
+                tracing::warn!(%err, ?req, "failed to deserialize ADVZCommonQueryData");
                 return None;
             },
         };
