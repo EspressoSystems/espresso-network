@@ -9015,7 +9015,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81bddcdb20abf9501610992b6759a4c888aef7d1a7247ef75e2404275ac24af1"
 dependencies = [
  "anyhow",
- "itertools 0.12.1",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.104",
@@ -11205,9 +11205,9 @@ dependencies = [
 
 [[package]]
 name = "surf-disco"
-version = "0.9.3"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c1758d68168ae618461f7b55a654bcafdd08b6f56eabae6f51beb5f6f4d57788"
+checksum = "b717b626cff3b85e495746cede5b1442d942053f70485faeae1925c8abcc3fac"
 dependencies = [
  "async-std",
  "async-tungstenite",
