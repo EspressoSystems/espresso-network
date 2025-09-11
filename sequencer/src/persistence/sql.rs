@@ -1518,7 +1518,7 @@ impl SequencerPersistence for Persistence {
 
             offset = values.last().context("last row")?.0;
 
-            query_builder.push_values(values.into_iter(), |mut b, (view, leaf, qc)| {
+            query_builder.push_values(values, |mut b, (view, leaf, qc)| {
                 b.push_bind(view).push_bind(leaf).push_bind(qc);
             });
 
@@ -1621,7 +1621,7 @@ impl SequencerPersistence for Persistence {
                 sqlx::QueryBuilder::new("INSERT INTO da_proposal2 (view, payload_hash, data) ");
 
             offset = values.last().context("last row")?.0;
-            query_builder.push_values(values.into_iter(), |mut b, (view, payload_hash, data)| {
+            query_builder.push_values(values, |mut b, (view, payload_hash, data)| {
                 b.push_bind(view).push_bind(payload_hash).push_bind(data);
             });
             query_builder.push(" ON CONFLICT DO NOTHING");
@@ -1719,7 +1719,7 @@ impl SequencerPersistence for Persistence {
 
             offset = values.last().context("last row")?.0;
 
-            query_builder.push_values(values.into_iter(), |mut b, (view, payload_hash, data)| {
+            query_builder.push_values(values, |mut b, (view, payload_hash, data)| {
                 b.push_bind(view).push_bind(payload_hash).push_bind(data);
             });
 
@@ -1820,7 +1820,7 @@ impl SequencerPersistence for Persistence {
                 sqlx::QueryBuilder::new("INSERT INTO quorum_proposals2 (view, leaf_hash, data) ");
 
             offset = values.last().context("last row")?.0;
-            query_builder.push_values(values.into_iter(), |mut b, (view, leaf_hash, data)| {
+            query_builder.push_values(values, |mut b, (view, leaf_hash, data)| {
                 b.push_bind(view).push_bind(leaf_hash).push_bind(data);
             });
 
@@ -1920,7 +1920,7 @@ impl SequencerPersistence for Persistence {
 
             offset = values.last().context("last row")?.0;
 
-            query_builder.push_values(values.into_iter(), |mut b, (view, leaf_hash, data)| {
+            query_builder.push_values(values, |mut b, (view, leaf_hash, data)| {
                 b.push_bind(view).push_bind(leaf_hash).push_bind(data);
             });
 
@@ -1998,6 +1998,43 @@ impl SequencerPersistence for Persistence {
                 anyhow::Result::<_>::Ok(bincode::deserialize(&bytes)?)
             })
             .transpose()
+    }
+
+    async fn store_eqc(
+        &self,
+        high_qc: QuorumCertificate2<SeqTypes>,
+        next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let eqc_bytes =
+            bincode::serialize(&(high_qc, next_epoch_high_qc)).context("serializing eqc")?;
+        let mut tx = self.db.write().await?;
+        tx.upsert("eqc", ["id", "data"], ["id"], [(true, eqc_bytes)])
+            .await?;
+        tx.commit().await
+    }
+
+    async fn load_eqc(
+        &self,
+    ) -> Option<(
+        QuorumCertificate2<SeqTypes>,
+        NextEpochQuorumCertificate2<SeqTypes>,
+    )> {
+        let result = self
+            .db
+            .read()
+            .await
+            .ok()?
+            .fetch_optional("SELECT * FROM eqc where id = true")
+            .await
+            .ok()?;
+
+        result
+            .map(|row| {
+                let bytes: Vec<u8> = row.get("data");
+                bincode::deserialize(&bytes)
+            })
+            .transpose()
+            .ok()?
     }
 
     async fn append_da2(
@@ -2374,7 +2411,7 @@ impl MembershipPersistence for Persistence {
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
-        query_builder.push_values(events.into_iter(), |mut b, (l1_block, log_index, event)| {
+        query_builder.push_values(events, |mut b, (l1_block, log_index, event)| {
             b.push_bind(l1_block).push_bind(log_index).push_bind(event);
         });
 

@@ -20,7 +20,10 @@ use staking_cli::{
     delegation::{approve, delegate, undelegate},
     demo::stake_for_demo,
     info::{display_stake_table, fetch_token_address, stake_table_info},
-    registration::{deregister_validator, register_validator, update_consensus_keys},
+    registration::{
+        deregister_validator, register_validator, update_commission, update_consensus_keys,
+    },
+    signature::{NodeSignatureDestination, NodeSignatureInput, NodeSignatures},
     Commands, Config, ValidSignerConfig,
 };
 use sysinfo::System;
@@ -191,6 +194,23 @@ pub async fn main() -> Result<()> {
             println!("Arch: {}", System::cpu_arch());
             return Ok(());
         },
+        Commands::ExportNodeSignatures {
+            address,
+            consensus_private_key,
+            state_private_key,
+            output_args,
+        } => {
+            let destination = NodeSignatureDestination::try_from(output_args)?;
+
+            let payload = NodeSignatures::create(
+                address,
+                &consensus_private_key.into(),
+                &StateKeyPair::from_sign_key(state_private_key),
+            );
+
+            payload.handle_output(destination)?;
+            return Ok(());
+        },
         _ => {}, // Other commands handled after shared setup.
     }
 
@@ -235,7 +255,7 @@ pub async fn main() -> Result<()> {
     };
 
     let provider = ProviderBuilder::new()
-        .wallet(wallet)
+        .wallet(wallet.clone())
         .on_http(config.rpc_url.clone());
     let stake_table_addr = config.stake_table_address;
     let token_addr = fetch_token_address(config.rpc_url.clone(), stake_table_addr).await?;
@@ -277,38 +297,27 @@ pub async fn main() -> Result<()> {
     // Commands that require a signer
     let result = match config.commands {
         Commands::RegisterValidator {
-            consensus_private_key,
-            state_private_key,
+            signature_args,
             commission,
         } => {
             tracing::info!("Registering validator {account} with commission {commission}");
-            register_validator(
-                &provider,
-                stake_table_addr,
-                commission,
-                account,
-                (consensus_private_key).into(),
-                StateKeyPair::from_sign_key(state_private_key),
-            )
-            .await
+            let input = NodeSignatureInput::try_from((signature_args, &wallet))?;
+            let payload = NodeSignatures::try_from((input, &wallet))?;
+            register_validator(&provider, stake_table_addr, commission, payload).await
         },
-        Commands::UpdateConsensusKeys {
-            consensus_private_key,
-            state_private_key,
-        } => {
+        Commands::UpdateConsensusKeys { signature_args } => {
             tracing::info!("Updating validator {account} with new keys");
-            update_consensus_keys(
-                &provider,
-                stake_table_addr,
-                account,
-                (consensus_private_key).into(),
-                StateKeyPair::from_sign_key(state_private_key),
-            )
-            .await
+            let input = NodeSignatureInput::try_from((signature_args, &wallet))?;
+            let payload = NodeSignatures::try_from((input, &wallet))?;
+            update_consensus_keys(&provider, stake_table_addr, payload).await
         },
         Commands::DeregisterValidator {} => {
             tracing::info!("Deregistering validator {account}");
             deregister_validator(&provider, stake_table_addr).await
+        },
+        Commands::UpdateCommission { new_commission } => {
+            tracing::info!("Updating validator {account} commission to {new_commission}");
+            update_commission(&provider, stake_table_addr, new_commission).await
         },
         Commands::Approve { amount } => {
             tracing::info!(

@@ -23,6 +23,7 @@ pub mod info;
 pub mod l1;
 pub mod parse;
 pub mod registration;
+pub mod signature;
 
 pub mod deploy;
 
@@ -204,15 +205,8 @@ pub enum Commands {
     Account,
     /// Register to become a validator.
     RegisterValidator {
-        /// The consensus signing key. Used to sign a message to prove ownership of the key.
-        #[clap(long, value_parser = parse::parse_bls_priv_key, env = "CONSENSUS_PRIVATE_KEY")]
-        consensus_private_key: BLSPrivKey,
-
-        /// The state signing key.
-        ///
-        /// TODO: Used to sign a message to prove ownership of the key.
-        #[clap(long, value_parser = parse::parse_state_priv_key, env = "STATE_PRIVATE_KEY")]
-        state_private_key: StateSignKey,
+        #[clap(flatten)]
+        signature_args: signature::NodeSignatureArgs,
 
         /// The commission to charge delegators
         #[clap(long, value_parser = parse::parse_commission, env = "COMMISSION")]
@@ -220,18 +214,17 @@ pub enum Commands {
     },
     /// Update a validators Espresso consensus signing keys.
     UpdateConsensusKeys {
-        /// The consensus signing key. Used to sign a message to prove ownership of the key.
-        #[clap(long, value_parser = parse::parse_bls_priv_key, env = "CONSENSUS_PRIVATE_KEY")]
-        consensus_private_key: BLSPrivKey,
-
-        /// The state signing key.
-        ///
-        /// TODO: Used to sign a message to prove ownership of the key.
-        #[clap(long, value_parser = parse::parse_state_priv_key, env = "STATE_PRIVATE_KEY")]
-        state_private_key: StateSignKey,
+        #[clap(flatten)]
+        signature_args: signature::NodeSignatureArgs,
     },
     /// Deregister a validator.
     DeregisterValidator {},
+    /// Update validator commission rate.
+    UpdateCommission {
+        /// The new commission rate to set
+        #[clap(long, value_parser = parse::parse_commission, env = "NEW_COMMISSION")]
+        new_commission: Commission,
+    },
     /// Approve stake table contract to move tokens
     Approve {
         #[clap(long, value_parser = parse_ether)]
@@ -295,5 +288,22 @@ pub enum Commands {
 
         #[arg(long, value_enum, default_value_t = DelegationConfig::default())]
         delegation_config: DelegationConfig,
+    },
+    /// Export validator node signatures for address validation.
+    ExportNodeSignatures {
+        /// The Ethereum address to sign.
+        #[clap(long)]
+        address: Address,
+
+        /// The BLS private key for signing.
+        #[clap(long, value_parser = parse::parse_bls_priv_key, env = "BLS_PRIVATE_KEY")]
+        consensus_private_key: BLSPrivKey,
+
+        /// The Schnorr private key for signing.
+        #[clap(long, value_parser = parse::parse_state_priv_key, env = "SCHNORR_PRIVATE_KEY")]
+        state_private_key: StateSignKey,
+
+        #[clap(flatten)]
+        output_args: signature::OutputArgs,
     },
 }

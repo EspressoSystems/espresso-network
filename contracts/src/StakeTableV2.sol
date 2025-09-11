@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import { OwnableUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { PausableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import { AccessControlUpgradeable } from
@@ -12,6 +9,7 @@ import { StakeTable } from "./StakeTable.sol";
 import { EdOnBN254 } from "./libraries/EdOnBn254.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { BLSSig } from "./libraries/BLSSig.sol";
+import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 
 /// @title Ethereum L1 component of the Espresso Global Confirmation Layer (GCL) stake table.
 ///
@@ -29,12 +27,74 @@ import { BLSSig } from "./libraries/BLSSig.sol";
 /// support registration and key updates must use the V2 functions and listen to the V2 events. The
 /// original functions revert with a `DeprecatedFunction` error in V2.
 ///
-/// 2. The exit escrow period can be updated by the owner of the contract.
+/// 2. The exit escrow period can be updated by the owner of the contract
+/// within valid bounds (15 blocks to 14 days).
+///
+/// 3. The following functions can be paused by the PAUSER_ROLE:
+/// - `claimWithdrawal(...)`
+/// - `claimValidatorExit(...)`
+/// - `delegate(...)`
+/// - `undelegate(...)`
+/// - `deregisterValidator(...)`
+/// - `registerValidatorV2(...)`
+/// - `updateConsensusKeysV2(...)`
+/// When paused, these functions revert with a standard pausable error, `EnforcedPause()`.
+/// Only the PAUSER_ROLE can pause/unpause the contract.
+///
+/// Note: `updateExitEscrowPeriod` is NOT pausable for emergency governance access.
+///
+/// 4. The `claimValidatorExit` function is overridden to ensure
+/// that the validator's delegatedAmount is updated during this method
+/// The update is deferred until the funds are actually withdrawn.
+///
+/// 5. The `deregisterValidator` function is overridden to ensure
+/// that the validator's delegatedAmount is not updated during this method as it was in v1.
+///
+/// 6. The `updateExitEscrowPeriod` function is added to allow governance to update
+/// the exit escrow period within valid bounds (15 blocks to 14 days).
+///
+/// 7. The `pause` and `unpause` functions are added for emergency control.
+///
+/// 8. The commission rate for validators can be updated with the `updateCommission` function.
 ///
 /// @notice The StakeTableV2 contract ABI is a superset of the original ABI. Consumers of the
 /// contract can use the V2 ABI, even if they would like to maintain backwards compatibility.
 contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeable {
+    // === Types ===
+
+    /// @notice Struct for tracking validator commission and last increase time
+    struct CommissionTracking {
+        uint16 commission;
+        uint256 lastIncreaseTime;
+    }
+
+    /// @notice Struct for initializing validator commissions during migration
+    struct InitialCommission {
+        address validator;
+        uint16 commission;
+    }
+
+    // === Storage ===
+
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+
+    /// @notice Minimum time interval between commission increases (in seconds)
+    uint256 public minCommissionIncreaseInterval;
+
+    /// @notice Maximum commission increase allowed per increase (in basis points)
+    uint16 public maxCommissionIncrease;
+
+    /// @notice Commission tracking for each validator
+    mapping(address validator => CommissionTracking tracking) public commissionTracking;
+
+    /// Schnorr keys that have been seen by the contract
+    ///
+    /// @dev ensures a bijective mapping between schnorr key and ethereum account and prevents some
+    /// errors due to
+    /// misconfigurations of validators the contract currently marks keys as used and only allow
+    /// them to be used once. This for example prevents callers from accidentally registering the
+    /// same Schnorr key twice.
+    mapping(bytes32 schnorrKey => bool used) public schnorrKeys;
 
     // === Events ===
 
@@ -62,10 +122,25 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @notice The exit escrow period is updated
     event ExitEscrowPeriodUpdated(uint64 newExitEscrowPeriod);
 
-    // === Errors ===
+    /// @notice A validator updates their commission rate
+    /// @param validator The address of the validator
+    /// @param timestamp The timestamp of the update
+    /// @param newCommission The new commission rate
+    ///
+    /// @dev the timestamp is emitted to simplify processing in the GCL
+    event CommissionUpdated(
+        address indexed validator, uint256 timestamp, uint16 oldCommission, uint16 newCommission
+    );
 
-    /// The exit escrow period is invalid (either too short or too long)
-    error ExitEscrowPeriodInvalid();
+    /// @notice The minimum commission update interval is updated
+    /// @param newInterval The new minimum update interval in seconds
+    event MinCommissionUpdateIntervalUpdated(uint256 newInterval);
+
+    /// @notice The maximum commission increase is updated
+    /// @param newMaxIncrease The new maximum commission increase in basis points
+    event MaxCommissionIncreaseUpdated(uint16 newMaxIncrease);
+
+    // === Errors ===
 
     /// The Schnorr signature is invalid (either the wrong length or the wrong key)
     error InvalidSchnorrSig();
@@ -73,17 +148,63 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// The function is deprecated as it was replaced by a new function
     error DeprecatedFunction();
 
+    /// The commission update is too soon after the last update
+    error CommissionUpdateTooSoon();
+
+    /// The commission increase exceeds the maximum allowed increase
+    error CommissionIncreaseExceedsMax();
+
+    /// The commission value is unchanged
+    error CommissionUnchanged();
+
+    /// The rate limit parameters are invalid
+    error InvalidRateLimitParameters();
+
+    /// The validator commission has already been initialized
+    error CommissionAlreadyInitialized(address validator);
+
+    /// The Schnorr key has been previously registered in the contract.
+    error SchnorrKeyAlreadyUsed();
+
+    /// @notice Constructor
+    /// @dev This function is overridden to disable initializers
     constructor() {
         _disableInitializers();
     }
 
-    function initializeV2(address pauser, address admin) public reinitializer(2) {
+    /// @notice Reinitialize the contract
+    ///
+    /// @param admin The address to be granted the default admin role
+    /// @param pauser The address to be granted the pauser role
+    /// @param initialCommissions commissions of validators
+    ///
+    /// @notice initialCommissions must be an empty array if the contract we're
+    /// upgrading has not been used before (e.g. on mainnet). On decaf (sepolia),
+    /// this must be called with the current commissions of pre-existing
+    /// validators read from L1 events.
+    ///
+    /// @dev This function is overridden to add pauser and admin roles
+    function initializeV2(
+        address pauser,
+        address admin,
+        InitialCommission[] calldata initialCommissions
+    ) public reinitializer(2) {
         __AccessControl_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(PAUSER_ROLE, pauser);
+
+        // Default values found to be reasonable in internal discussion, may be
+        // adjusted before release and updated after release.
+        minCommissionIncreaseInterval = 7 days;
+        maxCommissionIncrease = 500; // 5%
+
+        // initialize commissions (if the contract under upgrade has existing state)
+        _initializeCommissions(initialCommissions);
     }
 
+    /// @notice Get the version of the contract
+    /// @dev This function is overridden to return the version of the contract
     function getVersion()
         public
         pure
@@ -94,32 +215,87 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         return (2, 0, 0);
     }
 
+    /// @notice Pause the contract
+    /// @dev This function is only callable by the PAUSER_ROLE
     function pause() external onlyRole(PAUSER_ROLE) {
         _pause();
     }
 
+    /// @notice Unpause the contract
+    /// @dev This function is only callable by the PAUSER_ROLE
     function unpause() external onlyRole(PAUSER_ROLE) {
         _unpause();
     }
 
+    /// @notice Withdraw previously delegated funds after a validator has exited
+    /// @param validator The validator to withdraw from
+    /// @dev This function is overridden to deduct the amount from the validator's delegatedAmount
+    /// @dev and to add pausable functionality
+    /// @dev since the delegated Amount is no longer updated during validator exit
     function claimValidatorExit(address validator) public virtual override whenNotPaused {
-        super.claimValidatorExit(validator);
+        address delegator = msg.sender;
+        uint256 unlocksAt = validatorExits[validator];
+        if (unlocksAt == 0) {
+            revert ValidatorNotExited();
+        }
+
+        if (block.timestamp < unlocksAt) {
+            revert PrematureWithdrawal();
+        }
+
+        uint256 amount = delegations[validator][delegator];
+        if (amount == 0) {
+            revert NothingToWithdraw();
+        }
+
+        // Mark funds as spent
+        delegations[validator][delegator] = 0;
+        // the delegatedAmount is updated here (instead of during deregistration) in v2,
+        // it's only decremented during withdrawal
+        validators[validator].delegatedAmount -= amount;
+
+        SafeTransferLib.safeTransfer(token, delegator, amount);
+
+        emit Withdrawal(delegator, amount);
     }
 
+    /// @notice Withdraw previously delegated funds after a validator has exited
+    /// @param validator The validator to withdraw from
+    /// @dev This function is overridden to add pausable functionality
     function claimWithdrawal(address validator) public virtual override whenNotPaused {
         super.claimWithdrawal(validator);
     }
 
+    /// @notice Delegate funds to a validator
+    /// @param validator The validator to delegate to
+    /// @param amount The amount to delegate
+    /// @dev This function is overridden to add pausable functionality
     function delegate(address validator, uint256 amount) public virtual override whenNotPaused {
         super.delegate(validator, amount);
     }
 
+    /// @notice Undelegate funds from a validator
+    /// @param validator The validator to undelegate from
+    /// @param amount The amount to undelegate
+    /// @dev This function is overridden to add pausable functionality
     function undelegate(address validator, uint256 amount) public virtual override whenNotPaused {
         super.undelegate(validator, amount);
     }
 
+    /// @notice Deregister a validator
+    /// @dev This function is overridden to add pausable functionality
+    /// @dev and to ensure that the validator's delegatedAmount is not updated until withdrawal
+    /// @dev delegatedAmount represents the no. of tokens that have been delegated to a validator,
+    /// even if it's not participating in consensus
     function deregisterValidator() public virtual override whenNotPaused {
-        super.deregisterValidator();
+        address validator = msg.sender;
+        ensureValidatorActive(validator);
+
+        validators[validator].status = ValidatorStatus.Exited;
+        validatorExits[validator] = block.timestamp + exitEscrowPeriod;
+        // in v2, the delegatedAmount is not updated until withdrawal
+
+        emit ValidatorExit(validator);
     }
 
     /// @notice Register a validator in the stake table
@@ -129,6 +305,8 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @param blsSig The BLS signature that authenticates the BLS VK
     /// @param schnorrSig The Schnorr signature that authenticates the Schnorr VK
     /// @param commission in % with 2 decimals, from 0.00% (value 0) to 100% (value 10_000)
+    /// @dev This function is overridden to add pausable functionality
+    /// @dev and to add schnorrSig validation
     function registerValidatorV2(
         BN254.G2Point memory blsVK,
         EdOnBN254.EdOnBN254Point memory schnorrVK,
@@ -140,7 +318,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
         ensureValidatorNotRegistered(validator);
         ensureNonZeroSchnorrKey(schnorrVK);
-        ensureNewKey(blsVK);
+        ensureNewKeys(blsVK, schnorrVK);
 
         // Verify that the validator can sign for that blsVK. This prevents rogue public-key
         // attacks.
@@ -157,7 +335,12 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         }
 
         blsKeys[_hashBlsKey(blsVK)] = true;
+        schnorrKeys[_hashSchnorrKey(schnorrVK)] = true;
         validators[validator] = Validator({ status: ValidatorStatus.Active, delegatedAmount: 0 });
+
+        // Store the initial commission for this validator
+        commissionTracking[validator] =
+            CommissionTracking({ commission: commission, lastIncreaseTime: 0 });
 
         emit ValidatorRegisteredV2(validator, blsVK, schnorrVK, commission, blsSig, schnorrSig);
     }
@@ -168,6 +351,8 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @param schnorrVK The new Schnorr verification key
     /// @param blsSig The BLS signature that authenticates the blsVK
     /// @param schnorrSig The Schnorr signature that authenticates the schnorrVK
+    /// @dev This function is overridden to add pausable functionality
+    /// @dev and to add schnorrSig validation
     function updateConsensusKeysV2(
         BN254.G2Point memory blsVK,
         EdOnBN254.EdOnBN254Point memory schnorrVK,
@@ -178,7 +363,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
         ensureValidatorActive(validator);
         ensureNonZeroSchnorrKey(schnorrVK);
-        ensureNewKey(blsVK);
+        ensureNewKeys(blsVK, schnorrVK);
 
         // Verify that the validator can sign for that blsVK. This prevents rogue public-key
         // attacks.
@@ -190,6 +375,100 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         emit ConsensusKeysUpdatedV2(validator, blsVK, schnorrVK, blsSig, schnorrSig);
     }
 
+    /// @notice Update the commission rate for a validator
+    /// @param newCommission The new commission rate in % with 2 decimals (0 to 10_000)
+    /// @notice
+    ///
+    ///   1. Only one commission *increase* per minCommissionIncreaseInterval is allowed.
+    ///   2. The commission increase cannot exceed maxCommissionIncrease.
+    ///
+    /// These limits protect stakers from sudden large commission increases,
+    /// particularly by exiting validators.
+    function updateCommission(uint16 newCommission) external virtual whenNotPaused {
+        address validator = msg.sender;
+        ensureValidatorActive(validator);
+        require(newCommission <= 10000, InvalidCommission());
+
+        CommissionTracking storage tracking = commissionTracking[validator];
+        uint16 currentCommission = tracking.commission;
+        require(newCommission != currentCommission, CommissionUnchanged());
+
+        // NOTE: Limits exist to protect stakers from sudden loss of revenue due
+        // to commission increases.
+        //
+        // 1. Limits only enforced for commission *increase*.
+        // 2. Time of last change only tracked for commission *increase*.
+        if (newCommission > currentCommission) {
+            // Allow immediate first increase or after interval has passed
+            uint256 lastIncreaseTime = tracking.lastIncreaseTime;
+            require(
+                lastIncreaseTime == 0
+                    || block.timestamp >= lastIncreaseTime + minCommissionIncreaseInterval,
+                CommissionUpdateTooSoon()
+            );
+
+            // both maxCommissionIncrease and newCommission are <= 10_000
+            require(
+                newCommission <= currentCommission + maxCommissionIncrease,
+                CommissionIncreaseExceedsMax()
+            );
+            tracking.lastIncreaseTime = block.timestamp;
+        }
+
+        tracking.commission = newCommission;
+
+        emit CommissionUpdated(validator, block.timestamp, currentCommission, newCommission);
+    }
+
+    /// @notice Set the minimum interval between commission updates
+    /// @param newInterval The new minimum interval in seconds
+    function setMinCommissionUpdateInterval(uint256 newInterval) external virtual onlyOwner {
+        require(newInterval > 0 && newInterval <= 365 days, InvalidRateLimitParameters());
+        minCommissionIncreaseInterval = newInterval;
+        emit MinCommissionUpdateIntervalUpdated(newInterval);
+    }
+
+    /// @notice Set the maximum commission increase allowed per update
+    /// @param newMaxIncrease The new maximum increase in basis points (e.g., 500 = 5%)
+    function setMaxCommissionIncrease(uint16 newMaxIncrease) external virtual onlyOwner {
+        require(newMaxIncrease > 0 && newMaxIncrease <= 10000, InvalidRateLimitParameters());
+        maxCommissionIncrease = newMaxIncrease;
+        emit MaxCommissionIncreaseUpdated(newMaxIncrease);
+    }
+
+    /// @notice Initialize validator commissions during V2 migration
+    /// @dev This function is used to retroactively initialize commission storage for validators
+    /// that were registered before the V2 upgrade. On decaf, this will be called with current
+    /// commission values read from L1 events. On mainnet, this will be called with an empty array
+    /// since there are no pre-existing validators.
+    /// @param initialCommissions Array of InitialCommission structs containing validator addresses
+    /// and their commissions
+    function _initializeCommissions(InitialCommission[] calldata initialCommissions) private {
+        for (uint256 i = 0; i < initialCommissions.length; i++) {
+            address validator = initialCommissions[i].validator;
+            uint16 commission = initialCommissions[i].commission;
+
+            require(commission <= 10000, InvalidCommission());
+
+            ValidatorStatus status = validators[validator].status;
+            require(status != ValidatorStatus.Unknown, ValidatorInactive());
+
+            require(
+                commissionTracking[validator].lastIncreaseTime == 0
+                    && commissionTracking[validator].commission == 0,
+                CommissionAlreadyInitialized(validator)
+            );
+
+            commissionTracking[validator] =
+                CommissionTracking({ commission: commission, lastIncreaseTime: 0 });
+        }
+    }
+
+    /// @notice Update the exit escrow period
+    /// @param newExitEscrowPeriod The new exit escrow period
+    /// @dev This function ensures that the exit escrow period is within the valid range
+    /// @dev This function is not pausable so that governance can perform emergency updates in the
+    /// presence of system
     function updateExitEscrowPeriod(uint64 newExitEscrowPeriod) external virtual onlyOwner {
         uint64 minExitEscrowPeriod = lightClient.blocksPerEpoch() * 15; // assuming 15 seconds per
             // block
@@ -203,7 +482,34 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         emit ExitEscrowPeriodUpdated(newExitEscrowPeriod);
     }
 
+    function _hashSchnorrKey(EdOnBN254.EdOnBN254Point memory schnorrVK)
+        internal
+        pure
+        returns (bytes32)
+    {
+        return keccak256(abi.encode(schnorrVK.x, schnorrVK.y));
+    }
+
+    /// @notice Ensure that the BLS and Schnorr keys are not already used
+    /// @param blsVK The BLS verification key
+    /// @param schnorrVK The Schnorr verification key
+    function ensureNewKeys(BN254.G2Point memory blsVK, EdOnBN254.EdOnBN254Point memory schnorrVK)
+        internal
+        view
+    {
+        if (blsKeys[_hashBlsKey(blsVK)]) {
+            revert BlsKeyAlreadyUsed();
+        }
+
+        if (schnorrKeys[_hashSchnorrKey(schnorrVK)]) {
+            revert SchnorrKeyAlreadyUsed();
+        }
+    }
+
     // deprecate previous registration function
+    /// @notice Deprecate previous registration function
+    /// @dev This function is overridden to revert with a DeprecatedFunction error
+    /// @dev users must call registerValidatorV2 instead
     function registerValidator(
         BN254.G2Point memory,
         EdOnBN254.EdOnBN254Point memory,
@@ -213,7 +519,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         revert DeprecatedFunction();
     }
 
-    // deprecate previous updateConsensusKeys function
+    /// @notice Deprecate previous updateConsensusKeys function
+    /// @dev This function is overridden to revert with a DeprecatedFunction error
+    /// @dev users must call updateConsensusKeysV2 instead
     function updateConsensusKeys(
         BN254.G2Point memory,
         EdOnBN254.EdOnBN254Point memory,

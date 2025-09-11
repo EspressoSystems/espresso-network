@@ -269,8 +269,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use self::{
     staketablev2::{EdOnBN254::EdOnBN254Point, BN254::G2Point},
     StakeTableV2::{
-        ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit,
-        ValidatorRegistered, ValidatorRegisteredV2,
+        CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated,
+        ValidatorExit, ValidatorRegistered, ValidatorRegisteredV2,
     },
 };
 
@@ -369,6 +369,37 @@ impl<'de> Deserialize<'de> for ValidatorRegisteredV2 {
             commission,
             blsSig,
             schnorrSig,
+        })
+    }
+}
+
+impl Serialize for CommissionUpdated {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (
+            &self.validator,
+            self.timestamp,
+            self.oldCommission,
+            self.newCommission,
+        )
+            .serialize(serializer)
+    }
+}
+
+#[allow(non_snake_case)]
+impl<'de> Deserialize<'de> for CommissionUpdated {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (validator, timestamp, oldCommission, newCommission) = <_>::deserialize(deserializer)?;
+        Ok(Self {
+            validator,
+            timestamp,
+            newCommission,
+            oldCommission,
         })
     }
 }
@@ -556,5 +587,31 @@ impl<'de> Deserialize<'de> for ConsensusKeysUpdatedV2 {
             blsSig,
             schnorrSig,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy::{primitives::U256, sol_types::private::Address};
+
+    use super::*;
+
+    #[test]
+    fn test_commission_updated_serde_roundtrip() {
+        let original = CommissionUpdated {
+            validator: Address::random(),
+            timestamp: U256::from(999),
+            oldCommission: 123,
+            newCommission: 456,
+        };
+
+        let serialized = bincode::serialize(&original).expect("Failed to serialize");
+        let deserialized: CommissionUpdated =
+            bincode::deserialize(&serialized).expect("Failed to deserialize");
+
+        assert_eq!(original.validator, deserialized.validator);
+        assert_eq!(original.timestamp, deserialized.timestamp);
+        assert_eq!(original.oldCommission, deserialized.oldCommission);
+        assert_eq!(original.newCommission, deserialized.newCommission);
     }
 }

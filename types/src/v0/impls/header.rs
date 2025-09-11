@@ -1081,7 +1081,7 @@ impl BlockHeader<SeqTypes> for Header {
         //  The Header is versioned,
         //  so we create the genesis header for the current version of the sequencer.
         Self::create(
-            instance_state.chain_config,
+            instance_state.genesis_header.chain_config,
             0,
             timestamp,
             timestamp_millis,
@@ -1100,7 +1100,7 @@ impl BlockHeader<SeqTypes> for Header {
             vec![FeeInfo::genesis()],
             vec![],
             None,
-            instance_state.current_version,
+            instance_state.genesis_version,
             None,
         )
     }

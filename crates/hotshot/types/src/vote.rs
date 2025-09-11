@@ -12,7 +12,7 @@ use std::{
     marker::PhantomData,
 };
 
-use alloy::primitives::U256;
+use alloy::primitives::{FixedBytes, U256};
 use bitvec::{bitvec, vec::BitVec};
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::*;
@@ -23,10 +23,10 @@ use crate::{
     light_client::{LightClientState, StakeTableState},
     message::UpgradeLock,
     simple_certificate::{LightClientStateUpdateCertificateV2, Threshold},
-    simple_vote::{LightClientStateUpdateVote, VersionedVoteData, Voteable},
+    simple_vote::{LightClientStateUpdateVote2, VersionedVoteData, Voteable},
     stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
-        node_implementation::{NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::{
             LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StakeTableEntryType,
             StateSignatureKey,
@@ -249,9 +249,9 @@ type VoteMap2<COMMITMENT, PK, SIG> = HashMap<COMMITMENT, (U256, BTreeMap<PK, (SI
 
 /// Accumulator for light client state update vote
 #[allow(clippy::type_complexity)]
-pub struct LightClientStateUpdateVoteAccumulator<TYPES: NodeType> {
+pub struct LightClientStateUpdateVoteAccumulator<TYPES: NodeType, V: Versions> {
     pub vote_outcomes: HashMap<
-        (LightClientState, StakeTableState),
+        (LightClientState, StakeTableState, FixedBytes<32>),
         (
             U256,
             HashMap<
@@ -263,16 +263,18 @@ pub struct LightClientStateUpdateVoteAccumulator<TYPES: NodeType> {
             >,
         ),
     >,
+
+    pub upgrade_lock: UpgradeLock<TYPES, V>,
 }
 
-impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
+impl<TYPES: NodeType, V: Versions> LightClientStateUpdateVoteAccumulator<TYPES, V> {
     /// Add a vote to the total accumulated votes for the given epoch.
     /// Returns the accumulator or the certificate if we
     /// have accumulated enough votes to exceed the threshold for creating a certificate.
     pub async fn accumulate(
         &mut self,
         key: &TYPES::SignatureKey,
-        vote: &LightClientStateUpdateVote<TYPES>,
+        vote: &LightClientStateUpdateVote2<TYPES>,
         membership: &EpochMembership<TYPES>,
     ) -> Option<LightClientStateUpdateCertificateV2<TYPES>> {
         let epoch = membership.epoch()?;
@@ -291,17 +293,27 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
             error!("Invalid light client state update vote {vote:?}");
             return None;
         }
-        if !<TYPES::StateSignatureKey as LCV3StateSignatureKey>::verify_state_sig(
-            &state_ver_key,
-            &vote.signature,
-            vote.signed_state_digest,
-        ) {
+        // only verify the new state signature on the new version
+        if self
+            .upgrade_lock
+            .proposal2_version(TYPES::View::new(vote.light_client_state.view_number))
+            .await
+            && !<TYPES::StateSignatureKey as LCV3StateSignatureKey>::verify_state_sig(
+                &state_ver_key,
+                &vote.signature,
+                vote.signed_state_digest,
+            )
+        {
             error!("Invalid light client state update vote {vote:?}");
             return None;
         }
         let (total_stake_casted, vote_map) = self
             .vote_outcomes
-            .entry((vote.light_client_state, vote.next_stake_table_state))
+            .entry((
+                vote.light_client_state,
+                vote.next_stake_table_state,
+                vote.auth_root,
+            ))
             .or_insert_with(|| (U256::from(0), HashMap::new()));
 
         // Check for duplicate vote
