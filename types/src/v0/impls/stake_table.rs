@@ -2264,25 +2264,42 @@ impl Membership<SeqTypes> for EpochCommittees {
         };
 
         // If the epoch committee:
-        // - exists and has a header and block reward, return early.
+        // - exists and has a header stake table hash and block reward, return early.
         // - exists without a reward, reuse validators and update reward.
+        // and fetch from L1 if the stake table hash is missing.
         // - doesn't exist, fetch it from L1.
         let (validators, stake_table_hash) = match epoch_committee {
-            Some(ref committee) => {
-                if committee.block_reward.is_some() && committee.header.is_some() {
-                    tracing::info!(
-                        ?epoch,
-                        "committee already has block reward and header, skipping add_epoch_root"
-                    );
-                    return Ok(());
-                }
+            Some(committee)
+                if committee.block_reward.is_some()
+                    && committee.header.is_some()
+                    && committee.stake_table_hash.is_some() =>
+            {
+                tracing::info!(
+                    ?epoch,
+                    "committee already has block reward, header, and stake table hash; skipping \
+                     add_epoch_root"
+                );
+                return Ok(());
+            },
 
+            Some(committee) => {
                 if let Some(reward) = committee.block_reward {
                     block_reward = Some(reward);
                 }
 
-                (committee.validators.clone(), committee.stake_table_hash)
+                if let Some(hash) = committee.stake_table_hash {
+                    (committee.validators.clone(), Some(hash))
+                } else {
+                    // if stake table hash is missing then recalculate from events
+                    tracing::info!(
+                        "Stake table hash missing for epoch {epoch}. recalculating by fetching \
+                         from l1."
+                    );
+                    let (map, hash) = fetcher.fetch(epoch, &block_header).await?;
+                    (map, Some(hash))
+                }
             },
+
             None => {
                 tracing::info!("Stake table missing for epoch {epoch}. Fetching from L1.");
                 let (map, hash) = fetcher.fetch(epoch, &block_header).await?;
