@@ -819,3 +819,28 @@ impl From<EdOnBN254PointLegacy> for EdOnBN254::EdOnBN254Point {
         Self { x: v.x, y: v.y }
     }
 }
+#[cfg(test)]
+mod tests {
+    use alloy::{primitives::U256, sol_types::private::Address};
+
+    use crate::sol_types::StakeTableV2::CommissionUpdated;
+
+    #[test]
+    fn test_commission_updated_serde_roundtrip() {
+        let original = CommissionUpdated {
+            validator: Address::random(),
+            timestamp: U256::from(999),
+            oldCommission: 123,
+            newCommission: 456,
+        };
+
+        let serialized = bincode::serialize(&original).expect("Failed to serialize");
+        let deserialized: CommissionUpdated =
+            bincode::deserialize(&serialized).expect("Failed to deserialize");
+
+        assert_eq!(original.validator, deserialized.validator);
+        assert_eq!(original.timestamp, deserialized.timestamp);
+        assert_eq!(original.oldCommission, deserialized.oldCommission);
+        assert_eq!(original.newCommission, deserialized.newCommission);
+    }
+}

@@ -1518,7 +1518,7 @@ impl SequencerPersistence for Persistence {
 
             offset = values.last().context("last row")?.0;
 
-            query_builder.push_values(values.into_iter(), |mut b, (view, leaf, qc)| {
+            query_builder.push_values(values, |mut b, (view, leaf, qc)| {
                 b.push_bind(view).push_bind(leaf).push_bind(qc);
             });
 
@@ -1621,7 +1621,7 @@ impl SequencerPersistence for Persistence {
                 sqlx::QueryBuilder::new("INSERT INTO da_proposal2 (view, payload_hash, data) ");
 
             offset = values.last().context("last row")?.0;
-            query_builder.push_values(values.into_iter(), |mut b, (view, payload_hash, data)| {
+            query_builder.push_values(values, |mut b, (view, payload_hash, data)| {
                 b.push_bind(view).push_bind(payload_hash).push_bind(data);
             });
             query_builder.push(" ON CONFLICT DO NOTHING");
@@ -1719,7 +1719,7 @@ impl SequencerPersistence for Persistence {
 
             offset = values.last().context("last row")?.0;
 
-            query_builder.push_values(values.into_iter(), |mut b, (view, payload_hash, data)| {
+            query_builder.push_values(values, |mut b, (view, payload_hash, data)| {
                 b.push_bind(view).push_bind(payload_hash).push_bind(data);
             });
 
@@ -1820,7 +1820,7 @@ impl SequencerPersistence for Persistence {
                 sqlx::QueryBuilder::new("INSERT INTO quorum_proposals2 (view, leaf_hash, data) ");
 
             offset = values.last().context("last row")?.0;
-            query_builder.push_values(values.into_iter(), |mut b, (view, leaf_hash, data)| {
+            query_builder.push_values(values, |mut b, (view, leaf_hash, data)| {
                 b.push_bind(view).push_bind(leaf_hash).push_bind(data);
             });
 
@@ -1920,7 +1920,7 @@ impl SequencerPersistence for Persistence {
 
             offset = values.last().context("last row")?.0;
 
-            query_builder.push_values(values.into_iter(), |mut b, (view, leaf_hash, data)| {
+            query_builder.push_values(values, |mut b, (view, leaf_hash, data)| {
                 b.push_bind(view).push_bind(leaf_hash).push_bind(data);
             });
 
@@ -2519,7 +2519,7 @@ impl MembershipPersistence for Persistence {
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
-        query_builder.push_values(events.into_iter(), |mut b, (l1_block, log_index, event)| {
+        query_builder.push_values(events, |mut b, (l1_block, log_index, event)| {
             b.push_bind(l1_block).push_bind(log_index).push_bind(event);
         });
 
