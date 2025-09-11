@@ -1273,7 +1273,6 @@ mod tests {
                 .lagOverEscapeHatchThreshold(U256::from(height), U256::from(0))
                 .call()
                 .await
-                .map(|ret| ret)
                 .unwrap_or(false)
             {
                 tracing::info!("waiting for setting hotshot down");
@@ -1292,7 +1291,6 @@ mod tests {
                 .lagOverEscapeHatchThreshold(U256::from(height), U256::from(0))
                 .call()
                 .await
-                .map(|ret| ret)
                 .unwrap_or(true)
             {
                 tracing::info!("waiting for setting hotshot up");
@@ -1467,7 +1465,6 @@ mod tests {
                     .lagOverEscapeHatchThreshold(U256::from(height), U256::from(0))
                     .call()
                     .await
-                    .map(|ret| ret)
                     .unwrap_or(false)
                 {
                     tracing::info!("waiting for setting hotshot down");
@@ -1486,7 +1483,6 @@ mod tests {
                     .lagOverEscapeHatchThreshold(U256::from(height), U256::from(0))
                     .call()
                     .await
-                    .map(|ret| ret)
                     .unwrap_or(true)
                 {
                     tracing::info!("waiting for setting hotshot up");
