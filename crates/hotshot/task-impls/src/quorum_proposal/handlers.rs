@@ -589,7 +589,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                 maybe_next_epoch_qc
                     .as_ref()
                     .is_some_and(|neqc| neqc.data.leaf_commit == parent_qc.data.leaf_commit),
-                "Jusify QC on our proposal is for an epoch transition block but we don't have the \
+                "Justify QC on our proposal is for an epoch transition block but we don't have the \
                  corresponding next epoch QC. Do not propose."
             );
             maybe_next_epoch_qc
