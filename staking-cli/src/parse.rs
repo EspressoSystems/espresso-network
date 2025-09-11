@@ -1,6 +1,6 @@
 use std::{fmt::Display, str::FromStr as _};
 
-use derive_more::From;
+use derive_more::{Add, From};
 use hotshot_types::{light_client::StateSignKey, signature_key::BLSPrivKey};
 use rust_decimal::{prelude::ToPrimitive as _, Decimal};
 use tagged_base64::{TaggedBase64, Tb64Error};
@@ -14,7 +14,7 @@ pub fn parse_state_priv_key(s: &str) -> Result<StateSignKey, Tb64Error> {
     TaggedBase64::parse(s)?.try_into()
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Add)]
 pub struct Commission(u16);
 
 impl Commission {
@@ -71,6 +71,8 @@ pub struct ParseCommissionError {
 
 /// Parse a percentage string into a `Percentage` type.
 pub fn parse_commission(s: &str) -> Result<Commission, ParseCommissionError> {
+    // strip trailing whitespace and percentage sign
+    let s = s.trim().trim_end_matches("%").trim();
     let dec = Decimal::from_str(s).map_err(|e| ParseCommissionError { msg: e.to_string() })?;
     if dec != dec.round_dp(2) {
         return Err(
@@ -111,6 +113,8 @@ mod test {
         for (input, expected) in cases {
             let commission = Commission(input);
             assert_eq!(commission.to_string(), expected);
+            let parsed = parse_commission(expected).unwrap();
+            assert_eq!(parsed, commission);
         }
     }
 
@@ -126,7 +130,11 @@ mod test {
             ("2", 200),
             ("1.000000", 100),
             ("1.2", 120),
+            ("1.2", 120),
             ("12.34", 1234),
+            ("12.34%", 1234),
+            ("12.34% ", 1234),
+            ("12.34 % ", 1234),
             ("100", 10000),
             ("100.0", 10000),
             ("100.00", 10000),

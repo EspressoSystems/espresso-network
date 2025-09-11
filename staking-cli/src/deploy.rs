@@ -21,7 +21,7 @@ use espresso_contract_deployer::{
 use hotshot_contract_adapter::{
     sol_types::{
         EspToken::{self, EspTokenInstance},
-        StakeTable,
+        StakeTable, StakeTableV2,
     },
     stake_table::StakeTableContractVersion,
 };
@@ -31,8 +31,10 @@ use rand::{rngs::StdRng, CryptoRng, Rng as _, RngCore, SeedableRng as _};
 use url::Url;
 
 use crate::{
-    parse::Commission, registration::register_validator, signature::NodeSignatures, BLSKeyPair,
-    DEV_MNEMONIC,
+    parse::Commission,
+    registration::{fetch_commission, register_validator},
+    signature::NodeSignatures,
+    BLSKeyPair, DEV_MNEMONIC,
 };
 
 type TestProvider = FillProvider<
@@ -260,18 +262,21 @@ impl TestSystem {
         Ok(())
     }
 
-    pub async fn warp_time(&self, seconds: U256) -> Result<()> {
+    pub async fn anvil_increase_time(&self, seconds: U256) -> Result<()> {
         self.provider
             .anvil_increase_time(seconds.to::<u64>())
             .await?;
         Ok(())
     }
 
-    pub async fn get_min_commission_update_interval(&self) -> Result<U256> {
-        use hotshot_contract_adapter::sol_types::StakeTableV2;
+    pub async fn get_min_commission_increase_interval(&self) -> Result<U256> {
         let stake_table = StakeTableV2::new(self.stake_table, &self.provider);
         let interval = stake_table.minCommissionIncreaseInterval().call().await?._0;
         Ok(interval)
+    }
+
+    pub async fn fetch_commission(&self) -> Result<Commission> {
+        fetch_commission(&self.provider, self.stake_table, self.deployer_address).await
     }
 
     pub async fn balance(&self, address: Address) -> Result<U256> {

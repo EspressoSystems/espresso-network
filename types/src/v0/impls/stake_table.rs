@@ -309,6 +309,7 @@ impl StakeTableState {
                 }
 
                 // The stake table v1 contract does *not* enforce that each schnorr key is only used once.
+                // We need to clone here because we need to both insert into the set and use the key later
                 if !self.used_schnorr_keys.insert(state_ver_key.clone()) {
                     return Ok(Err(ExpectedStakeTableError::SchnorrKeyAlreadyUsed(
                         state_ver_key.to_string(),
@@ -517,6 +518,8 @@ impl StakeTableState {
                 newCommission,
                 ..
             }) => {
+                // NOTE: Commission update events are supported only in protocol
+                // version V4 and stake table contract V2.
                 if newCommission > COMMISSION_BASIS_POINTS {
                     return Err(StakeTableError::InvalidCommission(validator, newCommission));
                 }
@@ -1104,7 +1107,7 @@ impl Fetcher {
         });
 
         // fetch commission updated events
-        let commission_updated_events = stream::iter(chunks.clone()).then(|(from, to)| {
+        let commission_updated_events = stream::iter(chunks).then(|(from, to)| {
             let retry_delay = l1_client.options().l1_retry_delay;
             let stake_table_contract = stake_table_contract.clone();
             async move {
@@ -1560,16 +1563,10 @@ impl EpochCommittees {
         self.fixed_block_reward
     }
 
-    /// Fetch the block reward and update it if its None.
+    /// Fetch the fixed block reward and update it if its None.
     /// We used a fixed block reward for version v3
-    /// Version v4 uses the dynamic block reward based
+    /// Version v4 uses the dynamic block reward
     /// Assumes the stake table contract proxy address does not change
-    /// In the future, if we want to support updates to the stake table contract address
-    /// via chain config, or allow the contract to handle additional block reward calculation
-    /// parameters (e.g., inflation, block time), the `fetch_block_reward` logic can be
-    /// updated to support per-epoch rewards.
-    /// Initially, the block reward is zero if the node starts on pre-epoch version
-    /// but it is updated on the first call to `add_epoch_root()`
     async fn fetch_and_update_fixed_block_reward(
         membership: Arc<RwLock<Self>>,
         epoch: EpochNumber,

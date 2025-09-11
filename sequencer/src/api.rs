@@ -5746,7 +5746,8 @@ mod test {
                 )
             }))
             .pos_hook::<PosVersionV4>(
-                DelegationConfig::MultipleDelegators,
+                // We want no new rewards after setting the commission to zero.
+                DelegationConfig::NoSelfDelegation,
                 StakeTableContractVersion::V1, // upgraded later
             )
             .await
@@ -5784,6 +5785,7 @@ mod test {
             .epoch(EPOCH_HEIGHT)
             .unwrap();
         let target_epoch = current_epoch.u64() + 3;
+        println!("target epoch for new stake table: {target_epoch}");
         let mut events = network.peers[0].event_stream().await;
         wait_for_epochs(&mut events, EPOCH_HEIGHT, target_epoch).await;
 
@@ -5813,19 +5815,30 @@ mod test {
             assert_eq!(validators.get(&val).unwrap().commission, new_comm.to_evm());
         }
 
-        // check validator 0 received zero rewards in the last epoch where its
-        // commission was zero
+        let last_block_with_nonzero_commission = EPOCH_HEIGHT * (target_epoch - 1);
+        println!("last block with non-zero commission {last_block_with_nonzero_commission}");
+        let val0 = commissions[0].0;
+        let amount_with_nonzero_commission = client
+            .get::<Option<RewardAmount>>(&format!(
+                "reward-state-v2/reward-balance/{last_block_with_nonzero_commission}/{val0}"
+            ))
+            .send()
+            .await?
+            .unwrap();
+        println!("reward amount from non-zero commission phase {amount_with_nonzero_commission}");
+
+        // check validator 0 receives no new rewards (except the remainder that
+        // goes to the leader) in the epoch where its commission is zero
+        let tolerance = U256::from(10 * EPOCH_HEIGHT).into();
         for block in EPOCH_HEIGHT * (target_epoch - 1) + 1..EPOCH_HEIGHT * target_epoch {
-            let address = commissions[0].0;
-            let amount = client
+            let current_amount = client
                 .get::<Option<RewardAmount>>(&format!(
-                    "reward-state/reward-balance/{block}/{address}"
+                    "reward-state-v2/reward-balance/{block}/{val0}"
                 ))
                 .send()
-                .await
-                .ok()
-                .flatten();
-            assert!(amount.is_none(), "amount is not none for block {block}")
+                .await?
+                .unwrap();
+            assert!(current_amount < amount_with_nonzero_commission + tolerance)
         }
 
         Ok(())

@@ -262,7 +262,7 @@ mod test {
         let new_commission = Commission::try_from("10.50")?;
 
         // Wait 2 seconds to ensure we're past the interval
-        system.warp_time(U256::from(2)).await?;
+        system.anvil_increase_time(U256::from(2)).await?;
 
         let receipt =
             update_commission(&system.provider, system.stake_table, new_commission).await?;

@@ -1781,6 +1781,7 @@ mod tests {
             .parse()?;
         let provider = ProviderBuilder::new().on_http(rpc_url);
 
+        // Decaf / sepolia stake table address
         let stake_table_address: Address = "0x40304FbE94D5E7D1492Dd90c53a2D63E8506a037".parse()?;
         let fetched_commissions =
             fetch_commissions_for_stake_table_storage_migration(&provider, stake_table_address)
