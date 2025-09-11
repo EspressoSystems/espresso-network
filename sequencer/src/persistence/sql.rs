@@ -2027,7 +2027,7 @@ impl SequencerPersistence for Persistence {
                 "INSERT INTO stake_table_events (l1_block, log_index, event) ",
             );
 
-            query_builder.push_values(values.into_iter(), |mut b, (l1_block, log_index, event)| {
+            query_builder.push_values(values, |mut b, (l1_block, log_index, event)| {
                 b.push_bind(l1_block).push_bind(log_index).push_bind(event);
             });
             query_builder.push(
