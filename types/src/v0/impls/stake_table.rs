@@ -3585,34 +3585,4 @@ mod tests {
             );
         }
     }
-
-    // #[test]
-    // fn test_serde_default_and_custom_serialization() {
-    //     let mut state = StakeTableState::new();
-    //     let validator = TestValidator::random();
-    //     let account = validator.account;
-
-    //     let e1 = StakeTableEvent::Register((&validator).into());
-    //     let val = serde_json::to_value(e1).unwrap();
-
-    //     println!("val1={val}");
-    //     let delegator = Address::random();
-    //     let e2 = StakeTableEvent::Delegate(Delegated {
-    //         delegator,
-    //         validator: account,
-    //         amount: U256::from(10u64),
-    //     });
-
-    //     let val2 = serde_json::to_value(e2).unwrap();
-    //     println!("val2={val2}");
-    //     let e3 = StakeTableEvent::Undelegate(Undelegated {
-    //         delegator,
-    //         validator: account,
-    //         amount: U256::from(20u64),
-    //     });
-
-    //     let val3 = serde_json::to_value(e3).unwrap();
-
-    //     println!("val3={val3}");
-    // }
 }
