@@ -247,7 +247,6 @@ portpicker = "0.1.1"
 pretty_assertions = { version = "1.4", features = ["unstable"] }
 priority-queue = "2"
 rand = "0.8.5"
-rand_0_9 = { package = "rand", version = "0.9" }
 rand_chacha = "0.3"
 rand_distr = "0.4"
 reqwest = "0.12"

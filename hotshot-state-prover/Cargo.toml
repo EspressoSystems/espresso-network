@@ -19,7 +19,6 @@ ark-ed-on-bn254 = { workspace = true }
 ark-ff = { workspace = true }
 ark-srs = { workspace = true }
 ark-std = { workspace = true }
-rand_0_9 = { workspace = true }
 clap = { workspace = true }
 displaydoc = { version = "0.2.3", default-features = false }
 espresso-contract-deployer = { path = "../contracts/rust/deployer" }

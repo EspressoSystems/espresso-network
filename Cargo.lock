@@ -5594,7 +5594,6 @@ dependencies = [
  "jf-rescue 0.1.0 (git+https://github.com/EspressoSystems/jellyfish?tag=0.4.5)",
  "jf-signature 0.2.0",
  "jf-utils 0.4.4 (git+https://github.com/EspressoSystems/jellyfish?tag=0.4.5)",
- "rand 0.9.2",
  "reqwest",
  "sequencer-utils",
  "serde",
