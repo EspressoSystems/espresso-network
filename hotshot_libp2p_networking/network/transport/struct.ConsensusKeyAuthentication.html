@@ -23,7 +23,7 @@ the authentication is disabled.</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.authenticate_with_remote_peer" class="method"><a class="src rightside" href="../../../src/hotshot_libp2p_networking/network/transport.rs.html#87-95">Source</a><h4 class="code-header">pub async fn <a href="#method.authenticate_with_remote_peer" class="fn">authenticate_with_remote_peer</a>&lt;W: AsyncWrite + <a class="trait" href="https://doc.rust-lang.org/1.89.0/core/marker/trait.Unpin.html" title="trait core::marker::Unpin">Unpin</a>&gt;(
     stream: <a class="primitive" href="https://doc.rust-lang.org/1.89.0/std/primitive.reference.html">&amp;mut W</a>,
     auth_message: &amp;[<a class="primitive" href="https://doc.rust-lang.org/1.89.0/std/primitive.u8.html">u8</a>],
-) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.98/anyhow/type.Result.html" title="type anyhow::Result">AnyhowResult</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/1.89.0/std/primitive.unit.html">()</a>&gt;</h4></section></summary><div class="docblock"><p>Prove to the remote peer that we are in the stake table by sending
+) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.99/anyhow/type.Result.html" title="type anyhow::Result">AnyhowResult</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/1.89.0/std/primitive.unit.html">()</a>&gt;</h4></section></summary><div class="docblock"><p>Prove to the remote peer that we are in the stake table by sending
 them our authentication message.</p>
 <h5 id="errors"><a class="doc-anchor" href="#errors">§</a>Errors</h5>
 <ul>
@@ -33,7 +33,7 @@ them our authentication message.</p>
     stream: <a class="primitive" href="https://doc.rust-lang.org/1.89.0/std/primitive.reference.html">&amp;mut R</a>,
     required_peer_id: &amp;<a class="struct" href="../../reexport/struct.PeerId.html" title="struct hotshot_libp2p_networking::reexport::PeerId">PeerId</a>,
     consensus_key_to_pid_map: <a class="struct" href="https://doc.rust-lang.org/1.89.0/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;Mutex&lt;BiMap&lt;S, <a class="struct" href="../../reexport/struct.PeerId.html" title="struct hotshot_libp2p_networking::reexport::PeerId">PeerId</a>&gt;&gt;&gt;,
-) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.98/anyhow/type.Result.html" title="type anyhow::Result">AnyhowResult</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/1.89.0/std/primitive.unit.html">()</a>&gt;</h4></section></summary><div class="docblock"><p>Verify that the remote peer is:</p>
+) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.99/anyhow/type.Result.html" title="type anyhow::Result">AnyhowResult</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/1.89.0/std/primitive.unit.html">()</a>&gt;</h4></section></summary><div class="docblock"><p>Verify that the remote peer is:</p>
 <ul>
 <li>In the stake table</li>
 <li>Sending us a valid authentication message</li>

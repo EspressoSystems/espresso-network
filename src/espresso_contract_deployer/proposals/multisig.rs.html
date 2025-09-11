@@ -155,7 +155,7 @@
 <a href=#155 id=155 data-nosnippet>155</a>/// - `dry_run`: Whether to do a dry run
 <a href=#156 id=156 data-nosnippet>156</a>///
 <a href=#157 id=157 data-nosnippet>157</a>/// Returns:
-<a href=#158 id=158 data-nosnippet>158</a>/// - A tuple of (stdout, success) from the script execution
+<a href=#158 id=158 data-nosnippet>158</a>/// - stdout from the script execution
 <a href=#159 id=159 data-nosnippet>159</a></span><span class="kw">pub async fn </span>call_upgrade_proxy_script(
 <a href=#160 id=160 data-nosnippet>160</a>    proxy_addr: Address,
 <a href=#161 id=161 data-nosnippet>161</a>    new_impl_addr: Address,
@@ -163,7 +163,7 @@
 <a href=#163 id=163 data-nosnippet>163</a>    rpc_url: String,
 <a href=#164 id=164 data-nosnippet>164</a>    safe_addr: Address,
 <a href=#165 id=165 data-nosnippet>165</a>    dry_run: <span class="prelude-ty">Option</span>&lt;bool&gt;,
-<a href=#166 id=166 data-nosnippet>166</a>) -&gt; <span class="prelude-ty">Result</span>&lt;(String, bool), anyhow::Error&gt; {
+<a href=#166 id=166 data-nosnippet>166</a>) -&gt; anyhow::Result&lt;String&gt; {
 <a href=#167 id=167 data-nosnippet>167</a>    <span class="kw">let </span>dry_run = dry_run.unwrap_or(<span class="bool-val">false</span>);
 <a href=#168 id=168 data-nosnippet>168</a>    <span class="macro">tracing::info!</span>(<span class="string">"Dry run: {}"</span>, dry_run);
 <a href=#169 id=169 data-nosnippet>169</a>    <span class="macro">tracing::info!</span>(
@@ -197,9 +197,9 @@
 <a href=#197 id=197 data-nosnippet>197</a>    <span class="kw">let </span>stderr = String::from_utf8_lossy(<span class="kw-2">&amp;</span>output.stderr);
 <a href=#198 id=198 data-nosnippet>198</a>    <span class="comment">// if stderr is not empty, return the stderr
 <a href=#199 id=199 data-nosnippet>199</a>    </span><span class="kw">if </span>!output.status.success() {
-<a href=#200 id=200 data-nosnippet>200</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="macro">anyhow!</span>(<span class="string">"Upgrade script failed: {}"</span>, stderr));
+<a href=#200 id=200 data-nosnippet>200</a>        <span class="macro">anyhow::bail!</span>(<span class="string">"Upgrade script failed: {}"</span>, stderr);
 <a href=#201 id=201 data-nosnippet>201</a>    }
-<a href=#202 id=202 data-nosnippet>202</a>    <span class="prelude-val">Ok</span>((stdout.to_string(), <span class="bool-val">true</span>))
+<a href=#202 id=202 data-nosnippet>202</a>    <span class="prelude-val">Ok</span>(stdout.to_string())
 <a href=#203 id=203 data-nosnippet>203</a>}
 <a href=#204 id=204 data-nosnippet>204</a>
 <a href=#205 id=205 data-nosnippet>205</a><span class="doccomment">/// Verify the node js files are present and can be executed.
@@ -242,7 +242,7 @@
 <a href=#242 id=242 data-nosnippet>242</a>    is_mock: bool,
 <a href=#243 id=243 data-nosnippet>243</a>    rpc_url: String,
 <a href=#244 id=244 data-nosnippet>244</a>    dry_run: <span class="prelude-ty">Option</span>&lt;bool&gt;,
-<a href=#245 id=245 data-nosnippet>245</a>) -&gt; <span class="prelude-ty">Result</span>&lt;(String, bool)&gt; {
+<a href=#245 id=245 data-nosnippet>245</a>) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
 <a href=#246 id=246 data-nosnippet>246</a>    <span class="kw">let </span>expected_major_version: u8 = <span class="number">2</span>;
 <a href=#247 id=247 data-nosnippet>247</a>    <span class="kw">let </span>dry_run = dry_run.unwrap_or_else(|| {
 <a href=#248 id=248 data-nosnippet>248</a>        <span class="macro">tracing::warn!</span>(<span class="string">"Dry run not specified, defaulting to false"</span>);
@@ -391,7 +391,7 @@
 <a href=#391 id=391 data-nosnippet>391</a>    is_mock: bool,
 <a href=#392 id=392 data-nosnippet>392</a>    rpc_url: String,
 <a href=#393 id=393 data-nosnippet>393</a>    dry_run: <span class="prelude-ty">Option</span>&lt;bool&gt;,
-<a href=#394 id=394 data-nosnippet>394</a>) -&gt; <span class="prelude-ty">Result</span>&lt;(String, bool)&gt; {
+<a href=#394 id=394 data-nosnippet>394</a>) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
 <a href=#395 id=395 data-nosnippet>395</a>    <span class="kw">let </span>expected_major_version: u8 = <span class="number">3</span>;
 <a href=#396 id=396 data-nosnippet>396</a>    <span class="kw">let </span>dry_run = dry_run.unwrap_or_else(|| {
 <a href=#397 id=397 data-nosnippet>397</a>        <span class="macro">tracing::warn!</span>(<span class="string">"Dry run not specified, defaulting to false"</span>);
@@ -532,7 +532,7 @@
 <a href=#532 id=532 data-nosnippet>532</a>    contracts: <span class="kw-2">&amp;mut </span>Contracts,
 <a href=#533 id=533 data-nosnippet>533</a>    rpc_url: String,
 <a href=#534 id=534 data-nosnippet>534</a>    dry_run: <span class="prelude-ty">Option</span>&lt;bool&gt;,
-<a href=#535 id=535 data-nosnippet>535</a>) -&gt; <span class="prelude-ty">Result</span>&lt;(String, bool)&gt; {
+<a href=#535 id=535 data-nosnippet>535</a>) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
 <a href=#536 id=536 data-nosnippet>536</a>    <span class="kw">let </span>dry_run = dry_run.unwrap_or_else(|| {
 <a href=#537 id=537 data-nosnippet>537</a>        <span class="macro">tracing::warn!</span>(<span class="string">"Dry run not specified, defaulting to false"</span>);
 <a href=#538 id=538 data-nosnippet>538</a>        <span class="bool-val">false
@@ -603,84 +603,51 @@
 <a href=#603 id=603 data-nosnippet>603</a>    multisig_address: Address,
 <a href=#604 id=604 data-nosnippet>604</a>    pauser: Address,
 <a href=#605 id=605 data-nosnippet>605</a>    dry_run: <span class="prelude-ty">Option</span>&lt;bool&gt;,
-<a href=#606 id=606 data-nosnippet>606</a>) -&gt; <span class="prelude-ty">Result</span>&lt;(String, bool)&gt; {
+<a href=#606 id=606 data-nosnippet>606</a>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#607 id=607 data-nosnippet>607</a>    <span class="macro">tracing::info!</span>(<span class="string">"Upgrading StakeTableProxy to StakeTableV2 using multisig owner"</span>);
 <a href=#608 id=608 data-nosnippet>608</a>    <span class="kw">let </span>dry_run = dry_run.unwrap_or(<span class="bool-val">false</span>);
-<a href=#609 id=609 data-nosnippet>609</a>    <span class="kw">match </span>contracts.address(Contract::StakeTableProxy) {
-<a href=#610 id=610 data-nosnippet>610</a>        <span class="comment">// check if proxy already exists
-<a href=#611 id=611 data-nosnippet>611</a>        </span><span class="prelude-val">None </span>=&gt; <span class="prelude-val">Err</span>(<span class="macro">anyhow!</span>(<span class="string">"StakeTableProxy not found, can't upgrade"</span>)),
-<a href=#612 id=612 data-nosnippet>612</a>        <span class="prelude-val">Some</span>(proxy_addr) =&gt; {
-<a href=#613 id=613 data-nosnippet>613</a>            <span class="kw">let </span>proxy = StakeTable::new(proxy_addr, <span class="kw-2">&amp;</span>provider);
-<a href=#614 id=614 data-nosnippet>614</a>            <span class="kw">let </span>owner = proxy.owner().call().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#615 id=615 data-nosnippet>615</a>            <span class="kw">let </span>owner_addr = owner._0;
-<a href=#616 id=616 data-nosnippet>616</a>            <span class="kw">if </span>owner_addr != multisig_address {
-<a href=#617 id=617 data-nosnippet>617</a>                <span class="macro">tracing::error!</span>(
-<a href=#618 id=618 data-nosnippet>618</a>                    <span class="string">"Proxy is not owned by the multisig. Expected: {multisig_address:#x}, Got: \
-<a href=#619 id=619 data-nosnippet>619</a>                     {owner_addr:#x}"
-<a href=#620 id=620 data-nosnippet>620</a>                </span>);
-<a href=#621 id=621 data-nosnippet>621</a>                <span class="macro">anyhow::bail!</span>(<span class="string">"Proxy is not owned by the multisig"</span>);
-<a href=#622 id=622 data-nosnippet>622</a>            }
-<a href=#623 id=623 data-nosnippet>623</a>            <span class="kw">if </span>!dry_run &amp;&amp; !<span class="kw">crate</span>::is_contract(<span class="kw-2">&amp;</span>provider, owner_addr).<span class="kw">await</span><span class="question-mark">? </span>{
-<a href=#624 id=624 data-nosnippet>624</a>                <span class="macro">tracing::error!</span>(<span class="string">"Proxy owner is not a contract. Expected: {owner_addr:#x}"</span>);
-<a href=#625 id=625 data-nosnippet>625</a>                <span class="macro">anyhow::bail!</span>(<span class="string">"Proxy owner is not a contract"</span>);
-<a href=#626 id=626 data-nosnippet>626</a>            }
-<a href=#627 id=627 data-nosnippet>627</a>            <span class="comment">// TODO: check if owner is a SAFE multisig
-<a href=#628 id=628 data-nosnippet>628</a>
-<a href=#629 id=629 data-nosnippet>629</a>            // first deploy StakeTableV2.sol implementation
-<a href=#630 id=630 data-nosnippet>630</a>            </span><span class="kw">let </span>stake_table_v2_addr = contracts
-<a href=#631 id=631 data-nosnippet>631</a>                .deploy(
-<a href=#632 id=632 data-nosnippet>632</a>                    Contract::StakeTableV2,
-<a href=#633 id=633 data-nosnippet>633</a>                    StakeTableV2::deploy_builder(<span class="kw-2">&amp;</span>provider),
-<a href=#634 id=634 data-nosnippet>634</a>                )
-<a href=#635 id=635 data-nosnippet>635</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#636 id=636 data-nosnippet>636</a>
-<a href=#637 id=637 data-nosnippet>637</a>            <span class="comment">// prepare init data
-<a href=#638 id=638 data-nosnippet>638</a>            </span><span class="kw">let </span>expected_major_version = <span class="number">2</span>;
-<a href=#639 id=639 data-nosnippet>639</a>            <span class="kw">let </span>init_data = <span class="kw">if </span><span class="kw">crate</span>::already_initialized(
-<a href=#640 id=640 data-nosnippet>640</a>                <span class="kw-2">&amp;</span>provider,
-<a href=#641 id=641 data-nosnippet>641</a>                proxy_addr,
-<a href=#642 id=642 data-nosnippet>642</a>                Contract::StakeTableV2,
-<a href=#643 id=643 data-nosnippet>643</a>                expected_major_version,
-<a href=#644 id=644 data-nosnippet>644</a>            )
-<a href=#645 id=645 data-nosnippet>645</a>            .<span class="kw">await</span><span class="question-mark">?
-<a href=#646 id=646 data-nosnippet>646</a>            </span>{
-<a href=#647 id=647 data-nosnippet>647</a>                <span class="macro">tracing::info!</span>(
-<a href=#648 id=648 data-nosnippet>648</a>                    <span class="string">"Proxy was already initialized for version {}"</span>,
-<a href=#649 id=649 data-nosnippet>649</a>                    expected_major_version
-<a href=#650 id=650 data-nosnippet>650</a>                );
-<a href=#651 id=651 data-nosnippet>651</a>                <span class="macro">vec!</span>[].into()
-<a href=#652 id=652 data-nosnippet>652</a>            } <span class="kw">else </span>{
-<a href=#653 id=653 data-nosnippet>653</a>                <span class="macro">tracing::info!</span>(
-<a href=#654 id=654 data-nosnippet>654</a>                    <span class="string">"Init Data to be signed.\n Function: initializeV2\n Arguments:\n pauser: \
-<a href=#655 id=655 data-nosnippet>655</a>                     {:?}\n admin: {:?}"</span>,
-<a href=#656 id=656 data-nosnippet>656</a>                    pauser,
-<a href=#657 id=657 data-nosnippet>657</a>                    owner_addr
-<a href=#658 id=658 data-nosnippet>658</a>                );
-<a href=#659 id=659 data-nosnippet>659</a>                StakeTableV2::new(stake_table_v2_addr, <span class="kw-2">&amp;</span>provider)
-<a href=#660 id=660 data-nosnippet>660</a>                    .initializeV2(pauser, owner_addr)
-<a href=#661 id=661 data-nosnippet>661</a>                    .calldata()
-<a href=#662 id=662 data-nosnippet>662</a>                    .to_owned()
-<a href=#663 id=663 data-nosnippet>663</a>            };
-<a href=#664 id=664 data-nosnippet>664</a>
-<a href=#665 id=665 data-nosnippet>665</a>            <span class="comment">// invoke upgrade on proxy via the safeSDK
-<a href=#666 id=666 data-nosnippet>666</a>            </span><span class="kw">let </span>result = call_upgrade_proxy_script(
-<a href=#667 id=667 data-nosnippet>667</a>                proxy_addr,
-<a href=#668 id=668 data-nosnippet>668</a>                stake_table_v2_addr,
-<a href=#669 id=669 data-nosnippet>669</a>                init_data.to_string(),
-<a href=#670 id=670 data-nosnippet>670</a>                rpc_url,
-<a href=#671 id=671 data-nosnippet>671</a>                owner_addr,
-<a href=#672 id=672 data-nosnippet>672</a>                <span class="prelude-val">Some</span>(dry_run),
-<a href=#673 id=673 data-nosnippet>673</a>            )
-<a href=#674 id=674 data-nosnippet>674</a>            .<span class="kw">await</span>;
-<a href=#675 id=675 data-nosnippet>675</a>
-<a href=#676 id=676 data-nosnippet>676</a>            <span class="comment">// Check the result directly
-<a href=#677 id=677 data-nosnippet>677</a>            </span><span class="kw">if let </span><span class="prelude-val">Err</span>(<span class="kw-2">ref </span>err) = result {
-<a href=#678 id=678 data-nosnippet>678</a>                <span class="macro">tracing::error!</span>(<span class="string">"StakeTableProxy upgrade failed: {:?}"</span>, err);
-<a href=#679 id=679 data-nosnippet>679</a>            } <span class="kw">else </span>{
-<a href=#680 id=680 data-nosnippet>680</a>                <span class="macro">tracing::info!</span>(<span class="string">"StakeTableProxy upgrade proposal sent"</span>);
-<a href=#681 id=681 data-nosnippet>681</a>                <span class="comment">// IDEA: add a function to wait for the proposal to be executed
-<a href=#682 id=682 data-nosnippet>682</a>            </span>}
-<a href=#683 id=683 data-nosnippet>683</a>            <span class="prelude-val">Ok</span>(result.context(<span class="string">"Upgrade proposal failed"</span>)<span class="question-mark">?</span>)
-<a href=#684 id=684 data-nosnippet>684</a>        },
-<a href=#685 id=685 data-nosnippet>685</a>    }
-<a href=#686 id=686 data-nosnippet>686</a>}</code></pre></div></section></main></body></html>
+<a href=#609 id=609 data-nosnippet>609</a>    <span class="kw">let </span><span class="prelude-val">Some</span>(proxy_addr) = contracts.address(Contract::StakeTableProxy) <span class="kw">else </span>{
+<a href=#610 id=610 data-nosnippet>610</a>        <span class="macro">anyhow::bail!</span>(<span class="string">"StakeTableProxy not found, can't upgrade"</span>)
+<a href=#611 id=611 data-nosnippet>611</a>    };
+<a href=#612 id=612 data-nosnippet>612</a>
+<a href=#613 id=613 data-nosnippet>613</a>    <span class="kw">let </span>proxy = StakeTable::new(proxy_addr, <span class="kw-2">&amp;</span>provider);
+<a href=#614 id=614 data-nosnippet>614</a>    <span class="kw">let </span>owner = proxy.owner().call().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#615 id=615 data-nosnippet>615</a>    <span class="kw">let </span>owner_addr = owner._0;
+<a href=#616 id=616 data-nosnippet>616</a>
+<a href=#617 id=617 data-nosnippet>617</a>    <span class="kw">if </span>owner_addr != multisig_address {
+<a href=#618 id=618 data-nosnippet>618</a>        <span class="macro">anyhow::bail!</span>(
+<a href=#619 id=619 data-nosnippet>619</a>            <span class="string">"Proxy not owned by multisig. expected: {multisig_address:#x}, got: {owner_addr:#x}"
+<a href=#620 id=620 data-nosnippet>620</a>        </span>);
+<a href=#621 id=621 data-nosnippet>621</a>    }
+<a href=#622 id=622 data-nosnippet>622</a>    <span class="kw">if </span>!dry_run &amp;&amp; !<span class="kw">crate</span>::is_contract(<span class="kw-2">&amp;</span>provider, owner_addr).<span class="kw">await</span><span class="question-mark">? </span>{
+<a href=#623 id=623 data-nosnippet>623</a>        <span class="macro">tracing::error!</span>(<span class="string">"Proxy owner is not a contract. Expected: {owner_addr:#x}"</span>);
+<a href=#624 id=624 data-nosnippet>624</a>        <span class="macro">anyhow::bail!</span>(<span class="string">"Proxy owner is not a contract"</span>);
+<a href=#625 id=625 data-nosnippet>625</a>    }
+<a href=#626 id=626 data-nosnippet>626</a>    <span class="comment">// TODO: check if owner is a SAFE multisig
+<a href=#627 id=627 data-nosnippet>627</a>
+<a href=#628 id=628 data-nosnippet>628</a>    </span><span class="kw">let </span>(_init_commissions, init_data) =
+<a href=#629 id=629 data-nosnippet>629</a>        <span class="kw">crate</span>::prepare_stake_table_v2_upgrade(<span class="kw-2">&amp;</span>provider, proxy_addr, pauser, owner_addr).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#630 id=630 data-nosnippet>630</a>
+<a href=#631 id=631 data-nosnippet>631</a>    <span class="kw">let </span>stake_table_v2_addr = contracts
+<a href=#632 id=632 data-nosnippet>632</a>        .deploy(
+<a href=#633 id=633 data-nosnippet>633</a>            Contract::StakeTableV2,
+<a href=#634 id=634 data-nosnippet>634</a>            StakeTableV2::deploy_builder(<span class="kw-2">&amp;</span>provider),
+<a href=#635 id=635 data-nosnippet>635</a>        )
+<a href=#636 id=636 data-nosnippet>636</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#637 id=637 data-nosnippet>637</a>
+<a href=#638 id=638 data-nosnippet>638</a>    <span class="comment">// invoke upgrade on proxy via the safeSDK
+<a href=#639 id=639 data-nosnippet>639</a>    </span>call_upgrade_proxy_script(
+<a href=#640 id=640 data-nosnippet>640</a>        proxy_addr,
+<a href=#641 id=641 data-nosnippet>641</a>        stake_table_v2_addr,
+<a href=#642 id=642 data-nosnippet>642</a>        init_data.unwrap_or_default().to_string(),
+<a href=#643 id=643 data-nosnippet>643</a>        rpc_url,
+<a href=#644 id=644 data-nosnippet>644</a>        owner_addr,
+<a href=#645 id=645 data-nosnippet>645</a>        <span class="prelude-val">Some</span>(dry_run),
+<a href=#646 id=646 data-nosnippet>646</a>    )
+<a href=#647 id=647 data-nosnippet>647</a>    .<span class="kw">await
+<a href=#648 id=648 data-nosnippet>648</a>    </span>.context(<span class="string">"Calling upgrade proxy script failed"</span>)<span class="question-mark">?</span>;
+<a href=#649 id=649 data-nosnippet>649</a>
+<a href=#650 id=650 data-nosnippet>650</a>    <span class="macro">tracing::info!</span>(<span class="string">"StakeTableProxy upgrade proposal sent"</span>);
+<a href=#651 id=651 data-nosnippet>651</a>
+<a href=#652 id=652 data-nosnippet>652</a>    <span class="prelude-val">Ok</span>(())
+<a href=#653 id=653 data-nosnippet>653</a>}</code></pre></div></section></main></body></html>

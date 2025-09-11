@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["deregister_validator","register_validator","update_consensus_keys"]};
+window.SIDEBAR_ITEMS = {"fn":["deregister_validator","fetch_commission","register_validator","update_commission","update_consensus_keys"]};

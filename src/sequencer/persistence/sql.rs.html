@@ -1518,7 +1518,7 @@
 <a href=#1518 id=1518 data-nosnippet>1518</a>
 <a href=#1519 id=1519 data-nosnippet>1519</a>            offset = values.last().context(<span class="string">"last row"</span>)<span class="question-mark">?</span>.<span class="number">0</span>;
 <a href=#1520 id=1520 data-nosnippet>1520</a>
-<a href=#1521 id=1521 data-nosnippet>1521</a>            query_builder.push_values(values.into_iter(), |<span class="kw-2">mut </span>b, (view, leaf, qc)| {
+<a href=#1521 id=1521 data-nosnippet>1521</a>            query_builder.push_values(values, |<span class="kw-2">mut </span>b, (view, leaf, qc)| {
 <a href=#1522 id=1522 data-nosnippet>1522</a>                b.push_bind(view).push_bind(leaf).push_bind(qc);
 <a href=#1523 id=1523 data-nosnippet>1523</a>            });
 <a href=#1524 id=1524 data-nosnippet>1524</a>
@@ -1621,7 +1621,7 @@
 <a href=#1621 id=1621 data-nosnippet>1621</a>                sqlx::QueryBuilder::new(<span class="string">"INSERT INTO da_proposal2 (view, payload_hash, data) "</span>);
 <a href=#1622 id=1622 data-nosnippet>1622</a>
 <a href=#1623 id=1623 data-nosnippet>1623</a>            offset = values.last().context(<span class="string">"last row"</span>)<span class="question-mark">?</span>.<span class="number">0</span>;
-<a href=#1624 id=1624 data-nosnippet>1624</a>            query_builder.push_values(values.into_iter(), |<span class="kw-2">mut </span>b, (view, payload_hash, data)| {
+<a href=#1624 id=1624 data-nosnippet>1624</a>            query_builder.push_values(values, |<span class="kw-2">mut </span>b, (view, payload_hash, data)| {
 <a href=#1625 id=1625 data-nosnippet>1625</a>                b.push_bind(view).push_bind(payload_hash).push_bind(data);
 <a href=#1626 id=1626 data-nosnippet>1626</a>            });
 <a href=#1627 id=1627 data-nosnippet>1627</a>            query_builder.push(<span class="string">" ON CONFLICT DO NOTHING"</span>);
@@ -1719,7 +1719,7 @@
 <a href=#1719 id=1719 data-nosnippet>1719</a>
 <a href=#1720 id=1720 data-nosnippet>1720</a>            offset = values.last().context(<span class="string">"last row"</span>)<span class="question-mark">?</span>.<span class="number">0</span>;
 <a href=#1721 id=1721 data-nosnippet>1721</a>
-<a href=#1722 id=1722 data-nosnippet>1722</a>            query_builder.push_values(values.into_iter(), |<span class="kw-2">mut </span>b, (view, payload_hash, data)| {
+<a href=#1722 id=1722 data-nosnippet>1722</a>            query_builder.push_values(values, |<span class="kw-2">mut </span>b, (view, payload_hash, data)| {
 <a href=#1723 id=1723 data-nosnippet>1723</a>                b.push_bind(view).push_bind(payload_hash).push_bind(data);
 <a href=#1724 id=1724 data-nosnippet>1724</a>            });
 <a href=#1725 id=1725 data-nosnippet>1725</a>
@@ -1820,7 +1820,7 @@
 <a href=#1820 id=1820 data-nosnippet>1820</a>                sqlx::QueryBuilder::new(<span class="string">"INSERT INTO quorum_proposals2 (view, leaf_hash, data) "</span>);
 <a href=#1821 id=1821 data-nosnippet>1821</a>
 <a href=#1822 id=1822 data-nosnippet>1822</a>            offset = values.last().context(<span class="string">"last row"</span>)<span class="question-mark">?</span>.<span class="number">0</span>;
-<a href=#1823 id=1823 data-nosnippet>1823</a>            query_builder.push_values(values.into_iter(), |<span class="kw-2">mut </span>b, (view, leaf_hash, data)| {
+<a href=#1823 id=1823 data-nosnippet>1823</a>            query_builder.push_values(values, |<span class="kw-2">mut </span>b, (view, leaf_hash, data)| {
 <a href=#1824 id=1824 data-nosnippet>1824</a>                b.push_bind(view).push_bind(leaf_hash).push_bind(data);
 <a href=#1825 id=1825 data-nosnippet>1825</a>            });
 <a href=#1826 id=1826 data-nosnippet>1826</a>
@@ -1920,7 +1920,7 @@
 <a href=#1920 id=1920 data-nosnippet>1920</a>
 <a href=#1921 id=1921 data-nosnippet>1921</a>            offset = values.last().context(<span class="string">"last row"</span>)<span class="question-mark">?</span>.<span class="number">0</span>;
 <a href=#1922 id=1922 data-nosnippet>1922</a>
-<a href=#1923 id=1923 data-nosnippet>1923</a>            query_builder.push_values(values.into_iter(), |<span class="kw-2">mut </span>b, (view, leaf_hash, data)| {
+<a href=#1923 id=1923 data-nosnippet>1923</a>            query_builder.push_values(values, |<span class="kw-2">mut </span>b, (view, leaf_hash, data)| {
 <a href=#1924 id=1924 data-nosnippet>1924</a>                b.push_bind(view).push_bind(leaf_hash).push_bind(data);
 <a href=#1925 id=1925 data-nosnippet>1925</a>            });
 <a href=#1926 id=1926 data-nosnippet>1926</a>
@@ -2411,7 +2411,7 @@
 <a href=#2411 id=2411 data-nosnippet>2411</a>            })
 <a href=#2412 id=2412 data-nosnippet>2412</a>            .collect::&lt;anyhow::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
 <a href=#2413 id=2413 data-nosnippet>2413</a>
-<a href=#2414 id=2414 data-nosnippet>2414</a>        query_builder.push_values(events.into_iter(), |<span class="kw-2">mut </span>b, (l1_block, log_index, event)| {
+<a href=#2414 id=2414 data-nosnippet>2414</a>        query_builder.push_values(events, |<span class="kw-2">mut </span>b, (l1_block, log_index, event)| {
 <a href=#2415 id=2415 data-nosnippet>2415</a>            b.push_bind(l1_block).push_bind(log_index).push_bind(event);
 <a href=#2416 id=2416 data-nosnippet>2416</a>        });
 <a href=#2417 id=2417 data-nosnippet>2417</a>

@@ -219,85 +219,91 @@
 <a href=#219 id=219 data-nosnippet>219</a>    },
 <a href=#220 id=220 data-nosnippet>220</a>    <span class="doccomment">/// Deregister a validator.
 <a href=#221 id=221 data-nosnippet>221</a>    </span>DeregisterValidator {},
-<a href=#222 id=222 data-nosnippet>222</a>    <span class="doccomment">/// Approve stake table contract to move tokens
-<a href=#223 id=223 data-nosnippet>223</a>    </span>Approve {
-<a href=#224 id=224 data-nosnippet>224</a>        <span class="attr">#[clap(long, value_parser = parse_ether)]
-<a href=#225 id=225 data-nosnippet>225</a>        </span>amount: U256,
-<a href=#226 id=226 data-nosnippet>226</a>    },
-<a href=#227 id=227 data-nosnippet>227</a>    <span class="doccomment">/// Delegate funds to a validator.
-<a href=#228 id=228 data-nosnippet>228</a>    </span>Delegate {
-<a href=#229 id=229 data-nosnippet>229</a>        <span class="attr">#[clap(long)]
-<a href=#230 id=230 data-nosnippet>230</a>        </span>validator_address: Address,
-<a href=#231 id=231 data-nosnippet>231</a>
-<a href=#232 id=232 data-nosnippet>232</a>        <span class="attr">#[clap(long, value_parser = parse_ether)]
-<a href=#233 id=233 data-nosnippet>233</a>        </span>amount: U256,
-<a href=#234 id=234 data-nosnippet>234</a>    },
-<a href=#235 id=235 data-nosnippet>235</a>    <span class="doccomment">/// Initiate a withdrawal of delegated funds from a validator.
-<a href=#236 id=236 data-nosnippet>236</a>    </span>Undelegate {
-<a href=#237 id=237 data-nosnippet>237</a>        <span class="attr">#[clap(long)]
-<a href=#238 id=238 data-nosnippet>238</a>        </span>validator_address: Address,
-<a href=#239 id=239 data-nosnippet>239</a>
-<a href=#240 id=240 data-nosnippet>240</a>        <span class="attr">#[clap(long, value_parser = parse_ether)]
-<a href=#241 id=241 data-nosnippet>241</a>        </span>amount: U256,
-<a href=#242 id=242 data-nosnippet>242</a>    },
-<a href=#243 id=243 data-nosnippet>243</a>    <span class="doccomment">/// Claim withdrawal after an undelegation.
-<a href=#244 id=244 data-nosnippet>244</a>    </span>ClaimWithdrawal {
-<a href=#245 id=245 data-nosnippet>245</a>        <span class="attr">#[clap(long)]
-<a href=#246 id=246 data-nosnippet>246</a>        </span>validator_address: Address,
-<a href=#247 id=247 data-nosnippet>247</a>    },
-<a href=#248 id=248 data-nosnippet>248</a>    <span class="doccomment">/// Claim withdrawal after validator exit.
-<a href=#249 id=249 data-nosnippet>249</a>    </span>ClaimValidatorExit {
-<a href=#250 id=250 data-nosnippet>250</a>        <span class="attr">#[clap(long)]
-<a href=#251 id=251 data-nosnippet>251</a>        </span>validator_address: Address,
-<a href=#252 id=252 data-nosnippet>252</a>    },
-<a href=#253 id=253 data-nosnippet>253</a>    <span class="doccomment">/// Check ESP token balance.
-<a href=#254 id=254 data-nosnippet>254</a>    </span>TokenBalance {
-<a href=#255 id=255 data-nosnippet>255</a>        <span class="doccomment">/// The address to check.
-<a href=#256 id=256 data-nosnippet>256</a>        </span><span class="attr">#[clap(long)]
-<a href=#257 id=257 data-nosnippet>257</a>        </span>address: <span class="prelude-ty">Option</span>&lt;Address&gt;,
+<a href=#222 id=222 data-nosnippet>222</a>    <span class="doccomment">/// Update validator commission rate.
+<a href=#223 id=223 data-nosnippet>223</a>    </span>UpdateCommission {
+<a href=#224 id=224 data-nosnippet>224</a>        <span class="doccomment">/// The new commission rate to set
+<a href=#225 id=225 data-nosnippet>225</a>        </span><span class="attr">#[clap(long, value_parser = parse::parse_commission, env = <span class="string">"NEW_COMMISSION"</span>)]
+<a href=#226 id=226 data-nosnippet>226</a>        </span>new_commission: Commission,
+<a href=#227 id=227 data-nosnippet>227</a>    },
+<a href=#228 id=228 data-nosnippet>228</a>    <span class="doccomment">/// Approve stake table contract to move tokens
+<a href=#229 id=229 data-nosnippet>229</a>    </span>Approve {
+<a href=#230 id=230 data-nosnippet>230</a>        <span class="attr">#[clap(long, value_parser = parse_ether)]
+<a href=#231 id=231 data-nosnippet>231</a>        </span>amount: U256,
+<a href=#232 id=232 data-nosnippet>232</a>    },
+<a href=#233 id=233 data-nosnippet>233</a>    <span class="doccomment">/// Delegate funds to a validator.
+<a href=#234 id=234 data-nosnippet>234</a>    </span>Delegate {
+<a href=#235 id=235 data-nosnippet>235</a>        <span class="attr">#[clap(long)]
+<a href=#236 id=236 data-nosnippet>236</a>        </span>validator_address: Address,
+<a href=#237 id=237 data-nosnippet>237</a>
+<a href=#238 id=238 data-nosnippet>238</a>        <span class="attr">#[clap(long, value_parser = parse_ether)]
+<a href=#239 id=239 data-nosnippet>239</a>        </span>amount: U256,
+<a href=#240 id=240 data-nosnippet>240</a>    },
+<a href=#241 id=241 data-nosnippet>241</a>    <span class="doccomment">/// Initiate a withdrawal of delegated funds from a validator.
+<a href=#242 id=242 data-nosnippet>242</a>    </span>Undelegate {
+<a href=#243 id=243 data-nosnippet>243</a>        <span class="attr">#[clap(long)]
+<a href=#244 id=244 data-nosnippet>244</a>        </span>validator_address: Address,
+<a href=#245 id=245 data-nosnippet>245</a>
+<a href=#246 id=246 data-nosnippet>246</a>        <span class="attr">#[clap(long, value_parser = parse_ether)]
+<a href=#247 id=247 data-nosnippet>247</a>        </span>amount: U256,
+<a href=#248 id=248 data-nosnippet>248</a>    },
+<a href=#249 id=249 data-nosnippet>249</a>    <span class="doccomment">/// Claim withdrawal after an undelegation.
+<a href=#250 id=250 data-nosnippet>250</a>    </span>ClaimWithdrawal {
+<a href=#251 id=251 data-nosnippet>251</a>        <span class="attr">#[clap(long)]
+<a href=#252 id=252 data-nosnippet>252</a>        </span>validator_address: Address,
+<a href=#253 id=253 data-nosnippet>253</a>    },
+<a href=#254 id=254 data-nosnippet>254</a>    <span class="doccomment">/// Claim withdrawal after validator exit.
+<a href=#255 id=255 data-nosnippet>255</a>    </span>ClaimValidatorExit {
+<a href=#256 id=256 data-nosnippet>256</a>        <span class="attr">#[clap(long)]
+<a href=#257 id=257 data-nosnippet>257</a>        </span>validator_address: Address,
 <a href=#258 id=258 data-nosnippet>258</a>    },
-<a href=#259 id=259 data-nosnippet>259</a>    <span class="doccomment">/// Check ESP token allowance of stake table contract.
-<a href=#260 id=260 data-nosnippet>260</a>    </span>TokenAllowance {
+<a href=#259 id=259 data-nosnippet>259</a>    <span class="doccomment">/// Check ESP token balance.
+<a href=#260 id=260 data-nosnippet>260</a>    </span>TokenBalance {
 <a href=#261 id=261 data-nosnippet>261</a>        <span class="doccomment">/// The address to check.
 <a href=#262 id=262 data-nosnippet>262</a>        </span><span class="attr">#[clap(long)]
-<a href=#263 id=263 data-nosnippet>263</a>        </span>owner: <span class="prelude-ty">Option</span>&lt;Address&gt;,
+<a href=#263 id=263 data-nosnippet>263</a>        </span>address: <span class="prelude-ty">Option</span>&lt;Address&gt;,
 <a href=#264 id=264 data-nosnippet>264</a>    },
-<a href=#265 id=265 data-nosnippet>265</a>    <span class="doccomment">/// Transfer ESP tokens
-<a href=#266 id=266 data-nosnippet>266</a>    </span>Transfer {
-<a href=#267 id=267 data-nosnippet>267</a>        <span class="doccomment">/// The address to transfer to.
+<a href=#265 id=265 data-nosnippet>265</a>    <span class="doccomment">/// Check ESP token allowance of stake table contract.
+<a href=#266 id=266 data-nosnippet>266</a>    </span>TokenAllowance {
+<a href=#267 id=267 data-nosnippet>267</a>        <span class="doccomment">/// The address to check.
 <a href=#268 id=268 data-nosnippet>268</a>        </span><span class="attr">#[clap(long)]
-<a href=#269 id=269 data-nosnippet>269</a>        </span>to: Address,
-<a href=#270 id=270 data-nosnippet>270</a>
-<a href=#271 id=271 data-nosnippet>271</a>        <span class="doccomment">/// The amount to transfer
-<a href=#272 id=272 data-nosnippet>272</a>        </span><span class="attr">#[clap(long, value_parser = parse_ether)]
-<a href=#273 id=273 data-nosnippet>273</a>        </span>amount: U256,
-<a href=#274 id=274 data-nosnippet>274</a>    },
-<a href=#275 id=275 data-nosnippet>275</a>    <span class="doccomment">/// Register the validators and delegates for the local demo.
-<a href=#276 id=276 data-nosnippet>276</a>    </span>StakeForDemo {
-<a href=#277 id=277 data-nosnippet>277</a>        <span class="doccomment">/// The number of validators to register.
-<a href=#278 id=278 data-nosnippet>278</a>        ///
-<a href=#279 id=279 data-nosnippet>279</a>        /// The default (5) works for the local native and docker demos.
-<a href=#280 id=280 data-nosnippet>280</a>        </span><span class="attr">#[clap(long, default_value_t = <span class="number">5</span>)]
-<a href=#281 id=281 data-nosnippet>281</a>        </span>num_validators: u16,
-<a href=#282 id=282 data-nosnippet>282</a>
-<a href=#283 id=283 data-nosnippet>283</a>        <span class="attr">#[arg(long, value_enum, default_value_t = DelegationConfig::default())]
-<a href=#284 id=284 data-nosnippet>284</a>        </span>delegation_config: DelegationConfig,
-<a href=#285 id=285 data-nosnippet>285</a>    },
-<a href=#286 id=286 data-nosnippet>286</a>    <span class="doccomment">/// Export validator node signatures for address validation.
-<a href=#287 id=287 data-nosnippet>287</a>    </span>ExportNodeSignatures {
-<a href=#288 id=288 data-nosnippet>288</a>        <span class="doccomment">/// The Ethereum address to sign.
-<a href=#289 id=289 data-nosnippet>289</a>        </span><span class="attr">#[clap(long)]
-<a href=#290 id=290 data-nosnippet>290</a>        </span>address: Address,
-<a href=#291 id=291 data-nosnippet>291</a>
-<a href=#292 id=292 data-nosnippet>292</a>        <span class="doccomment">/// The BLS private key for signing.
-<a href=#293 id=293 data-nosnippet>293</a>        </span><span class="attr">#[clap(long, value_parser = parse::parse_bls_priv_key, env = <span class="string">"BLS_PRIVATE_KEY"</span>)]
-<a href=#294 id=294 data-nosnippet>294</a>        </span>consensus_private_key: BLSPrivKey,
-<a href=#295 id=295 data-nosnippet>295</a>
-<a href=#296 id=296 data-nosnippet>296</a>        <span class="doccomment">/// The Schnorr private key for signing.
-<a href=#297 id=297 data-nosnippet>297</a>        </span><span class="attr">#[clap(long, value_parser = parse::parse_state_priv_key, env = <span class="string">"SCHNORR_PRIVATE_KEY"</span>)]
-<a href=#298 id=298 data-nosnippet>298</a>        </span>state_private_key: StateSignKey,
-<a href=#299 id=299 data-nosnippet>299</a>
-<a href=#300 id=300 data-nosnippet>300</a>        <span class="attr">#[clap(flatten)]
-<a href=#301 id=301 data-nosnippet>301</a>        </span>output_args: signature::OutputArgs,
-<a href=#302 id=302 data-nosnippet>302</a>    },
-<a href=#303 id=303 data-nosnippet>303</a>}</code></pre></div></section></main></body></html>
+<a href=#269 id=269 data-nosnippet>269</a>        </span>owner: <span class="prelude-ty">Option</span>&lt;Address&gt;,
+<a href=#270 id=270 data-nosnippet>270</a>    },
+<a href=#271 id=271 data-nosnippet>271</a>    <span class="doccomment">/// Transfer ESP tokens
+<a href=#272 id=272 data-nosnippet>272</a>    </span>Transfer {
+<a href=#273 id=273 data-nosnippet>273</a>        <span class="doccomment">/// The address to transfer to.
+<a href=#274 id=274 data-nosnippet>274</a>        </span><span class="attr">#[clap(long)]
+<a href=#275 id=275 data-nosnippet>275</a>        </span>to: Address,
+<a href=#276 id=276 data-nosnippet>276</a>
+<a href=#277 id=277 data-nosnippet>277</a>        <span class="doccomment">/// The amount to transfer
+<a href=#278 id=278 data-nosnippet>278</a>        </span><span class="attr">#[clap(long, value_parser = parse_ether)]
+<a href=#279 id=279 data-nosnippet>279</a>        </span>amount: U256,
+<a href=#280 id=280 data-nosnippet>280</a>    },
+<a href=#281 id=281 data-nosnippet>281</a>    <span class="doccomment">/// Register the validators and delegates for the local demo.
+<a href=#282 id=282 data-nosnippet>282</a>    </span>StakeForDemo {
+<a href=#283 id=283 data-nosnippet>283</a>        <span class="doccomment">/// The number of validators to register.
+<a href=#284 id=284 data-nosnippet>284</a>        ///
+<a href=#285 id=285 data-nosnippet>285</a>        /// The default (5) works for the local native and docker demos.
+<a href=#286 id=286 data-nosnippet>286</a>        </span><span class="attr">#[clap(long, default_value_t = <span class="number">5</span>)]
+<a href=#287 id=287 data-nosnippet>287</a>        </span>num_validators: u16,
+<a href=#288 id=288 data-nosnippet>288</a>
+<a href=#289 id=289 data-nosnippet>289</a>        <span class="attr">#[arg(long, value_enum, default_value_t = DelegationConfig::default())]
+<a href=#290 id=290 data-nosnippet>290</a>        </span>delegation_config: DelegationConfig,
+<a href=#291 id=291 data-nosnippet>291</a>    },
+<a href=#292 id=292 data-nosnippet>292</a>    <span class="doccomment">/// Export validator node signatures for address validation.
+<a href=#293 id=293 data-nosnippet>293</a>    </span>ExportNodeSignatures {
+<a href=#294 id=294 data-nosnippet>294</a>        <span class="doccomment">/// The Ethereum address to sign.
+<a href=#295 id=295 data-nosnippet>295</a>        </span><span class="attr">#[clap(long)]
+<a href=#296 id=296 data-nosnippet>296</a>        </span>address: Address,
+<a href=#297 id=297 data-nosnippet>297</a>
+<a href=#298 id=298 data-nosnippet>298</a>        <span class="doccomment">/// The BLS private key for signing.
+<a href=#299 id=299 data-nosnippet>299</a>        </span><span class="attr">#[clap(long, value_parser = parse::parse_bls_priv_key, env = <span class="string">"BLS_PRIVATE_KEY"</span>)]
+<a href=#300 id=300 data-nosnippet>300</a>        </span>consensus_private_key: BLSPrivKey,
+<a href=#301 id=301 data-nosnippet>301</a>
+<a href=#302 id=302 data-nosnippet>302</a>        <span class="doccomment">/// The Schnorr private key for signing.
+<a href=#303 id=303 data-nosnippet>303</a>        </span><span class="attr">#[clap(long, value_parser = parse::parse_state_priv_key, env = <span class="string">"SCHNORR_PRIVATE_KEY"</span>)]
+<a href=#304 id=304 data-nosnippet>304</a>        </span>state_private_key: StateSignKey,
+<a href=#305 id=305 data-nosnippet>305</a>
+<a href=#306 id=306 data-nosnippet>306</a>        <span class="attr">#[clap(flatten)]
+<a href=#307 id=307 data-nosnippet>307</a>        </span>output_args: signature::OutputArgs,
+<a href=#308 id=308 data-nosnippet>308</a>    },
+<a href=#309 id=309 data-nosnippet>309</a>}</code></pre></div></section></main></body></html>
