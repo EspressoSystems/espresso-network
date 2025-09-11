@@ -19,7 +19,7 @@
 <a href=#19 id=19 data-nosnippet>19</a>    epoch_membership::EpochMembershipCoordinator,
 <a href=#20 id=20 data-nosnippet>20</a>    message::UpgradeLock,
 <a href=#21 id=21 data-nosnippet>21</a>    simple_certificate::{
-<a href=#22 id=22 data-nosnippet>22</a>        EpochRootQuorumCertificate, LightClientStateUpdateCertificateV2,
+<a href=#22 id=22 data-nosnippet>22</a>        EpochRootQuorumCertificateV2, LightClientStateUpdateCertificateV2,
 <a href=#23 id=23 data-nosnippet>23</a>        NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
 <a href=#24 id=24 data-nosnippet>24</a>    },
 <a href=#25 id=25 data-nosnippet>25</a>    stake_table::StakeTableEntries,
@@ -557,7 +557,7 @@
 <a href=#557 id=557 data-nosnippet>557</a>                },
 <a href=#558 id=558 data-nosnippet>558</a>            },
 <a href=#559 id=559 data-nosnippet>559</a>
-<a href=#560 id=560 data-nosnippet>560</a>            HotShotEvent::EpochRootQcFormed(EpochRootQuorumCertificate { qc, state_cert }) =&gt; {
+<a href=#560 id=560 data-nosnippet>560</a>            HotShotEvent::EpochRootQcFormed(EpochRootQuorumCertificateV2 { qc, state_cert }) =&gt; {
 <a href=#561 id=561 data-nosnippet>561</a>                <span class="comment">// Only update if the qc is from a newer view
 <a href=#562 id=562 data-nosnippet>562</a>                </span><span class="kw">if </span>qc.view_number() &lt;= <span class="self">self</span>.consensus.read().<span class="kw">await</span>.high_qc().view_number {
 <a href=#563 id=563 data-nosnippet>563</a>                    <span class="macro">tracing::trace!</span>(

@@ -844,19 +844,60 @@
 <a href=#844 id=844 data-nosnippet>844</a>
 <a href=#845 id=845 data-nosnippet>845</a><span class="attr">#[derive(Serialize, Deserialize, Eq, Hash, PartialEq, Debug, Clone)]
 <a href=#846 id=846 data-nosnippet>846</a>#[serde(bound(deserialize = <span class="string">"QuorumCertificate2&lt;TYPES&gt;:for&lt;'a&gt; Deserialize&lt;'a&gt;"</span>))]
-<a href=#847 id=847 data-nosnippet>847</a></span><span class="kw">pub struct </span>EpochRootQuorumCertificate&lt;TYPES: NodeType&gt; {
+<a href=#847 id=847 data-nosnippet>847</a></span><span class="kw">pub struct </span>EpochRootQuorumCertificateV2&lt;TYPES: NodeType&gt; {
 <a href=#848 id=848 data-nosnippet>848</a>    <span class="kw">pub </span>qc: QuorumCertificate2&lt;TYPES&gt;,
 <a href=#849 id=849 data-nosnippet>849</a>    <span class="kw">pub </span>state_cert: LightClientStateUpdateCertificateV2&lt;TYPES&gt;,
 <a href=#850 id=850 data-nosnippet>850</a>}
 <a href=#851 id=851 data-nosnippet>851</a>
-<a href=#852 id=852 data-nosnippet>852</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; HasViewNumber&lt;TYPES&gt; <span class="kw">for </span>EpochRootQuorumCertificate&lt;TYPES&gt; {
+<a href=#852 id=852 data-nosnippet>852</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; HasViewNumber&lt;TYPES&gt; <span class="kw">for </span>EpochRootQuorumCertificateV2&lt;TYPES&gt; {
 <a href=#853 id=853 data-nosnippet>853</a>    <span class="kw">fn </span>view_number(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; TYPES::View {
 <a href=#854 id=854 data-nosnippet>854</a>        <span class="self">self</span>.qc.view_number()
 <a href=#855 id=855 data-nosnippet>855</a>    }
 <a href=#856 id=856 data-nosnippet>856</a>}
 <a href=#857 id=857 data-nosnippet>857</a>
-<a href=#858 id=858 data-nosnippet>858</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; HasEpoch&lt;TYPES&gt; <span class="kw">for </span>EpochRootQuorumCertificate&lt;TYPES&gt; {
+<a href=#858 id=858 data-nosnippet>858</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; HasEpoch&lt;TYPES&gt; <span class="kw">for </span>EpochRootQuorumCertificateV2&lt;TYPES&gt; {
 <a href=#859 id=859 data-nosnippet>859</a>    <span class="kw">fn </span>epoch(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;TYPES::Epoch&gt; {
 <a href=#860 id=860 data-nosnippet>860</a>        <span class="self">self</span>.qc.epoch()
 <a href=#861 id=861 data-nosnippet>861</a>    }
-<a href=#862 id=862 data-nosnippet>862</a>}</code></pre></div></section></main></body></html>
+<a href=#862 id=862 data-nosnippet>862</a>}
+<a href=#863 id=863 data-nosnippet>863</a>
+<a href=#864 id=864 data-nosnippet>864</a><span class="attr">#[derive(Serialize, Deserialize, Eq, Hash, PartialEq, Debug, Clone)]
+<a href=#865 id=865 data-nosnippet>865</a>#[serde(bound(deserialize = <span class="string">"QuorumCertificate2&lt;TYPES&gt;:for&lt;'a&gt; Deserialize&lt;'a&gt;"</span>))]
+<a href=#866 id=866 data-nosnippet>866</a></span><span class="kw">pub struct </span>EpochRootQuorumCertificateV1&lt;TYPES: NodeType&gt; {
+<a href=#867 id=867 data-nosnippet>867</a>    <span class="kw">pub </span>qc: QuorumCertificate2&lt;TYPES&gt;,
+<a href=#868 id=868 data-nosnippet>868</a>    <span class="kw">pub </span>state_cert: LightClientStateUpdateCertificateV1&lt;TYPES&gt;,
+<a href=#869 id=869 data-nosnippet>869</a>}
+<a href=#870 id=870 data-nosnippet>870</a>
+<a href=#871 id=871 data-nosnippet>871</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; HasViewNumber&lt;TYPES&gt; <span class="kw">for </span>EpochRootQuorumCertificateV1&lt;TYPES&gt; {
+<a href=#872 id=872 data-nosnippet>872</a>    <span class="kw">fn </span>view_number(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; TYPES::View {
+<a href=#873 id=873 data-nosnippet>873</a>        <span class="self">self</span>.qc.view_number()
+<a href=#874 id=874 data-nosnippet>874</a>    }
+<a href=#875 id=875 data-nosnippet>875</a>}
+<a href=#876 id=876 data-nosnippet>876</a>
+<a href=#877 id=877 data-nosnippet>877</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; HasEpoch&lt;TYPES&gt; <span class="kw">for </span>EpochRootQuorumCertificateV1&lt;TYPES&gt; {
+<a href=#878 id=878 data-nosnippet>878</a>    <span class="kw">fn </span>epoch(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;TYPES::Epoch&gt; {
+<a href=#879 id=879 data-nosnippet>879</a>        <span class="self">self</span>.qc.epoch()
+<a href=#880 id=880 data-nosnippet>880</a>    }
+<a href=#881 id=881 data-nosnippet>881</a>}
+<a href=#882 id=882 data-nosnippet>882</a>
+<a href=#883 id=883 data-nosnippet>883</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; From&lt;EpochRootQuorumCertificateV1&lt;TYPES&gt;&gt;
+<a href=#884 id=884 data-nosnippet>884</a>    <span class="kw">for </span>EpochRootQuorumCertificateV2&lt;TYPES&gt;
+<a href=#885 id=885 data-nosnippet>885</a>{
+<a href=#886 id=886 data-nosnippet>886</a>    <span class="kw">fn </span>from(root_qc: EpochRootQuorumCertificateV1&lt;TYPES&gt;) -&gt; <span class="self">Self </span>{
+<a href=#887 id=887 data-nosnippet>887</a>        <span class="self">Self </span>{
+<a href=#888 id=888 data-nosnippet>888</a>            qc: root_qc.qc,
+<a href=#889 id=889 data-nosnippet>889</a>            state_cert: root_qc.state_cert.into(),
+<a href=#890 id=890 data-nosnippet>890</a>        }
+<a href=#891 id=891 data-nosnippet>891</a>    }
+<a href=#892 id=892 data-nosnippet>892</a>}
+<a href=#893 id=893 data-nosnippet>893</a>
+<a href=#894 id=894 data-nosnippet>894</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; From&lt;EpochRootQuorumCertificateV2&lt;TYPES&gt;&gt;
+<a href=#895 id=895 data-nosnippet>895</a>    <span class="kw">for </span>EpochRootQuorumCertificateV1&lt;TYPES&gt;
+<a href=#896 id=896 data-nosnippet>896</a>{
+<a href=#897 id=897 data-nosnippet>897</a>    <span class="kw">fn </span>from(root_qc: EpochRootQuorumCertificateV2&lt;TYPES&gt;) -&gt; <span class="self">Self </span>{
+<a href=#898 id=898 data-nosnippet>898</a>        <span class="self">Self </span>{
+<a href=#899 id=899 data-nosnippet>899</a>            qc: root_qc.qc,
+<a href=#900 id=900 data-nosnippet>900</a>            state_cert: root_qc.state_cert.into(),
+<a href=#901 id=901 data-nosnippet>901</a>        }
+<a href=#902 id=902 data-nosnippet>902</a>    }
+<a href=#903 id=903 data-nosnippet>903</a>}</code></pre></div></section></main></body></html>

@@ -10,8 +10,8 @@
 <a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>chrono::Utc;
 <a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>hotshot_types::{
 <a href=#12 id=12 data-nosnippet>12</a>    event::{Event, EventType},
-<a href=#13 id=13 data-nosnippet>13</a>    simple_certificate::EpochRootQuorumCertificate,
-<a href=#14 id=14 data-nosnippet>14</a>    simple_vote::{EpochRootQuorumVote, HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
+<a href=#13 id=13 data-nosnippet>13</a>    simple_certificate::EpochRootQuorumCertificateV2,
+<a href=#14 id=14 data-nosnippet>14</a>    simple_vote::{EpochRootQuorumVote2, HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
 <a href=#15 id=15 data-nosnippet>15</a>    traits::node_implementation::{ConsensusTime, NodeImplementation, NodeType},
 <a href=#16 id=16 data-nosnippet>16</a>    utils::{is_epoch_root, is_epoch_transition, is_last_block, EpochTransitionIndicator},
 <a href=#17 id=17 data-nosnippet>17</a>    vote::{HasViewNumber, Vote},
@@ -120,7 +120,7 @@
 <a href=#120 id=120 data-nosnippet>120</a>    I: NodeImplementation&lt;TYPES&gt;,
 <a href=#121 id=121 data-nosnippet>121</a>    V: Versions,
 <a href=#122 id=122 data-nosnippet>122</a>&gt;(
-<a href=#123 id=123 data-nosnippet>123</a>    vote: <span class="kw-2">&amp;</span>EpochRootQuorumVote&lt;TYPES&gt;,
+<a href=#123 id=123 data-nosnippet>123</a>    vote: <span class="kw-2">&amp;</span>EpochRootQuorumVote2&lt;TYPES&gt;,
 <a href=#124 id=124 data-nosnippet>124</a>    event: Arc&lt;HotShotEvent&lt;TYPES&gt;&gt;,
 <a href=#125 id=125 data-nosnippet>125</a>    sender: <span class="kw-2">&amp;</span>Sender&lt;Arc&lt;HotShotEvent&lt;TYPES&gt;&gt;&gt;,
 <a href=#126 id=126 data-nosnippet>126</a>    task_state: <span class="kw-2">&amp;mut </span>ConsensusTaskState&lt;TYPES, I, V&gt;,
@@ -312,7 +312,7 @@
 <a href=#312 id=312 data-nosnippet>312</a>            );
 <a href=#313 id=313 data-nosnippet>313</a>            broadcast_event(
 <a href=#314 id=314 data-nosnippet>314</a>                Arc::new(HotShotEvent::EpochRootQcSend(
-<a href=#315 id=315 data-nosnippet>315</a>                    EpochRootQuorumCertificate {
+<a href=#315 id=315 data-nosnippet>315</a>                    EpochRootQuorumCertificateV2 {
 <a href=#316 id=316 data-nosnippet>316</a>                        qc: high_qc,
 <a href=#317 id=317 data-nosnippet>317</a>                        state_cert,
 <a href=#318 id=318 data-nosnippet>318</a>                    },
