@@ -5815,31 +5815,33 @@ mod test {
             assert_eq!(validators.get(&val).unwrap().commission, new_comm.to_evm());
         }
 
-        let last_block_with_nonzero_commission = EPOCH_HEIGHT * (target_epoch - 1);
-        println!("last block with non-zero commission {last_block_with_nonzero_commission}");
-        let val0 = commissions[0].0;
-        let amount_with_nonzero_commission = client
-            .get::<Option<RewardAmount>>(&format!(
-                "reward-state-v2/reward-balance/{last_block_with_nonzero_commission}/{val0}"
-            ))
-            .send()
-            .await?
-            .unwrap();
-        println!("reward amount from non-zero commission phase {amount_with_nonzero_commission}");
-
-        // check validator 0 receives no new rewards (except the remainder that
-        // goes to the leader) in the epoch where its commission is zero
-        let tolerance = U256::from(10 * EPOCH_HEIGHT).into();
-        for block in EPOCH_HEIGHT * (target_epoch - 1) + 1..EPOCH_HEIGHT * target_epoch {
-            let current_amount = client
+        let last_block_with_old_commissions = EPOCH_HEIGHT * (target_epoch - 1);
+        let block_with_new_commissions = EPOCH_HEIGHT * target_epoch;
+        let mut new_amounts = vec![];
+        for (val, ..) in commissions {
+            let before = client
                 .get::<Option<RewardAmount>>(&format!(
-                    "reward-state-v2/reward-balance/{block}/{val0}"
+                    "reward-state-v2/reward-balance/{last_block_with_old_commissions}/{val}"
                 ))
                 .send()
                 .await?
                 .unwrap();
-            assert!(current_amount < amount_with_nonzero_commission + tolerance)
+            let after = client
+                .get::<Option<RewardAmount>>(&format!(
+                    "reward-state-v2/reward-balance/{block_with_new_commissions}/{val}"
+                ))
+                .send()
+                .await?
+                .unwrap();
+            new_amounts.push(after - before);
         }
+
+        let tolerance = U256::from(10 * EPOCH_HEIGHT).into();
+        // validator zero got new new rewards except remainders
+        assert!(new_amounts[0] < tolerance);
+
+        // other validators are still receiving rewards
+        assert!(new_amounts[1] + new_amounts[2] > tolerance);
 
         Ok(())
     }
