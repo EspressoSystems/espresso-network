@@ -168,6 +168,73 @@ async fn test_cli_update_consensus_keys(#[case] version: StakeTableContractVersi
     Ok(())
 }
 
+#[test_log::test(tokio::test)]
+async fn test_cli_update_commission() -> Result<()> {
+    // Only test on V2 since V1 doesn't support commission updates
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
+    system.register_validator().await?;
+
+    let new_commission = "8.5".try_into()?;
+    assert_ne!(system.fetch_commission().await?, new_commission);
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-commission")
+        .arg("--new-commission")
+        .arg("8.5")
+        .assert()
+        .success();
+    assert_eq!(system.fetch_commission().await?, new_commission);
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_increase_commission_too_soon() -> Result<()> {
+    // Only test on V2 since V1 doesn't support commission updates
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
+    system.register_validator().await?;
+
+    let old_commission = system.fetch_commission().await?;
+    let basis_point = 1u64.try_into()?;
+    let first_update = old_commission + basis_point;
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-commission")
+        .arg("--new-commission")
+        .arg(first_update.to_string())
+        .assert()
+        .success();
+    assert_eq!(system.fetch_commission().await?, first_update);
+
+    let interval = system.get_min_commission_increase_interval().await?;
+    // Warp to just before the end of the delay
+    system.anvil_increase_time(interval - U256::from(5)).await?;
+
+    let second_update = first_update + basis_point;
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-commission")
+        .arg("--new-commission")
+        .arg(second_update.to_string())
+        .assert()
+        .failure()
+        .stdout(str::contains("TooSoon"));
+    assert_eq!(system.fetch_commission().await?, first_update);
+
+    system.anvil_increase_time(U256::from(5)).await?;
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-commission")
+        .arg("--new-commission")
+        .arg(second_update.to_string())
+        .assert()
+        .success();
+    assert_eq!(system.fetch_commission().await?, second_update);
+
+    Ok(())
+}
+
 #[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_delegate(#[case] version: StakeTableContractVersion) -> Result<()> {
     let system = TestSystem::deploy_version(version).await?;
