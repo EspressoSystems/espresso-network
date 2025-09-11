@@ -9,7 +9,7 @@ use hotshot_types::{
     event::Event,
     stake_table::HSStakeTable,
     traits::{
-        election::Membership,
+        election::{Membership, NoStakeTableHash},
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::StakeTableEntryType,
     },
@@ -78,6 +78,7 @@ impl<
     > Membership<TYPES> for StrictMembership<TYPES, StakeTable>
 {
     type Error = anyhow::Error;
+    type StakeTableHash = NoStakeTableHash;
     type Storage = TestStorage<TYPES>;
 
     fn new<I: NodeImplementation<TYPES>>(

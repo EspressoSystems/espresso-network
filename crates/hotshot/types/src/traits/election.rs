@@ -10,6 +10,7 @@ use std::{collections::BTreeSet, fmt::Debug, sync::Arc};
 use alloy::primitives::U256;
 use async_broadcast::Receiver;
 use async_lock::RwLock;
+use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::Result;
 
 use super::node_implementation::NodeType;
@@ -22,12 +23,24 @@ use crate::{
     PeerConfig,
 };
 
+pub struct NoStakeTableHash;
+
+impl Committable for NoStakeTableHash {
+    fn commit(&self) -> Commitment<Self> {
+        Commitment::from_raw([0u8; 32])
+    }
+}
+
 /// A protocol for determining membership in and participating in a committee.
 pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// The error type returned by methods like `lookup_leader`.
     type Error: std::fmt::Display;
+
     /// Storage type used by the underlying fetcher
     type Storage;
+
+    type StakeTableHash: Committable;
+
     /// Create a committee
     fn new<I: NodeImplementation<TYPES>>(
         // Note: eligible_leaders is currently a hack because the DA leader == the quorum leader
@@ -234,6 +247,12 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
 
     /// Get first epoch if epochs are enabled, `None` otherwise
     fn first_epoch(&self) -> Option<TYPES::Epoch>;
+
+    /// Returns the commitment of the stake table for the given epoch,
+    /// Errors if the stake table is not available for the given epoch
+    fn stake_table_hash(&self, _epoch: TYPES::Epoch) -> Option<Commitment<Self::StakeTableHash>> {
+        None
+    }
 }
 
 pub fn membership_spawn_add_epoch_root<TYPES: NodeType>(

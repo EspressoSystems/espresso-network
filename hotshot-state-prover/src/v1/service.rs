@@ -135,7 +135,6 @@ pub async fn submit_state_and_proof(
     // send the tx
     let (receipt, included_block) = sequencer_utils::contract_send(&tx)
         .await
-        .with_context(|| "Failed to send contract tx")
         .map_err(ProverError::ContractError)?;
 
     tracing::info!(
@@ -432,8 +431,8 @@ mod test {
     // const MAX_HISTORY_SECONDS: u32 = 864000;
     const NUM_INIT_VALIDATORS: usize = STAKE_TABLE_CAPACITY_FOR_TEST / 2;
 
-    /// This helper function deploy LightClient V1, and its Proxy, then deploy V2 and upgrade the proxy.
-    /// Returns the address of the proxy, caller can cast the address to be `LightClientV2` or `LightClientV2Mock`
+    /// This helper function deploy LightClient V1, and its Proxy.
+    /// Returns the address of the proxy.
     async fn deploy(
         provider: impl Provider,
         contracts: &mut Contracts,

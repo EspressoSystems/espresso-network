@@ -14,6 +14,7 @@ environment:
   - ESPRESSO_SEQUENCER_CDN_ENDPOINT=127.0.0.1:$ESPRESSO_CDN_SERVER_PORT
   - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL=http://localhost:$ESPRESSO_ORCHESTRATOR_PORT
   - ESPRESSO_SEQUENCER_URL=http://localhost:$ESPRESSO_SEQUENCER_API_PORT
+  - ESPRESSO_SEQUENCER_URLS=http://localhost:$ESPRESSO_SEQUENCER_API_PORT,http://localhost:$ESPRESSO_SEQUENCER1_API_PORT
   - ESPRESSO_SEQUENCER_L1_PROVIDER=http://localhost:$ESPRESSO_SEQUENCER_L1_PORT
   - ESPRESSO_SEQUENCER_GENESIS_FILE=$ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE
   - ESPRESSO_BUILDER_GENESIS_FILE=$ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE
@@ -55,14 +56,13 @@ processes:
     # script will think they're already deployed.
     command:
       unset ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS
-      && deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2
+      && deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2 --upgrade-light-client-v3
     namespace: setup
     depends_on:
       demo-l1-network:
         condition: process_healthy
       sequencer0:
         condition: process_healthy
-      # Make sure this doesn't start until the other contracts have been deployed, since we use the same mnemonic.
       deploy-sequencer-contracts:
         condition: process_completed
     availability: *exit-ok
@@ -556,7 +556,7 @@ processes:
       - "$ESPRESSO_BUILDER_SERVER_PORT:$ESPRESSO_BUILDER_SERVER_PORT"
     environment:
       - ESPRESSO_SEQUENCER_STATE_PEERS=http://localhost:$ESPRESSO_SEQUENCER_API_PORT
-      - ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_URL=http://localhost:$ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT
+      - ESPRESSO_SEQUENCER_URL=http://localhost:$ESPRESSO_SEQUENCER_API_PORT
       - ESPRESSO_BUILDER_GENESIS_FILE
     depends_on:
       sequencer0:

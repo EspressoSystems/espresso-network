@@ -16,7 +16,7 @@ use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent},
-    Leaf, Leaf2, NetworkConfig, Payload, SeqTypes, ValidatorMap,
+    Leaf, Leaf2, NetworkConfig, Payload, SeqTypes, StakeTableHash, ValidatorMap,
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
@@ -219,6 +219,10 @@ impl Inner {
 
     fn next_epoch_qc(&self) -> PathBuf {
         self.path.join("next_epoch_quorum_certificate")
+    }
+
+    fn eqc(&self) -> PathBuf {
+        self.path.join("eqc")
     }
 
     fn libp2p_dht_path(&self) -> PathBuf {
@@ -1064,6 +1068,45 @@ impl SequencerPersistence for Persistence {
         ))
     }
 
+    async fn store_eqc(
+        &self,
+        high_qc: QuorumCertificate2<SeqTypes>,
+        next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let mut inner = self.inner.write().await;
+        let path = &inner.eqc();
+
+        inner.replace(
+            path,
+            |_| {
+                // Always overwrite the previous file.
+                Ok(true)
+            },
+            |mut file| {
+                let bytes = bincode::serialize(&(high_qc, next_epoch_high_qc))
+                    .context("serializing next epoch qc")?;
+                file.write_all(&bytes)?;
+                Ok(())
+            },
+        )
+    }
+
+    async fn load_eqc(
+        &self,
+    ) -> Option<(
+        QuorumCertificate2<SeqTypes>,
+        NextEpochQuorumCertificate2<SeqTypes>,
+    )> {
+        let inner = self.inner.read().await;
+        let path = inner.eqc();
+        if !path.is_file() {
+            return None;
+        }
+        let bytes = fs::read(&path).ok()?;
+
+        bincode::deserialize(&bytes).ok()
+    }
+
     async fn append_da2(
         &self,
         proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
@@ -1572,7 +1615,7 @@ impl MembershipPersistence for Persistence {
     async fn load_stake(
         &self,
         epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>)>> {
+    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>> {
         let inner = self.inner.read().await;
         let path = &inner.stake_table_dir_path();
         let file_path = path.join(epoch.to_string()).with_extension("txt");
@@ -1596,7 +1639,7 @@ impl MembershipPersistence for Persistence {
                         err
                     )
                 })?;
-                (map, None)
+                (map, None, None)
             },
         };
 
@@ -1617,8 +1660,13 @@ impl MembershipPersistence for Persistence {
                 format!("failed to read stake table file at {}", file_path.display())
             })?;
 
-            let stake: (ValidatorMap, Option<RewardAmount>) =
-                match bincode::deserialize::<(ValidatorMap, Option<RewardAmount>)>(&bytes) {
+            let stake: (ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>) =
+                match bincode::deserialize::<(
+                    ValidatorMap,
+                    Option<RewardAmount>,
+                    Option<StakeTableHash>,
+                )>(&bytes)
+                {
                     Ok(res) => res,
                     Err(err) => {
                         let validatormap = bincode::deserialize::<ValidatorMap>(&bytes)
@@ -1631,11 +1679,11 @@ impl MembershipPersistence for Persistence {
                                 )
                             })?;
 
-                        (validatormap, None)
+                        (validatormap, None, None)
                     },
                 };
 
-            validator_sets.push((epoch, stake));
+            validator_sets.push((epoch, (stake.0, stake.1), stake.2));
         }
 
         Ok(Some(validator_sets))
@@ -1646,6 +1694,7 @@ impl MembershipPersistence for Persistence {
         epoch: EpochNumber,
         stake: ValidatorMap,
         block_reward: Option<RewardAmount>,
+        stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
         let dir_path = &inner.stake_table_dir_path();
@@ -1661,7 +1710,7 @@ impl MembershipPersistence for Persistence {
                 Ok(true)
             },
             |mut file| {
-                let bytes = bincode::serialize(&(stake, block_reward))
+                let bytes = bincode::serialize(&(stake, block_reward, stake_table_hash))
                     .context("serializing combined stake table")?;
                 file.write_all(&bytes)?;
                 Ok(())
@@ -2219,7 +2268,7 @@ mod test {
                 },
                 next_stake_table_state: Default::default(),
                 signatures: vec![], // filling arbitrary value
-                auth_root: None,
+                auth_root: Default::default(),
             };
             assert!(storage.add_state_cert(state_cert).await.is_ok());
 

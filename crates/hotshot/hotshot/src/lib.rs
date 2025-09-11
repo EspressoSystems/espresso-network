@@ -1059,7 +1059,7 @@ pub struct InitializerEpochInfo<TYPES: NodeType> {
     pub block_header: Option<TYPES::BlockHeader>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 /// initializer struct for creating starting block
 pub struct HotShotInitializer<TYPES: NodeType> {
     /// Instance-level state.
@@ -1263,7 +1263,9 @@ async fn load_start_epoch_info<TYPES: NodeType>(
         .await
         .set_first_epoch(first_epoch_number, INITIAL_DRB_RESULT);
 
-    for epoch_info in start_epoch_info {
+    let mut sorted_epoch_info = start_epoch_info.clone();
+    sorted_epoch_info.sort_by_key(|info| info.epoch);
+    for epoch_info in sorted_epoch_info {
         if let Some(block_header) = &epoch_info.block_header {
             tracing::info!("Calling add_epoch_root for epoch {}", epoch_info.epoch);
 

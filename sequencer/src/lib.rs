@@ -480,8 +480,9 @@ where
         },
     };
 
+    let genesis_chain_config = genesis.header.chain_config;
     let mut genesis_state = ValidatedState {
-        chain_config: genesis.chain_config.into(),
+        chain_config: genesis_chain_config.into(),
         ..Default::default()
     };
     for (address, amount) in genesis.accounts {
@@ -545,6 +546,7 @@ where
 
     let instance_state = NodeState {
         chain_config: genesis.chain_config,
+        genesis_chain_config,
         l1_client,
         genesis_header: genesis.header,
         genesis_state,
@@ -914,6 +916,7 @@ pub mod testing {
                         .genesis_st_state(genesis_stake)
                         .blocks_per_epoch(blocks_per_epoch)
                         .epoch_start_block(epoch_start_block)
+                        .exit_escrow_period(U256::from(blocks_per_epoch * 15 + 100))
                         .multisig_pauser(self.signer.address())
                         .token_name("Espresso".to_string())
                         .token_symbol("ESP".to_string())
@@ -1274,7 +1277,7 @@ pub mod testing {
                 Arc::new(catchup_providers.clone()),
                 V::Base::VERSION,
                 coordinator.clone(),
-                Version { major: 0, minor: 1 },
+                V::Base::VERSION,
             )
             .with_current_version(V::Base::version())
             .with_genesis(state)

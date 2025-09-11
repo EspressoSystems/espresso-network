@@ -45,7 +45,7 @@ services:
 
   deploy-prover-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
-    command: deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2
+    command: deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2 --upgrade-light-client-v3
     environment:
       - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL
       - ESPRESSO_SEQUENCER_L1_PROVIDER
@@ -273,7 +273,6 @@ services:
     image: ghcr.io/espressosystems/espresso-sequencer/sequencer:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SEQUENCER_API_PORT:$ESPRESSO_SEQUENCER_API_PORT"
-      - "$ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT:$ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT"
     # Run the full API server with all modules, Postgres storage
     command: sequencer -- storage-sql -- http -- query -- submit -- hotshot-events -- config
     environment:
@@ -283,7 +282,6 @@ services:
       - ESPRESSO_SEQUENCER_CDN_ENDPOINT
       - ESPRESSO_SEQUENCER_API_PORT
       - ESPRESSO_SEQUENCER_MAX_CONNECTIONS
-      - ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT
       - ESPRESSO_SEQUENCER_API_PEERS=http://sequencer1:$ESPRESSO_SEQUENCER_API_PORT
       - ESPRESSO_SEQUENCER_STATE_PEERS=http://sequencer1:$ESPRESSO_SEQUENCER_API_PORT
       - ESPRESSO_SEQUENCER_POSTGRES_HOST=sequencer-db-0
@@ -558,7 +556,7 @@ services:
       - ESPRESSO_SUBMIT_TRANSACTIONS_DELAY
       - ESPRESSO_BENCH_START_BLOCK
       - ESPRESSO_BENCH_END_BLOCK
-      - ESPRESSO_SEQUENCER_URL
+      - ESPRESSO_SEQUENCER_URLS
       - RUST_LOG
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
@@ -581,7 +579,7 @@ services:
       - ESPRESSO_SUBMIT_TRANSACTIONS_DELAY
       - ESPRESSO_BENCH_START_BLOCK
       - ESPRESSO_BENCH_END_BLOCK
-      - ESPRESSO_SEQUENCER_URL
+      - ESPRESSO_SEQUENCER_URLS
       - RUST_LOG
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
@@ -596,7 +594,7 @@ services:
     ports:
       - "$ESPRESSO_BUILDER_SERVER_PORT:$ESPRESSO_BUILDER_SERVER_PORT"
     environment:
-      - ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_URL=http://sequencer0:$ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT
+      - ESPRESSO_SEQUENCER_URL=http://sequencer0:$ESPRESSO_SEQUENCER_API_PORT
       - ESPRESSO_SEQUENCER_STATE_PEERS=http://sequencer0:$ESPRESSO_SEQUENCER_API_PORT
       - ESPRESSO_BUILDER_GENESIS_FILE
       - ESPRESSO_BUILDER_ETH_MNEMONIC

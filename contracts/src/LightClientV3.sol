@@ -64,8 +64,6 @@ contract LightClientV3 is LightClientV2 {
         BN254.validateScalarField(nextStakeTable.blsKeyComm);
         BN254.validateScalarField(nextStakeTable.schnorrKeyComm);
         BN254.validateScalarField(nextStakeTable.amountComm);
-        // DIFF: also validate the new public input
-        BN254.validateScalarField(BN254.ScalarField.wrap(newAuthRoot));
 
         // epoch-related checks
         uint64 lastUpdateEpoch = currentEpoch();

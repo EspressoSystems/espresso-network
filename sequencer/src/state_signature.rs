@@ -5,20 +5,22 @@ use std::{
     sync::Arc,
 };
 
+use alloy::primitives::FixedBytes;
 use async_lock::RwLock;
 use espresso_types::{traits::SequencerPersistence, PubKey};
 use hotshot::types::{Event, EventType, SchnorrPubKey};
+use hotshot_task_impls::helpers::derive_signed_state_digest;
 use hotshot_types::{
     event::LeafInfo,
     light_client::{
-        LCV2StateSignatureRequestBody, LightClientState, StakeTableState, StateSignKey,
-        StateSignature, StateVerKey,
+        LCV2StateSignatureRequestBody, LCV3StateSignatureRequestBody, LightClientState,
+        StakeTableState, StateSignKey, StateSignature, StateVerKey,
     },
     traits::{
         block_contents::BlockHeader,
         network::ConnectedNetwork,
         node_implementation::{NodeType, Versions},
-        signature_key::{LCV1StateSignatureKey, LCV2StateSignatureKey},
+        signature_key::{LCV1StateSignatureKey, LCV2StateSignatureKey, LCV3StateSignatureKey},
     },
     utils::{is_ge_epoch_root, option_epoch_from_block_number},
 };
@@ -112,8 +114,14 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
 
                 // The last few state updates are handled in the consensus, we do not sign them.
                 if leaf.with_epoch & is_ge_epoch_root(cur_block_height, blocks_per_epoch) {
+                    tracing::debug!("Skipping epoch transition block {cur_block_height}");
                     return;
                 }
+
+                let Ok(auth_root) = leaf.block_header().auth_root() else {
+                    tracing::error!("Failed to get auth root for light client state");
+                    return;
+                };
 
                 let option_state_epoch = option_epoch_from_block_number::<SeqTypes>(
                     leaf.with_epoch,
@@ -128,7 +136,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                         .await
                     else {
                         tracing::error!(
-                            "Fail to get membership for epoch: {:?}",
+                            "Failed to get membership for epoch: {:?}",
                             option_state_epoch
                         );
                         return;
@@ -149,19 +157,15 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                     }
                 }
 
-                let Ok(signature) = self.sign_new_state(&state, self.voting_stake_table).await
+                let Ok(request_body) = self
+                    .get_request_body(&state, &self.voting_stake_table, auth_root)
+                    .await
                 else {
                     tracing::error!("Failed to sign new state");
                     return;
                 };
 
                 if let Some(client) = &self.relay_server_client {
-                    let request_body = LCV2StateSignatureRequestBody {
-                        key: self.ver_key.clone(),
-                        state,
-                        next_stake: self.voting_stake_table,
-                        signature,
-                    };
                     if let Err(error) = client
                         .post::<()>("api/state")
                         .body_binary(&request_body)
@@ -178,7 +182,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                             tracing::error!("Failed to sign new state for legacy light client");
                             return;
                         };
-                        let request_body = LCV2StateSignatureRequestBody {
+                        let legacy_request_body = LCV2StateSignatureRequestBody {
                             key: self.ver_key.clone(),
                             state,
                             next_stake: StakeTableState::default(),
@@ -186,7 +190,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                         };
                         if let Err(error) = client
                             .post::<()>("api/legacy-state")
-                            .body_binary(&request_body)
+                            .body_binary(&legacy_request_body)
                             .unwrap()
                             .send()
                             .await
@@ -207,37 +211,43 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
     }
 
     /// Return a signature of a light client state at given height.
-    pub async fn get_state_signature(&self, height: u64) -> Option<LCV2StateSignatureRequestBody> {
+    pub async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         let pool_guard = self.signatures.read().await;
         pool_guard.get_signature(height)
     }
 
     /// Sign the light client state at given height and store it.
-    async fn sign_new_state(
+    async fn get_request_body(
         &self,
         state: &LightClientState,
-        next_stake_table: StakeTableState,
-    ) -> Result<StateSignature, SignatureError> {
-        let signature = <SchnorrPubKey as LCV2StateSignatureKey>::sign_state(
+        next_stake_table: &StakeTableState,
+        auth_root: FixedBytes<32>,
+    ) -> Result<LCV3StateSignatureRequestBody, SignatureError> {
+        let signed_state_digest = derive_signed_state_digest(state, next_stake_table, &auth_root);
+        let signature = <SchnorrPubKey as LCV3StateSignatureKey>::sign_state(
+            &self.sign_key,
+            signed_state_digest,
+        )?;
+        let v2signature = <SchnorrPubKey as LCV2StateSignatureKey>::sign_state(
             &self.sign_key,
             state,
-            &next_stake_table,
+            next_stake_table,
         )?;
+        let request_body = LCV3StateSignatureRequestBody {
+            key: self.ver_key.clone(),
+            state: *state,
+            next_stake: *next_stake_table,
+            signature,
+            v2_signature: v2signature.clone(),
+            auth_root,
+        };
         let mut pool_guard = self.signatures.write().await;
-        pool_guard.push(
-            state.block_height,
-            LCV2StateSignatureRequestBody {
-                key: self.ver_key.clone(),
-                state: *state,
-                next_stake: next_stake_table,
-                signature: signature.clone(),
-            },
-        );
+        pool_guard.push(state.block_height, request_body.clone());
         tracing::debug!(
             "New signature added for block height {}",
             state.block_height
         );
-        Ok(signature)
+        Ok(request_body)
     }
 
     async fn legacy_sign_new_state(
@@ -251,12 +261,12 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
 /// A rolling in-memory storage for the most recent light client state signatures.
 #[derive(Debug, Default)]
 pub struct StateSignatureMemStorage {
-    pool: HashMap<u64, LCV2StateSignatureRequestBody>,
+    pool: HashMap<u64, LCV3StateSignatureRequestBody>,
     deque: VecDeque<u64>,
 }
 
 impl StateSignatureMemStorage {
-    pub fn push(&mut self, height: u64, signature: LCV2StateSignatureRequestBody) {
+    pub fn push(&mut self, height: u64, signature: LCV3StateSignatureRequestBody) {
         self.pool.insert(height, signature);
         self.deque.push_back(height);
         if self.pool.len() > SIGNATURE_STORAGE_CAPACITY {
@@ -264,7 +274,7 @@ impl StateSignatureMemStorage {
         }
     }
 
-    pub fn get_signature(&self, height: u64) -> Option<LCV2StateSignatureRequestBody> {
+    pub fn get_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.pool.get(&height).cloned()
     }
 }

@@ -39,7 +39,9 @@ use hotshot_types::{
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
-        signature_key::{LCV2StateSignatureKey, SignatureKey, StakeTableEntryType},
+        signature_key::{
+            LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StakeTableEntryType,
+        },
         storage::Storage,
         BlockPayload, ValidatedState,
     },
@@ -1324,9 +1326,10 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
 }
 
 /// Validates the light client state update certificate
-pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
+pub async fn validate_light_client_state_update_certificate<TYPES: NodeType, V: Versions>(
     state_cert: &LightClientStateUpdateCertificateV2<TYPES>,
     membership_coordinator: &EpochMembershipCoordinator<TYPES>,
+    upgrade_lock: &UpgradeLock<TYPES, V>,
 ) -> Result<()> {
     tracing::debug!("Validating light client state update certificate");
 
@@ -1346,16 +1349,41 @@ pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
     });
 
     let mut accumulated_stake = U256::from(0);
-    for (key, sig) in state_cert.signatures.iter() {
+    let signed_state_digest = derive_signed_state_digest(
+        &state_cert.light_client_state,
+        &state_cert.next_stake_table_state,
+        &state_cert.auth_root,
+    );
+    for (key, sig, sig_v2) in state_cert.signatures.iter() {
         if let Some(stake) = state_key_map.get(key) {
             accumulated_stake += *stake;
-            if !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
-                key,
-                sig,
-                &state_cert.light_client_state,
-                &state_cert.next_stake_table_state,
-            ) {
-                bail!("Invalid light client state update certificate signature");
+            #[allow(clippy::collapsible_else_if)]
+            // We only perform the second signature check prior to the DrbAndHeaderUpgrade
+            if !upgrade_lock
+                .proposal2_version(TYPES::View::new(state_cert.light_client_state.view_number))
+                .await
+            {
+                if !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
+                    key,
+                    sig_v2,
+                    &state_cert.light_client_state,
+                    &state_cert.next_stake_table_state,
+                ) {
+                    bail!("Invalid light client state update certificate signature");
+                }
+            } else {
+                if !<TYPES::StateSignatureKey as LCV3StateSignatureKey>::verify_state_sig(
+                    key,
+                    sig,
+                    signed_state_digest,
+                ) || !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
+                    key,
+                    sig_v2,
+                    &state_cert.light_client_state,
+                    &state_cert.next_stake_table_state,
+                ) {
+                    bail!("Invalid light client state update certificate signature");
+                }
             }
         } else {
             bail!("Invalid light client state update certificate signature");

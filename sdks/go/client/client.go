@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,6 +33,14 @@ func NewClient(url string) *Client {
 		client:  http.DefaultClient,
 	}
 }
+
+// Transaction submission or fetch error due to a server issue, IO error, timeout, etc., that may
+// be fixed a retry.
+var ErrEphemeral = errors.New("retryable")
+
+// Transaction submission or fetch error due to invalid information or any failure that cannot be
+// resolved by a retry.
+var ErrPermanent = errors.New("not retryable")
 
 func (c *Client) FetchVidCommonByHeight(ctx context.Context, blockHeight uint64) (common.VidCommon, error) {
 	var res types.VidCommonQueryData
@@ -75,7 +84,7 @@ func (c *Client) FetchHeadersByRange(ctx context.Context, from uint64, until uin
 
 func (c *Client) FetchExplorerTransactionByHash(ctx context.Context, hash *types.TaggedBase64) (types.ExplorerTransactionQueryData, error) {
 	if hash == nil {
-		return types.ExplorerTransactionQueryData{}, fmt.Errorf("hash is nil")
+		return types.ExplorerTransactionQueryData{}, fmt.Errorf("%w: hash is nil", ErrPermanent)
 	}
 	var res types.ExplorerTransactionQueryData
 	if err := c.get(ctx, &res, "explorer/transaction/hash/%s", hash.String()); err != nil {
@@ -147,23 +156,24 @@ func (c *Client) FetchTransactionsInBlock(ctx context.Context, blockHeight uint6
 func (c *Client) SubmitTransaction(ctx context.Context, tx types.Transaction) (*types.TaggedBase64, error) {
 	response, err := c.tryPostRequest(ctx, c.baseUrl, tx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrPermanent, err)
 	}
 
 	defer response.Body.Close()
 	if response.StatusCode != 200 {
-		return nil, fmt.Errorf("received unexpected status code: %v", response.StatusCode)
+		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
 	}
 
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
 	}
 
 	var hash types.TaggedBase64
 	if err := json.Unmarshal(body, &hash); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrPermanent, err)
 	}
+
 	return &hash, nil
 }
 
@@ -175,7 +185,7 @@ type NamespaceResponse struct {
 func (c *Client) getRawMessage(ctx context.Context, format string, args ...any) (json.RawMessage, error) {
 	res, err := c.tryGetRequest(ctx, c.baseUrl, format, args...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrPermanent, err)
 	}
 
 	defer res.Body.Close()
@@ -185,7 +195,8 @@ func (c *Client) getRawMessage(ctx context.Context, format string, args ...any) 
 		// information about why the request failed. If this call fails, the response will be `nil`,
 		// which is fine to include in the log, so we can ignore errors.
 		body, _ := io.ReadAll(res.Body)
-		return nil, fmt.Errorf("request failed with status %d and body %s", res.StatusCode, string(body))
+		err := fmt.Errorf("request failed with status %d and body %s", res.StatusCode, string(body))
+		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
 	}
 
 	// Read the response body into memory before we unmarshal it, rather than passing the io.Reader
@@ -193,7 +204,7 @@ func (c *Client) getRawMessage(ctx context.Context, format string, args ...any) 
 	// failed.
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
 	}
 	return body, nil
 }
@@ -204,7 +215,7 @@ func (c *Client) get(ctx context.Context, out any, format string, args ...any) e
 		return err
 	}
 	if err := json.Unmarshal(body, out); err != nil {
-		return fmt.Errorf("request failed with body %s and error %v", string(body), err)
+		return fmt.Errorf("%w: request failed with body %s and error %v", ErrPermanent, string(body), err)
 	}
 	return nil
 }

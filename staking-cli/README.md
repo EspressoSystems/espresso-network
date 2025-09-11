@@ -74,6 +74,7 @@ Commands:
     token-balance          Check ESP token balance
     token-allowance        Check ESP token allowance of stake table contract
     transfer               Transfer ESP tokens
+    export-node-signatures       Export validator node signatures for address validation
     stake-for-demo         Register the validators and delegates for the local demo
     help                   Print this message or the help of the given subcommand(s)
 
@@ -231,6 +232,14 @@ This section covers commands for node operators.
     STATE_PRIVATE_KEY=SCHNORR_SIGNING_KEY~...
     ```
 
+    Alternatively, you can use pre-signed signatures:
+
+        staking-cli register-validator --node-signatures signatures.json --commission 4.99
+
+    You can specify the format for parsing node signatures from stdin or files:
+
+        staking-cli register-validator --node-signatures signatures.toml --format toml --commission 4.99
+
 - Each Ethereum account used must have enough gas funds on the L1 to call the registration method of the contract. The
   register transaction consumes about 300k gas.
 - Each BLS (Espresso) and key can be registered only once.
@@ -261,3 +270,44 @@ it.
     CONSENSUS_PRIVATE_KEY=BLS_SIGNING_KEY~...
     STATE_PRIVATE_KEY=SCHNORR_SIGNING_KEY~...
     ```
+
+    Alternatively, you can use pre-signed signatures:
+
+        staking-cli update-consensus-keys --node-signatures signatures.json
+        staking-cli update-consensus-keys --node-signatures signatures.toml --format toml
+
+### Exporting Node Signatures
+
+To avoid mixing Espresso and Ethereum keys on a single host we can pre-sign the validator address for registration and
+key updates. The exported payload can later be used to build the Ethereum transaction on another host.
+
+    staking-cli export-node-signatures --address 0x12...34 \
+        --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY>
+
+Output formats:
+
+- JSON to stdout (default): `staking-cli export-node-signatures --address 0x12...34 --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY>`
+- JSON to file: `--output signatures.json`
+- TOML to file: `--output signatures.toml`
+- Explicit format override: `--output signatures.json --format toml` (saves TOML content to .json file)
+
+The command will generate a signature payload file that doesn't contain any secrets: 
+
+```toml
+address = "0x..."
+bls_vk = "BLS_VER_KEY~..."
+bls_signature = "BLS_SIG~..."
+schnorr_vk = "SCHNORR_VER_KEY~..."
+schnorr_signature = "SCHNORR_SIG~..."
+```
+
+The exported signatures can then be used in validator operations:
+
+    staking-cli register-validator --node-signatures signatures.json --commission 4.99
+    staking-cli update-consensus-keys --node-signatures signatures.json
+
+Format handling:
+
+- File extension auto-detection: `.json` and `.toml` files are automatically parsed in the correct format
+- Stdin defaults to JSON: `cat signatures.json | staking-cli register-validator --node-signatures - --commission 4.99`
+- Explicit format for stdin: `cat signatures.toml | staking-cli register-validator --node-signatures - --format toml --commission 4.99`

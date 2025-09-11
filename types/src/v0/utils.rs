@@ -26,6 +26,8 @@ use time::{
 };
 use tokio::time::sleep;
 
+use crate::ChainConfig;
+
 pub fn upgrade_commitment_map<Types: NodeType>(
     map: CommitmentMap<Leaf<Types>>,
 ) -> CommitmentMap<Leaf2<Types>> {
@@ -59,6 +61,7 @@ impl<T> Update<T> {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct GenesisHeader {
     pub timestamp: Timestamp,
+    pub chain_config: ChainConfig,
 }
 
 #[derive(Hash, Copy, Clone, Debug, derive_more::Display, PartialEq, Eq, From, Into)]

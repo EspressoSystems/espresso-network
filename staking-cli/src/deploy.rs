@@ -1,4 +1,4 @@
-use std::{process::Command, time::Duration};
+use std::time::Duration;
 
 use alloy::{
     network::{Ethereum, EthereumWallet, TransactionBuilder as _},
@@ -30,7 +30,10 @@ use hotshot_types::light_client::StateKeyPair;
 use rand::{rngs::StdRng, CryptoRng, Rng as _, RngCore, SeedableRng as _};
 use url::Url;
 
-use crate::{parse::Commission, registration::register_validator, BLSKeyPair, DEV_MNEMONIC};
+use crate::{
+    parse::Commission, registration::register_validator, signature::NodeSignatures, BLSKeyPair,
+    DEV_MNEMONIC,
+};
 
 type TestProvider = FillProvider<
     JoinFill<JoinedRecommendedFillers, WalletFiller<EthereumWallet>>,
@@ -61,7 +64,7 @@ impl TestSystem {
     pub async fn deploy_version(
         stake_table_contract_version: StakeTableContractVersion,
     ) -> Result<Self> {
-        let exit_escrow_period = Duration::from_secs(1);
+        let exit_escrow_period = Duration::from_secs(250);
         let port = portpicker::pick_unused_port().unwrap();
         // Spawn anvil
         let provider = ProviderBuilder::new().on_anvil_with_wallet_and_config(|anvil| {
@@ -166,15 +169,13 @@ impl TestSystem {
     }
 
     pub async fn register_validator(&self) -> Result<()> {
-        let receipt = register_validator(
-            &self.provider,
-            self.stake_table,
-            self.commission,
+        let payload = NodeSignatures::create(
             self.deployer_address,
-            self.bls_key_pair.clone(),
-            self.state_key_pair.clone(),
-        )
-        .await?;
+            &self.bls_key_pair.clone(),
+            &self.state_key_pair.clone(),
+        );
+        let receipt =
+            register_validator(&self.provider, self.stake_table, self.commission, payload).await?;
         assert!(receipt.status());
         Ok(())
     }
@@ -266,31 +267,6 @@ impl TestSystem {
         assert!(self.allowance(self.deployer_address).await? == amount);
         Ok(())
     }
-
-    /// Inject test system config into CLI command via arguments
-    pub fn args(&self, cmd: &mut Command, signer: Signer) {
-        cmd.arg("--rpc-url")
-            .arg(self.rpc_url.to_string())
-            .arg("--stake-table-address")
-            .arg(self.stake_table.to_string())
-            .arg("--account-index")
-            .arg("0");
-
-        match signer {
-            Signer::Ledger => cmd.arg("--ledger"),
-            Signer::Mnemonic => cmd.arg("--mnemonic").arg(DEV_MNEMONIC),
-            Signer::BrokeMnemonic => cmd
-                .arg("--mnemonic")
-                .arg("roast term reopen pave choose high rally trouble upon govern hollow stand"),
-        };
-    }
-}
-
-#[derive(Clone, Copy)]
-pub enum Signer {
-    Ledger,
-    Mnemonic,
-    BrokeMnemonic,
 }
 
 #[cfg(test)]

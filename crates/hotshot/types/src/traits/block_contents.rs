@@ -17,6 +17,7 @@ use std::{
     sync::Arc,
 };
 
+use alloy::primitives::FixedBytes;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -215,5 +216,5 @@ pub trait BlockHeader<TYPES: NodeType>:
     /// The `auth_root` is a 32-byte hash calculated using the reward Merkle tree
     /// digest and other values.  
     /// It is used by the reward claim contract to verify the reward claim
-    fn auth_root(&self) -> anyhow::Result<Option<[u8; 32]>>;
+    fn auth_root(&self) -> anyhow::Result<FixedBytes<32>>;
 }

@@ -216,7 +216,9 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
                         }
                     },
                     Err(RecvError::Closed) => {
-                        break anyhow::bail!("Failed to fetch leaf: network task receiver closed");
+                        break Err(anyhow::anyhow!(
+                            "Failed to fetch leaf: network task receiver closed"
+                        ));
                     },
                     _ => {
                         continue;
