@@ -707,13 +707,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
 }
 
 #[derive(Debug)]
-pub struct DishonestViewSyncNextEpoch {
+pub struct DishonestViewSyncWrongEpoch<TYPES: NodeType> {
     pub first_dishonest_view_number: u64,
+    pub epoch_modifier: fn(TYPES::Epoch) -> TYPES::Epoch,
 }
 
 #[async_trait]
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransformerState<TYPES, I, V>
-    for DishonestViewSyncNextEpoch
+    for DishonestViewSyncWrongEpoch<TYPES>
 {
     async fn send_handler(
         &mut self,
@@ -754,7 +755,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
                         ViewSyncPreCommitData2 {
                             relay: 0,
                             round: view_number,
-                            epoch: vote.data.epoch.map(|e| e + 1),
+                            epoch: vote.data.epoch.map(self.epoch_modifier),
                         },
                         view_number,
                         public_key,
@@ -816,8 +817,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
                     .await;
                 match transmit_result {
                     Ok(()) => tracing::info!(
-                        "Sent ViewSyncPreCommitVoteSend for view {} to the leader",
+                        "Sent ViewSyncPreCommitVoteSend for view {} and epoch {:?} to the leader",
                         view_number,
+                        message.kind.epoch(),
                     ),
                     Err(e) => panic!("Failed to send message task: {e:?}"),
                 }

@@ -16,7 +16,7 @@ use hotshot_testing::{
     overall_safety_task::OverallSafetyPropertiesDescription,
     test_builder::{Behaviour, TestDescription},
 };
-use hotshot_testing::byzantine::byzantine_behaviour::DishonestViewSyncNextEpoch;
+use hotshot_testing::byzantine::byzantine_behaviour::DishonestViewSyncWrongEpoch;
 use hotshot_testing::view_sync_task::ViewSyncTaskDescription;
 use hotshot_types::{
     message::{GeneralConsensusMessage, MessageKind, SequencingMessage},
@@ -293,8 +293,48 @@ cross_tests!(
     Metadata: {
         let behaviour = Rc::new(move |node_id| {
             match node_id {
-                0 | 1 | 9 => Behaviour::Byzantine(Box::new(DishonestViewSyncNextEpoch {
+                0 | 1 | 9 => Behaviour::Byzantine(Box::new(DishonestViewSyncWrongEpoch {
                     first_dishonest_view_number: 9,
+                    epoch_modifier: |e| e + 1,
+                })),
+                _ => Behaviour::Standard,
+            }
+        });
+
+        let mut metadata = TestDescription {
+            // allow more time to pass in CI
+            completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
+                TimeBasedCompletionTaskDescription {
+                    duration: Duration::from_secs(120),
+                },
+            ),
+            overall_safety_properties: OverallSafetyPropertiesDescription {
+                num_successful_views: 30,
+                ..OverallSafetyPropertiesDescription::default()
+            },
+            view_sync_properties: ViewSyncTaskDescription::Threshold(0, 13),
+            behaviour,
+            ..TestDescription::default()
+        }.set_num_nodes(10, 10);
+
+        metadata.overall_safety_properties.possible_view_failures = (0..100).collect();
+        metadata.overall_safety_properties.decide_timeout = Duration::from_secs(60);
+        metadata
+    },
+);
+
+cross_tests!(
+    TestName: view_sync_old_epoch,
+    Impls: [PushCdnImpl],
+    Types: [TestTypes],
+    Versions: [EpochsTestVersions],
+    Ignore: false,
+    Metadata: {
+        let behaviour = Rc::new(move |node_id| {
+            match node_id {
+                1..=3 => Behaviour::Byzantine(Box::new(DishonestViewSyncWrongEpoch {
+                    first_dishonest_view_number: 11,
+                    epoch_modifier: |e| e - 1,
                 })),
                 _ => Behaviour::Standard,
             }
