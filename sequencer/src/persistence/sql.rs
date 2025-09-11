@@ -16,7 +16,7 @@ use espresso_types::{
     parse_duration, parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
-    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent},
+    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent, StakeTableEventLegacy},
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
     StakeTableHash, ValidatorMap,
 };
@@ -1966,6 +1966,114 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
+    async fn migrate_stake_table_events(&self) -> anyhow::Result<()> {
+        let batch_size: i64 = 10_000;
+        let mut tx = self.db.read().await?;
+
+        let (is_completed, mut offset) = query_as::<(bool, i64)>(
+            "SELECT completed, migrated_rows 
+         FROM epoch_migration 
+         WHERE table_name = 'stake_table_events'",
+        )
+        .fetch_optional(tx.as_mut())
+        .await?
+        .unwrap();
+
+        if is_completed {
+            tracing::info!("stake_table_events migration already done");
+            return Ok(());
+        }
+
+        tracing::warn!("migrating stake_table_events…");
+
+        loop {
+            let mut rtx = self.db.read().await?;
+            let rows = query(
+                "SELECT l1_block, log_index, event 
+             FROM stake_table_events
+             ORDER BY l1_block, log_index
+             LIMIT $1 OFFSET $2",
+            )
+            .bind(batch_size)
+            .bind(offset)
+            .fetch_all(rtx.as_mut())
+            .await?;
+            drop(rtx);
+
+            if rows.is_empty() {
+                break;
+            }
+
+            let mut values = Vec::new();
+
+            for row in rows.iter() {
+                let l1_block: i64 = row.try_get("l1_block")?;
+                let log_index: i64 = row.try_get("log_index")?;
+                let event_value: serde_json::Value = row.try_get("event")?;
+
+                // deserialize legacy
+                let legacy_event: StakeTableEventLegacy =
+                    serde_json::from_value(event_value.clone())
+                        .context("Failed to deserialize legacy stake_table_event")?;
+
+                let new_event: StakeTableEvent = legacy_event.into();
+                let event_json = serde_json::to_value(new_event)?;
+
+                values.push((l1_block, log_index, event_json));
+            }
+
+            // Insert batch into new table
+            let mut query_builder: sqlx::QueryBuilder<Db> = sqlx::QueryBuilder::new(
+                "INSERT INTO stake_table_events (l1_block, log_index, event) ",
+            );
+
+            query_builder.push_values(values.into_iter(), |mut b, (l1_block, log_index, event)| {
+                b.push_bind(l1_block).push_bind(log_index).push_bind(event);
+            });
+            query_builder.push(
+                " ON CONFLICT (l1_block, log_index) 
+      DO UPDATE SET event = EXCLUDED.event",
+            );
+
+            let mut wtx = self.db.write().await?;
+            query_builder.build().execute(wtx.as_mut()).await?;
+
+            // update migration progress
+            offset += rows.len() as i64;
+
+            wtx.upsert(
+                "epoch_migration",
+                ["table_name", "completed", "migrated_rows"],
+                ["table_name"],
+                [("stake_table_events".to_string(), false, offset)],
+            )
+            .await?;
+            wtx.commit().await?;
+
+            tracing::info!(
+                "stake_table_events migration progress: rows={} offset={}",
+                rows.len(),
+                offset
+            );
+
+            if rows.len() < batch_size as usize {
+                break;
+            }
+        }
+        let mut wtx = self.db.write().await?;
+        wtx.upsert(
+            "epoch_migration",
+            ["table_name", "completed", "migrated_rows"],
+            ["table_name"],
+            [("stake_table_events".to_string(), true, offset)],
+        )
+        .await?;
+        wtx.commit().await?;
+
+        tracing::warn!("migration complete for stake_table_events");
+
+        Ok(())
+    }
     async fn store_next_epoch_quorum_certificate(
         &self,
         high_qc: NextEpochQuorumCertificate2<SeqTypes>,
@@ -3333,7 +3441,7 @@ mod test {
             tx.commit().await.expect("failed to commit");
         }
 
-        storage.migrate_consensus().await.unwrap();
+        storage.migrate_storage().await.unwrap();
 
         let mut tx = storage.db.read().await.unwrap();
         let (anchor_leaf2_count,) = query_as::<(i64,)>("SELECT COUNT(*) from anchor_leaf2")
@@ -3403,7 +3511,7 @@ mod test {
             "Wrong light client state update certificate in the storage",
         );
 
-        storage.migrate_consensus().await.unwrap();
+        storage.migrate_storage().await.unwrap();
     }
 }
 

@@ -831,7 +831,10 @@ pub trait SequencerPersistence:
         &self,
         decided_upgrade_certificate: Option<UpgradeCertificate<SeqTypes>>,
     ) -> anyhow::Result<()>;
-    async fn migrate_consensus(&self) -> anyhow::Result<()> {
+
+    async fn migrate_stake_table_events(&self) -> anyhow::Result<()>;
+
+    async fn migrate_storage(&self) -> anyhow::Result<()> {
         tracing::warn!("migrating consensus data...");
 
         self.migrate_anchor_leaf().await?;

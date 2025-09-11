@@ -5,10 +5,10 @@ use async_lock::{Mutex, RwLock};
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use derive_more::derive::{From, Into};
 use hotshot::types::{SignatureKey};
-use hotshot_contract_adapter::sol_types::StakeTableV2::{
+use hotshot_contract_adapter::sol_types::{ConsensusKeysUpdatedLegacy, ConsensusKeysUpdatedV2Legacy, DelegatedLegacy, StakeTableV2::{
     ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit,
     ValidatorRegistered, ValidatorRegisteredV2,
-};
+}, UndelegatedLegacy, ValidatorExitLegacy, ValidatorRegisteredLegacy, ValidatorRegisteredV2Legacy};
 use hotshot_types::{
     data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, PeerConfig
 };
@@ -137,6 +137,46 @@ pub enum StakeTableEvent {
     KeyUpdateV2(ConsensusKeysUpdatedV2),
 }
 
+
+#[derive(Clone,serde::Serialize, serde::Deserialize)]
+pub enum StakeTableEventLegacy {
+    Register(ValidatorRegisteredLegacy),
+    RegisterV2(ValidatorRegisteredV2Legacy),
+    Deregister(ValidatorExitLegacy),
+    Delegate(DelegatedLegacy),
+    Undelegate(UndelegatedLegacy),
+    KeyUpdate(ConsensusKeysUpdatedLegacy),
+    KeyUpdateV2(ConsensusKeysUpdatedV2Legacy),
+}
+
+
+impl From<StakeTableEventLegacy> for StakeTableEvent {
+    fn from(legacy: StakeTableEventLegacy) -> Self {
+        match legacy {
+            StakeTableEventLegacy::Register(v) => {
+                StakeTableEvent::Register(v.into())
+            }
+            StakeTableEventLegacy::RegisterV2(v) => {
+                StakeTableEvent::RegisterV2(v.into())
+            }
+            StakeTableEventLegacy::Deregister(v) => {
+                StakeTableEvent::Deregister(v.into())
+            }
+            StakeTableEventLegacy::Delegate(v) => {
+                StakeTableEvent::Delegate(v.into())
+            }
+            StakeTableEventLegacy::Undelegate(v) => {
+                StakeTableEvent::Undelegate(v.into())
+            }
+            StakeTableEventLegacy::KeyUpdate(v) => {
+                StakeTableEvent::KeyUpdate(v.into())
+            }
+            StakeTableEventLegacy::KeyUpdateV2(v) => {
+                StakeTableEvent::KeyUpdateV2(v.into())
+            }
+        }
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum StakeTableError {

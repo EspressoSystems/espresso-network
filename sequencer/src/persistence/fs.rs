@@ -15,7 +15,7 @@ use clap::Parser;
 use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent},
+    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent, StakeTableEventLegacy},
     Leaf, Leaf2, NetworkConfig, Payload, SeqTypes, StakeTableHash, ValidatorMap,
 };
 use hotshot::InitializerEpochInfo;
@@ -1405,6 +1405,72 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
+    async fn migrate_stake_table_events(&self) -> anyhow::Result<()> {
+        let mut inner = self.inner.write().await;
+
+        if inner.migrated.contains("stake_table_events") {
+            tracing::info!("stake_table_events already migrated");
+            return Ok(());
+        }
+
+        let dir_path = &inner.stake_table_dir_path();
+        let events_dir = dir_path.join("events");
+        let old_events_dir = dir_path.join("old_events");
+
+        if !events_dir.exists() {
+            inner.migrated.insert("stake_table_events".to_string());
+            inner.update_migration()?;
+            return Ok(());
+        };
+
+        fs::rename(&events_dir, &old_events_dir)?;
+        tracing::info!("Renamed {:?} to {:?}", events_dir, old_events_dir);
+
+        tracing::warn!("migrating stake table events..");
+
+        for entry in fs::read_dir(&old_events_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if !path.is_file() {
+                continue;
+            }
+
+            // last_l1_finalized.bin is copied as-is
+            if path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| s == "last_l1_finalized")
+                .unwrap_or(false)
+            {
+                let target = events_dir.join("last_l1_finalized").with_extension("bin");
+                fs::copy(&path, &target)?;
+                continue;
+            }
+
+            // Read legacy event
+            let file = File::open(&path).context("Failed to open legacy event file")?;
+            let reader = BufReader::new(file);
+            let legacy_event: StakeTableEventLegacy =
+                serde_json::from_reader(reader).context("Failed to deserialize legacy event")?;
+
+            let new_event: StakeTableEvent = legacy_event.into();
+
+            let target = events_dir.join(path.file_name().unwrap());
+            let file = File::create(&target).context("Failed to create new event file")?;
+            let writer = BufWriter::new(file);
+
+            serde_json::to_writer_pretty(writer, &new_event)
+                .context("Failed to serialize new event")?;
+        }
+
+        inner.migrated.insert("stake_table_events".to_string());
+        inner.update_migration()?;
+        tracing::warn!("successfully migrated stake table events");
+
+        Ok(())
+    }
+
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
         if let Ok(loaded_drb_input) = self.load_drb_input(drb_input.epoch).await {
             if loaded_drb_input.iteration >= drb_input.iteration {
@@ -2395,7 +2461,7 @@ mod test {
                 .unwrap();
         }
 
-        storage.migrate_consensus().await.unwrap();
+        storage.migrate_storage().await.unwrap();
         let inner = storage.inner.read().await;
         let decided_leaves = fs::read_dir(inner.decided_leaf2_path()).unwrap();
         let decided_leaves_count = decided_leaves
@@ -2448,7 +2514,7 @@ mod test {
         // re run the consensus migration.
         // No changes will occur, as the migration has already been completed.
         let storage = opt.create().await.unwrap();
-        storage.migrate_consensus().await.unwrap();
+        storage.migrate_storage().await.unwrap();
 
         let inner = storage.inner.read().await;
         let decided_leaves = fs::read_dir(inner.decided_leaf2_path()).unwrap();
