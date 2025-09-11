@@ -328,32 +328,32 @@ pub async fn run_rr_sender(config: AppConfig) -> Result<()> {
                 .send_request(peer_id, TestRequest(config.message.clone().unwrap()));
             loop {
                 match swarm.select_next_some().await {
-                    SwarmEvent::Behaviour(request_response::Event::Message { peer, message })
-                        if &peer == peer_id =>
-                    {
-                        match message {
-                            request_response::Message::Response {
-                                request_id: _,
-                                response: _,
-                            } => {
-                                let elapsed = start.elapsed();
-                                roundtrips.push((addr.to_string(), elapsed));
-                                info!(
-                                    "Reply from {}: {} in {:?}",
-                                    peer_id,
-                                    addr.to_string(),
-                                    elapsed
-                                );
-                                break;
-                            },
-                            message => {
-                                info!(
-                                    "Received unexpected message from {}: {:?}",
-                                    addr.to_string(),
-                                    message
-                                );
-                            },
-                        }
+                    SwarmEvent::Behaviour(request_response::Event::Message {
+                        peer,
+                        message,
+                        connection_id: _,
+                    }) if &peer == peer_id => match message {
+                        request_response::Message::Response {
+                            request_id: _,
+                            response: _,
+                        } => {
+                            let elapsed = start.elapsed();
+                            roundtrips.push((addr.to_string(), elapsed));
+                            info!(
+                                "Reply from {}: {} in {:?}",
+                                peer_id,
+                                addr.to_string(),
+                                elapsed
+                            );
+                            break;
+                        },
+                        message => {
+                            info!(
+                                "Received unexpected message from {}: {:?}",
+                                addr.to_string(),
+                                message
+                            );
+                        },
                     },
                     event => {
                         info!("Received swarm event: {:?}", event);
@@ -373,7 +373,11 @@ pub async fn run_rr_receiver(config: AppConfig) -> Result<()> {
     let _ = swarm.listen_on(config.listen)?;
     loop {
         match swarm.select_next_some().await {
-            SwarmEvent::Behaviour(request_response::Event::Message { peer, message }) => {
+            SwarmEvent::Behaviour(request_response::Event::Message {
+                peer,
+                message,
+                connection_id: _,
+            }) => {
                 let peer_addr = peers_map.get(&peer).unwrap();
                 match message {
                     request_response::Message::Request {

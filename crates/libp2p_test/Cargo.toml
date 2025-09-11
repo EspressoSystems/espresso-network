@@ -7,18 +7,18 @@ edition = "2021"
 anyhow = "1"
 bimap = "0.6"
 blake3 = "1.4"
-hotshot-example-types = { path = "../hotshot/example-types" }
-hotshot-libp2p-networking = { path = "../hotshot/libp2p-networking" }
-hotshot-types = { path = "../hotshot/types" }
-libp2p = { version = "0.54", features = ["tokio"] }
-libp2p-identity = "0.2"
-parking_lot = "0.12"
-serde = { version = "1", features = ["derive"] }
+hotshot-example-types = { workspace = true }
+hotshot-libp2p-networking = { workspace = true }
+hotshot-types = { workspace = true }
+libp2p = { workspace = true }
+libp2p-identity = { workspace = true }
+parking_lot = { workspace = true }
+serde = { workspace = true }
 tagged-base64 = { workspace = true }
-tokio = { version = "1", features = ["full"] }
-toml = "0.8"
-tracing = "0.1"
-tracing-subscriber = "0.3"
+tokio = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [lib]
 path = "src/lib.rs"
