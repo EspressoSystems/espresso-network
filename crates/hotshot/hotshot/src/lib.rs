@@ -245,7 +245,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
         config: HotShotConfig<TYPES>,
-        membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        mut membership_coordinator: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
         consensus_metrics: ConsensusMetricsValue,
@@ -268,6 +268,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
 
         let (internal_tx, mut internal_rx) = internal_channel;
         let (mut external_tx, mut external_rx) = external_channel;
+
+        membership_coordinator
+            .set_external_channel(external_rx.clone())
+            .await;
 
         tracing::warn!(
             "Starting consensus with versions:\n\n Base: {:?}\nUpgrade: {:?}.",

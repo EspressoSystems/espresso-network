@@ -269,7 +269,6 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Libp2pNetwork<T> {
                     let mut write_ids = node_ids_ref.write().await;
                     if write_ids.contains(&node_id) {
                         write_ids.clear();
-                        bootstrap_addrs_ref.write().await.clear();
                     }
                     write_ids.insert(node_id);
                     drop(write_ids);
