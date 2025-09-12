@@ -1426,6 +1426,8 @@ impl SequencerPersistence for Persistence {
         fs::rename(&events_dir, &old_events_dir)?;
         tracing::info!("Renamed {:?} to {:?}", events_dir, old_events_dir);
 
+        fs::create_dir_all(&events_dir)?;
+
         tracing::warn!("migrating stake table events..");
 
         for entry in fs::read_dir(&old_events_dir)? {
@@ -2145,9 +2147,13 @@ fn epoch_files(
 mod test {
     use std::marker::PhantomData;
 
+    use alloy::primitives::{Address, U256};
     use committable::{Commitment, CommitmentBoundsArkless, Committable};
     use espresso_types::{Header, Leaf, NodeState, PubKey, ValidatedState};
     use hotshot::types::SignatureKey;
+    use hotshot_contract_adapter::sol_types::{
+        DelegatedLegacy, StakeTableV2::Delegated, ValidatorRegisteredLegacy,
+    };
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_query_service::testing::mocks::MockVersions;
     use hotshot_types::{
@@ -2642,6 +2648,91 @@ mod test {
             [(ViewNumber::new(1), quorum_proposal)]
                 .into_iter()
                 .collect::<BTreeMap<_, _>>()
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_stake_table_events_fs_migration() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        let storage = opt.create().await.unwrap();
+
+        let inner = storage.inner.read().await;
+        let events_dir = inner.stake_table_dir_path().join("events");
+        drop(inner);
+        fs::create_dir_all(&events_dir).unwrap();
+        let validator = espresso_types::testing::TestValidator::random();
+        let delegator = Address::random();
+
+        let legacy_events: Vec<(u64, i64, StakeTableEventLegacy, StakeTableEvent)> = vec![
+            (
+                1,
+                1,
+                StakeTableEventLegacy::Register(ValidatorRegisteredLegacy {
+                    account: validator.account,
+                    blsVk: validator.bls_vk.into(),
+                    schnorrVk: validator.schnorr_vk.into(),
+                    commission: validator.commission,
+                }),
+                StakeTableEvent::Register((&validator).into()),
+            ),
+            (
+                1,
+                2,
+                StakeTableEventLegacy::Delegate(DelegatedLegacy {
+                    delegator,
+                    validator: validator.account,
+                    amount: U256::ZERO,
+                }),
+                StakeTableEvent::Delegate(Delegated {
+                    delegator,
+                    validator: validator.account,
+                    amount: U256::ZERO,
+                }),
+            ),
+        ];
+
+        // Write legacy JSON files (simulate old filesystem storage)
+        for (block, log_index, legacy_event, _) in &legacy_events {
+            let filename = format!("{block}_{log_index}.json");
+            let path = events_dir.join(filename);
+            let mut file = fs::File::create(&path).unwrap();
+            let json = serde_json::to_string_pretty(legacy_event).unwrap();
+            file.write_all(json.as_bytes()).unwrap();
+        }
+
+        let last_block = 1_u64;
+        let mut f = fs::File::create(events_dir.join("last_l1_finalized.bin")).unwrap();
+        f.write_all(&last_block.to_le_bytes()).unwrap();
+
+        // Run migration
+        storage.migrate_stake_table_events().await.unwrap();
+
+        // Verify all events are migrated
+        for (block, log_index, _, expected_event) in legacy_events {
+            let filename = format!("{block}_{log_index}.json");
+            let path = events_dir.join(filename);
+
+            let contents = fs::read_to_string(&path).unwrap();
+            let migrated_event: StakeTableEvent = serde_json::from_str(&contents).unwrap();
+
+            assert_eq!(
+                migrated_event, expected_event,
+                "event migrated incorrectly from legacy"
+            );
+        }
+
+        let finalized_path = events_dir.join("last_l1_finalized.bin");
+        assert!(
+            finalized_path.exists(),
+            "last_l1_finalized.bin is missing after migration"
+        );
+
+        let bytes = fs::read(&finalized_path).unwrap();
+        let migrated_last_block = u64::from_le_bytes(bytes.try_into().unwrap());
+        assert_eq!(
+            migrated_last_block, last_block,
+            "last_l1_finalized.bin did not preserve last finalized block"
         );
     }
 }
