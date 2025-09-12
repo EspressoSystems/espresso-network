@@ -192,8 +192,20 @@ async fn main() {
     // Subscribe to block stream so we can check that our transactions are getting sequenced.
     let client = Client::<Error, SequencerApiVersion>::new(opt.urls[0].clone());
     let block_height: usize = client.get("status/block-height").send().await.unwrap();
+
+    // Create a new [`WebSocketConfig`]. We trust the events service on our nodes to not
+    // send us malicious messages.
+    let websocket_config = WebSocketConfig {
+        max_message_size: None,
+        max_frame_size: None,
+        ..Default::default()
+    };
+
     let mut blocks = client
-        .socket(&format!("availability/stream/blocks/{}", block_height - 1))
+        .socket_with_config(
+            &format!("availability/stream/blocks/{}", block_height - 1),
+            websocket_config,
+        )
         .subscribe()
         .await
         .unwrap();
