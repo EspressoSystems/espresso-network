@@ -185,7 +185,9 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                 self.replica_entry(proposal.data.view_number())
                     .proposal_recv = Some(now);
             },
-            HotShotEvent::QuorumVoteRecv(_vote) => {},
+            HotShotEvent::QuorumVoteRecv(_vote) => {
+                // self.leader_entry(vote.view_number()).vote_recv = Some(now);
+            },
             HotShotEvent::TimeoutVoteRecv(_vote) => {},
             HotShotEvent::TimeoutVoteSend(vote) => {
                 self.replica_entry(vote.view_number()).timeout_vote_send = Some(now);
@@ -218,6 +220,7 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
 
                         // calculate the elapsed time as milliseconds (from nanoseconds)
                         let elapsed_time = (now - previous_proposal_time) / 1_000_000;
+
                         if elapsed_time > 0 {
                             self.consensus
                                 .read()
