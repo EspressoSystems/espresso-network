@@ -450,7 +450,9 @@ impl MockLedger {
 
     // return a dummy auth root
     pub fn new_dummy_auth_root(&mut self) -> FixedBytes<32> {
-        FixedBytes::random_with(&mut self.rng)
+        let mut bytes = [0; 32];
+        self.rng.fill_bytes(&mut bytes);
+        bytes.into()
     }
 }
 

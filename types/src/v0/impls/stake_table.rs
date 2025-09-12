@@ -861,7 +861,7 @@ impl Fetcher {
 
                 loop {
                     match stake_table_contract.initializedAtBlock().call().await {
-                        Ok(init_block) => break init_block._0.to::<u64>(),
+                        Ok(init_block) => break init_block.to::<u64>(),
                         Err(err) => {
                             if start.elapsed() >= max_retry_duration {
                                 panic!(
@@ -1248,7 +1248,6 @@ impl Fetcher {
             .call()
             .await
             .map_err(FetchRewardError::ContractCall)?
-            ._0
             .to::<u64>();
 
         tracing::info!("stake table init block ={stake_table_init_block}");
@@ -1258,8 +1257,7 @@ impl Fetcher {
             .block(BlockId::finalized())
             .call()
             .await
-            .map_err(FetchRewardError::TokenAddressFetch)?
-            ._0;
+            .map_err(FetchRewardError::TokenAddressFetch)?;
 
         let token = EspToken::new(token_address, provider.clone());
 
@@ -1347,7 +1345,7 @@ impl Fetcher {
     pub async fn scan_token_contract_initialized_event_log(
         &self,
         stake_table_init_block: u64,
-        token: EspTokenInstance<(), L1Provider>,
+        token: EspTokenInstance<L1Provider>,
     ) -> Result<Log, FetchRewardError> {
         let max_events_range = self.l1_client.options().l1_events_max_block_range;
         const MAX_BLOCKS_SCANNED: u64 = 200_000;

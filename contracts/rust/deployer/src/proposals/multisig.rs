@@ -93,7 +93,7 @@ pub async fn transfer_ownership_from_multisig_to_timelock(
     };
     tracing::info!("{} found at {proxy_addr:#x}", contract);
 
-    let owner_addr = proxy_instance.owner().call().await?._0;
+    let owner_addr = proxy_instance.owner().call().await?;
 
     if !params.dry_run && !crate::is_contract(provider, owner_addr).await? {
         tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
@@ -254,7 +254,7 @@ pub async fn upgrade_light_client_v2_multisig_owner(
         .ok_or_else(|| anyhow!("LightClientProxy (multisig owner) not found, can't upgrade"))?;
     tracing::info!("LightClientProxy found at {proxy_addr:#x}");
     let proxy = LightClient::new(proxy_addr, &provider);
-    let owner_addr = proxy.owner().call().await?._0;
+    let owner_addr = proxy.owner().call().await?;
 
     if !dry_run && !crate::is_contract(&provider, owner_addr).await? {
         tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
@@ -403,7 +403,7 @@ pub async fn upgrade_light_client_v3_multisig_owner(
         .ok_or_else(|| anyhow!("LightClientProxy (multisig owner) not found, can't upgrade"))?;
     tracing::info!("LightClientProxy found at {proxy_addr:#x}");
     let proxy = LightClient::new(proxy_addr, &provider);
-    let owner_addr = proxy.owner().call().await?._0;
+    let owner_addr = proxy.owner().call().await?;
 
     if !dry_run && !crate::is_contract(&provider, owner_addr).await? {
         tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
@@ -543,7 +543,7 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
         .ok_or_else(|| anyhow!("EspTokenProxy (multisig owner) not found, can't upgrade"))?;
     tracing::info!("EspTokenProxy found at {proxy_addr:#x}");
     let proxy = EspToken::new(proxy_addr, &provider);
-    let owner_addr = proxy.owner().call().await?._0;
+    let owner_addr = proxy.owner().call().await?;
 
     if !dry_run {
         tracing::info!("Checking if owner is a contract");
@@ -612,7 +612,7 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
 
     let proxy = StakeTable::new(proxy_addr, &provider);
     let owner = proxy.owner().call().await?;
-    let owner_addr = owner._0;
+    let owner_addr = owner;
 
     if owner_addr != multisig_address {
         anyhow::bail!(

@@ -565,7 +565,7 @@ mod test {
         let admin = wallet.default_signer().address();
         let inner_provider = ProviderBuilder::new()
             .wallet(wallet)
-            .on_http(anvil.endpoint_url());
+            .connect_http(anvil.endpoint_url());
         let provider = AnvilProvider::new(inner_provider, Arc::clone(&anvil));
         let mut contracts = Contracts::new();
 
@@ -624,7 +624,7 @@ mod test {
         let admin = wallet.default_signer().address();
         let inner_provider = ProviderBuilder::new()
             .wallet(wallet)
-            .on_http(anvil.endpoint_url());
+            .connect_http(anvil.endpoint_url());
         let provider = AnvilProvider::new(inner_provider, Arc::clone(&anvil));
         let mut contracts = Contracts::new();
 
@@ -839,7 +839,7 @@ mod test {
         let admin = wallet.default_signer().address();
         let inner_provider = ProviderBuilder::new()
             .wallet(wallet)
-            .on_http(anvil.endpoint_url());
+            .connect_http(anvil.endpoint_url());
         let provider = AnvilProvider::new(inner_provider, Arc::clone(&anvil));
         let mut contracts = Contracts::new();
 

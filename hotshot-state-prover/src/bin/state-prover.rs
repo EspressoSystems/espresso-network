@@ -115,7 +115,7 @@ async fn main() {
     let transport = SwitchingTransport::new(args.l1_options, args.l1_provider_url)
         .expect("failed to create switching transport, check your l1 provider urls");
     let rpc_client = RpcClient::new(transport.clone(), false);
-    let l1_provider = ProviderBuilder::new().on_client(rpc_client.clone());
+    let l1_provider = ProviderBuilder::new().connect_client(rpc_client.clone());
     let chain_id = l1_provider.get_chain_id().await.unwrap();
     let signer = MnemonicBuilder::<English>::default()
         .phrase(args.eth_mnemonic)

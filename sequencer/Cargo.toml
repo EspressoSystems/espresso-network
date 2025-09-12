@@ -58,7 +58,7 @@ derive_more = { workspace = true }
 dotenvy = { workspace = true }
 either = { workspace = true }
 espresso-contract-deployer = { path = "../contracts/rust/deployer" }
-espresso-types = { path = "../types" }
+espresso-types = { path = "../types", features = ["testing"] }
 futures = { workspace = true }
 generic-tests = "0.1.3"
 

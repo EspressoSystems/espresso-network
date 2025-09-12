@@ -38,7 +38,7 @@ async fn test_tree_helper(num_keys: usize) -> Result<()> {
     let wallet = EthereumWallet::from(signer);
     let provider = ProviderBuilder::new()
         .wallet(wallet)
-        .on_http(anvil.endpoint_url());
+        .connect_http(anvil.endpoint_url());
 
     // Deploy contract
     let contract = RewardClaimPrototypeMock::deploy(&provider).await?;
@@ -87,14 +87,14 @@ async fn test_tree_helper(num_keys: usize) -> Result<()> {
         .call()
         .await?;
 
-    assert!(is_valid._0, "Membership proof invalid");
+    assert!(is_valid, "Membership proof invalid");
 
     let is_valid = contract
         .verifyRewardClaim(root, account_sol, amount + U256::from(1), proof_sol.clone())
         .call()
         .await?;
 
-    assert!(!is_valid._0, "Membership proof should be invalid");
+    assert!(!is_valid, "Membership proof should be invalid");
 
     let gas_used = contract
         .verifyRewardClaim(root, account_sol, amount, proof_sol)

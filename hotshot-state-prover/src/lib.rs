@@ -113,7 +113,7 @@ impl ProverServiceState {
 
 impl StateProverConfig {
     pub async fn validate_light_client_contract(&self) -> Result<(), ProverError> {
-        let provider = ProviderBuilder::new().on_client(self.l1_rpc_client.clone());
+        let provider = ProviderBuilder::new().connect_client(self.l1_rpc_client.clone());
 
         if let Err(e) = is_proxy_contract(&provider, self.light_client_address).await {
             Err(ProverError::ContractError(anyhow::anyhow!(

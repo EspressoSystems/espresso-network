@@ -60,8 +60,7 @@ impl TimelockContract {
                         operation.salt,
                     )
                     .call()
-                    .await?
-                    ._0)
+                    .await?)
             },
             TimelockContract::SafeExitTimelock(timelock_addr) => {
                 Ok(SafeExitTimelock::new(*timelock_addr, &provider)
@@ -73,8 +72,7 @@ impl TimelockContract {
                         operation.salt,
                     )
                     .call()
-                    .await?
-                    ._0)
+                    .await?)
             },
         }
     }
@@ -132,15 +130,13 @@ impl TimelockContract {
                 Ok(OpsTimelock::new(*timelock_addr, &provider)
                     .isOperationPending(operation_id)
                     .call()
-                    .await?
-                    ._0)
+                    .await?)
             },
             TimelockContract::SafeExitTimelock(timelock_addr) => {
                 Ok(SafeExitTimelock::new(*timelock_addr, &provider)
                     .isOperationPending(operation_id)
                     .call()
-                    .await?
-                    ._0)
+                    .await?)
             },
         }
     }
@@ -155,15 +151,13 @@ impl TimelockContract {
                 Ok(OpsTimelock::new(*timelock_addr, &provider)
                     .isOperationReady(operation_id)
                     .call()
-                    .await?
-                    ._0)
+                    .await?)
             },
             TimelockContract::SafeExitTimelock(timelock_addr) => {
                 Ok(SafeExitTimelock::new(*timelock_addr, &provider)
                     .isOperationReady(operation_id)
                     .call()
-                    .await?
-                    ._0)
+                    .await?)
             },
         }
     }
@@ -178,15 +172,13 @@ impl TimelockContract {
                 Ok(OpsTimelock::new(*timelock_addr, &provider)
                     .isOperationDone(operation_id)
                     .call()
-                    .await?
-                    ._0)
+                    .await?)
             },
             TimelockContract::SafeExitTimelock(timelock_addr) => {
                 Ok(SafeExitTimelock::new(*timelock_addr, &provider)
                     .isOperationDone(operation_id)
                     .call()
-                    .await?
-                    ._0)
+                    .await?)
             },
         }
     }
@@ -280,22 +272,22 @@ pub async fn schedule_timelock_operation(
     let timelock = match contract_type {
         Contract::FeeContractProxy => {
             let proxy = FeeContract::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?._0;
+            let proxy_owner = proxy.owner().call().await?;
             TimelockContract::OpsTimelock(proxy_owner)
         },
         Contract::EspTokenProxy => {
             let proxy = EspToken::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?._0;
+            let proxy_owner = proxy.owner().call().await?;
             TimelockContract::SafeExitTimelock(proxy_owner)
         },
         Contract::LightClientProxy => {
             let proxy = LightClient::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?._0;
+            let proxy_owner = proxy.owner().call().await?;
             TimelockContract::OpsTimelock(proxy_owner)
         },
         Contract::StakeTableProxy => {
             let proxy = StakeTable::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?._0;
+            let proxy_owner = proxy.owner().call().await?;
             TimelockContract::OpsTimelock(proxy_owner)
         },
         _ => anyhow::bail!(
@@ -341,22 +333,22 @@ pub async fn execute_timelock_operation(
     let timelock = match contract_type {
         Contract::FeeContractProxy => {
             let proxy = FeeContract::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?._0;
+            let proxy_owner = proxy.owner().call().await?;
             TimelockContract::OpsTimelock(proxy_owner)
         },
         Contract::EspTokenProxy => {
             let proxy = EspToken::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?._0;
+            let proxy_owner = proxy.owner().call().await?;
             TimelockContract::SafeExitTimelock(proxy_owner)
         },
         Contract::LightClientProxy => {
             let proxy = LightClient::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?._0;
+            let proxy_owner = proxy.owner().call().await?;
             TimelockContract::OpsTimelock(proxy_owner)
         },
         Contract::StakeTableProxy => {
             let proxy = StakeTable::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?._0;
+            let proxy_owner = proxy.owner().call().await?;
             TimelockContract::OpsTimelock(proxy_owner)
         },
         _ => anyhow::bail!(
@@ -399,22 +391,22 @@ pub async fn cancel_timelock_operation(
     let timelock = match contract_type {
         Contract::FeeContractProxy => {
             let proxy = FeeContract::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?._0;
+            let proxy_owner = proxy.owner().call().await?;
             TimelockContract::OpsTimelock(proxy_owner)
         },
         Contract::EspTokenProxy => {
             let proxy = EspToken::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?._0;
+            let proxy_owner = proxy.owner().call().await?;
             TimelockContract::SafeExitTimelock(proxy_owner)
         },
         Contract::LightClientProxy => {
             let proxy = LightClient::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?._0;
+            let proxy_owner = proxy.owner().call().await?;
             TimelockContract::OpsTimelock(proxy_owner)
         },
         Contract::StakeTableProxy => {
             let proxy = StakeTable::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?._0;
+            let proxy_owner = proxy.owner().call().await?;
             TimelockContract::OpsTimelock(proxy_owner)
         },
         _ => anyhow::bail!(

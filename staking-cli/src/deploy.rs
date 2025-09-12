@@ -72,7 +72,7 @@ impl TestSystem {
         let mut attempts = 0;
         let (port, provider) = loop {
             let port = portpicker::pick_unused_port().unwrap();
-            match ProviderBuilder::new().on_anvil_with_wallet_and_config(|anvil| {
+            match ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
                 anvil.port(port).arg("--accounts").arg("20")
             }) {
                 Ok(provider) => break (port, provider),
@@ -271,7 +271,7 @@ impl TestSystem {
 
     pub async fn get_min_commission_increase_interval(&self) -> Result<U256> {
         let stake_table = StakeTableV2::new(self.stake_table, &self.provider);
-        let interval = stake_table.minCommissionIncreaseInterval().call().await?._0;
+        let interval = stake_table.minCommissionIncreaseInterval().call().await?;
         Ok(interval)
     }
 
@@ -281,12 +281,12 @@ impl TestSystem {
 
     pub async fn balance(&self, address: Address) -> Result<U256> {
         let token = EspToken::new(self.token, &self.provider);
-        Ok(token.balanceOf(address).call().await?._0)
+        Ok(token.balanceOf(address).call().await?)
     }
 
     pub async fn allowance(&self, owner: Address) -> Result<U256> {
         let token = EspToken::new(self.token, &self.provider);
-        Ok(token.allowance(owner, self.stake_table).call().await?._0)
+        Ok(token.allowance(owner, self.stake_table).call().await?)
     }
 
     pub async fn approve(&self, amount: U256) -> Result<()> {
@@ -312,7 +312,7 @@ mod test {
         let stake_table = StakeTable::new(system.stake_table, &system.provider);
         // sanity check that we can fetch the exit escrow period
         assert_eq!(
-            stake_table.exitEscrowPeriod().call().await?._0,
+            stake_table.exitEscrowPeriod().call().await?,
             U256::from(system.exit_escrow_period.as_secs())
         );
 

@@ -67,8 +67,8 @@ pub fn display_stake_table(stake_table: Vec<Validator<BLSPubKey>>, compact: bool
 }
 
 pub async fn fetch_token_address(rpc_url: Url, stake_table_address: Address) -> Result<Address> {
-    let provider = ProviderBuilder::new().on_http(rpc_url);
-    Ok(StakeTableV2::new(stake_table_address, provider)
+    let provider = ProviderBuilder::new().connect_http(rpc_url);
+    StakeTableV2::new(stake_table_address, provider)
         .token()
         .call()
         .await
@@ -76,6 +76,5 @@ pub async fn fetch_token_address(rpc_url: Url, stake_table_address: Address) -> 
             format!(
                 "Failed to fetch token address from stake table contract at {stake_table_address}"
             )
-        })?
-        ._0)
+        })
 }

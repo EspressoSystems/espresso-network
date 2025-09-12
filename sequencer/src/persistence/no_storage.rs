@@ -234,6 +234,9 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
+    async fn migrate_stake_table_events(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
     async fn store_drb_result(
         &self,
         _epoch: EpochNumber,

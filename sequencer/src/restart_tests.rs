@@ -796,7 +796,7 @@ impl TestNetwork {
 
         let deployer = ProviderBuilder::new()
             .wallet(EthereumWallet::from(signer.clone()))
-            .on_http(l1_url.clone());
+            .connect_http(l1_url.clone());
 
         let blocks_per_epoch = genesis.epoch_height;
         let epoch_start_block = genesis.epoch_start_block;
