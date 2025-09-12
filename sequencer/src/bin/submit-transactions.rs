@@ -25,7 +25,7 @@ use rand_chacha::ChaChaRng;
 use rand_distr::Distribution;
 use sequencer::SequencerApiVersion;
 use sequencer_utils::logging;
-use surf_disco::{Client, Url};
+use surf_disco::{reexports::WebSocketConfig, Client, Url};
 use tide_disco::{error::ServerError, App};
 use tokio::{task::spawn, time::sleep};
 use vbs::version::StaticVersionType;
