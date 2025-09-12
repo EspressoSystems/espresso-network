@@ -845,6 +845,10 @@ pub trait SequencerPersistence:
 
         tracing::warn!("consensus storage has been migrated to new types");
 
+        tracing::warn!("migrating stake table events");
+        self.migrate_stake_table_events().await?;
+        tracing::warn!("stake table events have been migrated");
+
         Ok(())
     }
 

@@ -819,6 +819,110 @@ impl From<EdOnBN254PointLegacy> for EdOnBN254::EdOnBN254Point {
         Self { x: v.x, y: v.y }
     }
 }
+
+impl From<ValidatorRegistered> for ValidatorRegisteredLegacy {
+    fn from(v: ValidatorRegistered) -> Self {
+        Self {
+            account: v.account,
+            blsVk: v.blsVk.into(),
+            schnorrVk: v.schnorrVk.into(),
+            commission: v.commission,
+        }
+    }
+}
+
+impl From<ValidatorRegisteredV2> for ValidatorRegisteredV2Legacy {
+    fn from(v: ValidatorRegisteredV2) -> Self {
+        Self {
+            account: v.account,
+            blsVK: v.blsVK.into(),
+            schnorrVK: v.schnorrVK.into(),
+            commission: v.commission,
+            blsSig: v.blsSig.into(),
+            schnorrSig: v.schnorrSig,
+        }
+    }
+}
+
+impl From<ValidatorExit> for ValidatorExitLegacy {
+    fn from(v: ValidatorExit) -> Self {
+        Self {
+            validator: v.validator,
+        }
+    }
+}
+
+impl From<Delegated> for DelegatedLegacy {
+    fn from(v: Delegated) -> Self {
+        Self {
+            delegator: v.delegator,
+            validator: v.validator,
+            amount: v.amount,
+        }
+    }
+}
+
+impl From<Undelegated> for UndelegatedLegacy {
+    fn from(v: Undelegated) -> Self {
+        Self {
+            delegator: v.delegator,
+            validator: v.validator,
+            amount: v.amount,
+        }
+    }
+}
+
+impl From<ConsensusKeysUpdated> for ConsensusKeysUpdatedLegacy {
+    fn from(v: ConsensusKeysUpdated) -> Self {
+        Self {
+            account: v.account,
+            blsVK: v.blsVK.into(),
+            schnorrVK: v.schnorrVK.into(),
+        }
+    }
+}
+
+impl From<ConsensusKeysUpdatedV2> for ConsensusKeysUpdatedV2Legacy {
+    fn from(v: ConsensusKeysUpdatedV2) -> Self {
+        Self {
+            account: v.account,
+            blsVK: v.blsVK.into(),
+            schnorrVK: v.schnorrVK.into(),
+            blsSig: v.blsSig.into(),
+            schnorrSig: v.schnorrSig,
+        }
+    }
+}
+
+impl From<BN254::G2Point> for G2PointLegacy {
+    fn from(v: BN254::G2Point) -> Self {
+        Self {
+            x0: v.x0,
+            x1: v.x1,
+            y0: v.y0,
+            y1: v.y1,
+        }
+    }
+}
+
+impl From<G1PointSol> for G1PointLegacy {
+    fn from(v: G1PointSol) -> Self {
+        Self { x: v.x, y: v.y }
+    }
+}
+
+impl From<BN254::G1Point> for G1PointLegacy {
+    fn from(v: BN254::G1Point) -> Self {
+        Self { x: v.x, y: v.y }
+    }
+}
+
+impl From<EdOnBN254::EdOnBN254Point> for EdOnBN254PointLegacy {
+    fn from(v: EdOnBN254::EdOnBN254Point) -> Self {
+        Self { x: v.x, y: v.y }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alloy::{primitives::U256, sol_types::private::Address};

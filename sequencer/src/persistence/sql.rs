@@ -1970,19 +1970,28 @@ impl SequencerPersistence for Persistence {
         let batch_size: i64 = 10_000;
         let mut tx = self.db.read().await?;
 
-        let (is_completed, mut offset) = query_as::<(bool, i64)>(
+        let migration_status = query_as::<(bool, i64)>(
             "SELECT completed, migrated_rows 
          FROM epoch_migration 
          WHERE table_name = 'stake_table_events'",
         )
         .fetch_optional(tx.as_mut())
-        .await?
-        .unwrap();
+        .await?;
 
-        if is_completed {
-            tracing::info!("stake_table_events migration already done");
-            return Ok(());
-        }
+        let mut offset = if let Some((completed, migrated_rows)) = migration_status {
+            if completed {
+                tracing::info!("Migration already completed for stake_table_events");
+                return Ok(());
+            }
+            tracing::info!(
+                "Resuming stake_table_events migration from offset={}",
+                migrated_rows
+            );
+            migrated_rows
+        } else {
+            tracing::info!("No existing migration entry for stake_table_events, starting from 0");
+            0
+        };
 
         tracing::warn!("migrating stake_table_events…");
 
@@ -2869,9 +2878,16 @@ mod testing {
 #[cfg(test)]
 mod test {
 
+    use alloy::primitives::{Address, U256};
     use committable::{Commitment, CommitmentBoundsArkless};
     use espresso_types::{traits::NullEventConsumer, Header, Leaf, NodeState, ValidatedState};
     use futures::stream::TryStreamExt;
+    use hotshot_contract_adapter::sol_types::{
+        ConsensusKeysUpdatedLegacy, ConsensusKeysUpdatedV2Legacy, DelegatedLegacy,
+        StakeTableV2::{Delegated, Undelegated},
+        UndelegatedLegacy, ValidatorExitLegacy, ValidatorRegisteredLegacy,
+        ValidatorRegisteredV2Legacy,
+    };
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_types::{
         data::{
@@ -3512,6 +3528,161 @@ mod test {
         );
 
         storage.migrate_storage().await.unwrap();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_stake_table_events_migration() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+
+        let storage = opt.create().await.unwrap();
+
+        let validator = espresso_types::testing::TestValidator::random();
+
+        let delegator = Address::random();
+
+        let legacy_events: Vec<(i64, i64, StakeTableEventLegacy, StakeTableEvent)> = vec![
+            (
+                1,
+                1,
+                StakeTableEventLegacy::Register(ValidatorRegisteredLegacy {
+                    account: validator.account,
+                    blsVk: validator.bls_vk.into(),
+                    schnorrVk: validator.schnorr_vk.into(),
+                    commission: validator.commission,
+                }),
+                StakeTableEvent::Register((&validator).into()),
+            ),
+            (
+                1,
+                2,
+                StakeTableEventLegacy::RegisterV2(ValidatorRegisteredV2Legacy {
+                    account: validator.account,
+                    blsVK: validator.bls_vk.into(),
+                    schnorrVK: validator.schnorr_vk.into(),
+                    commission: validator.commission,
+                    blsSig: validator.bls_sig.clone().into(),
+                    schnorrSig: validator.schnorr_sig.clone(),
+                }),
+                StakeTableEvent::RegisterV2((&validator).into()),
+            ),
+            (
+                1,
+                3,
+                StakeTableEventLegacy::KeyUpdate(ConsensusKeysUpdatedLegacy {
+                    account: validator.account,
+                    blsVK: validator.bls_vk.into(),
+                    schnorrVK: validator.schnorr_vk.into(),
+                }),
+                StakeTableEvent::KeyUpdate((&validator).into()),
+            ),
+            (
+                1,
+                4,
+                StakeTableEventLegacy::KeyUpdateV2(ConsensusKeysUpdatedV2Legacy {
+                    account: validator.account,
+                    blsVK: validator.bls_vk.into(),
+                    schnorrVK: validator.schnorr_vk.into(),
+                    blsSig: validator.bls_sig.clone().into(),
+                    schnorrSig: validator.schnorr_sig.clone(),
+                }),
+                StakeTableEvent::KeyUpdateV2((&validator).into()),
+            ),
+            (
+                1,
+                5,
+                StakeTableEventLegacy::Deregister(ValidatorExitLegacy {
+                    validator: validator.account,
+                }),
+                StakeTableEvent::Deregister((&validator).into()),
+            ),
+            (
+                1,
+                6,
+                StakeTableEventLegacy::Delegate(DelegatedLegacy {
+                    delegator,
+                    validator: validator.account,
+                    amount: U256::ZERO,
+                }),
+                StakeTableEvent::Delegate(Delegated {
+                    delegator,
+                    validator: validator.account,
+                    amount: U256::ZERO,
+                }),
+            ),
+            (
+                1,
+                7,
+                StakeTableEventLegacy::Undelegate(UndelegatedLegacy {
+                    delegator,
+                    validator: validator.account,
+                    amount: U256::ZERO,
+                }),
+                StakeTableEvent::Undelegate(Undelegated {
+                    delegator,
+                    validator: validator.account,
+                    amount: U256::ZERO,
+                }),
+            ),
+        ];
+
+        let mut tx = storage.db.write().await.unwrap();
+
+        for (block, log_index, legacy_event, _) in &legacy_events {
+            let legacy_json = serde_json::to_value(legacy_event).unwrap();
+            query(
+                "INSERT INTO stake_table_events (l1_block, log_index, event)
+             VALUES ($1, $2, $3)",
+            )
+            .bind(block)
+            .bind(log_index)
+            .bind(legacy_json)
+            .execute(tx.as_mut())
+            .await
+            .unwrap();
+        }
+
+        tx.commit().await.unwrap();
+
+        storage.migrate_stake_table_events().await.unwrap();
+
+        let mut tx = storage.db.read().await.unwrap();
+
+        let (completed, migrated_rows) = query_as::<(bool, i64)>(
+            "SELECT completed, migrated_rows 
+         FROM epoch_migration 
+         WHERE table_name = 'stake_table_events'",
+        )
+        .fetch_one(tx.as_mut())
+        .await
+        .unwrap();
+        assert!(completed, "migration should be marked as completed");
+        assert_eq!(
+            migrated_rows,
+            legacy_events.len() as i64,
+            "all rows should be migrated"
+        );
+
+        for (block, log_index, _, expected_event) in legacy_events {
+            let row = query(
+                "SELECT event 
+             FROM stake_table_events 
+             WHERE l1_block = $1 AND log_index = $2",
+            )
+            .bind(block)
+            .bind(log_index)
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+
+            let event_value: serde_json::Value = row.try_get("event").unwrap();
+            let migrated_event: StakeTableEvent = serde_json::from_value(event_value).unwrap();
+
+            assert_eq!(
+                migrated_event, expected_event,
+                "event migrated incorrectly from legacy"
+            );
+        }
     }
 }
 
