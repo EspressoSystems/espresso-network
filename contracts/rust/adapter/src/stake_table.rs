@@ -200,6 +200,15 @@ impl ConsensusKeysUpdatedV2 {
     }
 }
 
+impl From<StakeTable::ValidatorRegistered> for StakeTableV2::InitialCommission {
+    fn from(value: StakeTable::ValidatorRegistered) -> Self {
+        Self {
+            validator: value.account,
+            commission: value.commission,
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use alloy::primitives::Address;
