@@ -2152,7 +2152,7 @@ mod test {
     use espresso_types::{Header, Leaf, NodeState, PubKey, ValidatedState};
     use hotshot::types::SignatureKey;
     use hotshot_contract_adapter::sol_types::{
-        DelegatedLegacy, StakeTableV2::Delegated, ValidatorRegisteredLegacy,
+        ConsensusKeysUpdatedLegacy, ConsensusKeysUpdatedV2Legacy, DelegatedLegacy, StakeTableV2::{Delegated, Undelegated}, UndelegatedLegacy, ValidatorExitLegacy, ValidatorRegisteredLegacy, ValidatorRegisteredV2Legacy
     };
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_query_service::testing::mocks::MockVersions;
@@ -2664,7 +2664,7 @@ mod test {
         let validator = espresso_types::testing::TestValidator::random();
         let delegator = Address::random();
 
-        let legacy_events: Vec<(u64, i64, StakeTableEventLegacy, StakeTableEvent)> = vec![
+         let legacy_events: Vec<(u64, i64, StakeTableEventLegacy, StakeTableEvent)> = vec![
             (
                 1,
                 1,
@@ -2679,12 +2679,69 @@ mod test {
             (
                 1,
                 2,
+                StakeTableEventLegacy::RegisterV2(ValidatorRegisteredV2Legacy {
+                    account: validator.account,
+                    blsVK: validator.bls_vk.into(),
+                    schnorrVK: validator.schnorr_vk.into(),
+                    commission: validator.commission,
+                    blsSig: validator.bls_sig.clone().into(),
+                    schnorrSig: validator.schnorr_sig.clone(),
+                }),
+                StakeTableEvent::RegisterV2((&validator).into()),
+            ),
+            (
+                1,
+                3,
+                StakeTableEventLegacy::KeyUpdate(ConsensusKeysUpdatedLegacy {
+                    account: validator.account,
+                    blsVK: validator.bls_vk.into(),
+                    schnorrVK: validator.schnorr_vk.into(),
+                }),
+                StakeTableEvent::KeyUpdate((&validator).into()),
+            ),
+            (
+                1,
+                4,
+                StakeTableEventLegacy::KeyUpdateV2(ConsensusKeysUpdatedV2Legacy {
+                    account: validator.account,
+                    blsVK: validator.bls_vk.into(),
+                    schnorrVK: validator.schnorr_vk.into(),
+                    blsSig: validator.bls_sig.clone().into(),
+                    schnorrSig: validator.schnorr_sig.clone(),
+                }),
+                StakeTableEvent::KeyUpdateV2((&validator).into()),
+            ),
+            (
+                1,
+                5,
+                StakeTableEventLegacy::Deregister(ValidatorExitLegacy {
+                    validator: validator.account,
+                }),
+                StakeTableEvent::Deregister((&validator).into()),
+            ),
+            (
+                1,
+                6,
                 StakeTableEventLegacy::Delegate(DelegatedLegacy {
                     delegator,
                     validator: validator.account,
                     amount: U256::ZERO,
                 }),
                 StakeTableEvent::Delegate(Delegated {
+                    delegator,
+                    validator: validator.account,
+                    amount: U256::ZERO,
+                }),
+            ),
+            (
+                1,
+                7,
+                StakeTableEventLegacy::Undelegate(UndelegatedLegacy {
+                    delegator,
+                    validator: validator.account,
+                    amount: U256::ZERO,
+                }),
+                StakeTableEvent::Undelegate(Undelegated {
                     delegator,
                     validator: validator.account,
                     amount: U256::ZERO,
