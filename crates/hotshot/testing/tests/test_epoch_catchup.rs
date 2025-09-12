@@ -13,7 +13,7 @@ use hotshot_example_types::{
         static_committee::StaticStakeTable, two_static_committees::TwoStakeTables,
     },
     node_types::{
-        EpochsTestVersions, PushCdnImpl, RandomOverlapQuorumFilterConfig,
+        EpochsTestVersions, CombinedImpl, RandomOverlapQuorumFilterConfig,
         TestTypesEpochCatchupTypes,
     },
 };
@@ -29,7 +29,7 @@ use hotshot_types::signature_key::{BLSPubKey, SchnorrPubKey};
 
 cross_tests!(
     TestName: test_catchup_epochs,
-    Impls: [PushCdnImpl],
+    Impls: [CombinedImpl],
     Types: [
         TestTypesEpochCatchupTypes<StaticStakeTable<BLSPubKey,SchnorrPubKey>>
     ],
@@ -78,7 +78,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_two_stake_tables_catchup_epochs,
-    Impls: [PushCdnImpl],
+    Impls: [CombinedImpl],
     Types: [
         TestTypesEpochCatchupTypes<TwoStakeTables<BLSPubKey, SchnorrPubKey>>,
     ],
@@ -127,7 +127,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_randomized_leader_catchup_epochs,
-    Impls: [PushCdnImpl],
+    Impls: [CombinedImpl],
     Types: [
         TestTypesEpochCatchupTypes<RandomizedStakeTable<BLSPubKey,SchnorrPubKey>>
     ],
@@ -176,7 +176,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_randomized_committee_catchup_epochs,
-    Impls: [PushCdnImpl],
+    Impls: [CombinedImpl],
     Types: [
         TestTypesEpochCatchupTypes<RandomizedCommitteeMembers<BLSPubKey, SchnorrPubKey, RandomOverlapQuorumFilterConfig<123, 8, 10, 2, 5>, RandomOverlapQuorumFilterConfig<123, 3, 4, 1, 2>>>,
     ],
@@ -212,7 +212,7 @@ cross_tests!(
             );
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 50,
-            possible_view_failures: vec![2, 3, 14, 15, 17, 18],
+            possible_view_failures: vec![2, 3, 14, 15, 17, 18, 42, 43],
             decide_timeout: Duration::from_secs(20),
             ..Default::default()
         };
