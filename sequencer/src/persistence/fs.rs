@@ -2152,7 +2152,10 @@ mod test {
     use espresso_types::{Header, Leaf, NodeState, PubKey, ValidatedState};
     use hotshot::types::SignatureKey;
     use hotshot_contract_adapter::sol_types::{
-        ConsensusKeysUpdatedLegacy, ConsensusKeysUpdatedV2Legacy, DelegatedLegacy, StakeTableV2::{Delegated, Undelegated}, UndelegatedLegacy, ValidatorExitLegacy, ValidatorRegisteredLegacy, ValidatorRegisteredV2Legacy
+        ConsensusKeysUpdatedLegacy, ConsensusKeysUpdatedV2Legacy, DelegatedLegacy,
+        StakeTableV2::{Delegated, Undelegated},
+        UndelegatedLegacy, ValidatorExitLegacy, ValidatorRegisteredLegacy,
+        ValidatorRegisteredV2Legacy,
     };
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_query_service::testing::mocks::MockVersions;
@@ -2664,7 +2667,7 @@ mod test {
         let validator = espresso_types::testing::TestValidator::random();
         let delegator = Address::random();
 
-         let legacy_events: Vec<(u64, i64, StakeTableEventLegacy, StakeTableEvent)> = vec![
+        let legacy_events: Vec<(u64, i64, StakeTableEventLegacy, StakeTableEvent)> = vec![
             (
                 1,
                 1,
@@ -2684,7 +2687,7 @@ mod test {
                     blsVK: validator.bls_vk.into(),
                     schnorrVK: validator.schnorr_vk.into(),
                     commission: validator.commission,
-                    blsSig: validator.bls_sig.clone().into(),
+                    blsSig: validator.bls_sig.into(),
                     schnorrSig: validator.schnorr_sig.clone(),
                 }),
                 StakeTableEvent::RegisterV2((&validator).into()),
@@ -2706,7 +2709,7 @@ mod test {
                     account: validator.account,
                     blsVK: validator.bls_vk.into(),
                     schnorrVK: validator.schnorr_vk.into(),
-                    blsSig: validator.bls_sig.clone().into(),
+                    blsSig: validator.bls_sig.into(),
                     schnorrSig: validator.schnorr_sig.clone(),
                 }),
                 StakeTableEvent::KeyUpdateV2((&validator).into()),
