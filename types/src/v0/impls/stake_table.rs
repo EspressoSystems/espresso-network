@@ -2218,7 +2218,9 @@ impl Membership<SeqTypes> for EpochCommittees {
             },
             (_, None) => {
                 let leaders = &self.non_epoch_committee.eligible_leaders;
-
+                if leaders.is_empty() {
+                    return Err(LeaderLookupError);
+                }
                 let index = *view_number as usize % leaders.len();
                 let res = leaders[index].clone();
                 Ok(PubKey::public_key(&res.stake_table_entry))
