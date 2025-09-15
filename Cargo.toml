@@ -105,6 +105,7 @@ alloy = { version = "0.13", default-features = false, features = [
     "rpc",
     "rpc-client",
     "rpc-types",
+    "serde",
     "signer-local",
     "signer-mnemonic",
     "signer-ledger",
