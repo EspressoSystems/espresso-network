@@ -1,4 +1,4 @@
-use std::{process::Command, time::Duration};
+use std::time::Duration;
 
 use alloy::{
     network::{Ethereum, EthereumWallet, TransactionBuilder as _},
@@ -21,7 +21,7 @@ use espresso_contract_deployer::{
 use hotshot_contract_adapter::{
     sol_types::{
         EspToken::{self, EspTokenInstance},
-        StakeTable,
+        StakeTable, StakeTableV2,
     },
     stake_table::StakeTableContractVersion,
 };
@@ -30,7 +30,12 @@ use hotshot_types::light_client::StateKeyPair;
 use rand::{rngs::StdRng, CryptoRng, Rng as _, RngCore, SeedableRng as _};
 use url::Url;
 
-use crate::{parse::Commission, registration::register_validator, BLSKeyPair, DEV_MNEMONIC};
+use crate::{
+    parse::Commission,
+    registration::{fetch_commission, register_validator},
+    signature::NodeSignatures,
+    BLSKeyPair, DEV_MNEMONIC,
+};
 
 type TestProvider = FillProvider<
     JoinFill<JoinedRecommendedFillers, WalletFiller<EthereumWallet>>,
@@ -62,11 +67,25 @@ impl TestSystem {
         stake_table_contract_version: StakeTableContractVersion,
     ) -> Result<Self> {
         let exit_escrow_period = Duration::from_secs(250);
-        let port = portpicker::pick_unused_port().unwrap();
-        // Spawn anvil
-        let provider = ProviderBuilder::new().on_anvil_with_wallet_and_config(|anvil| {
-            anvil.port(port).arg("--accounts").arg("20")
-        })?;
+        // Sporadically the provider builder fails with a timeout inside alloy.
+        // Retry a few times.
+        let mut attempts = 0;
+        let (port, provider) = loop {
+            let port = portpicker::pick_unused_port().unwrap();
+            match ProviderBuilder::new().on_anvil_with_wallet_and_config(|anvil| {
+                anvil.port(port).arg("--accounts").arg("20")
+            }) {
+                Ok(provider) => break (port, provider),
+                Err(e) => {
+                    attempts += 1;
+                    if attempts >= 5 {
+                        anyhow::bail!("Failed to spawn anvil after 5 attempts: {e}");
+                    }
+                    tracing::warn!("Anvil spawn failed, retrying: {e}");
+                },
+            }
+        };
+
         let rpc_url = format!("http://localhost:{port}").parse()?;
         let deployer_address = provider.default_signer_address();
         // I don't know how to get the signer out of the provider, by default anvil uses the dev
@@ -166,15 +185,13 @@ impl TestSystem {
     }
 
     pub async fn register_validator(&self) -> Result<()> {
-        let receipt = register_validator(
-            &self.provider,
-            self.stake_table,
-            self.commission,
+        let payload = NodeSignatures::create(
             self.deployer_address,
-            self.bls_key_pair.clone(),
-            self.state_key_pair.clone(),
-        )
-        .await?;
+            &self.bls_key_pair.clone(),
+            &self.state_key_pair.clone(),
+        );
+        let receipt =
+            register_validator(&self.provider, self.stake_table, self.commission, payload).await?;
         assert!(receipt.status());
         Ok(())
     }
@@ -245,6 +262,23 @@ impl TestSystem {
         Ok(())
     }
 
+    pub async fn anvil_increase_time(&self, seconds: U256) -> Result<()> {
+        self.provider
+            .anvil_increase_time(seconds.to::<u64>())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_min_commission_increase_interval(&self) -> Result<U256> {
+        let stake_table = StakeTableV2::new(self.stake_table, &self.provider);
+        let interval = stake_table.minCommissionIncreaseInterval().call().await?._0;
+        Ok(interval)
+    }
+
+    pub async fn fetch_commission(&self) -> Result<Commission> {
+        fetch_commission(&self.provider, self.stake_table, self.deployer_address).await
+    }
+
     pub async fn balance(&self, address: Address) -> Result<U256> {
         let token = EspToken::new(self.token, &self.provider);
         Ok(token.balanceOf(address).call().await?._0)
@@ -266,31 +300,6 @@ impl TestSystem {
         assert!(self.allowance(self.deployer_address).await? == amount);
         Ok(())
     }
-
-    /// Inject test system config into CLI command via arguments
-    pub fn args(&self, cmd: &mut Command, signer: Signer) {
-        cmd.arg("--rpc-url")
-            .arg(self.rpc_url.to_string())
-            .arg("--stake-table-address")
-            .arg(self.stake_table.to_string())
-            .arg("--account-index")
-            .arg("0");
-
-        match signer {
-            Signer::Ledger => cmd.arg("--ledger"),
-            Signer::Mnemonic => cmd.arg("--mnemonic").arg(DEV_MNEMONIC),
-            Signer::BrokeMnemonic => cmd
-                .arg("--mnemonic")
-                .arg("roast term reopen pave choose high rally trouble upon govern hollow stand"),
-        };
-    }
-}
-
-#[derive(Clone, Copy)]
-pub enum Signer {
-    Ledger,
-    Mnemonic,
-    BrokeMnemonic,
 }
 
 #[cfg(test)]

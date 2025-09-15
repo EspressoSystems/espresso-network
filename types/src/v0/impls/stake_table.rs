@@ -25,8 +25,8 @@ use hotshot::types::{BLSPubKey, SchnorrPubKey, SignatureKey as _};
 use hotshot_contract_adapter::sol_types::{
     EspToken::{self, EspTokenInstance},
     StakeTableV2::{
-        self, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, StakeTableV2Events,
-        Undelegated, ValidatorExit, ValidatorRegistered, ValidatorRegisteredV2,
+        self, CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated,
+        StakeTableV2Events, Undelegated, ValidatorExit, ValidatorRegistered, ValidatorRegisteredV2,
     },
 };
 use hotshot_types::{
@@ -231,6 +231,7 @@ impl StakeTableState {
                 }
 
                 // The stake table v1 contract does *not* enforce that each schnorr key is only used once.
+                // We need to clone here because we need to both insert into the set and use the key later
                 if !self.used_schnorr_keys.insert(state_ver_key.clone()) {
                     return Ok(Err(ExpectedStakeTableError::SchnorrKeyAlreadyUsed(
                         state_ver_key.to_string(),
@@ -433,6 +434,29 @@ impl StakeTableState {
                 validator.stake_table_key = stake_table_key;
                 validator.state_ver_key = state_ver_key;
             },
+
+            StakeTableEvent::CommissionUpdate(CommissionUpdated {
+                validator,
+                newCommission,
+                ..
+            }) => {
+                // NOTE: Commission update events are supported only in protocol
+                // version V4 and stake table contract V2.
+                if newCommission > COMMISSION_BASIS_POINTS {
+                    return Err(StakeTableError::InvalidCommission(validator, newCommission));
+                }
+
+                // NOTE: currently we are not enforcing changes to the
+                // commission increase rates and leave this enforcement to the
+                // stake table contract.
+
+                let val = self
+                    .validators
+                    .get_mut(&validator)
+                    .ok_or(StakeTableError::ValidatorNotFound(validator))?;
+
+                val.commission = newCommission;
+            },
         }
 
         Ok(Ok(()))
@@ -556,6 +580,9 @@ impl std::fmt::Debug for StakeTableEvent {
             StakeTableEvent::Undelegate(event) => write!(f, "Undelegate({:?})", event.delegator),
             StakeTableEvent::KeyUpdate(event) => write!(f, "KeyUpdate({:?})", event.account),
             StakeTableEvent::KeyUpdateV2(event) => write!(f, "KeyUpdateV2({:?})", event.account),
+            StakeTableEvent::CommissionUpdate(event) => {
+                write!(f, "CommissionUpdate({:?})", event.validator)
+            },
         }
     }
 }
@@ -744,7 +771,7 @@ impl Fetcher {
         contract: Address,
         from_block: Option<u64>,
         to_block: u64,
-    ) -> anyhow::Result<Vec<(StakeTableV2Events, Log)>> {
+    ) -> Result<Vec<(StakeTableV2Events, Log)>, StakeTableError> {
         let stake_table_contract = StakeTableV2::new(contract, l1_client.provider.clone());
         let max_retry_duration = l1_client.options().l1_events_max_retry_duration;
         // get the block number when the contract was initialized
@@ -814,6 +841,7 @@ impl Fetcher {
                                 Undelegated::SIGNATURE,
                                 ConsensusKeysUpdated::SIGNATURE,
                                 ConsensusKeysUpdatedV2::SIGNATURE,
+                                CommissionUpdated::SIGNATURE,
                             ])
                             .address(contract)
                             .from_block(from)
@@ -848,6 +876,18 @@ impl Fetcher {
                                 log.display()
                             );
                             continue;
+                        }
+                    },
+                    StakeTableV2Events::CommissionUpdated(CommissionUpdated {
+                        validator,
+                        newCommission,
+                        ..
+                    }) => {
+                        if *newCommission > COMMISSION_BASIS_POINTS {
+                            return Err(StakeTableError::InvalidCommission(
+                                *validator,
+                                *newCommission,
+                            ));
                         }
                     },
                     _ => {},
@@ -973,8 +1013,8 @@ impl Fetcher {
         // during the token contract initialization. The initialization transaction also transfers initial supply minted
         // from the zero address. Since the result set is small (a single event),
         // most RPC providers like Infura and Alchemy allow querying across the full block range
-        // If this fails because provider does not allow the query due to rate limiting (or some other error), we fall back to scanning over
-        // a fixed block range.
+        // If this fails because provider does not allow the query due to rate limiting (or some other error), we fall
+        // back to scanning over a fixed block range.
         let init_logs = token
             .Initialized_filter()
             .from_block(0u64)
@@ -1200,11 +1240,13 @@ where
 
                     This might be caused by:
                     - The current block range being too large for your RPC provider.
-                    - The event query returning more data than your RPC allows as some RPC providers limit the number of events returned.
+                    - The event query returning more data than your RPC allows as
+                      some RPC providers limit the number of events returned.
                     - RPC provider outage
 
                     Suggested solution:
-                    - Reduce the value of the environment variable `ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE` to query smaller ranges.
+                    - Reduce the value of the environment variable
+                      `ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE` to query smaller ranges.
                     - Add multiple RPC providers
                     - Use a different RPC provider with higher rate limits."#,
                         format_duration(max_duration)
@@ -1267,15 +1309,10 @@ impl EpochCommittees {
         self.fixed_block_reward
     }
 
-    /// Fetch the block reward and update it if its None.
+    /// Fetch the fixed block reward and update it if its None.
     /// We used a fixed block reward for version v3
-    /// Version v4 uses the dynamic block reward based
+    /// Version v4 uses the dynamic block reward
     /// Assumes the stake table contract proxy address does not change
-    /// In the future, if we want to support updates to the stake table contract address via chain config,
-    /// or allow the contract to handle additional block reward calculation parameters (e.g., inflation, block time),
-    /// the `fetch_block_reward` logic can be updated to support per-epoch rewards.
-    /// Initially, the block reward is zero if the node starts on pre-epoch version
-    /// but it is updated on the first call to `add_epoch_root()`
     async fn fetch_and_update_fixed_block_reward(
         membership: Arc<RwLock<Self>>,
         epoch: EpochNumber,
@@ -1517,7 +1554,8 @@ impl EpochCommittees {
                 .checked_div(epoch_height)
                 .context("Epoch height is zero. cannot compute average block time")?
         };
-        tracing::info!(?epoch, %total_supply, %total_stake, %average_block_time_ms, "dynamic block reward parameters");
+        tracing::info!(?epoch, %total_supply, %total_stake, %average_block_time_ms,
+                       "dynamic block reward parameters");
 
         let block_reward =
             Self::compute_block_reward(epoch, total_supply, total_stake, average_block_time_ms)?;
@@ -2037,25 +2075,42 @@ impl Membership<SeqTypes> for EpochCommittees {
         };
 
         // If the epoch committee:
-        // - exists and has a header and block reward, return early.
+        // - exists and has a header stake table hash and block reward, return early.
         // - exists without a reward, reuse validators and update reward.
+        // and fetch from L1 if the stake table hash is missing.
         // - doesn't exist, fetch it from L1.
         let (validators, stake_table_hash) = match epoch_committee {
-            Some(ref committee) => {
-                if committee.block_reward.is_some() && committee.header.is_some() {
-                    tracing::info!(
-                        ?epoch,
-                        "committee already has block reward and header, skipping add_epoch_root"
-                    );
-                    return Ok(());
-                }
+            Some(committee)
+                if committee.block_reward.is_some()
+                    && committee.header.is_some()
+                    && committee.stake_table_hash.is_some() =>
+            {
+                tracing::info!(
+                    ?epoch,
+                    "committee already has block reward, header, and stake table hash; skipping \
+                     add_epoch_root"
+                );
+                return Ok(());
+            },
 
+            Some(committee) => {
                 if let Some(reward) = committee.block_reward {
                     block_reward = Some(reward);
                 }
 
-                (committee.validators.clone(), committee.stake_table_hash)
+                if let Some(hash) = committee.stake_table_hash {
+                    (committee.validators.clone(), Some(hash))
+                } else {
+                    // if stake table hash is missing then recalculate from events
+                    tracing::info!(
+                        "Stake table hash missing for epoch {epoch}. recalculating by fetching \
+                         from l1."
+                    );
+                    let (map, hash) = fetcher.fetch(epoch, &block_header).await?;
+                    (map, Some(hash))
+                }
             },
+
             None => {
                 tracing::info!("Stake table missing for epoch {epoch}. Fetching from L1.");
                 let (map, hash) = fetcher.fetch(epoch, &block_header).await?;
@@ -2272,7 +2327,7 @@ pub mod testing {
     use alloy::primitives::Bytes;
     use hotshot_contract_adapter::{
         sol_types::{EdOnBN254PointSol, G1PointSol, G2PointSol},
-        stake_table::{sign_address_bls, sign_address_schnorr},
+        stake_table::{sign_address_bls, sign_address_schnorr, StateSignatureSol},
     };
     use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
     use rand::{Rng as _, RngCore as _};
@@ -2315,8 +2370,8 @@ pub mod testing {
                 bls_vk: bls_key_pair.ver_key().to_affine().into(),
                 schnorr_vk: schnorr_key_pair.ver_key().to_affine().into(),
                 commission,
-                bls_sig,
-                schnorr_sig,
+                bls_sig: bls_sig.into(),
+                schnorr_sig: StateSignatureSol::from(schnorr_sig).into(),
             }
         }
     }
@@ -2641,7 +2696,13 @@ mod tests {
 
     #[test]
     fn test_display_log() {
-        let serialized = r#"{"address":"0x0000000000000000000000000000000000000069","topics":["0x0000000000000000000000000000000000000000000000000000000000000069"],"data":"0x69","blockHash":"0x0000000000000000000000000000000000000000000000000000000000000069","blockNumber":"0x69","blockTimestamp":"0x69","transactionHash":"0x0000000000000000000000000000000000000000000000000000000000000069","transactionIndex":"0x69","logIndex":"0x70","removed":false}"#;
+        let serialized = r#"{"address":"0x0000000000000000000000000000000000000069",
+            "topics":["0x0000000000000000000000000000000000000000000000000000000000000069"],
+            "data":"0x69",
+            "blockHash":"0x0000000000000000000000000000000000000000000000000000000000000069",
+            "blockNumber":"0x69","blockTimestamp":"0x69",
+            "transactionHash":"0x0000000000000000000000000000000000000000000000000000000000000069",
+            "transactionIndex":"0x69","logIndex":"0x70","removed":false}"#;
         let log: Log = serde_json::from_str(serialized).unwrap();
         assert_eq!(
             log.display(),
@@ -2693,7 +2754,8 @@ mod tests {
             stake_table_state.apply_event(StakeTableEvent::Register((&test_validator).into()));
 
         pretty_assertions::assert_matches!(
-           v1_already_registered_result,  Err(StakeTableError::AlreadyRegistered(account)) if account == test_validator.account,
+           v1_already_registered_result,  Err(StakeTableError::AlreadyRegistered(account))
+                if account == test_validator.account,
            "Expected AlreadyRegistered error. version ={version:?} result={v1_already_registered_result:?}",
         );
 
@@ -2855,7 +2917,7 @@ mod tests {
             bls_vk: bls_key_pair.ver_key().to_affine().into(),
             schnorr_vk: val1.schnorr_vk,
             commission: val1.commission,
-            bls_sig: sign_address_bls(&bls_key_pair, val1.account),
+            bls_sig: sign_address_bls(&bls_key_pair, val1.account).into(),
             schnorr_sig: val1.clone().schnorr_sig,
         };
         let event1 = StakeTableEvent::RegisterV2((&val1).into());
@@ -2882,6 +2944,48 @@ mod tests {
 
         let deregister_event = StakeTableEvent::Deregister((&validator).into());
         assert!(state.apply_event(deregister_event).unwrap().is_ok());
+    }
+
+    #[test]
+    fn test_commission_validation_exceeds_basis_points() {
+        // Create a simple stake table with one validator
+        let validator = TestValidator::random();
+        let mut stake_table = StakeTableState::new();
+
+        // Register the validator first
+        let registration_event = ValidatorRegistered::from(&validator).into();
+        stake_table
+            .apply_event(registration_event)
+            .unwrap()
+            .unwrap();
+
+        // Test that a commission exactly at the limit is allowed
+        let valid_commission_event = CommissionUpdated {
+            validator: validator.account,
+            timestamp: Default::default(),
+            oldCommission: 0,
+            newCommission: COMMISSION_BASIS_POINTS, // Exactly at the limit
+        }
+        .into();
+        assert!(stake_table.apply_event(valid_commission_event).is_ok());
+
+        let invalid_commission = COMMISSION_BASIS_POINTS + 1;
+        let invalid_commission_event = CommissionUpdated {
+            validator: validator.account,
+            timestamp: Default::default(),
+            oldCommission: 0,
+            newCommission: invalid_commission,
+        }
+        .into();
+
+        let err = stake_table
+            .apply_event(invalid_commission_event)
+            .unwrap_err();
+
+        assert_matches!(
+            err,
+            StakeTableError::InvalidCommission(addr, invalid_commission)
+                if addr == addr && invalid_commission == invalid_commission);
     }
 
     #[test]

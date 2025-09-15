@@ -21,6 +21,7 @@ This CLI helps users interact with the Espresso staking contract, either as a de
     - [Recovering funds after a validator exit](#recovering-funds-after-a-validator-exit)
   - [Node operators](#node-operators)
     - [Registering a validator](#registering-a-validator)
+    - [Updating your commission](#updating-your-commission)
     - [De-registering your validator](#de-registering-your-validator)
     - [Rotating your consensus keys](#rotating-your-consensus-keys)
 
@@ -64,6 +65,7 @@ Commands:
     stake-table            Show the stake table in the Espresso stake table contract
     account                Print the signer account address
     register-validator     Register to become a validator
+    update-commission      Update a validator's commission rate
     update-consensus-keys  Update a validators Espresso consensus signing keys
     deregister-validator   Deregister a validator
     approve                Approve stake table contract to move tokens
@@ -74,6 +76,7 @@ Commands:
     token-balance          Check ESP token balance
     token-allowance        Check ESP token allowance of stake table contract
     transfer               Transfer ESP tokens
+    export-node-signatures       Export validator node signatures for address validation
     stake-for-demo         Register the validators and delegates for the local demo
     help                   Print this message or the help of the given subcommand(s)
 
@@ -231,13 +234,35 @@ This section covers commands for node operators.
     STATE_PRIVATE_KEY=SCHNORR_SIGNING_KEY~...
     ```
 
+    Alternatively, you can use pre-signed signatures:
+
+        staking-cli register-validator --node-signatures signatures.json --commission 4.99
+
+    You can specify the format for parsing node signatures from stdin or files:
+
+        staking-cli register-validator --node-signatures signatures.toml --format toml --commission 4.99
+
 - Each Ethereum account used must have enough gas funds on the L1 to call the registration method of the contract. The
   register transaction consumes about 300k gas.
 - Each BLS (Espresso) and key can be registered only once.
-- The commission cannot be changed later. One would need to deregister the validator, register it again, and direct
-  delegators to redelegate in order to change it.
+- The commission can be updated later using the `update-commission` command, subject to rate limits.
 - Each Ethereum account can only be used to register a single validator. For multiple validators, at a minimum,
   different account indices (or mnemonics) must be used.
+
+### Updating your commission
+
+Validators can update their commission rate, subject to the following rate limits:
+- Commission updates are limited to once per week (7 days by default)
+- Commission increases are capped at 5% per update (e.g., from 10% to 15%)
+- Commission decreases have no limit
+
+To update your commission:
+
+    staking-cli update-commission --new-commission 7.5
+
+The commission value is in percent with up to 2 decimal points: from 0.00 to 100.00.
+
+Note: The minimum time interval and maximum increase are contract parameters that may be adjusted by governance.
 
 ### De-registering your validator
 
@@ -261,3 +286,44 @@ it.
     CONSENSUS_PRIVATE_KEY=BLS_SIGNING_KEY~...
     STATE_PRIVATE_KEY=SCHNORR_SIGNING_KEY~...
     ```
+
+    Alternatively, you can use pre-signed signatures:
+
+        staking-cli update-consensus-keys --node-signatures signatures.json
+        staking-cli update-consensus-keys --node-signatures signatures.toml --format toml
+
+### Exporting Node Signatures
+
+To avoid mixing Espresso and Ethereum keys on a single host we can pre-sign the validator address for registration and
+key updates. The exported payload can later be used to build the Ethereum transaction on another host.
+
+    staking-cli export-node-signatures --address 0x12...34 \
+        --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY>
+
+Output formats:
+
+- JSON to stdout (default): `staking-cli export-node-signatures --address 0x12...34 --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY>`
+- JSON to file: `--output signatures.json`
+- TOML to file: `--output signatures.toml`
+- Explicit format override: `--output signatures.json --format toml` (saves TOML content to .json file)
+
+The command will generate a signature payload file that doesn't contain any secrets: 
+
+```toml
+address = "0x..."
+bls_vk = "BLS_VER_KEY~..."
+bls_signature = "BLS_SIG~..."
+schnorr_vk = "SCHNORR_VER_KEY~..."
+schnorr_signature = "SCHNORR_SIG~..."
+```
+
+The exported signatures can then be used in validator operations:
+
+    staking-cli register-validator --node-signatures signatures.json --commission 4.99
+    staking-cli update-consensus-keys --node-signatures signatures.json
+
+Format handling:
+
+- File extension auto-detection: `.json` and `.toml` files are automatically parsed in the correct format
+- Stdin defaults to JSON: `cat signatures.json | staking-cli register-validator --node-signatures - --commission 4.99`
+- Explicit format for stdin: `cat signatures.toml | staking-cli register-validator --node-signatures - --format toml --commission 4.99`
