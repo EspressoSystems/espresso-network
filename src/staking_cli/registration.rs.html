@@ -340,82 +340,80 @@
 <a href=#340 id=340 data-nosnippet>340</a>            <span class="prelude-val">Some</span>(<span class="number">0</span>),
 <a href=#341 id=341 data-nosnippet>341</a>            receipt.block_number.unwrap(),
 <a href=#342 id=342 data-nosnippet>342</a>        )
-<a href=#343 id=343 data-nosnippet>343</a>        .<span class="kw">await
-<a href=#344 id=344 data-nosnippet>344</a>        </span>.sort_events()<span class="question-mark">?</span>;
-<a href=#345 id=345 data-nosnippet>345</a>
-<a href=#346 id=346 data-nosnippet>346</a>        <span class="comment">// verify that we only have the first RegisterV2 event
-<a href=#347 id=347 data-nosnippet>347</a>        </span><span class="macro">assert_eq!</span>(events.len(), <span class="number">1</span>);
-<a href=#348 id=348 data-nosnippet>348</a>        <span class="kw">match </span>events[<span class="number">0</span>].<span class="number">1</span>.clone() {
-<a href=#349 id=349 data-nosnippet>349</a>            StakeTableEvent::RegisterV2(event) =&gt; {
-<a href=#350 id=350 data-nosnippet>350</a>                <span class="macro">assert_eq!</span>(event.account, system.deployer_address);
-<a href=#351 id=351 data-nosnippet>351</a>            },
-<a href=#352 id=352 data-nosnippet>352</a>            <span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">"expected RegisterV2 event"</span>),
-<a href=#353 id=353 data-nosnippet>353</a>        }
-<a href=#354 id=354 data-nosnippet>354</a>        <span class="prelude-val">Ok</span>(())
-<a href=#355 id=355 data-nosnippet>355</a>    }
-<a href=#356 id=356 data-nosnippet>356</a>
-<a href=#357 id=357 data-nosnippet>357</a>    <span class="doccomment">/// The GCL must remove stake table events with incorrect signatures. This test verifies that a
-<a href=#358 id=358 data-nosnippet>358</a>    /// consensus keys update event with incorrect schnorr signature is removed before the stake
-<a href=#359 id=359 data-nosnippet>359</a>    /// table is computed.
-<a href=#360 id=360 data-nosnippet>360</a>    </span><span class="attr">#[tokio::test]
-<a href=#361 id=361 data-nosnippet>361</a>    </span><span class="kw">async fn </span>test_integration_unauthenticated_update_consensus_keys_events_removed() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#362 id=362 data-nosnippet>362</a>        <span class="kw">let </span>system = TestSystem::deploy().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#363 id=363 data-nosnippet>363</a>
-<a href=#364 id=364 data-nosnippet>364</a>        <span class="comment">// register a validator with correct signature
-<a href=#365 id=365 data-nosnippet>365</a>        </span>system.register_validator().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#366 id=366 data-nosnippet>366</a>        <span class="kw">let </span>validator_address = system.deployer_address;
-<a href=#367 id=367 data-nosnippet>367</a>
-<a href=#368 id=368 data-nosnippet>368</a>        <span class="comment">// NOTE: we can't register a validator with a bad BLS signature because the contract will revert
-<a href=#369 id=369 data-nosnippet>369</a>
-<a href=#370 id=370 data-nosnippet>370</a>        </span><span class="kw">let </span>(<span class="kw">_</span>, new_bls_key_pair, new_schnorr_key_pair) =
-<a href=#371 id=371 data-nosnippet>371</a>            TestSystem::gen_keys(<span class="kw-2">&amp;mut </span>StdRng::from_seed([<span class="number">1u8</span>; <span class="number">32</span>]));
-<a href=#372 id=372 data-nosnippet>372</a>        <span class="kw">let </span>(<span class="kw">_</span>, <span class="kw">_</span>, other_schnorr_key_pair) =
-<a href=#373 id=373 data-nosnippet>373</a>            TestSystem::gen_keys(<span class="kw-2">&amp;mut </span>StdRng::from_seed([<span class="number">2u8</span>; <span class="number">32</span>]));
-<a href=#374 id=374 data-nosnippet>374</a>
-<a href=#375 id=375 data-nosnippet>375</a>        <span class="kw">let </span>bls_vk = G2PointSol::from(new_bls_key_pair.ver_key());
-<a href=#376 id=376 data-nosnippet>376</a>        <span class="kw">let </span>bls_sig = G1PointSol::from(sign_address_bls(<span class="kw-2">&amp;</span>new_bls_key_pair, validator_address));
-<a href=#377 id=377 data-nosnippet>377</a>        <span class="kw">let </span>schnorr_vk = EdOnBN254PointSol::from(new_schnorr_key_pair.ver_key());
-<a href=#378 id=378 data-nosnippet>378</a>
-<a href=#379 id=379 data-nosnippet>379</a>        <span class="comment">// create a valid schnorr signature with the *wrong* key
-<a href=#380 id=380 data-nosnippet>380</a>        </span><span class="kw">let </span>schnorr_sig_other_key = StateSignatureSol::from(sign_address_schnorr(
-<a href=#381 id=381 data-nosnippet>381</a>            <span class="kw-2">&amp;</span>other_schnorr_key_pair,
-<a href=#382 id=382 data-nosnippet>382</a>            validator_address,
-<a href=#383 id=383 data-nosnippet>383</a>        ))
-<a href=#384 id=384 data-nosnippet>384</a>        .into();
-<a href=#385 id=385 data-nosnippet>385</a>
-<a href=#386 id=386 data-nosnippet>386</a>        <span class="kw">let </span>stake_table = StakeTableV2::new(system.stake_table, system.provider);
-<a href=#387 id=387 data-nosnippet>387</a>
-<a href=#388 id=388 data-nosnippet>388</a>        <span class="comment">// update consensus keys with the schnorr sig from another key
-<a href=#389 id=389 data-nosnippet>389</a>        </span><span class="kw">let </span>receipt = stake_table
-<a href=#390 id=390 data-nosnippet>390</a>            .updateConsensusKeysV2(bls_vk, schnorr_vk, bls_sig.into(), schnorr_sig_other_key)
-<a href=#391 id=391 data-nosnippet>391</a>            .send()
-<a href=#392 id=392 data-nosnippet>392</a>            .<span class="kw">await
-<a href=#393 id=393 data-nosnippet>393</a>            </span>.maybe_decode_revert::&lt;StakeTableV2Errors&gt;()<span class="question-mark">?
-<a href=#394 id=394 data-nosnippet>394</a>            </span>.get_receipt()
-<a href=#395 id=395 data-nosnippet>395</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#396 id=396 data-nosnippet>396</a>        <span class="macro">assert!</span>(receipt.status());
-<a href=#397 id=397 data-nosnippet>397</a>
-<a href=#398 id=398 data-nosnippet>398</a>        <span class="kw">let </span>l1 = L1Client::new(<span class="macro">vec!</span>[system.rpc_url])<span class="question-mark">?</span>;
-<a href=#399 id=399 data-nosnippet>399</a>        <span class="kw">let </span>events = Fetcher::fetch_events_from_contract(
-<a href=#400 id=400 data-nosnippet>400</a>            l1,
-<a href=#401 id=401 data-nosnippet>401</a>            system.stake_table,
-<a href=#402 id=402 data-nosnippet>402</a>            <span class="prelude-val">Some</span>(<span class="number">0</span>),
-<a href=#403 id=403 data-nosnippet>403</a>            receipt.block_number.unwrap(),
-<a href=#404 id=404 data-nosnippet>404</a>        )
-<a href=#405 id=405 data-nosnippet>405</a>        .<span class="kw">await
-<a href=#406 id=406 data-nosnippet>406</a>        </span>.sort_events()<span class="question-mark">?</span>;
-<a href=#407 id=407 data-nosnippet>407</a>
-<a href=#408 id=408 data-nosnippet>408</a>        <span class="comment">// verify that we only have the RegisterV2 event
-<a href=#409 id=409 data-nosnippet>409</a>        </span><span class="macro">assert_eq!</span>(events.len(), <span class="number">1</span>);
-<a href=#410 id=410 data-nosnippet>410</a>        <span class="kw">match </span>events[<span class="number">0</span>].<span class="number">1</span>.clone() {
-<a href=#411 id=411 data-nosnippet>411</a>            StakeTableEvent::RegisterV2(event) =&gt; {
-<a href=#412 id=412 data-nosnippet>412</a>                <span class="macro">assert_eq!</span>(event.account, system.deployer_address);
-<a href=#413 id=413 data-nosnippet>413</a>            },
-<a href=#414 id=414 data-nosnippet>414</a>            <span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">"expected RegisterV2 event"</span>),
-<a href=#415 id=415 data-nosnippet>415</a>        }
+<a href=#343 id=343 data-nosnippet>343</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#344 id=344 data-nosnippet>344</a>
+<a href=#345 id=345 data-nosnippet>345</a>        <span class="comment">// verify that we only have the first RegisterV2 event
+<a href=#346 id=346 data-nosnippet>346</a>        </span><span class="macro">assert_eq!</span>(events.len(), <span class="number">1</span>);
+<a href=#347 id=347 data-nosnippet>347</a>        <span class="kw">match </span>events[<span class="number">0</span>].<span class="number">1</span>.clone() {
+<a href=#348 id=348 data-nosnippet>348</a>            StakeTableEvent::RegisterV2(event) =&gt; {
+<a href=#349 id=349 data-nosnippet>349</a>                <span class="macro">assert_eq!</span>(event.account, system.deployer_address);
+<a href=#350 id=350 data-nosnippet>350</a>            },
+<a href=#351 id=351 data-nosnippet>351</a>            <span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">"expected RegisterV2 event"</span>),
+<a href=#352 id=352 data-nosnippet>352</a>        }
+<a href=#353 id=353 data-nosnippet>353</a>        <span class="prelude-val">Ok</span>(())
+<a href=#354 id=354 data-nosnippet>354</a>    }
+<a href=#355 id=355 data-nosnippet>355</a>
+<a href=#356 id=356 data-nosnippet>356</a>    <span class="doccomment">/// The GCL must remove stake table events with incorrect signatures. This test verifies that a
+<a href=#357 id=357 data-nosnippet>357</a>    /// consensus keys update event with incorrect schnorr signature is removed before the stake
+<a href=#358 id=358 data-nosnippet>358</a>    /// table is computed.
+<a href=#359 id=359 data-nosnippet>359</a>    </span><span class="attr">#[tokio::test]
+<a href=#360 id=360 data-nosnippet>360</a>    </span><span class="kw">async fn </span>test_integration_unauthenticated_update_consensus_keys_events_removed() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#361 id=361 data-nosnippet>361</a>        <span class="kw">let </span>system = TestSystem::deploy().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#362 id=362 data-nosnippet>362</a>
+<a href=#363 id=363 data-nosnippet>363</a>        <span class="comment">// register a validator with correct signature
+<a href=#364 id=364 data-nosnippet>364</a>        </span>system.register_validator().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#365 id=365 data-nosnippet>365</a>        <span class="kw">let </span>validator_address = system.deployer_address;
+<a href=#366 id=366 data-nosnippet>366</a>
+<a href=#367 id=367 data-nosnippet>367</a>        <span class="comment">// NOTE: we can't register a validator with a bad BLS signature because the contract will revert
+<a href=#368 id=368 data-nosnippet>368</a>
+<a href=#369 id=369 data-nosnippet>369</a>        </span><span class="kw">let </span>(<span class="kw">_</span>, new_bls_key_pair, new_schnorr_key_pair) =
+<a href=#370 id=370 data-nosnippet>370</a>            TestSystem::gen_keys(<span class="kw-2">&amp;mut </span>StdRng::from_seed([<span class="number">1u8</span>; <span class="number">32</span>]));
+<a href=#371 id=371 data-nosnippet>371</a>        <span class="kw">let </span>(<span class="kw">_</span>, <span class="kw">_</span>, other_schnorr_key_pair) =
+<a href=#372 id=372 data-nosnippet>372</a>            TestSystem::gen_keys(<span class="kw-2">&amp;mut </span>StdRng::from_seed([<span class="number">2u8</span>; <span class="number">32</span>]));
+<a href=#373 id=373 data-nosnippet>373</a>
+<a href=#374 id=374 data-nosnippet>374</a>        <span class="kw">let </span>bls_vk = G2PointSol::from(new_bls_key_pair.ver_key());
+<a href=#375 id=375 data-nosnippet>375</a>        <span class="kw">let </span>bls_sig = G1PointSol::from(sign_address_bls(<span class="kw-2">&amp;</span>new_bls_key_pair, validator_address));
+<a href=#376 id=376 data-nosnippet>376</a>        <span class="kw">let </span>schnorr_vk = EdOnBN254PointSol::from(new_schnorr_key_pair.ver_key());
+<a href=#377 id=377 data-nosnippet>377</a>
+<a href=#378 id=378 data-nosnippet>378</a>        <span class="comment">// create a valid schnorr signature with the *wrong* key
+<a href=#379 id=379 data-nosnippet>379</a>        </span><span class="kw">let </span>schnorr_sig_other_key = StateSignatureSol::from(sign_address_schnorr(
+<a href=#380 id=380 data-nosnippet>380</a>            <span class="kw-2">&amp;</span>other_schnorr_key_pair,
+<a href=#381 id=381 data-nosnippet>381</a>            validator_address,
+<a href=#382 id=382 data-nosnippet>382</a>        ))
+<a href=#383 id=383 data-nosnippet>383</a>        .into();
+<a href=#384 id=384 data-nosnippet>384</a>
+<a href=#385 id=385 data-nosnippet>385</a>        <span class="kw">let </span>stake_table = StakeTableV2::new(system.stake_table, system.provider);
+<a href=#386 id=386 data-nosnippet>386</a>
+<a href=#387 id=387 data-nosnippet>387</a>        <span class="comment">// update consensus keys with the schnorr sig from another key
+<a href=#388 id=388 data-nosnippet>388</a>        </span><span class="kw">let </span>receipt = stake_table
+<a href=#389 id=389 data-nosnippet>389</a>            .updateConsensusKeysV2(bls_vk, schnorr_vk, bls_sig.into(), schnorr_sig_other_key)
+<a href=#390 id=390 data-nosnippet>390</a>            .send()
+<a href=#391 id=391 data-nosnippet>391</a>            .<span class="kw">await
+<a href=#392 id=392 data-nosnippet>392</a>            </span>.maybe_decode_revert::&lt;StakeTableV2Errors&gt;()<span class="question-mark">?
+<a href=#393 id=393 data-nosnippet>393</a>            </span>.get_receipt()
+<a href=#394 id=394 data-nosnippet>394</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#395 id=395 data-nosnippet>395</a>        <span class="macro">assert!</span>(receipt.status());
+<a href=#396 id=396 data-nosnippet>396</a>
+<a href=#397 id=397 data-nosnippet>397</a>        <span class="kw">let </span>l1 = L1Client::new(<span class="macro">vec!</span>[system.rpc_url])<span class="question-mark">?</span>;
+<a href=#398 id=398 data-nosnippet>398</a>        <span class="kw">let </span>events = Fetcher::fetch_events_from_contract(
+<a href=#399 id=399 data-nosnippet>399</a>            l1,
+<a href=#400 id=400 data-nosnippet>400</a>            system.stake_table,
+<a href=#401 id=401 data-nosnippet>401</a>            <span class="prelude-val">Some</span>(<span class="number">0</span>),
+<a href=#402 id=402 data-nosnippet>402</a>            receipt.block_number.unwrap(),
+<a href=#403 id=403 data-nosnippet>403</a>        )
+<a href=#404 id=404 data-nosnippet>404</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#405 id=405 data-nosnippet>405</a>
+<a href=#406 id=406 data-nosnippet>406</a>        <span class="comment">// verify that we only have the RegisterV2 event
+<a href=#407 id=407 data-nosnippet>407</a>        </span><span class="macro">assert_eq!</span>(events.len(), <span class="number">1</span>);
+<a href=#408 id=408 data-nosnippet>408</a>        <span class="kw">match </span>events[<span class="number">0</span>].<span class="number">1</span>.clone() {
+<a href=#409 id=409 data-nosnippet>409</a>            StakeTableEvent::RegisterV2(event) =&gt; {
+<a href=#410 id=410 data-nosnippet>410</a>                <span class="macro">assert_eq!</span>(event.account, system.deployer_address);
+<a href=#411 id=411 data-nosnippet>411</a>            },
+<a href=#412 id=412 data-nosnippet>412</a>            <span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">"expected RegisterV2 event"</span>),
+<a href=#413 id=413 data-nosnippet>413</a>        }
+<a href=#414 id=414 data-nosnippet>414</a>
+<a href=#415 id=415 data-nosnippet>415</a>        <span class="macro">println!</span>(<span class="string">"Events: {events:?}"</span>);
 <a href=#416 id=416 data-nosnippet>416</a>
-<a href=#417 id=417 data-nosnippet>417</a>        <span class="macro">println!</span>(<span class="string">"Events: {events:?}"</span>);
-<a href=#418 id=418 data-nosnippet>418</a>
-<a href=#419 id=419 data-nosnippet>419</a>        <span class="prelude-val">Ok</span>(())
-<a href=#420 id=420 data-nosnippet>420</a>    }
-<a href=#421 id=421 data-nosnippet>421</a>}</code></pre></div></section></main></body></html>
+<a href=#417 id=417 data-nosnippet>417</a>        <span class="prelude-val">Ok</span>(())
+<a href=#418 id=418 data-nosnippet>418</a>    }
+<a href=#419 id=419 data-nosnippet>419</a>}</code></pre></div></section></main></body></html>
