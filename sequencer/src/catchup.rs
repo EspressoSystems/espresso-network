@@ -22,6 +22,7 @@ use espresso_types::{
     v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2},
     BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions, ValidatedState,
+    ValidatorMap,
 };
 use futures::{
     future::{Future, FutureExt, TryFuture, TryFutureExt},
@@ -30,7 +31,7 @@ use futures::{
 };
 use hotshot_types::{
     consensus::Consensus,
-    data::ViewNumber,
+    data::{EpochNumber, ViewNumber},
     message::UpgradeLock,
     network::NetworkConfig,
     stake_table::HSStakeTable,
@@ -557,7 +558,6 @@ pub(crate) trait CatchupStorage: Sync {
         }
     }
 }
-
 impl CatchupStorage for hotshot_query_service::data_source::MetricsDataSource {}
 
 impl<T, S> CatchupStorage for hotshot_query_service::data_source::ExtensibleDataSource<T, S>

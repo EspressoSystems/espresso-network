@@ -522,7 +522,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
 
 #[async_trait]
 pub trait SequencerPersistence:
-    Sized + Send + Sync + Clone + 'static + DhtPersistentStorage
+    Sized + Send + Sync + Clone + 'static + DhtPersistentStorage + MembershipPersistence
 {
     /// Use this storage as a state catchup backend, if supported.
     fn into_catchup_provider(

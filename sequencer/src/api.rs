@@ -219,6 +219,13 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     async fn previous_proposal_participation(&self) -> HashMap<PubKey, f64> {
         self.as_ref().previous_proposal_participation().await
     }
+
+    async fn get_all_validators(
+        &self,
+        epoch: <SeqTypes as NodeType>::Epoch,
+    ) -> anyhow::Result<ValidatorMap> {
+        self.as_ref().get_all_validators(epoch).await
+    }
 }
 
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
@@ -327,6 +334,17 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             .read()
             .await
             .previous_proposal_participation()
+    }
+
+    async fn get_all_validators(
+        &self,
+        epoch: <SeqTypes as NodeType>::Epoch,
+    ) -> anyhow::Result<ValidatorMap> {
+        let handle = self.consensus().await;
+        let handle_read = handle.read().await;
+        let storage = handle_read.storage();
+        let validators = storage.load_all_validators(epoch).await;
+        bail!("unimplemented")
     }
 }
 
