@@ -33,7 +33,7 @@ hotshot-task-impls = { workspace = true }
 hotshot-types = { workspace = true }
 hotshot-utils = { workspace = true }
 itertools = "0.14.0"
-jf-vid = { workspace = true }
+jf-advz = { workspace = true }
 lru = { workspace = true }
 portpicker = { workspace = true }
 rand = { workspace = true }

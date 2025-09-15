@@ -62,7 +62,7 @@ use alloy::primitives::map::HashMap;
 use async_trait::async_trait;
 use futures::future::Future;
 use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
-use jf_merkle_tree::prelude::MerkleProof;
+use jf_merkle_tree_compat::prelude::MerkleProof;
 use tagged_base64::TaggedBase64;
 
 use crate::{

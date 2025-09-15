@@ -12,7 +12,7 @@ use espresso_types::{
     v0_4::REWARD_MERKLE_TREE_V2_HEIGHT,
 };
 use hotshot_contract_adapter::sol_types::{AccruedRewardsProofSol, RewardClaimPrototypeMock};
-use jf_merkle_tree::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
+use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
 use rand::Rng as _;
 
 #[test_log::test(tokio::test)]

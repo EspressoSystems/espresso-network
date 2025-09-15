@@ -2095,7 +2095,7 @@ mod test {
         },
         vid::advz::advz_scheme,
     };
-    use jf_vid::VidScheme;
+    use jf_advz::VidScheme;
     use serde_json::json;
     use tempfile::TempDir;
     use vbs::version::StaticVersionType;

@@ -971,7 +971,7 @@ mod tests {
         availability::{BlockQueryData, TransactionQueryData, VidCommonQueryData},
         explorer::TransactionDetailResponse,
     };
-    use jf_merkle_tree::MerkleTreeScheme;
+    use jf_merkle_tree_compat::MerkleTreeScheme;
     use portpicker::pick_unused_port;
     use rand::Rng;
     use sequencer::SequencerApiVersion;

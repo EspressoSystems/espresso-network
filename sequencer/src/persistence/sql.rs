@@ -2784,7 +2784,7 @@ mod test {
             avidm::{init_avidm_param, AvidMScheme},
         },
     };
-    use jf_vid::VidScheme;
+    use jf_advz::VidScheme;
     use vbs::version::StaticVersionType;
 
     use super::*;

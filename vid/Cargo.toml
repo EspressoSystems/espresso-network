@@ -21,10 +21,10 @@ ark-serialize = { workspace = true }
 ark-std = { workspace = true }
 base64-bytes = { workspace = true }
 displaydoc = "0.2"
-jf-crhf = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-crhf-v0.1.1" }
-jf-merkle-tree = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-merkle-tree-v0.2.2" }
-jf-poseidon2 = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-poseidon2-v0.1.0", features = ["bn254"] }
-jf-utils = { git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5" }
+jf-crhf = { workspace = true }
+jf-merkle-tree = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-merkle-tree-v0.3.0" }
+jf-poseidon2 = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-poseidon2-v0.2.0", features = ["bn254"] }
+jf-utils = { workspace = true }
 p3-maybe-rayon = "0.2"
 serde = { workspace = true }
 sha2 = { workspace = true }
@@ -32,7 +32,7 @@ sha3 = { version = "0.10" }
 tagged-base64 = { workspace = true }
 
 [dev-dependencies]
-ark-bls12-381 = { version = "0.4.0" }
+ark-bls12-381 = { workspace = true }
 criterion = "0.5"
 rand = "0.8.5"
 

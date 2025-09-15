@@ -1378,10 +1378,10 @@ mod test {
         },
         vid::advz::advz_scheme,
     };
-    use jf_merkle_tree::{
+    use jf_advz::VidScheme;
+    use jf_merkle_tree_compat::{
         prelude::UniversalMerkleTree, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
     };
-    use jf_vid::VidScheme;
     use tokio::time::sleep;
     use vbs::version::StaticVersionType;
 

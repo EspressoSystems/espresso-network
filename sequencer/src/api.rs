@@ -43,7 +43,7 @@ use hotshot_types::{
     PeerConfig,
 };
 use itertools::Itertools;
-use jf_merkle_tree::MerkleTreeScheme;
+use jf_merkle_tree_compat::MerkleTreeScheme;
 use rand::Rng;
 use request_response::RequestType;
 use tokio::time::timeout;
@@ -925,7 +925,7 @@ pub mod test_helpers {
         HotShotConfig,
     };
     use itertools::izip;
-    use jf_merkle_tree::{MerkleCommitment, MerkleTreeScheme};
+    use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme};
     use portpicker::pick_unused_port;
     use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
     use surf_disco::Client;
@@ -2154,7 +2154,7 @@ mod test {
         utils::epoch_from_block_number,
         ValidatorConfig,
     };
-    use jf_merkle_tree::prelude::{MerkleProof, Sha3Node};
+    use jf_merkle_tree_compat::prelude::{MerkleProof, Sha3Node};
     use portpicker::pick_unused_port;
     use rand::seq::SliceRandom;
     use rstest::rstest;

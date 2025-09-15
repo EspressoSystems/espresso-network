@@ -28,7 +28,7 @@ use hotshot_types::{
     },
     vid::advz::{advz_scheme, ADVZCommitment, ADVZCommon},
 };
-use jf_vid::VidScheme;
+use jf_advz::VidScheme;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use snafu::{ensure, Snafu};
 

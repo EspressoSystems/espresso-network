@@ -13,6 +13,4 @@ ignore = [
     # To upgrade async-tungstenite we need a new release of tide-websockets, which seems unlikely
     # https://github.com/http-rs/tide-websockets
     "RUSTSEC-2025-0009",
-    # Requires jf to upgrade ark from 0.4 to 0.5, so we can use tracing-subscriber 0.3 exclusively
-    "RUSTSEC-2025-0055",
 ]

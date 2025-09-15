@@ -45,7 +45,9 @@ use hotshot_types::traits::{
     block_contents::BlockHeader,
     metrics::{Counter, Gauge, Histogram, Metrics as _},
 };
-use jf_merkle_tree::{ForgetableMerkleTreeScheme, MerkleTreeScheme, UniversalMerkleTreeScheme};
+use jf_merkle_tree_compat::{
+    ForgetableMerkleTreeScheme, MerkleTreeScheme, UniversalMerkleTreeScheme,
+};
 use rand::{seq::SliceRandom, RngCore};
 use sequencer::SequencerApiVersion;
 use sequencer_utils::logging;

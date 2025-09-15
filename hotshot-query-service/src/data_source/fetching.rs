@@ -100,7 +100,7 @@ use hotshot_types::{
         node_implementation::NodeType,
     },
 };
-use jf_merkle_tree::{prelude::MerkleProof, MerkleTreeScheme};
+use jf_merkle_tree_compat::{prelude::MerkleProof, MerkleTreeScheme};
 use tagged_base64::TaggedBase64;
 use tokio::{spawn, time::sleep};
 use tracing::Instrument;

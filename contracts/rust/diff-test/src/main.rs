@@ -494,7 +494,7 @@ fn main() {
 
             let message_bytes = cli.args[0].parse::<Bytes>().unwrap();
 
-            let field_elem: Fq = hasher.hash_to_field(&message_bytes, 1)[0];
+            let field_elem: Fq = hasher.hash_to_field::<1>(&message_bytes)[0];
             let fq_u256 = field_to_u256::<Fq>(field_elem);
             let hash_to_curve_elem: G1Affine = hash_to_curve::<Keccak256>(&message_bytes).into();
             let hash_to_curve_elem_parsed: G1PointSol = hash_to_curve_elem.into();
