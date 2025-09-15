@@ -288,18 +288,6 @@ impl<
     ) -> anyhow::Result<Leaf2<TYPES>> {
         let membership_reader = membership.read().await;
 
-        for node in membership_reader.inner.stake_table(Some(*epoch + 1)) {
-            if let Ok(leaf) = membership_reader
-                .fetcher
-                .read()
-                .await
-                .fetch_leaf(block_height, node.signature_key)
-                .await
-            {
-                return Ok(leaf);
-            }
-        }
-
         for node in membership_reader.inner.full_stake_table() {
             if let Ok(leaf) = membership_reader
                 .fetcher
@@ -336,22 +324,6 @@ impl<
             let mut drb_leaf = None;
 
             for node in membership_reader.inner.full_stake_table() {
-                if let Ok(leaf) = membership_reader
-                    .fetcher
-                    .read()
-                    .await
-                    .fetch_leaf(drb_block_height, node.signature_key)
-                    .await
-                {
-                    drb_leaf = Some(leaf);
-                    break;
-                }
-            }
-
-            for node in membership_reader
-                .inner
-                .stake_table(Some(previous_epoch + 1))
-            {
                 if let Ok(leaf) = membership_reader
                     .fetcher
                     .read()
