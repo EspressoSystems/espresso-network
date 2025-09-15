@@ -17,25 +17,27 @@ contract UpgradeLightClientScript is Script {
         uint256 extraField,
         address admin
     ) external returns (address) {
-        vm.startBroadcast(admin);
-        address proxy =
-            upgradeLightClient(mostRecentlyDeployedProxy, address(new LCV2()), newField, extraField);
-        vm.stopBroadcast();
+        address proxy = upgradeLightClient(
+            admin, mostRecentlyDeployedProxy, address(new LCV2()), newField, extraField
+        );
         return proxy;
     }
 
     /// @notice upgrades the light client contract by calling the upgrade function the
     /// implementation contract via
     /// the proxy
+    /// @param admin address of admin to broadcast as
     /// @param proxyAddress address of proxy
     /// @param newLightClient address of new implementation
     /// @return address of the proxy
     function upgradeLightClient(
+        address admin,
         address proxyAddress,
         address newLightClient,
         uint256 newField,
         uint256 extraField
     ) public returns (address) {
+        vm.startBroadcast(admin);
         LC proxy = LC(proxyAddress); //make the function call on the previous implementation
 
         proxy.upgradeToAndCall(
@@ -43,6 +45,7 @@ contract UpgradeLightClientScript is Script {
         ); //proxy
             // address now points to the new
             // implementation
+        vm.stopBroadcast();
         return address(proxy);
     }
 }
