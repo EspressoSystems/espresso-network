@@ -65,6 +65,10 @@ where
         self.da_members.clone()
     }
 
+    fn full_stake_table(&self) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
+        self.quorum_members.clone()
+    }
+
     fn lookup_leader(&self, view_number: u64, _epoch: Option<u64>) -> anyhow::Result<PubKey> {
         let index = view_number as usize % self.quorum_members.len();
         let leader = self.quorum_members[index].clone();

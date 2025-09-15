@@ -97,6 +97,14 @@ where
         }
     }
 
+    fn full_stake_table(&self) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
+        self.quorum_1_members
+            .iter()
+            .chain(self.quorum_2_members.iter())
+            .cloned()
+            .collect()
+    }
+
     fn lookup_leader(&self, view_number: u64, epoch: Option<u64>) -> anyhow::Result<PubKey> {
         let stake_table = self.stake_table(epoch);
 

@@ -232,6 +232,9 @@ impl<
     }
 
     fn has_randomized_stake_table(&self, epoch: TYPES::Epoch) -> anyhow::Result<bool> {
+        if !self.has_stake_table(epoch) {
+            return Ok(false);
+        }
         let has_randomized_stake_table = self.inner.has_randomized_stake_table(*epoch);
 
         if let Ok(result) = has_randomized_stake_table {
@@ -283,10 +286,21 @@ impl<
         block_height: u64,
         epoch: TYPES::Epoch,
     ) -> anyhow::Result<Leaf2<TYPES>> {
-        tracing::error!("FETCHING EPOCH ROOT");
         let membership_reader = membership.read().await;
 
-        for node in membership_reader.inner.stake_table(Some(*epoch)) {
+        for node in membership_reader.inner.stake_table(Some(*epoch + 1)) {
+            if let Ok(leaf) = membership_reader
+                .fetcher
+                .read()
+                .await
+                .fetch_leaf(block_height, node.signature_key)
+                .await
+            {
+                return Ok(leaf);
+            }
+        }
+
+        for node in membership_reader.inner.full_stake_table() {
             if let Ok(leaf) = membership_reader
                 .fetcher
                 .read()
@@ -305,7 +319,6 @@ impl<
         membership: Arc<RwLock<Self>>,
         epoch: TYPES::Epoch,
     ) -> anyhow::Result<DrbResult> {
-        tracing::error!("FETCHING EPOCH DRB");
         let membership_reader = membership.read().await;
         if let Ok(drb_result) = membership_reader.inner.get_epoch_drb(*epoch) {
             Ok(drb_result)
@@ -322,7 +335,23 @@ impl<
 
             let mut drb_leaf = None;
 
-            for node in membership_reader.inner.stake_table(Some(previous_epoch)) {
+            for node in membership_reader.inner.full_stake_table() {
+                if let Ok(leaf) = membership_reader
+                    .fetcher
+                    .read()
+                    .await
+                    .fetch_leaf(drb_block_height, node.signature_key)
+                    .await
+                {
+                    drb_leaf = Some(leaf);
+                    break;
+                }
+            }
+
+            for node in membership_reader
+                .inner
+                .stake_table(Some(previous_epoch + 1))
+            {
                 if let Ok(leaf) = membership_reader
                     .fetcher
                     .read()

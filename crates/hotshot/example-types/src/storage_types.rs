@@ -54,7 +54,7 @@ pub struct TestStorageState<TYPES: NodeType> {
     da2s: HashMap<TYPES::View, Proposal<TYPES, DaProposal2<TYPES>>>,
     pub proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposal<TYPES>>>,
     pub proposals2: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposal2<TYPES>>>,
-    proposals_wrapper: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
+    pub proposals_wrapper: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
     high_qc: Option<hotshot_types::simple_certificate::QuorumCertificate<TYPES>>,
     high_qc2: Option<hotshot_types::simple_certificate::QuorumCertificate2<TYPES>>,
     eqc: Option<(

@@ -59,6 +59,8 @@ pub trait TestStakeTable<
 
     fn stake_table(&self, epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>>;
 
+    fn full_stake_table(&self) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>>;
+
     fn da_stake_table(&self, epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>>;
 
     fn stake(

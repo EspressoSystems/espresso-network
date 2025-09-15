@@ -115,6 +115,10 @@ impl<
         result
     }
 
+    fn full_stake_table(&self) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
+        self.quorum_members.clone()
+    }
+
     fn stake_table(&self, epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
         if let Some(epoch) = epoch {
             let filter = self.make_quorum_filter(epoch);

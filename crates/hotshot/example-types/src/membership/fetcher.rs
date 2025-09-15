@@ -117,21 +117,22 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
                             .inner
                             .read()
                             .await
-                            .proposals2
+                            .proposals_wrapper
                             .iter()
                             .map(|(_view, proposal)| {
                                 (
-                                    proposal.data.block_header.block_number(),
+                                    proposal.data.block_header().block_number(),
                                     Leaf2::from_quorum_proposal(&proposal.data.clone().into()),
                                 )
                             })
                             .collect();
 
                         let Some(leaf) = leaves.get(&requested_height) else {
-                            tracing::warn!(
+                            tracing::error!(
                                 "Block at height {} not found in storage",
                                 requested_height
                             );
+                            tracing::error!("stored leaves: {:?}", leaves);
                             continue;
                         };
 
@@ -150,7 +151,7 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
                             (network_functions.direct_message)(serialized_leaf_response, requester)
                                 .await
                         {
-                            tracing::warn!(
+                            tracing::error!(
                                 "Failed to send leaf response in test membership fetcher: {e}"
                             );
                         };
@@ -181,6 +182,11 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
             ),
         };
 
+        let mut network_receiver = self
+            .network_receiver
+            .clone()
+            .expect("Tried to fetch leaf before calling `set_external_channel`");
+
         let serialized_leaf_request =
             BincodeSerializer::<StaticVersion<0, 0>>::serialize(&leaf_request)
                 .expect("Failed to serialize leaf request");
@@ -188,15 +194,10 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
         if let Err(e) =
             (self.network_functions.direct_message)(serialized_leaf_request, source).await
         {
-            tracing::warn!("Failed to send leaf request in test membership fetcher: {e}");
+            tracing::error!("Failed to send leaf request in test membership fetcher: {e}");
         };
 
-        let mut network_receiver = self
-            .network_receiver
-            .clone()
-            .expect("Tried to fetch leaf before calling `set_external_channel`");
-
-        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        tokio::time::timeout(std::time::Duration::from_millis(100), async {
             loop {
                 match network_receiver.recv_direct().await {
                     Ok(Event {

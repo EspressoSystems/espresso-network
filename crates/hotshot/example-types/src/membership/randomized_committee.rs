@@ -80,6 +80,10 @@ where
         self.da_members.clone()
     }
 
+    fn full_stake_table(&self) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
+        self.quorum_members.clone()
+    }
+
     fn lookup_leader(&self, view_number: u64, _epoch: Option<u64>) -> anyhow::Result<PubKey> {
         let res = select_randomized_leader(&self.randomized_committee, view_number);
 
