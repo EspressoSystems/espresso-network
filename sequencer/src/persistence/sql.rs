@@ -16,8 +16,8 @@ use espresso_types::{
     parse_duration, parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
-    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent},
-    BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
+    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent, Validator},
+    BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload, PubKey,
     StakeTableHash, ValidatorMap,
 };
 use futures::stream::StreamExt;
@@ -65,7 +65,7 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use itertools::Itertools;
-use sqlx::{query, Executor, Row};
+use sqlx::{query, Executor, QueryBuilder, Row};
 
 use crate::{
     catchup::SqlStateCatchup, persistence::persistence_metrics::PersistenceMetricsValue, NodeType,
@@ -2507,6 +2507,57 @@ impl MembershipPersistence for Persistence {
                 events,
             ))
         }
+    }
+
+    async fn store_all_validators(
+        &self,
+        epoch: EpochNumber,
+        all_validators: ValidatorMap,
+    ) -> anyhow::Result<()> {
+        let mut tx = self.db.write().await?;
+
+        if all_validators.is_empty() {
+            return Ok(());
+        }
+
+        let mut query_builder =
+            QueryBuilder::new("INSERT INTO stake_table_validators (epoch, address, validator) ");
+
+        query_builder.push_values(all_validators.into_iter(), |mut b, (address, validator)| {
+            let validator_json =
+                serde_json::to_value(&validator).expect("cannot serialize validator to json");
+            b.push_bind(epoch.u64() as i64)
+                .push_bind(address.to_string())
+                .push_bind(validator_json);
+        });
+
+        query_builder
+            .push(" ON CONFLICT (epoch, address) DO UPDATE SET validator = EXCLUDED.validator");
+
+        let query = query_builder.build();
+
+        query.execute(tx.as_mut()).await?;
+
+        Ok(())
+    }
+
+    async fn load_all_validators(&self, epoch: EpochNumber) -> anyhow::Result<ValidatorMap> {
+        let mut tx = self.db.read().await?;
+
+        let rows = query("SELECT address, validator FROM stake_table_validators WHERE epoch = $1")
+            .bind(epoch.u64() as i64)
+            .fetch_all(tx.as_mut())
+            .await?;
+
+        let mut map = ValidatorMap::new();
+        for row in rows {
+            let address: String = row.try_get("address")?;
+            let validator_json: serde_json::Value = row.try_get("validator")?;
+            let validator: Validator<PubKey> = serde_json::from_value(validator_json)?;
+            map.insert(address.parse()?, validator);
+        }
+
+        Ok(map)
     }
 }
 

@@ -8,7 +8,7 @@ use std::{
     time::Instant,
 };
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, bail, Context};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::Parser;
@@ -1894,6 +1894,52 @@ impl MembershipPersistence for Persistence {
                 events,
             ))
         }
+    }
+
+    async fn store_all_validators(
+        &self,
+        epoch: EpochNumber,
+        all_validators: ValidatorMap,
+    ) -> anyhow::Result<()> {
+        let inner = self.inner.read().await;
+        let dir_path = inner.stake_table_dir_path();
+        let validators_dir = dir_path.join("validators");
+
+        // Ensure validators directory exists
+        fs::create_dir_all(&validators_dir)
+            .with_context(|| format!("Failed to create validators dir: {validators_dir:?}"))?;
+
+        // Path = validators/epoch_<number>.json
+        let file_path = validators_dir.join(format!("epoch_{epoch}.json"));
+
+        let file = File::create(&file_path)
+            .with_context(|| format!("Failed to create validator file: {file_path:?}"))?;
+        let writer = BufWriter::new(file);
+
+        serde_json::to_writer_pretty(writer, &all_validators)
+            .with_context(|| format!("Failed to serialize validators for epoch {epoch}"))?;
+
+        Ok(())
+    }
+
+    async fn load_all_validators(&self, epoch: EpochNumber) -> anyhow::Result<ValidatorMap> {
+        let inner = self.inner.read().await;
+        let dir_path = inner.stake_table_dir_path();
+        let validators_dir = dir_path.join("validators");
+        let file_path = validators_dir.join(format!("epoch_{epoch}.json"));
+
+        if !file_path.exists() {
+            bail!("Validator file not found for epoch {epoch}");
+        }
+
+        let file = File::open(&file_path)
+            .with_context(|| format!("Failed to open validator file: {file_path:?}"))?;
+        let reader = BufReader::new(file);
+
+        let map: ValidatorMap = serde_json::from_reader(reader)
+            .with_context(|| format!("Failed to deserialize validators at {file_path:?}"))?;
+
+        Ok(map)
     }
 }
 

@@ -121,6 +121,18 @@ impl MembershipPersistence for NoStorage {
     )> {
         bail!("unimplemented")
     }
+
+    async fn store_all_validators(
+        &self,
+        _epoch: EpochNumber,
+        _all_validators: ValidatorMap,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn load_all_validators(&self, _epoch: EpochNumber) -> anyhow::Result<ValidatorMap> {
+        bail!("unimplemented")
+    }
 }
 
 impl NodeState {

@@ -2,7 +2,7 @@
 //! It also includes some trait implementations that cannot be implemented in an external crate.
 use std::{cmp::max, collections::BTreeMap, fmt::Debug, ops::Range, sync::Arc};
 
-use alloy::primitives::U256;
+use alloy::primitives::{Address, U256};
 use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
 use committable::Commitment;
@@ -32,6 +32,7 @@ use hotshot_types::{
     utils::genesis_epoch_from_version,
     vote::HasViewNumber,
 };
+use indexmap::IndexMap;
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::{
@@ -43,10 +44,11 @@ use crate::{
     v0::impls::{StakeTableHash, ValidatedState},
     v0_3::{
         ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount, RewardMerkleCommitmentV1,
+        Validator,
     },
     v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2},
     BlockMerkleTree, Event, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig,
-    SeqTypes, ValidatorMap,
+    PubKey, SeqTypes, ValidatorMap,
 };
 
 #[async_trait]
@@ -505,6 +507,17 @@ pub trait MembershipPersistence: Send + Sync + 'static {
         Option<EventsPersistenceRead>,
         Vec<(EventKey, StakeTableEvent)>,
     )>;
+
+    async fn store_all_validators(
+        &self,
+        epoch: EpochNumber,
+        all_validators: IndexMap<Address, Validator<PubKey>>,
+    ) -> anyhow::Result<()>;
+
+    async fn load_all_validators(
+        &self,
+        epoch: EpochNumber,
+    ) -> anyhow::Result<IndexMap<Address, Validator<PubKey>>>;
 }
 
 #[async_trait]

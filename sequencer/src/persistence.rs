@@ -1646,4 +1646,41 @@ mod tests {
 
         Ok(())
     }
+
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_store_and_load_all_validators<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) -> anyhow::Result<()> {
+        let tmp = P::tmp_storage().await;
+        let mut opt = P::options(&tmp);
+
+        let storage = opt.create().await.unwrap();
+
+        let validator1 = Validator::mock();
+        let mut vmap1 = IndexMap::new();
+        vmap1.insert(validator1.account.clone(), validator1.clone());
+
+        storage
+            .store_all_validators(EpochNumber::new(10), vmap1.clone())
+            .await?;
+
+        let loaded1 = storage.load_all_validators(EpochNumber::new(10)).await?;
+        assert_eq!(vmap1, loaded1);
+
+        let validator2 = Validator::mock();
+        let mut vmap2 = IndexMap::new();
+        vmap2.insert(validator2.account.clone(), validator2.clone());
+
+        storage
+            .store_all_validators(EpochNumber::new(11), vmap2.clone())
+            .await?;
+
+        let loaded2 = storage.load_all_validators(EpochNumber::new(11)).await?;
+        assert_eq!(vmap2, loaded2);
+
+        let loaded1_again = storage.load_all_validators(EpochNumber::new(10)).await?;
+        assert_eq!(vmap1, loaded1_again);
+
+        Ok(())
+    }
 }
