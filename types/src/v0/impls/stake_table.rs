@@ -112,12 +112,12 @@ impl TryFrom<StakeTableV2Events> for StakeTableEvent {
             StakeTableV2Events::Undelegated(v) => Ok(StakeTableEvent::Undelegate(v)),
             StakeTableV2Events::ConsensusKeysUpdated(v) => Ok(StakeTableEvent::KeyUpdate(v)),
             StakeTableV2Events::ConsensusKeysUpdatedV2(v) => Ok(StakeTableEvent::KeyUpdateV2(v)),
-            _ => Err(anyhow::anyhow!("Unsupported StakeTableV2Events variant")),
+            _ => Err(anyhow::anyhow!("Unsupported StakeTableV2Events variant ")),
         }
     }
 }
 
-pub fn sort_stake_table_events(
+fn sort_stake_table_events(
     event_logs: Vec<(StakeTableV2Events, Log)>,
 ) -> Result<Vec<(EventKey, StakeTableEvent)>, EventSortingError> {
     let mut events: Vec<(EventKey, StakeTableEvent)> = Vec::new();
@@ -742,7 +742,6 @@ impl Fetcher {
         )
         .await?;
 
-        let contract_events = sort_stake_table_events(contract_events)?;
         let mut events = match from_block {
             Some(_) => persistence_events
                 .into_iter()
@@ -771,7 +770,7 @@ impl Fetcher {
         contract: Address,
         from_block: Option<u64>,
         to_block: u64,
-    ) -> Result<Vec<(StakeTableV2Events, Log)>, StakeTableError> {
+    ) -> Result<Vec<(EventKey, StakeTableEvent)>, StakeTableError> {
         let stake_table_contract = StakeTableV2::new(contract, l1_client.provider.clone());
         let max_retry_duration = l1_client.options().l1_events_max_retry_duration;
         // get the block number when the contract was initialized
@@ -897,7 +896,7 @@ impl Fetcher {
             }
         }
 
-        Ok(events)
+        sort_stake_table_events(events).map_err(Into::into)
     }
 
     /// Get `StakeTable` at specific l1 block height.
@@ -932,9 +931,9 @@ impl Fetcher {
         to_block: u64,
     ) -> anyhow::Result<(ValidatorMap, StakeTableHash)> {
         let events = Self::fetch_events_from_contract(l1_client, contract, None, to_block).await?;
-        let sorted = sort_stake_table_events(events)?;
+
         // Process the sorted events and return the resulting stake table.
-        validators_from_l1_events(sorted.into_iter().map(|(_, e)| e))
+        validators_from_l1_events(events.into_iter().map(|(_, e)| e))
             .context("failed to construct validators set from l1 events")
     }
 
@@ -3068,8 +3067,6 @@ mod tests {
             8582328,
         )
         .await?;
-
-        let sorted_events = events.sort_stake_table_events().expect("failed to sort");
 
         // Serialize and write sorted events
         let json_events = serde_json::to_string_pretty(&sorted_events)?;

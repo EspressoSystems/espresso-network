@@ -39,7 +39,6 @@ mod tests {
         Contract, Contracts,
     };
     use espresso_types::{
-        sort_stake_table_events,
         traits::{
             EventConsumer, EventsPersistenceRead, MembershipPersistence, NullEventConsumer,
             PersistenceOptions, SequencerPersistence,
@@ -1267,15 +1266,13 @@ mod tests {
         assert!(stored_l1.is_some());
         assert!(events.iter().all(|((l1_block, _), _)| *l1_block <= block));
         // Fetch events directly from the contract and compare with persisted data
-        let contract_events = sort_stake_table_events(
-            Fetcher::fetch_events_from_contract(
-                l1_client.clone(),
-                stake_table_contract,
-                None,
-                block,
-            )
-            .await?,
-        )?;
+        let contract_events = Fetcher::fetch_events_from_contract(
+            l1_client.clone(),
+            stake_table_contract,
+            None,
+            block,
+        )
+        .await?;
         assert_eq!(
             contract_events, events,
             "Events from contract and persistence do not match"
@@ -1549,7 +1546,6 @@ mod tests {
             // Wait for more than update interval to assert that persistence was updated
             // L1 update interval is 7s in this test
 
-            use espresso_types::sort_stake_table_events;
             tokio::time::sleep(std::time::Duration::from_secs(8)).await;
 
             let block = anvil_provider
@@ -1569,10 +1565,9 @@ mod tests {
 
             assert!(l1_block > prev_l1_block, "events not updated");
 
-            let contract_events = sort_stake_table_events(
+            let contract_events =
                 Fetcher::fetch_events_from_contract(l1_client.clone(), st_addr, None, l1_block)
-                    .await?,
-            )?;
+                    .await?;
             assert_eq!(persisted_events, contract_events);
 
             prev_l1_block = l1_block;

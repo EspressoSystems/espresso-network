@@ -177,7 +177,9 @@ pub enum StakeTableError {
     #[error("Schnorr key already used: {0}")]
     SchnorrKeyAlreadyUsed(String),
     #[error("Stake table event decode error {0}")]
-    StakeTableEventDecodeError(#[from] alloy::sol_types::Error)
+    StakeTableEventDecodeError(#[from] alloy::sol_types::Error),
+    #[error("Stake table events sorting error: {0}")]
+    EventSortingError(#[from] EventSortingError)
 }
 
 #[derive(Debug, Error)]

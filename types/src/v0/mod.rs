@@ -24,9 +24,8 @@ pub(crate) use impls::active_validator_set_from_l1_events;
 #[cfg(any(test, feature = "testing"))]
 pub use impls::mock;
 pub use impls::{
-    get_l1_deposits, retain_accounts, sort_stake_table_events, validators_from_l1_events,
-    BuilderValidationError, EpochCommittees, FeeError, ProposalValidationError,
-    StateValidationError,
+    get_l1_deposits, retain_accounts, validators_from_l1_events, BuilderValidationError,
+    EpochCommittees, FeeError, ProposalValidationError, StateValidationError,
 };
 pub use nsproof::*;
 pub use txproof::*;
