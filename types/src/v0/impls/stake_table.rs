@@ -112,7 +112,43 @@ impl TryFrom<StakeTableV2Events> for StakeTableEvent {
             StakeTableV2Events::Undelegated(v) => Ok(StakeTableEvent::Undelegate(v)),
             StakeTableV2Events::ConsensusKeysUpdated(v) => Ok(StakeTableEvent::KeyUpdate(v)),
             StakeTableV2Events::ConsensusKeysUpdatedV2(v) => Ok(StakeTableEvent::KeyUpdateV2(v)),
-            _ => Err(anyhow::anyhow!("Unsupported StakeTableV2Events variant ")),
+            StakeTableV2Events::CommissionUpdated(v) => Ok(StakeTableEvent::CommissionUpdate(v)),
+            StakeTableV2Events::ExitEscrowPeriodUpdated(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::ExitEscrowPeriodUpdated({v:?})"
+            )),
+            StakeTableV2Events::Initialized(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::Initialized({v:?})"
+            )),
+            StakeTableV2Events::MaxCommissionIncreaseUpdated(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::MaxCommissionIncreaseUpdated({v:?})"
+            )),
+            StakeTableV2Events::MinCommissionUpdateIntervalUpdated(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::MinCommissionUpdateIntervalUpdated({v:?})"
+            )),
+            StakeTableV2Events::OwnershipTransferred(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::OwnershipTransferred({v:?})"
+            )),
+            StakeTableV2Events::Paused(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::Paused({v:?})"
+            )),
+            StakeTableV2Events::RoleAdminChanged(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::RoleAdminChanged({v:?})"
+            )),
+            StakeTableV2Events::RoleGranted(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::RoleGranted({v:?})"
+            )),
+            StakeTableV2Events::RoleRevoked(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::RoleRevoked({v:?})"
+            )),
+            StakeTableV2Events::Unpaused(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::Unpaused({v:?})"
+            )),
+            StakeTableV2Events::Upgraded(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::Upgraded({v:?})"
+            )),
+            StakeTableV2Events::Withdrawal(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::Withdrawal({v:?})"
+            )),
         }
     }
 }
