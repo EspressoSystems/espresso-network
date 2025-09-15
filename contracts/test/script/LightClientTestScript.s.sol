@@ -179,11 +179,10 @@ contract UpgradeLightClientWithoutMultisigAdminScript is Script {
         public
         returns (address)
     {
-        vm.startBroadcast(admin);
         LC proxy = LC(proxyAddress); //make the function call on the previous implementation
+        vm.broadcast(admin);
         proxy.upgradeToAndCall(newLightClient, ""); //proxy address now points to the new
             // implementation
-        vm.stopBroadcast();
         return address(proxy);
     }
 }
@@ -218,11 +217,10 @@ contract UpgradeToSameLightClientWithoutMultisigAdminScript is Script {
         public
         returns (address)
     {
-        vm.startBroadcast(admin);
+        vm.broadcast(admin);
         LC proxy = LC(proxyAddress); //make the function call on the previous implementation
         proxy.upgradeToAndCall(newLightClient, ""); //proxy address now points to the new
             // implementation
-        vm.stopBroadcast();
         return address(proxy);
     }
 }

@@ -37,15 +37,12 @@ contract UpgradeLightClientScript is Script {
         uint256 newField,
         uint256 extraField
     ) public returns (address) {
-        vm.startBroadcast(admin);
         LC proxy = LC(proxyAddress); //make the function call on the previous implementation
 
+        vm.broadcast(admin);
         proxy.upgradeToAndCall(
             newLightClient, abi.encodeCall(LCV2.initializeV2, (newField, extraField))
-        ); //proxy
-            // address now points to the new
-            // implementation
-        vm.stopBroadcast();
+        ); //proxy address now points to the new implementation
         return address(proxy);
     }
 }
