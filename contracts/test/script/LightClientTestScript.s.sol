@@ -163,9 +163,8 @@ contract UpgradeLightClientWithoutMultisigAdminScript is Script {
         string memory seedPhrase = vm.envString("MNEMONIC");
         uint32 seedPhraseOffset = uint32(vm.envUint("MNEMONIC_OFFSET"));
         (address admin,) = deriveRememberKey(seedPhrase, seedPhraseOffset);
-        vm.startBroadcast(admin);
 
-        address proxy = upgradeLightClient(mostRecentlyDeployedProxy, address(new LCV2()));
+        address proxy = upgradeLightClient(admin, mostRecentlyDeployedProxy, address(new LC()));
         return proxy;
     }
 
@@ -179,6 +178,7 @@ contract UpgradeLightClientWithoutMultisigAdminScript is Script {
         public
         returns (address)
     {
+         vm.startBroadcast(admin);
         LC proxy = LC(proxyAddress); //make the function call on the previous implementation
         proxy.upgradeToAndCall(newLightClient, ""); //proxy address now points to the new
             // implementation
