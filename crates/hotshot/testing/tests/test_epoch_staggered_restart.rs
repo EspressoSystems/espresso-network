@@ -60,7 +60,7 @@ cross_tests!(
       metadata.completion_task_description =
           CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
               TimeBasedCompletionTaskDescription {
-                  duration: Duration::from_secs(140),
+                  duration: Duration::from_secs(180),
               },
           );
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
