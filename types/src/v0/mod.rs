@@ -14,8 +14,9 @@ pub mod config;
 mod header;
 mod impls;
 mod nsproof;
-mod sparse_mt;
+pub mod sparse_mt;
 pub mod traits;
+mod txproof;
 mod utils;
 pub use header::Header;
 #[allow(unused_imports)]
@@ -27,6 +28,7 @@ pub use impls::{
     EpochCommittees, FeeError, ProposalValidationError, StateValidationError,
 };
 pub use nsproof::*;
+pub use txproof::*;
 pub use utils::*;
 use vbs::version::{StaticVersion, StaticVersionType};
 
@@ -115,7 +117,6 @@ reexport_unchanged_types!(
     TxIter,
     TxPayload,
     TxPayloadRange,
-    TxProof,
     TxTableEntries,
     TxTableEntriesRange,
     Upgrade,

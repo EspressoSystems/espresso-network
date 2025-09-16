@@ -103,6 +103,7 @@ alloy = { version = "0.13", default-features = false, features = [
     "rpc",
     "rpc-client",
     "rpc-types",
+    "serde",
     "signer-local",
     "signer-mnemonic",
     "signer-ledger",
@@ -201,7 +202,7 @@ committable = "0.2"
 derivative = "2.2"
 itertools = "0.12"
 jf-crhf = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5" }
-jf-merkle-tree = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5", features = [
+jf-merkle-tree = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5-patch1", features = [
     "std",
 ] }
 jf-pcs = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5", features = [
@@ -226,7 +227,7 @@ jf-vid = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfis
     "std",
     "parallel",
 ] }
-libp2p = { package = "libp2p", version = "0.54", default-features = false, features = [
+libp2p = { package = "libp2p", version = "0.56", default-features = false, features = [
     "macros",
     "autonat",
     "cbor",

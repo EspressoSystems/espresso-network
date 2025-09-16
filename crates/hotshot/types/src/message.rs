@@ -31,20 +31,21 @@ use crate::{
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
-        QuorumProposalWrapper, UpgradeProposal,
+        QuorumProposal2Legacy, QuorumProposalWrapper, UpgradeProposal,
     },
     epoch_membership::EpochMembership,
     request_response::ProposalRequestPayload,
     simple_certificate::{
-        DaCertificate, DaCertificate2, EpochRootQuorumCertificate, NextEpochQuorumCertificate2,
-        QuorumCertificate2, UpgradeCertificate, ViewSyncCommitCertificate,
-        ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate, ViewSyncFinalizeCertificate2,
-        ViewSyncPreCommitCertificate, ViewSyncPreCommitCertificate2,
+        DaCertificate, DaCertificate2, EpochRootQuorumCertificateV1, EpochRootQuorumCertificateV2,
+        NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
+        ViewSyncCommitCertificate, ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate,
+        ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate, ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
-        DaVote, DaVote2, EpochRootQuorumVote, HasEpoch, QuorumVote, QuorumVote2, TimeoutVote,
-        TimeoutVote2, UpgradeVote, ViewSyncCommitVote, ViewSyncCommitVote2, ViewSyncFinalizeVote,
-        ViewSyncFinalizeVote2, ViewSyncPreCommitVote, ViewSyncPreCommitVote2,
+        DaVote, DaVote2, EpochRootQuorumVote, EpochRootQuorumVote2, HasEpoch, QuorumVote,
+        QuorumVote2, TimeoutVote, TimeoutVote2, UpgradeVote, ViewSyncCommitVote,
+        ViewSyncCommitVote2, ViewSyncFinalizeVote, ViewSyncFinalizeVote2, ViewSyncPreCommitVote,
+        ViewSyncPreCommitVote2,
     },
     traits::{
         election::Membership,
@@ -233,7 +234,7 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
     ProposalResponse(Proposal<TYPES, QuorumProposal<TYPES>>),
 
     /// Message with a quorum proposal.
-    Proposal2(Proposal<TYPES, QuorumProposal2<TYPES>>),
+    Proposal2Legacy(Proposal<TYPES, QuorumProposal2Legacy<TYPES>>),
 
     /// Message with a quorum vote.
     Vote2(QuorumVote2<TYPES>),
@@ -242,7 +243,7 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
     EpochRootQuorumVote(EpochRootQuorumVote<TYPES>),
 
     /// A replica has responded with a valid proposal.
-    ProposalResponse2(Proposal<TYPES, QuorumProposal2<TYPES>>),
+    ProposalResponse2Legacy(Proposal<TYPES, QuorumProposal2Legacy<TYPES>>),
 
     /// Message for the next leader containing our highest QC
     HighQc(
@@ -256,8 +257,8 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
         NextEpochQuorumCertificate2<TYPES>,
     ),
 
-    /// Message for the next leader containing the epoch root QC
-    EpochRootQc(EpochRootQuorumCertificate<TYPES>),
+    /// Message for the next leader containing the epoch root QC from older consensus version.
+    EpochRootQcV1(EpochRootQuorumCertificateV1<TYPES>),
 
     /// Message with a view sync pre-commit vote
     ViewSyncPreCommitVote2(ViewSyncPreCommitVote2<TYPES>),
@@ -279,6 +280,18 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
 
     /// Message with a Timeout vote
     TimeoutVote2(TimeoutVote2<TYPES>),
+
+    /// Message for the next leader containing the epoch root QC
+    EpochRootQc(EpochRootQuorumCertificateV2<TYPES>),
+
+    /// Message with a quorum proposal.
+    Proposal2(Proposal<TYPES, QuorumProposal2<TYPES>>),
+
+    /// A replica has responded with a valid proposal.
+    ProposalResponse2(Proposal<TYPES, QuorumProposal2<TYPES>>),
+
+    /// Message with an epoch root quorum vote.
+    EpochRootQuorumVote2(EpochRootQuorumVote2<TYPES>),
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Hash, Eq)]
@@ -337,6 +350,11 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                         // this should match replica upon receipt
                         p.data.view_number()
                     },
+                    GeneralConsensusMessage::Proposal2Legacy(p) => {
+                        // view of leader in the leaf when proposal
+                        // this should match replica upon receipt
+                        p.data.view_number()
+                    },
                     GeneralConsensusMessage::Proposal2(p) => {
                         // view of leader in the leaf when proposal
                         // this should match replica upon receipt
@@ -344,6 +362,9 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     },
                     GeneralConsensusMessage::ProposalRequested(req, _) => req.view_number,
                     GeneralConsensusMessage::ProposalResponse(proposal) => {
+                        proposal.data.view_number()
+                    },
+                    GeneralConsensusMessage::ProposalResponse2Legacy(proposal) => {
                         proposal.data.view_number()
                     },
                     GeneralConsensusMessage::ProposalResponse2(proposal) => {
@@ -388,7 +409,9 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     GeneralConsensusMessage::HighQc(qc, _)
                     | GeneralConsensusMessage::ExtendedQc(qc, _) => qc.view_number(),
                     GeneralConsensusMessage::EpochRootQuorumVote(vote) => vote.view_number(),
+                    GeneralConsensusMessage::EpochRootQuorumVote2(vote) => vote.view_number(),
                     GeneralConsensusMessage::EpochRootQc(root_qc) => root_qc.view_number(),
+                    GeneralConsensusMessage::EpochRootQcV1(root_qc) => root_qc.view_number(),
                 }
             },
             SequencingMessage::Da(da_message) => {
@@ -424,6 +447,11 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                         // this should match replica upon receipt
                         p.data.epoch()
                     },
+                    GeneralConsensusMessage::Proposal2Legacy(p) => {
+                        // view of leader in the leaf when proposal
+                        // this should match replica upon receipt
+                        p.data.epoch()
+                    },
                     GeneralConsensusMessage::Proposal2(p) => {
                         // view of leader in the leaf when proposal
                         // this should match replica upon receipt
@@ -431,6 +459,9 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     },
                     GeneralConsensusMessage::ProposalRequested(..) => None,
                     GeneralConsensusMessage::ProposalResponse(proposal) => proposal.data.epoch(),
+                    GeneralConsensusMessage::ProposalResponse2Legacy(proposal) => {
+                        proposal.data.epoch()
+                    },
                     GeneralConsensusMessage::ProposalResponse2(proposal) => proposal.data.epoch(),
                     GeneralConsensusMessage::Vote(vote_message) => vote_message.epoch(),
                     GeneralConsensusMessage::Vote2(vote_message) => vote_message.epoch(),
@@ -461,7 +492,9 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     GeneralConsensusMessage::HighQc(qc, _)
                     | GeneralConsensusMessage::ExtendedQc(qc, _) => qc.epoch(),
                     GeneralConsensusMessage::EpochRootQuorumVote(vote) => vote.epoch(),
+                    GeneralConsensusMessage::EpochRootQuorumVote2(vote) => vote.epoch(),
                     GeneralConsensusMessage::EpochRootQc(root_qc) => root_qc.epoch(),
+                    GeneralConsensusMessage::EpochRootQcV1(root_qc) => root_qc.epoch(),
                 }
             },
             SequencingMessage::Da(da_message) => {
@@ -669,6 +702,16 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
     /// Return whether epochs are enabled in the given view
     pub async fn epochs_enabled(&self, view: TYPES::View) -> bool {
         self.version_infallible(view).await >= V::Epochs::VERSION
+    }
+
+    /// Return whether `QuorumProposal2Legacy` is the correct message type for the given view
+    pub async fn proposal2_legacy_version(&self, view: TYPES::View) -> bool {
+        self.epochs_enabled(view).await && !self.upgraded_drb_and_header(view).await
+    }
+
+    /// Return whether `QuorumProposal2` is the correct message type for the given view
+    pub async fn proposal2_version(&self, view: TYPES::View) -> bool {
+        self.epochs_enabled(view).await && self.upgraded_drb_and_header(view).await
     }
 
     /// Return whether epochs are enabled in the given view

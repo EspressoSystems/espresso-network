@@ -199,9 +199,12 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         MockStakeTableV2 stakeTableV2Impl = new MockStakeTableV2();
 
         // Upgrade to V2
+        MockStakeTableV2.InitialCommission[] memory emptyCommissions;
         StakeTable(payable(address(proxy))).upgradeToAndCall(
             address(stakeTableV2Impl),
-            abi.encodeWithSignature("initializeV2(address,address)", admin, admin)
+            abi.encodeWithSignature(
+                "initializeV2(address,address,(address,uint16)[])", admin, admin, emptyCommissions
+            )
         );
 
         // Cast to V2 interface
@@ -729,5 +732,29 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         // Verify no pending withdrawals remain
         require(testState.totalPendingWithdrawal == 0, "No pending withdrawals should remain");
         require(testState.totalDelegated == 0, "No delegations should remain");
+    }
+
+    /// @dev Assert sum of delegated amounts to a validator equals validator.delegatedAmount
+    ///
+    /// Iterates over all validators and their delegators, and is therefore very slow.
+    function assertValidatorDelegatedAmountSum() public view {
+        for (uint256 i = 0; i < validators.all.length(); i++) {
+            address val = validators.all.at(i);
+
+            // Get the validator's delegatedAmount from the contract
+            (uint256 validatorDelegatedAmount,) = stakeTable.validators(val);
+
+            // Calculate sum of all individual delegations to this validator
+            uint256 sumOfDelegations = 0;
+            EnumerableSet.AddressSet storage validatorDelegators = delegators.delegators[val];
+            for (uint256 j = 0; j < validatorDelegators.length(); j++) {
+                address delegator = validatorDelegators.at(j);
+                sumOfDelegations += stakeTable.delegations(val, delegator);
+            }
+
+            require(
+                validatorDelegatedAmount == sumOfDelegations, "Validator delegatedAmount mismatch"
+            );
+        }
     }
 }

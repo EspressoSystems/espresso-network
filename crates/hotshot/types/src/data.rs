@@ -847,17 +847,33 @@ pub struct QuorumProposal2Legacy<TYPES: NodeType> {
 }
 
 impl<TYPES: NodeType> From<QuorumProposal2Legacy<TYPES>> for QuorumProposal2<TYPES> {
-    fn from(v3: QuorumProposal2Legacy<TYPES>) -> Self {
+    fn from(quorum_proposal2: QuorumProposal2Legacy<TYPES>) -> Self {
         Self {
-            block_header: v3.block_header,
-            view_number: v3.view_number,
-            epoch: v3.epoch,
-            justify_qc: v3.justify_qc,
-            next_epoch_justify_qc: v3.next_epoch_justify_qc,
-            upgrade_certificate: v3.upgrade_certificate,
-            view_change_evidence: v3.view_change_evidence,
-            next_drb_result: v3.next_drb_result,
-            state_cert: v3.state_cert.map(Into::into),
+            block_header: quorum_proposal2.block_header,
+            view_number: quorum_proposal2.view_number,
+            epoch: quorum_proposal2.epoch,
+            justify_qc: quorum_proposal2.justify_qc,
+            next_epoch_justify_qc: quorum_proposal2.next_epoch_justify_qc,
+            upgrade_certificate: quorum_proposal2.upgrade_certificate,
+            view_change_evidence: quorum_proposal2.view_change_evidence,
+            next_drb_result: quorum_proposal2.next_drb_result,
+            state_cert: quorum_proposal2.state_cert.map(Into::into),
+        }
+    }
+}
+
+impl<TYPES: NodeType> From<QuorumProposal2<TYPES>> for QuorumProposal2Legacy<TYPES> {
+    fn from(quorum_proposal2: QuorumProposal2<TYPES>) -> Self {
+        Self {
+            block_header: quorum_proposal2.block_header,
+            view_number: quorum_proposal2.view_number,
+            epoch: quorum_proposal2.epoch,
+            justify_qc: quorum_proposal2.justify_qc,
+            next_epoch_justify_qc: quorum_proposal2.next_epoch_justify_qc,
+            upgrade_certificate: quorum_proposal2.upgrade_certificate,
+            view_change_evidence: quorum_proposal2.view_change_evidence,
+            next_drb_result: quorum_proposal2.next_drb_result,
+            state_cert: quorum_proposal2.state_cert.map(Into::into),
         }
     }
 }
@@ -975,6 +991,14 @@ impl<TYPES: NodeType> From<QuorumProposal<TYPES>> for QuorumProposalWrapper<TYPE
     }
 }
 
+impl<TYPES: NodeType> From<QuorumProposal2Legacy<TYPES>> for QuorumProposalWrapper<TYPES> {
+    fn from(quorum_proposal: QuorumProposal2Legacy<TYPES>) -> Self {
+        Self {
+            proposal: quorum_proposal.into(),
+        }
+    }
+}
+
 impl<TYPES: NodeType> From<QuorumProposal2<TYPES>> for QuorumProposalWrapper<TYPES> {
     fn from(quorum_proposal2: QuorumProposal2<TYPES>) -> Self {
         Self {
@@ -984,6 +1008,12 @@ impl<TYPES: NodeType> From<QuorumProposal2<TYPES>> for QuorumProposalWrapper<TYP
 }
 
 impl<TYPES: NodeType> From<QuorumProposalWrapper<TYPES>> for QuorumProposal<TYPES> {
+    fn from(quorum_proposal_wrapper: QuorumProposalWrapper<TYPES>) -> Self {
+        quorum_proposal_wrapper.proposal.into()
+    }
+}
+
+impl<TYPES: NodeType> From<QuorumProposalWrapper<TYPES>> for QuorumProposal2Legacy<TYPES> {
     fn from(quorum_proposal_wrapper: QuorumProposalWrapper<TYPES>) -> Self {
         quorum_proposal_wrapper.proposal.into()
     }

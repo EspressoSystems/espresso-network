@@ -270,11 +270,11 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             Contract::LightClientV2 => {
                 assert!(
                     self.blocks_per_epoch.is_some(),
-                    "forget to specify blocks_per_epoch()"
+                    "forgot to specify blocks_per_epoch()"
                 );
                 assert!(
                     self.epoch_start_block.is_some(),
-                    "forget to specify epoch_start_block()"
+                    "forgot to specify epoch_start_block()"
                 );
 
                 let use_mock = self.mock_light_client;
@@ -284,10 +284,10 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 let epoch_start_block = self.epoch_start_block.unwrap();
                 let rpc_url = self.rpc_url.clone();
 
-                // TEST-ONLY: if this config is not yet set, we use a large default value
+                // TEST-ONLY: if this config is not yet set, we use u64::MAX
                 // to avoid contract complaining about invalid zero-valued blocks_per_epoch.
-                // This large value will act as if we are always in epoch 1, which won't conflict
-                // with the effective purpose of the real `PublicNetworkConfig`.
+                // This value will allow tests to proceed with realistic epoch behavior.
+                // TODO: remove this once we have a proper way to set blocks_per_epoch
                 if use_mock && blocks_per_epoch == 0 {
                     blocks_per_epoch = u64::MAX;
                 }
@@ -376,7 +376,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 let lc_addr = contracts
                     .address(Contract::LightClientProxy)
                     .context("no LightClient proxy address")?;
-                let escrow_period = self.exit_escrow_period.unwrap_or(U256::from(300));
+                let escrow_period = self.exit_escrow_period.unwrap_or(U256::from(250));
                 crate::deploy_stake_table_proxy(
                     provider,
                     contracts,

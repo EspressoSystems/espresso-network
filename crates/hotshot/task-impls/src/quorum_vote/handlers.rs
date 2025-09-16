@@ -16,7 +16,7 @@ use hotshot_types::{
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     event::{Event, EventType},
     message::{Proposal, UpgradeLock},
-    simple_vote::{EpochRootQuorumVote, LightClientStateUpdateVote, QuorumData2, QuorumVote2},
+    simple_vote::{EpochRootQuorumVote2, LightClientStateUpdateVote2, QuorumData2, QuorumVote2},
     storage_metrics::StorageMetricsValue,
     traits::{
         block_contents::BlockHeader,
@@ -220,6 +220,17 @@ pub(crate) async fn handle_quorum_proposal_validated<
                 leaf_info.leaf.block_header().block_number(),
             );
         }
+
+        broadcast_event(
+            Arc::new(HotShotEvent::LeavesDecided(
+                leaf_views
+                    .iter()
+                    .map(|leaf_info| leaf_info.leaf.clone())
+                    .collect(),
+            )),
+            event_sender,
+        )
+        .await;
 
         // Send an update to everyone saying that we've reached a decide
         broadcast_event(
@@ -498,7 +509,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         )
         .wrap()
         .context(error!("Failed to sign the light client state"))?;
-        let state_vote = LightClientStateUpdateVote {
+        let state_vote = LightClientStateUpdateVote2 {
             epoch: TYPES::Epoch::new(epoch_from_block_number(leaf.height(), epoch_height)),
             light_client_state,
             next_stake_table_state,
@@ -508,10 +519,9 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
             signed_state_digest,
         };
         broadcast_event(
-            Arc::new(HotShotEvent::EpochRootQuorumVoteSend(EpochRootQuorumVote {
-                vote,
-                state_vote,
-            })),
+            Arc::new(HotShotEvent::EpochRootQuorumVoteSend(
+                EpochRootQuorumVote2 { vote, state_vote },
+            )),
             &sender,
         )
         .await;
