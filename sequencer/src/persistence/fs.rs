@@ -15,8 +15,8 @@ use clap::Parser;
 use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent},
-    Leaf, Leaf2, NetworkConfig, Payload, SeqTypes, StakeTableHash, ValidatorMap,
+    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent, Validator},
+    Leaf, Leaf2, NetworkConfig, Payload, PubKey, SeqTypes, StakeTableHash, ValidatorMap,
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
@@ -1922,7 +1922,10 @@ impl MembershipPersistence for Persistence {
         Ok(())
     }
 
-    async fn load_all_validators(&self, epoch: EpochNumber) -> anyhow::Result<ValidatorMap> {
+    async fn load_all_validators(
+        &self,
+        epoch: EpochNumber,
+    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
         let inner = self.inner.read().await;
         let dir_path = inner.stake_table_dir_path();
         let validators_dir = dir_path.join("validators");
@@ -1939,7 +1942,7 @@ impl MembershipPersistence for Persistence {
         let map: ValidatorMap = serde_json::from_reader(reader)
             .with_context(|| format!("Failed to deserialize validators at {file_path:?}"))?;
 
-        Ok(map)
+        Ok(map.into_values().collect())
     }
 }
 

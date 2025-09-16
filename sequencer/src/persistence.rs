@@ -1665,7 +1665,7 @@ mod tests {
             .await?;
 
         let loaded1 = storage.load_all_validators(EpochNumber::new(10)).await?;
-        assert_eq!(vmap1, loaded1);
+        assert_eq!(vmap1.clone().into_values().collect::<Vec<_>>(), loaded1);
 
         let validator2 = Validator::mock();
         let mut vmap2 = IndexMap::new();
@@ -1676,10 +1676,10 @@ mod tests {
             .await?;
 
         let loaded2 = storage.load_all_validators(EpochNumber::new(11)).await?;
-        assert_eq!(vmap2, loaded2);
+        assert_eq!(vmap2.into_values().collect::<Vec<_>>(), loaded2);
 
         let loaded1_again = storage.load_all_validators(EpochNumber::new(10)).await?;
-        assert_eq!(vmap1, loaded1_again);
+        assert_eq!(vmap1.into_values().collect::<Vec<_>>(), loaded1_again);
 
         Ok(())
     }

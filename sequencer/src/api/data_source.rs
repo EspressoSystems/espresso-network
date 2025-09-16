@@ -159,7 +159,7 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     fn get_all_validators(
         &self,
         epoch: <T as NodeType>::Epoch,
-    ) -> impl Send + Future<Output = anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>>>;
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<Validator<PubKey>>>>;
 }
 
 pub(crate) trait CatchupDataSource: Sync {

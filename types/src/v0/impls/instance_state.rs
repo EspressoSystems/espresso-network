@@ -25,8 +25,8 @@ use crate::{
         impls::StakeTableHash, traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo,
         L1Client, Timestamp, Upgrade, UpgradeMode,
     },
-    v0_3::RewardAmount,
-    EpochCommittees, ValidatorMap,
+    v0_3::{RewardAmount, Validator},
+    EpochCommittees, PubKey, ValidatorMap,
 };
 
 /// Represents the immutable state of a node.
@@ -130,7 +130,10 @@ impl MembershipPersistence for NoStorage {
         Ok(())
     }
 
-    async fn load_all_validators(&self, _epoch: EpochNumber) -> anyhow::Result<ValidatorMap> {
+    async fn load_all_validators(
+        &self,
+        _epoch: EpochNumber,
+    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
         bail!("unimplemented")
     }
 }

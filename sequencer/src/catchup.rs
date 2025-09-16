@@ -22,7 +22,6 @@ use espresso_types::{
     v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2},
     BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions, ValidatedState,
-    ValidatorMap,
 };
 use futures::{
     future::{Future, FutureExt, TryFuture, TryFutureExt},
@@ -31,7 +30,7 @@ use futures::{
 };
 use hotshot_types::{
     consensus::Consensus,
-    data::{EpochNumber, ViewNumber},
+    data::ViewNumber,
     message::UpgradeLock,
     network::NetworkConfig,
     stake_table::HSStakeTable,

@@ -12,6 +12,12 @@ PATH = ["validators/:epoch_number"]
 ":epoch_number" = "Integer"
 DOC = "Get the validators map for the given epoch."
 
+[route.get_all_validators]
+PATH = ["validators/all/:epoch_number"]
+":epoch_number" = "Integer"
+DOC = "Get all the validators including the inactive ones for the given epoch."
+
+
 [route.current_proposal_participation]
 PATH = ["/current-proposal-participation"]
 DOC = """

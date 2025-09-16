@@ -517,7 +517,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     async fn load_all_validators(
         &self,
         epoch: EpochNumber,
-    ) -> anyhow::Result<IndexMap<Address, Validator<PubKey>>>;
+    ) -> anyhow::Result<Vec<Validator<PubKey>>>;
 }
 
 #[async_trait]

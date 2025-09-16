@@ -2541,7 +2541,10 @@ impl MembershipPersistence for Persistence {
         Ok(())
     }
 
-    async fn load_all_validators(&self, epoch: EpochNumber) -> anyhow::Result<ValidatorMap> {
+    async fn load_all_validators(
+        &self,
+        epoch: EpochNumber,
+    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
         let mut tx = self.db.read().await?;
 
         let rows = query("SELECT address, validator FROM stake_table_validators WHERE epoch = $1")
@@ -2549,15 +2552,12 @@ impl MembershipPersistence for Persistence {
             .fetch_all(tx.as_mut())
             .await?;
 
-        let mut map = ValidatorMap::new();
-        for row in rows {
-            let address: String = row.try_get("address")?;
-            let validator_json: serde_json::Value = row.try_get("validator")?;
-            let validator: Validator<PubKey> = serde_json::from_value(validator_json)?;
-            map.insert(address.parse()?, validator);
-        }
-
-        Ok(map)
+        rows.into_iter()
+            .map(|row| {
+                let validator_json: serde_json::Value = row.try_get("validator")?;
+                serde_json::from_value::<Validator<PubKey>>(validator_json).map_err(Into::into)
+            })
+            .collect()
     }
 }
 

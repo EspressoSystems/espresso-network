@@ -14,7 +14,7 @@ use espresso_types::{
     config::PublicNetworkConfig,
     retain_accounts,
     v0::traits::SequencerPersistence,
-    v0_3::{ChainConfig, RewardAccountV1, RewardAmount, RewardMerkleTreeV1},
+    v0_3::{ChainConfig, RewardAccountV1, RewardAmount, RewardMerkleTreeV1, Validator},
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction, ValidatorMap,
@@ -223,7 +223,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     async fn get_all_validators(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
-    ) -> anyhow::Result<ValidatorMap> {
+    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
         self.as_ref().get_all_validators(epoch).await
     }
 }
@@ -339,12 +339,11 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     async fn get_all_validators(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
-    ) -> anyhow::Result<ValidatorMap> {
+    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
         let handle = self.consensus().await;
         let handle_read = handle.read().await;
         let storage = handle_read.storage();
-        let validators = storage.load_all_validators(epoch).await;
-        bail!("unimplemented")
+        storage.load_all_validators(epoch).await
     }
 }
 
