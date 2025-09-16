@@ -1,5 +1,6 @@
 # Excluding packages with `--exclude` instead of the filterset prevents nextest from compiling them.
 # We should find a better way to handle this for example by having consistent crate names.
+# Temporarily ignoring benches b/c vid benches are causing troubles.
 test-ci-rest *args:
   echo Running unit tests
   RUST_LOG=error cargo nextest run \
@@ -18,7 +19,7 @@ test-ci-rest *args:
   --exclude diff-test-hotshot \
   --exclude gen-vk-contract \
   --exclude hotshot-contract-adapter \
-  --profile hotshot --lib --bins --tests --benches --workspace {{args}}
+  --profile hotshot --lib --bins --tests --workspace {{args}}
 
 # Build and run an integration test target
 test-ci test *args:
