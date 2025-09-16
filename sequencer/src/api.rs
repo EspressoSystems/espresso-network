@@ -2117,7 +2117,6 @@ mod test {
     };
     use espresso_types::{
         config::PublicHotShotConfig,
-        sparse_mt::KeccakNode,
         traits::{NullEventConsumer, PersistenceOptions},
         v0_3::{Fetcher, RewardAmount, COMMISSION_BASIS_POINTS, REWARD_MERKLE_TREE_V1_ARITY},
         v0_4::REWARD_MERKLE_TREE_V2_ARITY,
@@ -3496,14 +3495,13 @@ mod test {
             }
             let l1_block = header.l1_finalized().expect("l1 block not found");
 
-            let events = Fetcher::fetch_events_from_contract(
+            let sorted_events = Fetcher::fetch_events_from_contract(
                 l1_client.clone(),
                 stake_table,
                 None,
                 l1_block.number(),
             )
-            .await;
-            let sorted_events = events.sort_events().expect("failed to sort");
+            .await?;
 
             let mut sorted_dedup_removed = sorted_events.clone();
             sorted_dedup_removed.dedup();
@@ -5965,6 +5963,8 @@ mod test {
             wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
 
             for (address, _) in validated_state.reward_merkle_tree_v2.iter() {
+                use espresso_types::sparse_mt::KeccakNode;
+
                 let (_, expected_proof) = validated_state
                     .reward_merkle_tree_v2
                     .lookup(*address)
