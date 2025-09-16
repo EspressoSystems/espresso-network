@@ -180,7 +180,7 @@ impl TestConfig {
 
     /// Get the latest block where we see a light client update
     pub async fn latest_light_client_update(&self) -> u64 {
-        let provider = ProviderBuilder::new().on_http(self.l1_endpoint.clone());
+        let provider = ProviderBuilder::new().connect_http(self.l1_endpoint.clone());
         let filter = Filter::new()
             .from_block(BlockNumberOrTag::Earliest)
             .address(self.light_client_address);
