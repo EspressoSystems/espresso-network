@@ -639,13 +639,13 @@ pub mod testing {
     use alloy::{
         network::EthereumWallet,
         node_bindings::{Anvil, AnvilInstance},
-        primitives::U256,
+        primitives::{Address, U256},
         providers::{
             fillers::{
                 BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller,
             },
             layers::AnvilProvider,
-            ProviderBuilder, RootProvider,
+            Provider, ProviderBuilder, RootProvider,
         },
         signers::{
             k256::ecdsa::SigningKey,
@@ -1120,6 +1120,7 @@ pub mod testing {
         pub fn l1_url(&self) -> Url {
             self.l1_url.clone()
         }
+
         pub fn anvil(&self) -> Option<&AnvilFillProvider> {
             self.anvil_provider.as_ref()
         }
@@ -1134,6 +1135,20 @@ pub mod testing {
 
         pub fn staking_priv_keys(&self) -> Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)> {
             staking_priv_keys(&self.priv_keys, &self.state_key_pairs, self.num_nodes())
+        }
+
+        pub fn validator_providers(&self) -> Vec<(Address, impl Provider + Clone)> {
+            self.staking_priv_keys()
+                .into_iter()
+                .map(|(signer, ..)| {
+                    (
+                        signer.address(),
+                        ProviderBuilder::new()
+                            .wallet(EthereumWallet::from(signer))
+                            .on_http(self.l1_url.clone()),
+                    )
+                })
+                .collect()
         }
 
         pub async fn init_nodes<V: Versions>(

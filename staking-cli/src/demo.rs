@@ -37,6 +37,7 @@ pub enum DelegationConfig {
     #[default]
     VariableAmounts,
     MultipleDelegators,
+    NoSelfDelegation,
 }
 
 // Manual implementation to match parsing of clap's ValueEnum
@@ -46,6 +47,7 @@ impl fmt::Display for DelegationConfig {
             DelegationConfig::EqualAmounts => "equal-amounts",
             DelegationConfig::VariableAmounts => "variable-amounts",
             DelegationConfig::MultipleDelegators => "multiple-delegators",
+            DelegationConfig::NoSelfDelegation => "no-self-delegation",
         };
         write!(f, "{s}")
     }
@@ -108,12 +110,13 @@ pub async fn setup_stake_table_contract_for_test(
 
         // delegate 100 to 500 ESP
         let delegate_amount = match config {
-            DelegationConfig::EqualAmounts => parse_ether("100")?,
+            DelegationConfig::EqualAmounts => Some(parse_ether("100")?),
             DelegationConfig::MultipleDelegators | DelegationConfig::VariableAmounts => {
-                parse_ether("100")? * U256::from(val_index % 5 + 1)
+                Some(parse_ether("100")? * U256::from(val_index % 5 + 1))
             },
+            DelegationConfig::NoSelfDelegation => None,
         };
-        let delegate_amount_esp = format_ether(delegate_amount);
+        let delegate_amount_esp = delegate_amount.map(format_ether).unwrap_or_default();
 
         tracing::info!("validator {val_index} address: {validator_address}, balance: {bal}");
 
@@ -149,23 +152,26 @@ pub async fn setup_stake_table_contract_for_test(
         .await?;
         assert!(receipt.status());
 
-        tracing::info!(
-            "delegate {delegate_amount_esp} ESP for validator {val_index} from {validator_address}"
-        );
-        let receipt = delegate(
-            &validator_provider,
-            stake_table_address,
-            validator_address,
-            delegate_amount,
-        )
-        .await?;
-        assert!(receipt.status());
+        if let Some(delegate_amount) = delegate_amount {
+            tracing::info!(
+                "delegate {delegate_amount_esp} ESP for validator {val_index} from \
+                 {validator_address}"
+            );
+            let receipt = delegate(
+                &validator_provider,
+                stake_table_address,
+                validator_address,
+                delegate_amount,
+            )
+            .await?;
+            assert!(receipt.status());
+        }
 
         match config {
             DelegationConfig::EqualAmounts | DelegationConfig::VariableAmounts => {
                 tracing::debug!("not adding extra delegators");
             },
-            DelegationConfig::MultipleDelegators => {
+            DelegationConfig::MultipleDelegators | DelegationConfig::NoSelfDelegation => {
                 tracing::info!("adding multiple delegators for validator {val_index} ");
                 let num_delegators = rng.gen_range(2..=5);
                 add_multiple_delegators(
@@ -411,6 +417,24 @@ mod test {
         // The total stake of the validator is not equal to it's own delegation
         assert_ne!(val1.delegators.get(&val1.account), Some(&val1.stake));
         assert_ne!(val2.delegators.get(&val2.account), Some(&val2.stake));
+
+        // The are other delegators
+        assert!(val1.delegators.len() > 1);
+        assert!(val2.delegators.len() > 1);
+
+        // The stake amounts are not equal
+        assert_ne!(val1.stake, val2.stake);
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_stake_for_demo_no_self_delegation() -> Result<()> {
+        let (val1, val2) = shared_setup(DelegationConfig::NoSelfDelegation).await?;
+
+        // The validators have no self delegation
+        assert_eq!(val1.delegators.get(&val1.account), None);
+        assert_eq!(val2.delegators.get(&val2.account), None);
 
         // The are other delegators
         assert!(val1.delegators.len() > 1);

@@ -21,6 +21,7 @@ This CLI helps users interact with the Espresso staking contract, either as a de
     - [Recovering funds after a validator exit](#recovering-funds-after-a-validator-exit)
   - [Node operators](#node-operators)
     - [Registering a validator](#registering-a-validator)
+    - [Updating your commission](#updating-your-commission)
     - [De-registering your validator](#de-registering-your-validator)
     - [Rotating your consensus keys](#rotating-your-consensus-keys)
 
@@ -64,6 +65,7 @@ Commands:
     stake-table            Show the stake table in the Espresso stake table contract
     account                Print the signer account address
     register-validator     Register to become a validator
+    update-commission      Update a validator's commission rate
     update-consensus-keys  Update a validators Espresso consensus signing keys
     deregister-validator   Deregister a validator
     approve                Approve stake table contract to move tokens
@@ -243,10 +245,24 @@ This section covers commands for node operators.
 - Each Ethereum account used must have enough gas funds on the L1 to call the registration method of the contract. The
   register transaction consumes about 300k gas.
 - Each BLS (Espresso) and key can be registered only once.
-- The commission cannot be changed later. One would need to deregister the validator, register it again, and direct
-  delegators to redelegate in order to change it.
+- The commission can be updated later using the `update-commission` command, subject to rate limits.
 - Each Ethereum account can only be used to register a single validator. For multiple validators, at a minimum,
   different account indices (or mnemonics) must be used.
+
+### Updating your commission
+
+Validators can update their commission rate, subject to the following rate limits:
+- Commission updates are limited to once per week (7 days by default)
+- Commission increases are capped at 5% per update (e.g., from 10% to 15%)
+- Commission decreases have no limit
+
+To update your commission:
+
+    staking-cli update-commission --new-commission 7.5
+
+The commission value is in percent with up to 2 decimal points: from 0.00 to 100.00.
+
+Note: The minimum time interval and maximum increase are contract parameters that may be adjusted by governance.
 
 ### De-registering your validator
 
