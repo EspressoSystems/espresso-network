@@ -66,7 +66,7 @@ getrandom = { version = "0.2", default-features = false, features = ["std"] }
 hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15", features = ["serde"] }
 hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14", features = ["raw"] }
 hashbrown-5ef9efb8ec2df382 = { package = "hashbrown", version = "0.12", features = ["raw"] }
-hex = { version = "0.4", features = ["serde"] }
+hex = { version = "0.4" }
 http-client = { version = "6", default-features = false, features = ["curl_client"] }
 indexmap = { version = "2", features = ["serde"] }
 itertools-582f2526e08bb6a0 = { package = "itertools", version = "0.14" }
@@ -89,7 +89,8 @@ once_cell = { version = "1" }
 p3-maybe-rayon = { version = "0.2", default-features = false, features = ["parallel"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
-rand = { version = "0.9", features = ["serde"] }
+rand-274715c4dabd11b0 = { package = "rand", version = "0.9", features = ["serde"] }
+rand-c38e5c1d305a1b54 = { package = "rand", version = "0.8", features = ["small_rng"] }
 rand_chacha = { version = "0.3" }
 refinery-core = { version = "0.8", features = ["tokio-postgres", "toml"] }
 regex = { version = "1" }
@@ -175,7 +176,7 @@ getrandom = { version = "0.2", default-features = false, features = ["std"] }
 hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15", features = ["serde"] }
 hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14", features = ["raw"] }
 hashbrown-5ef9efb8ec2df382 = { package = "hashbrown", version = "0.12", features = ["raw"] }
-hex = { version = "0.4", features = ["serde"] }
+hex = { version = "0.4" }
 http-client = { version = "6", default-features = false, features = ["curl_client"] }
 indexmap = { version = "2", features = ["serde"] }
 itertools-582f2526e08bb6a0 = { package = "itertools", version = "0.14" }
@@ -199,7 +200,8 @@ once_cell = { version = "1" }
 p3-maybe-rayon = { version = "0.2", default-features = false, features = ["parallel"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
-rand = { version = "0.9", features = ["serde"] }
+rand-274715c4dabd11b0 = { package = "rand", version = "0.9", features = ["serde"] }
+rand-c38e5c1d305a1b54 = { package = "rand", version = "0.8", features = ["small_rng"] }
 rand_chacha = { version = "0.3" }
 refinery-core = { version = "0.8", features = ["tokio-postgres", "toml"] }
 regex = { version = "1" }

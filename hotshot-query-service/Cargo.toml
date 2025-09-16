@@ -82,7 +82,7 @@ lazy_static = "1"
 log = { version = "0.4", optional = true }
 portpicker = { version = "0.1", optional = true }
 prometheus = { version = "0.13", default-features = false }
-rand = { version = "0.8", optional = true }
+rand = { workspace = true, optional = true }
 refinery = { version = "0.8", features = ["tokio-postgres"], optional = true }
 refinery-core = { version = "0.8", optional = true }
 semver = { workspace = true }
@@ -130,7 +130,7 @@ clap = { version = "4.5", features = ["derive", "env"] }
 espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0" }
 generic-array = "0.14"
 portpicker = "0.1"
-rand = "0.8"
+rand = { workspace = true }
 reqwest = "0.12.3"
 tempfile = "3.10"
 test-log = { workspace = true }

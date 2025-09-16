@@ -34,7 +34,7 @@ tagged-base64 = { workspace = true }
 [dev-dependencies]
 ark-bls12-381 = { workspace = true }
 criterion = "0.5"
-rand = "0.8.5"
+rand = { workspace = true }
 
 [[bench]]
 name = "dispersal"
