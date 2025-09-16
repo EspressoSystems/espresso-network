@@ -546,19 +546,6 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                 );
 
                 self.num_timeouts_tracked += 1;
-                let leader = self
-                    .membership_coordinator
-                    .membership_for_epoch(self.cur_epoch)
-                    .await?
-                    .leader(view_number)
-                    .await?;
-                tracing::warn!(
-                    %leader,
-                    leader_mnemonic = hotshot_types::utils::mnemonic(&leader),
-                    view_number = *view_number,
-                    num_timeouts_tracked = self.num_timeouts_tracked,
-                    "view timed out",
-                );
 
                 if self.num_timeouts_tracked >= 3 {
                     tracing::error!("Too many consecutive timeouts!  This shouldn't happen");
@@ -585,6 +572,19 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                     )
                     .await;
                 }
+                let leader = self
+                    .membership_coordinator
+                    .membership_for_epoch(self.cur_epoch)
+                    .await?
+                    .leader(view_number)
+                    .await?;
+                tracing::warn!(
+                    %leader,
+                    leader_mnemonic = hotshot_types::utils::mnemonic(&leader),
+                    view_number = *view_number,
+                    num_timeouts_tracked = self.num_timeouts_tracked,
+                    "view timed out",
+                );
             },
             HotShotEvent::SetFirstEpoch(view, epoch) => {
                 self.first_epoch = Some((*view, *epoch));
