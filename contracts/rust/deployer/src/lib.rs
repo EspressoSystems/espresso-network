@@ -2158,7 +2158,7 @@ mod tests {
             total_supply,
             parse_ether(&initial_supply.to_string()).unwrap()
         );
-        assert_eq!(token.balanceOf(init_recipient).call().await?, total_supply,);
+        assert_eq!(token.balanceOf(init_recipient).call().await?, total_supply);
         assert_eq!(token.name().call().await?, name);
         assert_eq!(token.symbol().call().await?, symbol);
 
