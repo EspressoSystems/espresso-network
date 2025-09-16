@@ -1658,7 +1658,7 @@ mod tests {
 
         let validator1 = Validator::mock();
         let mut vmap1 = IndexMap::new();
-        vmap1.insert(validator1.account.clone(), validator1.clone());
+        vmap1.insert(validator1.account, validator1.clone());
 
         storage
             .store_all_validators(EpochNumber::new(10), vmap1.clone())
@@ -1669,7 +1669,7 @@ mod tests {
 
         let validator2 = Validator::mock();
         let mut vmap2 = IndexMap::new();
-        vmap2.insert(validator2.account.clone(), validator2.clone());
+        vmap2.insert(validator2.account, validator2.clone());
 
         storage
             .store_all_validators(EpochNumber::new(11), vmap2.clone())
