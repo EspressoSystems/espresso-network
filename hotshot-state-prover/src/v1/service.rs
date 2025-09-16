@@ -413,7 +413,7 @@ pub async fn run_prover_once<ApiVer: StaticVersionType>(
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
 
     use alloy::{
         node_bindings::Anvil,
