@@ -926,17 +926,6 @@ checksum = "69f7f8c3906b62b754cd5326047894316021dcfe5a194c8ea52bdd94934a3457"
 
 [[package]]
 name = "ark-bls12-377"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb00293ba84f51ce3bd026bd0de55899c4e68f0a39a5728cebae3a73ffdc0a4f"
-dependencies = [
- "ark-ec 0.4.2",
- "ark-ff 0.4.2",
- "ark-std 0.4.0",
-]
-
-[[package]]
-name = "ark-bls12-377"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bfedac3173d12820a5e0d6cd4de31b49719a74f4a41dc09b6652d0276a3b2cd4"
@@ -944,18 +933,6 @@ dependencies = [
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
  "ark-std 0.5.0",
-]
-
-[[package]]
-name = "ark-bls12-381"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c775f0d12169cba7aae4caeb547bb6a50781c7449a8aa53793827c9ec4abf488"
-dependencies = [
- "ark-ec 0.4.2",
- "ark-ff 0.4.2",
- "ark-serialize 0.4.2",
- "ark-std 0.4.0",
 ]
 
 [[package]]
@@ -995,44 +972,14 @@ dependencies = [
 
 [[package]]
 name = "ark-bw6-761"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e0605daf0cc5aa2034b78d008aaf159f56901d92a52ee4f6ecdfdac4f426700"
-dependencies = [
- "ark-bls12-377 0.4.0",
- "ark-ec 0.4.2",
- "ark-ff 0.4.2",
- "ark-std 0.4.0",
-]
-
-[[package]]
-name = "ark-bw6-761"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1cc9cae367e0c3c0b52e3ef13371122752654f45d0212ec7306fb0c1c012cd98"
 dependencies = [
- "ark-bls12-377 0.5.0",
+ "ark-bls12-377",
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
  "ark-std 0.5.0",
-]
-
-[[package]]
-name = "ark-crypto-primitives"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f3a13b34da09176a8baba701233fdffbaa7c1b1192ce031a3da4e55ce1f1a56"
-dependencies = [
- "ark-ec 0.4.2",
- "ark-ff 0.4.2",
- "ark-relations 0.4.0",
- "ark-serialize 0.4.2",
- "ark-snark 0.4.0",
- "ark-std 0.4.0",
- "blake2",
- "derivative",
- "digest 0.10.7",
- "sha2 0.10.9",
 ]
 
 [[package]]
@@ -1045,9 +992,9 @@ dependencies = [
  "ark-crypto-primitives-macros",
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
- "ark-relations 0.5.1",
+ "ark-relations",
  "ark-serialize 0.5.0",
- "ark-snark 0.5.1",
+ "ark-snark",
  "ark-std 0.5.0",
  "blake2",
  "derivative",
@@ -1111,38 +1058,14 @@ dependencies = [
 
 [[package]]
 name = "ark-ed-on-bls12-377"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b10d901b9ac4b38f9c32beacedfadcdd64e46f8d7f8e88c1ae1060022cf6f6c6"
-dependencies = [
- "ark-bls12-377 0.4.0",
- "ark-ec 0.4.2",
- "ark-ff 0.4.2",
- "ark-std 0.4.0",
-]
-
-[[package]]
-name = "ark-ed-on-bls12-377"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebbf817b2db27d2787009b2ff76304a5b90b4b01bb16aa8351701fd40f5f37b2"
 dependencies = [
- "ark-bls12-377 0.5.0",
+ "ark-bls12-377",
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
  "ark-std 0.5.0",
-]
-
-[[package]]
-name = "ark-ed-on-bls12-381"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba6d678bb98a7e4f825bd4e332e93ac4f5a114ce2e3340dee4d7dc1c7ab5b323"
-dependencies = [
- "ark-bls12-381 0.4.0",
- "ark-ec 0.4.2",
- "ark-ff 0.4.2",
- "ark-std 0.4.0",
 ]
 
 [[package]]
@@ -1151,22 +1074,10 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba93ca6e75e5f589c139e5a41ebd783ebf2153de0025cd2b00da2963929c92ec"
 dependencies = [
- "ark-bls12-381 0.5.0",
+ "ark-bls12-381",
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
  "ark-std 0.5.0",
-]
-
-[[package]]
-name = "ark-ed-on-bn254"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71892f265d01650e34988a546b37ea1d2ba1da162a639597a03d1550f26004d8"
-dependencies = [
- "ark-bn254 0.4.0",
- "ark-ec 0.4.2",
- "ark-ff 0.4.2",
- "ark-std 0.4.0",
 ]
 
 [[package]]
@@ -1344,11 +1255,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d68a105d915bcde6c0687363591c97e72d2d3758f3532d48fd0bf21a3261ce7"
 dependencies = [
  "ahash 0.8.12",
- "ark-crypto-primitives 0.5.0",
+ "ark-crypto-primitives",
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
  "ark-poly 0.5.0",
- "ark-relations 0.5.1",
+ "ark-relations",
  "ark-serialize 0.5.0",
  "ark-std 0.5.0",
  "blake2",
@@ -1369,23 +1280,12 @@ checksum = "941551ef1df4c7a401de7068758db6503598e6f01850bdb2cfdb614a1f9dbea1"
 dependencies = [
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
- "ark-relations 0.5.1",
+ "ark-relations",
  "ark-std 0.5.0",
  "educe",
  "num-bigint",
  "num-integer",
  "num-traits",
- "tracing",
-]
-
-[[package]]
-name = "ark-relations"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00796b6efc05a3f48225e59cb6a2cda78881e7c390872d5786aaf112f31fb4f0"
-dependencies = [
- "ark-ff 0.4.2",
- "ark-std 0.4.0",
  "tracing",
 ]
 
@@ -1461,24 +1361,12 @@ dependencies = [
 
 [[package]]
 name = "ark-snark"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84d3cc6833a335bb8a600241889ead68ee89a3cf8448081fb7694c0fe503da63"
-dependencies = [
- "ark-ff 0.4.2",
- "ark-relations 0.4.0",
- "ark-serialize 0.4.2",
- "ark-std 0.4.0",
-]
-
-[[package]]
-name = "ark-snark"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d368e2848c2d4c129ce7679a7d0d2d612b6a274d3ea6a13bad4445d61b381b88"
 dependencies = [
  "ark-ff 0.5.0",
- "ark-relations 0.5.1",
+ "ark-relations",
  "ark-serialize 0.5.0",
  "ark-std 0.5.0",
 ]
@@ -2117,40 +2005,12 @@ dependencies = [
 
 [[package]]
 name = "axum"
-version = "0.6.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b829e4e32b91e643de6eafe82b1d90675f5874230191a4ffbc1b336dec4d6bf"
-dependencies = [
- "async-trait",
- "axum-core 0.3.4",
- "bitflags 1.3.2",
- "bytes 1.10.1",
- "futures-util",
- "http 0.2.12",
- "http-body 0.4.6",
- "hyper 0.14.32",
- "itoa",
- "matchit",
- "memchr",
- "mime",
- "percent-encoding",
- "pin-project-lite 0.2.16",
- "rustversion",
- "serde",
- "sync_wrapper 0.1.2",
- "tower 0.4.13",
- "tower-layer",
- "tower-service",
-]
-
-[[package]]
-name = "axum"
 version = "0.7.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edca88bc138befd0323b20752846e6587272d3b03b0343c8ea28a6f819e6e71f"
 dependencies = [
  "async-trait",
- "axum-core 0.4.5",
+ "axum-core",
  "bytes 1.10.1",
  "futures-util",
  "http 1.3.1",
@@ -2164,25 +2024,8 @@ dependencies = [
  "pin-project-lite 0.2.16",
  "rustversion",
  "serde",
- "sync_wrapper 1.0.2",
+ "sync_wrapper",
  "tower 0.5.2",
- "tower-layer",
- "tower-service",
-]
-
-[[package]]
-name = "axum-core"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "759fa577a247914fd3f7f76d62972792636412fbfd634cd452f6a385a74d2d2c"
-dependencies = [
- "async-trait",
- "bytes 1.10.1",
- "futures-util",
- "http 0.2.12",
- "http-body 0.4.6",
- "mime",
- "rustversion",
  "tower-layer",
  "tower-service",
 ]
@@ -2202,7 +2045,7 @@ dependencies = [
  "mime",
  "pin-project-lite 0.2.16",
  "rustversion",
- "sync_wrapper 1.0.2",
+ "sync_wrapper",
  "tower-layer",
  "tower-service",
 ]
@@ -2570,7 +2413,7 @@ dependencies = [
  "hotshot-example-types",
  "hotshot-state-prover",
  "hotshot-types",
- "jf-signature 0.3.0",
+ "jf-signature",
  "portpicker",
  "rand 0.8.5",
  "sequencer",
@@ -2692,15 +2535,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "capnpc"
-version = "0.20.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1aa3d5f01e69ed11656d2c7c47bf34327ea9bfb5c85c7de787fcd7b6c5e45b61"
-dependencies = [
- "capnp",
-]
-
-[[package]]
 name = "cast"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2736,37 +2570,14 @@ dependencies = [
 
 [[package]]
 name = "cdn-broker"
-version = "0.4.0"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade#849e7edb32788e42738541ba4d5c64d3e061d86d"
+version = "0.6.0"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.0#cc15fd411305de3d02fed6ed5bec0ab7af945f52"
 dependencies = [
- "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade)",
+ "cdn-proto",
  "clap 4.5.47",
- "console-subscriber 0.3.0",
- "dashmap",
+ "console-subscriber",
  "derivative",
- "jf-signature 0.1.0",
- "lazy_static",
- "local-ip-address",
- "parking_lot",
- "portpicker",
- "prometheus",
- "rand 0.8.5",
- "rkyv",
- "tokio",
- "tracing",
- "tracing-subscriber 0.3.20",
-]
-
-[[package]]
-name = "cdn-broker"
-version = "0.4.0"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.8#591787a18459308bdb3944dda3dbd96f67d8ef2f"
-dependencies = [
- "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.8)",
- "clap 4.5.47",
- "console-subscriber 0.4.1",
- "derivative",
- "jf-signature 0.2.0",
+ "jf-signature",
  "lazy_static",
  "local-ip-address",
  "parking_lot",
@@ -2781,13 +2592,13 @@ dependencies = [
 
 [[package]]
 name = "cdn-client"
-version = "0.4.0"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.8#591787a18459308bdb3944dda3dbd96f67d8ef2f"
+version = "0.6.0"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.0#cc15fd411305de3d02fed6ed5bec0ab7af945f52"
 dependencies = [
- "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.8)",
+ "cdn-proto",
  "clap 4.5.47",
  "derive_more 1.0.0",
- "jf-signature 0.2.0",
+ "jf-signature",
  "parking_lot",
  "rand 0.8.5",
  "tokio",
@@ -2797,25 +2608,12 @@ dependencies = [
 
 [[package]]
 name = "cdn-marshal"
-version = "0.4.0"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade#849e7edb32788e42738541ba4d5c64d3e061d86d"
+version = "0.6.0"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.0#cc15fd411305de3d02fed6ed5bec0ab7af945f52"
 dependencies = [
- "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade)",
+ "cdn-proto",
  "clap 4.5.47",
- "jf-signature 0.1.0",
- "tokio",
- "tracing",
- "tracing-subscriber 0.3.20",
-]
-
-[[package]]
-name = "cdn-marshal"
-version = "0.4.0"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.8#591787a18459308bdb3944dda3dbd96f67d8ef2f"
-dependencies = [
- "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.8)",
- "clap 4.5.47",
- "jf-signature 0.2.0",
+ "jf-signature",
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.20",
@@ -2823,51 +2621,17 @@ dependencies = [
 
 [[package]]
 name = "cdn-proto"
-version = "0.4.0"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade#849e7edb32788e42738541ba4d5c64d3e061d86d"
+version = "0.6.0"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.0#cc15fd411305de3d02fed6ed5bec0ab7af945f52"
 dependencies = [
  "anyhow",
- "ark-serialize 0.4.2",
- "async-trait",
- "capnp",
- "capnpc",
- "derivative",
- "jf-signature 0.1.0",
- "kanal",
- "lazy_static",
- "mnemonic",
- "num_enum",
- "pem",
- "prometheus",
- "quinn",
- "rand 0.8.5",
- "rcgen",
- "redis",
- "rkyv",
- "rustls 0.23.31",
- "rustls-pki-types",
- "sqlx",
- "thiserror 1.0.69",
- "tokio",
- "tokio-rustls",
- "tracing",
- "url",
- "warp",
-]
-
-[[package]]
-name = "cdn-proto"
-version = "0.4.0"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.8#591787a18459308bdb3944dda3dbd96f67d8ef2f"
-dependencies = [
- "anyhow",
- "ark-serialize 0.4.2",
+ "ark-serialize 0.5.0",
  "async-channel 2.5.0",
  "async-trait",
  "capnp",
  "derivative",
  "derive_more 1.0.0",
- "jf-signature 0.2.0",
+ "jf-signature",
  "lazy_static",
  "mnemonic",
  "num_enum",
@@ -3262,53 +3026,15 @@ dependencies = [
 
 [[package]]
 name = "console-api"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a257c22cd7e487dd4a13d413beabc512c5052f0bc048db0da6a84c3d8a6142fd"
-dependencies = [
- "futures-core",
- "prost 0.12.6",
- "prost-types 0.12.6",
- "tonic 0.11.0",
- "tracing-core",
-]
-
-[[package]]
-name = "console-api"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8030735ecb0d128428b64cd379809817e620a40e5001c54465b99ec5feec2857"
 dependencies = [
  "futures-core",
- "prost 0.13.5",
- "prost-types 0.13.5",
- "tonic 0.12.3",
+ "prost",
+ "prost-types",
+ "tonic",
  "tracing-core",
-]
-
-[[package]]
-name = "console-subscriber"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31c4cc54bae66f7d9188996404abdf7fdfa23034ef8e43478c8810828abad758"
-dependencies = [
- "console-api 0.7.0",
- "crossbeam-channel",
- "crossbeam-utils",
- "futures-task",
- "hdrhistogram",
- "humantime",
- "prost 0.12.6",
- "prost-types 0.12.6",
- "serde",
- "serde_json",
- "thread_local",
- "tokio",
- "tokio-stream",
- "tonic 0.11.0",
- "tracing",
- "tracing-core",
- "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -3317,21 +3043,21 @@ version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6539aa9c6a4cd31f4b1c040f860a1eac9aa80e7df6b05d506a6e7179936d6a01"
 dependencies = [
- "console-api 0.8.1",
+ "console-api",
  "crossbeam-channel",
  "crossbeam-utils",
  "futures-task",
  "hdrhistogram",
  "humantime",
  "hyper-util",
- "prost 0.13.5",
- "prost-types 0.13.5",
+ "prost",
+ "prost-types",
  "serde",
  "serde_json",
  "thread_local",
  "tokio",
  "tokio-stream",
- "tonic 0.12.3",
+ "tonic",
  "tracing",
  "tracing-core",
  "tracing-subscriber 0.3.20",
@@ -4044,7 +3770,7 @@ dependencies = [
  "alloy",
  "ark-bn254 0.5.0",
  "ark-ec 0.5.0",
- "ark-ed-on-bn254 0.5.0",
+ "ark-ed-on-bn254",
  "ark-ff 0.5.0",
  "ark-poly 0.5.0",
  "ark-std 0.5.0",
@@ -4054,8 +3780,8 @@ dependencies = [
  "hotshot-types",
  "jf-pcs",
  "jf-plonk",
- "jf-signature 0.3.0",
- "jf-utils 0.5.0",
+ "jf-signature",
+ "jf-utils",
  "sha3",
 ]
 
@@ -4428,16 +4154,16 @@ dependencies = [
 name = "espresso-crypto-helper"
 version = "0.1.0"
 dependencies = [
- "ark-ed-on-bn254 0.5.0",
+ "ark-ed-on-bn254",
  "ark-ff 0.5.0",
  "ark-serialize 0.5.0",
  "committable",
  "espresso-types",
  "hotshot-query-service",
  "hotshot-types",
- "jf-crhf 0.2.0",
+ "jf-crhf",
  "jf-merkle-tree-compat",
- "jf-rescue 0.2.0",
+ "jf-rescue",
  "openssl",
  "primitive-types 0.13.1",
  "serde",
@@ -4500,7 +4226,7 @@ dependencies = [
  "itertools 0.12.1",
  "jf-advz",
  "jf-merkle-tree-compat",
- "jf-utils 0.5.0",
+ "jf-utils",
  "lru 0.12.5",
  "num-traits",
  "parking_lot",
@@ -5450,9 +5176,9 @@ dependencies = [
  "bimap",
  "bincode",
  "blake3",
- "cdn-broker 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.8)",
+ "cdn-broker",
  "cdn-client",
- "cdn-marshal 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.8)",
+ "cdn-marshal",
  "chrono",
  "committable",
  "dashmap",
@@ -5627,7 +5353,7 @@ dependencies = [
  "anyhow",
  "ark-bn254 0.5.0",
  "ark-ec 0.5.0",
- "ark-ed-on-bn254 0.5.0",
+ "ark-ed-on-bn254",
  "ark-ff 0.5.0",
  "ark-poly 0.5.0",
  "ark-serialize 0.5.0",
@@ -5637,8 +5363,8 @@ dependencies = [
  "hotshot-types",
  "jf-pcs",
  "jf-plonk",
- "jf-signature 0.3.0",
- "jf-utils 0.5.0",
+ "jf-signature",
+ "jf-utils",
  "num-bigint",
  "num-traits",
  "rand 0.8.5",
@@ -5707,8 +5433,8 @@ dependencies = [
  "anyhow",
  "async-lock 3.4.1",
  "async-trait",
- "cdn-broker 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.8)",
- "cdn-marshal 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.8)",
+ "cdn-broker",
+ "cdn-marshal",
  "chrono",
  "clap 4.5.47",
  "espresso-types",
@@ -5872,7 +5598,7 @@ dependencies = [
  "anyhow",
  "ark-bn254 0.5.0",
  "ark-ec 0.5.0",
- "ark-ed-on-bn254 0.5.0",
+ "ark-ed-on-bn254",
  "ark-ff 0.5.0",
  "ark-srs",
  "ark-std 0.5.0",
@@ -5886,13 +5612,13 @@ dependencies = [
  "hotshot-task-impls",
  "hotshot-types",
  "itertools 0.12.1",
- "jf-crhf 0.2.0",
+ "jf-crhf",
  "jf-pcs",
  "jf-plonk",
- "jf-relation 0.5.0",
- "jf-rescue 0.2.0",
- "jf-signature 0.3.0",
- "jf-utils 0.5.0",
+ "jf-relation",
+ "jf-rescue",
+ "jf-signature",
+ "jf-utils",
  "reqwest",
  "sequencer-utils",
  "serde",
@@ -6007,7 +5733,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "ark-bn254 0.5.0",
- "ark-ed-on-bn254 0.5.0",
+ "ark-ed-on-bn254",
  "ark-ff 0.5.0",
  "ark-serialize 0.5.0",
  "ark-srs",
@@ -6028,11 +5754,11 @@ dependencies = [
  "futures",
  "hotshot-utils",
  "jf-advz",
- "jf-crhf 0.2.0",
+ "jf-crhf",
  "jf-pcs",
- "jf-rescue 0.2.0",
- "jf-signature 0.3.0",
- "jf-utils 0.5.0",
+ "jf-rescue",
+ "jf-signature",
+ "jf-utils",
  "lazy_static",
  "libp2p-identity",
  "memoize",
@@ -6238,18 +5964,6 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
-]
-
-[[package]]
-name = "hyper-timeout"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbb958482e8c7be4bc3cf272a766a2b0bf1a6755e7a6ae777f017a31d11b13b1"
-dependencies = [
- "hyper 0.14.32",
- "pin-project-lite 0.2.16",
- "tokio",
- "tokio-io-timeout",
 ]
 
 [[package]]
@@ -6804,18 +6518,10 @@ dependencies = [
  "itertools 0.14.0",
  "jf-merkle-tree-compat",
  "jf-pcs",
- "jf-utils 0.5.0",
+ "jf-utils",
  "rayon",
  "serde",
  "tagged-base64",
-]
-
-[[package]]
-name = "jf-commitment"
-version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/jellyfish?tag=0.4.5#7d71dbeff14f1a501b0b0dc391f1dffa1b8374fb"
-dependencies = [
- "ark-std 0.4.0",
 ]
 
 [[package]]
@@ -6824,15 +6530,6 @@ version = "0.2.0"
 source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-commitment-v0.2.0#f1538793f7f0e391495cb17bbb0c8703ec5f689d"
 dependencies = [
  "ark-std 0.5.0",
-]
-
-[[package]]
-name = "jf-crhf"
-version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/jellyfish?tag=0.4.5#7d71dbeff14f1a501b0b0dc391f1dffa1b8374fb"
-dependencies = [
- "ark-serialize 0.4.2",
- "ark-std 0.4.0",
 ]
 
 [[package]]
@@ -6849,8 +6546,8 @@ name = "jf-merkle-tree"
 version = "0.3.0"
 source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-merkle-tree-v0.3.0#f1538793f7f0e391495cb17bbb0c8703ec5f689d"
 dependencies = [
- "ark-bls12-377 0.5.0",
- "ark-bls12-381 0.5.0",
+ "ark-bls12-377",
+ "ark-bls12-381",
  "ark-bn254 0.5.0",
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
@@ -6862,11 +6559,11 @@ dependencies = [
  "hashbrown 0.14.5",
  "hex",
  "itertools 0.12.1",
- "jf-crhf 0.2.0",
+ "jf-crhf",
  "jf-poseidon2",
- "jf-relation 0.5.0",
- "jf-rescue 0.2.0",
- "jf-utils 0.5.0",
+ "jf-relation",
+ "jf-rescue",
+ "jf-utils",
  "num-bigint",
  "num-traits",
  "serde",
@@ -6880,8 +6577,8 @@ name = "jf-merkle-tree-compat"
 version = "0.1.0"
 source = "git+https://github.com/EspressoSystems/jellyfish-compat?tag=jf-merkle-tree-compat-v0.1.0#4c27affcb5aee25270a5cd79b1b8af10194da274"
 dependencies = [
- "ark-bls12-377 0.5.0",
- "ark-bls12-381 0.5.0",
+ "ark-bls12-377",
+ "ark-bls12-381",
  "ark-bn254 0.5.0",
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
@@ -6893,9 +6590,9 @@ dependencies = [
  "getrandom 0.2.16",
  "hashbrown 0.14.5",
  "itertools 0.12.1",
- "jf-relation 0.5.0",
- "jf-rescue 0.2.0",
- "jf-utils 0.5.0",
+ "jf-relation",
+ "jf-rescue",
+ "jf-utils",
  "num-bigint",
  "num-traits",
  "serde",
@@ -6921,7 +6618,7 @@ dependencies = [
  "icicle-core",
  "icicle-cuda-runtime",
  "itertools 0.12.1",
- "jf-utils 0.5.0",
+ "jf-utils",
  "merlin",
  "rayon",
 ]
@@ -6943,11 +6640,11 @@ dependencies = [
  "espresso-systems-common",
  "hashbrown 0.14.5",
  "itertools 0.12.1",
- "jf-crhf 0.2.0",
+ "jf-crhf",
  "jf-pcs",
- "jf-relation 0.5.0",
- "jf-rescue 0.2.0",
- "jf-utils 0.5.0",
+ "jf-relation",
+ "jf-rescue",
+ "jf-utils",
  "merlin",
  "num-bigint",
  "rand_chacha 0.3.1",
@@ -6962,25 +6659,16 @@ name = "jf-poseidon2"
 version = "0.2.0"
 source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-poseidon2-v0.2.0#f1538793f7f0e391495cb17bbb0c8703ec5f689d"
 dependencies = [
- "ark-bls12-381 0.5.0",
+ "ark-bls12-381",
  "ark-bn254 0.5.0",
  "ark-ff 0.5.0",
  "ark-std 0.5.0",
  "displaydoc",
  "hex",
- "jf-crhf 0.2.0",
+ "jf-crhf",
  "lazy_static",
  "spongefish",
  "zeroize",
-]
-
-[[package]]
-name = "jf-prf"
-version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/jellyfish?tag=0.4.5#7d71dbeff14f1a501b0b0dc391f1dffa1b8374fb"
-dependencies = [
- "ark-serialize 0.4.2",
- "ark-std 0.4.0",
 ]
 
 [[package]]
@@ -6994,38 +6682,13 @@ dependencies = [
 
 [[package]]
 name = "jf-relation"
-version = "0.4.4"
-source = "git+https://github.com/EspressoSystems/jellyfish?tag=0.4.5#7d71dbeff14f1a501b0b0dc391f1dffa1b8374fb"
-dependencies = [
- "ark-bls12-377 0.4.0",
- "ark-bls12-381 0.4.0",
- "ark-bn254 0.4.0",
- "ark-bw6-761 0.4.0",
- "ark-ec 0.4.2",
- "ark-ff 0.4.2",
- "ark-poly 0.4.2",
- "ark-serialize 0.4.2",
- "ark-std 0.4.0",
- "derivative",
- "displaydoc",
- "downcast-rs",
- "dyn-clone",
- "hashbrown 0.14.5",
- "itertools 0.12.1",
- "jf-utils 0.4.4",
- "num-bigint",
- "rand_chacha 0.3.1",
-]
-
-[[package]]
-name = "jf-relation"
 version = "0.5.0"
 source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-relation-v0.5.0#f1538793f7f0e391495cb17bbb0c8703ec5f689d"
 dependencies = [
- "ark-bls12-377 0.5.0",
- "ark-bls12-381 0.5.0",
+ "ark-bls12-377",
+ "ark-bls12-381",
  "ark-bn254 0.5.0",
- "ark-bw6-761 0.5.0",
+ "ark-bw6-761",
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
  "ark-poly 0.5.0",
@@ -7037,7 +6700,7 @@ dependencies = [
  "dyn-clone",
  "hashbrown 0.14.5",
  "itertools 0.12.1",
- "jf-utils 0.5.0",
+ "jf-utils",
  "num-bigint",
  "rand_chacha 0.3.1",
  "rayon",
@@ -7045,107 +6708,26 @@ dependencies = [
 
 [[package]]
 name = "jf-rescue"
-version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/jellyfish?tag=0.4.5#7d71dbeff14f1a501b0b0dc391f1dffa1b8374fb"
-dependencies = [
- "ark-bls12-377 0.4.0",
- "ark-bls12-381 0.4.0",
- "ark-bn254 0.4.0",
- "ark-bw6-761 0.4.0",
- "ark-crypto-primitives 0.4.0",
- "ark-ed-on-bls12-377 0.4.0",
- "ark-ed-on-bls12-381 0.4.0",
- "ark-ed-on-bn254 0.4.0",
- "ark-ff 0.4.2",
- "ark-std 0.4.0",
- "displaydoc",
- "itertools 0.12.1",
- "jf-commitment 0.1.0",
- "jf-crhf 0.1.0",
- "jf-prf 0.1.0",
- "jf-utils 0.4.4",
-]
-
-[[package]]
-name = "jf-rescue"
 version = "0.2.0"
 source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-rescue-v0.2.0#f1538793f7f0e391495cb17bbb0c8703ec5f689d"
 dependencies = [
- "ark-bls12-377 0.5.0",
- "ark-bls12-381 0.5.0",
+ "ark-bls12-377",
+ "ark-bls12-381",
  "ark-bn254 0.5.0",
- "ark-bw6-761 0.5.0",
- "ark-ed-on-bls12-377 0.5.0",
- "ark-ed-on-bls12-381 0.5.0",
- "ark-ed-on-bn254 0.5.0",
+ "ark-bw6-761",
+ "ark-ed-on-bls12-377",
+ "ark-ed-on-bls12-381",
+ "ark-ed-on-bn254",
  "ark-ff 0.5.0",
  "ark-std 0.5.0",
  "displaydoc",
  "itertools 0.12.1",
- "jf-commitment 0.2.0",
- "jf-crhf 0.2.0",
- "jf-prf 0.2.0",
- "jf-relation 0.5.0",
- "jf-utils 0.5.0",
+ "jf-commitment",
+ "jf-crhf",
+ "jf-prf",
+ "jf-relation",
+ "jf-utils",
  "spongefish",
- "zeroize",
-]
-
-[[package]]
-name = "jf-signature"
-version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/jellyfish?tag=0.4.5#7d71dbeff14f1a501b0b0dc391f1dffa1b8374fb"
-dependencies = [
- "ark-bls12-381 0.4.0",
- "ark-bn254 0.4.0",
- "ark-ec 0.4.2",
- "ark-ff 0.4.2",
- "ark-serialize 0.4.2",
- "ark-std 0.4.0",
- "blst",
- "derivative",
- "digest 0.10.7",
- "displaydoc",
- "hashbrown 0.14.5",
- "itertools 0.12.1",
- "jf-crhf 0.1.0",
- "jf-relation 0.4.4",
- "jf-rescue 0.1.0",
- "jf-utils 0.4.4",
- "num-bigint",
- "num-traits",
- "serde",
- "sha3",
- "tagged-base64",
- "zeroize",
-]
-
-[[package]]
-name = "jf-signature"
-version = "0.2.0"
-source = "git+https://github.com/EspressoSystems/jellyfish.git?tag=jf-signature-v0.2.0#ca160ce3452b560cad512b750a742a87c48c5881"
-dependencies = [
- "ark-bls12-381 0.4.0",
- "ark-bn254 0.4.0",
- "ark-ec 0.4.2",
- "ark-ff 0.4.2",
- "ark-serialize 0.4.2",
- "ark-std 0.4.0",
- "blst",
- "derivative",
- "digest 0.10.7",
- "displaydoc",
- "hashbrown 0.14.5",
- "itertools 0.12.1",
- "jf-crhf 0.1.0",
- "jf-relation 0.4.4",
- "jf-rescue 0.1.0",
- "jf-utils 0.4.4",
- "num-bigint",
- "num-traits",
- "serde",
- "sha3",
- "tagged-base64",
  "zeroize",
 ]
 
@@ -7154,7 +6736,7 @@ name = "jf-signature"
 version = "0.3.0"
 source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.3.0#f1538793f7f0e391495cb17bbb0c8703ec5f689d"
 dependencies = [
- "ark-bls12-381 0.5.0",
+ "ark-bls12-381",
  "ark-bn254 0.5.0",
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
@@ -7167,10 +6749,10 @@ dependencies = [
  "getrandom 0.2.16",
  "hashbrown 0.14.5",
  "itertools 0.12.1",
- "jf-crhf 0.2.0",
- "jf-relation 0.5.0",
- "jf-rescue 0.2.0",
- "jf-utils 0.5.0",
+ "jf-crhf",
+ "jf-relation",
+ "jf-rescue",
+ "jf-utils",
  "num-bigint",
  "num-traits",
  "serde",
@@ -7181,32 +6763,12 @@ dependencies = [
 
 [[package]]
 name = "jf-utils"
-version = "0.4.4"
-source = "git+https://github.com/EspressoSystems/jellyfish?tag=0.4.5#7d71dbeff14f1a501b0b0dc391f1dffa1b8374fb"
-dependencies = [
- "ark-ec 0.4.2",
- "ark-ed-on-bls12-377 0.4.0",
- "ark-ed-on-bls12-381 0.4.0",
- "ark-ff 0.4.2",
- "ark-poly 0.4.2",
- "ark-serialize 0.4.2",
- "ark-std 0.4.0",
- "digest 0.10.7",
- "displaydoc",
- "rand_chacha 0.3.1",
- "serde",
- "sha2 0.10.9",
- "tagged-base64",
-]
-
-[[package]]
-name = "jf-utils"
 version = "0.5.0"
 source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-utils-v0.5.0#f1538793f7f0e391495cb17bbb0c8703ec5f689d"
 dependencies = [
  "ark-ec 0.5.0",
- "ark-ed-on-bls12-377 0.5.0",
- "ark-ed-on-bls12-381 0.5.0",
+ "ark-ed-on-bls12-377",
+ "ark-ed-on-bls12-381",
  "ark-ff 0.5.0",
  "ark-poly 0.5.0",
  "ark-serialize 0.5.0",
@@ -7254,16 +6816,6 @@ dependencies = [
  "serdect",
  "sha2 0.10.9",
  "signature",
-]
-
-[[package]]
-name = "kanal"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e3953adf0cd667798b396c2fa13552d6d9b3269d7dd1154c4c416442d1ff574"
-dependencies = [
- "futures-core",
- "lock_api",
 ]
 
 [[package]]
@@ -9159,11 +8711,11 @@ dependencies = [
 
 [[package]]
 name = "proc-macro-crate"
-version = "3.3.0"
+version = "3.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edce586971a4dfaa28950c6f18ed55e0406c1ab88bbce2c6f6293a7aaba73d35"
+checksum = "219cb19e96be00ab2e37d6e299658a0cfa83e52429179969b0f0121b4ac46983"
 dependencies = [
- "toml_edit",
+ "toml_edit 0.23.5",
 ]
 
 [[package]]
@@ -9297,35 +8849,12 @@ dependencies = [
 
 [[package]]
 name = "prost"
-version = "0.12.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "deb1435c188b76130da55f17a466d252ff7b1418b2ad3e037d127b94e3411f29"
-dependencies = [
- "bytes 1.10.1",
- "prost-derive 0.12.6",
-]
-
-[[package]]
-name = "prost"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2796faa41db3ec313a31f7624d9286acf277b52de526150b7e69f3debf891ee5"
 dependencies = [
  "bytes 1.10.1",
- "prost-derive 0.13.5",
-]
-
-[[package]]
-name = "prost-derive"
-version = "0.12.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81bddcdb20abf9501610992b6759a4c888aef7d1a7247ef75e2404275ac24af1"
-dependencies = [
- "anyhow",
- "itertools 0.12.1",
- "proc-macro2",
- "quote",
- "syn 2.0.106",
+ "prost-derive",
 ]
 
 [[package]]
@@ -9343,20 +8872,11 @@ dependencies = [
 
 [[package]]
 name = "prost-types"
-version = "0.12.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9091c90b0a32608e984ff2fa4091273cbdd755d54935c51d520887f4a1dbd5b0"
-dependencies = [
- "prost 0.12.6",
-]
-
-[[package]]
-name = "prost-types"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52c2c1bf36ddb1a1c396b3601a3cec27c2462e45f07c386894ec3ccf5332bd16"
 dependencies = [
- "prost 0.13.5",
+ "prost",
 ]
 
 [[package]]
@@ -9866,7 +9386,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_urlencoded",
- "sync_wrapper 1.0.2",
+ "sync_wrapper",
  "tokio",
  "tokio-native-tls",
  "tower 0.5.2",
@@ -10539,8 +10059,8 @@ dependencies = [
  "async-trait",
  "bincode",
  "byteorder",
- "cdn-broker 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade)",
- "cdn-marshal 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade)",
+ "cdn-broker",
+ "cdn-marshal",
  "clap 4.5.47",
  "client",
  "committable",
@@ -10571,10 +10091,10 @@ dependencies = [
  "indexmap 2.11.3",
  "itertools 0.12.1",
  "jf-advz",
- "jf-crhf 0.2.0",
+ "jf-crhf",
  "jf-merkle-tree-compat",
- "jf-rescue 0.2.0",
- "jf-signature 0.3.0",
+ "jf-rescue",
+ "jf-signature",
  "libp2p",
  "num_enum",
  "parking_lot",
@@ -11372,7 +10892,7 @@ dependencies = [
  "hotshot-contract-adapter",
  "hotshot-state-prover",
  "hotshot-types",
- "jf-signature 0.3.0",
+ "jf-signature",
  "portpicker",
  "predicates",
  "rand 0.8.5",
@@ -11678,12 +11198,6 @@ dependencies = [
  "quote",
  "syn 2.0.106",
 ]
-
-[[package]]
-name = "sync_wrapper"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2047c6ded9c721764247e62cd3b03c09ffc529b2ba5b10ec482ae507a4a70160"
 
 [[package]]
 name = "sync_wrapper"
@@ -12130,16 +11644,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-io-timeout"
-version = "1.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bd86198d9ee903fedd2f9a2e72014287c0d9167e4ae43b5853007205dda1b76"
-dependencies = [
- "pin-project-lite 0.2.16",
- "tokio",
-]
-
-[[package]]
 name = "tokio-macros"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12246,8 +11750,8 @@ checksum = "dc1beb996b9d83529a9e75c17a1686767d148d70663143c7854d8b4a09ced362"
 dependencies = [
  "serde",
  "serde_spanned",
- "toml_datetime",
- "toml_edit",
+ "toml_datetime 0.6.11",
+ "toml_edit 0.22.27",
 ]
 
 [[package]]
@@ -12260,6 +11764,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "toml_datetime"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a197c0ec7d131bfc6f7e82c8442ba1595aeab35da7adbf05b6b73cd06a16b6be"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
 name = "toml_edit"
 version = "0.22.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12268,8 +11781,29 @@ dependencies = [
  "indexmap 2.11.3",
  "serde",
  "serde_spanned",
- "toml_datetime",
+ "toml_datetime 0.6.11",
  "toml_write",
+ "winnow",
+]
+
+[[package]]
+name = "toml_edit"
+version = "0.23.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2ad0b7ae9cfeef5605163839cb9221f453399f15cfb5c10be9885fcf56611f9"
+dependencies = [
+ "indexmap 2.11.3",
+ "toml_datetime 0.7.1",
+ "toml_parser",
+ "winnow",
+]
+
+[[package]]
+name = "toml_parser"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b551886f449aa90d4fe2bdaa9f4a2577ad2dde302c61ecf262d80b116db95c10"
+dependencies = [
  "winnow",
 ]
 
@@ -12281,40 +11815,13 @@ checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
 
 [[package]]
 name = "tonic"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76c4eb7a4e9ef9d4763600161f12f5070b92a578e1b634db88a6887844c91a13"
-dependencies = [
- "async-stream",
- "async-trait",
- "axum 0.6.20",
- "base64 0.21.7",
- "bytes 1.10.1",
- "h2 0.3.27",
- "http 0.2.12",
- "http-body 0.4.6",
- "hyper 0.14.32",
- "hyper-timeout 0.4.1",
- "percent-encoding",
- "pin-project",
- "prost 0.12.6",
- "tokio",
- "tokio-stream",
- "tower 0.4.13",
- "tower-layer",
- "tower-service",
- "tracing",
-]
-
-[[package]]
-name = "tonic"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877c5b330756d856ffcc4553ab34a5684481ade925ecc54bcd1bf02b1d0d4d52"
 dependencies = [
  "async-stream",
  "async-trait",
- "axum 0.7.9",
+ "axum",
  "base64 0.22.1",
  "bytes 1.10.1",
  "h2 0.4.12",
@@ -12322,11 +11829,11 @@ dependencies = [
  "http-body 1.0.1",
  "http-body-util",
  "hyper 1.7.0",
- "hyper-timeout 0.5.2",
+ "hyper-timeout",
  "hyper-util",
  "percent-encoding",
  "pin-project",
- "prost 0.13.5",
+ "prost",
  "socket2 0.5.10",
  "tokio",
  "tokio-stream",
@@ -12365,7 +11872,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "pin-project-lite 0.2.16",
- "sync_wrapper 1.0.2",
+ "sync_wrapper",
  "tokio",
  "tower-layer",
  "tower-service",
@@ -12861,7 +12368,7 @@ name = "vid"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "ark-bls12-381 0.5.0",
+ "ark-bls12-381",
  "ark-bn254 0.5.0",
  "ark-ff 0.5.0",
  "ark-poly 0.5.0",
@@ -12870,10 +12377,10 @@ dependencies = [
  "base64-bytes",
  "criterion",
  "displaydoc",
- "jf-crhf 0.2.0",
+ "jf-crhf",
  "jf-merkle-tree",
  "jf-poseidon2",
- "jf-utils 0.5.0",
+ "jf-utils",
  "p3-maybe-rayon",
  "rand 0.8.5",
  "serde",
@@ -13678,13 +13185,13 @@ dependencies = [
  "alloy-primitives",
  "alloy-rlp",
  "alloy-sol-type-parser",
- "ark-bls12-377 0.5.0",
- "ark-bls12-381 0.5.0",
+ "ark-bls12-377",
+ "ark-bls12-381",
  "ark-bn254 0.5.0",
- "ark-bw6-761 0.5.0",
- "ark-ed-on-bls12-377 0.5.0",
- "ark-ed-on-bls12-381 0.5.0",
- "ark-ed-on-bn254 0.5.0",
+ "ark-bw6-761",
+ "ark-ed-on-bls12-377",
+ "ark-ed-on-bls12-381",
+ "ark-ed-on-bn254",
  "ark-poly 0.5.0",
  "ark-std 0.5.0",
  "arrayvec",
@@ -13734,10 +13241,10 @@ dependencies = [
  "itertools 0.12.1",
  "itertools 0.13.0",
  "itertools 0.14.0",
- "jf-relation 0.5.0",
- "jf-rescue 0.2.0",
- "jf-signature 0.3.0",
- "jf-utils 0.5.0",
+ "jf-relation",
+ "jf-rescue",
+ "jf-signature",
+ "jf-utils",
  "libp2p-identity",
  "log",
  "memchr",
@@ -13775,8 +13282,8 @@ dependencies = [
  "tiny-keccak",
  "tokio",
  "tokio-util",
- "toml_datetime",
- "toml_edit",
+ "toml_datetime 0.6.11",
+ "toml_edit 0.22.27",
  "tracing",
  "tracing-core",
  "tracing-log",
