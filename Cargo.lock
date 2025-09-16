@@ -11592,8 +11592,7 @@ dependencies = [
 [[package]]
 name = "tide-disco"
 version = "0.9.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b288e55c99f598577a86a7b96e4b4b871cd36b5ae95ca8f923ccf081178e35c"
+source = "git+https://github.com/EspressoSystems/tide-disco.git?branch=test-cors#12601852e647197eb667b0af235258b30884946f"
 dependencies = [
  "anyhow",
  "async-h1",
