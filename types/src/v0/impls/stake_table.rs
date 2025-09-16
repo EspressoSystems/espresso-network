@@ -888,8 +888,7 @@ impl Fetcher {
             .await;
 
             for log in logs {
-                let event =
-                    StakeTableV2Events::decode_raw_log(log.topics(), &log.data().data)?;
+                let event = StakeTableV2Events::decode_raw_log(log.topics(), &log.data().data)?;
 
                 match &event {
                     StakeTableV2Events::ValidatorRegisteredV2(event) => {
