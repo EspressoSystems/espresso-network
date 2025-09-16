@@ -2523,7 +2523,7 @@ impl MembershipPersistence for Persistence {
         let mut query_builder =
             QueryBuilder::new("INSERT INTO stake_table_validators (epoch, address, validator) ");
 
-        query_builder.push_values(all_validators.into_iter(), |mut b, (address, validator)| {
+        query_builder.push_values(all_validators, |mut b, (address, validator)| {
             let validator_json =
                 serde_json::to_value(&validator).expect("cannot serialize validator to json");
             b.push_bind(epoch.u64() as i64)
@@ -2538,6 +2538,7 @@ impl MembershipPersistence for Persistence {
 
         query.execute(tx.as_mut()).await?;
 
+        tx.commit().await?;
         Ok(())
     }
 
