@@ -401,3 +401,29 @@ client state at the end of the epoch. This is used to update light client state 
 that it have the new stake table information for the next epoch. This also contains the auth_root field, 
 which is calculated based on the Keccak-256 hash of the reward Merkle tree roots.
 """
+
+[route.verify_transaction_proof]
+PATH = ["verify/transaction/:height/:index", "verify/transaction/hash/:hash"]
+":height" = "Integer"
+":index" = "Integer"
+":hash" = "TaggedBase64"
+DOC = """
+Verify a transaction inclusion proof.
+
+This endpoint verifies that a transaction is correctly included in its block using the provided
+inclusion proof. The verification process checks that the transaction proof is valid against the
+block's VID commitment and common VID data.
+
+Returns
+```
+{
+    "valid": boolean,
+    "transaction_hash": TaggedBase64,
+    "block_hash": TaggedBase64,
+    "block_height": integer,
+}
+```
+
+The `valid` field indicates whether the transaction inclusion proof is valid. If `valid` is false,
+the transaction is either not included in the block or the proof is invalid.
+"""
