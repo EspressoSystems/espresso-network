@@ -761,6 +761,51 @@ where
                 .context(FetchStateCertSnafu { epoch })
         }
         .boxed()
+    })?
+    .at("verify_transaction_proof", move |req, state| {
+        async move {
+            let tx_with_proof = get_transaction_with_proof(req, state, timeout).await?;
+            let height = tx_with_proof.block.height();
+
+            // Get VID common data for verification
+            let vid_common = state
+                .read(|state| state.get_vid_common(height as usize))
+                .await
+                .with_timeout(timeout)
+                .await
+                .context(FetchBlockSnafu {
+                    resource: height.to_string(),
+                })?;
+
+            // Get the block to access its VID commitment
+            let block = state
+                .read(|state| state.get_block(height as usize))
+                .await
+                .with_timeout(timeout)
+                .await
+                .context(FetchBlockSnafu {
+                    resource: height.to_string(),
+                })?;
+
+            // Verify the transaction inclusion proof
+            let is_valid = tx_with_proof
+                .proof()
+                .verify(
+                    block.ns_table(),
+                    tx_with_proof.transaction(),
+                    block.vid_commitment(),
+                    &vid_common,
+                )
+                .unwrap_or(false);
+
+            Ok(TransactionProofVerificationResult::new(
+                is_valid,
+                tx_with_proof.hash(),
+                tx_with_proof.block_hash(),
+                tx_with_proof.block_height(),
+            ))
+        }
+        .boxed()
     })?;
     Ok(api)
 }
@@ -818,6 +863,38 @@ where
             })
         },
     }
+}
+
+async fn get_transaction_with_proof<Types, State>(
+    req: RequestParams,
+    state: &State,
+    timeout: Duration,
+) -> Result<TransactionWithProofQueryData<Types>, Error>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+    State: 'static + Send + Sync + ReadState,
+    <State as ReadState>::State: Send + Sync + AvailabilityDataSource<Types>,
+{
+    let tx = get_transaction(req, state, timeout).await?;
+    let height = tx.block.height();
+    let vid = state
+        .read(|state| state.get_vid_common(height as usize))
+        .await
+        .with_timeout(timeout)
+        .await
+        .context(FetchBlockSnafu {
+            resource: height.to_string(),
+        })?;
+    let proof =
+        tx.block
+            .transaction_proof(&vid, &tx.index)
+            .context(InvalidTransactionIndexSnafu {
+                height,
+                index: tx.transaction.index(),
+            })?;
+    Ok(TransactionWithProofQueryData::new(tx.transaction, proof))
 }
 
 #[cfg(test)]
@@ -1943,6 +2020,102 @@ mod test {
             .await
             .unwrap_err();
         drop(tx);
+
+        network.shut_down().await;
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_transaction_proof_verification() {
+        // Create the consensus network.
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        network.start().await;
+
+        // Start the web server.
+        let port = pick_unused_port().unwrap();
+        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
+        let options = Options {
+            small_object_range_limit: 500,
+            large_object_range_limit: 500,
+            ..Default::default()
+        };
+
+        app.register_module(
+            "availability",
+            define_api(&options, MockBase::instance(), "1.0.0".parse().unwrap()).unwrap(),
+        )
+        .unwrap();
+        network.spawn(
+            "server",
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
+        );
+
+        // Start a client.
+        let client = Client::<Error, MockBase>::new(
+            format!("http://localhost:{port}/availability")
+                .parse()
+                .unwrap(),
+        );
+        assert!(client.connect(Some(Duration::from_secs(60))).await);
+
+        // Submit a transaction and wait for it to be finalized.
+        let txn = mock_transaction(vec![42]);
+        network.submit_transaction(txn).await;
+
+        // Wait for the transaction to be finalized.
+        let leaves = client
+            .socket("stream/leaves/0")
+            .subscribe::<LeafQueryData<MockTypes>>()
+            .await
+            .unwrap();
+        let blocks = client
+            .socket("stream/blocks/0")
+            .subscribe::<BlockQueryData<MockTypes>>()
+            .await
+            .unwrap();
+        let mut chain = leaves.zip(blocks).enumerate();
+
+        let (i, leaf, block) = loop {
+            let (i, (leaf, block)) = chain.next().await.unwrap();
+            let leaf = leaf.unwrap();
+            let block = block.unwrap();
+            if !block.is_empty() {
+                break (i, leaf, block);
+            }
+        };
+
+        // Test transaction proof verification for each transaction in the block
+        for (j, txn_from_block) in block.enumerate() {
+            let txn: TransactionQueryData<MockTypes> = client
+                .get(&format!("transaction/{}/{}/noproof", i, j.position))
+                .send()
+                .await
+                .unwrap();
+
+            // Test verification by height and index
+            let verification_result: TransactionProofVerificationResult<MockTypes> = client
+                .get(&format!("verify/transaction/{}/{}", i, j.position))
+                .send()
+                .await
+                .unwrap();
+
+            // The verification should be valid for legitimate transactions
+            assert!(verification_result.valid);
+            assert_eq!(verification_result.transaction_hash, txn.hash());
+            assert_eq!(verification_result.block_hash, block.hash());
+            assert_eq!(verification_result.block_height, i);
+
+            // Test verification by hash as well
+            let verification_result_by_hash: TransactionProofVerificationResult<MockTypes> = client
+                .get(&format!("verify/transaction/hash/{}", txn.hash()))
+                .send()
+                .await
+                .unwrap();
+
+            assert!(verification_result_by_hash.valid);
+            assert_eq!(verification_result_by_hash.transaction_hash, txn.hash());
+            assert_eq!(verification_result_by_hash.block_hash, block.hash());
+            assert_eq!(verification_result_by_hash.block_height, i);
+        }
 
         network.shut_down().await;
     }
