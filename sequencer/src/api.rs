@@ -477,6 +477,10 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> SubmitDa
             bail!("transaction size ({txn_size}) is greater than max_block_size ({max_block_size})")
         }
 
+        tracing::warn!(
+            "BlockBuilder: Calling consensus_read_lock.submit_transaction for tx: {:?}",
+            tx
+        );
         consensus_read_lock.submit_transaction(tx).await?;
         Ok(())
     }

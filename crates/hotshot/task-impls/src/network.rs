@@ -530,6 +530,10 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
             // Handle data messages
             MessageKind::Data(message) => match message {
                 DataMessage::SubmitTransaction(transaction, _) => {
+                    tracing::warn!(
+                        "BlockBuilder: received transaction from network: {:?}",
+                        transaction
+                    );
                     let mut hasher = DefaultHasher::new();
                     transaction.hash(&mut hasher);
                     if self.transactions_cache.put(hasher.finish(), ()).is_some() {

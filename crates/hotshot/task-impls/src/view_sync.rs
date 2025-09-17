@@ -553,6 +553,11 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                 } else {
                     // If this is the first timeout we've seen advance to the next view
                     self.cur_view = view_number + 1;
+                    tracing::warn!(
+                        "Advancing due to timeout to view {} epoch {:?}",
+                        *self.cur_view,
+                        self.cur_epoch
+                    );
                     broadcast_view_change(
                         &event_stream,
                         self.cur_view,
@@ -789,7 +794,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                 )
                 .await;
 
-                tracing::info!(
+                tracing::warn!(
                     "View sync protocol has received view sync evidence to update the view to {}",
                     *self.next_view
                 );
@@ -874,6 +879,12 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                     timeout_task.abort();
                 }
 
+                tracing::warn!(
+                    "viewsyncfinalizecertificaterecv: View sync protocol has received view sync \
+                     evidence to update the view to {}, epoch {:?}",
+                    *self.next_view,
+                    certificate.epoch()
+                );
                 broadcast_view_change(
                     &event_stream,
                     self.next_view,

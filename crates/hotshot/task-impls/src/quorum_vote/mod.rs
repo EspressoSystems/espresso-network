@@ -388,6 +388,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
             // We're voting for the proposal that will probably form the eQC. We don't want to change
             // the view here because we will probably change it when we form the eQC.
             // The main reason is to handle view change event only once in the transaction task.
+            tracing::warn!(
+                "broadcast_view_change from quorum vote for view {}, epoch {:?}",
+                self.view_number + 1,
+                cur_epoch
+            );
             broadcast_view_change(
                 &self.sender,
                 leaf.view_number() + 1,

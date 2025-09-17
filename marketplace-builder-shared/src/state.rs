@@ -207,6 +207,11 @@ where
                         continue;
                     }
 
+                    tracing::warn!(
+                        "BlockBuilder: Marketplace-builder-shared received transaction from \
+                         network: {:?}",
+                        txn
+                    );
                     self.txn_queue.write().await.insert(txn);
                     queue_empty = false;
                 },

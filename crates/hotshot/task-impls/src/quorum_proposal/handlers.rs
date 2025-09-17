@@ -862,7 +862,7 @@ pub(super) async fn handle_eqc_formed<
         return;
     }
     if !block_number.is_some_and(|bn| is_last_block(bn, task_state.epoch_height)) {
-        tracing::debug!("We formed QC but not eQC. Do nothing");
+        tracing::debug!("We formed QC but not eQC. Do nothing. Block_number = {block_number:?}");
         return;
     }
 

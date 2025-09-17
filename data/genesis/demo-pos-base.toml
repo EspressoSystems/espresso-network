@@ -11,7 +11,7 @@ capacity = 10
 [chain_config]
 chain_id = 999999999
 max_block_size = "1mb"
-base_fee = "1 wei"
+base_fee = "0"
 fee_recipient = "0x0000000000000000000000000000000000000000"
 fee_contract = "0x8ce361602b935680e8dec218b820ff5056beb7af"
 stake_table_contract = "0x12975173b87f7595ee45dffb2ab812ece596bf84"

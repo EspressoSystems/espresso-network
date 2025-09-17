@@ -1464,7 +1464,7 @@ pub async fn broadcast_view_change<TYPES: NodeType>(
             broadcast_epoch = Some(first_epoch);
         }
     }
-    tracing::trace!("Sending ViewChange for view {new_view_number} and epoch {broadcast_epoch:?}");
+    tracing::warn!("Sending ViewChange for view {new_view_number} and epoch {broadcast_epoch:?}");
     broadcast_event(
         Arc::new(HotShotEvent::ViewChange(new_view_number, broadcast_epoch)),
         sender,

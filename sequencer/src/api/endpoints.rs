@@ -639,6 +639,7 @@ where
                 .map_err(Error::from_request_error)?;
 
             let hash = tx.commit();
+            tracing::warn!("BlockBuilder: API submitting transaction: {:?}", tx);
             state
                 .read(|state| state.submit(tx).boxed())
                 .await

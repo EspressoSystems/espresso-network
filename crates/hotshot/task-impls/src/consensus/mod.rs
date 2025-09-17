@@ -247,7 +247,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                 if high_qc_updated || next_high_qc_updated {
                     // Send ViewChange indicating new view and new epoch.
                     let next_epoch = high_qc.data.epoch().map(|x| x + 1);
-                    tracing::info!("Entering new epoch: {next_epoch:?}");
+                    tracing::warn!(
+                        "Broadcasting view change while entering new epoch: {next_epoch:?}"
+                    );
                     broadcast_view_change(
                         &sender,
                         high_qc.view_number() + 1,

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <script src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-svg.js"></script>
+        <script src="https://cdn.plot.ly/plotly-3.0.1.min.js"></script>
+        
+</head>
+
+<body>
+    <div>
+        <div id="plotly-html-element" class="plotly-graph-div" style="height:100%; width:100%;"></div>
+
+        <script type="module">
+            const graph_div = document.getElementById("plotly-html-element");
+            await Plotly.newPlot(graph_div, {"data":[{"type":"scatter","name":"DA Cert Δ (ms)","mode":"markers","x":[174111,174124,174131,174175,174198],"y":[40.330722,111.167669,31.283013,41.832849,117.014117],"marker":{"symbol":"diamond","size":10,"line":{"width":1.0,"color":"blue"},"color":"rgba(0,0,0,0)"}},{"type":"scatter","name":"VID Disperse Δ (ms)","mode":"markers","x":[174111,174124,174131,174175,174198],"y":[23.221419,83.167619,17.496989,15.083255,28.34912],"marker":{"symbol":"square","size":8,"line":{"width":1.0,"color":"orange"},"color":"rgba(0,0,0,0)"}},{"type":"scatter","name":"Block Built Δ from previous proposal (ms)","mode":"markers","x":[174111,174124,174131,174175,174198],"y":[],"xaxis":"x2","yaxis":"y2","marker":{"symbol":"circle"}},{"type":"scatter","name":"VID Timestamp","mode":"markers","x":[174111,174124,174131,174175,174198],"y":[1755875653.3552065,1755875704.009384,1755875735.9695547,1755875948.7462656,1755876037.8107758],"xaxis":"x3","yaxis":"y3","marker":{"symbol":"square","size":8,"line":{"width":1.0,"color":"orange"},"color":"rgba(0,0,0,0)"}},{"type":"scatter","name":"DAC Timestamp","mode":"markers","x":[174111,174124,174131,174175,174198],"y":[1755875653.3723156,1755875704.0373843,1755875735.9833407,1755875948.7730153,1755876037.899441],"xaxis":"x3","yaxis":"y3","marker":{"symbol":"diamond","size":10,"line":{"width":1.0,"color":"blue"},"color":"rgba(0,0,0,0)"}},{"type":"scatter","name":"QC Timestamp","mode":"markers","x":[174111,174124,174131,174175,174198],"y":[1755875653.2305057,1755875704.1600473,1755875735.8510118,1755875949.048214,1755876037.679227],"xaxis":"x3","yaxis":"y3","marker":{"symbol":"circle","size":6,"line":{"width":1.0,"color":"green"},"color":"rgba(0,0,0,0)"}}],"layout":{"title":{"text":"Leader Stats"},"margin":{"l":130},"height":2000,"grid":{"rows":3,"columns":1,"pattern":"independent"},"xaxis":{"title":{"text":"View"}},"yaxis":{"title":{"text":"VID/DAC Δ from Block Built (ms)"}},"xaxis2":{"title":{"text":"View"}},"yaxis2":{"title":{"text":"Block built Δ from previous proposal (ms)"}},"xaxis3":{"title":{"text":"View"}},"yaxis3":{"title":{"text":"VID/DAC/QC Timestamps (ms)"}}},"config":{},"frames":null});
+        </script>
+    </div>
+</body>
+
+</html>

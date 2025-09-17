@@ -373,7 +373,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                     *view > *self.cur_view && *epoch >= self.cur_epoch,
                     debug!(
                         "Received a view change to an older view and epoch: tried to change view \
-                         to {view}and epoch {epoch:?} though we are at view {} and epoch {:?}",
+                         to {view} and epoch {epoch:?} though we are at view {} and epoch {:?}",
                         self.cur_view, self.cur_epoch
                     )
                 );

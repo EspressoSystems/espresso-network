@@ -1008,10 +1008,10 @@ impl<Types: NodeType> AcceptsTxnSubmits<Types> for ProxyGlobalState<Types> {
         &self,
         txns: Vec<<Types as NodeType>::Transaction>,
     ) -> Result<Vec<Commitment<<Types as NodeType>::Transaction>>, BuildError> {
-        tracing::debug!(
-            "Submitting {} transactions to the builder states{:?}",
+        tracing::warn!(
+            "BlockBuilder: Submitting {} transactions to the builder states: {:?}",
             txns.len(),
-            txns.iter().map(|txn| txn.commit()).collect::<Vec<_>>()
+            txns //txns.iter().map(|txn| txn.commit()).collect::<Vec<_>>()
         );
         let response = self
             .global_state
@@ -1490,6 +1490,10 @@ where
             }));
         }
 
+        tracing::warn!(
+            "BlockBuilder: HandleReceivedTxns submitting transaction {:?}",
+            tx
+        );
         let res = self
             .tx_sender
             .try_broadcast(Arc::new(ReceivedTransaction {

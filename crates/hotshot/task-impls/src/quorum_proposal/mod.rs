@@ -537,6 +537,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                         .block_number
                         .is_some_and(|bn| is_last_block(bn, self.epoch_height))
                     {
+                        tracing::warn!(
+                            "broadcast_view_change from qc2formed for view {view_number}, epoch \
+                             {:?}",
+                            qc.data.epoch
+                        );
                         broadcast_view_change(
                             &event_sender,
                             view_number,
@@ -579,6 +584,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     ))?;
 
                 let view_number = qc.view_number() + 1;
+                tracing::warn!(
+                    "broadcast_view_change from epoch root qc formed for view {view_number}, \
+                     epoch {:?}",
+                    qc.data.epoch
+                );
                 broadcast_view_change(&event_sender, view_number, qc.data.epoch, self.first_epoch)
                     .await;
                 self.create_dependency_task_if_new(

@@ -5,7 +5,10 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use std::{
-    collections::{BTreeMap, HashSet}, num::NonZero, sync::{atomic::AtomicBool, Arc}, time::Instant
+    collections::{BTreeMap, HashSet},
+    num::NonZero,
+    sync::{atomic::AtomicBool, Arc},
+    time::Instant,
 };
 
 use async_trait::async_trait;
@@ -225,7 +228,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 {
     async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
         let (builder_key, builder_private_key) =
-            TYPES::BuilderSignatureKey::generated_from_seed_indexed([0; 32], 0);
+            TYPES::BuilderSignatureKey::generated_from_seed_indexed([0; 32], 0); //handle.hotshot.id);
         Self {
             cur_view: handle.cur_view().await,
             cur_epoch: handle.cur_epoch().await,

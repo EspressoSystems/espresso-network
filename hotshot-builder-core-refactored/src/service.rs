@@ -762,6 +762,10 @@ where
         &self,
         txns: Vec<<Types as NodeType>::Transaction>,
     ) -> Result<Vec<Commitment<<Types as NodeType>::Transaction>>, BuildError> {
+        tracing::warn!(
+            "BlockBuilder: submit_txns called with transactions: {:?}",
+            txns
+        );
         txns.into_iter()
             .map(|txn| ReceivedTransaction::new(txn, TransactionSource::Private))
             .map(|txn| async {

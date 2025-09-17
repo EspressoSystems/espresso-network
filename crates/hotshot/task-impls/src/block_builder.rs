@@ -115,7 +115,16 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
                     if !self.transactions.contains(&txn.commit())
                         && !self.decided_not_seen_txns.contains(&txn.commit())
                     {
+                        tracing::warn!(
+                            "BlockBuilder: Collected transaction without waiting: {:?}",
+                            txn
+                        );
                         transactions.push(txn.clone());
+                    } else {
+                        tracing::warn!(
+                            "BlockBuilder: Ignoring duplicate transaction without waiting: {:?}",
+                            txn
+                        );
                     }
                 }
             }
@@ -131,7 +140,16 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
                     if !self.transactions.contains(&txn.commit())
                         && !self.decided_not_seen_txns.contains(&txn.commit())
                     {
+                        tracing::warn!(
+                            "BlockBuilder: Collected transaction while waiting: {:?}",
+                            txn
+                        );
                         transactions.push(txn.clone());
+                    } else {
+                        tracing::warn!(
+                            "BlockBuilder: Ignoring duplicate transaction while waiting: {:?}",
+                            txn
+                        );
                     }
                 }
                 if !transactions.is_empty() {
@@ -139,6 +157,7 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
                 }
             }
             if std::time::Instant::now().duration_since(start) > Duration::from_millis(100) {
+                tracing::error!("BlockBuilder: Timeout waiting for transactions");
                 break;
             }
         }
@@ -168,7 +187,7 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
                 Ok(Some(proposal)) => proposal,
                 Ok(None) => return None,
                 Err(_) => {
-                    tracing::error!("Proposal timed out");
+                    tracing::error!("BlockBuilder: Proposal timed out");
                     return None;
                 },
             };
@@ -186,6 +205,8 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
         receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
         version: Version,
     ) -> Option<HotShotTaskCompleted> {
+        tracing::warn!("BlockBuilder: Building block for view {view} and epoch {epoch:?}");
+
         let consensus_reader = self.consensus.read().await;
         let mut proposal = consensus_reader.last_proposals().get(&(view - 1)).cloned();
         drop(consensus_reader);
@@ -193,7 +214,9 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
             proposal = {
                 let Some(proposal) = self.wait_for_proposal(view - 1, receiver.clone()).await
                 else {
-                    tracing::error!("No proposal found for view {view}, sending empty block");
+                    tracing::error!(
+                        "BlockBuilder: No proposal found for view {view}, sending empty block"
+                    );
                     send_empty_block::<TYPES, V>(
                         &self.consensus,
                         &self.membership_coordinator,
@@ -205,6 +228,10 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
                     .await;
                     return None;
                 };
+                tracing::warn!(
+                    "BlockBuilder: Found proposal for view {view} after waiting: {:?}",
+                    proposal
+                );
                 Some(proposal)
             };
         }
@@ -219,12 +246,21 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
         let mut block = vec![];
         for (txn_hash, txn) in self.transactions.iter().rev() {
             if !in_flight_txns.contains_key(txn_hash) {
+                tracing::warn!("BlockBuilder: Adding transaction to block: {:?}", txn);
                 block.push(txn.clone());
+            } else {
+                tracing::warn!("BlockBuilder: Ignoring in-flight transaction: {:?}", txn);
             }
         }
 
         if block.is_empty() {
             block = self.wait_for_transactions(receiver.clone()).await;
+            tracing::warn!(
+                "BlockBuilder: Collected transactions after waiting for view {}: transactions: \
+                 {:?}",
+                view,
+                block
+            );
         }
 
         let consensus_reader = self.consensus.read().await;
@@ -238,6 +274,8 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
         let validated_state = maybe_validated_state
             .unwrap_or_else(|| Arc::new(TYPES::ValidatedState::from_header(leaf.block_header())));
 
+        let block_str = format!("{:?}", block);
+
         let Some((payload, metadata)) =
             <TYPES::BlockPayload as BlockPayload<TYPES>>::from_transactions(
                 block.into_iter(),
@@ -247,7 +285,7 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
             .await
             .ok()
         else {
-            tracing::error!("Failed to build block payload, sending empty block");
+            tracing::error!("BlockBuilder: Failed to build block payload, sending empty block");
             send_empty_block::<TYPES, V>(
                 &self.consensus,
                 &self.membership_coordinator,
@@ -266,7 +304,7 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
             TYPES::BuilderSignatureKey::sign_fee(&self.builder_private_key, FEE_AMOUNT, &metadata)
                 .ok()
         else {
-            tracing::error!("Failed to sign fee, sending empty block");
+            tracing::error!("BlockBuilder: Failed to sign fee, sending empty block");
             send_empty_block::<TYPES, V>(
                 &self.consensus,
                 &self.membership_coordinator,
@@ -284,6 +322,14 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
             fee_signature: signature_over_fee_info,
         };
 
+        tracing::warn!(
+            "BlockBuilder: Broadcasting BlockRecv for view {view} and epoch {epoch:?}, payload \
+             size: {}, metadata: {:?}, builder_fee: {:?}, transactions: {}",
+            encoded_payload.len(),
+            metadata,
+            builder_fee,
+            block_str
+        );
         broadcast_event(
             Arc::new(HotShotEvent::BlockRecv(PackedBundle::new(
                 encoded_payload,
@@ -320,7 +366,7 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
         // If it's the first view of the upgrade, we don't need to check for transition blocks
         if version >= V::Epochs::VERSION {
             let Some(epoch) = epoch else {
-                tracing::error!("Epoch is required for epoch-based view change");
+                tracing::error!("BlockBuilder: Epoch is required for epoch-based view change");
                 return None;
             };
             let high_qc = self.consensus.read().await.high_qc().clone();
@@ -337,7 +383,9 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
                         .unwrap_or(TYPES::View::new(0))
                         + 1
                 {
-                    tracing::warn!("High QC in epoch version and not the first QC after upgrade");
+                    tracing::warn!(
+                        "BlockBuilder: High QC in epoch version and not the first QC after upgrade"
+                    );
                     send_empty_block::<TYPES, V>(
                         &self.consensus,
                         &self.membership_coordinator,
@@ -372,8 +420,8 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
                 // We are proposing a transition block it should be empty
                 if !is_last_block(high_qc_block_number, self.epoch_height) {
                     tracing::info!(
-                        "Sending empty block event. View number: {view}. Parent Block number: \
-                         {high_qc_block_number}"
+                        "BlockBuilder: Sending empty block event. View number: {view}. Parent \
+                         Block number: {high_qc_block_number}"
                     );
                     send_empty_block::<TYPES, V>(
                         &self.consensus,
@@ -415,11 +463,16 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
     ) -> Result<()> {
         match event.as_ref() {
             HotShotEvent::TransactionsRecv(transactions) => {
+                tracing::warn!(
+                    "BlockBuilder: Handling received transactions: {:?}",
+                    transactions
+                );
                 for txn in transactions {
                     let commit = txn.commit();
                     if !self.transactions.contains(&commit)
                         && !self.decided_not_seen_txns.contains(&commit)
                     {
+                        tracing::warn!("BlockBuilder: Rebroadcasting transaction {:?}", txn);
                         broadcast_event(
                             Arc::new(HotShotEvent::TransactionsRecv(transactions.clone())),
                             &sender,
@@ -427,15 +480,22 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
                         .await;
                     }
                 }
+                tracing::warn!(
+                    "BlockBuilder: Calling handle_transactions: {:?}",
+                    transactions
+                );
                 self.handle_transactions(transactions).await;
             },
             HotShotEvent::ViewChange(view, epoch) => {
+                tracing::warn!(
+                    "BlockBuilder: Handling view change to view {view} and epoch {epoch:?}"
+                );
                 let view = TYPES::View::new(std::cmp::max(1, **view));
                 ensure!(
                     *view > *self.cur_view && *epoch >= self.cur_epoch,
                     debug!(
                         "Received a view change to an older view and epoch: tried to change view \
-                         to {view}and epoch {epoch:?} though we are at view {} and epoch {:?}",
+                         to {view} and epoch {epoch:?} though we are at view {} and epoch {:?}",
                         self.cur_view, self.cur_epoch
                     )
                 );
@@ -449,12 +509,25 @@ impl<TYPES: NodeType, V: Versions> BlockBuilderTaskState<TYPES, V> {
                     .leader(view)
                     .await?;
                 if leader == self.public_key {
+                    tracing::warn!(
+                        "BlockBuilder: We are the leader for view {view} and epoch {epoch:?}, \
+                         calling handle_view_change"
+                    );
                     self.handle_view_change(view, *epoch, sender.clone(), receiver.clone())
                         .await;
                     return Ok(());
+                } else {
+                    tracing::warn!(
+                        "BlockBuilder: We are not the leader for view {view} and epoch {epoch:?}, \
+                         ignoring"
+                    )
                 }
             },
-            HotShotEvent::ViewDecided(_, txns) => {
+            HotShotEvent::ViewDecided(leaves, txns) => {
+                tracing::warn!(
+                    "BlockBuilder: Handling ViewDecided for view {:?} with {txns:?}",
+                    leaves.first().map(|leaf| leaf.view_number())
+                );
                 for txn in txns {
                     // Remove the txn from our mempool if it's in there, else store it to prevent a later duplicate
                     if self.transactions.pop(txn).is_none() {

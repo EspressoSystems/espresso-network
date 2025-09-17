@@ -401,6 +401,10 @@ pub(crate) async fn handle_quorum_proposal_recv<
             .write()
             .await
             .update_highest_block(proposal_block_number);
+        tracing::warn!(
+            "broadcast_view_change from quorum_proposal_recv 1 for view {view_number}, epoch \
+             {proposal_epoch:?}"
+        );
         broadcast_view_change(
             event_sender,
             view_number,
@@ -429,6 +433,11 @@ pub(crate) async fn handle_quorum_proposal_recv<
     {
         validation_info.consensus.write().await.highest_block = proposal_block_number;
     }
+
+    tracing::warn!(
+        "broadcast_view_change from quorum_proposal_recv 2 for view {view_number}, epoch \
+         {proposal_epoch:?}"
+    );
     broadcast_view_change(
         event_sender,
         view_number,

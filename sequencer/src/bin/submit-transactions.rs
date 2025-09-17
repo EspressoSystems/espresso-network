@@ -416,6 +416,10 @@ async fn submit_transactions<ApiVer: StaticVersionType>(
         if randomized_batch_size <= txns_batch_count {
             if let Err(err) = if txns_batch_count == 1 {
                 // occasionally test the 'submit' endpoint, just for coverage
+                tracing::info!(
+                    "submitting single transaction via 'submit' endpoint: {:?}",
+                    txns[0]
+                );
                 client
                     .post::<()>("submit")
                     .body_binary(&txns[0])
@@ -423,6 +427,11 @@ async fn submit_transactions<ApiVer: StaticVersionType>(
                     .send()
                     .await
             } else {
+                tracing::info!(
+                    "submitting batch of {} transactions via 'batch' endpoint: {:?}",
+                    txns.len(),
+                    txns
+                );
                 client
                     .post::<()>("batch")
                     .body_binary(&txns)

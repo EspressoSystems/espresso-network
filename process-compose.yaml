@@ -155,6 +155,7 @@ processes:
   sequencer0:
     command: sequencer -- storage-sql -- http -- query -- submit -- hotshot-events -- config -- catchup
     environment:
+      - RUST_LOG=debug,hotshot_task_impls=trace,hotshot_task=trace
       - ESPRESSO_SEQUENCER_API_PORT=$ESPRESSO_SEQUENCER_API_PORT
       - ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS=0.0.0.0:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_0
       - ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS=localhost:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_0
@@ -209,6 +210,7 @@ processes:
   sequencer1:
     command: sequencer -- storage-sql -- http -- query -- explorer -- catchup
     environment:
+      - RUST_LOG=debug,hotshot_task_impls=trace,hotshot_task=trace
       - ESPRESSO_SEQUENCER_API_PORT=$ESPRESSO_SEQUENCER1_API_PORT
       - ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS=0.0.0.0:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_1
       - ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS=localhost:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_1
@@ -263,6 +265,7 @@ processes:
   sequencer2:
     command: sequencer -- http
     environment:
+      - RUST_LOG=debug,hotshot_task_impls=trace,hotshot_task=trace
       - ESPRESSO_SEQUENCER_API_PORT=$ESPRESSO_SEQUENCER2_API_PORT
       - ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS=0.0.0.0:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_2
       - ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS=localhost:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_2
@@ -310,6 +313,7 @@ processes:
   sequencer3:
     command: sequencer -- http -- query -- storage-fs
     environment:
+      - RUST_LOG=debug,hotshot_task_impls=trace,hotshot_task=trace
       - ESPRESSO_SEQUENCER_API_PORT=$ESPRESSO_SEQUENCER3_API_PORT
       - ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS=0.0.0.0:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_3
       - ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS=localhost:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_3
@@ -330,6 +334,7 @@ processes:
       - ESPRESSO_SEQUENCER_IDENTITY_LONGITUDE=104.1954
       - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://localhost:$ESPRESSO_SEQUENCER3_API_PORT/
       - ESPRESSO_SEQUENCER_L1_WS_PROVIDER=ws://localhost:$ESPRESSO_SEQUENCER_L1_WS_PORT
+      - ESPRESSO_SEQUENCER_IS_DA=true
     depends_on:
       orchestrator:
         condition: process_healthy
@@ -358,6 +363,7 @@ processes:
   sequencer4:
     command: sequencer-sqlite -- storage-sql -- http -- query
     environment:
+      - RUST_LOG=debug,hotshot_task_impls=trace,hotshot_task=trace
       - ESPRESSO_SEQUENCER_LIGHTWEIGHT=true
       - ESPRESSO_SEQUENCER_API_PORT=$ESPRESSO_SEQUENCER4_API_PORT
       - ESPRESSO_SEQUENCER_STATE_PEERS=http://localhost:$ESPRESSO_SEQUENCER_API_PORT
@@ -534,7 +540,7 @@ processes:
     command: submit-transactions
     environment:
       - ESPRESSO_SUBMIT_TRANSACTIONS_PORT=$ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT
-      - ESPRESSO_SUBMIT_TRANSACTIONS_SUBMIT_URL=http://localhost:$ESPRESSO_BUILDER_SERVER_PORT/txn_submit
+    #  - ESPRESSO_SUBMIT_TRANSACTIONS_SUBMIT_URL=http://localhost:$ESPRESSO_BUILDER_SERVER_PORT/txn_submit
     depends_on:
       sequencer0:
         condition: process_healthy
