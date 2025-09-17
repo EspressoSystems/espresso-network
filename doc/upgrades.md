@@ -110,7 +110,7 @@ parameters
 
 - **Version:** the new version after an upgrade is successful.
 - **start_proposing_view:** Represents the `start_proposing_view` value at which the upgrade is proposed.
-- **stop_proposing_view:** Refers to the view view after which the node stops proposing an upgrade.
+- **stop_proposing_view:** Refers to the view after which the node stops proposing an upgrade.
 
 The `upgrade.fee.chain_config` table contains the complete set of chain config parameters, which can be used, for
 example, to enable protocol fees or modify other parameters.
