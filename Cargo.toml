@@ -87,29 +87,7 @@ authors = ["Espresso Systems <hello@espressosys.com>"]
 edition = "2021"
 
 [workspace.dependencies]
-# The --alloy-version in the justfile gen-bindings recipe should match the version here.
-alloy = { version = "1.0", default-features = false, features = [
-    "contract",
-    "eips",
-    "json-rpc",
-    "getrandom",
-    "network",
-    "node-bindings",
-    "provider-ws",
-    "providers",
-    "reqwest",
-    "rand",
-    "rpc",
-    "rpc-client",
-    "rpc-types",
-    "serde",
-    "signer-local",
-    "signer-mnemonic",
-    "signer-ledger",
-    "signers",
-    "sol-types",
-    "transports",
-] }
+alloy = { version = "1.0", features = ["provider-ws", "json-rpc", "signer-mnemonic", "node-bindings", "getrandom"] }
 anyhow = "^1.0"
 ark-bls12-381 = "0.5"
 ark-bn254 = "0.5"
@@ -314,3 +292,7 @@ opt-level = 3
 inherits = "test"
 strip = true
 debug = "none"
+
+# ark-r1cs-std@0.5.0 contains vulnerable tracing-subscriber (RUSTSEC-2025-0055)
+[patch.crates-io]
+ark-r1cs-std = { path = "vendor/ark-r1cs-std-dummy" }

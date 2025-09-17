@@ -16,9 +16,9 @@ publish = false
 ### BEGIN HAKARI SECTION
 [dependencies]
 ahash = { version = "0.8" }
-alloy-json-abi = { version = "1", default-features = false, features = ["serde_json", "std"] }
-alloy-primitives = { version = "1", default-features = false, features = ["k256", "map", "rand", "rlp", "serde", "std"] }
-alloy-rlp = { version = "0.3", default-features = false, features = ["arrayvec", "derive", "std"] }
+alloy = { version = "1", features = ["getrandom", "json-rpc", "node-bindings", "provider-ws", "signer-ledger", "signer-mnemonic"] }
+alloy-json-abi = { version = "1", features = ["serde_json"] }
+alloy-primitives = { version = "1", features = ["getrandom", "k256", "rlp", "serde"] }
 alloy-sol-type-parser = { version = "1", default-features = false, features = ["serde", "std"] }
 ark-bls12-377 = { version = "0.5", default-features = false, features = ["curve", "std"] }
 ark-bls12-381 = { version = "0.5", features = ["std"] }
@@ -34,7 +34,6 @@ async-std = { version = "1", features = ["attributes", "tokio1", "unstable"] }
 async-tungstenite = { version = "0.13", features = ["async-native-tls", "async-tls"] }
 base64 = { version = "0.22" }
 bitvec = { version = "1", features = ["serde"] }
-bs58 = { version = "0.5", features = ["check"] }
 byteorder = { version = "1" }
 bytes = { version = "1", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -62,7 +61,8 @@ futures-io = { version = "0.3" }
 futures-sink = { version = "0.3" }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 generic-array = { version = "0.14", default-features = false, features = ["more_lengths", "zeroize"] }
-getrandom = { version = "0.2", default-features = false, features = ["std"] }
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
+getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2", default-features = false, features = ["std"] }
 hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15", features = ["serde"] }
 hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14", features = ["raw"] }
 hashbrown-5ef9efb8ec2df382 = { package = "hashbrown", version = "0.12", features = ["raw"] }
@@ -88,15 +88,14 @@ once_cell = { version = "1" }
 p3-maybe-rayon = { version = "0.2", default-features = false, features = ["parallel"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
-rand-274715c4dabd11b0 = { package = "rand", version = "0.9", features = ["serde"] }
-rand-c38e5c1d305a1b54 = { package = "rand", version = "0.8", features = ["small_rng"] }
+rand = { version = "0.8", features = ["small_rng"] }
 rand_chacha = { version = "0.3" }
 refinery-core = { version = "0.8", features = ["tokio-postgres", "toml"] }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
 reqwest = { version = "0.12", features = ["json"] }
-ruint = { version = "1", default-features = false, features = ["alloy-rlp", "rand-09", "serde", "std"] }
+ruint = { version = "1", default-features = false, features = ["alloy-rlp", "serde", "std"] }
 rustls-pki-types = { version = "1", features = ["std"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1", default-features = false, features = ["alloc", "rc", "result", "std"] }
@@ -120,9 +119,9 @@ zeroize = { version = "1", features = ["std", "zeroize_derive"] }
 
 [build-dependencies]
 ahash = { version = "0.8" }
-alloy-json-abi = { version = "1", default-features = false, features = ["serde_json", "std"] }
-alloy-primitives = { version = "1", default-features = false, features = ["k256", "map", "rand", "rlp", "serde", "std"] }
-alloy-rlp = { version = "0.3", default-features = false, features = ["arrayvec", "derive", "std"] }
+alloy = { version = "1", features = ["getrandom", "json-rpc", "node-bindings", "provider-ws", "signer-ledger", "signer-mnemonic"] }
+alloy-json-abi = { version = "1", features = ["serde_json"] }
+alloy-primitives = { version = "1", features = ["getrandom", "k256", "rlp", "serde"] }
 alloy-sol-type-parser = { version = "1", default-features = false, features = ["serde", "std"] }
 ark-bls12-377 = { version = "0.5", default-features = false, features = ["curve", "std"] }
 ark-bls12-381 = { version = "0.5", features = ["std"] }
@@ -138,7 +137,6 @@ async-std = { version = "1", features = ["attributes", "tokio1", "unstable"] }
 async-tungstenite = { version = "0.13", features = ["async-native-tls", "async-tls"] }
 base64 = { version = "0.22" }
 bitvec = { version = "1", features = ["serde"] }
-bs58 = { version = "0.5", features = ["check"] }
 byteorder = { version = "1" }
 bytes = { version = "1", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -169,7 +167,8 @@ futures-io = { version = "0.3" }
 futures-sink = { version = "0.3" }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 generic-array = { version = "0.14", default-features = false, features = ["more_lengths", "zeroize"] }
-getrandom = { version = "0.2", default-features = false, features = ["std"] }
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
+getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2", default-features = false, features = ["std"] }
 hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15", features = ["serde"] }
 hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14", features = ["raw"] }
 hashbrown-5ef9efb8ec2df382 = { package = "hashbrown", version = "0.12", features = ["raw"] }
@@ -196,15 +195,14 @@ once_cell = { version = "1" }
 p3-maybe-rayon = { version = "0.2", default-features = false, features = ["parallel"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
-rand-274715c4dabd11b0 = { package = "rand", version = "0.9", features = ["serde"] }
-rand-c38e5c1d305a1b54 = { package = "rand", version = "0.8", features = ["small_rng"] }
+rand = { version = "0.8", features = ["small_rng"] }
 rand_chacha = { version = "0.3" }
 refinery-core = { version = "0.8", features = ["tokio-postgres", "toml"] }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
 reqwest = { version = "0.12", features = ["json"] }
-ruint = { version = "1", default-features = false, features = ["alloy-rlp", "rand-09", "serde", "std"] }
+ruint = { version = "1", default-features = false, features = ["alloy-rlp", "serde", "std"] }
 rustls-pki-types = { version = "1", features = ["std"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1", default-features = false, features = ["alloc", "rc", "result", "std"] }
