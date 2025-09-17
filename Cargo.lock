@@ -1295,6 +1295,14 @@ dependencies = [
 [[package]]
 name = "ark-relations"
 version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec46ddc93e7af44bcab5230937635b06fb5744464dd6a7e7b083e80ebd274384"
+dependencies = [
+ "ark-ff 0.5.0",
+ "ark-std 0.5.0",
+ "tracing",
+ "tracing-subscriber 0.2.25",
+]
 
 [[package]]
 name = "ark-serialize"
@@ -1384,7 +1392,7 @@ dependencies = [
  "rand 0.8.5",
  "sha2 0.10.9",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
  "ureq",
 ]
 
@@ -2582,7 +2590,7 @@ dependencies = [
  "rkyv",
  "tokio",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -2598,7 +2606,7 @@ dependencies = [
  "rand 0.8.5",
  "tokio",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -2611,7 +2619,7 @@ dependencies = [
  "jf-signature",
  "tokio",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -3055,7 +3063,7 @@ dependencies = [
  "tonic",
  "tracing",
  "tracing-core",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -5196,7 +5204,7 @@ dependencies = [
  "time 0.3.43",
  "tokio",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
  "url",
  "vbs",
  "workspace-hack",
@@ -5253,7 +5261,7 @@ dependencies = [
  "tide-disco",
  "tokio",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
  "tracing-test",
  "url",
  "vbs",
@@ -5293,7 +5301,7 @@ dependencies = [
  "tide-disco",
  "tokio",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
  "tracing-test",
  "url",
  "vbs",
@@ -5333,7 +5341,7 @@ dependencies = [
  "tide-disco",
  "tokio",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
  "tracing-test",
  "url",
  "vbs",
@@ -5452,7 +5460,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
  "url",
  "workspace-hack",
 ]
@@ -5485,7 +5493,7 @@ dependencies = [
  "serde",
  "tokio",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
  "workspace-hack",
 ]
 
@@ -5578,7 +5586,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
  "trait-variant",
  "url",
  "vbs",
@@ -7380,7 +7388,7 @@ dependencies = [
  "generator",
  "scoped-tls",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -10121,7 +10129,7 @@ dependencies = [
  "tokio-util",
  "toml",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
  "url",
  "vbs",
  "vec1",
@@ -10903,7 +10911,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
  "url",
 ]
 
@@ -11311,7 +11319,7 @@ checksum = "1e33b98a582ea0be1168eba097538ee8dd4bbe0f2b01b22ac92ea30054e5be7b"
 dependencies = [
  "env_logger",
  "test-log-macros",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -11478,7 +11486,7 @@ dependencies = [
  "tracing-distributed",
  "tracing-futures",
  "tracing-log",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
  "url",
  "vbs",
 ]
@@ -11942,7 +11950,7 @@ dependencies = [
  "itertools 0.9.0",
  "tracing",
  "tracing-core",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -11978,6 +11986,15 @@ dependencies = [
 
 [[package]]
 name = "tracing-subscriber"
+version = "0.2.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e0d2eaa99c3c2e41547cfa109e910a68ea03823cccad4a0525dcbc9b01e8c71"
+dependencies = [
+ "tracing-core",
+]
+
+[[package]]
+name = "tracing-subscriber"
 version = "0.3.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2054a14f5307d601f88daf0553e1cbf472acc4f2c51afab632431cdcd72124d5"
@@ -12004,7 +12021,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "557b891436fe0d5e0e363427fc7f217abf9ccd510d5136549847bdcbcd011d68"
 dependencies = [
  "tracing-core",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
  "tracing-test-macro",
 ]
 
@@ -13266,7 +13283,7 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
  "tungstenite 0.13.0",
  "winnow",
  "zeroize",
