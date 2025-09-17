@@ -28,7 +28,7 @@ ark-ed-on-bls12-377 = { version = "0.5", default-features = false, features = ["
 ark-ed-on-bls12-381 = { version = "0.5", default-features = false, features = ["std"] }
 ark-ed-on-bn254 = { version = "0.5", features = ["std"] }
 ark-poly = { version = "0.5", features = ["parallel"] }
-ark-std = { version = "0.5", features = ["parallel", "print-trace"] }
+ark-std = { version = "0.5", features = ["parallel"] }
 arrayvec = { version = "0.7", default-features = false, features = ["serde", "std"] }
 async-std = { version = "1", features = ["attributes", "tokio1", "unstable"] }
 async-tungstenite = { version = "0.13", features = ["async-native-tls", "async-tls"] }
@@ -72,7 +72,6 @@ indexmap = { version = "2", features = ["serde"] }
 itertools-582f2526e08bb6a0 = { package = "itertools", version = "0.14" }
 itertools-594e8ee84c453af0 = { package = "itertools", version = "0.13" }
 itertools-5ef9efb8ec2df382 = { package = "itertools", version = "0.12" }
-itertools-93f6ce9d446188ac = { package = "itertools", version = "0.10" }
 jf-relation = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-relation-v0.5.0", features = ["std"] }
 jf-rescue = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-rescue-v0.2.0", features = ["gadgets", "std"] }
 jf-signature = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-signature-v0.3.0", features = ["bls", "gadgets", "std"] }
@@ -111,8 +110,6 @@ time = { version = "0.3", features = ["formatting", "local-offset", "macros", "p
 tiny-keccak = { version = "2", features = ["keccak", "shake"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "parking_lot", "rt-multi-thread", "sync", "time", "tracing"] }
 tokio-util = { version = "0.7", features = ["codec", "io", "rt"] }
-toml_datetime = { version = "0.6", default-features = false, features = ["serde"] }
-toml_edit = { version = "0.22", default-features = false, features = ["display", "parse", "serde"] }
 tracing = { version = "0.1", features = ["log"] }
 tracing-core = { version = "0.1" }
 tracing-log = { version = "0.2" }
@@ -135,7 +132,7 @@ ark-ed-on-bls12-377 = { version = "0.5", default-features = false, features = ["
 ark-ed-on-bls12-381 = { version = "0.5", default-features = false, features = ["std"] }
 ark-ed-on-bn254 = { version = "0.5", features = ["std"] }
 ark-poly = { version = "0.5", features = ["parallel"] }
-ark-std = { version = "0.5", features = ["parallel", "print-trace"] }
+ark-std = { version = "0.5", features = ["parallel"] }
 arrayvec = { version = "0.7", default-features = false, features = ["serde", "std"] }
 async-std = { version = "1", features = ["attributes", "tokio1", "unstable"] }
 async-tungstenite = { version = "0.13", features = ["async-native-tls", "async-tls"] }
@@ -182,7 +179,6 @@ indexmap = { version = "2", features = ["serde"] }
 itertools-582f2526e08bb6a0 = { package = "itertools", version = "0.14" }
 itertools-594e8ee84c453af0 = { package = "itertools", version = "0.13" }
 itertools-5ef9efb8ec2df382 = { package = "itertools", version = "0.12" }
-itertools-93f6ce9d446188ac = { package = "itertools", version = "0.10" }
 jf-relation = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-relation-v0.5.0", features = ["std"] }
 jf-rescue = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-rescue-v0.2.0", features = ["gadgets", "std"] }
 jf-signature = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-signature-v0.3.0", features = ["bls", "gadgets", "std"] }
@@ -224,8 +220,6 @@ time = { version = "0.3", features = ["formatting", "local-offset", "macros", "p
 tiny-keccak = { version = "2", features = ["keccak", "shake"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "parking_lot", "rt-multi-thread", "sync", "time", "tracing"] }
 tokio-util = { version = "0.7", features = ["codec", "io", "rt"] }
-toml_datetime = { version = "0.6", default-features = false, features = ["serde"] }
-toml_edit = { version = "0.22", default-features = false, features = ["display", "parse", "serde"] }
 tracing = { version = "0.1", features = ["log"] }
 tracing-core = { version = "0.1" }
 tracing-log = { version = "0.2" }
