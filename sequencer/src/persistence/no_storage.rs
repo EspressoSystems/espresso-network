@@ -328,6 +328,8 @@ impl MembershipPersistence for NoStorage {
     async fn load_all_validators(
         &self,
         _epoch: EpochNumber,
+        _offset: u64,
+        _limit: u64,
     ) -> anyhow::Result<Vec<Validator<PubKey>>> {
         Ok(Default::default())
     }

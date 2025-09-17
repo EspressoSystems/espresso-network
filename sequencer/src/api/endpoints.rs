@@ -634,8 +634,16 @@ where
                 }
             })?;
 
+            let offset = req.integer_param::<_, u64>("offset")?;
+
+            let limit = req.integer_param::<_, u64>("limit")?;
+
             state
-                .read(|state| state.get_all_validators(EpochNumber::new(epoch)).boxed())
+                .read(|state| {
+                    state
+                        .get_all_validators(EpochNumber::new(epoch), offset, limit)
+                        .boxed()
+                })
                 .await
                 .map_err(|err| hotshot_query_service::node::Error::Custom {
                     message: format!("failed to get all validators : err: {err}"),

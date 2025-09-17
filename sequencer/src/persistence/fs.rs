@@ -1925,6 +1925,8 @@ impl MembershipPersistence for Persistence {
     async fn load_all_validators(
         &self,
         epoch: EpochNumber,
+        offset: u64,
+        limit: u64,
     ) -> anyhow::Result<Vec<Validator<PubKey>>> {
         let inner = self.inner.read().await;
         let dir_path = inner.stake_table_dir_path();
@@ -1939,10 +1941,21 @@ impl MembershipPersistence for Persistence {
             .with_context(|| format!("Failed to open validator file: {file_path:?}"))?;
         let reader = BufReader::new(file);
 
-        let map: ValidatorMap = serde_json::from_reader(reader)
-            .with_context(|| format!("Failed to deserialize validators at {file_path:?}"))?;
+        let map: ValidatorMap = serde_json::from_reader(reader).with_context(|| {
+            format!("Failed to deserialize validators at {file_path:?}. epoch = {epoch}")
+        })?;
 
-        Ok(map.into_values().collect())
+        let mut values: Vec<Validator<PubKey>> = map.into_values().collect();
+        values.sort_by_key(|v| v.account);
+
+        let start = offset as usize;
+        let end = (start + limit as usize).min(values.len());
+
+        if start >= values.len() {
+            return Ok(vec![]);
+        }
+
+        Ok(values[start..end].to_vec())
     }
 }
 

@@ -159,6 +159,8 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     fn get_all_validators(
         &self,
         epoch: <T as NodeType>::Epoch,
+        offset: u64,
+        limit: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<Validator<PubKey>>>>;
 }
 

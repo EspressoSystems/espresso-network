@@ -223,8 +223,10 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     async fn get_all_validators(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
+        offset: u64,
+        limit: u64,
     ) -> anyhow::Result<Vec<Validator<PubKey>>> {
-        self.as_ref().get_all_validators(epoch).await
+        self.as_ref().get_all_validators(epoch, offset, limit).await
     }
 }
 
@@ -339,11 +341,13 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     async fn get_all_validators(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
+        offset: u64,
+        limit: u64,
     ) -> anyhow::Result<Vec<Validator<PubKey>>> {
         let handle = self.consensus().await;
         let handle_read = handle.read().await;
         let storage = handle_read.storage();
-        storage.load_all_validators(epoch).await
+        storage.load_all_validators(epoch, offset, limit).await
     }
 }
 

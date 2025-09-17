@@ -13,8 +13,10 @@ PATH = ["validators/:epoch_number"]
 DOC = "Get the validators map for the given epoch."
 
 [route.get_all_validators]
-PATH = ["all-validators/:epoch_number"]
+PATH = ["all-validators/:epoch_number/:offset/:limit"]
 ":epoch_number" = "Integer"
+":offset" = "Integer"
+":limit" = "Integer"
 DOC = "Get all the validators including the inactive ones for the given epoch."
 
 
