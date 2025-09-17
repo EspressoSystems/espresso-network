@@ -1109,3 +1109,41 @@ where
         Self(cert.0.into())
     }
 }
+
+/// Response data for transaction proof verification.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(bound = "")]
+pub struct TransactionProofVerificationResult<Types: NodeType>
+where
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+{
+    /// Whether the transaction inclusion proof is valid.
+    pub valid: bool,
+    /// The hash of the transaction being verified.
+    pub transaction_hash: TransactionHash<Types>,
+    /// The hash of the block containing the transaction.
+    pub block_hash: BlockHash<Types>,
+    /// The height of the block containing the transaction.
+    pub block_height: u64,
+}
+
+impl<Types: NodeType> TransactionProofVerificationResult<Types>
+where
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+{
+    pub fn new(
+        valid: bool,
+        transaction_hash: TransactionHash<Types>,
+        block_hash: BlockHash<Types>,
+        block_height: u64,
+    ) -> Self {
+        Self {
+            valid,
+            transaction_hash,
+            block_hash,
+            block_height,
+        }
+    }
+}
