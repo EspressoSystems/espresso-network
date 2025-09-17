@@ -491,6 +491,12 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     assert!(claim_receipt.status(), "Valid claim should succeed");
     println!("Successful claim - Gas used: {}", claim_receipt.gas_used);
 
+    // Check we got a reward claim event
+    let log = claim_receipt
+        .decoded_log::<RewardClaim::RewardsClaimed>()
+        .unwrap();
+    println!("Emitted event: {:?}", log);
+
     let balance_after = esp_token_contract
         .balanceOf(claimer_address)
         .call()

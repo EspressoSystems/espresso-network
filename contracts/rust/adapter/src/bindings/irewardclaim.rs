@@ -11,7 +11,7 @@ interface IRewardClaim {
     error InvalidAuthRoot();
     error InvalidRewardAmount();
 
-    event RewardClaimed(address indexed user, uint256 amount);
+    event RewardsClaimed(address indexed user, uint256 amount);
 
     function claimRewards(uint256 lifetimeRewards, LifetimeRewardsProof memory proof, bytes32[7] memory authRootInputs) external;
     function claimedRewards(address claimer) external view returns (uint256);
@@ -72,7 +72,7 @@ interface IRewardClaim {
   },
   {
     "type": "event",
-    "name": "RewardClaimed",
+    "name": "RewardsClaimed",
     "inputs": [
       {
         "name": "user",
@@ -536,9 +536,9 @@ error InvalidRewardAmount();
         }
     };
     #[derive(Default, Debug, PartialEq, Eq, Hash)]
-    /**Event with signature `RewardClaimed(address,uint256)` and selector `0x106f923f993c2149d49b4255ff723acafa1f2d94393f561d3eda32ae348f7241`.
+    /**Event with signature `RewardsClaimed(address,uint256)` and selector `0xfc30cddea38e2bf4d6ea7d3f9ed3b6ad7f176419f4963bd81318067a4aee73fe`.
 ```solidity
-event RewardClaimed(address indexed user, uint256 amount);
+event RewardsClaimed(address indexed user, uint256 amount);
 ```*/
     #[allow(
         non_camel_case_types,
@@ -547,7 +547,7 @@ event RewardClaimed(address indexed user, uint256 amount);
         clippy::style
     )]
     #[derive(Clone)]
-    pub struct RewardClaimed {
+    pub struct RewardsClaimed {
         #[allow(missing_docs)]
         pub user: alloy::sol_types::private::Address,
         #[allow(missing_docs)]
@@ -562,7 +562,7 @@ event RewardClaimed(address indexed user, uint256 amount);
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[automatically_derived]
-        impl alloy_sol_types::SolEvent for RewardClaimed {
+        impl alloy_sol_types::SolEvent for RewardsClaimed {
             type DataTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
             type DataToken<'a> = <Self::DataTuple<
                 'a,
@@ -571,11 +571,11 @@ event RewardClaimed(address indexed user, uint256 amount);
                 alloy_sol_types::sol_data::FixedBytes<32>,
                 alloy::sol_types::sol_data::Address,
             );
-            const SIGNATURE: &'static str = "RewardClaimed(address,uint256)";
+            const SIGNATURE: &'static str = "RewardsClaimed(address,uint256)";
             const SIGNATURE_HASH: alloy_sol_types::private::B256 = alloy_sol_types::private::B256::new([
-                16u8, 111u8, 146u8, 63u8, 153u8, 60u8, 33u8, 73u8, 212u8, 155u8, 66u8,
-                85u8, 255u8, 114u8, 58u8, 202u8, 250u8, 31u8, 45u8, 148u8, 57u8, 63u8,
-                86u8, 29u8, 62u8, 218u8, 50u8, 174u8, 52u8, 143u8, 114u8, 65u8,
+                252u8, 48u8, 205u8, 222u8, 163u8, 142u8, 43u8, 244u8, 214u8, 234u8,
+                125u8, 63u8, 158u8, 211u8, 182u8, 173u8, 127u8, 23u8, 100u8, 25u8, 244u8,
+                150u8, 59u8, 216u8, 19u8, 24u8, 6u8, 122u8, 74u8, 238u8, 115u8, 254u8,
             ]);
             const ANONYMOUS: bool = false;
             #[allow(unused_variables)]
@@ -634,7 +634,7 @@ event RewardClaimed(address indexed user, uint256 amount);
             }
         }
         #[automatically_derived]
-        impl alloy_sol_types::private::IntoLogData for RewardClaimed {
+        impl alloy_sol_types::private::IntoLogData for RewardsClaimed {
             fn to_log_data(&self) -> alloy_sol_types::private::LogData {
                 From::from(self)
             }
@@ -643,9 +643,9 @@ event RewardClaimed(address indexed user, uint256 amount);
             }
         }
         #[automatically_derived]
-        impl From<&RewardClaimed> for alloy_sol_types::private::LogData {
+        impl From<&RewardsClaimed> for alloy_sol_types::private::LogData {
             #[inline]
-            fn from(this: &RewardClaimed) -> alloy_sol_types::private::LogData {
+            fn from(this: &RewardsClaimed) -> alloy_sol_types::private::LogData {
                 alloy_sol_types::SolEvent::encode_log_data(this)
             }
         }
@@ -1225,7 +1225,7 @@ function claimedRewards(address claimer) external view returns (uint256);
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum IRewardClaimEvents {
         #[allow(missing_docs)]
-        RewardClaimed(RewardClaimed),
+        RewardsClaimed(RewardsClaimed),
     }
     #[automatically_derived]
     impl IRewardClaimEvents {
@@ -1237,9 +1237,9 @@ function claimedRewards(address claimer) external view returns (uint256);
         /// Prefer using `SolInterface` methods instead.
         pub const SELECTORS: &'static [[u8; 32usize]] = &[
             [
-                16u8, 111u8, 146u8, 63u8, 153u8, 60u8, 33u8, 73u8, 212u8, 155u8, 66u8,
-                85u8, 255u8, 114u8, 58u8, 202u8, 250u8, 31u8, 45u8, 148u8, 57u8, 63u8,
-                86u8, 29u8, 62u8, 218u8, 50u8, 174u8, 52u8, 143u8, 114u8, 65u8,
+                252u8, 48u8, 205u8, 222u8, 163u8, 142u8, 43u8, 244u8, 214u8, 234u8,
+                125u8, 63u8, 158u8, 211u8, 182u8, 173u8, 127u8, 23u8, 100u8, 25u8, 244u8,
+                150u8, 59u8, 216u8, 19u8, 24u8, 6u8, 122u8, 74u8, 238u8, 115u8, 254u8,
             ],
         ];
     }
@@ -1253,13 +1253,13 @@ function claimedRewards(address claimer) external view returns (uint256);
             validate: bool,
         ) -> alloy_sol_types::Result<Self> {
             match topics.first().copied() {
-                Some(<RewardClaimed as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
-                    <RewardClaimed as alloy_sol_types::SolEvent>::decode_raw_log(
+                Some(<RewardsClaimed as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
+                    <RewardsClaimed as alloy_sol_types::SolEvent>::decode_raw_log(
                             topics,
                             data,
                             validate,
                         )
-                        .map(Self::RewardClaimed)
+                        .map(Self::RewardsClaimed)
                 }
                 _ => {
                     alloy_sol_types::private::Err(alloy_sol_types::Error::InvalidLog {
@@ -1279,14 +1279,14 @@ function claimedRewards(address claimer) external view returns (uint256);
     impl alloy_sol_types::private::IntoLogData for IRewardClaimEvents {
         fn to_log_data(&self) -> alloy_sol_types::private::LogData {
             match self {
-                Self::RewardClaimed(inner) => {
+                Self::RewardsClaimed(inner) => {
                     alloy_sol_types::private::IntoLogData::to_log_data(inner)
                 }
             }
         }
         fn into_log_data(self) -> alloy_sol_types::private::LogData {
             match self {
-                Self::RewardClaimed(inner) => {
+                Self::RewardsClaimed(inner) => {
                     alloy_sol_types::private::IntoLogData::into_log_data(inner)
                 }
             }
@@ -1495,11 +1495,11 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         ) -> alloy_contract::Event<T, &P, E, N> {
             alloy_contract::Event::new_sol(&self.provider, &self.address)
         }
-        ///Creates a new event filter for the [`RewardClaimed`] event.
-        pub fn RewardClaimed_filter(
+        ///Creates a new event filter for the [`RewardsClaimed`] event.
+        pub fn RewardsClaimed_filter(
             &self,
-        ) -> alloy_contract::Event<T, &P, RewardClaimed, N> {
-            self.event_filter::<RewardClaimed>()
+        ) -> alloy_contract::Event<T, &P, RewardsClaimed, N> {
+            self.event_filter::<RewardsClaimed>()
         }
     }
 }

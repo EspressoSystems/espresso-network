@@ -55,7 +55,7 @@ contract RewardClaim is IRewardClaim, Initializable, OwnableUpgradeable, UUPSUpg
 
         espToken.mint(msg.sender, availableToClaim);
 
-        emit RewardClaimed(msg.sender, availableToClaim);
+        emit RewardsClaimed(msg.sender, availableToClaim);
     }
 
     function getVersion()
