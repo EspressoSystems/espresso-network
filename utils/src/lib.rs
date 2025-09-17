@@ -85,13 +85,12 @@ macro_rules! impl_to_fixed_bytes {
 /// - `wait_for_transaction_to_be_mined` is removed thanks to alloy's better builtin PendingTransaction await
 /// - DON'T use this if you want parse the exact revert reason/type, since this func will only give err msg like: "custom error 0x23b0db14",
 ///   instead, follow <https://docs.rs/alloy/0.12.5/alloy/contract/enum.Error.html#method.as_decoded_interface_error> to pattern-match err type
-pub async fn contract_send<P, C, N>(
-    call: &SolCallBuilder<P, C, N>,
+pub async fn contract_send<P, C>(
+    call: &SolCallBuilder<P, C>,
 ) -> Result<(TransactionReceipt, u64), anyhow::Error>
 where
-    P: Provider<N>,
+    P: Provider,
     C: SolCall,
-    N: alloy::providers::Network<ReceiptResponse = TransactionReceipt>,
 {
     let pending = match call.send().await {
         Ok(pending) => pending,
