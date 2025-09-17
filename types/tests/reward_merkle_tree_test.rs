@@ -11,7 +11,7 @@ use espresso_types::{
     v0_3::RewardAmount,
     v0_4::REWARD_MERKLE_TREE_V2_HEIGHT,
 };
-use hotshot_contract_adapter::sol_types::{AccruedRewardsProofSol, RewardClaimPrototypeMock};
+use hotshot_contract_adapter::sol_types::{LifetimeRewardsProofSol, RewardClaimPrototypeMock};
 use jf_merkle_tree::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
 use rand::Rng as _;
 
@@ -78,26 +78,31 @@ async fn test_tree_helper(num_keys: usize) -> Result<()> {
         RewardAccountProofV2::prove(&tree, test_account.0).expect("can generate proof");
     assert_eq!(amount, test_amount.0);
 
-    let proof_sol: AccruedRewardsProofSol = proof.try_into()?;
+    let proof_sol: LifetimeRewardsProofSol = proof.try_into()?;
     let account_sol = test_account.into();
 
     // Verify membership using Solidity contract
     let is_valid = contract
-        .verifyAuthRootCommitment(root, account_sol, amount, proof_sol.clone())
+        .verifyAuthRootCommitment(root, account_sol, amount, proof_sol.clone().into())
         .call()
         .await?;
 
     assert!(is_valid._0, "Membership proof invalid");
 
     let is_valid = contract
-        .verifyAuthRootCommitment(root, account_sol, amount + U256::from(1), proof_sol.clone())
+        .verifyAuthRootCommitment(
+            root,
+            account_sol,
+            amount + U256::from(1),
+            proof_sol.clone().into(),
+        )
         .call()
         .await?;
 
     assert!(!is_valid._0, "Membership proof should be invalid");
 
     let gas_used = contract
-        .verifyAuthRootCommitment(root, account_sol, amount, proof_sol)
+        .verifyAuthRootCommitment(root, account_sol, amount, proof_sol.into())
         .estimate_gas()
         .await?;
     println!("Gas used for membership verification: {gas_used}");

@@ -8,6 +8,7 @@ pub mod r#esptoken;
 pub mod r#esptokenv2;
 pub mod r#feecontract;
 pub mod r#iplonkverifier;
+pub mod r#irewardclaim;
 pub mod r#lightclient;
 pub mod r#lightclientarbitrum;
 pub mod r#lightclientarbitrumv2;

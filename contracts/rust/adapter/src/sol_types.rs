@@ -16,7 +16,6 @@
 
 use alloy::sol;
 
-use crate::bindings::rewardclaim;
 /// # What to re-export, what to hide?
 /// - export contract struct itself, but try to avoid export instance type (instead, use ::new() to get a handle)
 /// - avoid exporting `xxCall` and `xxReturn` types, they usually can be converted/transmuted from existing struct
@@ -28,6 +27,7 @@ pub use crate::bindings::{
     esptoken::EspToken,
     esptokenv2::EspTokenV2,
     feecontract::FeeContract::{self, Deposit},
+    irewardclaim::IRewardClaim::LifetimeRewardsProof as LifetimeRewardsProofSol,
     lightclient::{
         IPlonkVerifier::{PlonkProof as PlonkProofSol, VerifyingKey as VerifyingKeySol},
         LightClient::{
@@ -47,10 +47,7 @@ pub use crate::bindings::{
     plonkverifierv2::PlonkVerifierV2,
     plonkverifierv3::PlonkVerifierV3,
     rewardclaim::RewardClaim,
-    rewardclaimprototypemock::{
-        RewardClaimPrototypeMock,
-        RewardMerkleTreeVerifier::AccruedRewardsProof as AccruedRewardsProofSol,
-    },
+    rewardclaimprototypemock::RewardClaimPrototypeMock,
     safeexittimelock::SafeExitTimelock,
     staketable::StakeTable,
     staketablev2::{
@@ -58,6 +55,7 @@ pub use crate::bindings::{
         BN254::G2Point as G2PointSol,
     },
 };
+use crate::bindings::{rewardclaim, rewardclaimprototypemock};
 
 // For types that we need to interact with some functions but their bindings are not generated
 // we manually declare them there. It's possible that they get included in the future commits,
@@ -229,8 +227,16 @@ impl From<PlonkProofSol> for lightclientv3::IPlonkVerifier::PlonkProof {
     }
 }
 
-impl From<AccruedRewardsProofSol> for rewardclaim::RewardMerkleTreeVerifier::AccruedRewardsProof {
-    fn from(v: AccruedRewardsProofSol) -> Self {
+impl From<LifetimeRewardsProofSol> for rewardclaim::IRewardClaim::LifetimeRewardsProof {
+    fn from(v: LifetimeRewardsProofSol) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<LifetimeRewardsProofSol>
+    for rewardclaimprototypemock::IRewardClaim::LifetimeRewardsProof
+{
+    fn from(v: LifetimeRewardsProofSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }

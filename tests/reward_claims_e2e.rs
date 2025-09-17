@@ -18,7 +18,7 @@ use espresso_types::{
 };
 use futures::StreamExt;
 use hotshot_contract_adapter::sol_types::{
-    AccruedRewardsProofSol, EspTokenV2, LightClientV3, RewardClaim,
+    EspTokenV2, LifetimeRewardsProofSol, LightClientV3, RewardClaim,
 };
 use hotshot_query_service::data_source::SqlDataSource;
 use hotshot_state_prover::{v3::service::run_prover_once, StateProverConfig};
@@ -429,7 +429,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     }
     println!("Validator reward balance: {}", reward_data.balance);
 
-    let proof_sol: AccruedRewardsProofSol = reward_data.proof.try_into().unwrap();
+    let proof_sol: LifetimeRewardsProofSol = reward_data.proof.try_into().unwrap();
 
     // Create claimer wallet and provider for claiming rewards
     let claimer_signer = staking_priv_keys[0].0.clone();

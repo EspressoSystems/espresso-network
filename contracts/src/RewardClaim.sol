@@ -9,8 +9,9 @@ import { UUPSUpgradeable } from
 import "./LightClientV3.sol";
 import "./EspTokenV2.sol";
 import "./libraries/RewardMerkleTreeVerifier.sol";
+import "./interfaces/IRewardClaim.sol";
 
-contract RewardClaim is Initializable, OwnableUpgradeable, UUPSUpgradeable {
+contract RewardClaim is IRewardClaim, Initializable, OwnableUpgradeable, UUPSUpgradeable {
     using RewardMerkleTreeVerifier for bytes32;
 
     EspTokenV2 public espToken;
@@ -20,13 +21,6 @@ contract RewardClaim is Initializable, OwnableUpgradeable, UUPSUpgradeable {
 
     /// @notice upgrade event when the proxy updates the implementation it's pointing to
     event Upgrade(address implementation);
-
-    /// @notice User claimed rewards
-    event RewardClaimed(address indexed user, uint256 amount);
-
-    error InvalidAuthRoot();
-    error AlreadyClaimed();
-    error InvalidRewardAmount();
 
     constructor() {
         _disableInitializers();
@@ -47,17 +41,17 @@ contract RewardClaim is Initializable, OwnableUpgradeable, UUPSUpgradeable {
     }
 
     function claimRewards(
-        uint256 accruedReward,
-        RewardMerkleTreeVerifier.AccruedRewardsProof calldata proof,
+        uint256 totalEarnedRewards,
+        LifetimeRewardsProof calldata proof,
         bytes32[7] calldata authRootInputs
     ) external {
-        require(accruedReward != 0, InvalidRewardAmount());
-        require(claimedRewards[msg.sender] < accruedReward, AlreadyClaimed());
+        require(totalEarnedRewards != 0, InvalidRewardAmount());
+        require(claimedRewards[msg.sender] < totalEarnedRewards, AlreadyClaimed());
 
-        require(_verifyAuthRoot(accruedReward, proof, authRootInputs), InvalidAuthRoot());
+        require(_verifyAuthRoot(totalEarnedRewards, proof, authRootInputs), InvalidAuthRoot());
 
-        uint256 availableToClaim = accruedReward - claimedRewards[msg.sender];
-        claimedRewards[msg.sender] = accruedReward;
+        uint256 availableToClaim = totalEarnedRewards - claimedRewards[msg.sender];
+        claimedRewards[msg.sender] = totalEarnedRewards;
 
         espToken.mint(msg.sender, availableToClaim);
 
@@ -73,12 +67,12 @@ contract RewardClaim is Initializable, OwnableUpgradeable, UUPSUpgradeable {
     }
 
     function _verifyAuthRoot(
-        uint256 accruedReward,
-        RewardMerkleTreeVerifier.AccruedRewardsProof calldata proof,
+        uint256 totalEarnedRewards,
+        LifetimeRewardsProof calldata proof,
         bytes32[7] calldata authRootInputs
     ) internal view virtual returns (bool) {
         bytes32 rewardCommitment =
-            RewardMerkleTreeVerifier.computeRoot(msg.sender, accruedReward, proof);
+            RewardMerkleTreeVerifier.computeRoot(msg.sender, totalEarnedRewards, proof);
         bytes32 authRoot = keccak256(
             abi.encodePacked(
                 rewardCommitment,
