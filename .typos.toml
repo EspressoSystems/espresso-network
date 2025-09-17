@@ -15,3 +15,8 @@ extend-exclude = [
   "staking-cli/tests/cli.rs",
   "sdks/go/types/common/consts.go",
 ]
+
+
+[default.extend-words]
+# Common "spelling" of "type" in Rust/go
+typ = "typ"
