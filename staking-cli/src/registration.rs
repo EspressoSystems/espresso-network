@@ -340,8 +340,7 @@ mod test {
             Some(0),
             receipt.block_number.unwrap(),
         )
-        .await
-        .sort_events()?;
+        .await?;
 
         // verify that we only have the first RegisterV2 event
         assert_eq!(events.len(), 1);
@@ -402,8 +401,7 @@ mod test {
             Some(0),
             receipt.block_number.unwrap(),
         )
-        .await
-        .sort_events()?;
+        .await?;
 
         // verify that we only have the RegisterV2 event
         assert_eq!(events.len(), 1);

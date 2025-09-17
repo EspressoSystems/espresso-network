@@ -176,6 +176,10 @@ pub enum StakeTableError {
     InvalidCommission(Address, u16),
     #[error("Schnorr key already used: {0}")]
     SchnorrKeyAlreadyUsed(String),
+    #[error("Stake table event decode error {0}")]
+    StakeTableEventDecodeError(#[from] alloy::sol_types::Error),
+    #[error("Stake table events sorting error: {0}")]
+    EventSortingError(#[from] EventSortingError)
 }
 
 #[derive(Debug, Error)]
@@ -236,4 +240,7 @@ pub enum EventSortingError {
 
     #[error("Missing log index in log")]
     MissingLogIndex,
+
+    #[error("Invalid stake table V2 event")]
+    InvalidStakeTableV2Event
 }
