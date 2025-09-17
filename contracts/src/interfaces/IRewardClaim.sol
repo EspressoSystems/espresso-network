@@ -8,7 +8,7 @@ interface IRewardClaim {
     }
 
     /// @notice User claimed rewards
-    event RewardClaimed(address indexed user, uint256 amount);
+    event RewardsClaimed(address indexed user, uint256 amount);
 
     /// @notice Unable to authenticate rewards against Light Client contract
     error InvalidAuthRoot();
