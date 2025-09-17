@@ -2554,7 +2554,7 @@ impl MembershipPersistence for Persistence {
             "SELECT address, validator
          FROM stake_table_validators
          WHERE epoch = $1
-         ORDER BY address
+         ORDER BY address ASC
          LIMIT $2 OFFSET $3",
         )
         .bind(epoch.u64() as i64)

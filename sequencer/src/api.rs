@@ -6067,14 +6067,14 @@ mod test {
         // Verify that there are no validators for epoch # 1 and epoch # 2
         {
             client
-                .get::<Vec<Validator<PubKey>>>("node/all-validators/1")
+                .get::<Vec<Validator<PubKey>>>("node/all-validators/1/0/100")
                 .send()
                 .await
                 .unwrap()
                 .is_empty();
 
             client
-                .get::<Vec<Validator<PubKey>>>("node/all-validators/2")
+                .get::<Vec<Validator<PubKey>>>("node/all-validators/2/0/100")
                 .send()
                 .await
                 .unwrap()
@@ -6083,7 +6083,7 @@ mod test {
 
         // Get the epoch # 3 validators
         let validators = client
-            .get::<Vec<Validator<PubKey>>>("node/all-validators/3")
+            .get::<Vec<Validator<PubKey>>>("node/all-validators/3/0/100")
             .send()
             .await
             .expect("validators");
