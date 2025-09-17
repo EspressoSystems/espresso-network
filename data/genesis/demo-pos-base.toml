@@ -1,31 +1,32 @@
-base_version = "0.3"
-upgrade_version = "0.3"
-genesis_version = "0.3"
-epoch_height = 150
-epoch_start_block = 1
-stake_table_capacity = 10
+base_version = "0.4"
+upgrade_version = "0.4"
+genesis_version = "0.4"
+epoch_height = 3000
+drb_difficulty = 10
+drb_upgrade_difficulty = 10
+epoch_start_block = 1000
 
 [stake_table]
 capacity = 10
 
 [chain_config]
 chain_id = 999999999
-max_block_size = "1mb"
 base_fee = "1 wei"
+max_block_size = "1mb"
 fee_recipient = "0x0000000000000000000000000000000000000000"
-fee_contract = "0x8ce361602b935680e8dec218b820ff5056beb7af"
-stake_table_contract = "0x12975173b87f7595ee45dffb2ab812ece596bf84"
+fee_contract = "0xa15bb66138824a1c7167f5e85b957d04dd34e468"
+stake_table_contract = "0x196dbcbb54b8ec4958c959d8949ebfe87ac2aaaf"
 
 [header]
 timestamp = "1970-01-01T00:00:00Z"
 
 [header.chain_config]
 chain_id = 999999999
-max_block_size = "1mb"
 base_fee = "1 wei"
+max_block_size = "1mb"
 fee_recipient = "0x0000000000000000000000000000000000000000"
-fee_contract = "0x8ce361602b935680e8dec218b820ff5056beb7af"
-stake_table_contract = "0x12975173b87f7595ee45dffb2ab812ece596bf84"
+fee_contract = "0xa15bb66138824a1c7167f5e85b957d04dd34e468"
+stake_table_contract = "0x196dbcbb54b8ec4958c959d8949ebfe87ac2aaaf"
 
 [l1_finalized]
-number = 0
+number = 0 # Block where fee contract is deployed
