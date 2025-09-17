@@ -217,6 +217,12 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
         epoch: Option<<TYPES as NodeType>::Epoch>,
     ) -> Result<TYPES::SignatureKey> {
         self.check_first_epoch(epoch);
+        if self.eligible_leaders.is_empty() {
+            return Err(Error {
+                level: Level::Unspecified,
+                message: "No eligible leaders configured".to_string(),
+            });
+        }
         #[allow(clippy::cast_possible_truncation)]
         let index = *view_number as usize % self.eligible_leaders.len();
         let res = self.eligible_leaders[index].clone();
