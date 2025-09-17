@@ -41,17 +41,17 @@ contract RewardClaim is IRewardClaim, Initializable, OwnableUpgradeable, UUPSUpg
     }
 
     function claimRewards(
-        uint256 totalEarnedRewards,
+        uint256 lifetimeRewards,
         LifetimeRewardsProof calldata proof,
         bytes32[7] calldata authRootInputs
     ) external {
-        require(totalEarnedRewards != 0, InvalidRewardAmount());
-        require(claimedRewards[msg.sender] < totalEarnedRewards, AlreadyClaimed());
+        require(lifetimeRewards != 0, InvalidRewardAmount());
+        require(claimedRewards[msg.sender] < lifetimeRewards, AlreadyClaimed());
 
-        require(_verifyAuthRoot(totalEarnedRewards, proof, authRootInputs), InvalidAuthRoot());
+        require(_verifyAuthRoot(lifetimeRewards, proof, authRootInputs), InvalidAuthRoot());
 
-        uint256 availableToClaim = totalEarnedRewards - claimedRewards[msg.sender];
-        claimedRewards[msg.sender] = totalEarnedRewards;
+        uint256 availableToClaim = lifetimeRewards - claimedRewards[msg.sender];
+        claimedRewards[msg.sender] = lifetimeRewards;
 
         espToken.mint(msg.sender, availableToClaim);
 
@@ -67,12 +67,12 @@ contract RewardClaim is IRewardClaim, Initializable, OwnableUpgradeable, UUPSUpg
     }
 
     function _verifyAuthRoot(
-        uint256 totalEarnedRewards,
+        uint256 lifetimeRewards,
         LifetimeRewardsProof calldata proof,
         bytes32[7] calldata authRootInputs
     ) internal view virtual returns (bool) {
         bytes32 rewardCommitment =
-            RewardMerkleTreeVerifier.computeRoot(msg.sender, totalEarnedRewards, proof);
+            RewardMerkleTreeVerifier.computeRoot(msg.sender, lifetimeRewards, proof);
         bytes32 authRoot = keccak256(
             abi.encodePacked(
                 rewardCommitment,

@@ -19,16 +19,16 @@ interface IRewardClaim {
     /// @notice Reward amount must be greater than zero
     error InvalidRewardAmount();
 
-    /// @notice Claim accrued rewards
+    /// @notice Claim staking rewards
     ///
-    /// @param totalEarnedRewards Total earned rewards for the user
-    /// @param proof Merkle proof attesting to earned rewards for the user
+    /// @param lifetimeRewards Total earned lifetime rewards for the user
+    /// @param proof Merkle proof attesting to lifetime rewards for the user
     /// @param authRootInputs The authRootInputs must all be zero at the moment,
     ///        this may change in the future with Espresso protocol upgrades.
     ///
     /// @notice Obtain rewards and proof from the Espresso query service API.
     function claimRewards(
-        uint256 totalEarnedRewards,
+        uint256 lifetimeRewards,
         LifetimeRewardsProof calldata proof,
         bytes32[7] calldata authRootInputs
     ) external;

@@ -13,7 +13,7 @@ interface IRewardClaim {
 
     event RewardClaimed(address indexed user, uint256 amount);
 
-    function claimRewards(uint256 totalEarnedRewards, LifetimeRewardsProof memory proof, bytes32[7] memory authRootInputs) external;
+    function claimRewards(uint256 lifetimeRewards, LifetimeRewardsProof memory proof, bytes32[7] memory authRootInputs) external;
     function claimedRewards(address claimer) external view returns (uint256);
 }
 ```
@@ -26,7 +26,7 @@ interface IRewardClaim {
     "name": "claimRewards",
     "inputs": [
       {
-        "name": "totalEarnedRewards",
+        "name": "lifetimeRewards",
         "type": "uint256",
         "internalType": "uint256"
       },
@@ -653,13 +653,13 @@ event RewardClaimed(address indexed user, uint256 amount);
     #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `claimRewards(uint256,(bytes32[]),bytes32[7])` and selector `0x3b340872`.
 ```solidity
-function claimRewards(uint256 totalEarnedRewards, LifetimeRewardsProof memory proof, bytes32[7] memory authRootInputs) external;
+function claimRewards(uint256 lifetimeRewards, LifetimeRewardsProof memory proof, bytes32[7] memory authRootInputs) external;
 ```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct claimRewardsCall {
         #[allow(missing_docs)]
-        pub totalEarnedRewards: alloy::sol_types::private::primitives::aliases::U256,
+        pub lifetimeRewards: alloy::sol_types::private::primitives::aliases::U256,
         #[allow(missing_docs)]
         pub proof: <LifetimeRewardsProof as alloy::sol_types::SolType>::RustType,
         #[allow(missing_docs)]
@@ -708,7 +708,7 @@ function claimRewards(uint256 totalEarnedRewards, LifetimeRewardsProof memory pr
             #[doc(hidden)]
             impl ::core::convert::From<claimRewardsCall> for UnderlyingRustTuple<'_> {
                 fn from(value: claimRewardsCall) -> Self {
-                    (value.totalEarnedRewards, value.proof, value.authRootInputs)
+                    (value.lifetimeRewards, value.proof, value.authRootInputs)
                 }
             }
             #[automatically_derived]
@@ -716,7 +716,7 @@ function claimRewards(uint256 totalEarnedRewards, LifetimeRewardsProof memory pr
             impl ::core::convert::From<UnderlyingRustTuple<'_>> for claimRewardsCall {
                 fn from(tuple: UnderlyingRustTuple<'_>) -> Self {
                     Self {
-                        totalEarnedRewards: tuple.0,
+                        lifetimeRewards: tuple.0,
                         proof: tuple.1,
                         authRootInputs: tuple.2,
                     }
@@ -785,7 +785,7 @@ function claimRewards(uint256 totalEarnedRewards, LifetimeRewardsProof memory pr
                 (
                     <alloy::sol_types::sol_data::Uint<
                         256,
-                    > as alloy_sol_types::SolType>::tokenize(&self.totalEarnedRewards),
+                    > as alloy_sol_types::SolType>::tokenize(&self.lifetimeRewards),
                     <LifetimeRewardsProof as alloy_sol_types::SolType>::tokenize(
                         &self.proof,
                     ),
@@ -1459,13 +1459,13 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         ///Creates a new call builder for the [`claimRewards`] function.
         pub fn claimRewards(
             &self,
-            totalEarnedRewards: alloy::sol_types::private::primitives::aliases::U256,
+            lifetimeRewards: alloy::sol_types::private::primitives::aliases::U256,
             proof: <LifetimeRewardsProof as alloy::sol_types::SolType>::RustType,
             authRootInputs: [alloy::sol_types::private::FixedBytes<32>; 7usize],
         ) -> alloy_contract::SolCallBuilder<T, &P, claimRewardsCall, N> {
             self.call_builder(
                 &claimRewardsCall {
-                    totalEarnedRewards,
+                    lifetimeRewards,
                     proof,
                     authRootInputs,
                 },
