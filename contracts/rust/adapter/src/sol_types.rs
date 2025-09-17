@@ -27,6 +27,7 @@ pub use crate::bindings::{
     esptoken::EspToken,
     esptokenv2::EspTokenV2,
     feecontract::FeeContract::{self, Deposit},
+    irewardclaim::IRewardClaim::LifetimeRewardsProof as LifetimeRewardsProofSol,
     lightclient::{
         IPlonkVerifier::{PlonkProof as PlonkProofSol, VerifyingKey as VerifyingKeySol},
         LightClient::{
@@ -45,10 +46,8 @@ pub use crate::bindings::{
     plonkverifier::PlonkVerifier,
     plonkverifierv2::PlonkVerifierV2,
     plonkverifierv3::PlonkVerifierV3,
-    rewardclaimprototypemock::{
-        RewardClaimPrototypeMock,
-        RewardMerkleTreeVerifier::AccruedRewardsProof as AccruedRewardsProofSol,
-    },
+    rewardclaim::RewardClaim,
+    rewardclaimprototypemock::RewardClaimPrototypeMock,
     safeexittimelock::SafeExitTimelock,
     staketable::StakeTable,
     staketablev2::{
@@ -56,6 +55,7 @@ pub use crate::bindings::{
         BN254::G2Point as G2PointSol,
     },
 };
+use crate::bindings::{rewardclaim, rewardclaimprototypemock};
 
 // For types that we need to interact with some functions but their bindings are not generated
 // we manually declare them there. It's possible that they get included in the future commits,
@@ -223,6 +223,20 @@ impl From<StakeTableStateSol> for lightclientv3::LightClient::StakeTableState {
 
 impl From<PlonkProofSol> for lightclientv3::IPlonkVerifier::PlonkProof {
     fn from(v: PlonkProofSol) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<LifetimeRewardsProofSol> for rewardclaim::IRewardClaim::LifetimeRewardsProof {
+    fn from(v: LifetimeRewardsProofSol) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<LifetimeRewardsProofSol>
+    for rewardclaimprototypemock::IRewardClaim::LifetimeRewardsProof
+{
+    fn from(v: LifetimeRewardsProofSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }

@@ -9,7 +9,7 @@ use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
 use hotshot::types::BLSPubKey;
-use hotshot_contract_adapter::sol_types::AccruedRewardsProofSol;
+use hotshot_contract_adapter::sol_types::LifetimeRewardsProofSol;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     traits::{election::Membership, node_implementation::ConsensusTime},
@@ -412,7 +412,7 @@ impl RewardAccountProofV2 {
     }
 }
 
-impl TryInto<AccruedRewardsProofSol> for RewardAccountProofV2 {
+impl TryInto<LifetimeRewardsProofSol> for RewardAccountProofV2 {
     type Error = anyhow::Error;
 
     /// Generate a Solidity-compatible proof for this account
@@ -421,7 +421,7 @@ impl TryInto<AccruedRewardsProofSol> for RewardAccountProofV2 {
     /// obtain the leaf value from the jellyfish proof (Self).
     ///
     /// TODO: review error handling / panics
-    fn try_into(self) -> anyhow::Result<AccruedRewardsProofSol> {
+    fn try_into(self) -> anyhow::Result<LifetimeRewardsProofSol> {
         // NOTE: rustfmt fails to format this file if the nesting is too deep.
         let proof = if let RewardMerkleProofV2::Presence(proof) = &self.proof {
             proof
@@ -478,7 +478,7 @@ impl TryInto<AccruedRewardsProofSol> for RewardAccountProofV2 {
             })
             .collect();
 
-        Ok(AccruedRewardsProofSol { siblings })
+        Ok(LifetimeRewardsProofSol { siblings })
     }
 }
 
