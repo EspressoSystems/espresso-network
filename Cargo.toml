@@ -293,6 +293,6 @@ inherits = "test"
 strip = true
 debug = "none"
 
-# ark-r1cs-std@0.5.0 contains vulnerable tracing-subscriber (RUSTSEC-2025-0055)
+# ark-relations@0.5.1 contains vulnerable tracing-subscriber (RUSTSEC-2025-0055)
 [patch.crates-io]
-ark-r1cs-std = { path = "vendor/ark-r1cs-std-dummy" }
+ark-relations = { path = "vendor/ark-relations-dummy" }
