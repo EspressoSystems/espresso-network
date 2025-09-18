@@ -2550,11 +2550,14 @@ impl MembershipPersistence for Persistence {
     ) -> anyhow::Result<Vec<Validator<PubKey>>> {
         let mut tx = self.db.read().await?;
 
+        // Use LOWER(address) in ORDER BY to ensure consistent ordering for SQlite and Postgres.
+        // Postgres sorts text case sensitively by default, while SQLite sorts case insensitively.
+        // Applying LOWER() makes the result consistent.
         let rows = query(
             "SELECT address, validator
          FROM stake_table_validators
          WHERE epoch = $1
-         ORDER BY address ASC
+         ORDER BY LOWER(address) ASC
          LIMIT $2 OFFSET $3",
         )
         .bind(epoch.u64() as i64)

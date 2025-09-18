@@ -1670,24 +1670,28 @@ mod tests {
         let loaded_all = storage
             .load_all_validators(EpochNumber::new(10), 0, 100)
             .await?;
+        // SQLite returns a different ordered list even though there is an `ORDER BY address ASC` clause
         assert_eq!(expected_all, loaded_all);
 
         // Load first 10
         let loaded_first_10 = storage
             .load_all_validators(EpochNumber::new(10), 0, 10)
             .await?;
+
         assert_eq!(expected_all[..10], loaded_first_10);
 
         // Load next 10
         let loaded_next_10 = storage
             .load_all_validators(EpochNumber::new(10), 10, 10)
             .await?;
+
         assert_eq!(expected_all[10..20], loaded_next_10);
 
         // Load remaining 5
         let loaded_last_5 = storage
             .load_all_validators(EpochNumber::new(10), 20, 10)
             .await?;
+
         assert_eq!(expected_all[20..], loaded_last_5);
 
         // offset beyond size should return empty
@@ -1708,15 +1712,17 @@ mod tests {
         let mut expected_epoch11: Vec<_> = vmap2.clone().into_values().collect();
         expected_epoch11.sort_by_key(|v| v.account);
 
-        let loaded2 = storage
+        let mut loaded2 = storage
             .load_all_validators(EpochNumber::new(11), 0, 100)
             .await?;
+
         assert_eq!(expected_epoch11, loaded2);
 
         // Epoch 10 still there
-        let loaded1_again = storage
+        let mut loaded1_again = storage
             .load_all_validators(EpochNumber::new(10), 0, 100)
             .await?;
+
         assert_eq!(expected_all, loaded1_again);
 
         Ok(())
