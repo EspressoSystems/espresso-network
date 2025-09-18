@@ -14,8 +14,10 @@ use espresso_types::{
     config::PublicNetworkConfig,
     retain_accounts,
     v0::traits::SequencerPersistence,
-    v0_3::{ChainConfig, RewardAccountV1, RewardAmount, RewardMerkleTreeV1},
-    v0_4::{RewardAccountV2, RewardMerkleTreeV2},
+    v0_3::{
+        ChainConfig, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount, RewardMerkleTreeV1,
+    },
+    v0_4::{RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction, ValidatorMap,
 };
@@ -889,6 +891,57 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSig
             .read()
             .await
             .get_state_signature(height)
+            .await
+    }
+}
+
+pub(crate) trait RewardMerklizedStateDataSource: Sync {
+    fn load_v1_reward_account_proof(
+        &self,
+        _height: u64,
+        _account: RewardAccountV1,
+    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV1>> {
+        async {
+            bail!("reward merklized state is not supported for this data source");
+        }
+    }
+
+    fn load_v2_reward_account_proof(
+        &self,
+        _height: u64,
+        _account: RewardAccountV2,
+    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV2>> {
+        async {
+            bail!("reward merklized state is not supported for this data source");
+        }
+    }
+}
+
+impl RewardMerklizedStateDataSource for hotshot_query_service::data_source::MetricsDataSource {}
+
+impl<T, S> RewardMerklizedStateDataSource
+    for hotshot_query_service::data_source::ExtensibleDataSource<T, S>
+where
+    T: RewardMerklizedStateDataSource,
+    S: Sync,
+{
+    async fn load_v1_reward_account_proof(
+        &self,
+        height: u64,
+        account: RewardAccountV1,
+    ) -> anyhow::Result<RewardAccountQueryDataV1> {
+        self.inner()
+            .load_v1_reward_account_proof(height, account)
+            .await
+    }
+
+    async fn load_v2_reward_account_proof(
+        &self,
+        height: u64,
+        account: RewardAccountV2,
+    ) -> anyhow::Result<RewardAccountQueryDataV2> {
+        self.inner()
+            .load_v2_reward_account_proof(height, account)
             .await
     }
 }
@@ -2118,8 +2171,8 @@ mod test {
     use espresso_types::{
         config::PublicHotShotConfig,
         traits::{NullEventConsumer, PersistenceOptions},
-        v0_3::{Fetcher, RewardAmount, COMMISSION_BASIS_POINTS, REWARD_MERKLE_TREE_V1_ARITY},
-        v0_4::REWARD_MERKLE_TREE_V2_ARITY,
+        v0_3::{Fetcher, RewardAmount, RewardMerkleProofV1, COMMISSION_BASIS_POINTS},
+        v0_4::RewardMerkleProofV2,
         validators_from_l1_events, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAmount, FeeVersion,
         Header, L1ClientOptions, MockSequencerVersions, NamespaceId, RewardDistributor,
         SequencerVersions, ValidatedState,
@@ -5944,50 +5997,56 @@ mod test {
                     .expect_ok()
                     .unwrap();
 
-                let api_proof = client
-                    .get::<MerkleProof<
-                        RewardAmount,
-                        RewardAccountV1,
-                        Sha3Node,
-                        { REWARD_MERKLE_TREE_V1_ARITY },
-                    >>(&format!("reward-state/proof/{height}/{address}"))
+                let res = client
+                    .get::<RewardAccountQueryDataV1>(&format!(
+                        "reward-state/proof/{height}/{address}"
+                    ))
                     .send()
                     .await
                     .unwrap();
 
-                assert_eq!(
-                    api_proof, expected_proof,
-                    "Proof mismatch for V1 at {height}, addr={address}"
-                );
+                match res.proof.proof {
+                    RewardMerkleProofV1::Presence(p) => {
+                        assert_eq!(
+                            p, expected_proof,
+                            "Proof mismatch for V1 at {height}, addr={address}"
+                        );
+                    },
+                    other => panic!(
+                        "Expected Present proof for V1 at {height}, addr={address}, got {other:?}"
+                    ),
+                }
             }
         } else {
             // V2 case
             wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
 
             for (address, _) in validated_state.reward_merkle_tree_v2.iter() {
-                use espresso_types::sparse_mt::KeccakNode;
-
                 let (_, expected_proof) = validated_state
                     .reward_merkle_tree_v2
                     .lookup(*address)
                     .expect_ok()
                     .unwrap();
 
-                let api_proof = client
-                    .get::<MerkleProof<
-                        RewardAmount,
-                        RewardAccountV2,
-                        KeccakNode,
-                        { REWARD_MERKLE_TREE_V2_ARITY },
-                    >>(&format!("reward-state-v2/proof/{height}/{address}"))
+                let res = client
+                    .get::<RewardAccountQueryDataV2>(&format!(
+                        "reward-state-v2/proof/{height}/{address}"
+                    ))
                     .send()
                     .await
                     .unwrap();
 
-                assert_eq!(
-                    api_proof, expected_proof,
-                    "Proof mismatch for V2 at {height}, addr={address}"
-                );
+                match res.proof.proof {
+                    RewardMerkleProofV2::Presence(p) => {
+                        assert_eq!(
+                            p, expected_proof,
+                            "Proof mismatch for V2 at {height}, addr={address}"
+                        );
+                    },
+                    other => panic!(
+                        "Expected Present proof for V2 at {height}, addr={address}, got {other:?}"
+                    ),
+                }
             }
         }
 
