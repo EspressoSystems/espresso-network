@@ -2,8 +2,9 @@ use std::{num::NonZeroUsize, path::PathBuf, time::Duration};
 
 use builder::non_permissioned::{build_instance_state, BuilderConfig};
 use clap::Parser;
-use espresso_types::FeeVersion;
-use espresso_types::{eth_signature_key::EthKeyPair, parse_duration, SequencerVersions};
+use espresso_types::{
+    eth_signature_key::EthKeyPair, parse_duration, FeeVersion, SequencerVersions,
+};
 use futures::future::pending;
 use hotshot::traits::ValidatedState;
 use hotshot_types::{
