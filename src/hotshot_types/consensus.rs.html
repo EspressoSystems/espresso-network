@@ -1394,20 +1394,28 @@
 <a href=#1394 id=1394 data-nosnippet>1394</a>        <span class="kw">let </span>block_height = leaf.height();
 <a href=#1395 id=1395 data-nosnippet>1395</a>        is_ge_epoch_root(block_height, <span class="self">self</span>.epoch_height)
 <a href=#1396 id=1396 data-nosnippet>1396</a>    }
-<a href=#1397 id=1397 data-nosnippet>1397</a>}
-<a href=#1398 id=1398 data-nosnippet>1398</a>
-<a href=#1399 id=1399 data-nosnippet>1399</a><span class="doccomment">/// Alias for the block payload commitment and the associated metadata. The primary data
-<a href=#1400 id=1400 data-nosnippet>1400</a>/// needed in order to submit a proposal.
-<a href=#1401 id=1401 data-nosnippet>1401</a></span><span class="attr">#[derive(Eq, PartialEq, Debug, Clone)]
-<a href=#1402 id=1402 data-nosnippet>1402</a></span><span class="kw">pub struct </span>CommitmentAndMetadata&lt;TYPES: NodeType&gt; {
-<a href=#1403 id=1403 data-nosnippet>1403</a>    <span class="doccomment">/// Vid Commitment
-<a href=#1404 id=1404 data-nosnippet>1404</a>    </span><span class="kw">pub </span>commitment: VidCommitment,
-<a href=#1405 id=1405 data-nosnippet>1405</a>    <span class="doccomment">/// Builder Commitment
-<a href=#1406 id=1406 data-nosnippet>1406</a>    </span><span class="kw">pub </span>builder_commitment: BuilderCommitment,
-<a href=#1407 id=1407 data-nosnippet>1407</a>    <span class="doccomment">/// Metadata for the block payload
-<a href=#1408 id=1408 data-nosnippet>1408</a>    </span><span class="kw">pub </span>metadata: &lt;TYPES::BlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::Metadata,
-<a href=#1409 id=1409 data-nosnippet>1409</a>    <span class="doccomment">/// Builder fee data
-<a href=#1410 id=1410 data-nosnippet>1410</a>    </span><span class="kw">pub </span>fees: Vec1&lt;BuilderFee&lt;TYPES&gt;&gt;,
-<a href=#1411 id=1411 data-nosnippet>1411</a>    <span class="doccomment">/// View number this block is for
-<a href=#1412 id=1412 data-nosnippet>1412</a>    </span><span class="kw">pub </span>block_view: TYPES::View,
-<a href=#1413 id=1413 data-nosnippet>1413</a>}</code></pre></div></section></main></body></html>
+<a href=#1397 id=1397 data-nosnippet>1397</a>
+<a href=#1398 id=1398 data-nosnippet>1398</a>    <span class="kw">pub fn </span>is_high_qc_last_block(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#1399 id=1399 data-nosnippet>1399</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(block_height) = <span class="self">self</span>.high_qc().data.block_number <span class="kw">else </span>{
+<a href=#1400 id=1400 data-nosnippet>1400</a>            <span class="macro">tracing::warn!</span>(<span class="string">"We don't have a block number for the high QC"</span>);
+<a href=#1401 id=1401 data-nosnippet>1401</a>            <span class="kw">return </span><span class="bool-val">false</span>;
+<a href=#1402 id=1402 data-nosnippet>1402</a>        };
+<a href=#1403 id=1403 data-nosnippet>1403</a>        is_last_block(block_height, <span class="self">self</span>.epoch_height)
+<a href=#1404 id=1404 data-nosnippet>1404</a>    }
+<a href=#1405 id=1405 data-nosnippet>1405</a>}
+<a href=#1406 id=1406 data-nosnippet>1406</a>
+<a href=#1407 id=1407 data-nosnippet>1407</a><span class="doccomment">/// Alias for the block payload commitment and the associated metadata. The primary data
+<a href=#1408 id=1408 data-nosnippet>1408</a>/// needed in order to submit a proposal.
+<a href=#1409 id=1409 data-nosnippet>1409</a></span><span class="attr">#[derive(Eq, PartialEq, Debug, Clone)]
+<a href=#1410 id=1410 data-nosnippet>1410</a></span><span class="kw">pub struct </span>CommitmentAndMetadata&lt;TYPES: NodeType&gt; {
+<a href=#1411 id=1411 data-nosnippet>1411</a>    <span class="doccomment">/// Vid Commitment
+<a href=#1412 id=1412 data-nosnippet>1412</a>    </span><span class="kw">pub </span>commitment: VidCommitment,
+<a href=#1413 id=1413 data-nosnippet>1413</a>    <span class="doccomment">/// Builder Commitment
+<a href=#1414 id=1414 data-nosnippet>1414</a>    </span><span class="kw">pub </span>builder_commitment: BuilderCommitment,
+<a href=#1415 id=1415 data-nosnippet>1415</a>    <span class="doccomment">/// Metadata for the block payload
+<a href=#1416 id=1416 data-nosnippet>1416</a>    </span><span class="kw">pub </span>metadata: &lt;TYPES::BlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::Metadata,
+<a href=#1417 id=1417 data-nosnippet>1417</a>    <span class="doccomment">/// Builder fee data
+<a href=#1418 id=1418 data-nosnippet>1418</a>    </span><span class="kw">pub </span>fees: Vec1&lt;BuilderFee&lt;TYPES&gt;&gt;,
+<a href=#1419 id=1419 data-nosnippet>1419</a>    <span class="doccomment">/// View number this block is for
+<a href=#1420 id=1420 data-nosnippet>1420</a>    </span><span class="kw">pub </span>block_view: TYPES::View,
+<a href=#1421 id=1421 data-nosnippet>1421</a>}</code></pre></div></section></main></body></html>

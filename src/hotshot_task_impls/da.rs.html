@@ -436,73 +436,81 @@
 <a href=#436 id=436 data-nosnippet>436</a>                    </span>);
 <a href=#437 id=437 data-nosnippet>437</a>                    <span class="kw">return </span><span class="prelude-val">Ok</span>(());
 <a href=#438 id=438 data-nosnippet>438</a>                }
-<a href=#439 id=439 data-nosnippet>439</a>                <span class="kw">let </span>epoch_transition_indicator =
-<a href=#440 id=440 data-nosnippet>440</a>                    <span class="kw">if </span><span class="self">self</span>.consensus.read().<span class="kw">await</span>.is_high_qc_ge_root_block() {
-<a href=#441 id=441 data-nosnippet>441</a>                        EpochTransitionIndicator::InTransition
-<a href=#442 id=442 data-nosnippet>442</a>                    } <span class="kw">else </span>{
-<a href=#443 id=443 data-nosnippet>443</a>                        EpochTransitionIndicator::NotInTransition
-<a href=#444 id=444 data-nosnippet>444</a>                    };
-<a href=#445 id=445 data-nosnippet>445</a>                <span class="kw">let </span>data: DaProposal2&lt;TYPES&gt; = DaProposal2 {
-<a href=#446 id=446 data-nosnippet>446</a>                    encoded_transactions: Arc::clone(encoded_transactions),
-<a href=#447 id=447 data-nosnippet>447</a>                    metadata: metadata.clone(),
-<a href=#448 id=448 data-nosnippet>448</a>                    <span class="comment">// Upon entering a new view we want to send a DA Proposal for the next view -&gt; Is it always the case that this is cur_view + 1?
-<a href=#449 id=449 data-nosnippet>449</a>                    </span>view_number,
-<a href=#450 id=450 data-nosnippet>450</a>                    epoch,
-<a href=#451 id=451 data-nosnippet>451</a>                    epoch_transition_indicator,
-<a href=#452 id=452 data-nosnippet>452</a>                };
-<a href=#453 id=453 data-nosnippet>453</a>
-<a href=#454 id=454 data-nosnippet>454</a>                <span class="kw">let </span>message = Proposal {
-<a href=#455 id=455 data-nosnippet>455</a>                    data,
-<a href=#456 id=456 data-nosnippet>456</a>                    signature,
-<a href=#457 id=457 data-nosnippet>457</a>                    _pd: PhantomData,
-<a href=#458 id=458 data-nosnippet>458</a>                };
-<a href=#459 id=459 data-nosnippet>459</a>
-<a href=#460 id=460 data-nosnippet>460</a>                broadcast_event(
-<a href=#461 id=461 data-nosnippet>461</a>                    Arc::new(HotShotEvent::DaProposalSend(
-<a href=#462 id=462 data-nosnippet>462</a>                        message.clone(),
-<a href=#463 id=463 data-nosnippet>463</a>                        <span class="self">self</span>.public_key.clone(),
-<a href=#464 id=464 data-nosnippet>464</a>                    )),
-<a href=#465 id=465 data-nosnippet>465</a>                    <span class="kw-2">&amp;</span>event_stream,
-<a href=#466 id=466 data-nosnippet>466</a>                )
-<a href=#467 id=467 data-nosnippet>467</a>                .<span class="kw">await</span>;
-<a href=#468 id=468 data-nosnippet>468</a>                <span class="kw">let </span>payload_with_metadata = Arc::new(PayloadWithMetadata {
-<a href=#469 id=469 data-nosnippet>469</a>                    payload: TYPES::BlockPayload::from_bytes(
-<a href=#470 id=470 data-nosnippet>470</a>                        encoded_transactions.as_ref(),
-<a href=#471 id=471 data-nosnippet>471</a>                        metadata,
-<a href=#472 id=472 data-nosnippet>472</a>                    ),
-<a href=#473 id=473 data-nosnippet>473</a>                    metadata: metadata.clone(),
-<a href=#474 id=474 data-nosnippet>474</a>                });
-<a href=#475 id=475 data-nosnippet>475</a>                <span class="comment">// Save the payload early because we might need it to calculate VID for the next epoch nodes.
-<a href=#476 id=476 data-nosnippet>476</a>                </span><span class="kw">let </span>update_result = <span class="self">self
-<a href=#477 id=477 data-nosnippet>477</a>                    </span>.consensus
-<a href=#478 id=478 data-nosnippet>478</a>                    .write()
-<a href=#479 id=479 data-nosnippet>479</a>                    .<span class="kw">await
-<a href=#480 id=480 data-nosnippet>480</a>                    </span>.update_saved_payloads(view_number, payload_with_metadata);
-<a href=#481 id=481 data-nosnippet>481</a>                <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = update_result {
-<a href=#482 id=482 data-nosnippet>482</a>                    <span class="macro">tracing::trace!</span>(<span class="string">"{e:?}"</span>);
-<a href=#483 id=483 data-nosnippet>483</a>                }
-<a href=#484 id=484 data-nosnippet>484</a>            },
-<a href=#485 id=485 data-nosnippet>485</a>            <span class="kw">_ </span>=&gt; {},
-<a href=#486 id=486 data-nosnippet>486</a>        }
-<a href=#487 id=487 data-nosnippet>487</a>        <span class="prelude-val">Ok</span>(())
-<a href=#488 id=488 data-nosnippet>488</a>    }
-<a href=#489 id=489 data-nosnippet>489</a>}
-<a href=#490 id=490 data-nosnippet>490</a>
-<a href=#491 id=491 data-nosnippet>491</a><span class="attr">#[async_trait]
-<a href=#492 id=492 data-nosnippet>492</a></span><span class="doccomment">/// task state implementation for DA Task
-<a href=#493 id=493 data-nosnippet>493</a></span><span class="kw">impl</span>&lt;TYPES: NodeType, I: NodeImplementation&lt;TYPES&gt;, V: Versions&gt; TaskState
-<a href=#494 id=494 data-nosnippet>494</a>    <span class="kw">for </span>DaTaskState&lt;TYPES, I, V&gt;
-<a href=#495 id=495 data-nosnippet>495</a>{
-<a href=#496 id=496 data-nosnippet>496</a>    <span class="kw">type </span>Event = HotShotEvent&lt;TYPES&gt;;
-<a href=#497 id=497 data-nosnippet>497</a>
-<a href=#498 id=498 data-nosnippet>498</a>    <span class="kw">async fn </span>handle_event(
-<a href=#499 id=499 data-nosnippet>499</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#500 id=500 data-nosnippet>500</a>        event: Arc&lt;<span class="self">Self</span>::Event&gt;,
-<a href=#501 id=501 data-nosnippet>501</a>        sender: <span class="kw-2">&amp;</span>Sender&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
-<a href=#502 id=502 data-nosnippet>502</a>        _receiver: <span class="kw-2">&amp;</span>Receiver&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
-<a href=#503 id=503 data-nosnippet>503</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#504 id=504 data-nosnippet>504</a>        <span class="self">self</span>.handle(event, sender.clone()).<span class="kw">await
-<a href=#505 id=505 data-nosnippet>505</a>    </span>}
-<a href=#506 id=506 data-nosnippet>506</a>
-<a href=#507 id=507 data-nosnippet>507</a>    <span class="kw">fn </span>cancel_subtasks(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {}
-<a href=#508 id=508 data-nosnippet>508</a>}</code></pre></div></section></main></body></html>
+<a href=#439 id=439 data-nosnippet>439</a>                <span class="kw">let </span>consensus_reader = <span class="self">self</span>.consensus.read().<span class="kw">await</span>;
+<a href=#440 id=440 data-nosnippet>440</a>                <span class="kw">let </span>epoch_transition_indicator = <span class="kw">if </span>consensus_reader.is_high_qc_ge_root_block() {
+<a href=#441 id=441 data-nosnippet>441</a>                    <span class="kw">if </span><span class="self">self</span>.upgrade_lock.upgraded_drb_and_header(view_number).<span class="kw">await
+<a href=#442 id=442 data-nosnippet>442</a>                        </span>&amp;&amp; consensus_reader.is_high_qc_last_block()
+<a href=#443 id=443 data-nosnippet>443</a>                    {
+<a href=#444 id=444 data-nosnippet>444</a>                        EpochTransitionIndicator::NotInTransition
+<a href=#445 id=445 data-nosnippet>445</a>                    } <span class="kw">else </span>{
+<a href=#446 id=446 data-nosnippet>446</a>                        EpochTransitionIndicator::InTransition
+<a href=#447 id=447 data-nosnippet>447</a>                    }
+<a href=#448 id=448 data-nosnippet>448</a>                } <span class="kw">else </span>{
+<a href=#449 id=449 data-nosnippet>449</a>                    EpochTransitionIndicator::NotInTransition
+<a href=#450 id=450 data-nosnippet>450</a>                };
+<a href=#451 id=451 data-nosnippet>451</a>                drop(consensus_reader);
+<a href=#452 id=452 data-nosnippet>452</a>
+<a href=#453 id=453 data-nosnippet>453</a>                <span class="kw">let </span>data: DaProposal2&lt;TYPES&gt; = DaProposal2 {
+<a href=#454 id=454 data-nosnippet>454</a>                    encoded_transactions: Arc::clone(encoded_transactions),
+<a href=#455 id=455 data-nosnippet>455</a>                    metadata: metadata.clone(),
+<a href=#456 id=456 data-nosnippet>456</a>                    <span class="comment">// Upon entering a new view we want to send a DA Proposal for the next view -&gt; Is it always the case that this is cur_view + 1?
+<a href=#457 id=457 data-nosnippet>457</a>                    </span>view_number,
+<a href=#458 id=458 data-nosnippet>458</a>                    epoch,
+<a href=#459 id=459 data-nosnippet>459</a>                    epoch_transition_indicator,
+<a href=#460 id=460 data-nosnippet>460</a>                };
+<a href=#461 id=461 data-nosnippet>461</a>
+<a href=#462 id=462 data-nosnippet>462</a>                <span class="kw">let </span>message = Proposal {
+<a href=#463 id=463 data-nosnippet>463</a>                    data,
+<a href=#464 id=464 data-nosnippet>464</a>                    signature,
+<a href=#465 id=465 data-nosnippet>465</a>                    _pd: PhantomData,
+<a href=#466 id=466 data-nosnippet>466</a>                };
+<a href=#467 id=467 data-nosnippet>467</a>
+<a href=#468 id=468 data-nosnippet>468</a>                broadcast_event(
+<a href=#469 id=469 data-nosnippet>469</a>                    Arc::new(HotShotEvent::DaProposalSend(
+<a href=#470 id=470 data-nosnippet>470</a>                        message.clone(),
+<a href=#471 id=471 data-nosnippet>471</a>                        <span class="self">self</span>.public_key.clone(),
+<a href=#472 id=472 data-nosnippet>472</a>                    )),
+<a href=#473 id=473 data-nosnippet>473</a>                    <span class="kw-2">&amp;</span>event_stream,
+<a href=#474 id=474 data-nosnippet>474</a>                )
+<a href=#475 id=475 data-nosnippet>475</a>                .<span class="kw">await</span>;
+<a href=#476 id=476 data-nosnippet>476</a>                <span class="kw">let </span>payload_with_metadata = Arc::new(PayloadWithMetadata {
+<a href=#477 id=477 data-nosnippet>477</a>                    payload: TYPES::BlockPayload::from_bytes(
+<a href=#478 id=478 data-nosnippet>478</a>                        encoded_transactions.as_ref(),
+<a href=#479 id=479 data-nosnippet>479</a>                        metadata,
+<a href=#480 id=480 data-nosnippet>480</a>                    ),
+<a href=#481 id=481 data-nosnippet>481</a>                    metadata: metadata.clone(),
+<a href=#482 id=482 data-nosnippet>482</a>                });
+<a href=#483 id=483 data-nosnippet>483</a>                <span class="comment">// Save the payload early because we might need it to calculate VID for the next epoch nodes.
+<a href=#484 id=484 data-nosnippet>484</a>                </span><span class="kw">let </span>update_result = <span class="self">self
+<a href=#485 id=485 data-nosnippet>485</a>                    </span>.consensus
+<a href=#486 id=486 data-nosnippet>486</a>                    .write()
+<a href=#487 id=487 data-nosnippet>487</a>                    .<span class="kw">await
+<a href=#488 id=488 data-nosnippet>488</a>                    </span>.update_saved_payloads(view_number, payload_with_metadata);
+<a href=#489 id=489 data-nosnippet>489</a>                <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = update_result {
+<a href=#490 id=490 data-nosnippet>490</a>                    <span class="macro">tracing::trace!</span>(<span class="string">"{e:?}"</span>);
+<a href=#491 id=491 data-nosnippet>491</a>                }
+<a href=#492 id=492 data-nosnippet>492</a>            },
+<a href=#493 id=493 data-nosnippet>493</a>            <span class="kw">_ </span>=&gt; {},
+<a href=#494 id=494 data-nosnippet>494</a>        }
+<a href=#495 id=495 data-nosnippet>495</a>        <span class="prelude-val">Ok</span>(())
+<a href=#496 id=496 data-nosnippet>496</a>    }
+<a href=#497 id=497 data-nosnippet>497</a>}
+<a href=#498 id=498 data-nosnippet>498</a>
+<a href=#499 id=499 data-nosnippet>499</a><span class="attr">#[async_trait]
+<a href=#500 id=500 data-nosnippet>500</a></span><span class="doccomment">/// task state implementation for DA Task
+<a href=#501 id=501 data-nosnippet>501</a></span><span class="kw">impl</span>&lt;TYPES: NodeType, I: NodeImplementation&lt;TYPES&gt;, V: Versions&gt; TaskState
+<a href=#502 id=502 data-nosnippet>502</a>    <span class="kw">for </span>DaTaskState&lt;TYPES, I, V&gt;
+<a href=#503 id=503 data-nosnippet>503</a>{
+<a href=#504 id=504 data-nosnippet>504</a>    <span class="kw">type </span>Event = HotShotEvent&lt;TYPES&gt;;
+<a href=#505 id=505 data-nosnippet>505</a>
+<a href=#506 id=506 data-nosnippet>506</a>    <span class="kw">async fn </span>handle_event(
+<a href=#507 id=507 data-nosnippet>507</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#508 id=508 data-nosnippet>508</a>        event: Arc&lt;<span class="self">Self</span>::Event&gt;,
+<a href=#509 id=509 data-nosnippet>509</a>        sender: <span class="kw-2">&amp;</span>Sender&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
+<a href=#510 id=510 data-nosnippet>510</a>        _receiver: <span class="kw-2">&amp;</span>Receiver&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
+<a href=#511 id=511 data-nosnippet>511</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#512 id=512 data-nosnippet>512</a>        <span class="self">self</span>.handle(event, sender.clone()).<span class="kw">await
+<a href=#513 id=513 data-nosnippet>513</a>    </span>}
+<a href=#514 id=514 data-nosnippet>514</a>
+<a href=#515 id=515 data-nosnippet>515</a>    <span class="kw">fn </span>cancel_subtasks(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {}
+<a href=#516 id=516 data-nosnippet>516</a>}</code></pre></div></section></main></body></html>
