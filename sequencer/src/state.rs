@@ -23,7 +23,7 @@ use tokio::time::sleep;
 use vbs::version::StaticVersionType;
 
 use crate::{
-    api::RewardMerklizedStateDataSource,
+    api::RewardAccountProofDataSource,
     catchup::{CatchupStorage, SqlStateCatchup},
     persistence::ChainConfigPersistence,
     NodeState, SeqTypes,
@@ -416,7 +416,7 @@ pub(crate) trait SequencerStateDataSource:
     + StatusDataSource
     + VersionedDataSource
     + CatchupStorage
-    + RewardMerklizedStateDataSource
+    + RewardAccountProofDataSource
     + PrunedHeightDataSource
     + MerklizedStateHeightPersistence
 {
@@ -429,7 +429,7 @@ impl<T> SequencerStateDataSource for T where
         + StatusDataSource
         + VersionedDataSource
         + CatchupStorage
-        + RewardMerklizedStateDataSource
+        + RewardAccountProofDataSource
         + PrunedHeightDataSource
         + MerklizedStateHeightPersistence
 {

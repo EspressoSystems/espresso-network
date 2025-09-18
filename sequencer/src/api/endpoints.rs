@@ -54,7 +54,7 @@ use super::{
     StorageState,
 };
 use crate::{
-    api::RewardMerklizedStateDataSource, SeqTypes, SequencerApiVersion, SequencerPersistence,
+    api::RewardAccountProofDataSource, SeqTypes, SequencerApiVersion, SequencerPersistence,
 };
 
 pub(super) fn fee<State, Ver>(
@@ -111,7 +111,7 @@ where
     <MT as MerklizedState<SeqTypes, ARITY>>::Entry: std::marker::Copy,
     <State as ReadState>::State: Send
         + Sync
-        + RewardMerklizedStateDataSource
+        + RewardAccountProofDataSource
         + MerklizedStateDataSource<SeqTypes, MT, ARITY>
         + MerklizedStateHeightPersistence,
 {

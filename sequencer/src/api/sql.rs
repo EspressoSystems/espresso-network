@@ -50,7 +50,7 @@ use super::{
     BlocksFrontier,
 };
 use crate::{
-    api::RewardMerklizedStateDataSource,
+    api::RewardAccountProofDataSource,
     catchup::{CatchupStorage, NullStateCatchup},
     persistence::{sql::Options, ChainConfigPersistence},
     state::compute_state_update,
@@ -99,7 +99,7 @@ impl SequencerDataSource for DataSource {
     }
 }
 
-impl RewardMerklizedStateDataSource for SqlStorage {
+impl RewardAccountProofDataSource for SqlStorage {
     async fn load_v1_reward_account_proof(
         &self,
         height: u64,
@@ -380,7 +380,7 @@ impl CatchupStorage for SqlStorage {
     }
 }
 
-impl RewardMerklizedStateDataSource for DataSource {
+impl RewardAccountProofDataSource for DataSource {
     async fn load_v1_reward_account_proof(
         &self,
         height: u64,

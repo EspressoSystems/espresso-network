@@ -895,7 +895,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSig
     }
 }
 
-pub(crate) trait RewardMerklizedStateDataSource: Sync {
+pub(crate) trait RewardAccountProofDataSource: Sync {
     fn load_v1_reward_account_proof(
         &self,
         _height: u64,
@@ -917,12 +917,12 @@ pub(crate) trait RewardMerklizedStateDataSource: Sync {
     }
 }
 
-impl RewardMerklizedStateDataSource for hotshot_query_service::data_source::MetricsDataSource {}
+impl RewardAccountProofDataSource for hotshot_query_service::data_source::MetricsDataSource {}
 
-impl<T, S> RewardMerklizedStateDataSource
+impl<T, S> RewardAccountProofDataSource
     for hotshot_query_service::data_source::ExtensibleDataSource<T, S>
 where
-    T: RewardMerklizedStateDataSource,
+    T: RewardAccountProofDataSource,
     S: Sync,
 {
     async fn load_v1_reward_account_proof(
