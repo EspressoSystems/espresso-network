@@ -363,9 +363,7 @@ pub trait RunDa<
     /// # Panics if it cannot generate a genesis block, fails to initialize HotShot, or cannot
     /// get the anchored view
     /// Note: sequencing leaf does not have state, so does not return state
-    async fn initialize_state_and_hotshot(
-        &self,
-    ) -> SystemContextHandle<TYPES, NODE, V> {
+    async fn initialize_state_and_hotshot(&self) -> SystemContextHandle<TYPES, NODE, V> {
         let initializer = hotshot::HotShotInitializer::<TYPES>::from_genesis::<V>(
             TestInstanceState::default(),
             self.config().config.epoch_height,
@@ -388,14 +386,14 @@ pub trait RunDa<
         let epoch_height = config.config.epoch_height;
         let storage = TestStorage::<TYPES>::default();
 
-    let membership = Arc::new(RwLock::new(<TYPES as NodeType>::Membership::new::<NODE>(
-        config.config.known_nodes_with_stake.clone(),
-        config.config.known_da_nodes.clone(),
-        storage.clone(),
-        network.clone(),
-        pk.clone(),
-        config.config.epoch_height,
-    )));
+        let membership = Arc::new(RwLock::new(<TYPES as NodeType>::Membership::new::<NODE>(
+            config.config.known_nodes_with_stake.clone(),
+            config.config.known_da_nodes.clone(),
+            storage.clone(),
+            network.clone(),
+            pk.clone(),
+            config.config.epoch_height,
+        )));
 
         SystemContext::init(
             pk,
