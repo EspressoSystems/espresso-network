@@ -394,7 +394,6 @@ impl<T: NodeType> Libp2pNetwork<T> {
     pub async fn from_config<D: DhtPersistentStorage>(
         mut config: NetworkConfig<T>,
         dht_persistent_storage: D,
-        quorum_membership: Arc<RwLock<T::Membership>>,
         gossip_config: GossipConfig,
         request_response_config: RequestResponseConfig,
         bind_address: Multiaddr,
@@ -425,7 +424,6 @@ impl<T: NodeType> Libp2pNetwork<T> {
 
         // Set the auth message and stake table
         config_builder
-            .membership(Some(quorum_membership))
             .auth_message(Some(auth_message));
 
         // The replication factor is the minimum of [the default and 2/3 the number of nodes]
@@ -513,7 +511,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
     pub async fn new<D: DhtPersistentStorage>(
         metrics: Libp2pMetricsValue,
         dht_persistent_storage: D,
-        config: NetworkNodeConfig<T>,
+        config: NetworkNodeConfig,
         pk: T::SignatureKey,
         lookup_record_value: RecordValue<T::SignatureKey>,
         bootstrap_addrs: BootstrapAddrs,
