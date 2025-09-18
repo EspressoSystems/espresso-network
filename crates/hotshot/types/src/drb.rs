@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc, time::Instant};
 
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -66,7 +66,7 @@ pub fn drb_difficulty_selector<TYPES: NodeType, V: Versions>(
 pub const DIFFICULTY_LEVEL: u64 = 10;
 
 /// Interval at which to store the results
-pub const DRB_CHECKPOINT_INTERVAL: u64 = 1000000;
+pub const DRB_CHECKPOINT_INTERVAL: u64 = 1_000_000_000;
 
 /// DRB seed input for epoch 1 and 2.
 pub const INITIAL_DRB_SEED_INPUT: [u8; 32] = [0; 32];
@@ -128,13 +128,23 @@ pub async fn compute_drb_result(
 
     let final_checkpoint = remaining_iterations / DRB_CHECKPOINT_INTERVAL;
 
+    let mut last_time = Instant::now();
+    let mut last_iteration = iteration;
+
     // loop up to, but not including, the `final_checkpoint`
     for _ in 0..final_checkpoint {
-        for _ in 0..DRB_CHECKPOINT_INTERVAL {
-            // TODO: This may be optimized to avoid memcopies after we bench the hash time.
-            // <https://github.com/EspressoSystems/HotShot/issues/3880>
-            hash = Sha256::digest(hash).to_vec();
-        }
+        hash = tokio::task::spawn_blocking(move || {
+            let mut hash_tmp = hash.clone();
+            for _ in 0..DRB_CHECKPOINT_INTERVAL {
+                // TODO: This may be optimized to avoid memcopies after we bench the hash time.
+                // <https://github.com/EspressoSystems/HotShot/issues/3880>
+                hash_tmp = Sha256::digest(&hash_tmp).to_vec();
+            }
+
+            hash_tmp
+        })
+        .await
+        .expect("DRB calculation failed: this should never happen");
 
         let mut partial_drb_result = [0u8; 32];
         partial_drb_result.copy_from_slice(&hash);
@@ -148,25 +158,60 @@ pub async fn compute_drb_result(
             difficulty_level: drb_input.difficulty_level,
         };
 
+        let elapsed_time = last_time.elapsed().as_millis();
+
         let store_drb_progress = store_drb_progress.clone();
         tokio::spawn(async move {
+            tracing::warn!(
+                "Storing partial DRB progress: {:?}. Time elapsed since the previous iteration of \
+                 {:?}: {:?}",
+                updated_drb_input,
+                last_iteration,
+                elapsed_time
+            );
             if let Err(e) = store_drb_progress(updated_drb_input).await {
                 tracing::warn!("Failed to store DRB progress during calculation: {}", e);
             }
         });
+
+        last_time = Instant::now();
+        last_iteration = iteration;
     }
 
     let final_checkpoint_iteration = iteration;
 
     // perform the remaining iterations
-    for _ in final_checkpoint_iteration..drb_input.difficulty_level {
-        hash = Sha256::digest(hash).to_vec();
-        iteration += 1;
-    }
+    hash = tokio::task::spawn_blocking(move || {
+        let mut hash_tmp = hash.clone();
+        for _ in final_checkpoint_iteration..drb_input.difficulty_level {
+            // TODO: This may be optimized to avoid memcopies after we bench the hash time.
+            // <https://github.com/EspressoSystems/HotShot/issues/3880>
+            hash_tmp = Sha256::digest(&hash_tmp).to_vec();
+        }
+
+        hash_tmp
+    })
+    .await
+    .expect("DRB calculation failed: this should never happen");
 
     // Convert the hash to the DRB result.
     let mut drb_result = [0u8; 32];
     drb_result.copy_from_slice(&hash);
+
+    let final_drb_input = DrbInput {
+        epoch: drb_input.epoch,
+        iteration: drb_input.difficulty_level,
+        value: drb_result,
+        difficulty_level: drb_input.difficulty_level,
+    };
+
+    let store_drb_progress = store_drb_progress.clone();
+    tokio::spawn(async move {
+        if let Err(e) = store_drb_progress(final_drb_input).await {
+            tracing::warn!("Failed to store DRB progress during calculation: {}", e);
+        }
+    });
+
     drb_result
 }
 
@@ -329,6 +374,12 @@ pub mod election {
         stake_table_hash: [u8; 32],
         /// DRB result
         drb: [u8; 32],
+    }
+
+    impl<Entry> RandomizedCommittee<Entry> {
+        pub fn drb_result(&self) -> [u8; 32] {
+            self.drb
+        }
     }
 }
 

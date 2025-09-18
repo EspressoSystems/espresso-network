@@ -13,7 +13,7 @@ use std::{
     marker::PhantomData,
 };
 
-use alloy::primitives::U256;
+use alloy::primitives::{FixedBytes, U256};
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::*;
 use serde::{Deserialize, Serialize};
@@ -735,7 +735,30 @@ pub type UpgradeCertificate<TYPES> =
 
 /// Type for light client state update certificate
 #[derive(Serialize, Deserialize, Eq, Hash, PartialEq, Debug, Clone)]
-pub struct LightClientStateUpdateCertificate<TYPES: NodeType> {
+pub struct LightClientStateUpdateCertificateV2<TYPES: NodeType> {
+    /// The epoch of the light client state
+    pub epoch: TYPES::Epoch,
+    /// Light client state for epoch transition
+    pub light_client_state: LightClientState,
+    /// Next epoch stake table state
+    pub next_stake_table_state: StakeTableState,
+    /// Signatures to the light client state
+    #[allow(clippy::type_complexity)]
+    pub signatures: Vec<(
+        TYPES::StateSignatureKey,
+        <TYPES::StateSignatureKey as StateSignatureKey>::StateSignature, // LCV3 signature
+        <TYPES::StateSignatureKey as StateSignatureKey>::StateSignature, // LCV2 signature
+    )>,
+    /// Present in versions >= V4.
+    ///
+    /// This field stores the Keccak-256 hash of the concatenated Merkle roots.
+    /// Currently, it includes only the Espresso reward Merkle tree root.
+    pub auth_root: FixedBytes<32>,
+}
+
+/// Type for light client state update certificate
+#[derive(Serialize, Deserialize, Eq, Hash, PartialEq, Debug, Clone)]
+pub struct LightClientStateUpdateCertificateV1<TYPES: NodeType> {
     /// The epoch of the light client state
     pub epoch: TYPES::Epoch,
     /// Light client state for epoch transition
@@ -749,19 +772,54 @@ pub struct LightClientStateUpdateCertificate<TYPES: NodeType> {
     )>,
 }
 
-impl<TYPES: NodeType> HasViewNumber<TYPES> for LightClientStateUpdateCertificate<TYPES> {
+impl<TYPES: NodeType> From<LightClientStateUpdateCertificateV1<TYPES>>
+    for LightClientStateUpdateCertificateV2<TYPES>
+{
+    fn from(v1: LightClientStateUpdateCertificateV1<TYPES>) -> Self {
+        Self {
+            epoch: v1.epoch,
+            light_client_state: v1.light_client_state,
+            next_stake_table_state: v1.next_stake_table_state,
+            signatures: v1
+                .signatures
+                .into_iter()
+                .map(|(key, sig)| (key, sig.clone(), sig)) // Cloning the signatues here because we use it only for storage.
+                .collect(),
+            auth_root: Default::default(),
+        }
+    }
+}
+
+impl<TYPES: NodeType> From<LightClientStateUpdateCertificateV2<TYPES>>
+    for LightClientStateUpdateCertificateV1<TYPES>
+{
+    fn from(v2: LightClientStateUpdateCertificateV2<TYPES>) -> Self {
+        Self {
+            epoch: v2.epoch,
+            light_client_state: v2.light_client_state,
+            next_stake_table_state: v2.next_stake_table_state,
+            signatures: v2
+                .signatures
+                .into_iter()
+                .map(|(key, _, sig)| (key, sig))
+                .collect(),
+        }
+    }
+}
+
+impl<TYPES: NodeType> HasViewNumber<TYPES> for LightClientStateUpdateCertificateV2<TYPES> {
     fn view_number(&self) -> TYPES::View {
         TYPES::View::new(self.light_client_state.view_number)
     }
 }
 
-impl<TYPES: NodeType> HasEpoch<TYPES> for LightClientStateUpdateCertificate<TYPES> {
+impl<TYPES: NodeType> HasEpoch<TYPES> for LightClientStateUpdateCertificateV2<TYPES> {
     fn epoch(&self) -> Option<TYPES::Epoch> {
         Some(self.epoch)
     }
 }
 
-impl<TYPES: NodeType> LightClientStateUpdateCertificate<TYPES> {
+impl<TYPES: NodeType> LightClientStateUpdateCertificateV1<TYPES> {
     pub fn genesis() -> Self {
         Self {
             epoch: TYPES::Epoch::genesis(),
@@ -772,21 +830,74 @@ impl<TYPES: NodeType> LightClientStateUpdateCertificate<TYPES> {
     }
 }
 
-#[derive(Serialize, Deserialize, Eq, Hash, PartialEq, Debug, Clone)]
-#[serde(bound(deserialize = "QuorumCertificate2<TYPES>:for<'a> Deserialize<'a>"))]
-pub struct EpochRootQuorumCertificate<TYPES: NodeType> {
-    pub qc: QuorumCertificate2<TYPES>,
-    pub state_cert: LightClientStateUpdateCertificate<TYPES>,
+impl<TYPES: NodeType> LightClientStateUpdateCertificateV2<TYPES> {
+    pub fn genesis() -> Self {
+        Self {
+            epoch: TYPES::Epoch::genesis(),
+            light_client_state: Default::default(),
+            next_stake_table_state: Default::default(),
+            signatures: vec![],
+            auth_root: Default::default(),
+        }
+    }
 }
 
-impl<TYPES: NodeType> HasViewNumber<TYPES> for EpochRootQuorumCertificate<TYPES> {
+#[derive(Serialize, Deserialize, Eq, Hash, PartialEq, Debug, Clone)]
+#[serde(bound(deserialize = "QuorumCertificate2<TYPES>:for<'a> Deserialize<'a>"))]
+pub struct EpochRootQuorumCertificateV2<TYPES: NodeType> {
+    pub qc: QuorumCertificate2<TYPES>,
+    pub state_cert: LightClientStateUpdateCertificateV2<TYPES>,
+}
+
+impl<TYPES: NodeType> HasViewNumber<TYPES> for EpochRootQuorumCertificateV2<TYPES> {
     fn view_number(&self) -> TYPES::View {
         self.qc.view_number()
     }
 }
 
-impl<TYPES: NodeType> HasEpoch<TYPES> for EpochRootQuorumCertificate<TYPES> {
+impl<TYPES: NodeType> HasEpoch<TYPES> for EpochRootQuorumCertificateV2<TYPES> {
     fn epoch(&self) -> Option<TYPES::Epoch> {
         self.qc.epoch()
+    }
+}
+
+#[derive(Serialize, Deserialize, Eq, Hash, PartialEq, Debug, Clone)]
+#[serde(bound(deserialize = "QuorumCertificate2<TYPES>:for<'a> Deserialize<'a>"))]
+pub struct EpochRootQuorumCertificateV1<TYPES: NodeType> {
+    pub qc: QuorumCertificate2<TYPES>,
+    pub state_cert: LightClientStateUpdateCertificateV1<TYPES>,
+}
+
+impl<TYPES: NodeType> HasViewNumber<TYPES> for EpochRootQuorumCertificateV1<TYPES> {
+    fn view_number(&self) -> TYPES::View {
+        self.qc.view_number()
+    }
+}
+
+impl<TYPES: NodeType> HasEpoch<TYPES> for EpochRootQuorumCertificateV1<TYPES> {
+    fn epoch(&self) -> Option<TYPES::Epoch> {
+        self.qc.epoch()
+    }
+}
+
+impl<TYPES: NodeType> From<EpochRootQuorumCertificateV1<TYPES>>
+    for EpochRootQuorumCertificateV2<TYPES>
+{
+    fn from(root_qc: EpochRootQuorumCertificateV1<TYPES>) -> Self {
+        Self {
+            qc: root_qc.qc,
+            state_cert: root_qc.state_cert.into(),
+        }
+    }
+}
+
+impl<TYPES: NodeType> From<EpochRootQuorumCertificateV2<TYPES>>
+    for EpochRootQuorumCertificateV1<TYPES>
+{
+    fn from(root_qc: EpochRootQuorumCertificateV2<TYPES>) -> Self {
+        Self {
+            qc: root_qc.qc,
+            state_cert: root_qc.state_cert.into(),
+        }
     }
 }

@@ -16,8 +16,8 @@ use hotshot_task_impls::{
     builder::BuilderClient, consensus::ConsensusTaskState, da::DaTaskState,
     quorum_proposal::QuorumProposalTaskState, quorum_proposal_recv::QuorumProposalRecvTaskState,
     quorum_vote::QuorumVoteTaskState, request::NetworkRequestState, rewind::RewindTaskState,
-    transactions::TransactionTaskState, upgrade::UpgradeTaskState, vid::VidTaskState,
-    view_sync::ViewSyncTaskState,
+    stats::StatsTaskState, transactions::TransactionTaskState, upgrade::UpgradeTaskState,
+    vid::VidTaskState, view_sync::ViewSyncTaskState,
 };
 use hotshot_types::{
     consensus::OuterConsensus,
@@ -184,6 +184,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             first_epoch: None,
             highest_finalized_epoch_view: (None, TYPES::View::new(0)),
+            epoch_height: handle.epoch_height,
         }
     }
 }
@@ -338,6 +339,21 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             view_start_time: Instant::now(),
             first_epoch: None,
         }
+    }
+}
+
+#[async_trait]
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
+    for StatsTaskState<TYPES>
+{
+    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+        StatsTaskState::<TYPES>::new(
+            handle.cur_view().await,
+            handle.cur_epoch().await,
+            handle.public_key().clone(),
+            OuterConsensus::new(handle.hotshot.consensus()),
+            handle.hotshot.membership_coordinator.clone(),
+        )
     }
 }
 

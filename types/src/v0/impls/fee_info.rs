@@ -14,9 +14,8 @@ use hotshot_query_service::explorer::MonetaryValue;
 use hotshot_types::traits::block_contents::BuilderFee;
 use itertools::Itertools;
 use jf_merkle_tree::{
-    ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
-    MerkleCommitment, MerkleTreeError, MerkleTreeScheme, ToTraversalPath,
-    UniversalMerkleTreeScheme,
+    ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult, MerkleTreeError,
+    MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
 };
 use num_traits::CheckedSub;
 use sequencer_utils::{
@@ -327,7 +326,6 @@ impl ToTraversalPath<256> for FeeAccount {
     }
 }
 
-#[allow(dead_code)]
 impl FeeAccountProof {
     pub fn presence(
         pos: FeeAccount,
@@ -373,7 +371,7 @@ impl FeeAccountProof {
         match &self.proof {
             FeeMerkleProof::Presence(proof) => {
                 ensure!(
-                    FeeMerkleTree::verify(comm.digest(), FeeAccount(self.account), proof)?.is_ok(),
+                    FeeMerkleTree::verify(comm, FeeAccount(self.account), proof)?.is_ok(),
                     "invalid proof"
                 );
                 Ok(proof
@@ -384,7 +382,11 @@ impl FeeAccountProof {
             FeeMerkleProof::Absence(proof) => {
                 let tree = FeeMerkleTree::from_commitment(comm);
                 ensure!(
-                    tree.non_membership_verify(FeeAccount(self.account), proof)?,
+                    FeeMerkleTree::non_membership_verify(
+                        tree.commitment(),
+                        FeeAccount(self.account),
+                        proof
+                    )?,
                     "invalid proof"
                 );
                 Ok(U256::ZERO)

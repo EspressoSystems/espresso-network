@@ -9,6 +9,10 @@ edition = { workspace = true }
 [lib]
 doctest = false
 
+[[bin]]
+name = "eval-domain"
+path = "src/bin/eval_domain.rs"
+
 [dependencies]
 alloy = { workspace = true }
 anyhow = { workspace = true }
@@ -19,6 +23,7 @@ ark-ff = { workspace = true }
 ark-poly = { workspace = true }
 ark-serialize = { workspace = true }
 ark-std = { workspace = true }
+derive_more = { workspace = true }
 hotshot-types = { workspace = true }
 jf-pcs = { workspace = true }
 jf-plonk = { workspace = true }
@@ -31,8 +36,8 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+bincode = { workspace = true }
 tokio = { workspace = true }
 
-[[bin]]
-name = "eval-domain"
-path = "src/bin/eval_domain.rs"
+[lints]
+workspace = true

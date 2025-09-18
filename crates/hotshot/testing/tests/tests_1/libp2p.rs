@@ -18,10 +18,9 @@ use tracing::instrument;
 
 /// libp2p network test
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn libp2p_network() {
-    hotshot::helpers::initialize_logging();
 
     let mut metadata: TestDescription<TestTypes, Libp2pImpl, TestVersions> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
@@ -50,10 +49,9 @@ async fn libp2p_network() {
 
 /// libp2p network test with failures
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn libp2p_network_failures_2() {
-    hotshot::helpers::initialize_logging();
 
     let mut metadata: TestDescription<TestTypes, Libp2pImpl, TestVersions> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
@@ -96,11 +94,10 @@ async fn libp2p_network_failures_2() {
 
 /// stress test for libp2p
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 #[ignore]
 async fn test_stress_libp2p_network() {
-    hotshot::helpers::initialize_logging();
 
     let metadata: TestDescription<TestTypes, Libp2pImpl, TestVersions> =
         TestDescription::default_stress();

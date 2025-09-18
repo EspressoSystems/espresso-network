@@ -19,8 +19,8 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     simple_certificate::{
-        EpochRootQuorumCertificate, LightClientStateUpdateCertificate, NextEpochQuorumCertificate2,
-        QuorumCertificate2, UpgradeCertificate,
+        EpochRootQuorumCertificateV2, LightClientStateUpdateCertificateV2,
+        NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
     },
     stake_table::StakeTableEntries,
     traits::{
@@ -99,7 +99,7 @@ pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>
     pub epoch_height: u64,
 
     /// Formed light client state update certificates
-    pub formed_state_cert: BTreeMap<TYPES::Epoch, LightClientStateUpdateCertificate<TYPES>>,
+    pub formed_state_cert: BTreeMap<TYPES::Epoch, LightClientStateUpdateCertificateV2<TYPES>>,
 
     /// First view in which epoch version takes effect
     pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
@@ -557,7 +557,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 },
             },
 
-            HotShotEvent::EpochRootQcFormed(EpochRootQuorumCertificate { qc, state_cert }) => {
+            HotShotEvent::EpochRootQcFormed(EpochRootQuorumCertificateV2 { qc, state_cert }) => {
                 // Only update if the qc is from a newer view
                 if qc.view_number() <= self.consensus.read().await.high_qc().view_number {
                     tracing::trace!(

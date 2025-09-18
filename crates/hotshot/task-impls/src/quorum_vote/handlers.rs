@@ -12,24 +12,23 @@ use committable::Committable;
 use hotshot_types::{
     consensus::OuterConsensus,
     data::{Leaf2, QuorumProposalWrapper, VidDisperseShare},
-    drb::{DrbResult, INITIAL_DRB_RESULT},
+    drb::INITIAL_DRB_RESULT,
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     event::{Event, EventType},
     message::{Proposal, UpgradeLock},
-    simple_vote::{EpochRootQuorumVote, LightClientStateUpdateVote, QuorumData2, QuorumVote2},
+    simple_vote::{EpochRootQuorumVote2, LightClientStateUpdateVote2, QuorumData2, QuorumVote2},
     storage_metrics::StorageMetricsValue,
     traits::{
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
-        signature_key::{SignatureKey, StateSignatureKey},
+        signature_key::{
+            LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StateSignatureKey,
+        },
         storage::Storage,
         ValidatedState,
     },
-    utils::{
-        epoch_from_block_number, is_epoch_transition, is_last_block, is_transition_block,
-        option_epoch_from_block_number,
-    },
+    utils::{epoch_from_block_number, is_epoch_transition, is_last_block, is_transition_block},
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
@@ -40,95 +39,11 @@ use super::QuorumVoteTaskState;
 use crate::{
     events::HotShotEvent,
     helpers::{
-        broadcast_event, decide_from_proposal, decide_from_proposal_2, fetch_proposal,
-        handle_drb_result, LeafChainTraversalOutcome,
+        broadcast_event, decide_from_proposal, decide_from_proposal_2, derive_signed_state_digest,
+        fetch_proposal, handle_drb_result, LeafChainTraversalOutcome,
     },
     quorum_vote::Versions,
 };
-
-/// Store the DRB result from the computation task to the shared `results` table.
-///
-/// Returns the result if it exists.
-async fn get_computed_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
-    epoch_number: TYPES::Epoch,
-    task_state: &mut QuorumVoteTaskState<TYPES, I, V>,
-) -> Option<DrbResult> {
-    // Return the result if it's already in the table.
-    task_state
-        .consensus
-        .read()
-        .await
-        .drb_results
-        .results
-        .get(&epoch_number)
-        .cloned()
-}
-
-/// Verify the DRB result from the proposal for the next epoch if this is the last block of the
-/// current epoch.
-///
-/// Uses the result from `start_drb_task`.
-///
-/// Returns an error if we should not vote.
-async fn verify_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
-    proposal: &QuorumProposalWrapper<TYPES>,
-    task_state: &mut QuorumVoteTaskState<TYPES, I, V>,
-) -> Result<()> {
-    // Skip if this is not the expected block.
-    if task_state.epoch_height == 0
-        || !is_epoch_transition(
-            proposal.block_header().block_number(),
-            task_state.epoch_height,
-        )
-    {
-        tracing::debug!("Skipping DRB result verification");
-        return Ok(());
-    }
-
-    // #3967 REVIEW NOTE: Check if this is the right way to decide if we're doing epochs
-    // Alternatively, should we just return Err() if epochs aren't happening here? Or can we assume
-    // that epochs are definitely happening by virtue of getting here?
-    let epoch = option_epoch_from_block_number::<TYPES>(
-        task_state
-            .upgrade_lock
-            .epochs_enabled(proposal.view_number())
-            .await,
-        proposal.block_header().block_number(),
-        task_state.epoch_height,
-    );
-
-    let proposal_result = proposal
-        .next_drb_result()
-        .context(info!("Proposal is missing the DRB result."))?;
-
-    if let Some(epoch_val) = epoch {
-        let has_stake_current_epoch = task_state
-            .membership
-            .stake_table_for_epoch(epoch)
-            .await
-            .context(warn!("No stake table for epoch {epoch_val}"))?
-            .has_stake(&task_state.public_key)
-            .await;
-
-        if has_stake_current_epoch {
-            let computed_result = get_computed_drb_result(epoch_val + 1, task_state)
-                .await
-                .context(warn!("DRB result not found"))?;
-
-            ensure!(
-                proposal_result == computed_result,
-                warn!(
-                    "Our calculated DRB result is {computed_result:?}, which does not match the \
-                     proposed DRB result of {proposal_result:?}"
-                )
-            );
-        }
-
-        Ok(())
-    } else {
-        Err(error!("Epochs are not available"))
-    }
-}
 
 /// Store the DRB result for the next epoch if we received it in a decided leaf.
 async fn store_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
@@ -154,7 +69,6 @@ async fn store_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Vers
                 task_state.membership.membership(),
                 current_epoch_number + 1,
                 &task_state.storage,
-                &task_state.consensus,
                 result,
             )
             .await;
@@ -181,11 +95,6 @@ pub(crate) async fn handle_quorum_proposal_validated<
         .version(proposal.view_number())
         .await?;
 
-    if version >= V::Epochs::VERSION {
-        // Don't vote if the DRB result verification fails.
-        verify_drb_result(proposal, task_state).await?;
-    }
-
     let LeafChainTraversalOutcome {
         new_locked_view_number,
         new_decided_view_number,
@@ -200,7 +109,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
             proposal.block_header().block_number(),
             task_state.epoch_height,
         ) {
-            decide_from_proposal_2::<TYPES, I, V>(
+            decide_from_proposal_2::<TYPES, I>(
                 proposal,
                 OuterConsensus::new(Arc::clone(&task_state.consensus.inner_consensus)),
                 Arc::clone(&task_state.upgrade_lock.decided_upgrade_certificate),
@@ -208,23 +117,21 @@ pub(crate) async fn handle_quorum_proposal_validated<
                 version >= V::Epochs::VERSION,
                 &task_state.membership,
                 &task_state.storage,
-                &task_state.upgrade_lock,
             )
             .await
         } else {
             LeafChainTraversalOutcome::default()
         }
     } else {
-        decide_from_proposal::<TYPES, I, V>(
+        decide_from_proposal::<TYPES, I>(
             proposal,
             OuterConsensus::new(Arc::clone(&task_state.consensus.inner_consensus)),
             Arc::clone(&task_state.upgrade_lock.decided_upgrade_certificate),
             &task_state.public_key,
             version >= V::Epochs::VERSION,
-            task_state.membership.membership(),
+            &task_state.membership,
             &task_state.storage,
             task_state.epoch_height,
-            &task_state.upgrade_lock,
         )
         .await
     };
@@ -314,6 +221,17 @@ pub(crate) async fn handle_quorum_proposal_validated<
             );
         }
 
+        broadcast_event(
+            Arc::new(HotShotEvent::LeavesDecided(
+                leaf_views
+                    .iter()
+                    .map(|leaf_info| leaf_info.leaf.clone())
+                    .collect(),
+            )),
+            event_sender,
+        )
+        .await;
+
         // Send an update to everyone saying that we've reached a decide
         broadcast_event(
             Event {
@@ -349,11 +267,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
 /// Updates the shared consensus state with the new voting data.
 #[instrument(skip_all, target = "VoteDependencyHandle", fields(view = *view_number))]
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn update_shared_state<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
-    V: Versions,
->(
+pub(crate) async fn update_shared_state<TYPES: NodeType, V: Versions>(
     consensus: OuterConsensus<TYPES>,
     sender: Sender<Arc<HotShotEvent<TYPES>>>,
     receiver: InactiveReceiver<Arc<HotShotEvent<TYPES>>>,
@@ -572,24 +486,42 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
             .commitment(stake_table_capacity)
             .wrap()
             .context(error!("Failed to compute stake table commitment"))?;
-        let signature = <TYPES::StateSignatureKey as StateSignatureKey>::sign_state(
+        // We are still providing LCV2 state signatures for backward compatibility
+        let v2_signature = <TYPES::StateSignatureKey as LCV2StateSignatureKey>::sign_state(
             state_private_key,
             &light_client_state,
             &next_stake_table_state,
         )
         .wrap()
         .context(error!("Failed to sign the light client state"))?;
-        let state_vote = LightClientStateUpdateVote {
+        let auth_root = leaf
+            .block_header()
+            .auth_root()
+            .wrap()
+            .context(error!(format!(
+                "Failed to get auth root for light client state certificate. view={view_number}"
+            )))?;
+        let signed_state_digest =
+            derive_signed_state_digest(&light_client_state, &next_stake_table_state, &auth_root);
+        let signature = <TYPES::StateSignatureKey as LCV3StateSignatureKey>::sign_state(
+            state_private_key,
+            signed_state_digest,
+        )
+        .wrap()
+        .context(error!("Failed to sign the light client state"))?;
+        let state_vote = LightClientStateUpdateVote2 {
             epoch: TYPES::Epoch::new(epoch_from_block_number(leaf.height(), epoch_height)),
             light_client_state,
             next_stake_table_state,
             signature,
+            v2_signature,
+            auth_root,
+            signed_state_digest,
         };
         broadcast_event(
-            Arc::new(HotShotEvent::EpochRootQuorumVoteSend(EpochRootQuorumVote {
-                vote,
-                state_vote,
-            })),
+            Arc::new(HotShotEvent::EpochRootQuorumVoteSend(
+                EpochRootQuorumVote2 { vote, state_vote },
+            )),
             &sender,
         )
         .await;

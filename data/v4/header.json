@@ -31,13 +31,15 @@
       "timestamp": "0x456"
     },
     "l1_head": 124,
+    "next_stake_table_hash": "STAKE_TABLE~v55sHI9xfLCPGytKJGlVMKbsp0evKzNFSA7ChMuzY1NA",
     "ns_table": {
       "bytes": "AwAAAO7/wAAcBgAAobC5EkAOAABksAWiXBQAAA=="
     },
     "payload_commitment": "AvidMCommit~GVev7Msgzxsj2Kfx6HfqnNoK4USAnZ602eXda3Ic0zrY",
-    "reward_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAKA",
+    "reward_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACgAAAAAAAAAAAAAAAAAAAARw",
     "timestamp": 789,
-    "timestamp_millis": 789000000000
+    "timestamp_millis": 789000000000,
+    "total_reward_distributed": "0"
   },
   "version": {
     "Version": {

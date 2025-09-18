@@ -19,12 +19,12 @@ use hotshot_types::{
     epoch_membership::EpochMembership,
     message::UpgradeLock,
     simple_certificate::{
-        DaCertificate2, EpochRootQuorumCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
-        QuorumCertificate2, TimeoutCertificate2, UpgradeCertificate, ViewSyncCommitCertificate2,
-        ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
+        DaCertificate2, EpochRootQuorumCertificateV2, NextEpochQuorumCertificate2,
+        QuorumCertificate, QuorumCertificate2, TimeoutCertificate2, UpgradeCertificate,
+        ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
-        DaVote2, EpochRootQuorumVote, NextEpochQuorumVote2, QuorumVote, QuorumVote2, TimeoutVote2,
+        DaVote2, EpochRootQuorumVote2, NextEpochQuorumVote2, QuorumVote, QuorumVote2, TimeoutVote2,
         UpgradeVote, ViewSyncCommitVote2, ViewSyncFinalizeVote2, ViewSyncPreCommitVote2,
     },
     traits::node_implementation::{ConsensusTime, NodeType, Versions},
@@ -669,7 +669,7 @@ pub struct EpochRootVoteCollectionTaskState<TYPES: NodeType, V: Versions> {
         Option<VoteAccumulator<TYPES, QuorumVote2<TYPES>, QuorumCertificate2<TYPES>, V>>,
 
     /// accumulator for light client state update votes
-    pub state_vote_accumulator: Option<LightClientStateUpdateVoteAccumulator<TYPES>>,
+    pub state_vote_accumulator: Option<LightClientStateUpdateVoteAccumulator<TYPES, V>>,
 
     /// The view which we are collecting votes for
     pub view: TYPES::View,
@@ -688,7 +688,7 @@ impl<TYPES: NodeType, V: Versions> EpochRootVoteCollectionTaskState<TYPES, V> {
         &mut self,
         event: Arc<HotShotEvent<TYPES>>,
         sender: &Sender<Arc<HotShotEvent<TYPES>>>,
-    ) -> Result<Option<EpochRootQuorumCertificate<TYPES>>> {
+    ) -> Result<Option<EpochRootQuorumCertificateV2<TYPES>>> {
         match event.as_ref() {
             HotShotEvent::EpochRootQuorumVoteRecv(vote) => self.accumulate_vote(vote, sender).await,
             _ => Ok(None),
@@ -698,10 +698,10 @@ impl<TYPES: NodeType, V: Versions> EpochRootVoteCollectionTaskState<TYPES, V> {
     /// Accumulate a vote and return the certificates if formed
     async fn accumulate_vote(
         &mut self,
-        vote: &EpochRootQuorumVote<TYPES>,
+        vote: &EpochRootQuorumVote2<TYPES>,
         event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,
-    ) -> Result<Option<EpochRootQuorumCertificate<TYPES>>> {
-        let EpochRootQuorumVote { vote, state_vote } = vote;
+    ) -> Result<Option<EpochRootQuorumCertificateV2<TYPES>>> {
+        let EpochRootQuorumVote2 { vote, state_vote } = vote;
         ensure!(
             vote.view_number() == self.view,
             error!(
@@ -728,7 +728,7 @@ impl<TYPES: NodeType, V: Versions> EpochRootVoteCollectionTaskState<TYPES, V> {
         ) {
             (None, None) => Ok(None),
             (Some(cert), Some(state_cert)) => {
-                let root_qc = EpochRootQuorumCertificate {
+                let root_qc = EpochRootQuorumCertificateV2 {
                     qc: cert,
                     state_cert,
                 };
@@ -762,10 +762,11 @@ async fn create_epoch_root_vote_collection_task_state<TYPES: NodeType, V: Versio
             vote_outcomes: HashMap::new(),
             signers: HashMap::new(),
             phantom: PhantomData,
-            upgrade_lock,
+            upgrade_lock: upgrade_lock.clone(),
         };
     let state_vote_accumulator = LightClientStateUpdateVoteAccumulator {
         vote_outcomes: HashMap::new(),
+        upgrade_lock,
     };
 
     let mut state = EpochRootVoteCollectionTaskState::<TYPES, V> {
@@ -790,7 +791,7 @@ async fn create_epoch_root_vote_collection_task_state<TYPES: NodeType, V: Versio
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_epoch_root_vote<TYPES: NodeType, V: Versions>(
     collectors: &mut EpochRootVoteCollectorsMap<TYPES, V>,
-    vote: &EpochRootQuorumVote<TYPES>,
+    vote: &EpochRootQuorumVote2<TYPES>,
     public_key: TYPES::SignatureKey,
     membership: &EpochMembership<TYPES>,
     id: u64,

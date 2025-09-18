@@ -19,7 +19,7 @@ use hotshot_types::{
     event::{HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
+        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate,
         QuorumCertificate2, UpgradeCertificate,
     },
     stake_table::HSStakeTable,
@@ -30,18 +30,23 @@ use hotshot_types::{
         ValidatedState as HotShotState,
     },
     utils::genesis_epoch_from_version,
+    vote::HasViewNumber,
 };
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::{
     impls::NodeState,
     utils::BackoffParams,
-    v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment},
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
 use crate::{
-    v0::impls::ValidatedState, v0_3::ChainConfig, BlockMerkleTree, Event, FeeAccount,
-    FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig, SeqTypes, ValidatorMap,
+    v0::impls::{StakeTableHash, ValidatedState},
+    v0_3::{
+        ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount, RewardMerkleCommitmentV1,
+    },
+    v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2},
+    BlockMerkleTree, Event, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig,
+    SeqTypes, ValidatorMap,
 };
 
 #[async_trait]
@@ -170,31 +175,31 @@ pub trait StateCatchup: Send + Sync {
     }
 
     /// Fetch the given list of reward accounts without retrying on transient errors.
-    async fn try_fetch_reward_accounts(
+    async fn try_fetch_reward_accounts_v2(
         &self,
         retry: usize,
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitment,
-        accounts: &[RewardAccount],
-    ) -> anyhow::Result<Vec<RewardAccountProof>>;
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+        accounts: &[RewardAccountV2],
+    ) -> anyhow::Result<Vec<RewardAccountProofV2>>;
 
     /// Fetch the given list of reward accounts, retrying on transient errors.
-    async fn fetch_reward_accounts(
+    async fn fetch_reward_accounts_v2(
         &self,
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitment,
-        accounts: Vec<RewardAccount>,
-    ) -> anyhow::Result<Vec<RewardAccountProof>> {
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+        accounts: Vec<RewardAccountV2>,
+    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
         self.backoff()
             .retry(self, |provider, retry| {
                 let accounts = &accounts;
                 async move {
                     provider
-                        .try_fetch_reward_accounts(
+                        .try_fetch_reward_accounts_v2(
                             retry,
                             instance,
                             height,
@@ -206,6 +211,52 @@ pub trait StateCatchup: Send + Sync {
                         .map_err(|err| {
                             err.context(format!(
                                 "fetching reward accounts {accounts:?}, height {height}, view \
+                                 {view}"
+                            ))
+                        })
+                }
+                .boxed()
+            })
+            .await
+    }
+
+    /// Fetch the given list of reward accounts without retrying on transient errors.
+    async fn try_fetch_reward_accounts_v1(
+        &self,
+        retry: usize,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitmentV1,
+        accounts: &[RewardAccountV1],
+    ) -> anyhow::Result<Vec<RewardAccountProofV1>>;
+
+    /// Fetch the given list of reward accounts, retrying on transient errors.
+    async fn fetch_reward_accounts_v1(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitmentV1,
+        accounts: Vec<RewardAccountV1>,
+    ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
+        self.backoff()
+            .retry(self, |provider, retry| {
+                let accounts = &accounts;
+                async move {
+                    provider
+                        .try_fetch_reward_accounts_v1(
+                            retry,
+                            instance,
+                            height,
+                            view,
+                            reward_merkle_tree_root,
+                            accounts,
+                        )
+                        .await
+                        .map_err(|err| {
+                            err.context(format!(
+                                "fetching v1 reward accounts {accounts:?}, height {height}, view \
                                  {view}"
                             ))
                         })
@@ -323,17 +374,17 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         (**self).fetch_chain_config(commitment).await
     }
 
-    async fn try_fetch_reward_accounts(
+    async fn try_fetch_reward_accounts_v2(
         &self,
         retry: usize,
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitment,
-        accounts: &[RewardAccount],
-    ) -> anyhow::Result<Vec<RewardAccountProof>> {
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+        accounts: &[RewardAccountV2],
+    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
         (**self)
-            .try_fetch_reward_accounts(
+            .try_fetch_reward_accounts_v2(
                 retry,
                 instance,
                 height,
@@ -344,16 +395,50 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
             .await
     }
 
-    async fn fetch_reward_accounts(
+    async fn fetch_reward_accounts_v2(
         &self,
         instance: &NodeState,
         height: u64,
         view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitment,
-        accounts: Vec<RewardAccount>,
-    ) -> anyhow::Result<Vec<RewardAccountProof>> {
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+        accounts: Vec<RewardAccountV2>,
+    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
         (**self)
-            .fetch_reward_accounts(instance, height, view, reward_merkle_tree_root, accounts)
+            .fetch_reward_accounts_v2(instance, height, view, reward_merkle_tree_root, accounts)
+            .await
+    }
+
+    async fn try_fetch_reward_accounts_v1(
+        &self,
+        retry: usize,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitmentV1,
+        accounts: &[RewardAccountV1],
+    ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
+        (**self)
+            .try_fetch_reward_accounts_v1(
+                retry,
+                instance,
+                height,
+                view,
+                reward_merkle_tree_root,
+                accounts,
+            )
+            .await
+    }
+
+    async fn fetch_reward_accounts_v1(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitmentV1,
+        accounts: Vec<RewardAccountV1>,
+    ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
+        (**self)
+            .fetch_reward_accounts_v1(instance, height, view, reward_merkle_tree_root, accounts)
             .await
     }
 
@@ -391,13 +476,22 @@ pub enum EventsPersistenceRead {
 /// Trait used by `Memberships` implementations to interact with persistence layer.
 pub trait MembershipPersistence: Send + Sync + 'static {
     /// Load stake table for epoch from storage
-    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<ValidatorMap>>;
+    async fn load_stake(
+        &self,
+        epoch: EpochNumber,
+    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>>;
 
     /// Load stake tables for storage for latest `n` known epochs
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
 
     /// Store stake table at `epoch` in the persistence layer
-    async fn store_stake(&self, epoch: EpochNumber, stake: ValidatorMap) -> anyhow::Result<()>;
+    async fn store_stake(
+        &self,
+        epoch: EpochNumber,
+        stake: ValidatorMap,
+        block_reward: Option<RewardAmount>,
+        stake_table_hash: Option<StakeTableHash>,
+    ) -> anyhow::Result<()>;
 
     async fn store_events(
         &self,
@@ -464,7 +558,7 @@ pub trait SequencerPersistence:
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>>;
     async fn load_state_cert(
         &self,
-    ) -> anyhow::Result<Option<LightClientStateUpdateCertificate<SeqTypes>>>;
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>>;
 
     /// Load the latest known consensus state.
     ///
@@ -510,7 +604,7 @@ pub trait SequencerPersistence:
             .load_next_epoch_quorum_certificate()
             .await
             .context("loading next epoch qc")?;
-        let (leaf, high_qc, anchor_view) = match self
+        let (leaf, mut high_qc, anchor_view) = match self
             .load_anchor_leaf()
             .await
             .context("loading anchor leaf")?
@@ -539,6 +633,13 @@ pub trait SequencerPersistence:
                 )
             },
         };
+
+        if let Some((extended_high_qc, _)) = self.load_eqc().await {
+            if extended_high_qc.view_number() > high_qc.view_number() {
+                high_qc = extended_high_qc
+            }
+        }
+
         let validated_state = if leaf.block_header().height() == 0 {
             // If we are starting from genesis, we can provide the full state.
             genesis_validated_state
@@ -586,7 +687,7 @@ pub trait SequencerPersistence:
             .await
             .context("loading light client state update certificate")?;
 
-        tracing::info!(
+        tracing::warn!(
             ?leaf,
             ?restart_view,
             ?epoch,
@@ -710,6 +811,22 @@ pub trait SequencerPersistence:
         &self,
         proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
     ) -> anyhow::Result<()>;
+
+    /// Update the current eQC in storage.
+    async fn store_eqc(
+        &self,
+        _high_qc: QuorumCertificate2<SeqTypes>,
+        _next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
+    ) -> anyhow::Result<()>;
+
+    /// Load the current eQC from storage.
+    async fn load_eqc(
+        &self,
+    ) -> Option<(
+        QuorumCertificate2<SeqTypes>,
+        NextEpochQuorumCertificate2<SeqTypes>,
+    )>;
+
     async fn store_upgrade_certificate(
         &self,
         decided_upgrade_certificate: Option<UpgradeCertificate<SeqTypes>>,
@@ -777,7 +894,7 @@ pub trait SequencerPersistence:
     ) -> anyhow::Result<()>;
     async fn add_state_cert(
         &self,
-        state_cert: LightClientStateUpdateCertificate<SeqTypes>,
+        state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()>;
 
     fn enable_metrics(&mut self, metrics: &dyn Metrics);
@@ -875,6 +992,28 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         Ok(())
     }
 
+    /// Update the current eQC in storage.
+    async fn update_eqc(
+        &self,
+        high_qc: QuorumCertificate2<SeqTypes>,
+        next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        if let Some((existing_high_qc, _)) = (**self).load_eqc().await {
+            if high_qc.view_number() < existing_high_qc.view_number() {
+                return Ok(());
+            }
+        }
+
+        (**self).store_eqc(high_qc, next_epoch_high_qc).await
+    }
+
+    async fn update_next_epoch_high_qc2(
+        &self,
+        _next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     async fn update_decided_upgrade_certificate(
         &self,
         decided_upgrade_certificate: Option<UpgradeCertificate<SeqTypes>>,
@@ -910,7 +1049,7 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
 
     async fn update_state_cert(
         &self,
-        state_cert: LightClientStateUpdateCertificate<SeqTypes>,
+        state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
         (**self).add_state_cert(state_cert).await
     }

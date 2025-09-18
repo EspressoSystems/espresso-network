@@ -119,6 +119,8 @@ pub struct ViewSyncTaskState<TYPES: NodeType, V: Versions> {
 
     /// Keeps track of the highest finalized view and epoch, used for garbage collection
     pub highest_finalized_epoch_view: (Option<TYPES::Epoch>, TYPES::View),
+
+    pub epoch_height: u64,
 }
 
 #[async_trait]
@@ -513,6 +515,28 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                     self.next_view = self.cur_view;
                     self.num_timeouts_tracked = 0;
                 }
+
+                self.garbage_collect_tasks().await;
+            },
+            HotShotEvent::LeavesDecided(leaves) => {
+                let finalized_epoch = self.highest_finalized_epoch_view.0.max(
+                    leaves
+                        .iter()
+                        .map(|leaf| leaf.epoch(self.epoch_height))
+                        .max()
+                        .unwrap_or(None),
+                );
+                let finalized_view = self.highest_finalized_epoch_view.1.max(
+                    leaves
+                        .iter()
+                        .map(|leaf| leaf.view_number())
+                        .max()
+                        .unwrap_or(TYPES::View::new(0)),
+                );
+
+                self.highest_finalized_epoch_view = (finalized_epoch, finalized_view);
+
+                self.garbage_collect_tasks().await;
             },
             &HotShotEvent::Timeout(view_number, ..) => {
                 // This is an old timeout and we can ignore it
@@ -522,19 +546,6 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                 );
 
                 self.num_timeouts_tracked += 1;
-                let leader = self
-                    .membership_coordinator
-                    .membership_for_epoch(self.cur_epoch)
-                    .await?
-                    .leader(view_number)
-                    .await?;
-                tracing::warn!(
-                    %leader,
-                    leader_mnemonic = hotshot_types::utils::mnemonic(&leader),
-                    view_number = *view_number,
-                    num_timeouts_tracked = self.num_timeouts_tracked,
-                    "view timed out",
-                );
 
                 if self.num_timeouts_tracked >= 3 {
                     tracing::error!("Too many consecutive timeouts!  This shouldn't happen");
@@ -561,6 +572,19 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                     )
                     .await;
                 }
+                let leader = self
+                    .membership_coordinator
+                    .membership_for_epoch(self.cur_epoch)
+                    .await?
+                    .leader(view_number)
+                    .await?;
+                tracing::warn!(
+                    %leader,
+                    leader_mnemonic = hotshot_types::utils::mnemonic(&leader),
+                    view_number = *view_number,
+                    num_timeouts_tracked = self.num_timeouts_tracked,
+                    "view timed out",
+                );
             },
             HotShotEvent::SetFirstEpoch(view, epoch) => {
                 self.first_epoch = Some((*view, *epoch));

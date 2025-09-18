@@ -39,11 +39,16 @@ pub use crate::bindings::{
     lightclientv2::{self, LightClientV2},
     lightclientv2mock::{self, LightClientV2Mock},
     lightclientv3::{self, LightClientV3},
+    lightclientv3mock::{self, LightClientV3Mock},
     opstimelock::OpsTimelock,
     ownableupgradeable::OwnableUpgradeable,
     plonkverifier::PlonkVerifier,
     plonkverifierv2::PlonkVerifierV2,
     plonkverifierv3::PlonkVerifierV3,
+    rewardclaimprototypemock::{
+        RewardClaimPrototypeMock,
+        RewardMerkleTreeVerifier::AccruedRewardsProof as AccruedRewardsProofSol,
+    },
     safeexittimelock::SafeExitTimelock,
     staketable::StakeTable,
     staketablev2::{
@@ -222,13 +227,50 @@ impl From<PlonkProofSol> for lightclientv3::IPlonkVerifier::PlonkProof {
     }
 }
 
+// Transmute conversion functions for LightClientV3Mock
+impl From<lightclientv3mock::LightClient::LightClientState> for LightClientStateSol {
+    fn from(v: lightclientv3mock::LightClient::LightClientState) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<LightClientStateSol> for lightclientv3mock::LightClient::LightClientState {
+    fn from(v: LightClientStateSol) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<StakeTableStateSol> for lightclientv3mock::LightClient::StakeTableState {
+    fn from(v: StakeTableStateSol) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<LightClientV3Mock::genesisStateReturn> for LightClientStateSol {
+    fn from(v: LightClientV3Mock::genesisStateReturn) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<LightClientV3Mock::finalizedStateReturn> for LightClientStateSol {
+    fn from(v: LightClientV3Mock::finalizedStateReturn) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<LightClientV3Mock::votingStakeTableStateReturn> for StakeTableStateSol {
+    fn from(v: LightClientV3Mock::votingStakeTableStateReturn) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use self::{
     staketablev2::{EdOnBN254::EdOnBN254Point, BN254::G2Point},
     StakeTableV2::{
-        ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit,
-        ValidatorRegistered, ValidatorRegisteredV2,
+        CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated,
+        ValidatorExit, ValidatorRegistered, ValidatorRegisteredV2,
     },
 };
 
@@ -327,6 +369,37 @@ impl<'de> Deserialize<'de> for ValidatorRegisteredV2 {
             commission,
             blsSig,
             schnorrSig,
+        })
+    }
+}
+
+impl Serialize for CommissionUpdated {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (
+            &self.validator,
+            self.timestamp,
+            self.oldCommission,
+            self.newCommission,
+        )
+            .serialize(serializer)
+    }
+}
+
+#[allow(non_snake_case)]
+impl<'de> Deserialize<'de> for CommissionUpdated {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (validator, timestamp, oldCommission, newCommission) = <_>::deserialize(deserializer)?;
+        Ok(Self {
+            validator,
+            timestamp,
+            newCommission,
+            oldCommission,
         })
     }
 }
@@ -514,5 +587,31 @@ impl<'de> Deserialize<'de> for ConsensusKeysUpdatedV2 {
             blsSig,
             schnorrSig,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy::{primitives::U256, sol_types::private::Address};
+
+    use super::*;
+
+    #[test]
+    fn test_commission_updated_serde_roundtrip() {
+        let original = CommissionUpdated {
+            validator: Address::random(),
+            timestamp: U256::from(999),
+            oldCommission: 123,
+            newCommission: 456,
+        };
+
+        let serialized = bincode::serialize(&original).expect("Failed to serialize");
+        let deserialized: CommissionUpdated =
+            bincode::deserialize(&serialized).expect("Failed to deserialize");
+
+        assert_eq!(original.validator, deserialized.validator);
+        assert_eq!(original.timestamp, deserialized.timestamp);
+        assert_eq!(original.oldCommission, deserialized.oldCommission);
+        assert_eq!(original.newCommission, deserialized.newCommission);
     }
 }

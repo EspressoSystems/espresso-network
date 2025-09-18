@@ -1,11 +1,12 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
 
 use alloy::primitives::U256;
 use async_broadcast::{broadcast, InactiveReceiver, Sender};
 use async_lock::{Mutex, RwLock};
+use committable::Commitment;
 use hotshot_utils::{
     anytrace::{self, Error, Level, Result, Wrap, DEFAULT_LOG_LEVEL},
     ensure, error, line_info, log, warn,
@@ -23,12 +24,14 @@ use crate::{
             Storage, StoreDrbProgressFn, StoreDrbResultFn,
         },
     },
-    utils::{root_block_in_epoch, transition_block_for_epoch},
+    utils::root_block_in_epoch,
     PeerConfig,
 };
 
 type EpochMap<TYPES> =
     HashMap<<TYPES as NodeType>::Epoch, InactiveReceiver<Result<EpochMembership<TYPES>>>>;
+
+type DrbMap<TYPES> = HashSet<<TYPES as NodeType>::Epoch>;
 
 type EpochSender<TYPES> = (
     <TYPES as NodeType>::Epoch,
@@ -43,8 +46,10 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     /// Any in progress attempts at catching up are stored in this map
     /// Any new callers wantin an `EpochMembership` will await on the signal
     /// alerting them the membership is ready.  The first caller for an epoch will
-    /// wait for the actual catchup and allert future callers when it's done
+    /// wait for the actual catchup and alert future callers when it's done
     catchup_map: Arc<Mutex<EpochMap<TYPES>>>,
+
+    drb_calculation_map: Arc<Mutex<DrbMap<TYPES>>>,
 
     /// Number of blocks in an epoch
     pub epoch_height: u64,
@@ -65,6 +70,7 @@ impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
         Self {
             membership: Arc::clone(&self.membership),
             catchup_map: Arc::clone(&self.catchup_map),
+            drb_calculation_map: Arc::clone(&self.drb_calculation_map),
             epoch_height: self.epoch_height,
             store_drb_progress_fn: Arc::clone(&self.store_drb_progress_fn),
             load_drb_progress_fn: Arc::clone(&self.load_drb_progress_fn),
@@ -87,6 +93,7 @@ where
         Self {
             membership,
             catchup_map: Arc::default(),
+            drb_calculation_map: Arc::default(),
             epoch_height,
             store_drb_progress_fn: store_drb_progress_fn(storage.clone()),
             load_drb_progress_fn: load_drb_progress_fn(storage.clone()),
@@ -201,7 +208,6 @@ where
     ) {
         // We need to fetch the requested epoch, that's for sure
         let mut fetch_epochs = vec![];
-        fetch_epochs.push((epoch, epoch_tx));
 
         let mut try_epoch = TYPES::Epoch::new(epoch.saturating_sub(1));
         let maybe_first_epoch = self.membership.read().await.first_epoch();
@@ -209,7 +215,8 @@ where
             let err = anytrace::error!(
                 "We got a catchup request for epoch {epoch:?} but the first epoch is not set"
             );
-            self.catchup_cleanup(epoch, fetch_epochs, err).await;
+            self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
+                .await;
             return;
         };
 
@@ -228,7 +235,8 @@ where
                         "We are trying to catchup to an epoch lower than the second epoch! This \
                          means the initial stake table is missing!"
                     );
-                    self.catchup_cleanup(epoch, fetch_epochs, err).await;
+                    self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
+                        .await;
                     return;
                 }
                 // Lock the catchup map
@@ -257,23 +265,15 @@ where
 
         // Iterate through the epochs we need to fetch in reverse, i.e. from the oldest to the newest
         while let Some((current_fetch_epoch, tx)) = fetch_epochs.pop() {
-            let root_leaf = match self.fetch_stake_table(current_fetch_epoch).await {
-                Ok(roof_leaf) => roof_leaf,
+            match self.fetch_stake_table(current_fetch_epoch).await {
+                Ok(_) => {},
                 Err(err) => {
                     fetch_epochs.push((current_fetch_epoch, tx));
-                    self.catchup_cleanup(epoch, fetch_epochs, err).await;
+                    self.catchup_cleanup(epoch, epoch_tx, fetch_epochs, err)
+                        .await;
                     return;
                 },
             };
-
-            if let Err(err) = self
-                .fetch_or_calc_drb_results(current_fetch_epoch, root_leaf)
-                .await
-            {
-                fetch_epochs.push((current_fetch_epoch, tx));
-                self.catchup_cleanup(epoch, fetch_epochs, err).await;
-                return;
-            }
 
             // Signal the other tasks about the success
             if let Ok(Some(res)) = tx.try_broadcast(Ok(EpochMembership {
@@ -290,6 +290,62 @@ where
             // Remove the epoch from the catchup map to indicate that the catchup is complete
             self.catchup_map.lock().await.remove(&current_fetch_epoch);
         }
+
+        let root_leaf = match self.fetch_stake_table(epoch).await {
+            Ok(root_leaf) => root_leaf,
+            Err(err) => {
+                self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
+                    .await;
+                return;
+            },
+        };
+
+        match <TYPES::Membership as Membership<TYPES>>::get_epoch_drb(
+            self.membership.clone(),
+            epoch,
+        )
+        .await
+        {
+            Ok(drb_result) => {
+                self.membership
+                    .write()
+                    .await
+                    .add_drb_result(epoch, drb_result);
+            },
+            Err(err) => {
+                tracing::warn!(
+                    "DRB result for epoch {} missing from membership. Beginning catchup to \
+                     recalculate it. Error: {}",
+                    epoch,
+                    err
+                );
+
+                if let Err(err) = self.compute_drb_result(epoch, root_leaf).await {
+                    tracing::error!(
+                        "DRB calculation for epoch {} failed . Error: {}",
+                        epoch,
+                        err
+                    );
+                    self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
+                        .await;
+                }
+            },
+        };
+
+        // Signal the other tasks about the success
+        if let Ok(Some(res)) = epoch_tx.try_broadcast(Ok(EpochMembership {
+            epoch: Some(epoch),
+            coordinator: self.clone(),
+        })) {
+            tracing::warn!(
+                "The catchup channel for epoch {} was overflown, dropped message {:?}",
+                epoch,
+                res.map(|em| em.epoch)
+            );
+        }
+
+        // Remove the epoch from the catchup map to indicate that the catchup is complete
+        self.catchup_map.lock().await.remove(&epoch);
     }
 
     /// Call this method if you think catchup is in progress for a given epoch
@@ -331,10 +387,17 @@ where
     async fn catchup_cleanup(
         &mut self,
         req_epoch: TYPES::Epoch,
-        cancel_epochs: Vec<EpochSender<TYPES>>,
+        epoch_tx: Sender<Result<EpochMembership<TYPES>>>,
+        mut cancel_epochs: Vec<EpochSender<TYPES>>,
         err: Error,
     ) {
         // Cleanup in case of error
+        cancel_epochs.push((req_epoch, epoch_tx));
+
+        tracing::error!(
+            "catchup for epoch {req_epoch:?} failed: {err:?}. Canceling catchup for epochs: {:?}",
+            cancel_epochs.iter().map(|(e, _)| e).collect::<Vec<_>>()
+        );
         let mut map_lock = self.catchup_map.lock().await;
         for (epoch, _) in cancel_epochs.iter() {
             // Remove the failed epochs from the catchup map
@@ -352,7 +415,6 @@ where
                 );
             }
         }
-        tracing::error!("catchup for epoch {req_epoch:?} failed: {err:?}");
     }
 
     /// A helper method to the `catchup` method.
@@ -401,94 +463,66 @@ where
         Ok(root_leaf)
     }
 
-    /// A helper method to the `catchup` method.
-    ///
-    /// Fetch or compute the DRB (Distributed Random Beacon) result for a given epoch.
-    ///
-    /// This method attempts to retrieve the DRB result for the specified epoch. If the DRB
-    /// result is not available, it computes the DRB using the provided root leaf and stores
-    /// the result in the membership state.
-    ///
-    /// # Arguments
-    ///
-    /// * `epoch` - The epoch for which to fetch or compute the DRB result.
-    /// * `root_leaf` - The epoch root leaf used for DRB computation if the result is not available.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` if the DRB result was successfully fetched or computed and stored.
-    /// * `Err(Error)` if the DRB result could not be fetched, computed, or stored.
-    async fn fetch_or_calc_drb_results(
+    pub async fn compute_drb_result(
         &self,
         epoch: TYPES::Epoch,
         root_leaf: Leaf2<TYPES>,
-    ) -> Result<()> {
-        let root_epoch = TYPES::Epoch::new(epoch.saturating_sub(2));
-        let Ok(root_membership) = self.stake_table_for_epoch(Some(root_epoch)).await else {
-            return Err(anytrace::error!(
-                "We tried to fetch drb result for epoch {epoch:?} but we don't have its root \
-                 epoch {root_epoch:?}. This should not happen"
-            ));
-        };
+    ) -> Result<DrbResult> {
+        let mut drb_calculation_map_lock = self.drb_calculation_map.lock().await;
 
-        let Ok(drb_membership) = root_membership.next_epoch_stake_table().await else {
-            return Err(anytrace::error!(
-                "get drb stake table failed for epoch {root_epoch:?}"
+        if drb_calculation_map_lock.contains(&epoch) {
+            return Err(anytrace::warn!(
+                "DRB calculation for epoch {} already in progress",
+                epoch
             ));
-        };
-
-        // get the DRB from the last block of the epoch right before the one we're catching up to
-        // or compute it if it's not available
-        let drb = if let Ok(drb) = drb_membership
-            .get_epoch_drb(transition_block_for_epoch(
-                *(root_epoch + 1),
-                self.epoch_height,
-            ))
-            .await
-        {
-            drb
         } else {
-            let Ok(drb_seed_input_vec) = bincode::serialize(&root_leaf.justify_qc().signatures)
-            else {
-                return Err(anytrace::error!(
-                    "Failed to serialize the QC signature for leaf {root_leaf:?}"
-                ));
-            };
+            drb_calculation_map_lock.insert(epoch);
+        }
 
-            let Some(ref drb_difficulty_selector) = *self.drb_difficulty_selector.read().await
-            else {
-                return Err(anytrace::error!(
-                    "The DRB difficulty selector is missing from the epoch membership \
-                     coordinator. This node will not be able to spawn any DRB calculation tasks \
-                     from catchup."
-                ));
-            };
+        drop(drb_calculation_map_lock);
 
-            let drb_difficulty = drb_difficulty_selector(root_leaf.view_number()).await;
-
-            let mut drb_seed_input = [0u8; 32];
-            let len = drb_seed_input_vec.len().min(32);
-            drb_seed_input[..len].copy_from_slice(&drb_seed_input_vec[..len]);
-            let drb_input = DrbInput {
-                epoch: *epoch,
-                iteration: 0,
-                value: drb_seed_input,
-                difficulty_level: drb_difficulty,
-            };
-
-            let store_drb_progress_fn = self.store_drb_progress_fn.clone();
-            let load_drb_progress_fn = self.load_drb_progress_fn.clone();
-
-            compute_drb_result(drb_input, store_drb_progress_fn, load_drb_progress_fn).await
+        let Ok(drb_seed_input_vec) = bincode::serialize(&root_leaf.justify_qc().signatures) else {
+            return Err(anytrace::error!(
+                "Failed to serialize the QC signature for leaf {root_leaf:?}"
+            ));
         };
 
-        tracing::info!("Writing drb result from catchup to storage for epoch {epoch}");
+        let Some(drb_difficulty_selector) = self.drb_difficulty_selector.read().await.clone()
+        else {
+            return Err(anytrace::error!(
+                "The DRB difficulty selector is missing from the epoch membership coordinator. \
+                 This node will not be able to spawn any DRB calculation tasks from catchup."
+            ));
+        };
+
+        let drb_difficulty = drb_difficulty_selector(root_leaf.view_number()).await;
+
+        let mut drb_seed_input = [0u8; 32];
+        let len = drb_seed_input_vec.len().min(32);
+        drb_seed_input[..len].copy_from_slice(&drb_seed_input_vec[..len]);
+        let drb_input = DrbInput {
+            epoch: *epoch,
+            iteration: 0,
+            value: drb_seed_input,
+            difficulty_level: drb_difficulty,
+        };
+
+        let store_drb_progress_fn = self.store_drb_progress_fn.clone();
+        let load_drb_progress_fn = self.load_drb_progress_fn.clone();
+
+        let drb = compute_drb_result(drb_input, store_drb_progress_fn, load_drb_progress_fn).await;
+
+        let mut drb_calculation_map_lock = self.drb_calculation_map.lock().await;
+        drb_calculation_map_lock.remove(&epoch);
+        drop(drb_calculation_map_lock);
+
+        tracing::info!("Writing drb result from catchup to storage for epoch {epoch}: {drb:?}");
         if let Err(e) = (self.store_drb_result_fn)(epoch, drb).await {
             tracing::warn!("Failed to add drb result to storage: {e}");
         }
         self.membership.write().await.add_drb_result(epoch, drb);
 
-        Ok(())
+        Ok(drb)
     }
 }
 
@@ -563,13 +597,12 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Wraps the same named Membership trait fn
-    async fn get_epoch_drb(&self, block_height: u64) -> Result<DrbResult> {
+    pub async fn get_epoch_drb(&self) -> Result<DrbResult> {
         let Some(epoch) = self.epoch else {
             return Err(anytrace::warn!("Cannot get drb for None epoch"));
         };
         <TYPES::Membership as Membership<TYPES>>::get_epoch_drb(
             self.coordinator.membership.clone(),
-            block_height,
             epoch,
         )
         .await
@@ -755,5 +788,14 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
                 .await
                 .add_drb_result(epoch, drb_result);
         }
+    }
+    pub async fn stake_table_hash(
+        &self,
+    ) -> Option<Commitment<<TYPES::Membership as Membership<TYPES>>::StakeTableHash>> {
+        self.coordinator
+            .membership
+            .read()
+            .await
+            .stake_table_hash(self.epoch?)
     }
 }

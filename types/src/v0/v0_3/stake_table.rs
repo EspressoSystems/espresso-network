@@ -1,16 +1,22 @@
 use std::{collections::HashMap, sync::Arc};
 
-use alloy::{primitives::{Address, Log, U256}, transports::{RpcError, TransportErrorKind}};
-use async_lock::Mutex;
+use alloy::{
+    primitives::{Address, Log, U256},
+    transports::{RpcError, TransportErrorKind},
+};
+use async_lock::{Mutex, RwLock};
+use committable::{Commitment, Committable, RawCommitmentBuilder};
 use derive_more::derive::{From, Into};
-use hotshot::types::{SignatureKey};
+use hotshot::types::SignatureKey;
 use hotshot_contract_adapter::sol_types::StakeTableV2::{
-    ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit,
-    ValidatorRegistered, ValidatorRegisteredV2,
+    CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated,
+    ValidatorExit, ValidatorRegistered, ValidatorRegisteredV2,
 };
 use hotshot_types::{
     data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, PeerConfig,
 };
+use itertools::Itertools;
+use jf_utils::to_bytes;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinHandle;
@@ -18,10 +24,10 @@ use tokio::task::JoinHandle;
 use super::L1Client;
 use crate::{
     traits::{MembershipPersistence, StateCatchup},
-    v0::ChainConfig,
+    v0::{impls::StakeTableHash, ChainConfig},
+    v0_3::RewardAmount,
     SeqTypes, ValidatorMap,
 };
-
 /// Stake table holding all staking information (DA and non-DA stakers)
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
 pub struct CombinedStakeTable(Vec<PeerConfigKeys<SeqTypes>>);
@@ -50,6 +56,39 @@ pub struct Validator<KEY: SignatureKey> {
     pub delegators: HashMap<Address, U256>,
 }
 
+pub(crate) fn to_fixed_bytes(value: U256) -> [u8; std::mem::size_of::<U256>()] {
+    let bytes: [u8; std::mem::size_of::<U256>()] = value.to_le_bytes();
+    bytes
+}
+
+impl<KEY: SignatureKey> Committable for Validator<KEY> {
+    fn commit(&self) -> Commitment<Self> {
+        let mut builder = RawCommitmentBuilder::new(&Self::tag())
+            .fixed_size_field("account", &self.account)
+            .var_size_field(
+                "stake_table_key",
+                self.stake_table_key.to_bytes().as_slice(),
+            )
+            .var_size_field("state_ver_key", &to_bytes!(&self.state_ver_key).unwrap())
+            .fixed_size_field("stake", &to_fixed_bytes(self.stake))
+            .constant_str("commission")
+            .u16(self.commission);
+
+        builder = builder.constant_str("delegators");
+        for (address, stake) in self.delegators.iter().sorted() {
+            builder = builder
+                .fixed_size_bytes(address)
+                .fixed_size_bytes(&to_fixed_bytes(*stake));
+        }
+
+        builder.finalize()
+    }
+
+    fn tag() -> String {
+        "VALIDATOR".to_string()
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize, std::hash::Hash, Clone, Debug, PartialEq, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct Delegator {
@@ -61,7 +100,8 @@ pub struct Delegator {
 /// Type for holding result sets matching epochs to stake tables.
 pub type IndexedStake = (
     EpochNumber,
-    ValidatorMap,
+    (ValidatorMap, Option<RewardAmount>),
+    Option<StakeTableHash>,
 );
 
 #[derive(Clone, derive_more::derive::Debug)]
@@ -77,6 +117,7 @@ pub struct Fetcher {
     /// Verifiable `ChainConfig` holding contract address
     pub(crate) chain_config: Arc<Mutex<ChainConfig>>,
     pub(crate) update_task: Arc<StakeTableUpdateTask>,
+    pub initial_supply: Arc<RwLock<Option<U256>>>,
 }
 
 #[derive(Debug, Default)]
@@ -102,8 +143,8 @@ pub enum StakeTableEvent {
     Undelegate(Undelegated),
     KeyUpdate(ConsensusKeysUpdated),
     KeyUpdateV2(ConsensusKeysUpdatedV2),
+    CommissionUpdate(CommissionUpdated),
 }
-
 
 #[derive(Debug, Error)]
 pub enum StakeTableError {
@@ -127,11 +168,23 @@ pub enum StakeTableError {
     MinimumStakeOverflow,
     #[error("Delegator {0:#x} has 0 stake")]
     ZeroDelegatorStake(Address),
+    #[error("Failed to hash stake table: {0}")]
+    HashError(#[from] bincode::Error),
+    #[error("Validator {0:#x} already exited and cannot be re-registered")]
+    ValidatorAlreadyExited(Address),
+    #[error("Validator {0:#x} has invalid commission {1}")]
+    InvalidCommission(Address, u16),
+    #[error("Schnorr key already used: {0}")]
+    SchnorrKeyAlreadyUsed(String),
+    #[error("Stake table event decode error {0}")]
+    StakeTableEventDecodeError(#[from] alloy::sol_types::Error),
+    #[error("Stake table events sorting error: {0}")]
+    EventSortingError(#[from] EventSortingError)
 }
 
 #[derive(Debug, Error)]
 pub enum ExpectedStakeTableError {
- #[error("Schnorr key already used: {0}")]
+    #[error("Schnorr key already used: {0}")]
     SchnorrKeyAlreadyUsed(String),
 }
 
@@ -156,13 +209,16 @@ pub enum FetchRewardError {
     MissingTransaction(#[source] alloy::contract::Error),
 
     #[error("Failed to decode Transfer log. tx_hash={tx_hash}")]
-    DecodeTransferLog { tx_hash: String},
+    DecodeTransferLog { tx_hash: String },
 
     #[error("First transfer should be a mint from the zero address")]
     InvalidMintFromAddress,
 
-    #[error("Division by zero in commission basis points")]
-    DivisionByZero,
+    #[error("Division by zero {0}")]
+    DivisionByZero(&'static str),
+
+    #[error("Overflow {0}")]
+    Overflow(&'static str),
 
     #[error("Contract call failed: {0}")]
     ContractCall(#[source] alloy::contract::Error),
@@ -184,4 +240,7 @@ pub enum EventSortingError {
 
     #[error("Missing log index in log")]
     MissingLogIndex,
+
+    #[error("Invalid stake table V2 event")]
+    InvalidStakeTableV2Event
 }

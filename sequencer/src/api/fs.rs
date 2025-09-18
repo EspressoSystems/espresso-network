@@ -52,13 +52,3 @@ mod impl_testable_data_source {
         }
     }
 }
-
-#[cfg(test)]
-mod generic_tests {
-    use super::{super::api_tests, DataSource};
-    // For some reason this is the only way to import the macro defined in another module of this
-    // crate.
-    use crate::*;
-
-    instantiate_api_tests!(DataSource);
-}

@@ -5,13 +5,21 @@ edition = { workspace = true }
 authors = { workspace = true }
 license = "MIT"
 
+[features]
+default = ["parallel", "keccak256"]
+parallel = ["ark-ff/parallel", "jf-utils/parallel", "p3-maybe-rayon/parallel"]
+print-trace = ["ark-std/print-trace"]
+sha256 = []
+keccak256 = []
+
 [dependencies]
-anyhow = "1.0"
+anyhow = { workspace = true }
 ark-bn254 = { workspace = true }
 ark-ff = { workspace = true, features = [ "asm" ] }
 ark-poly = { workspace = true }
 ark-serialize = { workspace = true }
 ark-std = { workspace = true }
+base64-bytes = { workspace = true }
 displaydoc = "0.2"
 jf-crhf = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-crhf-v0.1.1" }
 jf-merkle-tree = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-merkle-tree-v0.2.2" }
@@ -40,9 +48,5 @@ harness = false
 name = "recovery"
 harness = false
 
-[features]
-default = ["parallel", "keccak256"]
-parallel = ["ark-ff/parallel", "jf-utils/parallel", "p3-maybe-rayon/parallel"]
-print-trace = ["ark-std/print-trace"]
-sha256 = []
-keccak256 = []
+[lints]
+workspace = true

@@ -7,17 +7,20 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use alloy::primitives::U256;
+use anyhow::Context;
 use hotshot_types::{
     drb::DrbResult,
     stake_table::HSStakeTable,
     traits::{
-        election::Membership,
+        election::{Membership, NoStakeTableHash},
         node_implementation::NodeType,
         signature_key::{SignatureKey, StakeTableEntryType},
     },
     PeerConfig,
 };
 use hotshot_utils::anytrace::*;
+
+use crate::{Arc, RwLock};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 /// The static committee election
@@ -42,6 +45,9 @@ pub struct StaticCommittee<T: NodeType> {
     /// The first epoch which will be encountered. For testing, will panic if an epoch-carrying function is called
     /// when first_epoch is None or is Some greater than that epoch.
     first_epoch: Option<T::Epoch>,
+
+    /// `DrbResult`s indexed by epoch
+    drb_results: BTreeMap<T::Epoch, DrbResult>,
 }
 
 impl<TYPES: NodeType> StaticCommittee<TYPES> {
@@ -65,6 +71,7 @@ impl<TYPES: NodeType> StaticCommittee<TYPES> {
 
 impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
     type Error = hotshot_utils::anytrace::Error;
+    type StakeTableHash = NoStakeTableHash;
     /// Create a new election
     fn new(committee_members: Vec<PeerConfig<TYPES>>, da_members: Vec<PeerConfig<TYPES>>) -> Self {
         // For each eligible leader, get the stake table entry
@@ -115,6 +122,7 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
             indexed_stake_table,
             indexed_da_stake_table,
             first_epoch: None,
+            drb_results: BTreeMap::new(),
         }
     }
 
@@ -262,13 +270,31 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
         Ok(true)
     }
 
-    fn add_drb_result(&mut self, _epoch: <TYPES as NodeType>::Epoch, _drb_result: DrbResult) {}
+    fn add_drb_result(&mut self, epoch: <TYPES as NodeType>::Epoch, drb_result: DrbResult) {
+        self.drb_results.insert(epoch, drb_result);
+    }
 
-    fn set_first_epoch(&mut self, epoch: TYPES::Epoch, _initial_drb_result: DrbResult) {
+    fn set_first_epoch(&mut self, epoch: TYPES::Epoch, initial_drb_result: DrbResult) {
         self.first_epoch = Some(epoch);
+
+        self.add_drb_result(epoch, initial_drb_result);
+        self.add_drb_result(epoch + 1, initial_drb_result);
     }
 
     fn first_epoch(&self) -> Option<TYPES::Epoch> {
         self.first_epoch
+    }
+
+    async fn get_epoch_drb(
+        membership: Arc<RwLock<Self>>,
+        epoch: TYPES::Epoch,
+    ) -> anyhow::Result<DrbResult> {
+        let membership_reader = membership.read().await;
+
+        membership_reader
+            .drb_results
+            .get(&epoch)
+            .context("DRB result missing")
+            .copied()
     }
 }

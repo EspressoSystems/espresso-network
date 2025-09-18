@@ -46,17 +46,18 @@ impl<I: NodeImplementation<SeqTypes>, V: Versions> RecipientSourceTrait<Request,
         // Attempt to get the membership for the current epoch
         let membership = match self
             .memberships
-            .membership_for_epoch(Some(epoch_number))
+            .stake_table_for_epoch(Some(epoch_number))
             .await
         {
             Ok(membership) => membership,
             Err(e) => {
                 warn!(
-                    "Failed to get membership for epoch {}: {e:#}. Failing over to genesis",
+                    "Failed to get membership for epoch {}: {e:#}. Failing over to previous epoch",
                     epoch_number
                 );
+                let prev_epoch = epoch_number.saturating_sub(1);
                 self.memberships
-                    .membership_for_epoch(Some(EpochNumber::genesis()))
+                    .stake_table_for_epoch(Some(EpochNumber::new(prev_epoch)))
                     .await
                     .with_context(|| "failed to get stake table for epoch")?
             },

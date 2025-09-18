@@ -11,8 +11,9 @@ use alloy::{
 };
 use anyhow::{anyhow, Context, Result};
 use hotshot_contract_adapter::sol_types::{
-    EspToken, EspTokenV2, LightClient, LightClientV2, LightClientV2Mock, OwnableUpgradeable,
-    PlonkVerifierV2, StakeTable, StakeTableV2,
+    EspToken, EspTokenV2, LightClient, LightClientV2, LightClientV2Mock, LightClientV3,
+    LightClientV3Mock, OwnableUpgradeable, PlonkVerifierV2, PlonkVerifierV3, StakeTable,
+    StakeTableV2,
 };
 
 use crate::{Contract, Contracts, LIBRARY_PLACEHOLDER_ADDRESS};
@@ -154,7 +155,7 @@ pub fn find_script_path() -> Result<PathBuf> {
 /// - `dry_run`: Whether to do a dry run
 ///
 /// Returns:
-/// - A tuple of (stdout, success) from the script execution
+/// - stdout from the script execution
 pub async fn call_upgrade_proxy_script(
     proxy_addr: Address,
     new_impl_addr: Address,
@@ -162,7 +163,7 @@ pub async fn call_upgrade_proxy_script(
     rpc_url: String,
     safe_addr: Address,
     dry_run: Option<bool>,
-) -> Result<(String, bool), anyhow::Error> {
+) -> anyhow::Result<String> {
     let dry_run = dry_run.unwrap_or(false);
     tracing::info!("Dry run: {}", dry_run);
     tracing::info!(
@@ -196,9 +197,9 @@ pub async fn call_upgrade_proxy_script(
     let stderr = String::from_utf8_lossy(&output.stderr);
     // if stderr is not empty, return the stderr
     if !output.status.success() {
-        return Err(anyhow!("Upgrade script failed: {}", stderr));
+        anyhow::bail!("Upgrade script failed: {}", stderr);
     }
-    Ok((stdout.to_string(), true))
+    Ok(stdout.to_string())
 }
 
 /// Verify the node js files are present and can be executed.
@@ -241,7 +242,7 @@ pub async fn upgrade_light_client_v2_multisig_owner(
     is_mock: bool,
     rpc_url: String,
     dry_run: Option<bool>,
-) -> Result<(String, bool)> {
+) -> Result<String> {
     let expected_major_version: u8 = 2;
     let dry_run = dry_run.unwrap_or_else(|| {
         tracing::warn!("Dry run not specified, defaulting to false");
@@ -374,6 +375,150 @@ pub async fn upgrade_light_client_v2_multisig_owner(
     Ok(result)
 }
 
+/// Upgrade the light client proxy to use LightClientV3.
+/// Internally, first detect existence of proxy, then deploy LCV3, then upgrade and initializeV3.
+/// Internal to "deploy LCV3", we deploy PlonkVerifierV3 whose address will be used at LCV3 init time.
+/// Assumes:
+/// - the proxy is already deployed.
+/// - the proxy is owned by a multisig.
+/// - the proxy is not yet initialized for V3
+///
+/// Returns the url link to the upgrade proposal
+/// This function can only be called on a real network supported by the safeSDK
+pub async fn upgrade_light_client_v3_multisig_owner(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+    is_mock: bool,
+    rpc_url: String,
+    dry_run: Option<bool>,
+) -> Result<String> {
+    let expected_major_version: u8 = 3;
+    let dry_run = dry_run.unwrap_or_else(|| {
+        tracing::warn!("Dry run not specified, defaulting to false");
+        false
+    });
+
+    let proxy_addr = contracts
+        .address(Contract::LightClientProxy)
+        .ok_or_else(|| anyhow!("LightClientProxy (multisig owner) not found, can't upgrade"))?;
+    tracing::info!("LightClientProxy found at {proxy_addr:#x}");
+    let proxy = LightClient::new(proxy_addr, &provider);
+    let owner_addr = proxy.owner().call().await?._0;
+
+    if !dry_run && !crate::is_contract(&provider, owner_addr).await? {
+        tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
+        anyhow::bail!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
+    }
+
+    // Prepare addresses
+    let (_pv3_addr, lcv3_addr) = if !dry_run {
+        // Deploy PlonkVerifierV3.sol (if not already deployed)
+        let pv3_addr = contracts
+            .deploy(
+                Contract::PlonkVerifierV3,
+                PlonkVerifierV3::deploy_builder(&provider),
+            )
+            .await?;
+
+        // then deploy LightClientV3.sol
+        let target_lcv3_bytecode = if is_mock {
+            LightClientV3Mock::BYTECODE.encode_hex()
+        } else {
+            LightClientV3::BYTECODE.encode_hex()
+        };
+        let lcv3_linked_bytecode = {
+            match target_lcv3_bytecode
+                .matches(LIBRARY_PLACEHOLDER_ADDRESS)
+                .count()
+            {
+                0 => return Err(anyhow!("lib placeholder not found")),
+                1 => Bytes::from_hex(target_lcv3_bytecode.replacen(
+                    LIBRARY_PLACEHOLDER_ADDRESS,
+                    &pv3_addr.encode_hex(),
+                    1,
+                ))?,
+                _ => {
+                    return Err(anyhow!(
+                        "more than one lib placeholder found, consider using a different value"
+                    ))
+                },
+            }
+        };
+        let lcv3_addr = if is_mock {
+            let addr = LightClientV3Mock::deploy_builder(&provider)
+                .map(|req| req.with_deploy_code(lcv3_linked_bytecode))
+                .deploy()
+                .await?;
+            tracing::info!("deployed LightClientV3Mock at {addr:#x}");
+            addr
+        } else {
+            contracts
+                .deploy(
+                    Contract::LightClientV3,
+                    LightClientV3::deploy_builder(&provider)
+                        .map(|req| req.with_deploy_code(lcv3_linked_bytecode)),
+                )
+                .await?
+        };
+        (pv3_addr, lcv3_addr)
+    } else {
+        // Use dummy addresses for dry run
+        (Address::random(), Address::random())
+    };
+
+    // Prepare init data
+    let init_data = if crate::already_initialized(
+        &provider,
+        proxy_addr,
+        Contract::LightClientV3,
+        expected_major_version,
+    )
+    .await?
+    {
+        tracing::info!(
+            "Proxy was already initialized for version {}",
+            expected_major_version
+        );
+        vec![].into()
+    } else {
+        tracing::info!(
+            "Init Data to be signed.\n Function: initializeV3\n Arguments: none (V3 inherits from \
+             V2)"
+        );
+        LightClientV3::new(lcv3_addr, &provider)
+            .initializeV3()
+            .calldata()
+            .to_owned()
+    };
+
+    // invoke upgrade on proxy via the safeSDK
+    let result = call_upgrade_proxy_script(
+        proxy_addr,
+        lcv3_addr,
+        init_data.to_string(),
+        rpc_url,
+        owner_addr,
+        Some(dry_run),
+    )
+    .await?;
+
+    tracing::info!("Init data: {:?}", init_data);
+    if init_data.to_string() != "0x" {
+        tracing::info!(
+            "Data to be signed:\n Function: initializeV3\n Arguments: none (V3 inherits from V2)"
+        );
+    }
+    if !dry_run {
+        tracing::info!(
+                "LightClientProxy upgrade proposal sent. Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
+                owner_addr
+            );
+    }
+    // IDEA: add a function to wait for the proposal to be executed
+
+    Ok(result)
+}
+
 /// Upgrade the EspToken proxy to use EspTokenV2.
 /// Internally, first detect existence of proxy, then deploy EspTokenV2, then upgrade and initializeV2.
 /// Assumes:
@@ -387,7 +532,7 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
     contracts: &mut Contracts,
     rpc_url: String,
     dry_run: Option<bool>,
-) -> Result<(String, bool)> {
+) -> Result<String> {
     let dry_run = dry_run.unwrap_or_else(|| {
         tracing::warn!("Dry run not specified, defaulting to false");
         false
@@ -458,84 +603,51 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
     multisig_address: Address,
     pauser: Address,
     dry_run: Option<bool>,
-) -> Result<(String, bool)> {
+) -> Result<()> {
     tracing::info!("Upgrading StakeTableProxy to StakeTableV2 using multisig owner");
     let dry_run = dry_run.unwrap_or(false);
-    match contracts.address(Contract::StakeTableProxy) {
-        // check if proxy already exists
-        None => Err(anyhow!("StakeTableProxy not found, can't upgrade")),
-        Some(proxy_addr) => {
-            let proxy = StakeTable::new(proxy_addr, &provider);
-            let owner = proxy.owner().call().await?;
-            let owner_addr = owner._0;
-            if owner_addr != multisig_address {
-                tracing::error!(
-                    "Proxy is not owned by the multisig. Expected: {multisig_address:#x}, Got: \
-                     {owner_addr:#x}"
-                );
-                anyhow::bail!("Proxy is not owned by the multisig");
-            }
-            if !dry_run && !crate::is_contract(&provider, owner_addr).await? {
-                tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
-                anyhow::bail!("Proxy owner is not a contract");
-            }
-            // TODO: check if owner is a SAFE multisig
+    let Some(proxy_addr) = contracts.address(Contract::StakeTableProxy) else {
+        anyhow::bail!("StakeTableProxy not found, can't upgrade")
+    };
 
-            // first deploy StakeTableV2.sol implementation
-            let stake_table_v2_addr = contracts
-                .deploy(
-                    Contract::StakeTableV2,
-                    StakeTableV2::deploy_builder(&provider),
-                )
-                .await?;
+    let proxy = StakeTable::new(proxy_addr, &provider);
+    let owner = proxy.owner().call().await?;
+    let owner_addr = owner._0;
 
-            // prepare init data
-            let expected_major_version = 2;
-            let init_data = if crate::already_initialized(
-                &provider,
-                proxy_addr,
-                Contract::StakeTableV2,
-                expected_major_version,
-            )
-            .await?
-            {
-                tracing::info!(
-                    "Proxy was already initialized for version {}",
-                    expected_major_version
-                );
-                vec![].into()
-            } else {
-                tracing::info!(
-                    "Init Data to be signed.\n Function: initializeV2\n Arguments:\n pauser: \
-                     {:?}\n admin: {:?}",
-                    pauser,
-                    owner_addr
-                );
-                StakeTableV2::new(stake_table_v2_addr, &provider)
-                    .initializeV2(pauser, owner_addr)
-                    .calldata()
-                    .to_owned()
-            };
-
-            // invoke upgrade on proxy via the safeSDK
-            let result = call_upgrade_proxy_script(
-                proxy_addr,
-                stake_table_v2_addr,
-                init_data.to_string(),
-                rpc_url,
-                owner_addr,
-                Some(dry_run),
-            )
-            .await;
-
-            // Check the result directly
-            if let Err(ref err) = result {
-                tracing::error!("StakeTableProxy upgrade failed: {:?}", err);
-            } else {
-                tracing::info!("StakeTableProxy upgrade proposal sent");
-                // IDEA: add a function to wait for the proposal to be executed
-            }
-            Ok(result.context("Upgrade proposal failed")?)
-        },
+    if owner_addr != multisig_address {
+        anyhow::bail!(
+            "Proxy not owned by multisig. expected: {multisig_address:#x}, got: {owner_addr:#x}"
+        );
     }
+    if !dry_run && !crate::is_contract(&provider, owner_addr).await? {
+        tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
+        anyhow::bail!("Proxy owner is not a contract");
+    }
+    // TODO: check if owner is a SAFE multisig
+
+    let (_init_commissions, init_data) =
+        crate::prepare_stake_table_v2_upgrade(&provider, proxy_addr, pauser, owner_addr).await?;
+
+    let stake_table_v2_addr = contracts
+        .deploy(
+            Contract::StakeTableV2,
+            StakeTableV2::deploy_builder(&provider),
+        )
+        .await?;
+
+    // invoke upgrade on proxy via the safeSDK
+    call_upgrade_proxy_script(
+        proxy_addr,
+        stake_table_v2_addr,
+        init_data.unwrap_or_default().to_string(),
+        rpc_url,
+        owner_addr,
+        Some(dry_run),
+    )
+    .await
+    .context("Calling upgrade proxy script failed")?;
+
+    tracing::info!("StakeTableProxy upgrade proposal sent");
+
+    Ok(())
 }

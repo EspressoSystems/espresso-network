@@ -16,7 +16,7 @@ import (
 )
 
 var errs []error
-var defaultFetchWithMajorityError = fmt.Errorf("no majority consensus reached with potential errors. Errors: %v\n", errs)
+var defaultFetchWithMajorityError = fmt.Errorf("%w: no majority consensus reached with potential errors. Errors: %v\n", ErrPermanent, errs)
 
 // MockClient is a mock implementation of the Client interface
 type MockClient struct {
@@ -25,6 +25,7 @@ type MockClient struct {
 
 func (m *MockClient) FetchRawHeaderByHeight(ctx context.Context, height uint64) (json.RawMessage, error) {
 	args := m.Called(ctx, height)
+
 	return args.Get(0).(json.RawMessage), args.Error(1)
 }
 

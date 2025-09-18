@@ -44,7 +44,7 @@ use crate::{
         broadcast_event, broadcast_view_change, check_qc_state_cert_correspondence, fetch_proposal,
         update_high_qc, validate_epoch_transition_qc,
         validate_light_client_state_update_certificate, validate_proposal_safety_and_liveness,
-        validate_proposal_view_and_certs, validate_qc_and_next_epoch_qc,
+        validate_proposal_view_and_certs, validate_qc_and_next_epoch_qc, verify_drb_result,
     },
     quorum_proposal_recv::{UpgradeLock, Versions},
 };
@@ -276,6 +276,16 @@ pub(crate) async fn handle_quorum_proposal_recv<
 
     validate_block_height(proposal).await?;
 
+    let version = validation_info
+        .upgrade_lock
+        .version(proposal.data.view_number())
+        .await?;
+
+    if version >= V::Epochs::VERSION {
+        // Don't vote if the DRB result verification fails.
+        verify_drb_result(&proposal.data, &validation_info).await?;
+    }
+
     let view_number = proposal.data.view_number();
 
     let justify_qc = proposal.data.justify_qc().clone();
@@ -307,6 +317,7 @@ pub(crate) async fn handle_quorum_proposal_recv<
         validate_light_client_state_update_certificate(
             state_cert,
             &validation_info.membership.coordinator,
+            &validation_info.upgrade_lock,
         )
         .await?;
     }
