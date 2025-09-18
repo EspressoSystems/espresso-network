@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/hotshot/types/src/message.rs`."><title>message.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-84e720fa.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="hotshot_types" data-themes="" data-resource-suffix="" data-rustdoc-version="1.89.0 (29483883e 2025-08-04)" data-channel="1.89.0" data-search-js="search-92309212.js" data-settings-js="settings-5514c975.js" ><script src="../../static.files/storage-4e99c027.js"></script><script defer src="../../static.files/src-script-813739b1.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-fd3af306.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-32bb7600.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">hotshot_types/</div>message.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Copyright (c) 2021-2024 Espresso Systems (espressosys.com)
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/hotshot/types/src/message.rs`."><title>message.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-aa0817cf.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="hotshot_types" data-themes="" data-resource-suffix="" data-rustdoc-version="1.90.0 (1159e78c4 2025-09-14)" data-channel="1.90.0" data-search-js="search-fa3e91e5.js" data-settings-js="settings-5514c975.js" ><script src="../../static.files/storage-68b7e25d.js"></script><script defer src="../../static.files/src-script-813739b1.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-eebb9057.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-32bb7600.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">hotshot_types/</div>message.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Copyright (c) 2021-2024 Espresso Systems (espressosys.com)
 <a href=#2 id=2 data-nosnippet>2</a>// This file is part of the HotShot repository.
 <a href=#3 id=3 data-nosnippet>3</a>
 <a href=#4 id=4 data-nosnippet>4</a>// You should have received a copy of the MIT License
@@ -755,51 +755,60 @@
 <a href=#755 id=755 data-nosnippet>755</a>    /// # Errors
 <a href=#756 id=756 data-nosnippet>756</a>    ///
 <a href=#757 id=757 data-nosnippet>757</a>    /// Errors if deserialization fails.
-<a href=#758 id=758 data-nosnippet>758</a>    </span><span class="kw">pub async fn </span>deserialize&lt;M: HasViewNumber&lt;TYPES&gt; + <span class="kw">for</span>&lt;<span class="lifetime">'a</span>&gt; Deserialize&lt;<span class="lifetime">'a</span>&gt;&gt;(
+<a href=#758 id=758 data-nosnippet>758</a>    </span><span class="kw">pub async fn </span>deserialize&lt;M: Debug + HasViewNumber&lt;TYPES&gt; + <span class="kw">for</span>&lt;<span class="lifetime">'a</span>&gt; Deserialize&lt;<span class="lifetime">'a</span>&gt;&gt;(
 <a href=#759 id=759 data-nosnippet>759</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
 <a href=#760 id=760 data-nosnippet>760</a>        message: <span class="kw-2">&amp;</span>[u8],
 <a href=#761 id=761 data-nosnippet>761</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(M, Version)&gt; {
 <a href=#762 id=762 data-nosnippet>762</a>        <span class="comment">// Get the actual version from the message itself
-<a href=#763 id=763 data-nosnippet>763</a>        </span><span class="kw">let </span>actual_version = Version::deserialize(message)
+<a href=#763 id=763 data-nosnippet>763</a>        </span><span class="kw">let </span>(actual_version, rest) = Version::deserialize(message)
 <a href=#764 id=764 data-nosnippet>764</a>            .wrap()
-<a href=#765 id=765 data-nosnippet>765</a>            .context(<span class="macro">info!</span>(<span class="string">"Failed to read message version!"</span>))<span class="question-mark">?
-<a href=#766 id=766 data-nosnippet>766</a>            </span>.<span class="number">0</span>;
-<a href=#767 id=767 data-nosnippet>767</a>
-<a href=#768 id=768 data-nosnippet>768</a>        <span class="comment">// Deserialize the message using the stated version
-<a href=#769 id=769 data-nosnippet>769</a>        </span><span class="kw">let </span>deserialized_message: M = <span class="kw">match </span>actual_version {
-<a href=#770 id=770 data-nosnippet>770</a>            <span class="comment">// Special case: external messages (version 0.0)
-<a href=#771 id=771 data-nosnippet>771</a>            </span>v <span class="kw">if </span>v == EXTERNAL_MESSAGE_VERSION =&gt; {
-<a href=#772 id=772 data-nosnippet>772</a>                Serializer::&lt;StaticVersion&lt;<span class="number">0</span>, <span class="number">0</span>&gt;&gt;::deserialize(message)
-<a href=#773 id=773 data-nosnippet>773</a>            },
-<a href=#774 id=774 data-nosnippet>774</a>            v <span class="kw">if </span>v == V::Base::VERSION =&gt; Serializer::&lt;V::Base&gt;::deserialize(message),
-<a href=#775 id=775 data-nosnippet>775</a>            v <span class="kw">if </span>v == V::Upgrade::VERSION =&gt; Serializer::&lt;V::Upgrade&gt;::deserialize(message),
-<a href=#776 id=776 data-nosnippet>776</a>            v =&gt; {
-<a href=#777 id=777 data-nosnippet>777</a>                <span class="macro">bail!</span>(<span class="string">"Cannot deserialize message with stated version {v}"</span>);
-<a href=#778 id=778 data-nosnippet>778</a>            },
-<a href=#779 id=779 data-nosnippet>779</a>        }
-<a href=#780 id=780 data-nosnippet>780</a>        .wrap()
-<a href=#781 id=781 data-nosnippet>781</a>        .context(<span class="macro">info!</span>(<span class="string">"Failed to deserialize message!"</span>))<span class="question-mark">?</span>;
+<a href=#765 id=765 data-nosnippet>765</a>            .context(<span class="macro">info!</span>(<span class="string">"Failed to read message version!"</span>))<span class="question-mark">?</span>;
+<a href=#766 id=766 data-nosnippet>766</a>
+<a href=#767 id=767 data-nosnippet>767</a>        <span class="comment">// Deserialize the message using the stated version
+<a href=#768 id=768 data-nosnippet>768</a>        </span><span class="kw">let </span>deserialized_message: M = <span class="kw">match </span>actual_version {
+<a href=#769 id=769 data-nosnippet>769</a>            <span class="comment">// Special case: external messages (version 0.0)
+<a href=#770 id=770 data-nosnippet>770</a>            </span>v <span class="kw">if </span>v == EXTERNAL_MESSAGE_VERSION =&gt; {
+<a href=#771 id=771 data-nosnippet>771</a>                Serializer::&lt;StaticVersion&lt;<span class="number">0</span>, <span class="number">0</span>&gt;&gt;::deserialize(message)
+<a href=#772 id=772 data-nosnippet>772</a>            },
+<a href=#773 id=773 data-nosnippet>773</a>            v <span class="kw">if </span>v == V::Base::VERSION =&gt; Serializer::&lt;V::Base&gt;::deserialize(message),
+<a href=#774 id=774 data-nosnippet>774</a>            v <span class="kw">if </span>v == V::Upgrade::VERSION =&gt; Serializer::&lt;V::Upgrade&gt;::deserialize(message),
+<a href=#775 id=775 data-nosnippet>775</a>            v =&gt; {
+<a href=#776 id=776 data-nosnippet>776</a>                <span class="kw">let </span>attempted_deserialization: M = <span class="kw">match </span>bincode::deserialize(rest) {
+<a href=#777 id=777 data-nosnippet>777</a>                    <span class="prelude-val">Ok</span>(m) =&gt; m,
+<a href=#778 id=778 data-nosnippet>778</a>                    <span class="prelude-val">Err</span>(e) =&gt; {
+<a href=#779 id=779 data-nosnippet>779</a>                        <span class="macro">bail!</span>(<span class="string">"Cannot deserialize message with state version: {v}. Error: {e}"</span>);
+<a href=#780 id=780 data-nosnippet>780</a>                    },
+<a href=#781 id=781 data-nosnippet>781</a>                };
 <a href=#782 id=782 data-nosnippet>782</a>
-<a href=#783 id=783 data-nosnippet>783</a>        <span class="comment">// If the message is version 0.0, just return the deserialized message and the version.
-<a href=#784 id=784 data-nosnippet>784</a>        // We don't care about it matching the expected version for the view number.
-<a href=#785 id=785 data-nosnippet>785</a>        </span><span class="kw">if </span>actual_version == EXTERNAL_MESSAGE_VERSION {
-<a href=#786 id=786 data-nosnippet>786</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>((deserialized_message, actual_version));
-<a href=#787 id=787 data-nosnippet>787</a>        }
-<a href=#788 id=788 data-nosnippet>788</a>
-<a href=#789 id=789 data-nosnippet>789</a>        <span class="comment">// Get the view number associated with the message
-<a href=#790 id=790 data-nosnippet>790</a>        </span><span class="kw">let </span>view = deserialized_message.view_number();
+<a href=#783 id=783 data-nosnippet>783</a>                <span class="macro">bail!</span>(<span class="macro">warn!</span>(
+<a href=#784 id=784 data-nosnippet>784</a>                    <span class="string">"Received a message with state version {v} which is invalid for its view: {:?}"</span>,
+<a href=#785 id=785 data-nosnippet>785</a>                    attempted_deserialization
+<a href=#786 id=786 data-nosnippet>786</a>                ));
+<a href=#787 id=787 data-nosnippet>787</a>            },
+<a href=#788 id=788 data-nosnippet>788</a>        }
+<a href=#789 id=789 data-nosnippet>789</a>        .wrap()
+<a href=#790 id=790 data-nosnippet>790</a>        .context(<span class="macro">info!</span>(<span class="string">"Failed to deserialize message!"</span>))<span class="question-mark">?</span>;
 <a href=#791 id=791 data-nosnippet>791</a>
-<a href=#792 id=792 data-nosnippet>792</a>        <span class="comment">// Get the expected version for the message based on the view number
-<a href=#793 id=793 data-nosnippet>793</a>        </span><span class="kw">let </span>expected_version = <span class="self">self</span>.version(view).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#794 id=794 data-nosnippet>794</a>
-<a href=#795 id=795 data-nosnippet>795</a>        <span class="comment">// Check that the actual version matches the expected version
-<a href=#796 id=796 data-nosnippet>796</a>        </span><span class="kw">if </span>actual_version != expected_version {
-<a href=#797 id=797 data-nosnippet>797</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="macro">error!</span>(<span class="macro">format!</span>(
-<a href=#798 id=798 data-nosnippet>798</a>                <span class="string">"Message has invalid version number for its view. Expected: {expected_version}, \
-<a href=#799 id=799 data-nosnippet>799</a>                 Actual: {actual_version}, View: {view:?}"
-<a href=#800 id=800 data-nosnippet>800</a>            </span>)));
-<a href=#801 id=801 data-nosnippet>801</a>        };
-<a href=#802 id=802 data-nosnippet>802</a>
-<a href=#803 id=803 data-nosnippet>803</a>        <span class="prelude-val">Ok</span>((deserialized_message, actual_version))
-<a href=#804 id=804 data-nosnippet>804</a>    }
-<a href=#805 id=805 data-nosnippet>805</a>}</code></pre></div></section></main></body></html>
+<a href=#792 id=792 data-nosnippet>792</a>        <span class="comment">// If the message is version 0.0, just return the deserialized message and the version.
+<a href=#793 id=793 data-nosnippet>793</a>        // We don't care about it matching the expected version for the view number.
+<a href=#794 id=794 data-nosnippet>794</a>        </span><span class="kw">if </span>actual_version == EXTERNAL_MESSAGE_VERSION {
+<a href=#795 id=795 data-nosnippet>795</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>((deserialized_message, actual_version));
+<a href=#796 id=796 data-nosnippet>796</a>        }
+<a href=#797 id=797 data-nosnippet>797</a>
+<a href=#798 id=798 data-nosnippet>798</a>        <span class="comment">// Get the view number associated with the message
+<a href=#799 id=799 data-nosnippet>799</a>        </span><span class="kw">let </span>view = deserialized_message.view_number();
+<a href=#800 id=800 data-nosnippet>800</a>
+<a href=#801 id=801 data-nosnippet>801</a>        <span class="comment">// Get the expected version for the message based on the view number
+<a href=#802 id=802 data-nosnippet>802</a>        </span><span class="kw">let </span>expected_version = <span class="self">self</span>.version(view).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#803 id=803 data-nosnippet>803</a>
+<a href=#804 id=804 data-nosnippet>804</a>        <span class="comment">// Check that the actual version matches the expected version
+<a href=#805 id=805 data-nosnippet>805</a>        </span><span class="kw">if </span>actual_version != expected_version {
+<a href=#806 id=806 data-nosnippet>806</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="macro">error!</span>(<span class="macro">format!</span>(
+<a href=#807 id=807 data-nosnippet>807</a>                <span class="string">"Message has invalid version number for its view. Expected: {expected_version}, \
+<a href=#808 id=808 data-nosnippet>808</a>                 Actual: {actual_version}, View: {view:?}"
+<a href=#809 id=809 data-nosnippet>809</a>            </span>)));
+<a href=#810 id=810 data-nosnippet>810</a>        };
+<a href=#811 id=811 data-nosnippet>811</a>
+<a href=#812 id=812 data-nosnippet>812</a>        <span class="prelude-val">Ok</span>((deserialized_message, actual_version))
+<a href=#813 id=813 data-nosnippet>813</a>    }
+<a href=#814 id=814 data-nosnippet>814</a>}</code></pre></div></section></main></body></html>
