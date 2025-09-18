@@ -2,6 +2,7 @@ use std::{num::NonZeroUsize, path::PathBuf, time::Duration};
 
 use builder::non_permissioned::{build_instance_state, BuilderConfig};
 use clap::Parser;
+use espresso_types::FeeVersion;
 use espresso_types::{eth_signature_key::EthKeyPair, parse_duration, SequencerVersions};
 use futures::future::pending;
 use hotshot::traits::ValidatedState;
@@ -117,26 +118,57 @@ async fn main() -> anyhow::Result<()> {
         (
             espresso_types::EpochVersion::VERSION,
             espresso_types::DrbAndHeaderUpgradeVersion::VERSION,
-        ) => run(genesis, opt).await,
+        ) => {
+            run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::EpochVersion>>(
+                genesis, opt,
+            )
+            .await
+        },
         #[cfg(all(feature = "fee", feature = "drb-and-header"))]
         (
             espresso_types::FeeVersion::VERSION,
             espresso_types::DrbAndHeaderUpgradeVersion::VERSION,
-        ) => run(genesis, modules).await,
+        ) => {
+            run::<
+                SequencerVersions<
+                    espresso_types::FeeVersion,
+                    espresso_types::DrbAndHeaderUpgradeVersion,
+                >,
+            >(genesis, opt)
+            .await
+        },
         #[cfg(feature = "drb-and-header")]
-        (espresso_types::DrbAndHeaderUpgradeVersion::VERSION, _) => run(genesis, opt).await,
+        (espresso_types::DrbAndHeaderUpgradeVersion::VERSION, _) => {
+            run::<
+                SequencerVersions<
+                    espresso_types::DrbAndHeaderUpgradeVersion,
+                    espresso_types::DrbAndHeaderUpgradeVersion,
+                >,
+            >(genesis, opt)
+            .await
+        },
         #[cfg(all(feature = "fee", feature = "pos"))]
-        (FeeVersion::VERSION, espresso_types::EpochVersion::VERSION) => run(genesis, opt).await,
+        (FeeVersion::VERSION, espresso_types::EpochVersion::VERSION) => {
+            run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::EpochVersion>>(
+                genesis, opt,
+            )
+            .await
+        },
         #[cfg(feature = "pos")]
         (espresso_types::EpochVersion::VERSION, espresso_types::EpochVersion::VERSION) => {
-            run(
+            run::<SequencerVersions<espresso_types::EpochVersion, espresso_types::EpochVersion>>(
                 genesis, opt,
                 // Specifying V0_0 disables upgrades
             )
             .await
         },
         #[cfg(feature = "fee")]
-        (FeeVersion::VERSION, espresso_types::FeeVersion::VERSION) => run(genesis, opt).await,
+        (FeeVersion::VERSION, espresso_types::FeeVersion::VERSION) => {
+            run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::FeeVersion>>(
+                genesis, opt,
+            )
+            .await
+        },
         _ => panic!(
             "Invalid base ({base}) and upgrade ({upgrade}) versions specified in the toml file."
         ),
