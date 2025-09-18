@@ -26,6 +26,7 @@ use hotshot_example_types::{
 use hotshot_types::{
     constants::EVENT_CHANNEL_SIZE,
     data::Leaf2,
+    epoch_membership::EpochMembershipCoordinator,
     event::Event,
     message::convert_proposal,
     simple_certificate::{
@@ -252,7 +253,23 @@ where
                                 };
 
                                 let storage = node.handle.storage().clone();
-                                let memberships = node.handle.membership_coordinator.clone();
+
+                                let membership = Arc::new(RwLock::new(
+                                    <TYPES as NodeType>::Membership::new::<I>(
+                                        node.handle.hotshot.config.known_nodes_with_stake.clone(),
+                                        node.handle.hotshot.config.known_da_nodes.clone(),
+                                        node.handle.storage().clone(),
+                                        generated_network.clone(),
+                                        node.handle.public_key().clone(),
+                                        node.handle.hotshot.config.epoch_height,
+                                    ),
+                                ));
+                                let memberships = EpochMembershipCoordinator::new(
+                                    membership,
+                                    node.handle.hotshot.config.epoch_height,
+                                    &node.handle.storage().clone(),
+                                );
+
                                 let config = node.handle.hotshot.config.clone();
 
                                 let next_epoch_high_qc = storage.next_epoch_high_qc_cloned().await;
