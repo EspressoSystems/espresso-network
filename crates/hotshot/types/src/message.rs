@@ -776,7 +776,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
                 let attempted_deserialization: M = match bincode::deserialize(rest) {
                     Ok(m) => m,
                     Err(e) => {
-                        bail!("Cannot deserialize message with state version: {v}. Error: {e}");
+                        bail!("Cannot deserialize message with stated version: {v}. Error: {e}");
                     },
                 };
 
