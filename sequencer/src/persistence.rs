@@ -1712,14 +1712,14 @@ mod tests {
         let mut expected_epoch11: Vec<_> = vmap2.clone().into_values().collect();
         expected_epoch11.sort_by_key(|v| v.account);
 
-        let mut loaded2 = storage
+        let loaded2 = storage
             .load_all_validators(EpochNumber::new(11), 0, 100)
             .await?;
 
         assert_eq!(expected_epoch11, loaded2);
 
         // Epoch 10 still there
-        let mut loaded1_again = storage
+        let loaded1_again = storage
             .load_all_validators(EpochNumber::new(10), 0, 100)
             .await?;
 
