@@ -22,7 +22,7 @@ pub fn parse_ns_table(payload_byte_len: usize, bytes: &[u8]) -> Vec<Range<usize>
     if bytes.len() < NUM_NSS_BYTE_LEN
         || (bytes.len() - NUM_NSS_BYTE_LEN) % (NS_OFFSET_BYTE_LEN + NS_ID_BYTE_LEN) != 0
     {
-        tracing::warn!(
+        tracing::info!(
             "Failed to parse the metadata as namespace table. Use a single namespace table \
              instead."
         );
@@ -34,7 +34,7 @@ pub fn parse_ns_table(payload_byte_len: usize, bytes: &[u8]) -> Vec<Range<usize>
             / NS_ID_BYTE_LEN.saturating_add(NS_OFFSET_BYTE_LEN)
         || (num_entries == 0 && payload_byte_len != 0)
     {
-        tracing::warn!(
+        tracing::info!(
             "Failed to parse the metadata as namespace table. Use a single namespace table \
              instead."
         );
@@ -53,7 +53,7 @@ pub fn parse_ns_table(payload_byte_len: usize, bytes: &[u8]) -> Vec<Range<usize>
                 .unwrap(),
         ) as usize;
         if r < l || r > payload_byte_len {
-            tracing::warn!(
+            tracing::info!(
                 "Failed to parse the metadata as namespace table. Use a single namespace table \
                  instead."
             );
@@ -63,7 +63,7 @@ pub fn parse_ns_table(payload_byte_len: usize, bytes: &[u8]) -> Vec<Range<usize>
         l = r;
     }
     if l != payload_byte_len {
-        tracing::warn!(
+        tracing::info!(
             "Failed to parse the metadata as namespace table. Use a single namespace table \
              instead."
         );
