@@ -6,8 +6,8 @@ use async_trait::async_trait;
 use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent},
-    Leaf2, NetworkConfig, StakeTableHash, ValidatorMap,
+    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent, Validator},
+    Leaf2, NetworkConfig, PubKey, StakeTableHash, ValidatorMap,
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
@@ -318,6 +318,23 @@ impl MembershipPersistence for NoStorage {
         Vec<(EventKey, StakeTableEvent)>,
     )> {
         Ok((None, Vec::new()))
+    }
+
+    async fn store_all_validators(
+        &self,
+        _epoch: EpochNumber,
+        _all_validators: ValidatorMap,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn load_all_validators(
+        &self,
+        _epoch: EpochNumber,
+        _offset: u64,
+        _limit: u64,
+    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
+        Ok(Default::default())
     }
 }
 

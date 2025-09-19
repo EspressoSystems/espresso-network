@@ -19,14 +19,16 @@ pub mod traits;
 mod txproof;
 mod utils;
 pub use header::Header;
+#[cfg(any(test, feature = "testing"))]
+pub use impls::mock;
+#[cfg(any(test, feature = "testing"))]
+pub use impls::testing;
 #[allow(unused_imports)]
-pub(crate) use impls::active_validator_set_from_l1_events;
+pub(crate) use impls::validator_set_from_l1_events;
 pub use impls::{
     get_l1_deposits, retain_accounts, validators_from_l1_events, BuilderValidationError,
     EpochCommittees, FeeError, ProposalValidationError, StateValidationError,
 };
-#[cfg(any(test, feature = "testing"))]
-pub use impls::{mock, testing};
 pub use nsproof::*;
 pub use txproof::*;
 pub use utils::*;
