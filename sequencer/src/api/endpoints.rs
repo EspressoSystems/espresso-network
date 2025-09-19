@@ -20,6 +20,7 @@ pub type ADVZNamespaceProofQueryData = espresso_types::ADVZNamespaceProofQueryDa
 pub type NamespaceProofQueryData = espresso_types::NamespaceProofQueryData;
 
 use futures::{try_join, FutureExt};
+use hotshot_contract_adapter::sol_types::AccruedRewardsProofSol;
 use hotshot_query_service::{
     availability::{self, AvailabilityDataSource, CustomSnafu, FetchBlockSnafu},
     explorer::{self, ExplorerDataSource},
@@ -219,6 +220,48 @@ where
                 }
                 .boxed()
             })?;
+<<<<<<< Updated upstream
+=======
+
+            api.get("get_reward_account_proof_sol", move |req, state| {
+                async move {
+                    let address = req.string_param("address")?;
+                    let height = req.integer_param("height")?;
+                    let account = address
+                        .parse()
+                        .map_err(|_| merklized_state::Error::Custom {
+                            message: format!("invalid reward address: {address}"),
+                            status: StatusCode::BAD_REQUEST,
+                        })?;
+
+                    let proof = state
+                        .load_v2_reward_account_proof(height, account)
+                        .await
+                        .map_err(|err| merklized_state::Error::Custom {
+                            message: format!(
+                                "failed to load v2 reward account {address} at height {height}: \
+                                 {err}"
+                            ),
+                            status: StatusCode::NOT_FOUND,
+                        })?;
+
+                    let sol_proof: AccruedRewardsProofSol =
+                        proof
+                            .proof
+                            .try_into()
+                            .map_err(|err| merklized_state::Error::Custom {
+                                message: format!(
+                                    "Failed to convert reward proof for {address} at height \
+                                     {height}: {err}"
+                                ),
+                                status: StatusCode::INTERNAL_SERVER_ERROR,
+                            })?;
+
+                    Ok(sol_proof)
+                }
+                .boxed()
+            })?;
+>>>>>>> Stashed changes
         },
     }
 

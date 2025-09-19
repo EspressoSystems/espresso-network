@@ -14,3 +14,9 @@ PATH = ["proof/:height/:address"]
 ":address" = "Literal"
 ":height" = "Integer"
 DOC = "Get reward account merkle proof"
+
+[route.get_reward_account_proof_sol]
+PATH = ["proof/solidity/:height/:address"]
+":address" = "Literal"
+":height" = "Integer"
+DOC = "Get reward account merkle proof"
