@@ -220,8 +220,6 @@ where
                 }
                 .boxed()
             })?;
-<<<<<<< Updated upstream
-=======
 
             api.get("get_reward_account_proof_sol", move |req, state| {
                 async move {
@@ -261,7 +259,6 @@ where
                 }
                 .boxed()
             })?;
->>>>>>> Stashed changes
         },
     }
 
