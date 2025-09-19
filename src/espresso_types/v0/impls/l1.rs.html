@@ -424,7 +424,7 @@
 <a href=#424 id=424 data-nosnippet>424</a>    <span class="kw">fn </span>with_transport(transport: SwitchingTransport) -&gt; <span class="self">Self </span>{
 <a href=#425 id=425 data-nosnippet>425</a>        <span class="comment">// Create a new provider with that RPC client using the custom transport
 <a href=#426 id=426 data-nosnippet>426</a>        </span><span class="kw">let </span>rpc_client = RpcClient::new(transport.clone(), <span class="bool-val">false</span>);
-<a href=#427 id=427 data-nosnippet>427</a>        <span class="kw">let </span>provider = ProviderBuilder::new().on_client(rpc_client);
+<a href=#427 id=427 data-nosnippet>427</a>        <span class="kw">let </span>provider = ProviderBuilder::new().connect_client(rpc_client);
 <a href=#428 id=428 data-nosnippet>428</a>
 <a href=#429 id=429 data-nosnippet>429</a>        <span class="kw">let </span>opt = transport.options().clone();
 <a href=#430 id=430 data-nosnippet>430</a>
@@ -517,7 +517,7 @@
 <a href=#517 id=517 data-nosnippet>517</a>                            // problem with one of the hosts specifically.
 <a href=#518 id=518 data-nosnippet>518</a>                            </span><span class="kw">let </span>provider = i % urls.len();
 <a href=#519 id=519 data-nosnippet>519</a>                            <span class="kw">let </span>url = <span class="kw-2">&amp;</span>urls[provider];
-<a href=#520 id=520 data-nosnippet>520</a>                            ws = <span class="kw">match </span>ProviderBuilder::new().on_ws(WsConnect::new(url.clone())).<span class="kw">await </span>{
+<a href=#520 id=520 data-nosnippet>520</a>                            ws = <span class="kw">match </span>ProviderBuilder::new().connect_ws(WsConnect::new(url.clone())).<span class="kw">await </span>{
 <a href=#521 id=521 data-nosnippet>521</a>                                <span class="prelude-val">Ok</span>(ws) =&gt; ws,
 <a href=#522 id=522 data-nosnippet>522</a>                                <span class="prelude-val">Err</span>(err) =&gt; {
 <a href=#523 id=523 data-nosnippet>523</a>                                    <span class="macro">tracing::warn!</span>(provider, <span class="string">"Failed to connect WebSockets provider: {err:#}"</span>);
@@ -1161,7 +1161,7 @@
 <a href=#1161 id=1161 data-nosnippet>1161</a>        <span class="kw">let </span>deployer = wallet.default_signer().address();
 <a href=#1162 id=1162 data-nosnippet>1162</a>        <span class="kw">let </span>inner_provider = ProviderBuilder::new()
 <a href=#1163 id=1163 data-nosnippet>1163</a>            .wallet(wallet)
-<a href=#1164 id=1164 data-nosnippet>1164</a>            .on_http(anvil.endpoint_url());
+<a href=#1164 id=1164 data-nosnippet>1164</a>            .connect_http(anvil.endpoint_url());
 <a href=#1165 id=1165 data-nosnippet>1165</a>        <span class="comment">// a provider that holds both anvil (to avoid accidental drop) and wallet-enabled L1 provider
 <a href=#1166 id=1166 data-nosnippet>1166</a>        </span><span class="kw">let </span>provider = AnvilProvider::new(inner_provider, Arc::new(anvil));
 <a href=#1167 id=1167 data-nosnippet>1167</a>        <span class="comment">// cache store for deployed contracts

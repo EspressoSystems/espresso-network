@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["PlonkVerifierCalls","PlonkVerifierErrors"],"fn":["deploy","deploy_builder","new"],"static":["BYTECODE","DEPLOYED_BYTECODE"],"struct":["InvalidPlonkArgs","PlonkVerifierInstance","UnsupportedDegree","WrongPlonkVK","verifyCall","verifyReturn"]};

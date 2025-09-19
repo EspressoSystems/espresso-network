@@ -159,7 +159,7 @@
 <a href=#159 id=159 data-nosnippet>159</a>    </span><span class="kw">let </span>signer = key_pair.signer();
 <a href=#160 id=160 data-nosnippet>160</a>    <span class="kw">let </span>l1 = ProviderBuilder::new()
 <a href=#161 id=161 data-nosnippet>161</a>        .wallet(EthereumWallet::from(signer.clone()))
-<a href=#162 id=162 data-nosnippet>162</a>        .on_http(opt.rpc_url);
+<a href=#162 id=162 data-nosnippet>162</a>        .connect_http(opt.rpc_url);
 <a href=#163 id=163 data-nosnippet>163</a>    <span class="kw">let </span>contract = FeeContract::new(opt.contract_address, <span class="kw-2">&amp;</span>l1);
 <a href=#164 id=164 data-nosnippet>164</a>
 <a href=#165 id=165 data-nosnippet>165</a>    <span class="comment">// Connect to Espresso.
@@ -167,8 +167,8 @@
 <a href=#167 id=167 data-nosnippet>167</a>
 <a href=#168 id=168 data-nosnippet>168</a>    <span class="comment">// Validate deposit.
 <a href=#169 id=169 data-nosnippet>169</a>    </span><span class="kw">let </span>amount = U256::from(opt.amount);
-<a href=#170 id=170 data-nosnippet>170</a>    <span class="kw">let </span>min_deposit = contract.minDepositAmount().call().<span class="kw">await</span><span class="question-mark">?</span>._0;
-<a href=#171 id=171 data-nosnippet>171</a>    <span class="kw">let </span>max_deposit = contract.maxDepositAmount().call().<span class="kw">await</span><span class="question-mark">?</span>._0;
+<a href=#170 id=170 data-nosnippet>170</a>    <span class="kw">let </span>min_deposit = contract.minDepositAmount().call().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#171 id=171 data-nosnippet>171</a>    <span class="kw">let </span>max_deposit = contract.maxDepositAmount().call().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#172 id=172 data-nosnippet>172</a>    <span class="macro">ensure!</span>(
 <a href=#173 id=173 data-nosnippet>173</a>        amount &gt;= min_deposit,
 <a href=#174 id=174 data-nosnippet>174</a>        <span class="string">"amount is too small (minimum deposit: {min_deposit})"</span>,
@@ -282,7 +282,7 @@
 <a href=#282 id=282 data-nosnippet>282</a>    };
 <a href=#283 id=283 data-nosnippet>283</a>
 <a href=#284 id=284 data-nosnippet>284</a>    <span class="comment">// let l1 = Provider::try_from(opt.rpc_url.to_string())?.interval(opt.l1_interval);
-<a href=#285 id=285 data-nosnippet>285</a>    </span><span class="kw">let </span>l1 = ProviderBuilder::new().on_http(opt.rpc_url);
+<a href=#285 id=285 data-nosnippet>285</a>    </span><span class="kw">let </span>l1 = ProviderBuilder::new().connect_http(opt.rpc_url);
 <a href=#286 id=286 data-nosnippet>286</a>
 <a href=#287 id=287 data-nosnippet>287</a>    <span class="comment">// let block = opt.block.map(BlockId::from);
 <a href=#288 id=288 data-nosnippet>288</a>    </span><span class="kw">let </span>block = <span class="kw">match </span>opt.block {

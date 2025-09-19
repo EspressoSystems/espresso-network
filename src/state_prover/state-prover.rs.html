@@ -115,7 +115,7 @@
 <a href=#115 id=115 data-nosnippet>115</a>    </span><span class="kw">let </span>transport = SwitchingTransport::new(args.l1_options, args.l1_provider_url)
 <a href=#116 id=116 data-nosnippet>116</a>        .expect(<span class="string">"failed to create switching transport, check your l1 provider urls"</span>);
 <a href=#117 id=117 data-nosnippet>117</a>    <span class="kw">let </span>rpc_client = RpcClient::new(transport.clone(), <span class="bool-val">false</span>);
-<a href=#118 id=118 data-nosnippet>118</a>    <span class="kw">let </span>l1_provider = ProviderBuilder::new().on_client(rpc_client.clone());
+<a href=#118 id=118 data-nosnippet>118</a>    <span class="kw">let </span>l1_provider = ProviderBuilder::new().connect_client(rpc_client.clone());
 <a href=#119 id=119 data-nosnippet>119</a>    <span class="kw">let </span>chain_id = l1_provider.get_chain_id().<span class="kw">await</span>.unwrap();
 <a href=#120 id=120 data-nosnippet>120</a>    <span class="kw">let </span>signer = MnemonicBuilder::&lt;English&gt;::default()
 <a href=#121 id=121 data-nosnippet>121</a>        .phrase(args.eth_mnemonic)

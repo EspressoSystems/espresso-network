@@ -72,7 +72,7 @@
 <a href=#72 id=72 data-nosnippet>72</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>attempts = <span class="number">0</span>;
 <a href=#73 id=73 data-nosnippet>73</a>        <span class="kw">let </span>(port, provider) = <span class="kw">loop </span>{
 <a href=#74 id=74 data-nosnippet>74</a>            <span class="kw">let </span>port = portpicker::pick_unused_port().unwrap();
-<a href=#75 id=75 data-nosnippet>75</a>            <span class="kw">match </span>ProviderBuilder::new().on_anvil_with_wallet_and_config(|anvil| {
+<a href=#75 id=75 data-nosnippet>75</a>            <span class="kw">match </span>ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
 <a href=#76 id=76 data-nosnippet>76</a>                anvil.port(port).arg(<span class="string">"--accounts"</span>).arg(<span class="string">"20"</span>)
 <a href=#77 id=77 data-nosnippet>77</a>            }) {
 <a href=#78 id=78 data-nosnippet>78</a>                <span class="prelude-val">Ok</span>(provider) =&gt; <span class="kw">break </span>(port, provider),
@@ -271,7 +271,7 @@
 <a href=#271 id=271 data-nosnippet>271</a>
 <a href=#272 id=272 data-nosnippet>272</a>    <span class="kw">pub async fn </span>get_min_commission_increase_interval(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;U256&gt; {
 <a href=#273 id=273 data-nosnippet>273</a>        <span class="kw">let </span>stake_table = StakeTableV2::new(<span class="self">self</span>.stake_table, <span class="kw-2">&amp;</span><span class="self">self</span>.provider);
-<a href=#274 id=274 data-nosnippet>274</a>        <span class="kw">let </span>interval = stake_table.minCommissionIncreaseInterval().call().<span class="kw">await</span><span class="question-mark">?</span>._0;
+<a href=#274 id=274 data-nosnippet>274</a>        <span class="kw">let </span>interval = stake_table.minCommissionIncreaseInterval().call().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#275 id=275 data-nosnippet>275</a>        <span class="prelude-val">Ok</span>(interval)
 <a href=#276 id=276 data-nosnippet>276</a>    }
 <a href=#277 id=277 data-nosnippet>277</a>
@@ -281,12 +281,12 @@
 <a href=#281 id=281 data-nosnippet>281</a>
 <a href=#282 id=282 data-nosnippet>282</a>    <span class="kw">pub async fn </span>balance(<span class="kw-2">&amp;</span><span class="self">self</span>, address: Address) -&gt; <span class="prelude-ty">Result</span>&lt;U256&gt; {
 <a href=#283 id=283 data-nosnippet>283</a>        <span class="kw">let </span>token = EspToken::new(<span class="self">self</span>.token, <span class="kw-2">&amp;</span><span class="self">self</span>.provider);
-<a href=#284 id=284 data-nosnippet>284</a>        <span class="prelude-val">Ok</span>(token.balanceOf(address).call().<span class="kw">await</span><span class="question-mark">?</span>._0)
+<a href=#284 id=284 data-nosnippet>284</a>        <span class="prelude-val">Ok</span>(token.balanceOf(address).call().<span class="kw">await</span><span class="question-mark">?</span>)
 <a href=#285 id=285 data-nosnippet>285</a>    }
 <a href=#286 id=286 data-nosnippet>286</a>
 <a href=#287 id=287 data-nosnippet>287</a>    <span class="kw">pub async fn </span>allowance(<span class="kw-2">&amp;</span><span class="self">self</span>, owner: Address) -&gt; <span class="prelude-ty">Result</span>&lt;U256&gt; {
 <a href=#288 id=288 data-nosnippet>288</a>        <span class="kw">let </span>token = EspToken::new(<span class="self">self</span>.token, <span class="kw-2">&amp;</span><span class="self">self</span>.provider);
-<a href=#289 id=289 data-nosnippet>289</a>        <span class="prelude-val">Ok</span>(token.allowance(owner, <span class="self">self</span>.stake_table).call().<span class="kw">await</span><span class="question-mark">?</span>._0)
+<a href=#289 id=289 data-nosnippet>289</a>        <span class="prelude-val">Ok</span>(token.allowance(owner, <span class="self">self</span>.stake_table).call().<span class="kw">await</span><span class="question-mark">?</span>)
 <a href=#290 id=290 data-nosnippet>290</a>    }
 <a href=#291 id=291 data-nosnippet>291</a>
 <a href=#292 id=292 data-nosnippet>292</a>    <span class="kw">pub async fn </span>approve(<span class="kw-2">&amp;</span><span class="self">self</span>, amount: U256) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
@@ -312,7 +312,7 @@
 <a href=#312 id=312 data-nosnippet>312</a>        <span class="kw">let </span>stake_table = StakeTable::new(system.stake_table, <span class="kw-2">&amp;</span>system.provider);
 <a href=#313 id=313 data-nosnippet>313</a>        <span class="comment">// sanity check that we can fetch the exit escrow period
 <a href=#314 id=314 data-nosnippet>314</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#315 id=315 data-nosnippet>315</a>            stake_table.exitEscrowPeriod().call().<span class="kw">await</span><span class="question-mark">?</span>._0,
+<a href=#315 id=315 data-nosnippet>315</a>            stake_table.exitEscrowPeriod().call().<span class="kw">await</span><span class="question-mark">?</span>,
 <a href=#316 id=316 data-nosnippet>316</a>            U256::from(system.exit_escrow_period.as_secs())
 <a href=#317 id=317 data-nosnippet>317</a>        );
 <a href=#318 id=318 data-nosnippet>318</a>

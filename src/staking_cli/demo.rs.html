@@ -68,7 +68,7 @@
 <a href=#68 id=68 data-nosnippet>68</a>
 <a href=#69 id=69 data-nosnippet>69</a>    <span class="macro">tracing::info!</span>(<span class="string">"ESP token address: {token_address}"</span>);
 <a href=#70 id=70 data-nosnippet>70</a>    <span class="kw">let </span>token = EspToken::new(token_address, token_holder);
-<a href=#71 id=71 data-nosnippet>71</a>    <span class="kw">let </span>token_balance = token.balanceOf(token_holder_addr).call().<span class="kw">await</span><span class="question-mark">?</span>._0;
+<a href=#71 id=71 data-nosnippet>71</a>    <span class="kw">let </span>token_balance = token.balanceOf(token_holder_addr).call().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#72 id=72 data-nosnippet>72</a>    <span class="macro">tracing::info!</span>(
 <a href=#73 id=73 data-nosnippet>73</a>        <span class="string">"token distributor account {} balance: {} ESP"</span>,
 <a href=#74 id=74 data-nosnippet>74</a>        token_holder_addr,
@@ -90,7 +90,7 @@
 <a href=#90 id=90 data-nosnippet>90</a>        <span class="kw">let </span>validator_wallet: EthereumWallet = EthereumWallet::from(signer);
 <a href=#91 id=91 data-nosnippet>91</a>        <span class="kw">let </span>validator_provider = ProviderBuilder::new()
 <a href=#92 id=92 data-nosnippet>92</a>            .wallet(validator_wallet)
-<a href=#93 id=93 data-nosnippet>93</a>            .on_http(rpc_url.clone());
+<a href=#93 id=93 data-nosnippet>93</a>            .connect_http(rpc_url.clone());
 <a href=#94 id=94 data-nosnippet>94</a>
 <a href=#95 id=95 data-nosnippet>95</a>        <span class="macro">tracing::info!</span>(<span class="string">"fund val {val_index} address: {validator_address}, {fund_amount_eth} ETH"</span>);
 <a href=#96 id=96 data-nosnippet>96</a>        <span class="kw">let </span>tx = TransactionRequest::default()

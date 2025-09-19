@@ -38,7 +38,7 @@
 <a href=#38 id=38 data-nosnippet>38</a>
 <a href=#39 id=39 data-nosnippet>39</a>    <span class="attr">#[tokio::test]
 <a href=#40 id=40 data-nosnippet>40</a>    </span><span class="kw">async fn </span>test_decode_revert_error() -&gt; anyhow::Result&lt;()&gt; {
-<a href=#41 id=41 data-nosnippet>41</a>        <span class="kw">let </span>provider = ProviderBuilder::new().on_anvil_with_wallet();
+<a href=#41 id=41 data-nosnippet>41</a>        <span class="kw">let </span>provider = ProviderBuilder::new().connect_anvil_with_wallet();
 <a href=#42 id=42 data-nosnippet>42</a>
 <a href=#43 id=43 data-nosnippet>43</a>        <span class="kw">let </span>token = EspToken::deploy(<span class="kw-2">&amp;</span>provider).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#44 id=44 data-nosnippet>44</a>        <span class="kw">let </span>err = token

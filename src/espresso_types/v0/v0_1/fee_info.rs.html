@@ -2,7 +2,7 @@
 <a href=#2 id=2 data-nosnippet>2</a><span class="kw">use </span>alloy_compat::ethers_serde;
 <a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span>ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 <a href=#4 id=4 data-nosnippet>4</a><span class="kw">use </span>derive_more::{Add, Display, From, Into, Mul, Sub};
-<a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>jf_merkle_tree::{MerkleTreeScheme, UniversalMerkleTreeScheme};
+<a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>jf_merkle_tree_compat::{MerkleTreeScheme, UniversalMerkleTreeScheme};
 <a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>serde::{Deserialize, Serialize};
 <a href=#7 id=7 data-nosnippet>7</a>
 <a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span><span class="kw">crate</span>::FeeMerkleTree;
@@ -91,9 +91,8 @@
 <a href=#91 id=91 data-nosnippet>91</a>    <span class="kw">pub </span>proof: FeeAccountProof,
 <a href=#92 id=92 data-nosnippet>92</a>}
 <a href=#93 id=93 data-nosnippet>93</a>
-<a href=#94 id=94 data-nosnippet>94</a>
-<a href=#95 id=95 data-nosnippet>95</a><span class="doccomment">/// Methods for use w/ Vec&lt;FeeInfo&gt;
-<a href=#96 id=96 data-nosnippet>96</a></span><span class="kw">pub trait </span>IterableFeeInfo {
-<a href=#97 id=97 data-nosnippet>97</a>    <span class="kw">fn </span>amount(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;FeeAmount&gt;;
-<a href=#98 id=98 data-nosnippet>98</a>    <span class="kw">fn </span>accounts(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;FeeAccount&gt;;
-<a href=#99 id=99 data-nosnippet>99</a>}</code></pre></div></section></main></body></html>
+<a href=#94 id=94 data-nosnippet>94</a><span class="doccomment">/// Methods for use w/ Vec&lt;FeeInfo&gt;
+<a href=#95 id=95 data-nosnippet>95</a></span><span class="kw">pub trait </span>IterableFeeInfo {
+<a href=#96 id=96 data-nosnippet>96</a>    <span class="kw">fn </span>amount(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;FeeAmount&gt;;
+<a href=#97 id=97 data-nosnippet>97</a>    <span class="kw">fn </span>accounts(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;FeeAccount&gt;;
+<a href=#98 id=98 data-nosnippet>98</a>}</code></pre></div></section></main></body></html>

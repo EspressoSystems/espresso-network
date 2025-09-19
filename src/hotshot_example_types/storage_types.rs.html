@@ -415,7 +415,7 @@
 <a href=#415 id=415 data-nosnippet>415</a>        <span class="prelude-val">Ok</span>(())
 <a href=#416 id=416 data-nosnippet>416</a>    }
 <a href=#417 id=417 data-nosnippet>417</a>
-<a href=#418 id=418 data-nosnippet>418</a>    <span class="kw">async fn </span>migrate_consensus(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#418 id=418 data-nosnippet>418</a>    <span class="kw">async fn </span>migrate_storage(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#419 id=419 data-nosnippet>419</a>        <span class="kw">let </span><span class="kw-2">mut </span>storage_writer = <span class="self">self</span>.inner.write().<span class="kw">await</span>;
 <a href=#420 id=420 data-nosnippet>420</a>
 <a href=#421 id=421 data-nosnippet>421</a>        <span class="kw">for </span>(view, proposal) <span class="kw">in </span>storage_writer.proposals.clone().iter() {

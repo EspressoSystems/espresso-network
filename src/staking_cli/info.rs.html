@@ -67,8 +67,8 @@
 <a href=#67 id=67 data-nosnippet>67</a>}
 <a href=#68 id=68 data-nosnippet>68</a>
 <a href=#69 id=69 data-nosnippet>69</a><span class="kw">pub async fn </span>fetch_token_address(rpc_url: Url, stake_table_address: Address) -&gt; <span class="prelude-ty">Result</span>&lt;Address&gt; {
-<a href=#70 id=70 data-nosnippet>70</a>    <span class="kw">let </span>provider = ProviderBuilder::new().on_http(rpc_url);
-<a href=#71 id=71 data-nosnippet>71</a>    <span class="prelude-val">Ok</span>(StakeTableV2::new(stake_table_address, provider)
+<a href=#70 id=70 data-nosnippet>70</a>    <span class="kw">let </span>provider = ProviderBuilder::new().connect_http(rpc_url);
+<a href=#71 id=71 data-nosnippet>71</a>    StakeTableV2::new(stake_table_address, provider)
 <a href=#72 id=72 data-nosnippet>72</a>        .token()
 <a href=#73 id=73 data-nosnippet>73</a>        .call()
 <a href=#74 id=74 data-nosnippet>74</a>        .<span class="kw">await
@@ -76,6 +76,5 @@
 <a href=#76 id=76 data-nosnippet>76</a>            <span class="macro">format!</span>(
 <a href=#77 id=77 data-nosnippet>77</a>                <span class="string">"Failed to fetch token address from stake table contract at {stake_table_address}"
 <a href=#78 id=78 data-nosnippet>78</a>            </span>)
-<a href=#79 id=79 data-nosnippet>79</a>        })<span class="question-mark">?
-<a href=#80 id=80 data-nosnippet>80</a>        </span>._0)
-<a href=#81 id=81 data-nosnippet>81</a>}</code></pre></div></section></main></body></html>
+<a href=#79 id=79 data-nosnippet>79</a>        })
+<a href=#80 id=80 data-nosnippet>80</a>}</code></pre></div></section></main></body></html>

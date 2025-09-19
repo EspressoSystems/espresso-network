@@ -1449,7 +1449,7 @@
 <a href=#1449 id=1449 data-nosnippet>1449</a>
 <a href=#1450 id=1450 data-nosnippet>1450</a>        <span class="kw">let </span>deployer = ProviderBuilder::new()
 <a href=#1451 id=1451 data-nosnippet>1451</a>            .wallet(EthereumWallet::from(network_config.signer().clone()))
-<a href=#1452 id=1452 data-nosnippet>1452</a>            .on_http(network_config.l1_url().clone());
+<a href=#1452 id=1452 data-nosnippet>1452</a>            .connect_http(network_config.l1_url().clone());
 <a href=#1453 id=1453 data-nosnippet>1453</a>
 <a href=#1454 id=1454 data-nosnippet>1454</a>        <span class="kw">let </span><span class="kw-2">mut </span>contracts = Contracts::new();
 <a href=#1455 id=1455 data-nosnippet>1455</a>        <span class="kw">let </span>args = DeployerArgsBuilder::default()

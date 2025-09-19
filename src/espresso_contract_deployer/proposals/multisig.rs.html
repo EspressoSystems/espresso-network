@@ -93,7 +93,7 @@
 <a href=#93 id=93 data-nosnippet>93</a>    };
 <a href=#94 id=94 data-nosnippet>94</a>    <span class="macro">tracing::info!</span>(<span class="string">"{} found at {proxy_addr:#x}"</span>, contract);
 <a href=#95 id=95 data-nosnippet>95</a>
-<a href=#96 id=96 data-nosnippet>96</a>    <span class="kw">let </span>owner_addr = proxy_instance.owner().call().<span class="kw">await</span><span class="question-mark">?</span>._0;
+<a href=#96 id=96 data-nosnippet>96</a>    <span class="kw">let </span>owner_addr = proxy_instance.owner().call().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#97 id=97 data-nosnippet>97</a>
 <a href=#98 id=98 data-nosnippet>98</a>    <span class="kw">if </span>!params.dry_run &amp;&amp; !<span class="kw">crate</span>::is_contract(provider, owner_addr).<span class="kw">await</span><span class="question-mark">? </span>{
 <a href=#99 id=99 data-nosnippet>99</a>        <span class="macro">tracing::error!</span>(<span class="string">"Proxy owner is not a contract. Expected: {owner_addr:#x}"</span>);
@@ -254,7 +254,7 @@
 <a href=#254 id=254 data-nosnippet>254</a>        .ok_or_else(|| <span class="macro">anyhow!</span>(<span class="string">"LightClientProxy (multisig owner) not found, can't upgrade"</span>))<span class="question-mark">?</span>;
 <a href=#255 id=255 data-nosnippet>255</a>    <span class="macro">tracing::info!</span>(<span class="string">"LightClientProxy found at {proxy_addr:#x}"</span>);
 <a href=#256 id=256 data-nosnippet>256</a>    <span class="kw">let </span>proxy = LightClient::new(proxy_addr, <span class="kw-2">&amp;</span>provider);
-<a href=#257 id=257 data-nosnippet>257</a>    <span class="kw">let </span>owner_addr = proxy.owner().call().<span class="kw">await</span><span class="question-mark">?</span>._0;
+<a href=#257 id=257 data-nosnippet>257</a>    <span class="kw">let </span>owner_addr = proxy.owner().call().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#258 id=258 data-nosnippet>258</a>
 <a href=#259 id=259 data-nosnippet>259</a>    <span class="kw">if </span>!dry_run &amp;&amp; !<span class="kw">crate</span>::is_contract(<span class="kw-2">&amp;</span>provider, owner_addr).<span class="kw">await</span><span class="question-mark">? </span>{
 <a href=#260 id=260 data-nosnippet>260</a>        <span class="macro">tracing::error!</span>(<span class="string">"Proxy owner is not a contract. Expected: {owner_addr:#x}"</span>);
@@ -403,7 +403,7 @@
 <a href=#403 id=403 data-nosnippet>403</a>        .ok_or_else(|| <span class="macro">anyhow!</span>(<span class="string">"LightClientProxy (multisig owner) not found, can't upgrade"</span>))<span class="question-mark">?</span>;
 <a href=#404 id=404 data-nosnippet>404</a>    <span class="macro">tracing::info!</span>(<span class="string">"LightClientProxy found at {proxy_addr:#x}"</span>);
 <a href=#405 id=405 data-nosnippet>405</a>    <span class="kw">let </span>proxy = LightClient::new(proxy_addr, <span class="kw-2">&amp;</span>provider);
-<a href=#406 id=406 data-nosnippet>406</a>    <span class="kw">let </span>owner_addr = proxy.owner().call().<span class="kw">await</span><span class="question-mark">?</span>._0;
+<a href=#406 id=406 data-nosnippet>406</a>    <span class="kw">let </span>owner_addr = proxy.owner().call().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#407 id=407 data-nosnippet>407</a>
 <a href=#408 id=408 data-nosnippet>408</a>    <span class="kw">if </span>!dry_run &amp;&amp; !<span class="kw">crate</span>::is_contract(<span class="kw-2">&amp;</span>provider, owner_addr).<span class="kw">await</span><span class="question-mark">? </span>{
 <a href=#409 id=409 data-nosnippet>409</a>        <span class="macro">tracing::error!</span>(<span class="string">"Proxy owner is not a contract. Expected: {owner_addr:#x}"</span>);
@@ -543,7 +543,7 @@
 <a href=#543 id=543 data-nosnippet>543</a>        .ok_or_else(|| <span class="macro">anyhow!</span>(<span class="string">"EspTokenProxy (multisig owner) not found, can't upgrade"</span>))<span class="question-mark">?</span>;
 <a href=#544 id=544 data-nosnippet>544</a>    <span class="macro">tracing::info!</span>(<span class="string">"EspTokenProxy found at {proxy_addr:#x}"</span>);
 <a href=#545 id=545 data-nosnippet>545</a>    <span class="kw">let </span>proxy = EspToken::new(proxy_addr, <span class="kw-2">&amp;</span>provider);
-<a href=#546 id=546 data-nosnippet>546</a>    <span class="kw">let </span>owner_addr = proxy.owner().call().<span class="kw">await</span><span class="question-mark">?</span>._0;
+<a href=#546 id=546 data-nosnippet>546</a>    <span class="kw">let </span>owner_addr = proxy.owner().call().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#547 id=547 data-nosnippet>547</a>
 <a href=#548 id=548 data-nosnippet>548</a>    <span class="kw">if </span>!dry_run {
 <a href=#549 id=549 data-nosnippet>549</a>        <span class="macro">tracing::info!</span>(<span class="string">"Checking if owner is a contract"</span>);
@@ -612,7 +612,7 @@
 <a href=#612 id=612 data-nosnippet>612</a>
 <a href=#613 id=613 data-nosnippet>613</a>    <span class="kw">let </span>proxy = StakeTable::new(proxy_addr, <span class="kw-2">&amp;</span>provider);
 <a href=#614 id=614 data-nosnippet>614</a>    <span class="kw">let </span>owner = proxy.owner().call().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#615 id=615 data-nosnippet>615</a>    <span class="kw">let </span>owner_addr = owner._0;
+<a href=#615 id=615 data-nosnippet>615</a>    <span class="kw">let </span>owner_addr = owner;
 <a href=#616 id=616 data-nosnippet>616</a>
 <a href=#617 id=617 data-nosnippet>617</a>    <span class="kw">if </span>owner_addr != multisig_address {
 <a href=#618 id=618 data-nosnippet>618</a>        <span class="macro">anyhow::bail!</span>(

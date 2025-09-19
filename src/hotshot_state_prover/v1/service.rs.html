@@ -246,7 +246,7 @@
 <a href=#246 id=246 data-nosnippet>246</a>    <span class="kw">let </span>wallet = EthereumWallet::from(state.config.signer.clone());
 <a href=#247 id=247 data-nosnippet>247</a>    <span class="kw">let </span>provider = ProviderBuilder::new()
 <a href=#248 id=248 data-nosnippet>248</a>        .wallet(wallet)
-<a href=#249 id=249 data-nosnippet>249</a>        .on_client(state.config.l1_rpc_client.clone());
+<a href=#249 id=249 data-nosnippet>249</a>        .connect_client(state.config.l1_rpc_client.clone());
 <a href=#250 id=250 data-nosnippet>250</a>
 <a href=#251 id=251 data-nosnippet>251</a>    <span class="comment">// only sync light client state when gas price is sane
 <a href=#252 id=252 data-nosnippet>252</a>    </span><span class="kw">if let </span><span class="prelude-val">Some</span>(max_gas_price) = state.config.max_gas_price {
@@ -413,7 +413,7 @@
 <a href=#413 id=413 data-nosnippet>413</a>}
 <a href=#414 id=414 data-nosnippet>414</a>
 <a href=#415 id=415 data-nosnippet>415</a><span class="attr">#[cfg(test)]
-<a href=#416 id=416 data-nosnippet>416</a></span><span class="kw">mod </span>test {
+<a href=#416 id=416 data-nosnippet>416</a></span><span class="kw">mod </span>tests {
 <a href=#417 id=417 data-nosnippet>417</a>
 <a href=#418 id=418 data-nosnippet>418</a>    <span class="kw">use </span>alloy::{
 <a href=#419 id=419 data-nosnippet>419</a>        node_bindings::Anvil,
@@ -461,7 +461,7 @@
 <a href=#461 id=461 data-nosnippet>461</a>
 <a href=#462 id=462 data-nosnippet>462</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
 <a href=#463 id=463 data-nosnippet>463</a>    </span><span class="kw">async fn </span>test_read_contract_state() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#464 id=464 data-nosnippet>464</a>        <span class="kw">let </span>provider = ProviderBuilder::new().on_anvil_with_wallet();
+<a href=#464 id=464 data-nosnippet>464</a>        <span class="kw">let </span>provider = ProviderBuilder::new().connect_anvil_with_wallet();
 <a href=#465 id=465 data-nosnippet>465</a>        <span class="kw">let </span><span class="kw-2">mut </span>contracts = Contracts::new();
 <a href=#466 id=466 data-nosnippet>466</a>        <span class="kw">let </span>rng = <span class="kw-2">&amp;mut </span>test_rng();
 <a href=#467 id=467 data-nosnippet>467</a>        <span class="kw">let </span>genesis_state = LightClientStateSol::dummy_genesis();
@@ -512,7 +512,7 @@
 <a href=#512 id=512 data-nosnippet>512</a>        <span class="kw">let </span>wallet = anvil.wallet().unwrap();
 <a href=#513 id=513 data-nosnippet>513</a>        <span class="kw">let </span>inner_provider = ProviderBuilder::new()
 <a href=#514 id=514 data-nosnippet>514</a>            .wallet(wallet)
-<a href=#515 id=515 data-nosnippet>515</a>            .on_http(anvil.endpoint_url());
+<a href=#515 id=515 data-nosnippet>515</a>            .connect_http(anvil.endpoint_url());
 <a href=#516 id=516 data-nosnippet>516</a>        <span class="comment">// a provider that holds both anvil (to avoid accidental drop) and wallet-enabled L1 provider
 <a href=#517 id=517 data-nosnippet>517</a>        </span><span class="kw">let </span>provider = AnvilProvider::new(inner_provider, Arc::new(anvil));
 <a href=#518 id=518 data-nosnippet>518</a>        <span class="kw">let </span><span class="kw-2">mut </span>contracts = Contracts::new();

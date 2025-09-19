@@ -189,7 +189,7 @@
 <a href=#189 id=189 data-nosnippet>189</a>                <span class="kw">let </span>l1 = opt
 <a href=#190 id=190 data-nosnippet>190</a>                    .l1
 <a href=#191 id=191 data-nosnippet>191</a>                    .as_ref()
-<a href=#192 id=192 data-nosnippet>192</a>                    .map(|url| ProviderBuilder::new().on_http(url.clone()));
+<a href=#192 id=192 data-nosnippet>192</a>                    .map(|url| ProviderBuilder::new().connect_http(url.clone()));
 <a href=#193 id=193 data-nosnippet>193</a>                <span class="kw">async move </span>{
 <a href=#194 id=194 data-nosnippet>194</a>                    <span class="kw">let </span><span class="kw-2">mut </span>ok = <span class="bool-val">true</span>;
 <a href=#195 id=195 data-nosnippet>195</a>

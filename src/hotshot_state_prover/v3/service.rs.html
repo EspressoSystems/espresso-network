@@ -362,7 +362,7 @@
 <a href=#362 id=362 data-nosnippet>362</a>    <span class="kw">let </span>wallet = EthereumWallet::from(state.config.signer.clone());
 <a href=#363 id=363 data-nosnippet>363</a>    <span class="kw">let </span>provider = ProviderBuilder::new()
 <a href=#364 id=364 data-nosnippet>364</a>        .wallet(wallet)
-<a href=#365 id=365 data-nosnippet>365</a>        .on_client(state.config.l1_rpc_client.clone());
+<a href=#365 id=365 data-nosnippet>365</a>        .connect_client(state.config.l1_rpc_client.clone());
 <a href=#366 id=366 data-nosnippet>366</a>
 <a href=#367 id=367 data-nosnippet>367</a>    <span class="comment">// only sync light client state when gas price is sane
 <a href=#368 id=368 data-nosnippet>368</a>    </span><span class="kw">if let </span><span class="prelude-val">Some</span>(max_gas_price) = state.config.max_gas_price {
@@ -683,7 +683,7 @@
 <a href=#683 id=683 data-nosnippet>683</a>
 <a href=#684 id=684 data-nosnippet>684</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
 <a href=#685 id=685 data-nosnippet>685</a>    </span><span class="kw">async fn </span>test_read_contract_state() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#686 id=686 data-nosnippet>686</a>        <span class="kw">let </span>provider = ProviderBuilder::new().on_anvil_with_wallet();
+<a href=#686 id=686 data-nosnippet>686</a>        <span class="kw">let </span>provider = ProviderBuilder::new().connect_anvil_with_wallet();
 <a href=#687 id=687 data-nosnippet>687</a>        <span class="kw">let </span><span class="kw-2">mut </span>contracts = Contracts::new();
 <a href=#688 id=688 data-nosnippet>688</a>        <span class="kw">let </span>rng = <span class="kw-2">&amp;mut </span>test_rng();
 <a href=#689 id=689 data-nosnippet>689</a>        <span class="kw">let </span>genesis_state = LightClientStateSol::dummy_genesis();
@@ -741,7 +741,7 @@
 <a href=#741 id=741 data-nosnippet>741</a>        <span class="kw">let </span>wallet = anvil.wallet().unwrap();
 <a href=#742 id=742 data-nosnippet>742</a>        <span class="kw">let </span>provider = ProviderBuilder::new()
 <a href=#743 id=743 data-nosnippet>743</a>            .wallet(wallet)
-<a href=#744 id=744 data-nosnippet>744</a>            .on_http(anvil.endpoint_url());
+<a href=#744 id=744 data-nosnippet>744</a>            .connect_http(anvil.endpoint_url());
 <a href=#745 id=745 data-nosnippet>745</a>        <span class="kw">let </span><span class="kw-2">mut </span>contracts = Contracts::new();
 <a href=#746 id=746 data-nosnippet>746</a>
 <a href=#747 id=747 data-nosnippet>747</a>        <span class="kw">let </span>lc_proxy_addr = deploy_and_upgrade(

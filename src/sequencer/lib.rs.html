@@ -906,7 +906,7 @@
 <a href=#906 id=906 data-nosnippet>906</a>
 <a href=#907 id=907 data-nosnippet>907</a>                    <span class="kw">let </span>deployer = ProviderBuilder::new()
 <a href=#908 id=908 data-nosnippet>908</a>                        .wallet(EthereumWallet::from(<span class="self">self</span>.signer.clone()))
-<a href=#909 id=909 data-nosnippet>909</a>                        .on_http(<span class="self">self</span>.l1_url.clone());
+<a href=#909 id=909 data-nosnippet>909</a>                        .connect_http(<span class="self">self</span>.l1_url.clone());
 <a href=#910 id=910 data-nosnippet>910</a>
 <a href=#911 id=911 data-nosnippet>911</a>                    <span class="kw">let </span><span class="kw-2">mut </span>contracts = Contracts::new();
 <a href=#912 id=912 data-nosnippet>912</a>                    <span class="kw">let </span>args = DeployerArgsBuilder::default()
@@ -1145,7 +1145,7 @@
 <a href=#1145 id=1145 data-nosnippet>1145</a>                        signer.address(),
 <a href=#1146 id=1146 data-nosnippet>1146</a>                        ProviderBuilder::new()
 <a href=#1147 id=1147 data-nosnippet>1147</a>                            .wallet(EthereumWallet::from(signer))
-<a href=#1148 id=1148 data-nosnippet>1148</a>                            .on_http(<span class="self">self</span>.l1_url.clone()),
+<a href=#1148 id=1148 data-nosnippet>1148</a>                            .connect_http(<span class="self">self</span>.l1_url.clone()),
 <a href=#1149 id=1149 data-nosnippet>1149</a>                    )
 <a href=#1150 id=1150 data-nosnippet>1150</a>                })
 <a href=#1151 id=1151 data-nosnippet>1151</a>                .collect()

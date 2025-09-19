@@ -21,12 +21,12 @@
 <a href=#21 id=21 data-nosnippet>21</a><span class="kw">pub use </span>header::Header;
 <a href=#22 id=22 data-nosnippet>22</a><span class="attr">#[allow(unused_imports)]
 <a href=#23 id=23 data-nosnippet>23</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>impls::active_validator_set_from_l1_events;
-<a href=#24 id=24 data-nosnippet>24</a><span class="attr">#[cfg(any(test, feature = <span class="string">"testing"</span>))]
-<a href=#25 id=25 data-nosnippet>25</a></span><span class="kw">pub use </span>impls::mock;
-<a href=#26 id=26 data-nosnippet>26</a><span class="kw">pub use </span>impls::{
-<a href=#27 id=27 data-nosnippet>27</a>    get_l1_deposits, retain_accounts, validators_from_l1_events, BuilderValidationError,
-<a href=#28 id=28 data-nosnippet>28</a>    EpochCommittees, FeeError, ProposalValidationError, StateValidationError,
-<a href=#29 id=29 data-nosnippet>29</a>};
+<a href=#24 id=24 data-nosnippet>24</a><span class="kw">pub use </span>impls::{
+<a href=#25 id=25 data-nosnippet>25</a>    get_l1_deposits, retain_accounts, validators_from_l1_events, BuilderValidationError,
+<a href=#26 id=26 data-nosnippet>26</a>    EpochCommittees, FeeError, ProposalValidationError, StateValidationError,
+<a href=#27 id=27 data-nosnippet>27</a>};
+<a href=#28 id=28 data-nosnippet>28</a><span class="attr">#[cfg(any(test, feature = <span class="string">"testing"</span>))]
+<a href=#29 id=29 data-nosnippet>29</a></span><span class="kw">pub use </span>impls::{mock, testing};
 <a href=#30 id=30 data-nosnippet>30</a><span class="kw">pub use </span>nsproof::<span class="kw-2">*</span>;
 <a href=#31 id=31 data-nosnippet>31</a><span class="kw">pub use </span>txproof::<span class="kw-2">*</span>;
 <a href=#32 id=32 data-nosnippet>32</a><span class="kw">pub use </span>utils::<span class="kw-2">*</span>;

@@ -5,7 +5,7 @@
 <a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>ark_serialize::{
 <a href=#6 id=6 data-nosnippet>6</a>    CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 <a href=#7 id=7 data-nosnippet>7</a>};
-<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>jf_merkle_tree::DigestAlgorithm;
+<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>jf_merkle_tree_compat::DigestAlgorithm;
 <a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>sha3::{Digest <span class="kw">as _</span>, Keccak256};
 <a href=#10 id=10 data-nosnippet>10</a>
 <a href=#11 id=11 data-nosnippet>11</a><span class="kw">use crate</span>::{v0_3::RewardAmount, v0_4::RewardAccountV2};
@@ -66,7 +66,7 @@
 <a href=#66 id=66 data-nosnippet>66</a></span><span class="kw">pub struct </span>Keccak256Hasher;
 <a href=#67 id=67 data-nosnippet>67</a>
 <a href=#68 id=68 data-nosnippet>68</a><span class="kw">impl </span>DigestAlgorithm&lt;RewardAmount, RewardAccountV2, KeccakNode&gt; <span class="kw">for </span>Keccak256Hasher {
-<a href=#69 id=69 data-nosnippet>69</a>    <span class="kw">fn </span>digest(data: <span class="kw-2">&amp;</span>[KeccakNode]) -&gt; <span class="prelude-ty">Result</span>&lt;KeccakNode, jf_merkle_tree::MerkleTreeError&gt; {
+<a href=#69 id=69 data-nosnippet>69</a>    <span class="kw">fn </span>digest(data: <span class="kw-2">&amp;</span>[KeccakNode]) -&gt; <span class="prelude-ty">Result</span>&lt;KeccakNode, jf_merkle_tree_compat::MerkleTreeError&gt; {
 <a href=#70 id=70 data-nosnippet>70</a>        <span class="kw">let </span><span class="kw-2">mut </span>hasher = Keccak256::new();
 <a href=#71 id=71 data-nosnippet>71</a>
 <a href=#72 id=72 data-nosnippet>72</a>        <span class="comment">// Hash the concatenated node data directly (no domain separator)
@@ -81,7 +81,7 @@
 <a href=#81 id=81 data-nosnippet>81</a>    <span class="kw">fn </span>digest_leaf(
 <a href=#82 id=82 data-nosnippet>82</a>        _pos: <span class="kw-2">&amp;</span>RewardAccountV2,
 <a href=#83 id=83 data-nosnippet>83</a>        elem: <span class="kw-2">&amp;</span>RewardAmount,
-<a href=#84 id=84 data-nosnippet>84</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;KeccakNode, jf_merkle_tree::MerkleTreeError&gt; {
+<a href=#84 id=84 data-nosnippet>84</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;KeccakNode, jf_merkle_tree_compat::MerkleTreeError&gt; {
 <a href=#85 id=85 data-nosnippet>85</a>        <span class="comment">// First hash of the value
 <a href=#86 id=86 data-nosnippet>86</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>hasher = Keccak256::new();
 <a href=#87 id=87 data-nosnippet>87</a>        hasher.update(elem.<span class="number">0</span>.to_be_bytes::&lt;<span class="number">32</span>&gt;()); <span class="comment">// 32-byte value as big-endian

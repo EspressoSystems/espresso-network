@@ -21,7 +21,7 @@
 <a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>async_trait::async_trait;
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>futures::stream::TryStreamExt;
 <a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>hotshot_types::traits::node_implementation::NodeType;
-<a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>jf_merkle_tree::{
+<a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>jf_merkle_tree_compat::{
 <a href=#25 id=25 data-nosnippet>25</a>    prelude::{MerkleNode, MerkleProof},
 <a href=#26 id=26 data-nosnippet>26</a>    DigestAlgorithm, MerkleCommitment, ToTraversalPath,
 <a href=#27 id=27 data-nosnippet>27</a>};
@@ -492,7 +492,7 @@
 <a href=#492 id=492 data-nosnippet>492</a><span class="attr">#[cfg(test)]
 <a href=#493 id=493 data-nosnippet>493</a></span><span class="kw">mod </span>test {
 <a href=#494 id=494 data-nosnippet>494</a>    <span class="kw">use </span>futures::stream::StreamExt;
-<a href=#495 id=495 data-nosnippet>495</a>    <span class="kw">use </span>jf_merkle_tree::{
+<a href=#495 id=495 data-nosnippet>495</a>    <span class="kw">use </span>jf_merkle_tree_compat::{
 <a href=#496 id=496 data-nosnippet>496</a>        universal_merkle_tree::UniversalMerkleTree, LookupResult, MerkleTreeScheme,
 <a href=#497 id=497 data-nosnippet>497</a>        UniversalMerkleTreeScheme,
 <a href=#498 id=498 data-nosnippet>498</a>    };
