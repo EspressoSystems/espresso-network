@@ -13,10 +13,20 @@ DOC = "Get balance in reward state at a specific height. Expected parameters are
 PATH = ["proof/:height/:address"]
 ":address" = "Literal"
 ":height" = "Integer"
-DOC = "Get reward account merkle proof"
+DOC = """The endpoint returns the Merkle proof for a reward account at a given block height, 
+where :address is the account address and :height is the block height. For protocol versions 
+up to and including V3, the response is a `RewardAccountQueryDataV1` type, which contains 
+the account balance and a `RewardAccountProofV1`. This proof is derived from 
+`RewardMerkleTreeV1`, which uses the SHA3 hashing algorithm. Starting from protocol version V4 
+and above, the endpoint returns a `RewardAccountQueryDataV2` type, containing the balance 
+and a `RewardAccountProofV2`. This proof is based on `RewardMerkleTreeV2`, which uses the 
+Keccak256 hashing algorithm."""
+
 
 [route.get_reward_account_proof_sol]
 PATH = ["proof/solidity/:height/:address"]
 ":address" = "Literal"
 ":height" = "Integer"
-DOC = "Get reward account merkle proof"
+DOC = """The endpoint returns the Merkle proof for a reward account in a Solidity-compatible 
+format, where :address is the account address and :height is the block height. The response 
+is an `AccruedRewardsProof` type, which contains the proof as a list of 32-byte hash siblings."""
