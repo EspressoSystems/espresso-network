@@ -43,8 +43,8 @@ use hotshot_types::{
     traits::{signature_key::BuilderSignatureKey, BlockPayload, EncodeBytes},
     vid::{advz::advz_scheme, avidm::init_avidm_param},
 };
-use jf_merkle_tree::MerkleTreeScheme;
-use jf_vid::VidScheme;
+use jf_advz::VidScheme;
+use jf_merkle_tree_compat::MerkleTreeScheme;
 use pretty_assertions::assert_eq;
 use rand::{Rng, RngCore};
 use sequencer_utils::commitment_to_u256;

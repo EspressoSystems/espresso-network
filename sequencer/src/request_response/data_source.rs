@@ -30,7 +30,7 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use itertools::Itertools;
-use jf_merkle_tree::{
+use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
     MerkleTreeScheme, UniversalMerkleTreeScheme,
 };

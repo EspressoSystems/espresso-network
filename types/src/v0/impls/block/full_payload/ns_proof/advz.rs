@@ -5,7 +5,7 @@ use hotshot_types::{
     traits::EncodeBytes,
     vid::advz::{advz_scheme, ADVZCommon, ADVZScheme},
 };
-use jf_vid::{
+use jf_advz::{
     payload_prover::{PayloadProver, Statement},
     VidScheme,
 };
@@ -172,7 +172,7 @@ mod tests {
         traits::EncodeBytes,
         vid::advz::{advz_scheme, ADVZScheme},
     };
-    use jf_vid::{VidDisperse, VidScheme};
+    use jf_advz::{VidDisperse, VidScheme};
 
     use crate::{v0::impls::block::test::ValidTest, v0_1::ADVZNsProof, Payload};
 

@@ -20,7 +20,7 @@ use hotshot_types::{
         avidm::{init_avidm_param, AvidMScheme},
     },
 };
-use jf_vid::VidScheme;
+use jf_advz::VidScheme;
 use surf_disco::{Client, Url};
 use vbs::{version::StaticVersionType, BinarySerializer};
 

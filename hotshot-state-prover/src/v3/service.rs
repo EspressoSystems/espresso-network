@@ -362,7 +362,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     let wallet = EthereumWallet::from(state.config.signer.clone());
     let provider = ProviderBuilder::new()
         .wallet(wallet)
-        .on_client(state.config.l1_rpc_client.clone());
+        .connect_client(state.config.l1_rpc_client.clone());
 
     // only sync light client state when gas price is sane
     if let Some(max_gas_price) = state.config.max_gas_price {
@@ -683,7 +683,7 @@ mod tests {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_read_contract_state() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let rng = &mut test_rng();
         let genesis_state = LightClientStateSol::dummy_genesis();
@@ -741,7 +741,7 @@ mod tests {
         let wallet = anvil.wallet().unwrap();
         let provider = ProviderBuilder::new()
             .wallet(wallet)
-            .on_http(anvil.endpoint_url());
+            .connect_http(anvil.endpoint_url());
         let mut contracts = Contracts::new();
 
         let lc_proxy_addr = deploy_and_upgrade(

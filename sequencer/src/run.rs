@@ -215,7 +215,7 @@ where
 
     let persistence = storage_opt.create().await?;
     persistence
-        .migrate_consensus()
+        .migrate_storage()
         .await
         .context("failed to migrate consensus data")?;
 
