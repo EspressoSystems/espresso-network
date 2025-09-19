@@ -659,6 +659,13 @@ async fn test_state_cert_query_data_v4() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_reward_proof_endpoint_serialization() {
+    let mut settings = insta::Settings::clone_current();
+
+    let data_dir =
+        Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../data/insta_snapshots");
+
+    settings.set_snapshot_path(data_dir);
+
     let mut reward_merkle_tree_v2 = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
     let address = Address::from_slice(&[1; 20]);
     let balance: U256 = 123_u64.try_into().unwrap();
@@ -670,8 +677,14 @@ async fn test_reward_proof_endpoint_serialization() {
     let (proof, _) = RewardAccountProofV2::prove(&reward_merkle_tree_v2, address).unwrap();
 
     let reward_proof = RewardAccountQueryDataV2 { balance, proof };
-    insta::assert_yaml_snapshot!("reward_proof_v2", reward_proof);
+
+    settings.bind(|| {
+        insta::assert_yaml_snapshot!("reward_proof_v2", reward_proof);
+    });
 
     let proof_sol: AccruedRewardsProofSol = reward_proof.proof.try_into().unwrap();
-    insta::assert_yaml_snapshot!("reward_proof_v2_sol", proof_sol);
+
+    settings.bind(|| {
+        insta::assert_yaml_snapshot!("reward_proof_v2_sol", proof_sol);
+    });
 }
