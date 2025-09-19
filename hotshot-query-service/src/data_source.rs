@@ -775,7 +775,7 @@ pub mod node_tests {
         },
         vid::advz::{advz_scheme, ADVZScheme},
     };
-    use jf_vid::VidScheme;
+    use jf_advz::VidScheme;
     use vbs::version::StaticVersionType;
 
     use crate::{

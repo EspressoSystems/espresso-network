@@ -159,7 +159,7 @@ async fn deposit(opt: Deposit) -> anyhow::Result<()> {
     let signer = key_pair.signer();
     let l1 = ProviderBuilder::new()
         .wallet(EthereumWallet::from(signer.clone()))
-        .on_http(opt.rpc_url);
+        .connect_http(opt.rpc_url);
     let contract = FeeContract::new(opt.contract_address, &l1);
 
     // Connect to Espresso.
@@ -167,8 +167,8 @@ async fn deposit(opt: Deposit) -> anyhow::Result<()> {
 
     // Validate deposit.
     let amount = U256::from(opt.amount);
-    let min_deposit = contract.minDepositAmount().call().await?._0;
-    let max_deposit = contract.maxDepositAmount().call().await?._0;
+    let min_deposit = contract.minDepositAmount().call().await?;
+    let max_deposit = contract.maxDepositAmount().call().await?;
     ensure!(
         amount >= min_deposit,
         "amount is too small (minimum deposit: {min_deposit})",
@@ -282,7 +282,7 @@ async fn l1_balance(opt: L1Balance) -> anyhow::Result<()> {
     };
 
     // let l1 = Provider::try_from(opt.rpc_url.to_string())?.interval(opt.l1_interval);
-    let l1 = ProviderBuilder::new().on_http(opt.rpc_url);
+    let l1 = ProviderBuilder::new().connect_http(opt.rpc_url);
 
     // let block = opt.block.map(BlockId::from);
     let block = match opt.block {

@@ -424,7 +424,7 @@ impl L1Client {
     fn with_transport(transport: SwitchingTransport) -> Self {
         // Create a new provider with that RPC client using the custom transport
         let rpc_client = RpcClient::new(transport.clone(), false);
-        let provider = ProviderBuilder::new().on_client(rpc_client);
+        let provider = ProviderBuilder::new().connect_client(rpc_client);
 
         let opt = transport.options().clone();
 
@@ -517,7 +517,7 @@ impl L1Client {
                             // problem with one of the hosts specifically.
                             let provider = i % urls.len();
                             let url = &urls[provider];
-                            ws = match ProviderBuilder::new().on_ws(WsConnect::new(url.clone())).await {
+                            ws = match ProviderBuilder::new().connect_ws(WsConnect::new(url.clone())).await {
                                 Ok(ws) => ws,
                                 Err(err) => {
                                     tracing::warn!(provider, "Failed to connect WebSockets provider: {err:#}");
@@ -1161,7 +1161,7 @@ mod test {
         let deployer = wallet.default_signer().address();
         let inner_provider = ProviderBuilder::new()
             .wallet(wallet)
-            .on_http(anvil.endpoint_url());
+            .connect_http(anvil.endpoint_url());
         // a provider that holds both anvil (to avoid accidental drop) and wallet-enabled L1 provider
         let provider = AnvilProvider::new(inner_provider, Arc::new(anvil));
         // cache store for deployed contracts

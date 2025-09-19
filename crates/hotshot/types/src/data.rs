@@ -21,7 +21,7 @@ use async_lock::RwLock;
 use bincode::Options;
 use committable::{Commitment, CommitmentBoundsArkless, Committable, RawCommitmentBuilder};
 use hotshot_utils::anytrace::*;
-use jf_vid::VidScheme;
+use jf_advz::VidScheme;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tagged_base64::TaggedBase64;
@@ -1977,7 +1977,7 @@ impl<TYPES: NodeType> Leaf<TYPES> {
 pub mod null_block {
     #![allow(missing_docs)]
 
-    use jf_vid::VidScheme;
+    use jf_advz::VidScheme;
     use vbs::version::StaticVersionType;
 
     use crate::{

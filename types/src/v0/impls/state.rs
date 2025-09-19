@@ -14,7 +14,7 @@ use hotshot_types::{
     utils::{epoch_from_block_number, is_ge_epoch_root},
 };
 use itertools::Itertools;
-use jf_merkle_tree::{
+use jf_merkle_tree_compat::{
     prelude::{MerkleProof, Sha3Digest, Sha3Node},
     AppendableMerkleTreeScheme, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
     LookupResult, MerkleCommitment, MerkleTreeError, MerkleTreeScheme,
