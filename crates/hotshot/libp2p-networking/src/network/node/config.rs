@@ -4,10 +4,8 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{collections::HashSet, num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{collections::HashSet, num::NonZeroUsize, time::Duration};
 
-use async_lock::RwLock;
-use hotshot_types::traits::node_implementation::NodeType;
 use libp2p::{identity::Keypair, Multiaddr};
 use libp2p_identity::PeerId;
 

@@ -144,7 +144,7 @@ impl<StakeTable: TestStakeTable<BLSPubKey, SchnorrPubKey>> Clone
     for TestTypesEpochCatchupTypes<StakeTable>
 {
     fn clone(&self) -> Self {
-        Self { _pd: PhantomData }
+        *self
     }
 }
 

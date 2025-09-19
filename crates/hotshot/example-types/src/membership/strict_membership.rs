@@ -284,7 +284,7 @@ impl<
     async fn get_epoch_root(
         membership: Arc<RwLock<Self>>,
         block_height: u64,
-        epoch: TYPES::Epoch,
+        _epoch: TYPES::Epoch,
     ) -> anyhow::Result<Leaf2<TYPES>> {
         let membership_reader = membership.read().await;
 

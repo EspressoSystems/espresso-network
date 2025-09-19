@@ -52,7 +52,7 @@ pub async fn direct_message_impl<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     network
         .direct_message(message, recipient.clone())
         .await
-        .context(format!("Failed to send message to recipient {}", recipient))
+        .context(format!("Failed to send message to recipient {recipient}"))
 }
 
 pub fn direct_message_fn<TYPES: NodeType, I: NodeImplementation<TYPES>>(

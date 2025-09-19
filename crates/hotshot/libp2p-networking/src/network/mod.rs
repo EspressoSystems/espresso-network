@@ -18,7 +18,6 @@ pub mod cbor;
 
 use std::{collections::HashSet, fmt::Debug, sync::Arc};
 
-use async_lock::RwLock;
 use bimap::BiMap;
 use futures::channel::oneshot::Sender;
 use hotshot_types::traits::{network::NetworkError, node_implementation::NodeType};
