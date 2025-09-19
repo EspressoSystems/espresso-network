@@ -121,7 +121,10 @@ impl StableQuorumIterator {
         let (prev_rng, this_rng) = make_rngs(seed, round);
 
         Self {
-            prev_rng: NonRepeatValueIterator::new(prev_rng, calc_num_slots(count, round % 2 == 0)),
+            prev_rng: NonRepeatValueIterator::new(
+                prev_rng,
+                calc_num_slots(count, round.is_multiple_of(2)),
+            ),
             this_rng: NonRepeatValueIterator::new(this_rng, calc_num_slots(count, round % 2 == 1)),
             round,
             count,
@@ -240,7 +243,10 @@ impl RandomOverlapQuorumIterator {
         let this_overlap = this_rng.gen_range(overlap_min..=overlap_max);
 
         Self {
-            prev_rng: NonRepeatValueIterator::new(prev_rng, calc_num_slots(count, round % 2 == 0)),
+            prev_rng: NonRepeatValueIterator::new(
+                prev_rng,
+                calc_num_slots(count, round.is_multiple_of(2)),
+            ),
             this_rng: NonRepeatValueIterator::new(this_rng, calc_num_slots(count, round % 2 == 1)),
             round,
             members: this_members,
@@ -415,7 +421,7 @@ mod tests {
                 "odd set non-overlap value should be odd (stable)"
             );
             assert!(
-                even_set[2] % 2 == 0,
+                even_set[2].is_multiple_of(2),
                 "even set non-overlap value should be even (stable)"
             );
 
@@ -429,7 +435,7 @@ mod tests {
                 "odd set non-overlap value should be odd (random overlap)"
             );
             assert!(
-                even_set[3] % 2 == 0,
+                even_set[3].is_multiple_of(2),
                 "even set non-overlap value should be even (random overlap)"
             );
         }

@@ -197,9 +197,8 @@ impl NsTable {
         // compute `[byte length] - header_byte_len` we must first check that
         // `[byte length]` is not exceeded by `header_byte_len`
         if self.bytes.len() < NsTableBuilder::header_byte_len()
-            || (self.bytes.len() - NsTableBuilder::header_byte_len())
-                % NsTableBuilder::entry_byte_len()
-                != 0
+            || !(self.bytes.len() - NsTableBuilder::header_byte_len())
+                .is_multiple_of(NsTableBuilder::entry_byte_len())
         {
             return Err(InvalidByteLen);
         }
