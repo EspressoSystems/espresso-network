@@ -5952,10 +5952,10 @@ mod test {
 
         let url = format!("http://localhost:{api_port}").parse().unwrap();
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
-        network.stop_consensus().await;
 
         let validated_state = network.server.decided_state().await;
-        let height = validated_state.block_merkle_tree.num_leaves() - 1;
+        let decided_leaf = network.server.decided_leaf().await;
+        let height = decided_leaf.height();
 
         async fn wait_until_block_height(
             client: &Client<ServerError, StaticVersion<0, 1>>,
@@ -5971,7 +5971,7 @@ mod test {
 
                 tracing::info!("{endpoint}: block height = {bh}");
 
-                if bh > height {
+                if bh >= height {
                     return;
                 }
                 sleep(Duration::from_secs(3)).await;
@@ -5989,6 +5989,8 @@ mod test {
         if Ver::Base::VERSION == EpochVersion::VERSION {
             // V1 case
             wait_until_block_height(&client, "reward-state/block-height", height).await;
+
+            network.stop_consensus().await;
 
             for (address, _) in validated_state.reward_merkle_tree_v1.iter() {
                 let (_, expected_proof) = validated_state
@@ -6020,6 +6022,8 @@ mod test {
         } else {
             // V2 case
             wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
+
+            network.stop_consensus().await;
 
             for (address, _) in validated_state.reward_merkle_tree_v2.iter() {
                 let (_, expected_proof) = validated_state
