@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use derivative::Derivative;
 use derive_more::with_trait::Display;
 use hotshot_types::traits::node_implementation::NodeType;
-use jf_merkle_tree::{
+use jf_merkle_tree_compat::{
     prelude::MerkleProof, DigestAlgorithm, Element, ForgetableMerkleTreeScheme, Index,
     MerkleCommitment, NodeValue, ToTraversalPath,
 };

@@ -1,16 +1,12 @@
-
-
 use committable::Commitment;
-use jf_merkle_tree::{
+use jf_merkle_tree_compat::{
     prelude::{LightWeightSHA3MerkleTree, Sha3Digest, Sha3Node},
     universal_merkle_tree::UniversalMerkleTree,
-    MerkleTreeScheme, 
+    MerkleTreeScheme,
 };
 
 use super::{FeeAccount, FeeAmount};
-use crate::{ Header};
-
- 
+use crate::Header;
 
 pub const BLOCK_MERKLE_TREE_HEIGHT: usize = 32;
 pub const FEE_MERKLE_TREE_HEIGHT: usize = 20;

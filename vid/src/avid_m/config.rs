@@ -5,7 +5,8 @@ use ark_serialize::CanonicalSerialize;
 use jf_crhf::CRHF;
 use jf_merkle_tree::hasher::HasherNode;
 use jf_poseidon2::{
-    constants::bn254::Poseidon2ParamsBn3, crhf::FixedLenPoseidon2Hash, sponge::Poseidon2SpongeState,
+    constants::bn254::Poseidon2ParamsBn3, crhf::FixedLenPoseidon2Hash,
+    permutation::Poseidon2Permutation,
 };
 use sha2::Digest;
 
@@ -32,7 +33,7 @@ pub trait AvidMConfig {
 /// Configuration of Poseidon2 based AVID-M scheme
 pub struct Poseidon2Config;
 
-type Poseidon2SpongeStateBnN3R1 = Poseidon2SpongeState<ark_bn254::Fr, 3, 1, Poseidon2ParamsBn3>;
+type Poseidon2SpongeStateBnN3R1 = Poseidon2Permutation<ark_bn254::Fr, 3, 1, Poseidon2ParamsBn3>;
 
 impl AvidMConfig for Poseidon2Config {
     type BaseField = ark_bn254::Fr;

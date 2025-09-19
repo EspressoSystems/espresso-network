@@ -17,7 +17,7 @@ use hotshot_types::{
     },
     utils::{epoch_from_block_number, is_ge_epoch_root, BuilderCommitment},
 };
-use jf_merkle_tree::{AppendableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme};
+use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme};
 use serde::{
     de::{self, MapAccess, SeqAccess, Visitor},
     Deserialize, Deserializer, Serialize, Serializer,
