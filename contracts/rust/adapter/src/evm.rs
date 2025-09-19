@@ -38,7 +38,7 @@ mod test {
 
     #[tokio::test]
     async fn test_decode_revert_error() -> anyhow::Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
 
         let token = EspToken::deploy(&provider).await?;
         let err = token

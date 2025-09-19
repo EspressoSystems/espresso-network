@@ -29,7 +29,7 @@ use hotshot_types::{
         avidm::{init_avidm_param, AvidMScheme},
     },
 };
-use jf_vid::VidScheme;
+use jf_advz::VidScheme;
 
 use crate::{
     availability::{

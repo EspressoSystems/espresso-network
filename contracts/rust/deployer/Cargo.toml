@@ -6,7 +6,7 @@ authors = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-alloy = { workspace = true }
+alloy = { workspace = true, features = ["signer-ledger"] }
 anyhow = { workspace = true }
 clap = { workspace = true }
 derive_builder = "0.20.2"

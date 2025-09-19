@@ -161,7 +161,7 @@ impl LCV1StateRelayServerState {
 
     pub fn new(stake_table_tracker: Arc<StakeTableTracker>) -> Self {
         Self {
-            bundles: HashMap::new(),
+            bundles: HashMap::default(),
             latest_available_bundle: None,
             latest_block_height: None,
             gc_queue: BTreeSet::new(),

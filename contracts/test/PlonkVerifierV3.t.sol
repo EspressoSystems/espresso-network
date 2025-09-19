@@ -56,7 +56,7 @@ contract PlonkVerifierCommonTest is Test {
         cmds[2] = vm.toString(seed);
 
         bytes memory result = vm.ffi(cmds);
-        (IPlonkVerifier.PlonkProof memory proof) = abi.decode(result, (IPlonkVerifier.PlonkProof));
+        IPlonkVerifier.PlonkProof memory proof = abi.decode(result, (IPlonkVerifier.PlonkProof));
         return proof;
     }
 
@@ -240,7 +240,7 @@ contract PlonkVerifier_validateProof_Test is PlonkVerifierCommonTest {
             }
         }
 
-        vm.expectRevert("Bn254: invalid G1 point");
+        vm.expectRevert("InvalidG1()");
         V._validateProof(proof);
     }
 
@@ -261,7 +261,7 @@ contract PlonkVerifier_validateProof_Test is PlonkVerifierCommonTest {
             mstore(add(start, mul(nthField, 0x20)), invalidField)
         }
 
-        vm.expectRevert("Bn254: invalid scalar field");
+        vm.expectRevert("InvalidScalar()");
         V._validateProof(proof);
     }
 }

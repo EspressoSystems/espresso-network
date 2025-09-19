@@ -9,7 +9,7 @@ use hotshot_types::{
     utils::BuilderCommitment,
     vid::advz::{ADVZCommon, ADVZScheme},
 };
-use jf_vid::VidScheme;
+use jf_advz::VidScheme;
 use sha2::Digest;
 use thiserror::Error;
 

@@ -21,6 +21,8 @@ mod utils;
 pub use header::Header;
 #[cfg(any(test, feature = "testing"))]
 pub use impls::mock;
+#[cfg(any(test, feature = "testing"))]
+pub use impls::testing;
 #[allow(unused_imports)]
 pub(crate) use impls::validator_set_from_l1_events;
 pub use impls::{
