@@ -395,10 +395,10 @@ impl SwitchingTransport {
         let url = self.urls[next_index].clone();
         tracing::info!(%url, next_gen, "switch L1 transport");
 
-        let revert_at = if next_gen % self.urls.len() == 0 {
+        let revert_at = if next_gen.is_multiple_of(self.urls.len()) {
             // If we are reverting to the primary transport, clear our scheduled revert time.
             None
-        } else if current_transport.generation % self.urls.len() == 0 {
+        } else if current_transport.generation.is_multiple_of(self.urls.len()) {
             // If we are failing over from the primary transport, schedule a time to automatically
             // revert back.
             Some(Instant::now() + self.opt.l1_failover_revert)
