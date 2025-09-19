@@ -269,7 +269,6 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Libp2pNetwork<T> {
                     let mut write_ids = node_ids_ref.write().await;
                     if write_ids.contains(&node_id) {
                         write_ids.clear();
-                        bootstrap_addrs_ref.write().await.clear();
                     }
                     write_ids.insert(node_id);
                     drop(write_ids);
@@ -395,7 +394,6 @@ impl<T: NodeType> Libp2pNetwork<T> {
     pub async fn from_config<D: DhtPersistentStorage>(
         mut config: NetworkConfig<T>,
         dht_persistent_storage: D,
-        quorum_membership: Arc<RwLock<T::Membership>>,
         gossip_config: GossipConfig,
         request_response_config: RequestResponseConfig,
         bind_address: Multiaddr,
@@ -425,9 +423,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
                 .with_context(|| "Failed to construct auth message")?;
 
         // Set the auth message and stake table
-        config_builder
-            .membership(Some(quorum_membership))
-            .auth_message(Some(auth_message));
+        config_builder.auth_message(Some(auth_message));
 
         // The replication factor is the minimum of [the default and 2/3 the number of nodes]
         let Some(default_replication_factor) = DEFAULT_REPLICATION_FACTOR else {
@@ -514,7 +510,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
     pub async fn new<D: DhtPersistentStorage>(
         metrics: Libp2pMetricsValue,
         dht_persistent_storage: D,
-        config: NetworkNodeConfig<T>,
+        config: NetworkNodeConfig,
         pk: T::SignatureKey,
         lookup_record_value: RecordValue<T::SignatureKey>,
         bootstrap_addrs: BootstrapAddrs,
