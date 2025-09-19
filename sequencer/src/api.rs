@@ -2183,7 +2183,7 @@ mod test {
     };
     use hotshot::types::EventType;
     use hotshot_contract_adapter::{
-        sol_types::{EspToken, StakeTableV2},
+        sol_types::{AccruedRewardsProofSol, EspToken, StakeTableV2},
         stake_table::StakeTableContractVersion,
     };
     use hotshot_example_types::node_types::EpochsTestVersions;
@@ -6038,7 +6038,7 @@ mod test {
                     .await
                     .unwrap();
 
-                match res.proof.proof {
+                match res.proof.proof.clone() {
                     RewardMerkleProofV2::Presence(p) => {
                         assert_eq!(
                             p, expected_proof,
@@ -6049,6 +6049,17 @@ mod test {
                         "Expected Present proof for V2 at {height}, addr={address}, got {other:?}"
                     ),
                 }
+
+                let solidity_proof = client
+                    .get::<AccruedRewardsProofSol>(&format!(
+                        "reward-state-v2/proof/solidity/{height}/{address}"
+                    ))
+                    .send()
+                    .await
+                    .unwrap();
+
+                let expected_sol_proof = res.proof.try_into().unwrap();
+                assert_eq!(solidity_proof, expected_sol_proof);
             }
         }
 
