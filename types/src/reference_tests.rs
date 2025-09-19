@@ -23,8 +23,9 @@
 
 use std::{fmt::Debug, path::Path, str::FromStr};
 
-use alloy::primitives::U256;
+use alloy::primitives::{Address, U256};
 use committable::Committable;
+use hotshot_contract_adapter::sol_types::AccruedRewardsProofSol;
 use hotshot_example_types::node_types::TestVersions;
 use hotshot_query_service::{
     availability::{
@@ -44,7 +45,7 @@ use hotshot_types::{
     vid::{advz::advz_scheme, avidm::init_avidm_param},
 };
 use jf_advz::VidScheme;
-use jf_merkle_tree_compat::MerkleTreeScheme;
+use jf_merkle_tree_compat::{MerkleTreeScheme, UniversalMerkleTreeScheme};
 use pretty_assertions::assert_eq;
 use rand::{Rng, RngCore};
 use sequencer_utils::commitment_to_u256;
@@ -60,7 +61,11 @@ use crate::{
     active_validator_set_from_l1_events,
     v0_1::{self, ADVZNsProof},
     v0_2,
-    v0_3::{EventKey, StakeTableEvent},
+    v0_3::{EventKey, RewardAmount, StakeTableEvent},
+    v0_4::{
+        RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
+        REWARD_MERKLE_TREE_V2_HEIGHT,
+    },
     ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
     NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload, SeqTypes, StakeTableHash,
     Transaction, ValidatedState,
@@ -650,4 +655,23 @@ async fn test_state_cert_query_data_v4() {
     let light_client_cert = LightClientStateUpdateCertificateV2::<SeqTypes>::genesis();
     let state_cert = StateCertQueryDataV2(light_client_cert);
     reference_test_without_committable("v4", "state_cert", &state_cert);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reward_proof_endpoint_serialization() {
+    let mut reward_merkle_tree_v2 = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+    let address = Address::from_slice(&[1; 20]);
+    let balance: U256 = 123_u64.try_into().unwrap();
+    let reward_amount = RewardAmount(balance);
+    reward_merkle_tree_v2
+        .update(RewardAccountV2::from(address), reward_amount)
+        .unwrap();
+
+    let (proof, _) = RewardAccountProofV2::prove(&reward_merkle_tree_v2, address).unwrap();
+
+    let reward_proof = RewardAccountQueryDataV2 { balance, proof };
+    insta::assert_yaml_snapshot!("reward_proof_v2", reward_proof);
+
+    let proof_sol: AccruedRewardsProofSol = reward_proof.proof.try_into().unwrap();
+    insta::assert_yaml_snapshot!("reward_proof_v2_sol", proof_sol);
 }
