@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
@@ -106,6 +109,7 @@ pub struct StatsTaskState<TYPES: NodeType> {
     latencies_by_view: BTreeMap<TYPES::View, i128>,
     sizes_by_view: BTreeMap<TYPES::View, i128>,
     epoch_start_times: BTreeMap<TYPES::Epoch, i128>,
+    timeouts: BTreeSet<TYPES::View>,
 }
 
 impl<TYPES: NodeType> StatsTaskState<TYPES> {
@@ -127,6 +131,7 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
             latencies_by_view: BTreeMap::new(),
             sizes_by_view: BTreeMap::new(),
             epoch_start_times: BTreeMap::new(),
+            timeouts: BTreeSet::new(),
         }
     }
     fn leader_entry(&mut self, view: TYPES::View) -> &mut LeaderViewStats<TYPES> {
@@ -144,6 +149,7 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
         self.replica_stats = self.replica_stats.split_off(&view);
         self.latencies_by_view = self.latencies_by_view.split_off(&view);
         self.sizes_by_view = self.sizes_by_view.split_off(&view);
+        self.timeouts = BTreeSet::new();
     }
 
     fn dump_stats(&self) -> Result<()> {
@@ -183,6 +189,11 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
         let total_latency = self.latencies_by_view.values().sum::<i128>();
         let average_latency = total_latency / num_views as i128;
         tracing::warn!("Average latency: {}ms", average_latency);
+        tracing::warn!(
+            "Number of timeouts in epoch: {}, is {}",
+            epoch,
+            self.timeouts.len()
+        );
         let total_size = self.sizes_by_view.values().sum::<i128>();
         if total_size == 0 {
             // Either no TXNs or we are not in the DA committee and don't know block sizes
@@ -351,8 +362,9 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                     self.leader_entry(*view).builder_start = Some(now);
                 }
             },
-            HotShotEvent::Timeout(..) => {
-                self.replica_entry(self.view).timeout_triggered = Some(now);
+            HotShotEvent::Timeout(view, _) => {
+                self.replica_entry(*view).timeout_triggered = Some(now);
+                self.timeouts.insert(*view);
             },
             HotShotEvent::TransactionsRecv(_txns) => {
                 // TODO: Track transactions by time
