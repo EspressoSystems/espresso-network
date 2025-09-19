@@ -45,6 +45,7 @@ hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
 humantime = "2"
 indexmap = { workspace = true }
+insta = { version = "1.43", features = ["yaml"] }
 itertools = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 jf-utils = { workspace = true }                                      # TODO temporary: used only for test_rng()
