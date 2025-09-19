@@ -16,6 +16,7 @@ ark-ff = { workspace = true }
 ark-serialize = { workspace = true }
 committable = { workspace = true }
 espresso-types = { path = "../../types" }
+primitive-types = { version = "0.13" }
 hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
 jf-crhf = { workspace = true }
