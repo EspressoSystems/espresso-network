@@ -3,7 +3,8 @@
 use alloy::primitives::U256;
 use ark_ff::{BigInteger, PrimeField};
 
-#[allow(dead_code)]
+// TODO: Remove unused attributes after https://github.com/EspressoSystems/espresso-network/pull/3601 is merged
+#[allow(dead_code, unused_attributes)]
 pub(crate) mod bindings;
 mod copy;
 pub mod evm;
