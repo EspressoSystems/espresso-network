@@ -46,9 +46,9 @@ hotshot-types = { workspace = true }
 humantime = "2"
 indexmap = { workspace = true }
 itertools = { workspace = true }
-jf-merkle-tree = { workspace = true }
+jf-merkle-tree-compat = { workspace = true }
 jf-utils = { workspace = true }                                      # TODO temporary: used only for test_rng()
-jf-vid = { workspace = true }
+jf-advz = { workspace = true }
 lru = { workspace = true }
 num-traits = { workspace = true }
 parking_lot = "0.12"

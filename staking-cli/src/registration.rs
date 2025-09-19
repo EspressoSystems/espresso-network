@@ -120,9 +120,42 @@ pub async fn deregister_validator(
         .await?)
 }
 
+pub async fn update_commission(
+    provider: impl Provider,
+    stake_table_addr: Address,
+    new_commission: Commission,
+) -> Result<TransactionReceipt> {
+    let stake_table = StakeTableV2::new(stake_table_addr, &provider);
+    Ok(stake_table
+        .updateCommission(new_commission.to_evm())
+        .send()
+        .await
+        .maybe_decode_revert::<StakeTableV2Errors>()?
+        .get_receipt()
+        .await?)
+}
+
+pub async fn fetch_commission(
+    provider: impl Provider,
+    stake_table_addr: Address,
+    validator: Address,
+) -> Result<Commission> {
+    let stake_table = StakeTableV2::new(stake_table_addr, &provider);
+    let version: StakeTableContractVersion = stake_table.getVersion().call().await?.try_into()?;
+    if matches!(version, StakeTableContractVersion::V1) {
+        anyhow::bail!("fetching commission is not supported with stake table V1");
+    }
+    Ok(stake_table
+        .commissionTracking(validator)
+        .call()
+        .await?
+        .commission
+        .try_into()?)
+}
+
 #[cfg(test)]
 mod test {
-    use alloy::providers::WalletProvider as _;
+    use alloy::{primitives::U256, providers::WalletProvider as _};
     use espresso_contract_deployer::build_provider;
     use espresso_types::{
         v0_3::{Fetcher, StakeTableEvent},
@@ -210,6 +243,44 @@ mod test {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_update_commission() -> Result<()> {
+        let system = TestSystem::deploy().await?;
+
+        // Set commission update interval to 1 second for testing
+        let stake_table = StakeTableV2::new(system.stake_table, &system.provider);
+        let receipt = stake_table
+            .setMinCommissionUpdateInterval(U256::from(1)) // 1 second
+            .send()
+            .await?
+            .get_receipt()
+            .await?;
+        assert!(receipt.status());
+
+        system.register_validator().await?;
+        let validator_address = system.deployer_address;
+        let new_commission = Commission::try_from("10.50")?;
+
+        // Wait 2 seconds to ensure we're past the interval
+        system.anvil_increase_time(U256::from(2)).await?;
+
+        let receipt =
+            update_commission(&system.provider, system.stake_table, new_commission).await?;
+        assert!(receipt.status());
+
+        let event = receipt
+            .decoded_log::<StakeTableV2::CommissionUpdated>()
+            .unwrap();
+        assert_eq!(event.validator, validator_address);
+        assert_eq!(event.newCommission, new_commission.to_evm());
+
+        let fetched_commission =
+            fetch_commission(&system.provider, system.stake_table, validator_address).await?;
+        assert_eq!(fetched_commission, new_commission);
+
+        Ok(())
+    }
+
     /// The GCL must remove stake table events with incorrect signatures. This test verifies that a
     /// validator registered event with incorrect schnorr signature is removed before the stake
     /// table is computed.
@@ -269,8 +340,7 @@ mod test {
             Some(0),
             receipt.block_number.unwrap(),
         )
-        .await
-        .sort_events()?;
+        .await?;
 
         // verify that we only have the first RegisterV2 event
         assert_eq!(events.len(), 1);
@@ -331,8 +401,7 @@ mod test {
             Some(0),
             receipt.block_number.unwrap(),
         )
-        .await
-        .sort_events()?;
+        .await?;
 
         // verify that we only have the RegisterV2 event
         assert_eq!(events.len(), 1);

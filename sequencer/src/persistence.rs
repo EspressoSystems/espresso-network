@@ -1272,8 +1272,7 @@ mod tests {
             None,
             block,
         )
-        .await
-        .sort_events()?;
+        .await?;
         assert_eq!(
             contract_events, events,
             "Events from contract and persistence do not match"
@@ -1450,7 +1449,7 @@ mod tests {
 
         let deployer = ProviderBuilder::new()
             .wallet(EthereumWallet::from(network_config.signer().clone()))
-            .on_http(network_config.l1_url().clone());
+            .connect_http(network_config.l1_url().clone());
 
         let mut contracts = Contracts::new();
         let args = DeployerArgsBuilder::default()
@@ -1546,6 +1545,7 @@ mod tests {
         for _i in 0..10 {
             // Wait for more than update interval to assert that persistence was updated
             // L1 update interval is 7s in this test
+
             tokio::time::sleep(std::time::Duration::from_secs(8)).await;
 
             let block = anvil_provider
@@ -1567,8 +1567,7 @@ mod tests {
 
             let contract_events =
                 Fetcher::fetch_events_from_contract(l1_client.clone(), st_addr, None, l1_block)
-                    .await
-                    .sort_events()?;
+                    .await?;
             assert_eq!(persisted_events, contract_events);
 
             prev_l1_block = l1_block;

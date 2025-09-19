@@ -199,9 +199,12 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         MockStakeTableV2 stakeTableV2Impl = new MockStakeTableV2();
 
         // Upgrade to V2
+        MockStakeTableV2.InitialCommission[] memory emptyCommissions;
         StakeTable(payable(address(proxy))).upgradeToAndCall(
             address(stakeTableV2Impl),
-            abi.encodeWithSignature("initializeV2(address,address)", admin, admin)
+            abi.encodeWithSignature(
+                "initializeV2(address,address,(address,uint16)[])", admin, admin, emptyCommissions
+            )
         );
 
         // Cast to V2 interface

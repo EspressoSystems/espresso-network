@@ -27,6 +27,10 @@ contract MockStakeTableV2 is StakeTableV2 {
         blsKeys[_hashBlsKey(blsVK)] = true;
         validators[validator] = Validator({ status: ValidatorStatus.Active, delegatedAmount: 0 });
 
+        // Store the initial commission for this validator
+        commissionTracking[validator] =
+            CommissionTracking({ commission: commission, lastIncreaseTime: 0 });
+
         emit ValidatorRegisteredV2(validator, blsVK, schnorrVK, commission, blsSig, schnorrSig);
     }
 }

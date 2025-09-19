@@ -4,7 +4,7 @@ use hotshot_types::{
     traits::EncodeBytes,
     vid::advz::{advz_scheme, ADVZCommon, ADVZScheme},
 };
-use jf_vid::{
+use jf_advz::{
     payload_prover::{PayloadProver, Statement},
     VidScheme,
 };

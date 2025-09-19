@@ -986,7 +986,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             // This ensures the next iteration starts from the next unseen leaf
             offset += limit as i64;
 
-            query_builder.push_values(leaf_rows.into_iter(), |mut b, row| {
+            query_builder.push_values(leaf_rows, |mut b, row| {
                 b.push_bind(row.0)
                     .push_bind(row.1)
                     .push_bind(row.2)
@@ -1016,7 +1016,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             let mut query_builder: sqlx::QueryBuilder<Db> =
                 sqlx::QueryBuilder::new("INSERT INTO vid2 (height, common, share) ");
 
-            query_builder.push_values(vid_rows.into_iter(), |mut b, row| {
+            query_builder.push_values(vid_rows, |mut b, row| {
                 b.push_bind(row.0).push_bind(row.1).push_bind(row.2);
             });
             query_builder.push(" ON CONFLICT DO NOTHING");
@@ -1378,10 +1378,10 @@ mod test {
         },
         vid::advz::advz_scheme,
     };
-    use jf_merkle_tree::{
+    use jf_advz::VidScheme;
+    use jf_merkle_tree_compat::{
         prelude::UniversalMerkleTree, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
     };
-    use jf_vid::VidScheme;
     use tokio::time::sleep;
     use vbs::version::StaticVersionType;
 

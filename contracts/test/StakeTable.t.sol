@@ -22,8 +22,6 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import { OwnableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { OpsTimelock } from "../src/OpsTimelock.sol";
-import { OwnableUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
@@ -934,9 +932,9 @@ contract StakeTable_register_Test is LightClientCommonTest {
             admin
         );
         proxy = new ERC1967Proxy(address(staketableImpl), initData);
-        S stakeTable = S(payable(address(proxy)));
+        S st = S(payable(address(proxy)));
 
-        assertEq(stakeTable.exitEscrowPeriod(), validEscrowPeriod);
+        assertEq(st.exitEscrowPeriod(), validEscrowPeriod);
     }
 }
 
@@ -1018,6 +1016,33 @@ contract StakeTableUpgradeV2Test is Test {
     function setUp() public virtual {
         stakeTableRegisterTest = new StakeTable_register_Test();
         stakeTableRegisterTest.setUp();
+    }
+
+    function admin() public view returns (address) {
+        return stakeTableRegisterTest.admin();
+    }
+
+    function getStakeTable() public view returns (S) {
+        return stakeTableRegisterTest.stakeTable();
+    }
+
+    function registerValidatorOnStakeTableV1(
+        address _validator,
+        string memory _seed,
+        uint16 _commission,
+        S _stakeTable
+    ) public {
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory sig
+        ) = stakeTableRegisterTest.genClientWallet(_validator, _seed);
+
+        vm.startPrank(_validator);
+        vm.expectEmit(false, false, false, true, address(_stakeTable));
+        emit S.ValidatorRegistered(_validator, blsVK, schnorrVK, _commission);
+        _stakeTable.registerValidator(blsVK, schnorrVK, sig, _commission);
+        vm.stopPrank();
     }
 
     function registerValidatorOnStakeTableV2(
@@ -2161,8 +2186,10 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         vm.startPrank(stakeTableRegisterTest.admin());
         S proxy = S(address(stakeTableRegisterTest.proxy()));
         address admin = proxy.owner();
-        bytes memory initData =
-            abi.encodeWithSelector(StakeTableV2.initializeV2.selector, pauser, admin);
+        StakeTableV2.InitialCommission[] memory emptyCommissions;
+        bytes memory initData = abi.encodeWithSelector(
+            StakeTableV2.initializeV2.selector, pauser, admin, emptyCommissions
+        );
         proxy.upgradeToAndCall(address(new StakeTableV2()), initData);
 
         (uint8 majorVersionNew,,) = StakeTableV2(address(proxy)).getVersion();
@@ -2180,8 +2207,9 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         assertEq(majorVersionNew, 2);
 
         address admin = stakeTableV2.owner();
-        vm.expectRevert();
-        stakeTableV2.initializeV2(pauser, admin);
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        StakeTableV2.InitialCommission[] memory emptyCommissions;
+        stakeTableV2.initializeV2(pauser, admin, emptyCommissions);
     }
 
     function test_StorageLayout_IsCompatible_V1V2() public {

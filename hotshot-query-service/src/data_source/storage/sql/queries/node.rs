@@ -12,11 +12,9 @@
 
 //! Node storage implementation for a database query engine.
 
-use std::{
-    collections::HashMap,
-    ops::{Bound, RangeBounds},
-};
+use std::ops::{Bound, RangeBounds};
 
+use alloy::primitives::map::HashMap;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use futures::stream::{StreamExt, TryStreamExt};
@@ -337,8 +335,8 @@ where
         .fetch_all(self.as_mut())
         .await?;
 
-        let mut num_transactions = HashMap::new();
-        let mut payload_size = HashMap::new();
+        let mut num_transactions = HashMap::default();
+        let mut payload_size = HashMap::default();
 
         for (namespace_id, num_tx, payload_sz) in rows {
             // Null namespace is represented as - 1 in database

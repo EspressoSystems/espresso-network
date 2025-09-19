@@ -22,7 +22,7 @@ use hotshot_types::{
     signature_key::{BLSPubKey, SchnorrPubKey},
     traits::node_implementation::{NodeType, Versions},
 };
-use jf_merkle_tree::{
+use jf_merkle_tree_compat::{
     prelude::{MerkleProof, Sha3Digest, Sha3Node},
     universal_merkle_tree::UniversalMerkleTree,
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,

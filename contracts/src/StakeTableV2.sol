@@ -55,9 +55,47 @@ import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 ///
 /// 7. The `pause` and `unpause` functions are added for emergency control.
 ///
+/// 8. The commission rate for validators can be updated with the `updateCommission` function.
+///
 /// @notice The StakeTableV2 contract ABI is a superset of the original ABI. Consumers of the
 /// contract can use the V2 ABI, even if they would like to maintain backwards compatibility.
 contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeable {
+    // === Types ===
+
+    /// @notice Struct for tracking validator commission and last increase time
+    struct CommissionTracking {
+        uint16 commission;
+        uint256 lastIncreaseTime;
+    }
+
+    /// @notice Struct for initializing validator commissions during migration
+    struct InitialCommission {
+        address validator;
+        uint16 commission;
+    }
+
+    // === Storage ===
+
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+
+    /// @notice Minimum time interval between commission increases (in seconds)
+    uint256 public minCommissionIncreaseInterval;
+
+    /// @notice Maximum commission increase allowed per increase (in basis points)
+    uint16 public maxCommissionIncrease;
+
+    /// @notice Commission tracking for each validator
+    mapping(address validator => CommissionTracking tracking) public commissionTracking;
+
+    /// Schnorr keys that have been seen by the contract
+    ///
+    /// @dev ensures a bijective mapping between schnorr key and ethereum account and prevents some
+    /// errors due to
+    /// misconfigurations of validators the contract currently marks keys as used and only allow
+    /// them to be used once. This for example prevents callers from accidentally registering the
+    /// same Schnorr key twice.
+    mapping(bytes32 schnorrKey => bool used) public schnorrKeys;
+
     // === Events ===
 
     /// @notice A validator is registered in the stake table
@@ -84,6 +122,24 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @notice The exit escrow period is updated
     event ExitEscrowPeriodUpdated(uint64 newExitEscrowPeriod);
 
+    /// @notice A validator updates their commission rate
+    /// @param validator The address of the validator
+    /// @param timestamp The timestamp of the update
+    /// @param newCommission The new commission rate
+    ///
+    /// @dev the timestamp is emitted to simplify processing in the GCL
+    event CommissionUpdated(
+        address indexed validator, uint256 timestamp, uint16 oldCommission, uint16 newCommission
+    );
+
+    /// @notice The minimum commission update interval is updated
+    /// @param newInterval The new minimum update interval in seconds
+    event MinCommissionUpdateIntervalUpdated(uint256 newInterval);
+
+    /// @notice The maximum commission increase is updated
+    /// @param newMaxIncrease The new maximum commission increase in basis points
+    event MaxCommissionIncreaseUpdated(uint16 newMaxIncrease);
+
     // === Errors ===
 
     /// The Schnorr signature is invalid (either the wrong length or the wrong key)
@@ -92,20 +148,23 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// The function is deprecated as it was replaced by a new function
     error DeprecatedFunction();
 
+    /// The commission update is too soon after the last update
+    error CommissionUpdateTooSoon();
+
+    /// The commission increase exceeds the maximum allowed increase
+    error CommissionIncreaseExceedsMax();
+
+    /// The commission value is unchanged
+    error CommissionUnchanged();
+
+    /// The rate limit parameters are invalid
+    error InvalidRateLimitParameters();
+
+    /// The validator commission has already been initialized
+    error CommissionAlreadyInitialized(address validator);
+
     /// The Schnorr key has been previously registered in the contract.
     error SchnorrKeyAlreadyUsed();
-
-    /// Variables
-    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
-
-    /// Schnorr keys that have been seen by the contract
-    ///
-    /// @dev ensures a bijective mapping between schnorr key and ethereum account and prevents some
-    /// errors due to
-    /// misconfigurations of validators the contract currently marks keys as used and only allow
-    /// them to be used once. This for example prevents callers from accidentally registering the
-    /// same Schnorr key twice.
-    mapping(bytes32 schnorrKey => bool used) public schnorrKeys;
 
     /// @notice Constructor
     /// @dev This function is overridden to disable initializers
@@ -114,12 +173,34 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     }
 
     /// @notice Reinitialize the contract
+    ///
+    /// @param admin The address to be granted the default admin role
+    /// @param pauser The address to be granted the pauser role
+    /// @param initialCommissions commissions of validators
+    ///
+    /// @notice initialCommissions must be an empty array if the contract we're
+    /// upgrading has not been used before (e.g. on mainnet). On decaf (sepolia),
+    /// this must be called with the current commissions of pre-existing
+    /// validators read from L1 events.
+    ///
     /// @dev This function is overridden to add pauser and admin roles
-    function initializeV2(address pauser, address admin) public reinitializer(2) {
+    function initializeV2(
+        address pauser,
+        address admin,
+        InitialCommission[] calldata initialCommissions
+    ) public reinitializer(2) {
         __AccessControl_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(PAUSER_ROLE, pauser);
+
+        // Default values found to be reasonable in internal discussion, may be
+        // adjusted before release and updated after release.
+        minCommissionIncreaseInterval = 7 days;
+        maxCommissionIncrease = 500; // 5%
+
+        // initialize commissions (if the contract under upgrade has existing state)
+        _initializeCommissions(initialCommissions);
     }
 
     /// @notice Get the version of the contract
@@ -257,6 +338,10 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         schnorrKeys[_hashSchnorrKey(schnorrVK)] = true;
         validators[validator] = Validator({ status: ValidatorStatus.Active, delegatedAmount: 0 });
 
+        // Store the initial commission for this validator
+        commissionTracking[validator] =
+            CommissionTracking({ commission: commission, lastIncreaseTime: 0 });
+
         emit ValidatorRegisteredV2(validator, blsVK, schnorrVK, commission, blsSig, schnorrSig);
     }
 
@@ -288,6 +373,95 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         blsKeys[_hashBlsKey(blsVK)] = true;
 
         emit ConsensusKeysUpdatedV2(validator, blsVK, schnorrVK, blsSig, schnorrSig);
+    }
+
+    /// @notice Update the commission rate for a validator
+    /// @param newCommission The new commission rate in % with 2 decimals (0 to 10_000)
+    /// @notice
+    ///
+    ///   1. Only one commission *increase* per minCommissionIncreaseInterval is allowed.
+    ///   2. The commission increase cannot exceed maxCommissionIncrease.
+    ///
+    /// These limits protect stakers from sudden large commission increases,
+    /// particularly by exiting validators.
+    function updateCommission(uint16 newCommission) external virtual whenNotPaused {
+        address validator = msg.sender;
+        ensureValidatorActive(validator);
+        require(newCommission <= 10000, InvalidCommission());
+
+        CommissionTracking storage tracking = commissionTracking[validator];
+        uint16 currentCommission = tracking.commission;
+        require(newCommission != currentCommission, CommissionUnchanged());
+
+        // NOTE: Limits exist to protect stakers from sudden loss of revenue due
+        // to commission increases.
+        //
+        // 1. Limits only enforced for commission *increase*.
+        // 2. Time of last change only tracked for commission *increase*.
+        if (newCommission > currentCommission) {
+            // Allow immediate first increase or after interval has passed
+            uint256 lastIncreaseTime = tracking.lastIncreaseTime;
+            require(
+                lastIncreaseTime == 0
+                    || block.timestamp >= lastIncreaseTime + minCommissionIncreaseInterval,
+                CommissionUpdateTooSoon()
+            );
+
+            // both maxCommissionIncrease and newCommission are <= 10_000
+            require(
+                newCommission <= currentCommission + maxCommissionIncrease,
+                CommissionIncreaseExceedsMax()
+            );
+            tracking.lastIncreaseTime = block.timestamp;
+        }
+
+        tracking.commission = newCommission;
+
+        emit CommissionUpdated(validator, block.timestamp, currentCommission, newCommission);
+    }
+
+    /// @notice Set the minimum interval between commission updates
+    /// @param newInterval The new minimum interval in seconds
+    function setMinCommissionUpdateInterval(uint256 newInterval) external virtual onlyOwner {
+        require(newInterval > 0 && newInterval <= 365 days, InvalidRateLimitParameters());
+        minCommissionIncreaseInterval = newInterval;
+        emit MinCommissionUpdateIntervalUpdated(newInterval);
+    }
+
+    /// @notice Set the maximum commission increase allowed per update
+    /// @param newMaxIncrease The new maximum increase in basis points (e.g., 500 = 5%)
+    function setMaxCommissionIncrease(uint16 newMaxIncrease) external virtual onlyOwner {
+        require(newMaxIncrease > 0 && newMaxIncrease <= 10000, InvalidRateLimitParameters());
+        maxCommissionIncrease = newMaxIncrease;
+        emit MaxCommissionIncreaseUpdated(newMaxIncrease);
+    }
+
+    /// @notice Initialize validator commissions during V2 migration
+    /// @dev This function is used to retroactively initialize commission storage for validators
+    /// that were registered before the V2 upgrade. On decaf, this will be called with current
+    /// commission values read from L1 events. On mainnet, this will be called with an empty array
+    /// since there are no pre-existing validators.
+    /// @param initialCommissions Array of InitialCommission structs containing validator addresses
+    /// and their commissions
+    function _initializeCommissions(InitialCommission[] calldata initialCommissions) private {
+        for (uint256 i = 0; i < initialCommissions.length; i++) {
+            address validator = initialCommissions[i].validator;
+            uint16 commission = initialCommissions[i].commission;
+
+            require(commission <= 10000, InvalidCommission());
+
+            ValidatorStatus status = validators[validator].status;
+            require(status != ValidatorStatus.Unknown, ValidatorInactive());
+
+            require(
+                commissionTracking[validator].lastIncreaseTime == 0
+                    && commissionTracking[validator].commission == 0,
+                CommissionAlreadyInitialized(validator)
+            );
+
+            commissionTracking[validator] =
+                CommissionTracking({ commission: commission, lastIncreaseTime: 0 });
+        }
     }
 
     /// @notice Update the exit escrow period

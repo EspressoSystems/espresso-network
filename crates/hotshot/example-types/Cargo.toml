@@ -21,7 +21,7 @@ hotshot = { workspace = true }
 hotshot-task-impls = { workspace = true }
 hotshot-types = { workspace = true }
 hotshot-utils = { workspace = true }
-jf-vid = { workspace = true }
+jf-advz = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

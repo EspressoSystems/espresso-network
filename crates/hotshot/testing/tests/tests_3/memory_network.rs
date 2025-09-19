@@ -10,12 +10,10 @@ use std::{sync::Arc, time::Duration};
 use hotshot::{
     traits::{
         implementations::{MasterMap, MemoryNetwork},
-        NodeImplementation,
     },
     types::SignatureKey,
 };
 use hotshot_example_types::{
-    
     block_types::{TestTransaction},
     node_types::{TestVersions, TestTypes},
     storage_types::TestStorage,
@@ -30,7 +28,6 @@ use hotshot_types::{
     },
 };
 use rand::{rngs::StdRng, RngCore, SeedableRng};
-use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 use tracing::{instrument, trace};
 
@@ -141,7 +138,8 @@ async fn memory_network_direct_queue() {
             .recv_message()
             .await
             .expect("Failed to receive message");
-        let (deserialized_message, _version) = upgrade_lock.deserialize(&recv_message).await.unwrap();
+        let (deserialized_message, _version) =
+            upgrade_lock.deserialize(&recv_message).await.unwrap();
         assert!(timeout(Duration::from_secs(1), network2.recv_message())
             .await
             .is_err());
@@ -162,7 +160,8 @@ async fn memory_network_direct_queue() {
             .recv_message()
             .await
             .expect("Failed to receive message");
-        let (deserialized_message, _version) = upgrade_lock.deserialize(&recv_message).await.unwrap();
+        let (deserialized_message, _version) =
+            upgrade_lock.deserialize(&recv_message).await.unwrap();
         assert!(timeout(Duration::from_secs(1), network1.recv_message())
             .await
             .is_err());
@@ -198,7 +197,8 @@ async fn memory_network_broadcast_queue() {
             .recv_message()
             .await
             .expect("Failed to receive message");
-        let (deserialized_message, _version) = upgrade_lock.deserialize(&recv_message).await.unwrap();
+        let (deserialized_message, _version) =
+            upgrade_lock.deserialize(&recv_message).await.unwrap();
         assert!(timeout(Duration::from_secs(1), network2.recv_message())
             .await
             .is_err());
@@ -223,7 +223,8 @@ async fn memory_network_broadcast_queue() {
             .recv_message()
             .await
             .expect("Failed to receive message");
-        let (deserialized_message, _version) = upgrade_lock.deserialize(&recv_message).await.unwrap();
+        let (deserialized_message, _version) =
+            upgrade_lock.deserialize(&recv_message).await.unwrap();
         assert!(timeout(Duration::from_secs(1), network1.recv_message())
             .await
             .is_err());
@@ -235,7 +236,6 @@ async fn memory_network_broadcast_queue() {
 #[instrument]
 #[allow(deprecated)]
 async fn memory_network_test_in_flight_message_count() {
-
     let group: Arc<MasterMap<<TestTypes as NodeType>::SignatureKey>> = MasterMap::new();
     trace!(?group);
     let pub_key_1 = pubkey();
