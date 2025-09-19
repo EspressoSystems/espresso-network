@@ -258,9 +258,7 @@
             golangci-lint
             # provides abigen
             go-ethereum
-          ] ++ lib.optionals stdenv.isDarwin
-            [ darwin.apple_sdk.frameworks.SystemConfiguration ]
-          ++ lib.optionals (!stdenv.isDarwin) [ cargo-watch ] # broken on OSX
+          ] ++ lib.optionals (!stdenv.isDarwin) [ cargo-watch ] # broken on OSX
           ;
           shellHook = rustShellHook + ''
             # Add the local scripts to the PATH
