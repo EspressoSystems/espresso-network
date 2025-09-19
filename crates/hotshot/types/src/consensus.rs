@@ -342,8 +342,13 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
             num_proposed as f64 / num_leader as f64
         };
         let last_epoch_participation = self.last_epoch_participation.get(&key);
-        let last_epoch_participation_ratio =
-            last_epoch_participation.map(|(leader, proposed)| *leader as f64 / *proposed as f64);
+        let last_epoch_participation_ratio = last_epoch_participation.map(|(leader, proposed)| {
+            if *leader == 0 {
+                0.0
+            } else {
+                *proposed as f64 / *leader as f64
+            }
+        });
         (
             current_epoch_participation_ratio,
             last_epoch_participation_ratio,
@@ -353,13 +358,31 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
     fn current_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
         self.current_epoch_participation
             .iter()
-            .map(|(key, (leader, proposed))| (key.clone(), *leader as f64 / *proposed as f64))
+            .map(|(key, (leader, proposed))| {
+                (
+                    key.clone(),
+                    if *leader == 0 {
+                        0.0
+                    } else {
+                        *proposed as f64 / *leader as f64
+                    },
+                )
+            })
             .collect()
     }
     fn previous_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
         self.last_epoch_participation
             .iter()
-            .map(|(key, (leader, proposed))| (key.clone(), *leader as f64 / *proposed as f64))
+            .map(|(key, (leader, proposed))| {
+                (
+                    key.clone(),
+                    if *leader == 0 {
+                        0.0
+                    } else {
+                        *proposed as f64 / *leader as f64
+                    },
+                )
+            })
             .collect()
     }
 }
