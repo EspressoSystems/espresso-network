@@ -327,7 +327,7 @@ pub fn epoch_from_block_number(block_number: u64, epoch_height: u64) -> u64 {
         0
     } else if block_number == 0 {
         1
-    } else if block_number % epoch_height == 0 {
+    } else if block_number.is_multiple_of(epoch_height) {
         block_number / epoch_height
     } else {
         block_number / epoch_height + 1
@@ -372,7 +372,7 @@ pub fn option_epoch_from_block_number<TYPES: NodeType>(
             None
         } else if block_number == 0 {
             Some(1u64)
-        } else if block_number % epoch_height == 0 {
+        } else if block_number.is_multiple_of(epoch_height) {
             Some(block_number / epoch_height)
         } else {
             Some(block_number / epoch_height + 1)
@@ -413,7 +413,7 @@ pub fn is_transition_block(block_number: u64, epoch_height: u64) -> bool {
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
-        (block_number + 3) % epoch_height == 0
+        (block_number + 3).is_multiple_of(epoch_height)
     }
 }
 /// returns true if it's the first transition block (epoch height - 2)
@@ -431,7 +431,7 @@ pub fn is_epoch_transition(block_number: u64, epoch_height: u64) -> bool {
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
-        block_number % epoch_height >= epoch_height - 3 || block_number % epoch_height == 0
+        block_number % epoch_height >= epoch_height - 3 || block_number.is_multiple_of(epoch_height)
     }
 }
 
@@ -441,7 +441,7 @@ pub fn is_last_block(block_number: u64, epoch_height: u64) -> bool {
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
-        block_number % epoch_height == 0
+        block_number.is_multiple_of(epoch_height)
     }
 }
 
@@ -467,7 +467,7 @@ pub fn is_epoch_root(block_number: u64, epoch_height: u64) -> bool {
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
-        (block_number + 5) % epoch_height == 0
+        (block_number + 5).is_multiple_of(epoch_height)
     }
 }
 
@@ -477,7 +477,7 @@ pub fn is_ge_epoch_root(block_number: u64, epoch_height: u64) -> bool {
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
-        block_number % epoch_height == 0 || block_number % epoch_height >= epoch_height - 5
+        block_number.is_multiple_of(epoch_height) || block_number % epoch_height >= epoch_height - 5
     }
 }
 
@@ -486,7 +486,7 @@ pub fn is_gt_epoch_root(block_number: u64, epoch_height: u64) -> bool {
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
-        block_number % epoch_height == 0 || block_number % epoch_height > epoch_height - 5
+        block_number.is_multiple_of(epoch_height) || block_number % epoch_height > epoch_height - 5
     }
 }
 
