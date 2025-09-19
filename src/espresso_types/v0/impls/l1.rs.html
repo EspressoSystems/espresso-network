@@ -395,10 +395,10 @@
 <a href=#395 id=395 data-nosnippet>395</a>        <span class="kw">let </span>url = <span class="self">self</span>.urls[next_index].clone();
 <a href=#396 id=396 data-nosnippet>396</a>        <span class="macro">tracing::info!</span>(%url, next_gen, <span class="string">"switch L1 transport"</span>);
 <a href=#397 id=397 data-nosnippet>397</a>
-<a href=#398 id=398 data-nosnippet>398</a>        <span class="kw">let </span>revert_at = <span class="kw">if </span>next_gen % <span class="self">self</span>.urls.len() == <span class="number">0 </span>{
+<a href=#398 id=398 data-nosnippet>398</a>        <span class="kw">let </span>revert_at = <span class="kw">if </span>next_gen.is_multiple_of(<span class="self">self</span>.urls.len()) {
 <a href=#399 id=399 data-nosnippet>399</a>            <span class="comment">// If we are reverting to the primary transport, clear our scheduled revert time.
 <a href=#400 id=400 data-nosnippet>400</a>            </span><span class="prelude-val">None
-<a href=#401 id=401 data-nosnippet>401</a>        </span>} <span class="kw">else if </span>current_transport.generation % <span class="self">self</span>.urls.len() == <span class="number">0 </span>{
+<a href=#401 id=401 data-nosnippet>401</a>        </span>} <span class="kw">else if </span>current_transport.generation.is_multiple_of(<span class="self">self</span>.urls.len()) {
 <a href=#402 id=402 data-nosnippet>402</a>            <span class="comment">// If we are failing over from the primary transport, schedule a time to automatically
 <a href=#403 id=403 data-nosnippet>403</a>            // revert back.
 <a href=#404 id=404 data-nosnippet>404</a>            </span><span class="prelude-val">Some</span>(Instant::now() + <span class="self">self</span>.opt.l1_failover_revert)

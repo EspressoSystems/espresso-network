@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["Keccak256Config","Poseidon2Config","Sha256Config"],"trait":["AvidMConfig"],"type":["Poseidon2SpongeStateBnN3R1"]};
+window.SIDEBAR_ITEMS = {"struct":["Keccak256Config"],"trait":["AvidMConfig"]};

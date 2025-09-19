@@ -1120,7 +1120,7 @@
 <a href=#1120 id=1120 data-nosnippet>1120</a>
 <a href=#1121 id=1121 data-nosnippet>1121</a>        <span class="comment">// log successful progress about once in 10 - 20 seconds,
 <a href=#1122 id=1122 data-nosnippet>1122</a>        // TODO: we may want to make this configurable
-<a href=#1123 id=1123 data-nosnippet>1123</a>        </span><span class="kw">if </span>parent_leaf.view_number().u64() % <span class="number">10 </span>== <span class="number">0 </span>{
+<a href=#1123 id=1123 data-nosnippet>1123</a>        </span><span class="kw">if </span>parent_leaf.view_number().u64().is_multiple_of(<span class="number">10</span>) {
 <a href=#1124 id=1124 data-nosnippet>1124</a>            <span class="macro">tracing::info!</span>(<span class="string">"validated and applied new header"</span>);
 <a href=#1125 id=1125 data-nosnippet>1125</a>        }
 <a href=#1126 id=1126 data-nosnippet>1126</a>        <span class="prelude-val">Ok</span>((validated_state, delta))

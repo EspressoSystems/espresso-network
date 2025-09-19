@@ -327,7 +327,7 @@
 <a href=#327 id=327 data-nosnippet>327</a>        <span class="number">0
 <a href=#328 id=328 data-nosnippet>328</a>    </span>} <span class="kw">else if </span>block_number == <span class="number">0 </span>{
 <a href=#329 id=329 data-nosnippet>329</a>        <span class="number">1
-<a href=#330 id=330 data-nosnippet>330</a>    </span>} <span class="kw">else if </span>block_number % epoch_height == <span class="number">0 </span>{
+<a href=#330 id=330 data-nosnippet>330</a>    </span>} <span class="kw">else if </span>block_number.is_multiple_of(epoch_height) {
 <a href=#331 id=331 data-nosnippet>331</a>        block_number / epoch_height
 <a href=#332 id=332 data-nosnippet>332</a>    } <span class="kw">else </span>{
 <a href=#333 id=333 data-nosnippet>333</a>        block_number / epoch_height + <span class="number">1
@@ -372,7 +372,7 @@
 <a href=#372 id=372 data-nosnippet>372</a>            <span class="prelude-val">None
 <a href=#373 id=373 data-nosnippet>373</a>        </span>} <span class="kw">else if </span>block_number == <span class="number">0 </span>{
 <a href=#374 id=374 data-nosnippet>374</a>            <span class="prelude-val">Some</span>(<span class="number">1u64</span>)
-<a href=#375 id=375 data-nosnippet>375</a>        } <span class="kw">else if </span>block_number % epoch_height == <span class="number">0 </span>{
+<a href=#375 id=375 data-nosnippet>375</a>        } <span class="kw">else if </span>block_number.is_multiple_of(epoch_height) {
 <a href=#376 id=376 data-nosnippet>376</a>            <span class="prelude-val">Some</span>(block_number / epoch_height)
 <a href=#377 id=377 data-nosnippet>377</a>        } <span class="kw">else </span>{
 <a href=#378 id=378 data-nosnippet>378</a>            <span class="prelude-val">Some</span>(block_number / epoch_height + <span class="number">1</span>)
@@ -413,8 +413,8 @@
 <a href=#413 id=413 data-nosnippet>413</a>    <span class="kw">if </span>block_number == <span class="number">0 </span>|| epoch_height == <span class="number">0 </span>{
 <a href=#414 id=414 data-nosnippet>414</a>        <span class="bool-val">false
 <a href=#415 id=415 data-nosnippet>415</a>    </span>} <span class="kw">else </span>{
-<a href=#416 id=416 data-nosnippet>416</a>        (block_number + <span class="number">3</span>) % epoch_height == <span class="number">0
-<a href=#417 id=417 data-nosnippet>417</a>    </span>}
+<a href=#416 id=416 data-nosnippet>416</a>        (block_number + <span class="number">3</span>).is_multiple_of(epoch_height)
+<a href=#417 id=417 data-nosnippet>417</a>    }
 <a href=#418 id=418 data-nosnippet>418</a>}
 <a href=#419 id=419 data-nosnippet>419</a><span class="doccomment">/// returns true if it's the first transition block (epoch height - 2)
 <a href=#420 id=420 data-nosnippet>420</a></span><span class="attr">#[must_use]
@@ -431,8 +431,8 @@
 <a href=#431 id=431 data-nosnippet>431</a>    <span class="kw">if </span>block_number == <span class="number">0 </span>|| epoch_height == <span class="number">0 </span>{
 <a href=#432 id=432 data-nosnippet>432</a>        <span class="bool-val">false
 <a href=#433 id=433 data-nosnippet>433</a>    </span>} <span class="kw">else </span>{
-<a href=#434 id=434 data-nosnippet>434</a>        block_number % epoch_height &gt;= epoch_height - <span class="number">3 </span>|| block_number % epoch_height == <span class="number">0
-<a href=#435 id=435 data-nosnippet>435</a>    </span>}
+<a href=#434 id=434 data-nosnippet>434</a>        block_number % epoch_height &gt;= epoch_height - <span class="number">3 </span>|| block_number.is_multiple_of(epoch_height)
+<a href=#435 id=435 data-nosnippet>435</a>    }
 <a href=#436 id=436 data-nosnippet>436</a>}
 <a href=#437 id=437 data-nosnippet>437</a>
 <a href=#438 id=438 data-nosnippet>438</a><span class="doccomment">/// Returns true if the block is the last block in the epoch
@@ -441,8 +441,8 @@
 <a href=#441 id=441 data-nosnippet>441</a>    <span class="kw">if </span>block_number == <span class="number">0 </span>|| epoch_height == <span class="number">0 </span>{
 <a href=#442 id=442 data-nosnippet>442</a>        <span class="bool-val">false
 <a href=#443 id=443 data-nosnippet>443</a>    </span>} <span class="kw">else </span>{
-<a href=#444 id=444 data-nosnippet>444</a>        block_number % epoch_height == <span class="number">0
-<a href=#445 id=445 data-nosnippet>445</a>    </span>}
+<a href=#444 id=444 data-nosnippet>444</a>        block_number.is_multiple_of(epoch_height)
+<a href=#445 id=445 data-nosnippet>445</a>    }
 <a href=#446 id=446 data-nosnippet>446</a>}
 <a href=#447 id=447 data-nosnippet>447</a>
 <a href=#448 id=448 data-nosnippet>448</a><span class="doccomment">/// Returns true if the block number is in trasntion but not the transition block
@@ -467,8 +467,8 @@
 <a href=#467 id=467 data-nosnippet>467</a>    <span class="kw">if </span>block_number == <span class="number">0 </span>|| epoch_height == <span class="number">0 </span>{
 <a href=#468 id=468 data-nosnippet>468</a>        <span class="bool-val">false
 <a href=#469 id=469 data-nosnippet>469</a>    </span>} <span class="kw">else </span>{
-<a href=#470 id=470 data-nosnippet>470</a>        (block_number + <span class="number">5</span>) % epoch_height == <span class="number">0
-<a href=#471 id=471 data-nosnippet>471</a>    </span>}
+<a href=#470 id=470 data-nosnippet>470</a>        (block_number + <span class="number">5</span>).is_multiple_of(epoch_height)
+<a href=#471 id=471 data-nosnippet>471</a>    }
 <a href=#472 id=472 data-nosnippet>472</a>}
 <a href=#473 id=473 data-nosnippet>473</a>
 <a href=#474 id=474 data-nosnippet>474</a><span class="doccomment">/// Returns true if the given block number is equal or greater than the epoch root block
@@ -477,7 +477,7 @@
 <a href=#477 id=477 data-nosnippet>477</a>    <span class="kw">if </span>block_number == <span class="number">0 </span>|| epoch_height == <span class="number">0 </span>{
 <a href=#478 id=478 data-nosnippet>478</a>        <span class="bool-val">false
 <a href=#479 id=479 data-nosnippet>479</a>    </span>} <span class="kw">else </span>{
-<a href=#480 id=480 data-nosnippet>480</a>        block_number % epoch_height == <span class="number">0 </span>|| block_number % epoch_height &gt;= epoch_height - <span class="number">5
+<a href=#480 id=480 data-nosnippet>480</a>        block_number.is_multiple_of(epoch_height) || block_number % epoch_height &gt;= epoch_height - <span class="number">5
 <a href=#481 id=481 data-nosnippet>481</a>    </span>}
 <a href=#482 id=482 data-nosnippet>482</a>}
 <a href=#483 id=483 data-nosnippet>483</a>
@@ -486,7 +486,7 @@
 <a href=#486 id=486 data-nosnippet>486</a>    <span class="kw">if </span>block_number == <span class="number">0 </span>|| epoch_height == <span class="number">0 </span>{
 <a href=#487 id=487 data-nosnippet>487</a>        <span class="bool-val">false
 <a href=#488 id=488 data-nosnippet>488</a>    </span>} <span class="kw">else </span>{
-<a href=#489 id=489 data-nosnippet>489</a>        block_number % epoch_height == <span class="number">0 </span>|| block_number % epoch_height &gt; epoch_height - <span class="number">5
+<a href=#489 id=489 data-nosnippet>489</a>        block_number.is_multiple_of(epoch_height) || block_number % epoch_height &gt; epoch_height - <span class="number">5
 <a href=#490 id=490 data-nosnippet>490</a>    </span>}
 <a href=#491 id=491 data-nosnippet>491</a>}
 <a href=#492 id=492 data-nosnippet>492</a>

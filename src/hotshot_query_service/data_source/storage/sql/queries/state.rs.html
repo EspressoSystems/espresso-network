@@ -1136,7 +1136,7 @@
 <a href=#1136 id=1136 data-nosnippet>1136</a>            <span class="kw">for _ in </span><span class="number">0</span>..<span class="number">50 </span>{
 <a href=#1137 id=1137 data-nosnippet>1137</a>                <span class="comment">// We flip a coin to decide whether to insert or delete, unless the tree is empty,
 <a href=#1138 id=1138 data-nosnippet>1138</a>                // in which case we can only insert.
-<a href=#1139 id=1139 data-nosnippet>1139</a>                </span><span class="kw">if </span>!expected.values().any(|v| v.is_some()) || rng.next_u32() % <span class="number">2 </span>== <span class="number">0 </span>{
+<a href=#1139 id=1139 data-nosnippet>1139</a>                </span><span class="kw">if </span>!expected.values().any(|v| v.is_some()) || rng.next_u32().is_multiple_of(<span class="number">2</span>) {
 <a href=#1140 id=1140 data-nosnippet>1140</a>                    <span class="comment">// Insert.
 <a href=#1141 id=1141 data-nosnippet>1141</a>                    </span><span class="kw">let </span>key = rng.next_u32() <span class="kw">as </span>usize;
 <a href=#1142 id=1142 data-nosnippet>1142</a>                    <span class="kw">let </span>val = rng.next_u32() <span class="kw">as </span>usize;
