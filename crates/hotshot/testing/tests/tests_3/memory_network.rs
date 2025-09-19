@@ -8,26 +8,25 @@
 use std::{sync::Arc, time::Duration};
 
 use hotshot::{
-    traits::{
-        implementations::{MasterMap, MemoryNetwork},
-    },
+    traits::implementations::{MasterMap, MemoryNetwork},
     types::SignatureKey,
 };
 use hotshot_example_types::{
-    block_types::{TestTransaction},
-    node_types::{TestVersions, TestTypes},
+    block_types::TestTransaction,
+    node_types::{TestTypes, TestVersions},
     storage_types::TestStorage,
 };
 use hotshot_types::{
-    data::{ViewNumber},
+    data::ViewNumber,
     message::{DataMessage, Message, MessageKind, UpgradeLock},
-    signature_key::{BLSPubKey},
+    signature_key::BLSPubKey,
     traits::{
         network::{BroadcastDelay, ConnectedNetwork, TestableNetworkingImplementation, Topic},
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
     },
 };
 use rand::{rngs::StdRng, RngCore, SeedableRng};
+use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 use tracing::{instrument, trace};
 
@@ -291,7 +290,8 @@ async fn memory_network_test_in_flight_message_count() {
         );
     }
 
-    while TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network1).unwrap() > 0
+    while TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network1).unwrap()
+        > 0
     {
         network1.recv_message().await.unwrap();
     }
@@ -302,7 +302,8 @@ async fn memory_network_test_in_flight_message_count() {
         network2.recv_message().await.unwrap();
     }
 
-    while TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network2).unwrap() > 0
+    while TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network2).unwrap()
+        > 0
     {
         network2.recv_message().await.unwrap();
     }
