@@ -38,7 +38,7 @@ use hotshot_types::{
     },
     vid::avidm::AvidMShare,
 };
-use jf_merkle_tree::MerkleTreeScheme;
+use jf_merkle_tree_compat::MerkleTreeScheme;
 use serde::de::Error as _;
 use snafu::OptionExt;
 use tagged_base64::TaggedBase64;

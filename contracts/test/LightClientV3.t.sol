@@ -433,7 +433,7 @@ contract LightClient_newFinalizedState_BeforeEpochActivation_Test is LightClient
         // invalid scalar for blockCommRoot
         vm.startPrank(prover);
         badState.blockCommRoot = BN254.ScalarField.wrap(BN254.R_MOD);
-        vm.expectRevert("Bn254: invalid scalar field");
+        vm.expectRevert("InvalidScalar()");
         lc.newFinalizedState(badState, nextStakeTable, newAuthRoot, newProof);
     }
 
@@ -477,7 +477,7 @@ contract LightClient_newFinalizedState_BeforeEpochActivation_Test is LightClient
         cmds[2] = vm.toString(uint64(42));
 
         bytes memory result = vm.ffi(cmds);
-        (V.PlonkProof memory dummyProof) = abi.decode(result, (V.PlonkProof));
+        V.PlonkProof memory dummyProof = abi.decode(result, (V.PlonkProof));
         vm.expectRevert(LC.InvalidProof.selector);
         lc.newFinalizedState(newState, nextStakeTable, newAuthRoot, dummyProof);
 
@@ -558,7 +558,7 @@ contract LightClient_newFinalizedState_OnEpochActivation_Test is LightClientComm
         cmds[2] = vm.toString(uint64(42));
 
         bytes memory result = vm.ffi(cmds);
-        (V.PlonkProof memory dummyProof) = abi.decode(result, (V.PlonkProof));
+        V.PlonkProof memory dummyProof = abi.decode(result, (V.PlonkProof));
 
         LC.LightClientState memory newState = LC.LightClientState({
             viewNum: 16,

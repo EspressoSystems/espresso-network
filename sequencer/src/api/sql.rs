@@ -38,7 +38,7 @@ use hotshot_types::{
     utils::epoch_from_block_number,
     vote::HasViewNumber,
 };
-use jf_merkle_tree::{
+use jf_merkle_tree_compat::{
     prelude::MerkleNode, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
     LookupResult, MerkleTreeScheme,
 };

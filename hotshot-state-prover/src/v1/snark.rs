@@ -107,7 +107,7 @@ where
 #[cfg(test)]
 mod tests {
     use ark_bn254::Bn254;
-    use ark_ec::pairing::Pairing;
+    use ark_ec::{pairing::Pairing, AffineRepr, ScalarMul};
     use ark_ed_on_bn254::EdwardsConfig as Config;
     use ark_std::{
         rand::{CryptoRng, RngCore},
@@ -142,8 +142,7 @@ mod tests {
     where
         R: RngCore + CryptoRng,
     {
-        use ark_ec::{scalar_mul::fixed_base::FixedBase, CurveGroup};
-        use ark_ff::PrimeField;
+        use ark_ec::CurveGroup;
         use ark_std::{end_timer, start_timer, UniformRand};
 
         let setup_time = start_timer!(|| format!("KZG10::Setup with degree {}", max_degree));
@@ -159,18 +158,12 @@ mod tests {
             cur *= &beta;
         }
 
-        let window_size = FixedBase::get_mul_window_size(max_degree + 1);
-
-        let scalar_bits = <Bn254 as Pairing>::ScalarField::MODULUS_BIT_SIZE as usize;
         let g_time = start_timer!(|| "Generating powers of G");
-        // TODO: parallelization
-        let g_table = FixedBase::get_window_table(scalar_bits, window_size, g);
-        let powers_of_g = FixedBase::msm::<<Bn254 as Pairing>::G1>(
-            scalar_bits,
-            window_size,
-            &g_table,
-            &powers_of_beta,
-        );
+        let powers_of_g = g
+            .batch_mul(&powers_of_beta)
+            .into_iter()
+            .map(|p| p.into_group())
+            .collect::<Vec<_>>();
         end_timer!(g_time);
 
         let powers_of_g = <Bn254 as Pairing>::G1::normalize_batch(&powers_of_g);
