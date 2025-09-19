@@ -1136,7 +1136,7 @@ mod test {
             for _ in 0..50 {
                 // We flip a coin to decide whether to insert or delete, unless the tree is empty,
                 // in which case we can only insert.
-                if !expected.values().any(|v| v.is_some()) || rng.next_u32() % 2 == 0 {
+                if !expected.values().any(|v| v.is_some()) || rng.next_u32().is_multiple_of(2) {
                     // Insert.
                     let key = rng.next_u32() as usize;
                     let val = rng.next_u32() as usize;

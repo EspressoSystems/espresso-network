@@ -20,7 +20,7 @@ const NS_ID_BYTE_LEN: usize = 4;
 pub fn parse_ns_table(payload_byte_len: usize, bytes: &[u8]) -> Vec<Range<usize>> {
     let mut result = vec![];
     if bytes.len() < NUM_NSS_BYTE_LEN
-        || (bytes.len() - NUM_NSS_BYTE_LEN) % (NS_OFFSET_BYTE_LEN + NS_ID_BYTE_LEN) != 0
+        || !(bytes.len() - NUM_NSS_BYTE_LEN).is_multiple_of(NS_OFFSET_BYTE_LEN + NS_ID_BYTE_LEN)
     {
         tracing::warn!(
             "Failed to parse the metadata as namespace table. Use a single namespace table \
