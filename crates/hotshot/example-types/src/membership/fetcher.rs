@@ -118,11 +118,11 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
                             .read()
                             .await
                             .proposals_wrapper
-                            .iter()
-                            .map(|(_view, proposal)| {
+                            .values()
+                            .map(|proposal| {
                                 (
                                     proposal.data.block_header().block_number(),
-                                    Leaf2::from_quorum_proposal(&proposal.data.clone().into()),
+                                    Leaf2::from_quorum_proposal(&proposal.data.clone()),
                                 )
                             })
                             .collect();

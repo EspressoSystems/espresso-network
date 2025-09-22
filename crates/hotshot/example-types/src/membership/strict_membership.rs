@@ -254,7 +254,7 @@ impl<
     }
 
     fn first_epoch(&self) -> Option<TYPES::Epoch> {
-        self.inner.first_epoch().map(|e| TYPES::Epoch::new(e))
+        self.inner.first_epoch().map(TYPES::Epoch::new)
     }
 
     fn set_first_epoch(&mut self, epoch: TYPES::Epoch, initial_drb_result: DrbResult) {
