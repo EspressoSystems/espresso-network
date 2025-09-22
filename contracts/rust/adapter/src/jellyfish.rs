@@ -39,8 +39,8 @@ where
             }
         } else {
             Self {
-                x: field_to_u256::<P::BaseField>(*p.x().unwrap()),
-                y: field_to_u256::<P::BaseField>(*p.y().unwrap()),
+                x: field_to_u256::<P::BaseField>(p.x().unwrap()),
+                y: field_to_u256::<P::BaseField>(p.y().unwrap()),
             }
         }
     }
@@ -94,8 +94,8 @@ where
 {
     fn from(p: twisted_edwards::Affine<P>) -> Self {
         Self {
-            x: field_to_u256::<P::BaseField>(*p.x().unwrap()),
-            y: field_to_u256::<P::BaseField>(*p.y().unwrap()),
+            x: field_to_u256::<P::BaseField>(p.x().unwrap()),
+            y: field_to_u256::<P::BaseField>(p.y().unwrap()),
         }
     }
 }

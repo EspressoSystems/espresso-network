@@ -405,7 +405,7 @@ pub mod mock {
     use async_trait::async_trait;
     use committable::Commitment;
     use hotshot_types::{data::ViewNumber, stake_table::HSStakeTable};
-    use jf_merkle_tree::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
+    use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 
     use super::*;
     use crate::{

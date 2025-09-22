@@ -21,7 +21,7 @@ use ark_serialize::CanonicalDeserialize;
 use async_trait::async_trait;
 use futures::stream::TryStreamExt;
 use hotshot_types::traits::node_implementation::NodeType;
-use jf_merkle_tree::{
+use jf_merkle_tree_compat::{
     prelude::{MerkleNode, MerkleProof},
     DigestAlgorithm, MerkleCommitment, ToTraversalPath,
 };
@@ -492,7 +492,7 @@ fn build_get_path_query<'q>(
 #[cfg(test)]
 mod test {
     use futures::stream::StreamExt;
-    use jf_merkle_tree::{
+    use jf_merkle_tree_compat::{
         universal_merkle_tree::UniversalMerkleTree, LookupResult, MerkleTreeScheme,
         UniversalMerkleTreeScheme,
     };
@@ -1136,7 +1136,7 @@ mod test {
             for _ in 0..50 {
                 // We flip a coin to decide whether to insert or delete, unless the tree is empty,
                 // in which case we can only insert.
-                if !expected.values().any(|v| v.is_some()) || rng.next_u32() % 2 == 0 {
+                if !expected.values().any(|v| v.is_some()) || rng.next_u32().is_multiple_of(2) {
                     // Insert.
                     let key = rng.next_u32() as usize;
                     let val = rng.next_u32() as usize;
