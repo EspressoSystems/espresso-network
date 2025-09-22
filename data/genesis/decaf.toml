@@ -1,4 +1,5 @@
 base_version = "0.4"
+upgrade_version = "0.4"
 genesis_version = "0.2"
 epoch_height = 3000
 drb_difficulty = 10
