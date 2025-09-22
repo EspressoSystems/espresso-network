@@ -117,8 +117,8 @@ impl LCV2StateRelayServerDataSource for LCV2StateRelayServerState {
                 // A signature is already posted for this key with this state
                 return Err(ServerError::catch_all(
                     StatusCode::BAD_REQUEST,
-                    "A LCV2 signature of this light client state is already posted at this \
-                     block height for this key."
+                    "A LCV2 signature of this light client state is already posted at this block \
+                     height for this key."
                         .to_owned(),
                 ));
             },
