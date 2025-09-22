@@ -35,12 +35,12 @@ pub struct LCV2StateRelayServerState {
     /// Bundles for light client V2
     bundles: HashMap<u64, HashMap<LightClientState, LCV2StateSignaturesBundle>>,
 
-    /// The latest state signatures bundle for legacy light client
+    /// The latest state signatures bundle for LCV2 light client
     latest_available_bundle: Option<LCV2StateSignaturesBundle>,
-    /// The block height of the latest available legacy state signature bundle
+    /// The block height of the latest available LCV2 state signature bundle
     latest_block_height: Option<u64>,
 
-    /// A ordered queue of block heights for legacy light client state, used for garbage collection.
+    /// A ordered queue of block heights for V2 light client state, used for garbage collection.
     gc_queue: BTreeSet<u64>,
 
     /// Stake table tracker
@@ -75,13 +75,10 @@ impl LCV2StateRelayServerDataSource for LCV2StateRelayServerState {
                 ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
             })?;
         let Some(weight) = stake_table.known_nodes.get(&req.key) else {
-            tracing::warn!(
-                "Received invalid legacy signature from unknown node: {:?}",
-                req
-            );
+            tracing::warn!("Received LCV2 signature from unknown node: {req}");
             return Err(ServerError::catch_all(
                 StatusCode::UNAUTHORIZED,
-                "Legacy signature posted by nodes not on the stake table".to_owned(),
+                "LCV2 signature posted by nodes not on the stake table".to_owned(),
             ));
         };
 
@@ -92,10 +89,10 @@ impl LCV2StateRelayServerDataSource for LCV2StateRelayServerState {
             &req.state,
             &req.next_stake,
         ) {
-            tracing::warn!("Received invalid legacy signature: {:?}", req);
+            tracing::warn!("Couldn't verify the received LCV2 signature: {req}");
             return Err(ServerError::catch_all(
                 StatusCode::BAD_REQUEST,
-                "The posted legacy signature is not valid.".to_owned(),
+                "The posted LCV2 signature is not valid.".to_owned(),
             ));
         }
 
@@ -111,7 +108,7 @@ impl LCV2StateRelayServerDataSource for LCV2StateRelayServerState {
                 accumulated_weight: U256::from(0),
             });
         tracing::debug!(
-            "Accepting new legacy signature for block height {} from {}.",
+            "Accepting new LCV2 signature for block height {} from {}.",
             block_height,
             req.key
         );
@@ -120,7 +117,7 @@ impl LCV2StateRelayServerDataSource for LCV2StateRelayServerState {
                 // A signature is already posted for this key with this state
                 return Err(ServerError::catch_all(
                     StatusCode::BAD_REQUEST,
-                    "A legacy signature of this light client state is already posted at this \
+                    "A LCV2 signature of this light client state is already posted at this \
                      block height for this key."
                         .to_owned(),
                 ));

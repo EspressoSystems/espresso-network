@@ -174,12 +174,18 @@ where
         async move {
             if let Ok(req) = req.body_auto::<LCV3StateSignatureRequestBody, BindVer>(bind_version) {
                 tracing::debug!("Received LCV3 state signature: {req}");
-                if let Err(e) =
-                    LCV2StateRelayServerDataSource::post_signature(state, req.clone().into()).await
-                {
-                    tracing::error!("Failed to post downgraded LCV2 state signature: {}", e);
+                if req.signature == req.v2_signature {
+                    // Equal signature indicates that the request is transformed from a V2 request.
+                    let req: LCV2StateSignatureRequestBody = req.into();
+                    if LCV1StateSignatureKey::verify_state_sig(&req.key, &req.signature, &req.state)
+                    {
+                        LCV1StateRelayServerDataSource::post_signature(state, req.into()).await
+                    } else {
+                        LCV2StateRelayServerDataSource::post_signature(state, req).await
+                    }
+                } else {
+                    LCV3StateRelayServerDataSource::post_signature(state, req).await
                 }
-                LCV3StateRelayServerDataSource::post_signature(state, req).await
             } else if let Ok(req) =
                 req.body_auto::<LCV2StateSignatureRequestBody, BindVer>(bind_version)
             {
