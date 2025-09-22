@@ -15,7 +15,7 @@ use hotshot_types::{
     traits::{election::Membership, node_implementation::ConsensusTime},
     utils::epoch_from_block_number,
 };
-use jf_merkle_tree::{
+use jf_merkle_tree_compat::{
     prelude::MerkleNode, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
     LookupResult, MerkleTreeScheme, PersistentUniversalMerkleTreeScheme, ToTraversalPath,
     UniversalMerkleTreeScheme,

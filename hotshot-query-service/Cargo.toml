@@ -74,22 +74,19 @@ hotshot-types = { workspace = true }
 # Dependencies enabled by feature "sql-data-source".
 include_dir = { version = "0.7", optional = true }
 itertools = "0.12.1"
-jf-merkle-tree = { workspace = true , features = [
+jf-merkle-tree-compat = { workspace = true , features = [
     "std",
 ] }
-jf-vid = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5", features = [
-    "std",
-    "parallel",
-] }
+jf-advz = { workspace = true }
 lazy_static = "1"
 log = { version = "0.4", optional = true }
 portpicker = { version = "0.1", optional = true }
 prometheus = { version = "0.13", default-features = false }
-rand = { version = "0.8", optional = true }
+rand = { workspace = true, optional = true }
 refinery = { version = "0.8", features = ["tokio-postgres"], optional = true }
 refinery-core = { version = "0.8", optional = true }
 semver = { workspace = true }
-serde = { version = "1.0", features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
 serde_json = "1.0"
 snafu = "0.8"
 sqlx = { version = "0.8", features = [
@@ -98,8 +95,8 @@ sqlx = { version = "0.8", features = [
     "runtime-tokio",
     "tls-native-tls",
 ], optional = true }
-surf-disco = { workspace = true }
-tagged-base64 = "0.4"
+surf-disco = "0.9"
+tagged-base64 = { workspace = true }
 tempfile = { version = "3.10", optional = true }
 tide-disco = "0.9"
 time = "0.3"
@@ -133,7 +130,7 @@ clap = { version = "4.5", features = ["derive", "env"] }
 espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0" }
 generic-array = "0.14"
 portpicker = "0.1"
-rand = "0.8"
+rand = { workspace = true }
 reqwest = "0.12.3"
 tempfile = "3.10"
 test-log = { workspace = true }

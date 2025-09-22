@@ -18,7 +18,9 @@ use hotshot_query_service::{
     status::StatusDataSource,
     types::HeightIndexed,
 };
-use jf_merkle_tree::{LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme};
+use jf_merkle_tree_compat::{
+    LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
+};
 use tokio::time::sleep;
 use vbs::version::StaticVersionType;
 

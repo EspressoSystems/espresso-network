@@ -14,7 +14,7 @@ anyhow = { workspace = true }
 ark-serialize = { workspace = true, features = ["derive"] }
 async-trait = { workspace = true }
 clap = { workspace = true }
-committable = "0.2"
+committable = { workspace = true }
 hotshot = { workspace = true }
 hotshot-example-types = { workspace = true }
 log-panics = { workspace = true }

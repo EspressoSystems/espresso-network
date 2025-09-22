@@ -43,7 +43,7 @@ use hotshot_types::{
     PeerConfig,
 };
 use itertools::Itertools;
-use jf_merkle_tree::MerkleTreeScheme;
+use jf_merkle_tree_compat::MerkleTreeScheme;
 use rand::Rng;
 use request_response::RequestType;
 use tokio::time::timeout;
@@ -925,7 +925,7 @@ pub mod test_helpers {
         HotShotConfig,
     };
     use itertools::izip;
-    use jf_merkle_tree::{MerkleCommitment, MerkleTreeScheme};
+    use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme};
     use portpicker::pick_unused_port;
     use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
     use surf_disco::Client;
@@ -1119,7 +1119,7 @@ pub mod test_helpers {
             let signer = network_config.signer();
             let deployer = ProviderBuilder::new()
                 .wallet(EthereumWallet::from(signer.clone()))
-                .on_http(l1_url.clone());
+                .connect_http(l1_url.clone());
 
             let blocks_per_epoch = network_config.hotshot_config().epoch_height;
             let epoch_start_block = network_config.hotshot_config().epoch_start_block;
@@ -2117,7 +2117,6 @@ mod test {
     };
     use espresso_types::{
         config::PublicHotShotConfig,
-        sparse_mt::KeccakNode,
         traits::{NullEventConsumer, PersistenceOptions},
         v0_3::{Fetcher, RewardAmount, COMMISSION_BASIS_POINTS, REWARD_MERKLE_TREE_V1_ARITY},
         v0_4::REWARD_MERKLE_TREE_V2_ARITY,
@@ -2154,7 +2153,7 @@ mod test {
         utils::epoch_from_block_number,
         ValidatorConfig,
     };
-    use jf_merkle_tree::prelude::{MerkleProof, Sha3Node};
+    use jf_merkle_tree_compat::prelude::{MerkleProof, Sha3Node};
     use portpicker::pick_unused_port;
     use rand::seq::SliceRandom;
     use rstest::rstest;
@@ -3496,14 +3495,13 @@ mod test {
             }
             let l1_block = header.l1_finalized().expect("l1 block not found");
 
-            let events = Fetcher::fetch_events_from_contract(
+            let sorted_events = Fetcher::fetch_events_from_contract(
                 l1_client.clone(),
                 stake_table,
                 None,
                 l1_block.number(),
             )
-            .await;
-            let sorted_events = events.sort_events().expect("failed to sort");
+            .await?;
 
             let mut sorted_dedup_removed = sorted_events.clone();
             sorted_dedup_removed.dedup();
@@ -5020,7 +5018,7 @@ mod test {
 
         let deployer = ProviderBuilder::new()
             .wallet(EthereumWallet::from(network_config.signer().clone()))
-            .on_http(network_config.l1_url().clone());
+            .connect_http(network_config.l1_url().clone());
 
         let mut contracts = Contracts::new();
         let args = DeployerArgsBuilder::default()
@@ -5086,7 +5084,6 @@ mod test {
             .block(BlockId::finalized())
             .call()
             .await?
-            ._0
             .to::<u64>();
 
         tracing::info!("stake table init block = {stake_table_init_block}");
@@ -5096,8 +5093,7 @@ mod test {
             .block(BlockId::finalized())
             .call()
             .await
-            .context("Failed to get token address")?
-            ._0;
+            .context("Failed to get token address")?;
 
         let token = EspToken::new(token_address, provider.clone());
 
@@ -5967,6 +5963,8 @@ mod test {
             wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
 
             for (address, _) in validated_state.reward_merkle_tree_v2.iter() {
+                use espresso_types::sparse_mt::KeccakNode;
+
                 let (_, expected_proof) = validated_state
                     .reward_merkle_tree_v2
                     .lookup(*address)

@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use alloy::{
     contract::SolCallBuilder,
+    network::ReceiptResponse,
     primitives::U256,
     providers::{Provider, ProviderBuilder},
     rpc::types::TransactionReceipt,
@@ -40,7 +41,7 @@ pub async fn wait_for_rpc(
     max_retries: usize,
 ) -> Result<usize, String> {
     let retries = wait_for_http(url, interval, max_retries).await?;
-    let client = ProviderBuilder::new().on_http(url.clone());
+    let client = ProviderBuilder::new().connect_http(url.clone());
     for i in retries..(max_retries + 1) {
         if client.get_block_number().await.is_ok() {
             tracing::debug!("JSON-RPC ready at {url}");
@@ -84,8 +85,8 @@ macro_rules! impl_to_fixed_bytes {
 /// - `wait_for_transaction_to_be_mined` is removed thanks to alloy's better builtin PendingTransaction await
 /// - DON'T use this if you want parse the exact revert reason/type, since this func will only give err msg like: "custom error 0x23b0db14",
 ///   instead, follow <https://docs.rs/alloy/0.12.5/alloy/contract/enum.Error.html#method.as_decoded_interface_error> to pattern-match err type
-pub async fn contract_send<T, P, C>(
-    call: &SolCallBuilder<T, P, C>,
+pub async fn contract_send<P, C>(
+    call: &SolCallBuilder<P, C>,
 ) -> Result<(TransactionReceipt, u64), anyhow::Error>
 where
     P: Provider,
@@ -116,7 +117,7 @@ where
     // If a transaction is mined and we get a receipt for it, the block number should _always_ be
     // set. If it is not, something has gone horribly wrong with the RPC.
     let block_number = receipt
-        .block_number
+        .block_number()
         .expect("transaction mined but block number not set");
     Ok((receipt, block_number))
 }
@@ -187,7 +188,7 @@ mod test {
 
     #[test_log::test(tokio::test)]
     async fn test_contract_send() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let contract = CounterWithError::deploy(provider.clone()).await?;
 
         // test normal contract sending should success
@@ -195,7 +196,7 @@ mod test {
         let (receipt, block_num) = contract_send(&inc_call).await?;
         assert_eq!(block_num, 2); // 1 for deployment, 1 for this send
         assert!(receipt.inner.is_success());
-        assert_eq!(contract.counter().call().await?.counter, I256::ONE);
+        assert_eq!(contract.counter().call().await?, I256::ONE);
 
         // test contract revert will return useful error message
         let revert_call = contract.revertA();
