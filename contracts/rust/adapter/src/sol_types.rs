@@ -31,6 +31,7 @@ pub use crate::bindings::{
     esp_token::EspToken,
     esp_token_v2::EspTokenV2,
     fee_contract::FeeContract::{self, Deposit},
+    i_reward_claim::IRewardClaim::LifetimeRewardsProof as LifetimeRewardsProofSol,
     light_client::{
         IPlonkVerifier::{PlonkProof as PlonkProofSol, VerifyingKey as VerifyingKeySol},
         LightClient::{
@@ -49,10 +50,7 @@ pub use crate::bindings::{
     plonk_verifier::PlonkVerifier,
     plonk_verifier_v2::PlonkVerifierV2,
     plonk_verifier_v3::PlonkVerifierV3,
-    reward_claim_prototype_mock::{
-        RewardClaimPrototypeMock,
-        RewardMerkleTreeVerifier::AccruedRewardsProof as AccruedRewardsProofSol,
-    },
+    reward_claim_prototype_mock::{self, RewardClaimPrototypeMock},
     safe_exit_timelock::SafeExitTimelock,
     stake_table::StakeTable,
     stake_table_v2::{
@@ -265,6 +263,22 @@ impl From<LightClientV3Mock::finalizedStateReturn> for LightClientStateSol {
 impl From<LightClientV3Mock::votingStakeTableStateReturn> for StakeTableStateSol {
     fn from(v: LightClientV3Mock::votingStakeTableStateReturn) -> Self {
         unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<reward_claim_prototype_mock::IRewardClaim::LifetimeRewardsProof>
+    for LifetimeRewardsProofSol
+{
+    fn from(value: reward_claim_prototype_mock::IRewardClaim::LifetimeRewardsProof) -> Self {
+        unsafe { std::mem::transmute(value) }
+    }
+}
+
+impl From<LifetimeRewardsProofSol>
+    for reward_claim_prototype_mock::IRewardClaim::LifetimeRewardsProof
+{
+    fn from(value: LifetimeRewardsProofSol) -> Self {
+        unsafe { std::mem::transmute(value) }
     }
 }
 

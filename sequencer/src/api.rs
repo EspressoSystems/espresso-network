@@ -2183,7 +2183,7 @@ mod test {
     };
     use hotshot::types::EventType;
     use hotshot_contract_adapter::{
-        sol_types::{AccruedRewardsProofSol, EspToken, StakeTableV2},
+        sol_types::{EspToken, LifetimeRewardsProofSol, StakeTableV2},
         stake_table::StakeTableContractVersion,
     };
     use hotshot_example_types::node_types::EpochsTestVersions;
@@ -6051,7 +6051,7 @@ mod test {
                 }
 
                 let solidity_proof = client
-                    .get::<AccruedRewardsProofSol>(&format!(
+                    .get::<LifetimeRewardsProofSol>(&format!(
                         "reward-state-v2/proof/solidity/{height}/{address}"
                     ))
                     .send()

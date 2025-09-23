@@ -2,8 +2,8 @@
 /**
 
 ```solidity
-library RewardMerkleTreeVerifier {
-    struct AccruedRewardsProof { bytes32[] siblings; }
+library IRewardClaim {
+    struct LifetimeRewardsProof { bytes32[] siblings; }
 }
 ```*/
 #[allow(
@@ -13,17 +13,17 @@ library RewardMerkleTreeVerifier {
     clippy::style,
     clippy::empty_structs_with_brackets
 )]
-pub mod RewardMerkleTreeVerifier {
+pub mod IRewardClaim {
     use super::*;
     use alloy::sol_types as alloy_sol_types;
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**```solidity
-struct AccruedRewardsProof { bytes32[] siblings; }
+struct LifetimeRewardsProof { bytes32[] siblings; }
 ```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
-    pub struct AccruedRewardsProof {
+    pub struct LifetimeRewardsProof {
         #[allow(missing_docs)]
         pub siblings: alloy::sol_types::private::Vec<
             alloy::sol_types::private::FixedBytes<32>,
@@ -61,24 +61,24 @@ struct AccruedRewardsProof { bytes32[] siblings; }
         }
         #[automatically_derived]
         #[doc(hidden)]
-        impl ::core::convert::From<AccruedRewardsProof> for UnderlyingRustTuple<'_> {
-            fn from(value: AccruedRewardsProof) -> Self {
+        impl ::core::convert::From<LifetimeRewardsProof> for UnderlyingRustTuple<'_> {
+            fn from(value: LifetimeRewardsProof) -> Self {
                 (value.siblings,)
             }
         }
         #[automatically_derived]
         #[doc(hidden)]
-        impl ::core::convert::From<UnderlyingRustTuple<'_>> for AccruedRewardsProof {
+        impl ::core::convert::From<UnderlyingRustTuple<'_>> for LifetimeRewardsProof {
             fn from(tuple: UnderlyingRustTuple<'_>) -> Self {
                 Self { siblings: tuple.0 }
             }
         }
         #[automatically_derived]
-        impl alloy_sol_types::SolValue for AccruedRewardsProof {
+        impl alloy_sol_types::SolValue for LifetimeRewardsProof {
             type SolType = Self;
         }
         #[automatically_derived]
-        impl alloy_sol_types::private::SolTypeValue<Self> for AccruedRewardsProof {
+        impl alloy_sol_types::private::SolTypeValue<Self> for LifetimeRewardsProof {
             #[inline]
             fn stv_to_tokens(&self) -> <Self as alloy_sol_types::SolType>::Token<'_> {
                 (
@@ -129,7 +129,7 @@ struct AccruedRewardsProof { bytes32[] siblings; }
             }
         }
         #[automatically_derived]
-        impl alloy_sol_types::SolType for AccruedRewardsProof {
+        impl alloy_sol_types::SolType for LifetimeRewardsProof {
             type RustType = Self;
             type Token<'a> = <UnderlyingSolTuple<
                 'a,
@@ -154,12 +154,12 @@ struct AccruedRewardsProof { bytes32[] siblings; }
             }
         }
         #[automatically_derived]
-        impl alloy_sol_types::SolStruct for AccruedRewardsProof {
-            const NAME: &'static str = "AccruedRewardsProof";
+        impl alloy_sol_types::SolStruct for LifetimeRewardsProof {
+            const NAME: &'static str = "LifetimeRewardsProof";
             #[inline]
             fn eip712_root_type() -> alloy_sol_types::private::Cow<'static, str> {
                 alloy_sol_types::private::Cow::Borrowed(
-                    "AccruedRewardsProof(bytes32[] siblings)",
+                    "LifetimeRewardsProof(bytes32[] siblings)",
                 )
             }
             #[inline]
@@ -182,7 +182,7 @@ struct AccruedRewardsProof { bytes32[] siblings; }
             }
         }
         #[automatically_derived]
-        impl alloy_sol_types::EventTopic for AccruedRewardsProof {
+        impl alloy_sol_types::EventTopic for LifetimeRewardsProof {
             #[inline]
             fn topic_preimage_length(rust: &Self::RustType) -> usize {
                 0usize
@@ -223,9 +223,9 @@ struct AccruedRewardsProof { bytes32[] siblings; }
         }
     };
     use alloy::contract as alloy_contract;
-    /**Creates a new wrapper around an on-chain [`RewardMerkleTreeVerifier`](self) contract instance.
+    /**Creates a new wrapper around an on-chain [`IRewardClaim`](self) contract instance.
 
-See the [wrapper's documentation](`RewardMerkleTreeVerifierInstance`) for more details.*/
+See the [wrapper's documentation](`IRewardClaimInstance`) for more details.*/
     #[inline]
     pub const fn new<
         P: alloy_contract::private::Provider<N>,
@@ -233,13 +233,13 @@ See the [wrapper's documentation](`RewardMerkleTreeVerifierInstance`) for more d
     >(
         address: alloy_sol_types::private::Address,
         __provider: P,
-    ) -> RewardMerkleTreeVerifierInstance<P, N> {
-        RewardMerkleTreeVerifierInstance::<P, N>::new(address, __provider)
+    ) -> IRewardClaimInstance<P, N> {
+        IRewardClaimInstance::<P, N>::new(address, __provider)
     }
-    /**A [`RewardMerkleTreeVerifier`](self) instance.
+    /**A [`IRewardClaim`](self) instance.
 
 Contains type-safe methods for interacting with an on-chain instance of the
-[`RewardMerkleTreeVerifier`](self) contract located at a given `address`, using a given
+[`IRewardClaim`](self) contract located at a given `address`, using a given
 provider `P`.
 
 If the contract bytecode is available (see the [`sol!`](alloy_sol_types::sol!)
@@ -248,21 +248,16 @@ be used to deploy a new instance of the contract.
 
 See the [module-level documentation](self) for all the available methods.*/
     #[derive(Clone)]
-    pub struct RewardMerkleTreeVerifierInstance<
-        P,
-        N = alloy_contract::private::Ethereum,
-    > {
+    pub struct IRewardClaimInstance<P, N = alloy_contract::private::Ethereum> {
         address: alloy_sol_types::private::Address,
         provider: P,
         _network: ::core::marker::PhantomData<N>,
     }
     #[automatically_derived]
-    impl<P, N> ::core::fmt::Debug for RewardMerkleTreeVerifierInstance<P, N> {
+    impl<P, N> ::core::fmt::Debug for IRewardClaimInstance<P, N> {
         #[inline]
         fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-            f.debug_tuple("RewardMerkleTreeVerifierInstance")
-                .field(&self.address)
-                .finish()
+            f.debug_tuple("IRewardClaimInstance").field(&self.address).finish()
         }
     }
     /// Instantiation and getters/setters.
@@ -270,10 +265,10 @@ See the [module-level documentation](self) for all the available methods.*/
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
-    > RewardMerkleTreeVerifierInstance<P, N> {
-        /**Creates a new wrapper around an on-chain [`RewardMerkleTreeVerifier`](self) contract instance.
+    > IRewardClaimInstance<P, N> {
+        /**Creates a new wrapper around an on-chain [`IRewardClaim`](self) contract instance.
 
-See the [wrapper's documentation](`RewardMerkleTreeVerifierInstance`) for more details.*/
+See the [wrapper's documentation](`IRewardClaimInstance`) for more details.*/
         #[inline]
         pub const fn new(
             address: alloy_sol_types::private::Address,
@@ -306,11 +301,11 @@ See the [wrapper's documentation](`RewardMerkleTreeVerifierInstance`) for more d
             &self.provider
         }
     }
-    impl<P: ::core::clone::Clone, N> RewardMerkleTreeVerifierInstance<&P, N> {
+    impl<P: ::core::clone::Clone, N> IRewardClaimInstance<&P, N> {
         /// Clones the provider and returns a new instance with the cloned provider.
         #[inline]
-        pub fn with_cloned_provider(self) -> RewardMerkleTreeVerifierInstance<P, N> {
-            RewardMerkleTreeVerifierInstance {
+        pub fn with_cloned_provider(self) -> IRewardClaimInstance<P, N> {
+            IRewardClaimInstance {
                 address: self.address,
                 provider: ::core::clone::Clone::clone(&self.provider),
                 _network: ::core::marker::PhantomData,
@@ -322,7 +317,7 @@ See the [wrapper's documentation](`RewardMerkleTreeVerifierInstance`) for more d
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
-    > RewardMerkleTreeVerifierInstance<P, N> {
+    > IRewardClaimInstance<P, N> {
         /// Creates a new call builder using this contract instance's provider and address.
         ///
         /// Note that the call can be any function call, not just those defined in this
@@ -339,7 +334,7 @@ See the [wrapper's documentation](`RewardMerkleTreeVerifierInstance`) for more d
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
-    > RewardMerkleTreeVerifierInstance<P, N> {
+    > IRewardClaimInstance<P, N> {
         /// Creates a new event filter using this contract instance's provider and address.
         ///
         /// Note that the type can be any event, not just those defined in this contract.
@@ -355,8 +350,8 @@ See the [wrapper's documentation](`RewardMerkleTreeVerifierInstance`) for more d
 
 Generated by the following Solidity interface...
 ```solidity
-library RewardMerkleTreeVerifier {
-    struct AccruedRewardsProof {
+library IRewardClaim {
+    struct LifetimeRewardsProof {
         bytes32[] siblings;
     }
 }
@@ -364,7 +359,7 @@ library RewardMerkleTreeVerifier {
 interface RewardClaimPrototypeMock {
     error InvalidProofLength();
 
-    function verifyRewardClaim(bytes32 root, address account, uint256 amount, RewardMerkleTreeVerifier.AccruedRewardsProof memory proof) external pure returns (bool);
+    function verifyRewardClaim(bytes32 root, address account, uint256 amount, IRewardClaim.LifetimeRewardsProof memory proof) external pure returns (bool);
 }
 ```
 
@@ -393,7 +388,7 @@ interface RewardClaimPrototypeMock {
       {
         "name": "proof",
         "type": "tuple",
-        "internalType": "struct RewardMerkleTreeVerifier.AccruedRewardsProof",
+        "internalType": "struct IRewardClaim.LifetimeRewardsProof",
         "components": [
           {
             "name": "siblings",
@@ -527,7 +522,7 @@ error InvalidProofLength();
     #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `verifyRewardClaim(bytes32,address,uint256,(bytes32[]))` and selector `0x4c6d20d2`.
 ```solidity
-function verifyRewardClaim(bytes32 root, address account, uint256 amount, RewardMerkleTreeVerifier.AccruedRewardsProof memory proof) external pure returns (bool);
+function verifyRewardClaim(bytes32 root, address account, uint256 amount, IRewardClaim.LifetimeRewardsProof memory proof) external pure returns (bool);
 ```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -539,7 +534,7 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
         #[allow(missing_docs)]
         pub amount: alloy::sol_types::private::primitives::aliases::U256,
         #[allow(missing_docs)]
-        pub proof: <RewardMerkleTreeVerifier::AccruedRewardsProof as alloy::sol_types::SolType>::RustType,
+        pub proof: <IRewardClaim::LifetimeRewardsProof as alloy::sol_types::SolType>::RustType,
     }
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Default, Debug, PartialEq, Eq, Hash)]
@@ -565,14 +560,14 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
                 alloy::sol_types::sol_data::FixedBytes<32>,
                 alloy::sol_types::sol_data::Address,
                 alloy::sol_types::sol_data::Uint<256>,
-                RewardMerkleTreeVerifier::AccruedRewardsProof,
+                IRewardClaim::LifetimeRewardsProof,
             );
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (
                 alloy::sol_types::private::FixedBytes<32>,
                 alloy::sol_types::private::Address,
                 alloy::sol_types::private::primitives::aliases::U256,
-                <RewardMerkleTreeVerifier::AccruedRewardsProof as alloy::sol_types::SolType>::RustType,
+                <IRewardClaim::LifetimeRewardsProof as alloy::sol_types::SolType>::RustType,
             );
             #[cfg(test)]
             #[allow(dead_code, unreachable_patterns)]
@@ -647,7 +642,7 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
                 alloy::sol_types::sol_data::FixedBytes<32>,
                 alloy::sol_types::sol_data::Address,
                 alloy::sol_types::sol_data::Uint<256>,
-                RewardMerkleTreeVerifier::AccruedRewardsProof,
+                IRewardClaim::LifetimeRewardsProof,
             );
             type Token<'a> = <Self::Parameters<
                 'a,
@@ -677,7 +672,7 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
                     <alloy::sol_types::sol_data::Uint<
                         256,
                     > as alloy_sol_types::SolType>::tokenize(&self.amount),
-                    <RewardMerkleTreeVerifier::AccruedRewardsProof as alloy_sol_types::SolType>::tokenize(
+                    <IRewardClaim::LifetimeRewardsProof as alloy_sol_types::SolType>::tokenize(
                         &self.proof,
                     ),
                 )
@@ -1128,7 +1123,7 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
             root: alloy::sol_types::private::FixedBytes<32>,
             account: alloy::sol_types::private::Address,
             amount: alloy::sol_types::private::primitives::aliases::U256,
-            proof: <RewardMerkleTreeVerifier::AccruedRewardsProof as alloy::sol_types::SolType>::RustType,
+            proof: <IRewardClaim::LifetimeRewardsProof as alloy::sol_types::SolType>::RustType,
         ) -> alloy_contract::SolCallBuilder<&P, verifyRewardClaimCall, N> {
             self.call_builder(
                 &verifyRewardClaimCall {

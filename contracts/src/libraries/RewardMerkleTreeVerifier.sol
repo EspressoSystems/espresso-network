@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
+import "../interfaces/IRewardClaim.sol";
+
 /* solhint-disable no-inline-assembly */
 
 /**
@@ -16,10 +18,6 @@ library RewardMerkleTreeVerifier {
     error InvalidProofLength();
 
     uint256 public constant TREE_DEPTH = 160;
-
-    struct AccruedRewardsProof {
-        bytes32[] siblings;
-    }
 
     function _hashLeaf(uint256 value) internal pure returns (bytes32) {
         bytes32 firstHash = keccak256(abi.encodePacked(value));
@@ -52,7 +50,7 @@ library RewardMerkleTreeVerifier {
         bytes32 root,
         address key,
         uint256 value,
-        AccruedRewardsProof calldata proof
+        IRewardClaim.LifetimeRewardsProof calldata proof
     ) internal pure returns (bool) {
         // NOTE: using memory instead of calldata for proof or siblings
         //       increases gas cost by 20%

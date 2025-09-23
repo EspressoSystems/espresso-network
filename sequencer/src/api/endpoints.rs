@@ -20,7 +20,7 @@ pub type ADVZNamespaceProofQueryData = espresso_types::ADVZNamespaceProofQueryDa
 pub type NamespaceProofQueryData = espresso_types::NamespaceProofQueryData;
 
 use futures::{try_join, FutureExt};
-use hotshot_contract_adapter::sol_types::AccruedRewardsProofSol;
+use hotshot_contract_adapter::{reward::RewardClaimInput, sol_types::LifetimeRewardsProofSol};
 use hotshot_query_service::{
     availability::{self, AvailabilityDataSource, CustomSnafu, FetchBlockSnafu},
     explorer::{self, ExplorerDataSource},
@@ -221,7 +221,7 @@ where
                 .boxed()
             })?;
 
-            api.get("get_reward_account_proof_sol", move |req, state| {
+            api.get("get_reward_claim_input", move |req, state| {
                 async move {
                     let address = req.string_param("address")?;
                     let height = req.integer_param("height")?;
@@ -243,7 +243,7 @@ where
                             status: StatusCode::NOT_FOUND,
                         })?;
 
-                    let sol_proof: AccruedRewardsProofSol =
+                    let proof_sol: LifetimeRewardsProofSol =
                         proof
                             .proof
                             .try_into()
@@ -255,7 +255,15 @@ where
                                 status: StatusCode::INTERNAL_SERVER_ERROR,
                             })?;
 
-                    Ok(sol_proof)
+                    let claim_input = RewardClaimInput {
+                        proof: proof_sol,
+                        lifetime_rewards: proof.balance.into(),
+                        // TODO: (MA) this should be the actual auth root
+                        // inputs, for the forseeable future they will be all
+                        // zero.
+                        auth_root_inputs: Default::default(),
+                    };
+                    Ok(claim_input)
                 }
                 .boxed()
             })?;
