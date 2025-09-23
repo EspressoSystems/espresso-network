@@ -89,15 +89,7 @@
             (import nixpkgs-legacy-process-compose { inherit system; }).process-compose;
         })
 
-        # The mold linker is around 50% faster on Linux than the default linker.
-        # This overlays a mkShell that is configured to use mold on Linux.
-        (final: prev: prev.lib.optionalAttrs prev.stdenv.isLinux {
-          mkShell = prev.mkShell.override {
-            stdenv = prev.stdenvAdapters.useMoldLinker prev.clangStdenv;
-          };
-        })
-
-        (final: prev: rec {
+        (final: prev: {
           golangci-lint = prev.golangci-lint.overrideAttrs (old: rec {
             version = "1.64.8";
             src = prev.fetchFromGitHub {
@@ -111,6 +103,10 @@
         })
       ];
       pkgs = import nixpkgs { inherit system overlays; };
+      myShell = pkgs.mkShellNoCC.override (pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+        # The mold linker is around 50% faster on Linux than the default linker.
+        stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.clangStdenv;
+      });
       crossShell = { config }:
         let
           localSystem = system;
@@ -210,7 +206,7 @@
           });
           solc = pkgs.solc-bin."0.8.28";
         in
-        mkShell (rustEnvVars // {
+        myShell (rustEnvVars // {
           buildInputs = [
             # Rust dependencies
             pkg-config
@@ -258,9 +254,7 @@
             golangci-lint
             # provides abigen
             go-ethereum
-          ] ++ lib.optionals stdenv.isDarwin
-            [ darwin.apple_sdk.frameworks.SystemConfiguration ]
-          ++ lib.optionals (!stdenv.isDarwin) [ cargo-watch ] # broken on OSX
+          ] ++ lib.optionals (!stdenv.isDarwin) [ cargo-watch ] # broken on OSX
           ;
           shellHook = rustShellHook + ''
             # Add the local scripts to the PATH
@@ -286,7 +280,7 @@
             extensions = [ "rustfmt" "clippy" "llvm-tools-preview" "rust-src" ];
           };
         in
-        mkShell (rustEnvVars // {
+        myShell (rustEnvVars // {
           buildInputs = [
             # Rust dependencies
             pkg-config
@@ -301,7 +295,7 @@
         let
           toolchain = pkgs.rust-bin.nightly.latest.minimal;
         in
-        mkShell (rustEnvVars // {
+        myShell (rustEnvVars // {
           buildInputs = [
             # Rust dependencies
             pkg-config
@@ -324,7 +318,7 @@
             extensions = [ "rustfmt" "clippy" "llvm-tools-preview" "rust-src" ];
           };
         in
-        mkShell (rustEnvVars // {
+        myShell (rustEnvVars // {
           buildInputs = [
             # Rust dependencies
             pkg-config
@@ -341,7 +335,7 @@
         let
           solc = pkgs.solc-bin."0.8.28";
         in
-        mkShell {
+        myShell {
           buildInputs = [
             # Foundry tools
             foundry-bin

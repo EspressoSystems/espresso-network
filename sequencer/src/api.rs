@@ -43,7 +43,7 @@ use hotshot_types::{
     PeerConfig,
 };
 use itertools::Itertools;
-use jf_merkle_tree::MerkleTreeScheme;
+use jf_merkle_tree_compat::MerkleTreeScheme;
 use rand::Rng;
 use request_response::RequestType;
 use tokio::time::timeout;
@@ -929,7 +929,7 @@ pub mod test_helpers {
         HotShotConfig,
     };
     use itertools::izip;
-    use jf_merkle_tree::{MerkleCommitment, MerkleTreeScheme};
+    use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme};
     use portpicker::pick_unused_port;
     use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
     use surf_disco::Client;
@@ -1123,7 +1123,7 @@ pub mod test_helpers {
             let signer = network_config.signer();
             let deployer = ProviderBuilder::new()
                 .wallet(EthereumWallet::from(signer.clone()))
-                .on_http(l1_url.clone());
+                .connect_http(l1_url.clone());
 
             let blocks_per_epoch = network_config.hotshot_config().epoch_height;
             let epoch_start_block = network_config.hotshot_config().epoch_start_block;
@@ -2157,7 +2157,7 @@ mod test {
         utils::epoch_from_block_number,
         ValidatorConfig,
     };
-    use jf_merkle_tree::prelude::{MerkleProof, Sha3Node};
+    use jf_merkle_tree_compat::prelude::{MerkleProof, Sha3Node};
     use portpicker::pick_unused_port;
     use rand::seq::SliceRandom;
     use rstest::rstest;
@@ -5022,7 +5022,7 @@ mod test {
 
         let deployer = ProviderBuilder::new()
             .wallet(EthereumWallet::from(network_config.signer().clone()))
-            .on_http(network_config.l1_url().clone());
+            .connect_http(network_config.l1_url().clone());
 
         let mut contracts = Contracts::new();
         let args = DeployerArgsBuilder::default()
@@ -5088,7 +5088,6 @@ mod test {
             .block(BlockId::finalized())
             .call()
             .await?
-            ._0
             .to::<u64>();
 
         tracing::info!("stake table init block = {stake_table_init_block}");
@@ -5098,8 +5097,7 @@ mod test {
             .block(BlockId::finalized())
             .call()
             .await
-            .context("Failed to get token address")?
-            ._0;
+            .context("Failed to get token address")?;
 
         let token = EspToken::new(token_address, provider.clone());
 

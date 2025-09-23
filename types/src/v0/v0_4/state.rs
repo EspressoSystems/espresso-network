@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use alloy::primitives::{Address, U256};
 use derive_more::{Display, From, Into};
-use jf_merkle_tree::{
+use jf_merkle_tree_compat::{
     universal_merkle_tree::UniversalMerkleTree, MerkleTreeScheme, UniversalMerkleTreeScheme,
 };
 use serde::{Deserialize, Serialize};

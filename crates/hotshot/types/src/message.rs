@@ -755,15 +755,14 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
     /// # Errors
     ///
     /// Errors if deserialization fails.
-    pub async fn deserialize<M: HasViewNumber<TYPES> + for<'a> Deserialize<'a>>(
+    pub async fn deserialize<M: Debug + HasViewNumber<TYPES> + for<'a> Deserialize<'a>>(
         &self,
         message: &[u8],
     ) -> Result<(M, Version)> {
         // Get the actual version from the message itself
-        let actual_version = Version::deserialize(message)
+        let (actual_version, rest) = Version::deserialize(message)
             .wrap()
-            .context(info!("Failed to read message version!"))?
-            .0;
+            .context(info!("Failed to read message version!"))?;
 
         // Deserialize the message using the stated version
         let deserialized_message: M = match actual_version {
@@ -774,7 +773,17 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
             v if v == V::Base::VERSION => Serializer::<V::Base>::deserialize(message),
             v if v == V::Upgrade::VERSION => Serializer::<V::Upgrade>::deserialize(message),
             v => {
-                bail!("Cannot deserialize message with stated version {v}");
+                let attempted_deserialization: M = match bincode::deserialize(rest) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        bail!("Cannot deserialize message with state version: {v}. Error: {e}");
+                    },
+                };
+
+                bail!(warn!(
+                    "Received a message with state version {v} which is invalid for its view: {:?}",
+                    attempted_deserialization
+                ));
             },
         }
         .wrap()

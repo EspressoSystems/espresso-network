@@ -395,10 +395,10 @@ impl SwitchingTransport {
         let url = self.urls[next_index].clone();
         tracing::info!(%url, next_gen, "switch L1 transport");
 
-        let revert_at = if next_gen % self.urls.len() == 0 {
+        let revert_at = if next_gen.is_multiple_of(self.urls.len()) {
             // If we are reverting to the primary transport, clear our scheduled revert time.
             None
-        } else if current_transport.generation % self.urls.len() == 0 {
+        } else if current_transport.generation.is_multiple_of(self.urls.len()) {
             // If we are failing over from the primary transport, schedule a time to automatically
             // revert back.
             Some(Instant::now() + self.opt.l1_failover_revert)
@@ -424,7 +424,7 @@ impl L1Client {
     fn with_transport(transport: SwitchingTransport) -> Self {
         // Create a new provider with that RPC client using the custom transport
         let rpc_client = RpcClient::new(transport.clone(), false);
-        let provider = ProviderBuilder::new().on_client(rpc_client);
+        let provider = ProviderBuilder::new().connect_client(rpc_client);
 
         let opt = transport.options().clone();
 
@@ -517,7 +517,7 @@ impl L1Client {
                             // problem with one of the hosts specifically.
                             let provider = i % urls.len();
                             let url = &urls[provider];
-                            ws = match ProviderBuilder::new().on_ws(WsConnect::new(url.clone())).await {
+                            ws = match ProviderBuilder::new().connect_ws(WsConnect::new(url.clone())).await {
                                 Ok(ws) => ws,
                                 Err(err) => {
                                     tracing::warn!(provider, "Failed to connect WebSockets provider: {err:#}");
@@ -1161,7 +1161,7 @@ mod test {
         let deployer = wallet.default_signer().address();
         let inner_provider = ProviderBuilder::new()
             .wallet(wallet)
-            .on_http(anvil.endpoint_url());
+            .connect_http(anvil.endpoint_url());
         // a provider that holds both anvil (to avoid accidental drop) and wallet-enabled L1 provider
         let provider = AnvilProvider::new(inner_provider, Arc::new(anvil));
         // cache store for deployed contracts

@@ -39,7 +39,6 @@ use hotshot_types::{
     traits::{
         metrics::{Counter, Metrics, NoMetrics},
         network::{BroadcastDelay, ConnectedNetwork, Topic as HotShotTopic},
-        node_implementation::NodeType,
         signature_key::SignatureKey,
     },
     utils::bincode_opts,
@@ -49,11 +48,14 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use parking_lot::Mutex;
 #[cfg(feature = "hotshot-testing")]
 use rand::{rngs::StdRng, RngCore, SeedableRng};
-use tokio::{spawn, sync::mpsc::error::TrySendError, time::sleep};
+use tokio::sync::mpsc::error::TrySendError;
+#[cfg(feature = "hotshot-testing")]
+use tokio::{spawn, time::sleep};
 #[cfg(feature = "hotshot-testing")]
 use tracing::error;
 
 use super::NetworkError;
+use crate::NodeType;
 
 /// CDN-specific metrics
 #[derive(Clone)]
