@@ -14,45 +14,48 @@ use hotshot_utils::{
     anytrace::{Error, Level, Result},
     line_info, warn,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::events::HotShotEvent;
 
-#[derive(Serialize)]
-struct LeaderViewStats<TYPES: NodeType> {
-    view: TYPES::View,
-    proposal_send: Option<i128>,
-    vote_recv: Option<i128>,
-    da_proposal_send: Option<i128>,
-    builder_start: Option<i128>,
-    block_built: Option<i128>,
-    vid_disperse_send: Option<i128>,
-    timeout_certificate_formed: Option<i128>,
-    qc_formed: Option<i128>,
-    da_cert_send: Option<i128>,
+#[derive(Serialize, Deserialize)]
+pub struct LeaderViewStats<TYPES: NodeType> {
+    pub view: TYPES::View,
+    pub prev_proposal_send: Option<i128>,
+    pub proposal_send: Option<i128>,
+    pub vote_recv: Option<i128>,
+    pub da_proposal_send: Option<i128>,
+    pub builder_start: Option<i128>,
+    pub block_built: Option<i128>,
+    pub vid_disperse_send: Option<i128>,
+    pub timeout_certificate_formed: Option<i128>,
+    pub qc_formed: Option<i128>,
+    pub da_cert_send: Option<i128>,
 }
 
-#[derive(Serialize)]
-struct ReplicaViewStats<TYPES: NodeType> {
-    view: TYPES::View,
-    proposal_recv: Option<i128>,
-    vote_send: Option<i128>,
-    timeout_vote_send: Option<i128>,
-    da_proposal_received: Option<i128>,
-    da_proposal_validated: Option<i128>,
-    da_certificate_recv: Option<i128>,
-    proposal_prelim_validated: Option<i128>,
-    proposal_validated: Option<i128>,
-    timeout_triggered: Option<i128>,
-    vid_share_validated: Option<i128>,
-    vid_share_recv: Option<i128>,
+#[derive(Serialize, Deserialize)]
+pub struct ReplicaViewStats<TYPES: NodeType> {
+    pub view: TYPES::View,
+    pub view_change: Option<i128>,
+    pub proposal_recv: Option<i128>,
+    pub vote_send: Option<i128>,
+    pub timeout_vote_send: Option<i128>,
+    pub da_proposal_received: Option<i128>,
+    pub da_proposal_validated: Option<i128>,
+    pub da_certificate_recv: Option<i128>,
+    pub proposal_prelim_validated: Option<i128>,
+    pub proposal_validated: Option<i128>,
+    pub timeout_triggered: Option<i128>,
+    pub vid_share_validated: Option<i128>,
+    pub vid_share_recv: Option<i128>,
 }
 
 impl<TYPES: NodeType> LeaderViewStats<TYPES> {
     fn new(view: TYPES::View) -> Self {
         Self {
             view,
+            prev_proposal_send: None,
             proposal_send: None,
             vote_recv: None,
             da_proposal_send: None,
@@ -70,6 +73,7 @@ impl<TYPES: NodeType> ReplicaViewStats<TYPES> {
     fn new(view: TYPES::View) -> Self {
         Self {
             view,
+            view_change: None,
             proposal_recv: None,
             vote_send: None,
             timeout_vote_send: None,
@@ -127,6 +131,7 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
         self.leader_stats = self.leader_stats.split_off(&view);
         self.replica_stats = self.replica_stats.split_off(&view);
     }
+
     fn dump_stats(&self) -> Result<()> {
         let mut writer = csv::Writer::from_writer(vec![]);
         for (_, leader_stats) in self.leader_stats.iter() {
@@ -180,9 +185,7 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                 self.replica_entry(proposal.data.view_number())
                     .proposal_recv = Some(now);
             },
-            HotShotEvent::QuorumVoteRecv(_vote) => {
-                // self.leader_entry(vote.view_number()).vote_recv = Some(now);
-            },
+            HotShotEvent::QuorumVoteRecv(_vote) => {},
             HotShotEvent::TimeoutVoteRecv(_vote) => {},
             HotShotEvent::TimeoutVoteSend(vote) => {
                 self.replica_entry(vote.view_number()).timeout_vote_send = Some(now);
@@ -210,6 +213,9 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                         .replica_entry(proposal.data.view_number() - 1)
                         .proposal_recv
                     {
+                        self.leader_entry(proposal.data.view_number())
+                            .prev_proposal_send = Some(previous_proposal_time);
+
                         // calculate the elapsed time as milliseconds (from nanoseconds)
                         let elapsed_time = (now - previous_proposal_time) / 1_000_000;
                         if elapsed_time > 0 {
@@ -269,20 +275,29 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                     .da_cert_send = Some(now);
             },
             HotShotEvent::ViewChange(view, epoch) => {
+                // Record the timestamp of the first observed view change
+                // This can happen when transitioning to the next view, either due to voting
+                // or receiving a proposal, but we only store the first one
+                if self.replica_entry(*view + 1).view_change.is_none() {
+                    self.replica_entry(*view + 1).view_change = Some(now);
+                }
+
                 if *epoch <= self.epoch && *view <= self.view {
                     return Ok(());
                 }
                 if self.view < *view {
                     self.view = *view;
                 }
+                let mut new_epoch = false;
                 if self.epoch < *epoch {
                     self.epoch = *epoch;
+                    new_epoch = true;
                 }
                 if *view == TYPES::View::new(0) {
                     return Ok(());
                 }
 
-                if **view % 100 == 0 {
+                if new_epoch {
                     let _ = self.dump_stats();
                     self.garbage_collect(*view - 1);
                 }
@@ -302,6 +317,7 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
             },
             HotShotEvent::TransactionsRecv(_txns) => {
                 // TODO: Track transactions by time
+                // #3526 https://github.com/EspressoSystems/espresso-network/issues/3526
             },
             HotShotEvent::SendPayloadCommitmentAndMetadata(_, _, _, view, _) => {
                 self.leader_entry(*view).vid_disperse_send = Some(now);

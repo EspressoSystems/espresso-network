@@ -30,6 +30,7 @@ use hotshot_types::{
         ValidatedState as HotShotState,
     },
     utils::genesis_epoch_from_version,
+    vote::HasViewNumber,
 };
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -39,7 +40,7 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
 use crate::{
-    v0::impls::ValidatedState,
+    v0::impls::{StakeTableHash, ValidatedState},
     v0_3::{
         ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount, RewardMerkleCommitmentV1,
     },
@@ -478,7 +479,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     async fn load_stake(
         &self,
         epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>)>>;
+    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>>;
 
     /// Load stake tables for storage for latest `n` known epochs
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
@@ -489,6 +490,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
         epoch: EpochNumber,
         stake: ValidatorMap,
         block_reward: Option<RewardAmount>,
+        stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()>;
 
     async fn store_events(
@@ -602,7 +604,7 @@ pub trait SequencerPersistence:
             .load_next_epoch_quorum_certificate()
             .await
             .context("loading next epoch qc")?;
-        let (leaf, high_qc, anchor_view) = match self
+        let (leaf, mut high_qc, anchor_view) = match self
             .load_anchor_leaf()
             .await
             .context("loading anchor leaf")?
@@ -631,6 +633,13 @@ pub trait SequencerPersistence:
                 )
             },
         };
+
+        if let Some((extended_high_qc, _)) = self.load_eqc().await {
+            if extended_high_qc.view_number() > high_qc.view_number() {
+                high_qc = extended_high_qc
+            }
+        }
+
         let validated_state = if leaf.block_header().height() == 0 {
             // If we are starting from genesis, we can provide the full state.
             genesis_validated_state
@@ -678,7 +687,7 @@ pub trait SequencerPersistence:
             .await
             .context("loading light client state update certificate")?;
 
-        tracing::info!(
+        tracing::warn!(
             ?leaf,
             ?restart_view,
             ?epoch,
@@ -802,6 +811,22 @@ pub trait SequencerPersistence:
         &self,
         proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
     ) -> anyhow::Result<()>;
+
+    /// Update the current eQC in storage.
+    async fn store_eqc(
+        &self,
+        _high_qc: QuorumCertificate2<SeqTypes>,
+        _next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
+    ) -> anyhow::Result<()>;
+
+    /// Load the current eQC from storage.
+    async fn load_eqc(
+        &self,
+    ) -> Option<(
+        QuorumCertificate2<SeqTypes>,
+        NextEpochQuorumCertificate2<SeqTypes>,
+    )>;
+
     async fn store_upgrade_certificate(
         &self,
         decided_upgrade_certificate: Option<UpgradeCertificate<SeqTypes>>,
@@ -964,6 +989,28 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
     }
 
     async fn update_high_qc2(&self, _high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Update the current eQC in storage.
+    async fn update_eqc(
+        &self,
+        high_qc: QuorumCertificate2<SeqTypes>,
+        next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        if let Some((existing_high_qc, _)) = (**self).load_eqc().await {
+            if high_qc.view_number() < existing_high_qc.view_number() {
+                return Ok(());
+            }
+        }
+
+        (**self).store_eqc(high_qc, next_epoch_high_qc).await
+    }
+
+    async fn update_next_epoch_high_qc2(
+        &self,
+        _next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
         Ok(())
     }
 

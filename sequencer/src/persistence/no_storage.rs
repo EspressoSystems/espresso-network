@@ -7,7 +7,7 @@ use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent},
-    Leaf2, NetworkConfig, ValidatorMap,
+    Leaf2, NetworkConfig, StakeTableHash, ValidatorMap,
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
@@ -186,6 +186,23 @@ impl SequencerPersistence for NoStorage {
         Ok(None)
     }
 
+    async fn store_eqc(
+        &self,
+        _high_qc: QuorumCertificate2<SeqTypes>,
+        _next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn load_eqc(
+        &self,
+    ) -> Option<(
+        QuorumCertificate2<SeqTypes>,
+        NextEpochQuorumCertificate2<SeqTypes>,
+    )> {
+        None
+    }
+
     async fn append_da2(
         &self,
         _proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
@@ -265,7 +282,7 @@ impl MembershipPersistence for NoStorage {
     async fn load_stake(
         &self,
         _epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>)>> {
+    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>> {
         Ok(None)
     }
 
@@ -278,6 +295,7 @@ impl MembershipPersistence for NoStorage {
         _epoch: EpochNumber,
         _stake: ValidatorMap,
         _block_reward: Option<RewardAmount>,
+        _stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()> {
         Ok(())
     }

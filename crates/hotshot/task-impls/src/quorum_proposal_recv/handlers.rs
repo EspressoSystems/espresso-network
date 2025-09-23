@@ -317,6 +317,7 @@ pub(crate) async fn handle_quorum_proposal_recv<
         validate_light_client_state_update_certificate(
             state_cert,
             &validation_info.membership.coordinator,
+            &validation_info.upgrade_lock,
         )
         .await?;
     }

@@ -986,7 +986,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             // This ensures the next iteration starts from the next unseen leaf
             offset += limit as i64;
 
-            query_builder.push_values(leaf_rows.into_iter(), |mut b, row| {
+            query_builder.push_values(leaf_rows, |mut b, row| {
                 b.push_bind(row.0)
                     .push_bind(row.1)
                     .push_bind(row.2)
@@ -1016,7 +1016,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             let mut query_builder: sqlx::QueryBuilder<Db> =
                 sqlx::QueryBuilder::new("INSERT INTO vid2 (height, common, share) ");
 
-            query_builder.push_values(vid_rows.into_iter(), |mut b, row| {
+            query_builder.push_values(vid_rows, |mut b, row| {
                 b.push_bind(row.0).push_bind(row.1).push_bind(row.2);
             });
             query_builder.push(" ON CONFLICT DO NOTHING");
@@ -1908,5 +1908,29 @@ mod test {
 
         assert_eq!(leaf_count as u64, num_rows, "not all leaves migrated");
         assert_eq!(vid_count as u64, num_rows, "not all vid migrated");
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_transaction_upsert_retries() {
+        let db = TmpDb::init().await;
+        let config = db.config();
+
+        let storage = SqlStorage::connect(config).await.unwrap();
+
+        let mut tx = storage.write().await.unwrap();
+
+        // Try to upsert into a table that does not exist.
+        // This will fail, so our `upsert` function will enter the retry loop.
+        // Since the table does not exist, all retries will eventually
+        // fail and we expect an error to be returned.
+        //
+        // Previously, this case would cause  a panic because we were calling
+        // methods on `QueryBuilder` after `.build()` without first
+        // calling `.reset()`and according to the sqlx docs, that always panics.
+        // Now, since we are properly calling `.reset()` inside `upsert()` for
+        // the query builder, the function returns an error instead of panicking.
+        tx.upsert("does_not_exist", ["test"], ["test"], [(1_i64,)])
+            .await
+            .unwrap_err();
     }
 }

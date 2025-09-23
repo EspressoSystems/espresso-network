@@ -19,7 +19,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     simple_certificate::{
-        EpochRootQuorumCertificate, LightClientStateUpdateCertificateV2,
+        EpochRootQuorumCertificateV2, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
     },
     stake_table::StakeTableEntries,
@@ -562,7 +562,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 },
             },
 
-            HotShotEvent::EpochRootQcFormed(EpochRootQuorumCertificate { qc, state_cert }) => {
+            HotShotEvent::EpochRootQcFormed(EpochRootQuorumCertificateV2 { qc, state_cert }) => {
                 // Only update if the qc is from a newer view
                 if qc.view_number() <= self.consensus.read().await.high_qc().view_number {
                     tracing::trace!(

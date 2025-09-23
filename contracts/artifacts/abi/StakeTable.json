@@ -695,19 +695,6 @@
   },
   {
     "type": "event",
-    "name": "Upgrade",
-    "inputs": [
-      {
-        "name": "implementation",
-        "type": "address",
-        "indexed": false,
-        "internalType": "address"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
     "name": "Upgraded",
     "inputs": [
       {
@@ -851,6 +838,11 @@
   {
     "type": "error",
     "name": "ERC1967NonPayable",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ExitEscrowPeriodInvalid",
     "inputs": []
   },
   {

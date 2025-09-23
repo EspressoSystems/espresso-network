@@ -180,6 +180,18 @@ pub struct LCV2StateSignaturesBundle {
     pub accumulated_weight: U256,
 }
 
+impl LCV2StateSignaturesBundle {
+    /// This is for backward compatibility reason
+    pub fn from_v1(value: LCV1StateSignaturesBundle) -> Self {
+        Self {
+            state: value.state,
+            next_stake: StakeTableState::default(), // filling arbitrary value here
+            signatures: value.signatures,
+            accumulated_weight: value.accumulated_weight,
+        }
+    }
+}
+
 /// The state signatures bundle is a light client V3 state and its signatures collected
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LCV3StateSignaturesBundle {

@@ -17,8 +17,8 @@ use hotshot_types::{
 };
 use jf_merkle_tree::{
     prelude::MerkleNode, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
-    LookupResult, MerkleCommitment, MerkleTreeScheme, PersistentUniversalMerkleTreeScheme,
-    ToTraversalPath, UniversalMerkleTreeScheme,
+    LookupResult, MerkleTreeScheme, PersistentUniversalMerkleTreeScheme, ToTraversalPath,
+    UniversalMerkleTreeScheme,
 };
 use num_traits::CheckedSub;
 use sequencer_utils::{
@@ -369,12 +369,7 @@ impl RewardAccountProofV2 {
         match &self.proof {
             RewardMerkleProofV2::Presence(proof) => {
                 ensure!(
-                    RewardMerkleTreeV2::verify(
-                        comm.digest(),
-                        RewardAccountV2(self.account),
-                        proof
-                    )?
-                    .is_ok(),
+                    RewardMerkleTreeV2::verify(comm, RewardAccountV2(self.account), proof)?.is_ok(),
                     "invalid proof"
                 );
                 Ok(proof
@@ -385,7 +380,11 @@ impl RewardAccountProofV2 {
             RewardMerkleProofV2::Absence(proof) => {
                 let tree = RewardMerkleTreeV2::from_commitment(comm);
                 ensure!(
-                    tree.non_membership_verify(RewardAccountV2(self.account), proof)?,
+                    RewardMerkleTreeV2::non_membership_verify(
+                        tree.commitment(),
+                        RewardAccountV2(self.account),
+                        proof
+                    )?,
                     "invalid proof"
                 );
                 Ok(U256::ZERO)
@@ -528,12 +527,7 @@ impl RewardAccountProofV1 {
         match &self.proof {
             RewardMerkleProofV1::Presence(proof) => {
                 ensure!(
-                    RewardMerkleTreeV1::verify(
-                        comm.digest(),
-                        RewardAccountV1(self.account),
-                        proof
-                    )?
-                    .is_ok(),
+                    RewardMerkleTreeV1::verify(comm, RewardAccountV1(self.account), proof)?.is_ok(),
                     "invalid proof"
                 );
                 Ok(proof
@@ -544,7 +538,11 @@ impl RewardAccountProofV1 {
             RewardMerkleProofV1::Absence(proof) => {
                 let tree = RewardMerkleTreeV1::from_commitment(comm);
                 ensure!(
-                    tree.non_membership_verify(RewardAccountV1(self.account), proof)?,
+                    RewardMerkleTreeV1::non_membership_verify(
+                        tree.commitment(),
+                        RewardAccountV1(self.account),
+                        proof
+                    )?,
                     "invalid proof"
                 );
                 Ok(U256::ZERO)
@@ -826,56 +824,61 @@ pub async fn distribute_block_reward(
     .await?;
 
     let parent_header = parent_leaf.block_header();
-    // Initialize the total rewards distributed so far in this block.
 
+    // Initialize the total rewards distributed so far in this block.
     let mut previously_distributed = parent_header.total_reward_distributed().unwrap_or_default();
 
     // Decide whether to use a fixed or dynamic block reward.
     let block_reward = if version >= DrbAndHeaderUpgradeVersion::version() {
-        let block_reward = instance_state
-            .block_reward(Some(EpochNumber::new(*epoch)))
+        instance_state
+            .block_reward(EpochNumber::new(*epoch))
             .await
-            .with_context(|| format!("block reward is None for epoch {epoch}"))?;
+            .with_context(|| format!("block reward is None for epoch {epoch}"))?
+    } else {
+        instance_state.fixed_block_reward().await?
+    };
 
-        // If the current block is the start block of the new v4 version,
-        // we use *fixed block reward* for calculating the total rewards distributed so far.
-        if parent_header.version() == EpochVersion::version() {
-            ensure!(
-                instance_state.epoch_start_block != 0,
-                "epoch_start_block is zero"
-            );
+    // If we are in the DRB + header upgrade
+    // and the parent block is from V3 (which does not have a previously distributed reward field),
+    // we need to recompute the previously distributed rewards
+    // using the fixed block reward and the number of blocks in which fixed reward was distributed
+    if version >= DrbAndHeaderUpgradeVersion::version()
+        && parent_header.version() == EpochVersion::version()
+    {
+        ensure!(
+            instance_state.epoch_start_block != 0,
+            "epoch_start_block is zero"
+        );
 
-            let fixed_block_reward = instance_state
-                .block_reward(None)
-                .await
-                .with_context(|| format!("block reward is None for epoch {epoch}"))?;
+        let fixed_block_reward = instance_state.fixed_block_reward().await?;
 
-            // Compute the first block where rewards start being distributed.
-            // Rewards begin only after the first two epochs
-            // Example:
-            //   epoch_height = 10, first_epoch = 1
-            // first_reward_block = 31
-            let first_reward_block = (*first_epoch + 2) * epoch_height + 1;
-
-            // If v4 upgrade started at block 101, and first_reward_block is 31:
-            // total_distributed = (101 - 31) * fixed_block_reward
-            let blocks = height
-                .checked_sub(first_reward_block)
-                .context("height - epoch_start_block underflowed")?;
-
+        // Compute the first block where rewards start being distributed.
+        // Rewards begin only after the first two epochs
+        // Example:
+        //   epoch_height = 10, first_epoch = 1
+        // first_reward_block = 21
+        let first_reward_block = (*first_epoch + 1) * epoch_height + 1;
+        // We only compute fixed reward distribured so far
+        // once the current block
+        // is beyond the first rewardable block.
+        if height > first_reward_block {
+            // If v4 upgrade started at block 101, and first_reward_block is 21:
+            // total_distributed = (101 - 21) * fixed_block_reward
+            let blocks = height.checked_sub(first_reward_block).with_context(|| {
+                format!("height ({height}) - first_reward_block ({first_reward_block}) underflowed")
+            })?;
             previously_distributed = U256::from(blocks)
                 .checked_mul(fixed_block_reward.0)
-                .context("overflow during total_distributed calculation")?
+                .with_context(|| {
+                    format!(
+                        "overflow during total_distributed calculation: blocks={blocks}, \
+                         fixed_block_reward={}",
+                        fixed_block_reward.0
+                    )
+                })?
                 .into();
         }
-
-        block_reward
-    } else {
-        instance_state
-            .block_reward(None)
-            .await
-            .with_context(|| format!("fixed block reward is None for epoch {epoch}"))?
-    };
+    }
 
     if block_reward.0.is_zero() {
         tracing::info!("block reward is zero. height={height}. epoch={epoch}");

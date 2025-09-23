@@ -26,7 +26,7 @@ use hotshot_types::{
 };
 use libp2p::{
     autonat,
-    core::transport::ListenerId,
+    core::{transport::ListenerId, upgrade::Version::V1Lazy},
     gossipsub::{
         Behaviour as Gossipsub, ConfigBuilder as GossipsubConfigBuilder, Event as GossipEvent,
         Message as GossipsubMessage, MessageAuthenticity, MessageId, Topic, ValidationMode,
@@ -331,7 +331,10 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 .unwrap()
                 .with_behaviour(|_| network)
                 .unwrap()
-                .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(10)))
+                .with_swarm_config(|cfg| {
+                    cfg.with_idle_connection_timeout(Duration::from_secs(10))
+                        .with_substream_upgrade_protocol_override(V1Lazy)
+                })
                 .build()
         };
         for (peer, addr) in &config.to_connect_addrs {
@@ -633,6 +636,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                                     protocol_version: _,
                                     agent_version: _,
                                     observed_addr: _,
+                                    signed_peer_record: _,
                                 },
                             connection_id: _,
                         } = *e
@@ -662,6 +666,13 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                         },
                         GossipEvent::GossipsubNotSupported { peer_id } => {
                             warn!("Peer {peer_id:?} does not support gossipsub");
+                            None
+                        },
+                        GossipEvent::SlowPeer {
+                            peer_id,
+                            failed_messages: _,
+                        } => {
+                            warn!("Peer {peer_id:?} is slow");
                             None
                         },
                     },
@@ -712,6 +723,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 local_addr: _,
                 send_back_addr: _,
                 error,
+                peer_id: _,
             } => {
                 warn!("Incoming connection error: {error:?}");
             },

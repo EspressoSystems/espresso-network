@@ -9,7 +9,7 @@ use hotshot_types::{
     drb::{compute_drb_result, DrbInput, DrbResult},
     stake_table::HSStakeTable,
     traits::{
-        election::Membership,
+        election::{Membership, NoStakeTableHash},
         node_implementation::{NodeType, Versions},
         signature_key::SignatureKey,
         storage::{null_load_drb_progress_fn, null_store_drb_progress_fn},
@@ -82,6 +82,8 @@ where
     TYPES::StateSignatureKey: From<InnerTypes::StateSignatureKey>,
 {
     type Error = <InnerTypes::Membership as Membership<InnerTypes>>::Error;
+
+    type StakeTableHash = NoStakeTableHash;
 
     fn new(
         // Note: eligible_leaders is currently a haMemck because the DA leader == the quorum leader

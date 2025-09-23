@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc, time::Instant};
 
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -128,6 +128,9 @@ pub async fn compute_drb_result(
 
     let final_checkpoint = remaining_iterations / DRB_CHECKPOINT_INTERVAL;
 
+    let mut last_time = Instant::now();
+    let mut last_iteration = iteration;
+
     // loop up to, but not including, the `final_checkpoint`
     for _ in 0..final_checkpoint {
         hash = tokio::task::spawn_blocking(move || {
@@ -155,13 +158,24 @@ pub async fn compute_drb_result(
             difficulty_level: drb_input.difficulty_level,
         };
 
+        let elapsed_time = last_time.elapsed().as_millis();
+
         let store_drb_progress = store_drb_progress.clone();
         tokio::spawn(async move {
-            tracing::warn!("Storing partial DRB progress: {:?}", updated_drb_input);
+            tracing::warn!(
+                "Storing partial DRB progress: {:?}. Time elapsed since the previous iteration of \
+                 {:?}: {:?}",
+                updated_drb_input,
+                last_iteration,
+                elapsed_time
+            );
             if let Err(e) = store_drb_progress(updated_drb_input).await {
                 tracing::warn!("Failed to store DRB progress during calculation: {}", e);
             }
         });
+
+        last_time = Instant::now();
+        last_iteration = iteration;
     }
 
     let final_checkpoint_iteration = iteration;

@@ -42,6 +42,7 @@ async-once-cell = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 byteorder = "1"
+hotshot-builder-refactored = { path = "../crates/hotshot-builder/refactored" }
 
 # CDN imports
 cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.1-upgrade", package = "cdn-broker", features = [
@@ -62,7 +63,6 @@ futures = { workspace = true }
 generic-tests = "0.1.3"
 
 hotshot = { workspace = true }
-hotshot-builder-core-refactored = { path = "../hotshot-builder-core-refactored" }
 hotshot-contract-adapter = { workspace = true }
 hotshot-events-service = { workspace = true }
 hotshot-libp2p-networking = { workspace = true }

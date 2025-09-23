@@ -16,13 +16,15 @@ use hotshot_types::{
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     event::{Event, EventType},
     message::{Proposal, UpgradeLock},
-    simple_vote::{EpochRootQuorumVote, LightClientStateUpdateVote, QuorumData2, QuorumVote2},
+    simple_vote::{EpochRootQuorumVote2, LightClientStateUpdateVote2, QuorumData2, QuorumVote2},
     storage_metrics::StorageMetricsValue,
     traits::{
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
-        signature_key::{LCV2StateSignatureKey, SignatureKey, StateSignatureKey},
+        signature_key::{
+            LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StateSignatureKey,
+        },
         storage::Storage,
         ValidatedState,
     },
@@ -37,8 +39,8 @@ use super::QuorumVoteTaskState;
 use crate::{
     events::HotShotEvent,
     helpers::{
-        broadcast_event, decide_from_proposal, decide_from_proposal_2, fetch_proposal,
-        handle_drb_result, LeafChainTraversalOutcome,
+        broadcast_event, decide_from_proposal, decide_from_proposal_2, derive_signed_state_digest,
+        fetch_proposal, handle_drb_result, LeafChainTraversalOutcome,
     },
     quorum_vote::Versions,
 };
@@ -487,7 +489,8 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
             .commitment(stake_table_capacity)
             .wrap()
             .context(error!("Failed to compute stake table commitment"))?;
-        let signature = <TYPES::StateSignatureKey as LCV2StateSignatureKey>::sign_state(
+        // We are still providing LCV2 state signatures for backward compatibility
+        let v2_signature = <TYPES::StateSignatureKey as LCV2StateSignatureKey>::sign_state(
             state_private_key,
             &light_client_state,
             &next_stake_table_state,
@@ -501,18 +504,27 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
             .context(error!(format!(
                 "Failed to get auth root for light client state certificate. view={view_number}"
             )))?;
-        let state_vote = LightClientStateUpdateVote {
+        let signed_state_digest =
+            derive_signed_state_digest(&light_client_state, &next_stake_table_state, &auth_root);
+        let signature = <TYPES::StateSignatureKey as LCV3StateSignatureKey>::sign_state(
+            state_private_key,
+            signed_state_digest,
+        )
+        .wrap()
+        .context(error!("Failed to sign the light client state"))?;
+        let state_vote = LightClientStateUpdateVote2 {
             epoch: TYPES::Epoch::new(epoch_from_block_number(leaf.height(), epoch_height)),
             light_client_state,
             next_stake_table_state,
             signature,
-            auth_root, // TODO: (Chengyu) Update signature logic for protocol version V4
+            v2_signature,
+            auth_root,
+            signed_state_digest,
         };
         broadcast_event(
-            Arc::new(HotShotEvent::EpochRootQuorumVoteSend(EpochRootQuorumVote {
-                vote,
-                state_vote,
-            })),
+            Arc::new(HotShotEvent::EpochRootQuorumVoteSend(
+                EpochRootQuorumVote2 { vote, state_vote },
+            )),
             &sender,
         )
         .await;
