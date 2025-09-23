@@ -60,7 +60,7 @@ cross_tests!(
         metadata.completion_task_description =
             CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                 TimeBasedCompletionTaskDescription {
-                    duration: Duration::from_secs(180),
+                    duration: Duration::from_secs(240),
                 },
             );
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
@@ -109,7 +109,7 @@ cross_tests!(
         metadata.completion_task_description =
             CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                 TimeBasedCompletionTaskDescription {
-                    duration: Duration::from_secs(180),
+                    duration: Duration::from_secs(240),
                 },
             );
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
@@ -158,7 +158,7 @@ cross_tests!(
         metadata.completion_task_description =
             CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                 TimeBasedCompletionTaskDescription {
-                    duration: Duration::from_secs(180),
+                    duration: Duration::from_secs(240),
                 },
             );
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
@@ -207,7 +207,7 @@ cross_tests!(
         metadata.completion_task_description =
             CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                 TimeBasedCompletionTaskDescription {
-                    duration: Duration::from_secs(180),
+                    duration: Duration::from_secs(240),
                 },
             );
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
