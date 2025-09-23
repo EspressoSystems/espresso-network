@@ -13,7 +13,7 @@ use hotshot_contract_adapter::sol_types::Deposit;
 use hotshot_query_service::explorer::MonetaryValue;
 use hotshot_types::traits::block_contents::BuilderFee;
 use itertools::Itertools;
-use jf_merkle_tree::{
+use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult, MerkleTreeError,
     MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
 };

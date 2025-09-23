@@ -14,7 +14,7 @@ use hotshot_types::{
     utils::{epoch_from_block_number, is_ge_epoch_root},
 };
 use itertools::Itertools;
-use jf_merkle_tree::{
+use jf_merkle_tree_compat::{
     prelude::{MerkleProof, Sha3Digest, Sha3Node},
     AppendableMerkleTreeScheme, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
     LookupResult, MerkleCommitment, MerkleTreeError, MerkleTreeScheme,
@@ -1120,7 +1120,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
 
         // log successful progress about once in 10 - 20 seconds,
         // TODO: we may want to make this configurable
-        if parent_leaf.view_number().u64() % 10 == 0 {
+        if parent_leaf.view_number().u64().is_multiple_of(10) {
             tracing::info!("validated and applied new header");
         }
         Ok((validated_state, delta))

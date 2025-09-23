@@ -23,7 +23,7 @@ hotshot-example-types = { workspace = true }
 hotshot-task-impls = { workspace = true }
 hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
-jf-vid = { workspace = true }
+jf-advz = { workspace = true }
 nonempty-collections = "0.2"
 quick_cache = "0.6"
 rand = { workspace = true }

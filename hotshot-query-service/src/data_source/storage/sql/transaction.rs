@@ -40,7 +40,7 @@ use hotshot_types::{
     },
 };
 use itertools::Itertools;
-use jf_merkle_tree::prelude::{MerkleNode, MerkleProof};
+use jf_merkle_tree_compat::prelude::{MerkleNode, MerkleProof};
 pub use sqlx::Executor;
 use sqlx::{
     pool::Pool, query_builder::Separated, types::BitVec, Encode, Execute, FromRow, QueryBuilder,

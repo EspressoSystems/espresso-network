@@ -21,7 +21,7 @@ hotshot = { workspace = true }
 hotshot-builder-api = { workspace = true }
 hotshot-builder-shared = { workspace = true }
 hotshot-types = { workspace = true }
-jf-vid = { workspace = true }
+jf-advz = { workspace = true }
 lru = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 sha2 = { workspace = true }
