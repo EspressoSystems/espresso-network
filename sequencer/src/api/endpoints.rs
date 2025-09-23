@@ -259,7 +259,7 @@ where
                         proof: proof_sol,
                         lifetime_rewards: proof.balance.into(),
                         // TODO: (MA) this should be the actual auth root
-                        // inputs, for the forseeable future they will be all
+                        // inputs, for the foreseeable future they will be all
                         // zero.
                         auth_root_inputs: Default::default(),
                     };
