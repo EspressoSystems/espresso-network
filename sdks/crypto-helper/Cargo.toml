@@ -20,6 +20,7 @@ hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
 jf-crhf = { workspace = true }
 jf-merkle-tree-compat = { workspace = true, features = ["std"] }
+primitive-types = { version = "0.13" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

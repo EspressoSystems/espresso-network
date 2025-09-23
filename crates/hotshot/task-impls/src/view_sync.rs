@@ -518,7 +518,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
 
                 self.garbage_collect_tasks().await;
             },
-            HotShotEvent::LeavesDecided(leaves) => {
+            HotShotEvent::ViewDecided(leaves, _) => {
                 let finalized_epoch = self.highest_finalized_epoch_view.0.max(
                     leaves
                         .iter()

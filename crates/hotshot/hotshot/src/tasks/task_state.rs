@@ -5,7 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::BTreeMap,
     num::NonZero,
     sync::{atomic::AtomicBool, Arc},
     time::Instant,
@@ -243,7 +243,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             public_key: handle.public_key().clone(),
             builder_public_key: builder_key,
             builder_private_key,
-            decided_not_seen_txns: HashSet::new(),
+            decided_not_seen_txns: Default::default(),
         }
     }
 }
