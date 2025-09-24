@@ -1,6 +1,5 @@
 ---
 source: types/src/reference_tests.rs
-assertion_line: 663
 expression: reward_proof
 ---
 balance: "0x7b"
@@ -929,48 +928,49 @@ proof:
         - Branch:
             value: FIELD~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-
             children:
-              - Empty
+              - ForgettenSubtree:
+                  value: FIELD~CEO878Jp33iRDtYemEnQuaMKfhc-3Du4_EOWuyg_ahj1
               - ForgettenSubtree:
                   value: FIELD~mho7AuZ5wls2FGDfI6FxdWJDbHzXKPYkSoO72IPT1lKo
         - Branch:
             value: FIELD~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-
             children:
               - ForgettenSubtree:
-                  value: FIELD~eTKId7PGKMNr5fUgFqCTzlXmyVyoPd4Sxx2OFVceXzJV
+                  value: FIELD~nYYJQhIQr0b9dqdx4JrqkqRsc-KKJQCBxf5YS_lU7eOw
               - Empty
         - Branch:
             value: FIELD~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-
             children:
               - ForgettenSubtree:
-                  value: FIELD~R5CqYIXTiWBxRt8ydK6iB47zSFA09Y9wHHnhkEn80XWG
+                  value: FIELD~35LZw1prR_RB9Broyp3FN5-g2Ds9wJMyAjiFVwhplYDZ
               - Empty
         - Branch:
             value: FIELD~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-
             children:
               - ForgettenSubtree:
-                  value: FIELD~my6VSGfbh4QGeBuzPgHNRS5Ey8LMSKe18Apq3lnbPIiq
+                  value: FIELD~qdKrWSWOxOndF2bI7WePxND5087fdVTDMUV5rrio6HEr
               - Empty
         - Branch:
             value: FIELD~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-
             children:
               - ForgettenSubtree:
-                  value: FIELD~gmnujXqjobmEiijtH7kRbyr7APXImqHM-IaG5DrEeQVI
+                  value: FIELD~b4wkivjzbo4hB3XLTm6WuXgEbI9iIYAXrCmh5yPCmVQp
               - Empty
         - Branch:
             value: FIELD~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-
             children:
               - ForgettenSubtree:
-                  value: FIELD~ECxGS3-cuk97uZe2hWbhoriz7uTwX9kZlWTAPlKa9hOF
+                  value: FIELD~3fyDl_viHQukMvf_0CVZ5iTPIP7W5xOlv75TCnFu1Gm_
               - Empty
         - Branch:
             value: FIELD~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-
             children:
               - ForgettenSubtree:
-                  value: FIELD~Jhite1EvTD2HRevufq35xiCFP7w0-LCh9RJiBZtK29Vm
+                  value: FIELD~VPbY7xAxS2FEl7LWwHzQooSZkRLKV1WjUMXyBjwvU6jU
               - Empty
         - Branch:
             value: FIELD~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-
             children:
               - ForgettenSubtree:
-                  value: FIELD~-58K44VXaMu0A39SL0ffOmpBCFTBsLe1Buc0GrIQiwsd
+                  value: FIELD~HBS0eSVP_Bp7lSgBA5Zo4xHdC-2EUKCoWNIJan35kIeC
               - Empty

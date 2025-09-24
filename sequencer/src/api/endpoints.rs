@@ -9,8 +9,10 @@ use std::{
 use anyhow::Result;
 use committable::Committable;
 use espresso_types::{
-    v0_1::ADVZNsProof, v0_3::RewardAccountV1, v0_4::RewardAccountV2, FeeAccount, FeeMerkleTree,
-    NamespaceId, NsProof, PubKey, Transaction,
+    v0_1::ADVZNsProof,
+    v0_3::RewardAccountV1,
+    v0_4::{RewardAccountV2, RewardClaimError},
+    FeeAccount, FeeMerkleTree, NamespaceId, NsProof, PubKey, Transaction,
 };
 // re-exported here to avoid breaking changes in consumers
 // "deprecated" does not work with "pub use": https://github.com/rust-lang/rust/issues/30827
@@ -20,7 +22,6 @@ pub type ADVZNamespaceProofQueryData = espresso_types::ADVZNamespaceProofQueryDa
 pub type NamespaceProofQueryData = espresso_types::NamespaceProofQueryData;
 
 use futures::{try_join, FutureExt};
-use hotshot_contract_adapter::sol_types::AccruedRewardsProofSol;
 use hotshot_query_service::{
     availability::{self, AvailabilityDataSource, CustomSnafu, FetchBlockSnafu},
     explorer::{self, ExplorerDataSource},
@@ -221,7 +222,7 @@ where
                 .boxed()
             })?;
 
-            api.get("get_reward_account_proof_sol", move |req, state| {
+            api.get("get_reward_claim_input", move |req, state| {
                 async move {
                     let address = req.string_param("address")?;
                     let height = req.integer_param("height")?;
@@ -243,19 +244,37 @@ where
                             status: StatusCode::NOT_FOUND,
                         })?;
 
-                    let sol_proof: AccruedRewardsProofSol =
-                        proof
-                            .proof
-                            .try_into()
-                            .map_err(|err| merklized_state::Error::Custom {
+                    // TODO: (MA) this will eventually be the other (non reward MT root) auth root
+                    // inputs, for the foreseeable future they will be all zero. And it's as of yet
+                    // unclear. It seems reasonable to delay the required refactoring work until
+                    // we are closer to needing it.
+                    let claim_input = match proof.to_reward_claim_input(Default::default()) {
+                        Ok(input) => input,
+                        Err(RewardClaimError::ZeroRewardError) => {
+                            return Err(merklized_state::Error::Custom {
                                 message: format!(
-                                    "Failed to convert reward proof for {address} at height \
-                                     {height}: {err}"
+                                    "zero reward balance for {address} at height {height}"
                                 ),
+                                status: StatusCode::NOT_FOUND,
+                            })
+                        },
+                        Err(RewardClaimError::ProofConversionError(err)) => {
+                            let message = format!(
+                                "failed to create solidity proof for {address} at height \
+                                 {height}: {err}",
+                            );
+                            tracing::warn!("{message}");
+                            // Normally we would not want to return the internal error via the
+                            // API response but this is an error that should never occur. No
+                            // secret data involved so it seems fine to return it.
+                            return Err(merklized_state::Error::Custom {
+                                message,
                                 status: StatusCode::INTERNAL_SERVER_ERROR,
-                            })?;
+                            });
+                        },
+                    };
 
-                    Ok(sol_proof)
+                    Ok(claim_input)
                 }
                 .boxed()
             })?;

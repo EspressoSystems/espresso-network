@@ -2,6 +2,7 @@
 pragma solidity ^0.8.28;
 
 import "../../src/libraries/RewardMerkleTreeVerifier.sol";
+import "../../src/interfaces/IRewardClaim.sol";
 
 /**
  * @title RewardClaimPrototypeMock
@@ -23,7 +24,7 @@ contract RewardClaimPrototypeMock {
         bytes32 root,
         address account,
         uint256 amount,
-        RewardMerkleTreeVerifier.AccruedRewardsProof calldata proof
+        IRewardClaim.LifetimeRewardsProof calldata proof
     ) external pure returns (bool) {
         return RewardMerkleTreeVerifier.verifyMembership(root, account, amount, proof);
     }
