@@ -53,22 +53,22 @@ impl<
     > StrictMembership<TYPES, StakeTable>
 {
     fn assert_has_stake_table(&self, epoch: Option<TYPES::Epoch>) {
-        // let Some(epoch) = epoch else {
-        //     return;
-        // };
-        // assert!(
-        //     self.epochs.contains(&epoch),
-        //     "Failed stake table check for epoch {epoch}"
-        // );
+        let Some(epoch) = epoch else {
+            return;
+        };
+        assert!(
+            self.epochs.contains(&epoch),
+            "Failed stake table check for epoch {epoch}"
+        );
     }
     fn assert_has_randomized_stake_table(&self, epoch: Option<TYPES::Epoch>) {
-        // let Some(epoch) = epoch else {
-        //     return;
-        // };
-        // assert!(
-        //     self.drbs.contains(&epoch),
-        //     "Failed drb check for epoch {epoch}"
-        // );
+        let Some(epoch) = epoch else {
+            return;
+        };
+        assert!(
+            self.drbs.contains(&epoch),
+            "Failed drb check for epoch {epoch}"
+        );
     }
 }
 
