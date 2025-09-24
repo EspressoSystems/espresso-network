@@ -57,3 +57,12 @@ jobs:
         - name: Run clippy
           run: |
             cargo clippy --workspace --features "embedded-db testing" --all-targets --keep-going -- -D warnings
+
+  check-individually:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@just
+      - uses: dtolnay/rust-toolchain@stable
+      - run: just check-individually
+
