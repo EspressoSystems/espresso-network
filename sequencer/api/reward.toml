@@ -24,7 +24,7 @@ Keccak256 hashing algorithm."""
 
 
 [route.get_reward_claim_input]
-PATH = ["proof/solidity/:height/:address"]
+PATH = ["reward-claim-input/:height/:address"]
 ":address" = "Literal"
 ":height" = "Integer"
 DOC = """The endpoint returns all the function inputs required for a reward claim contract call,

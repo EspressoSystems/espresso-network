@@ -9,8 +9,10 @@ use std::{
 use anyhow::Result;
 use committable::Committable;
 use espresso_types::{
-    v0_1::ADVZNsProof, v0_3::RewardAccountV1, v0_4::RewardAccountV2, FeeAccount, FeeMerkleTree,
-    NamespaceId, NsProof, PubKey, Transaction,
+    v0_1::ADVZNsProof,
+    v0_3::RewardAccountV1,
+    v0_4::{RewardAccountV2, RewardClaimError},
+    FeeAccount, FeeMerkleTree, NamespaceId, NsProof, PubKey, Transaction,
 };
 // re-exported here to avoid breaking changes in consumers
 // "deprecated" does not work with "pub use": https://github.com/rust-lang/rust/issues/30827
@@ -20,7 +22,6 @@ pub type ADVZNamespaceProofQueryData = espresso_types::ADVZNamespaceProofQueryDa
 pub type NamespaceProofQueryData = espresso_types::NamespaceProofQueryData;
 
 use futures::{try_join, FutureExt};
-use hotshot_contract_adapter::{reward::RewardClaimInput, sol_types::LifetimeRewardsProofSol};
 use hotshot_query_service::{
     availability::{self, AvailabilityDataSource, CustomSnafu, FetchBlockSnafu},
     explorer::{self, ExplorerDataSource},
@@ -243,26 +244,35 @@ where
                             status: StatusCode::NOT_FOUND,
                         })?;
 
-                    let proof_sol: LifetimeRewardsProofSol =
-                        proof
-                            .proof
-                            .try_into()
-                            .map_err(|err| merklized_state::Error::Custom {
+                    // TODO: (MA) this should be the actual auth root inputs,
+                    // for the foreseeable future they will be all zero.
+                    // Therefore it seems reasonable to delay this work until we
+                    // actually need it.
+                    let claim_input = match proof.to_reward_claim_input(Default::default()) {
+                        Ok(input) => input,
+                        Err(RewardClaimError::ZeroRewardError) => {
+                            return Err(merklized_state::Error::Custom {
                                 message: format!(
-                                    "Failed to convert reward proof for {address} at height \
+                                    "zero reward balance for {address} at height {height}"
+                                ),
+                                status: StatusCode::NOT_FOUND,
+                            })
+                        },
+                        Err(RewardClaimError::ProofConversionError(err)) => {
+                            // Normally we would not want to return the internal error
+                            // from the API but this is an error that should be impossible
+                            // to and there's no secret data involved so it seems fine to
+                            // return it, in the unlikely case it ever happens.
+                            return Err(merklized_state::Error::Custom {
+                                message: format!(
+                                    "failed to create solidity proof for {address} at height \
                                      {height}: {err}"
                                 ),
                                 status: StatusCode::INTERNAL_SERVER_ERROR,
-                            })?;
-
-                    let claim_input = RewardClaimInput {
-                        proof: proof_sol,
-                        lifetime_rewards: proof.balance.into(),
-                        // TODO: (MA) this should be the actual auth root
-                        // inputs, for the foreseeable future they will be all
-                        // zero.
-                        auth_root_inputs: Default::default(),
+                            });
+                        },
                     };
+
                     Ok(claim_input)
                 }
                 .boxed()

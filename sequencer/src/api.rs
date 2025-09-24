@@ -2183,7 +2183,8 @@ mod test {
     };
     use hotshot::types::EventType;
     use hotshot_contract_adapter::{
-        sol_types::{EspToken, LifetimeRewardsProofSol, StakeTableV2},
+        reward::RewardClaimInput,
+        sol_types::{EspToken, StakeTableV2},
         stake_table::StakeTableContractVersion,
     };
     use hotshot_example_types::node_types::EpochsTestVersions;
@@ -4971,7 +4972,7 @@ mod test {
             if let EventType::Decide { leaf_chain, .. } = event.event {
                 let leaf = leaf_chain[0].leaf.clone();
                 let epoch = leaf.epoch(epoch_height);
-                tracing::info!(
+                println!(
                     "Node decided at height: {}, epoch: {:?}",
                     leaf.height(),
                     epoch
@@ -5894,6 +5895,7 @@ mod test {
 
         Ok(())
     }
+
     #[rstest]
     #[case(PosVersionV3::new())]
     #[case(PosVersionV4::new())]
@@ -5910,7 +5912,7 @@ mod test {
             .build();
 
         let api_port = pick_unused_port().expect("No ports free for query service");
-        tracing::info!("API PORT = {api_port}");
+        println!("API PORT = {api_port}");
 
         let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
         let persistence: [_; NUM_NODES] = storage
@@ -5967,7 +5969,7 @@ mod test {
                     .await
                     .expect("block height not found");
 
-                tracing::info!("{endpoint}: block height = {bh}");
+                println!("{endpoint}: block height = {bh}");
 
                 if bh >= height {
                     return;
@@ -6050,16 +6052,18 @@ mod test {
                     ),
                 }
 
-                let solidity_proof = client
-                    .get::<LifetimeRewardsProofSol>(&format!(
-                        "reward-state-v2/proof/solidity/{height}/{address}"
+                let reward_claim_input = client
+                    .get::<RewardClaimInput>(&format!(
+                        "reward-state-v2/reward-claim-input/{height}/{address}"
                     ))
                     .send()
                     .await
                     .unwrap();
 
-                let expected_sol_proof = res.proof.try_into().unwrap();
-                assert_eq!(solidity_proof, expected_sol_proof);
+                assert_eq!(
+                    reward_claim_input,
+                    res.to_reward_claim_input(Default::default())?
+                );
             }
         }
 
