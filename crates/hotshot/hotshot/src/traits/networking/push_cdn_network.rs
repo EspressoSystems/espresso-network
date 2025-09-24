@@ -55,7 +55,6 @@ use tokio::{spawn, time::sleep};
 use tracing::error;
 
 use super::NetworkError;
-use crate::NodeType;
 
 /// CDN-specific metrics
 #[derive(Clone)]
@@ -283,7 +282,7 @@ impl<K: SignatureKey + 'static> PushCdnNetwork<K> {
 }
 
 #[cfg(feature = "hotshot-testing")]
-impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES>
+impl<TYPES: crate::NodeType> TestableNetworkingImplementation<TYPES>
     for PushCdnNetwork<TYPES::SignatureKey>
 {
     /// Generate n Push CDN clients, a marshal, and two brokers (that run locally).
