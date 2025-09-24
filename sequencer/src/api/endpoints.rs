@@ -244,10 +244,10 @@ where
                             status: StatusCode::NOT_FOUND,
                         })?;
 
-                    // TODO: (MA) this should be the actual auth root inputs,
-                    // for the foreseeable future they will be all zero.
-                    // Therefore it seems reasonable to delay this work until we
-                    // actually need it.
+                    // TODO: (MA) this will eventually be the other (non reward MT root) auth root
+                    // inputs, for the foreseeable future they will be all zero. And it's as of yet
+                    // unclear. It seems reasonable to delay the required refactoring work until
+                    // we are closer to needing it.
                     let claim_input = match proof.to_reward_claim_input(Default::default()) {
                         Ok(input) => input,
                         Err(RewardClaimError::ZeroRewardError) => {
@@ -259,15 +259,16 @@ where
                             })
                         },
                         Err(RewardClaimError::ProofConversionError(err)) => {
-                            // Normally we would not want to return the internal error
-                            // from the API but this is an error that should be impossible
-                            // to and there's no secret data involved so it seems fine to
-                            // return it, in the unlikely case it ever happens.
+                            let message = format!(
+                                "failed to create solidity proof for {address} at height \
+                                 {height}: {err}",
+                            );
+                            tracing::warn!("{message}");
+                            // Normally we would not want to return the internal error via the
+                            // API response but this is an error that should never occur. No
+                            // secret data involved so it seems fine to return it.
                             return Err(merklized_state::Error::Custom {
-                                message: format!(
-                                    "failed to create solidity proof for {address} at height \
-                                     {height}: {err}"
-                                ),
+                                message,
                                 status: StatusCode::INTERNAL_SERVER_ERROR,
                             });
                         },
