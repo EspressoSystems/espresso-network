@@ -128,7 +128,10 @@ impl PersistenceOptions for Options {
     }
 
     async fn reset(self) -> anyhow::Result<()> {
-        todo!()
+        let inner = self.inner.read().await;
+        fs::remove_dir_all(&inner.path)?;
+        fs::create_dir_all(&inner.path)?;
+        Ok(())
     }
 }
 
@@ -1673,8 +1676,9 @@ impl SequencerPersistence for Persistence {
         Ok(result)
     }
 
-    fn enable_metrics(&mut self, _metrics: &dyn Metrics) {
+    fn enable_metrics(&mut self, metrics: &dyn Metrics) {
         // todo!()
+        self.metrics.set_metrics(metrics);
     }
 }
 
