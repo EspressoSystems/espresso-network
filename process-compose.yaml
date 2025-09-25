@@ -208,7 +208,7 @@ processes:
       failure_threshold: 100
 
   sequencer1:
-    command: sequencer -- storage-sql -- http -- query -- explorer -- catchup
+    command: sequencer -- storage-sql -- http -- query -- submit -- explorer -- catchup
     environment:
       - RUST_LOG=debug,hotshot_task_impls=trace,hotshot_task=trace
       - ESPRESSO_SEQUENCER_API_PORT=$ESPRESSO_SEQUENCER1_API_PORT

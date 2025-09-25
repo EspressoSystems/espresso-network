@@ -143,7 +143,7 @@ async fn test_upgrade_task_with_vote() {
         ),
         Expectations::from_outputs_and_task_states(
             all_predicates![
-                leaves_decided(),
+                view_decided(),
                 exact(DaCertificateValidated(dacs[3].clone())),
                 exact(VidShareValidated(vids[3].0[0].clone())),
                 exact(ViewChange(ViewNumber::new(5), None)),
@@ -153,7 +153,7 @@ async fn test_upgrade_task_with_vote() {
         ),
         Expectations::from_outputs_and_task_states(
             all_predicates![
-                leaves_decided(),
+                view_decided(),
                 exact(DaCertificateValidated(dacs[4].clone())),
                 exact(VidShareValidated(vids[4].0[0].clone())),
                 exact(ViewChange(ViewNumber::new(6), None)),
@@ -162,7 +162,7 @@ async fn test_upgrade_task_with_vote() {
             vec![no_decided_upgrade_certificate()],
         ),
         Expectations::from_outputs_and_task_states(
-            vec![leaves_decided()],
+            vec![view_decided()],
             vec![decided_upgrade_certificate()],
         ),
     ];

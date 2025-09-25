@@ -22,6 +22,7 @@ use hotshot_task::task::Task;
 use hotshot_task_impls::rewind::RewindTaskState;
 use hotshot_task_impls::{
     block_builder::BlockBuilderTaskState,
+    //transactions::TransactionTaskState,
     da::DaTaskState,
     events::HotShotEvent,
     network::{NetworkEventTaskState, NetworkMessageTaskState},
