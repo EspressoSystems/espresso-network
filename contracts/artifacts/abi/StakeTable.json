@@ -821,11 +821,6 @@
   },
   {
     "type": "error",
-    "name": "BN254PairingProdFailed",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "BlsKeyAlreadyUsed",
     "inputs": []
   },
@@ -889,11 +884,6 @@
   },
   {
     "type": "error",
-    "name": "InvalidG1",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "InvalidInitialization",
     "inputs": []
   },
@@ -933,11 +923,6 @@
         "internalType": "address"
       }
     ]
-  },
-  {
-    "type": "error",
-    "name": "PowPrecompileFailed",
-    "inputs": []
   },
   {
     "type": "error",
