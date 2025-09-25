@@ -16,6 +16,10 @@
 
 use alloy::sol;
 
+use crate::bindings::stake_table_v2::{
+    EdOnBN254,
+    BN254::{self, BaseField},
+};
 /// # What to re-export, what to hide?
 /// - export contract struct itself, but try to avoid export instance type (instead, use ::new() to get a handle)
 /// - avoid exporting `xxCall` and `xxReturn` types, they usually can be converted/transmuted from existing struct
@@ -52,10 +56,6 @@ pub use crate::bindings::{
         self, EdOnBN254::EdOnBN254Point as EdOnBN254PointSol, StakeTableV2,
         BN254::G2Point as G2PointSol,
     },
-};
-use crate::bindings::stake_table_v2::{
-    EdOnBN254,
-    BN254::{self, BaseField},
 };
 
 // For types that we need to interact with some functions but their bindings are not generated

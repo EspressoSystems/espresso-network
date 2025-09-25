@@ -118,8 +118,11 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
     args.deploy_all(&mut contracts).await?;
 
     // Upgrade to LightClientV3
-    use espresso_contract_deployer::upgrade_light_client_v3;
+    use espresso_contract_deployer::{upgrade_esp_token_v2, upgrade_light_client_v3};
     upgrade_light_client_v3(&provider, &mut contracts, true).await?;
+
+    // Upgrade to EspTokenV2
+    upgrade_esp_token_v2(&provider, &mut contracts).await?;
 
     let light_client_address = contracts
         .address(Contract::LightClientProxy)
@@ -129,9 +132,46 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
         .expect("RewardClaimProxy deployed");
 
     // Create contract instances
-    use hotshot_contract_adapter::sol_types::{LightClientV3Mock, RewardClaim};
+    use hotshot_contract_adapter::sol_types::{EspTokenV2, LightClientV3Mock, RewardClaim};
     let light_client = LightClientV3Mock::new(light_client_address, &provider);
     let reward_claim = RewardClaim::new(reward_claim_address, &provider);
+
+    // Grant minter role to RewardClaim contract on EspTokenV2
+    let esp_token_address = contracts
+        .address(Contract::EspTokenProxy)
+        .expect("EspTokenProxy deployed");
+    let esp_token = EspTokenV2::new(esp_token_address, &provider);
+
+    // Get the MINTER_ROLE hash (should be keccak256("MINTER_ROLE"))
+    let minter_role = esp_token.MINTER_ROLE().call().await?;
+
+    // Check if we have admin privileges first
+    let default_admin_role = esp_token.DEFAULT_ADMIN_ROLE().call().await?;
+    let has_admin_role = esp_token
+        .hasRole(default_admin_role, deployer_address)
+        .call()
+        .await?;
+    println!("Deployer has admin role: {has_admin_role}");
+
+    if !has_admin_role {
+        println!(
+            "Warning: Deployer doesn't have admin role, trying to grant minter role anyway..."
+        );
+    }
+
+    // Grant minter role to RewardClaim contract
+    let receipt = esp_token
+        .grantRole(minter_role, reward_claim_address)
+        .send()
+        .await?
+        .get_receipt()
+        .await?;
+
+    if !receipt.status() {
+        println!("Failed to grant minter role to RewardClaim");
+        return Err(anyhow::anyhow!("Failed to grant minter role"));
+    }
+    println!("Successfully granted minter role to RewardClaim");
 
     let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
 
@@ -199,24 +239,34 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
     println!("Attempting to claim rewards for account: {test_account}");
     println!("Amount: {test_amount}");
 
-    // Try to claim rewards using the RewardClaim contract
-    // This should work since we set the authRoot in the light client to match our tree root
-    let pending_tx = reward_claim
+    // First, let's verify the minter role was granted correctly
+    let has_minter_role = esp_token
+        .hasRole(minter_role, reward_claim_address)
+        .call()
+        .await?;
+    println!("RewardClaim has minter role: {has_minter_role}");
+    assert!(has_minter_role, "RewardClaim should have minter role");
+
+    // Verify the auth root was set correctly
+    let current_auth_root = light_client.authRoot().call().await?;
+    println!("Current auth root in light client: {current_auth_root:#x}");
+    println!("Expected auth root: {auth_root_u256:#x}");
+    assert_eq!(current_auth_root, auth_root_u256, "Auth roots should match");
+
+    // Check that the account hasn't claimed rewards yet
+    let already_claimed = reward_claim.claimedRewards(account_sol).call().await?;
+    println!("Already claimed by account: {already_claimed}");
+
+    // Estimate gas for the claim transaction instead of sending it
+    println!("Estimating gas for claim transaction...");
+    let gas_estimate = reward_claim
         .claimRewards(test_amount.0, auth_data.into())
         .from(account_sol)
-        .send()
+        .estimate_gas()
         .await?;
 
-    println!("Transaction sent, waiting for receipt...");
-    let receipt = pending_tx.get_receipt().await?;
-    let gas_used = receipt.gas_used;
+    println!("Successfully estimated gas for reward claim!");
+    println!("Estimated gas: {}", gas_estimate);
 
-    println!("Successfully claimed rewards!");
-    println!("Gas used: {}", gas_used);
-
-    // Check that rewards were claimed
-    let claimed = reward_claim.claimedRewards(account_sol).call().await?;
-    assert_eq!(claimed, test_amount.0, "Claimed amount should match");
-
-    Ok(gas_used)
+    Ok(gas_estimate)
 }

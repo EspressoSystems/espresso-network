@@ -833,7 +833,7 @@ pub async fn deploy_token_proxy(
 }
 
 /// Upgrade the esp token proxy to use EspTokenV2.
-async fn upgrade_esp_token_v2(
+pub async fn upgrade_esp_token_v2(
     provider: impl Provider,
     contracts: &mut Contracts,
 ) -> Result<TransactionReceipt> {
