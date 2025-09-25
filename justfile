@@ -157,7 +157,7 @@ gen-bindings:
 
     # Generate the alloy bindings
     # TODO: `forge bind --alloy ...` fails if there's an unliked library so we pass pass it an address for the PlonkVerifier contract.
-    forge bind --skip test --skip script --use "0.8.28" --alloy --alloy-version "0.13.0" --contracts ./contracts/src/ \
+    forge bind --skip test --skip script --use "0.8.28"  --contracts ./contracts/src/ \
       --module --bindings-path contracts/rust/adapter/src/bindings --select "{{REGEXP}}" --overwrite --force \
       --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:0xffffffffffffffffffffffffffffffffffffffff \
       --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:0xffffffffffffffffffffffffffffffffffffffff \
@@ -170,7 +170,7 @@ gen-bindings:
 export-contract-abis:
     rm -rv contracts/artifacts/abi
     mkdir -p contracts/artifacts/abi
-    for contract in LightClient{,Mock,V2{,Mock}} StakeTable EspToken; do \
+    for contract in LightClient{,Mock,V2{,Mock}} StakeTable EspToken IRewardClaim; do \
         cat "contracts/out/${contract}.sol/${contract}.json" | jq .abi > "contracts/artifacts/abi/${contract}.json"; \
     done
 

@@ -25,7 +25,7 @@ use hotshot_types::{
     utils::{BuilderCommitment, EpochTransitionIndicator},
     vid::advz::advz_scheme,
 };
-use jf_vid::VidScheme;
+use jf_advz::VidScheme;
 use rand::{distributions::Standard, thread_rng, Rng};
 use vbs::version::StaticVersionType;
 

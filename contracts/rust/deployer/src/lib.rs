@@ -57,10 +57,10 @@ pub fn build_provider(
     if let Some(interval) = poll_interval {
         tracing::info!("Using custom L1 poll interval: {interval:?}");
         let client = RpcClient::new_http(url.clone()).with_poll_interval(interval);
-        ProviderBuilder::new().wallet(wallet).on_client(client)
+        ProviderBuilder::new().wallet(wallet).connect_client(client)
     } else {
         tracing::info!("Using default L1 poll interval");
-        ProviderBuilder::new().wallet(wallet).on_http(url)
+        ProviderBuilder::new().wallet(wallet).connect_http(url)
     }
 }
 
@@ -80,10 +80,10 @@ pub fn build_provider_ledger(
     if let Some(interval) = poll_interval {
         tracing::info!("Using custom L1 poll interval: {interval:?}");
         let client = RpcClient::new_http(url.clone()).with_poll_interval(interval);
-        ProviderBuilder::new().wallet(wallet).on_client(client)
+        ProviderBuilder::new().wallet(wallet).connect_client(client)
     } else {
         tracing::info!("Using default L1 poll interval");
-        ProviderBuilder::new().wallet(wallet).on_http(url)
+        ProviderBuilder::new().wallet(wallet).connect_http(url)
     }
 }
 
@@ -102,7 +102,7 @@ pub fn build_random_provider(url: Url) -> HttpProviderWithWallet {
         .build_random()
         .expect("fail to build signer");
     let wallet = EthereumWallet::from(signer);
-    ProviderBuilder::new().wallet(wallet).on_http(url)
+    ProviderBuilder::new().wallet(wallet).connect_http(url)
 }
 
 // We pass this during `forge bind --libraries` as a placeholder for the actual deployed library address
@@ -312,11 +312,7 @@ impl Contracts {
     ///
     /// The deployment `tx` will be sent only if contract `name` is not already deployed;
     /// otherwise this function will just return the predeployed address.
-    pub async fn deploy<T, P>(
-        &mut self,
-        name: Contract,
-        tx: RawCallBuilder<T, P>,
-    ) -> Result<Address>
+    pub async fn deploy<P>(&mut self, name: Contract, tx: RawCallBuilder<P>) -> Result<Address>
     where
         P: Provider,
     {
@@ -477,16 +473,13 @@ pub async fn deploy_light_client_proxy(
 
     // post deploy verification checks
     assert_eq!(lc_proxy.getVersion().call().await?.majorVersion, 1);
-    assert_eq!(lc_proxy.owner().call().await?._0, admin);
+    assert_eq!(lc_proxy.owner().call().await?, admin);
     if let Some(prover) = prover {
-        assert_eq!(lc_proxy.permissionedProver().call().await?._0, prover);
+        assert_eq!(lc_proxy.permissionedProver().call().await?, prover);
     }
+    assert_eq!(lc_proxy.stateHistoryRetentionPeriod().call().await?, 864000);
     assert_eq!(
-        lc_proxy.stateHistoryRetentionPeriod().call().await?._0,
-        864000
-    );
-    assert_eq!(
-        lc_proxy.currentBlockNumber().call().await?._0,
+        lc_proxy.currentBlockNumber().call().await?,
         U256::from(provider.get_block_number().await?)
     );
 
@@ -514,8 +507,7 @@ pub async fn upgrade_light_client_v2(
         None => Err(anyhow!("LightClientProxy not found, can't upgrade")),
         Some(proxy_addr) => {
             let proxy = LightClient::new(proxy_addr, &provider);
-            let state_history_retention_period =
-                proxy.stateHistoryRetentionPeriod().call().await?._0;
+            let state_history_retention_period = proxy.stateHistoryRetentionPeriod().call().await?;
             // first deploy PlonkVerifierV2.sol
             let pv2_addr = contracts
                 .deploy(
@@ -569,7 +561,7 @@ pub async fn upgrade_light_client_v2(
 
             // get owner of proxy
             let owner = proxy.owner().call().await?;
-            let owner_addr = owner._0;
+            let owner_addr = owner;
             tracing::info!("Proxy owner: {owner_addr:#x}");
 
             // prepare init calldata
@@ -589,31 +581,28 @@ pub async fn upgrade_light_client_v2(
                 // post deploy verification checks
                 let proxy_as_v2 = LightClientV2::new(proxy_addr, &provider);
                 assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
+                assert_eq!(proxy_as_v2.blocksPerEpoch().call().await?, blocks_per_epoch);
                 assert_eq!(
-                    proxy_as_v2.blocksPerEpoch().call().await?._0,
-                    blocks_per_epoch
-                );
-                assert_eq!(
-                    proxy_as_v2.epochStartBlock().call().await?._0,
+                    proxy_as_v2.epochStartBlock().call().await?,
                     epoch_start_block
                 );
                 assert_eq!(
-                    proxy_as_v2.stateHistoryRetentionPeriod().call().await?._0,
+                    proxy_as_v2.stateHistoryRetentionPeriod().call().await?,
                     state_history_retention_period
                 );
                 assert_eq!(
-                    proxy_as_v2.currentBlockNumber().call().await?._0,
+                    proxy_as_v2.currentBlockNumber().call().await?,
                     U256::from(provider.get_block_number().await?)
                 );
 
                 tracing::info!(%lcv2_addr, "LightClientProxy successfully upgrade to: ");
                 tracing::info!(
                     "blocksPerEpoch: {}",
-                    proxy_as_v2.blocksPerEpoch().call().await?._0
+                    proxy_as_v2.blocksPerEpoch().call().await?
                 );
                 tracing::info!(
                     "epochStartBlock: {}",
-                    proxy_as_v2.epochStartBlock().call().await?._0
+                    proxy_as_v2.epochStartBlock().call().await?
                 );
             } else {
                 tracing::error!("LightClientProxy upgrade failed: {:?}", receipt);
@@ -694,7 +683,7 @@ pub async fn upgrade_light_client_v3(
 
             // get owner of proxy
             let owner = proxy.owner().call().await?;
-            let owner_addr = owner._0;
+            let owner_addr = owner;
             tracing::info!("Proxy owner: {owner_addr:#x}");
 
             // prepare init calldata
@@ -786,7 +775,7 @@ pub async fn deploy_fee_contract_proxy(
     // post deploy verification checks
     let fee_proxy = FeeContract::new(fee_proxy_addr, &provider);
     assert_eq!(fee_proxy.getVersion().call().await?.majorVersion, 1);
-    assert_eq!(fee_proxy.owner().call().await?._0, admin);
+    assert_eq!(fee_proxy.owner().call().await?, admin);
 
     Ok(fee_proxy_addr)
 }
@@ -830,13 +819,13 @@ pub async fn deploy_token_proxy(
     // post deploy verification checks
     let token_proxy = EspToken::new(token_proxy_addr, &provider);
     assert_eq!(token_proxy.getVersion().call().await?.majorVersion, 1);
-    assert_eq!(token_proxy.owner().call().await?._0, owner);
-    assert_eq!(token_proxy.symbol().call().await?._0, symbol);
-    assert_eq!(token_proxy.decimals().call().await?._0, 18);
-    assert_eq!(token_proxy.name().call().await?._0, name);
-    let total_supply = token_proxy.totalSupply().call().await?._0;
+    assert_eq!(token_proxy.owner().call().await?, owner);
+    assert_eq!(token_proxy.symbol().call().await?, symbol);
+    assert_eq!(token_proxy.decimals().call().await?, 18);
+    assert_eq!(token_proxy.name().call().await?, name);
+    let total_supply = token_proxy.totalSupply().call().await?;
     assert_eq!(
-        token_proxy.balanceOf(init_grant_recipient).call().await?._0,
+        token_proxy.balanceOf(init_grant_recipient).call().await?,
         total_supply
     );
 
@@ -876,7 +865,7 @@ async fn upgrade_esp_token_v2(
         // post deploy verification checks
         let proxy_as_v2 = EspTokenV2::new(proxy_addr, &provider);
         assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
-        assert_eq!(proxy_as_v2.name().call().await?._0, "Espresso");
+        assert_eq!(proxy_as_v2.name().call().await?, "Espresso");
         tracing::info!(%v2_addr, "EspToken successfully upgraded to")
     } else {
         anyhow::bail!("EspToken upgrade failed: {:?}", receipt);
@@ -925,11 +914,11 @@ pub async fn deploy_stake_table_proxy(
 
     let st_proxy = StakeTable::new(st_proxy_addr, &provider);
     assert_eq!(st_proxy.getVersion().call().await?.majorVersion, 1);
-    assert_eq!(st_proxy.owner().call().await?._0, owner);
-    assert_eq!(st_proxy.token().call().await?._0, token_addr);
-    assert_eq!(st_proxy.lightClient().call().await?._0, light_client_addr);
+    assert_eq!(st_proxy.owner().call().await?, owner);
+    assert_eq!(st_proxy.token().call().await?, token_addr);
+    assert_eq!(st_proxy.lightClient().call().await?, light_client_addr);
     assert_eq!(
-        st_proxy.exitEscrowPeriod().call().await?._0,
+        st_proxy.exitEscrowPeriod().call().await?,
         exit_escrow_period
     );
 
@@ -1013,12 +1002,7 @@ pub async fn fetch_commissions_for_stake_table_storage_migration(
         );
     }
 
-    let start_block = stake_table
-        .initializedAtBlock()
-        .call()
-        .await?
-        ._0
-        .to::<u64>();
+    let start_block = stake_table.initializedAtBlock().call().await?.to::<u64>();
 
     tracing::info!(
         "Reading ValidatorRegistered events from L1 StakeTable V1 starting at block {}",
@@ -1157,11 +1141,11 @@ pub async fn upgrade_stake_table_v2(
         let proxy_as_v2 = StakeTableV2::new(proxy_addr, &provider);
         assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
 
-        let pauser_role = proxy_as_v2.PAUSER_ROLE().call().await?._0;
-        assert!(proxy_as_v2.hasRole(pauser_role, pauser).call().await?._0,);
+        let pauser_role = proxy_as_v2.PAUSER_ROLE().call().await?;
+        assert!(proxy_as_v2.hasRole(pauser_role, pauser).call().await?,);
 
-        let admin_role = proxy_as_v2.DEFAULT_ADMIN_ROLE().call().await?._0;
-        assert!(proxy_as_v2.hasRole(admin_role, admin).call().await?._0,);
+        let admin_role = proxy_as_v2.DEFAULT_ADMIN_ROLE().call().await?;
+        assert!(proxy_as_v2.hasRole(admin_role, admin).call().await?,);
 
         if let Some(migrated) = init_commissions {
             tracing::info!("Verifying migrated commissions, may take a minute");
@@ -1312,20 +1296,18 @@ pub async fn deploy_ops_timelock(
     let timelock = OpsTimelock::new(timelock_addr, &provider);
 
     // Verify initialization parameters
-    assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
+    assert_eq!(timelock.getMinDelay().call().await?, min_delay);
     assert!(
         timelock
-            .hasRole(timelock.PROPOSER_ROLE().call().await?._0, proposers[0])
+            .hasRole(timelock.PROPOSER_ROLE().call().await?, proposers[0])
             .call()
             .await?
-            ._0
     );
     assert!(
         timelock
-            .hasRole(timelock.EXECUTOR_ROLE().call().await?._0, executors[0])
+            .hasRole(timelock.EXECUTOR_ROLE().call().await?, executors[0])
             .call()
             .await?
-            ._0
     );
 
     // test that the admin is in the default admin role where DEFAULT_ADMIN_ROLE = 0x00
@@ -1335,7 +1317,6 @@ pub async fn deploy_ops_timelock(
             .hasRole(default_admin_role.into(), admin)
             .call()
             .await?
-            ._0
     );
 
     Ok(timelock_addr)
@@ -1381,20 +1362,18 @@ pub async fn deploy_safe_exit_timelock(
     let timelock = SafeExitTimelock::new(timelock_addr, &provider);
 
     // Verify initialization parameters
-    assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
+    assert_eq!(timelock.getMinDelay().call().await?, min_delay);
     assert!(
         timelock
-            .hasRole(timelock.PROPOSER_ROLE().call().await?._0, proposers[0])
+            .hasRole(timelock.PROPOSER_ROLE().call().await?, proposers[0])
             .call()
             .await?
-            ._0
     );
     assert!(
         timelock
-            .hasRole(timelock.EXECUTOR_ROLE().call().await?._0, executors[0])
+            .hasRole(timelock.EXECUTOR_ROLE().call().await?, executors[0])
             .call()
             .await?
-            ._0
     );
 
     // test that the admin is in the default admin role where DEFAULT_ADMIN_ROLE = 0x00
@@ -1404,7 +1383,6 @@ pub async fn deploy_safe_exit_timelock(
             .hasRole(default_admin_role.into(), admin)
             .call()
             .await?
-            ._0
     );
 
     Ok(timelock_addr)
@@ -1492,7 +1470,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_is_contract() -> Result<(), anyhow::Error> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
 
         // test with zero address returns false
         let zero_address = Address::ZERO;
@@ -1512,7 +1490,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_is_proxy_contract() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let deployer = provider.get_accounts().await?[0];
 
         let fee_contract = FeeContract::deploy(&provider).await?;
@@ -1526,7 +1504,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_deploy_light_client() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
         // first test if LightClientMock can be deployed
@@ -1543,7 +1521,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_deploy_mock_light_client_proxy() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
         // prepare `initialize()` input
@@ -1592,7 +1570,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_deploy_light_client_proxy() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
         // prepare `initialize()` input
@@ -1626,7 +1604,7 @@ mod tests {
         assert_eq!(fetched_stake.threshold, genesis_stake.threshold);
 
         let fetched_prover = lc.permissionedProver().call().await?;
-        assert_eq!(fetched_prover._0, prover);
+        assert_eq!(fetched_prover, prover);
 
         // test transfer ownership to multisig
         let multisig = Address::random();
@@ -1637,14 +1615,14 @@ mod tests {
             multisig,
         )
         .await?;
-        assert_eq!(lc.owner().call().await?._0, multisig);
+        assert_eq!(lc.owner().call().await?, multisig);
 
         Ok(())
     }
 
     #[test_log::test(tokio::test)]
     async fn test_deploy_fee_contract_proxy() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let admin = provider.get_accounts().await?[0];
         let alice = Address::random();
@@ -1653,7 +1631,7 @@ mod tests {
 
         // check initialization is correct
         let fee = FeeContract::new(fee_proxy_addr, &provider);
-        let fetched_owner = fee.owner().call().await?._0;
+        let fetched_owner = fee.owner().call().await?;
         assert_eq!(fetched_owner, alice);
 
         // redeploy new fee with admin being the owner
@@ -1670,13 +1648,13 @@ mod tests {
             multisig,
         )
         .await?;
-        assert_eq!(fee.owner().call().await?._0, multisig);
+        assert_eq!(fee.owner().call().await?, multisig);
 
         Ok(())
     }
 
     async fn test_upgrade_light_client_to_v2_helper(is_mock: bool) -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let blocks_per_epoch = 10; // for test
         let epoch_start_block = 22;
@@ -1702,8 +1680,7 @@ mod tests {
         let state_history_retention_period = LightClient::new(lc_proxy_addr, &provider)
             .stateHistoryRetentionPeriod()
             .call()
-            .await?
-            ._0;
+            .await?;
 
         // then upgrade to v2
         upgrade_light_client_v2(
@@ -1729,10 +1706,10 @@ mod tests {
             next_stake.abi_encode_params()
         );
         assert_eq!(lc.getVersion().call().await?.majorVersion, 2);
-        assert_eq!(lc.blocksPerEpoch().call().await?._0, blocks_per_epoch);
-        assert_eq!(lc.epochStartBlock().call().await?._0, epoch_start_block);
+        assert_eq!(lc.blocksPerEpoch().call().await?, blocks_per_epoch);
+        assert_eq!(lc.epochStartBlock().call().await?, epoch_start_block);
         assert_eq!(
-            lc.stateHistoryRetentionPeriod().call().await?._0,
+            lc.stateHistoryRetentionPeriod().call().await?,
             state_history_retention_period
         );
 
@@ -1747,10 +1724,7 @@ mod tests {
                 .await?
                 .watch()
                 .await?;
-            assert_eq!(
-                new_blocks_per_epoch,
-                lc_mock.blocksPerEpoch().call().await?._0
-            );
+            assert_eq!(new_blocks_per_epoch, lc_mock.blocksPerEpoch().call().await?);
         }
         Ok(())
     }
@@ -1767,7 +1741,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_fetch_commissions_for_stake_table_storage_migration() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let owner = provider.get_accounts().await?[0];
 
@@ -1858,7 +1832,7 @@ mod tests {
         let rpc_url = std::env::var("RPC_URL")
             .expect("RPC_URL environment variable not set")
             .parse()?;
-        let provider = ProviderBuilder::new().on_http(rpc_url);
+        let provider = ProviderBuilder::new().connect_http(rpc_url);
 
         // Decaf / sepolia stake table address
         let stake_table_address: Address = "0x40304FbE94D5E7D1492Dd90c53a2D63E8506a037".parse()?;
@@ -1918,15 +1892,15 @@ mod tests {
             .arg("20")
             .spawn();
 
-        let provider = ProviderBuilder::new().on_http(anvil.endpoint().parse()?);
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint().parse()?);
         let proxy = StakeTable::new(stake_table_address, &provider);
-        let proxy_owner = proxy.owner().call().await?._0;
+        let proxy_owner = proxy.owner().call().await?;
         tracing::info!("Proxy owner address: {proxy_owner:#x}");
 
         // Enable impersonation for the proxy owner
         let provider = ProviderBuilder::new()
             .filler(ImpersonateFiller::new(proxy_owner))
-            .on_http(anvil.endpoint().parse()?);
+            .connect_http(anvil.endpoint().parse()?);
         let anvil_provider = AnvilProvider::new(provider.clone(), Arc::new(anvil));
         anvil_provider.anvil_auto_impersonate_account(true).await?;
         anvil_provider
@@ -1944,7 +1918,7 @@ mod tests {
     }
 
     async fn test_upgrade_light_client_to_v3_helper(options: UpgradeTestOptions) -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let blocks_per_epoch = 10; // for test
         let epoch_start_block = 22;
@@ -2000,11 +1974,8 @@ mod tests {
 
         // V3 inherits blocks_per_epoch and epoch_start_block from V2
         let lc_as_v2 = LightClientV2::new(lc_proxy_addr, &provider);
-        assert_eq!(lc_as_v2.blocksPerEpoch().call().await?._0, blocks_per_epoch);
-        assert_eq!(
-            lc_as_v2.epochStartBlock().call().await?._0,
-            epoch_start_block
-        );
+        assert_eq!(lc_as_v2.blocksPerEpoch().call().await?, blocks_per_epoch);
+        assert_eq!(lc_as_v2.epochStartBlock().call().await?, epoch_start_block);
 
         // test mock-specific functions
         if options.is_mock {
@@ -2018,10 +1989,7 @@ mod tests {
                 .await?
                 .watch()
                 .await?;
-            assert_eq!(
-                new_blocks_per_epoch,
-                lc_mock.blocksPerEpoch().call().await?._0
-            );
+            assert_eq!(new_blocks_per_epoch, lc_mock.blocksPerEpoch().call().await?);
         }
         Ok(())
     }
@@ -2164,7 +2132,7 @@ mod tests {
         )
         .await?;
         let lc = LightClient::new(lc_proxy_addr, &provider);
-        assert_eq!(lc.owner().call().await?._0, multisig_admin);
+        assert_eq!(lc.owner().call().await?, multisig_admin);
 
         // then send upgrade proposal to the multisig wallet
         let result = upgrade_light_client_v2_multisig_owner(
@@ -2242,7 +2210,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_deploy_token_proxy() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
         let init_recipient = provider.get_accounts().await?[0];
@@ -2263,25 +2231,22 @@ mod tests {
         .await?;
         let token = EspToken::new(addr, &provider);
 
-        assert_eq!(token.owner().call().await?._0, rand_owner);
-        let total_supply = token.totalSupply().call().await?._0;
+        assert_eq!(token.owner().call().await?, rand_owner);
+        let total_supply = token.totalSupply().call().await?;
         assert_eq!(
             total_supply,
             parse_ether(&initial_supply.to_string()).unwrap()
         );
-        assert_eq!(
-            token.balanceOf(init_recipient).call().await?._0,
-            total_supply,
-        );
-        assert_eq!(token.name().call().await?._0, name);
-        assert_eq!(token.symbol().call().await?._0, symbol);
+        assert_eq!(token.balanceOf(init_recipient).call().await?, total_supply);
+        assert_eq!(token.name().call().await?, name);
+        assert_eq!(token.symbol().call().await?, symbol);
 
         Ok(())
     }
 
     #[test_log::test(tokio::test)]
     async fn test_deploy_stake_table_proxy() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
         // deploy token
@@ -2328,18 +2293,18 @@ mod tests {
         let stake_table = StakeTable::new(stake_table_addr, &provider);
 
         assert_eq!(
-            stake_table.exitEscrowPeriod().call().await?._0,
+            stake_table.exitEscrowPeriod().call().await?,
             exit_escrow_period
         );
-        assert_eq!(stake_table.owner().call().await?._0, owner);
-        assert_eq!(stake_table.token().call().await?._0, token_addr);
-        assert_eq!(stake_table.lightClient().call().await?._0, lc_proxy_addr);
+        assert_eq!(stake_table.owner().call().await?, owner);
+        assert_eq!(stake_table.token().call().await?, token_addr);
+        assert_eq!(stake_table.lightClient().call().await?, lc_proxy_addr);
         Ok(())
     }
 
     #[test_log::test(tokio::test)]
     async fn test_upgrade_stake_table_v2() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
         // deploy token
@@ -2397,17 +2362,17 @@ mod tests {
         let stake_table_v2 = StakeTableV2::new(stake_table_addr, &provider);
 
         assert_eq!(stake_table_v2.getVersion().call().await?, (2, 0, 0).into());
-        assert_eq!(stake_table_v2.owner().call().await?._0, owner);
-        assert_eq!(stake_table_v2.token().call().await?._0, token_addr);
-        assert_eq!(stake_table_v2.lightClient().call().await?._0, lc_proxy_addr);
+        assert_eq!(stake_table_v2.owner().call().await?, owner);
+        assert_eq!(stake_table_v2.token().call().await?, token_addr);
+        assert_eq!(stake_table_v2.lightClient().call().await?, lc_proxy_addr);
 
         // get pauser role
-        let pauser_role = stake_table_v2.PAUSER_ROLE().call().await?._0;
-        assert!(stake_table_v2.hasRole(pauser_role, pauser).call().await?._0,);
+        let pauser_role = stake_table_v2.PAUSER_ROLE().call().await?;
+        assert!(stake_table_v2.hasRole(pauser_role, pauser).call().await?,);
 
         // get admin role
-        let admin_role = stake_table_v2.DEFAULT_ADMIN_ROLE().call().await?._0;
-        assert!(stake_table_v2.hasRole(admin_role, owner).call().await?._0,);
+        let admin_role = stake_table_v2.DEFAULT_ADMIN_ROLE().call().await?;
+        assert!(stake_table_v2.hasRole(admin_role, owner).call().await?,);
 
         // ensure we can upgrade (again) to a V2 patch version
         let current_impl = read_proxy_impl(&provider, stake_table_addr).await?;
@@ -2431,7 +2396,7 @@ mod tests {
     async fn test_upgrade_stake_table_to_v2_multisig_owner_helper(dry_run: bool) -> Result<()> {
         let mut sepolia_rpc_url = "http://localhost:8545".to_string();
         let mut multisig_admin = Address::random();
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let init_recipient = provider.get_accounts().await?[0];
         let token_owner = Address::random();
@@ -2499,7 +2464,7 @@ mod tests {
         )
         .await?;
         let stake_table = StakeTable::new(stake_table_proxy_addr, &provider);
-        assert_eq!(stake_table.owner().call().await?._0, multisig_admin);
+        assert_eq!(stake_table.owner().call().await?, multisig_admin);
         // then send upgrade proposal to the multisig wallet
         let pauser = Address::random();
         upgrade_stake_table_v2_multisig_owner(
@@ -2525,7 +2490,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_deploy_ops_timelock() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
         // Setup test parameters
@@ -2546,23 +2511,21 @@ mod tests {
 
         // Verify deployment
         let timelock = OpsTimelock::new(timelock_addr, &provider);
-        assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
+        assert_eq!(timelock.getMinDelay().call().await?, min_delay);
 
         // Verify initialization parameters
-        assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
+        assert_eq!(timelock.getMinDelay().call().await?, min_delay);
         assert!(
             timelock
-                .hasRole(timelock.PROPOSER_ROLE().call().await?._0, proposers[0])
+                .hasRole(timelock.PROPOSER_ROLE().call().await?, proposers[0])
                 .call()
                 .await?
-                ._0
         );
         assert!(
             timelock
-                .hasRole(timelock.EXECUTOR_ROLE().call().await?._0, executors[0])
+                .hasRole(timelock.EXECUTOR_ROLE().call().await?, executors[0])
                 .call()
                 .await?
-                ._0
         );
 
         // test that the admin is in the default admin role where DEFAULT_ADMIN_ROLE = 0x00
@@ -2572,14 +2535,13 @@ mod tests {
                 .hasRole(default_admin_role.into(), admin)
                 .call()
                 .await?
-                ._0
         );
         Ok(())
     }
 
     #[test_log::test(tokio::test)]
     async fn test_deploy_safe_exit_timelock() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
         // Setup test parameters
@@ -2600,23 +2562,21 @@ mod tests {
 
         // Verify deployment
         let timelock = SafeExitTimelock::new(timelock_addr, &provider);
-        assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
+        assert_eq!(timelock.getMinDelay().call().await?, min_delay);
 
         // Verify initialization parameters
-        assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
+        assert_eq!(timelock.getMinDelay().call().await?, min_delay);
         assert!(
             timelock
-                .hasRole(timelock.PROPOSER_ROLE().call().await?._0, proposers[0])
+                .hasRole(timelock.PROPOSER_ROLE().call().await?, proposers[0])
                 .call()
                 .await?
-                ._0
         );
         assert!(
             timelock
-                .hasRole(timelock.EXECUTOR_ROLE().call().await?._0, executors[0])
+                .hasRole(timelock.EXECUTOR_ROLE().call().await?, executors[0])
                 .call()
                 .await?
-                ._0
         );
 
         // test that the admin is in the default admin role where DEFAULT_ADMIN_ROLE = 0x00
@@ -2626,14 +2586,13 @@ mod tests {
                 .hasRole(default_admin_role.into(), admin)
                 .call()
                 .await?
-                ._0
         );
         Ok(())
     }
 
     #[test_log::test(tokio::test)]
     async fn test_upgrade_esp_token_v2() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
         // deploy token
@@ -2653,7 +2612,7 @@ mod tests {
         )
         .await?;
         let esp_token = EspToken::new(token_proxy_addr, &provider);
-        assert_eq!(esp_token.name().call().await?._0, token_name);
+        assert_eq!(esp_token.name().call().await?, token_name);
 
         // upgrade to v2
         upgrade_esp_token_v2(&provider, &mut contracts).await?;
@@ -2661,24 +2620,24 @@ mod tests {
         let esp_token_v2 = EspTokenV2::new(token_proxy_addr, &provider);
 
         assert_eq!(esp_token_v2.getVersion().call().await?, (2, 0, 0).into());
-        assert_eq!(esp_token_v2.owner().call().await?._0, token_owner);
+        assert_eq!(esp_token_v2.owner().call().await?, token_owner);
 
         // name is hardcoded in the EspTokenV2 contract
-        assert_eq!(esp_token_v2.name().call().await?._0, "Espresso");
-        assert_eq!(esp_token_v2.symbol().call().await?._0, "ESP");
-        assert_eq!(esp_token_v2.decimals().call().await?._0, 18);
+        assert_eq!(esp_token_v2.name().call().await?, "Espresso");
+        assert_eq!(esp_token_v2.symbol().call().await?, "ESP");
+        assert_eq!(esp_token_v2.decimals().call().await?, 18);
 
         let initial_supply_in_wei = parse_ether(&initial_supply.to_string()).unwrap();
         assert_eq!(
-            esp_token_v2.totalSupply().call().await?._0,
+            esp_token_v2.totalSupply().call().await?,
             initial_supply_in_wei
         );
         assert_eq!(
-            esp_token_v2.balanceOf(init_recipient).call().await?._0,
+            esp_token_v2.balanceOf(init_recipient).call().await?,
             initial_supply_in_wei
         );
         assert_eq!(
-            esp_token_v2.balanceOf(token_owner).call().await?._0,
+            esp_token_v2.balanceOf(token_owner).call().await?,
             U256::ZERO
         );
 
@@ -2786,7 +2745,7 @@ mod tests {
         )
         .await?;
         let esp_token = EspToken::new(esp_token_proxy_addr, &provider);
-        assert_eq!(esp_token.owner().call().await?._0, multisig_admin);
+        assert_eq!(esp_token.owner().call().await?, multisig_admin);
 
         // then send upgrade proposal to the multisig wallet
         let result = upgrade_esp_token_v2_multisig_owner(
@@ -2816,7 +2775,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_schedule_and_execute_timelock_operation() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let delay = U256::from(0);
 
@@ -2861,22 +2820,22 @@ mod tests {
 
         // check that the tx is scheduled
         let timelock = OpsTimelock::new(timelock_addr, &provider);
-        assert!(timelock.isOperationPending(operation_id).call().await?._0);
-        assert!(timelock.isOperationReady(operation_id).call().await?._0);
-        assert!(!timelock.isOperationDone(operation_id).call().await?._0);
-        assert!(timelock.getTimestamp(operation_id).call().await?._0 > U256::ZERO);
+        assert!(timelock.isOperationPending(operation_id).call().await?);
+        assert!(timelock.isOperationReady(operation_id).call().await?);
+        assert!(!timelock.isOperationDone(operation_id).call().await?);
+        assert!(timelock.getTimestamp(operation_id).call().await? > U256::ZERO);
 
         // execute the tx since the delay is 0
         execute_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone())
             .await?;
 
         // check that the tx is executed
-        assert!(timelock.isOperationDone(operation_id).call().await?._0);
-        assert!(!timelock.isOperationPending(operation_id).call().await?._0);
-        assert!(!timelock.isOperationReady(operation_id).call().await?._0);
+        assert!(timelock.isOperationDone(operation_id).call().await?);
+        assert!(!timelock.isOperationPending(operation_id).call().await?);
+        assert!(!timelock.isOperationReady(operation_id).call().await?);
         // check that the new owner is the provider_wallet
         let fee_contract = FeeContract::new(operation.target, &provider);
-        assert_eq!(fee_contract.owner().call().await?._0, provider_wallet);
+        assert_eq!(fee_contract.owner().call().await?, provider_wallet);
 
         operation.value = U256::from(1);
         //transfer ownership back to the timelock
@@ -2903,9 +2862,8 @@ mod tests {
                 operation.salt,
             )
             .call()
-            .await?
-            ._0;
-        assert!(timelock.getTimestamp(next_operation_id).call().await?._0 == U256::ZERO);
+            .await?;
+        assert!(timelock.getTimestamp(next_operation_id).call().await? == U256::ZERO);
         Ok(())
     }
 
@@ -3043,8 +3001,8 @@ mod tests {
                 .await?;
                 let lc_v2 = LightClientV2::new(lc_proxy_addr, &provider);
                 assert_eq!(lc_v2.getVersion().call().await?.majorVersion, 2);
-                assert_eq!(lc_v2.blocksPerEpoch().call().await?._0, blocks_per_epoch);
-                assert_eq!(lc_v2.epochStartBlock().call().await?._0, epoch_start_block);
+                assert_eq!(lc_v2.blocksPerEpoch().call().await?, blocks_per_epoch);
+                assert_eq!(lc_v2.epochStartBlock().call().await?, epoch_start_block);
 
                 deploy_stake_table_proxy(
                     &provider,
@@ -3066,8 +3024,7 @@ mod tests {
             OwnableUpgradeable::new(proxy_addr, &provider)
                 .owner()
                 .call()
-                .await?
-                ._0,
+                .await?,
             multisig_admin
         );
 

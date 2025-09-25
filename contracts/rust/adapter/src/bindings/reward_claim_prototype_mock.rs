@@ -16,6 +16,7 @@ library IRewardClaim {
 pub mod IRewardClaim {
     use super::*;
     use alloy::sol_types as alloy_sol_types;
+    #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Debug, PartialEq, Eq, Hash)]
     /**```solidity
 struct LifetimeRewardsProof { bytes32[160] siblings; }
@@ -35,6 +36,7 @@ struct LifetimeRewardsProof { bytes32[160] siblings; }
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
+        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = (
             alloy::sol_types::sol_data::FixedArray<
                 alloy::sol_types::sol_data::FixedBytes<32>,
@@ -229,14 +231,13 @@ struct LifetimeRewardsProof { bytes32[160] siblings; }
 See the [wrapper's documentation](`IRewardClaimInstance`) for more details.*/
     #[inline]
     pub const fn new<
-        T: alloy_contract::private::Transport + ::core::clone::Clone,
-        P: alloy_contract::private::Provider<T, N>,
+        P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
     >(
         address: alloy_sol_types::private::Address,
-        provider: P,
-    ) -> IRewardClaimInstance<T, P, N> {
-        IRewardClaimInstance::<T, P, N>::new(address, provider)
+        __provider: P,
+    ) -> IRewardClaimInstance<P, N> {
+        IRewardClaimInstance::<P, N>::new(address, __provider)
     }
     /**A [`IRewardClaim`](self) instance.
 
@@ -250,13 +251,13 @@ be used to deploy a new instance of the contract.
 
 See the [module-level documentation](self) for all the available methods.*/
     #[derive(Clone)]
-    pub struct IRewardClaimInstance<T, P, N = alloy_contract::private::Ethereum> {
+    pub struct IRewardClaimInstance<P, N = alloy_contract::private::Ethereum> {
         address: alloy_sol_types::private::Address,
         provider: P,
-        _network_transport: ::core::marker::PhantomData<(N, T)>,
+        _network: ::core::marker::PhantomData<N>,
     }
     #[automatically_derived]
-    impl<T, P, N> ::core::fmt::Debug for IRewardClaimInstance<T, P, N> {
+    impl<P, N> ::core::fmt::Debug for IRewardClaimInstance<P, N> {
         #[inline]
         fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
             f.debug_tuple("IRewardClaimInstance").field(&self.address).finish()
@@ -265,22 +266,21 @@ See the [module-level documentation](self) for all the available methods.*/
     /// Instantiation and getters/setters.
     #[automatically_derived]
     impl<
-        T: alloy_contract::private::Transport + ::core::clone::Clone,
-        P: alloy_contract::private::Provider<T, N>,
+        P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
-    > IRewardClaimInstance<T, P, N> {
+    > IRewardClaimInstance<P, N> {
         /**Creates a new wrapper around an on-chain [`IRewardClaim`](self) contract instance.
 
 See the [wrapper's documentation](`IRewardClaimInstance`) for more details.*/
         #[inline]
         pub const fn new(
             address: alloy_sol_types::private::Address,
-            provider: P,
+            __provider: P,
         ) -> Self {
             Self {
                 address,
-                provider,
-                _network_transport: ::core::marker::PhantomData,
+                provider: __provider,
+                _network: ::core::marker::PhantomData,
             }
         }
         /// Returns a reference to the address.
@@ -304,24 +304,23 @@ See the [wrapper's documentation](`IRewardClaimInstance`) for more details.*/
             &self.provider
         }
     }
-    impl<T, P: ::core::clone::Clone, N> IRewardClaimInstance<T, &P, N> {
+    impl<P: ::core::clone::Clone, N> IRewardClaimInstance<&P, N> {
         /// Clones the provider and returns a new instance with the cloned provider.
         #[inline]
-        pub fn with_cloned_provider(self) -> IRewardClaimInstance<T, P, N> {
+        pub fn with_cloned_provider(self) -> IRewardClaimInstance<P, N> {
             IRewardClaimInstance {
                 address: self.address,
                 provider: ::core::clone::Clone::clone(&self.provider),
-                _network_transport: ::core::marker::PhantomData,
+                _network: ::core::marker::PhantomData,
             }
         }
     }
     /// Function calls.
     #[automatically_derived]
     impl<
-        T: alloy_contract::private::Transport + ::core::clone::Clone,
-        P: alloy_contract::private::Provider<T, N>,
+        P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
-    > IRewardClaimInstance<T, P, N> {
+    > IRewardClaimInstance<P, N> {
         /// Creates a new call builder using this contract instance's provider and address.
         ///
         /// Note that the call can be any function call, not just those defined in this
@@ -329,24 +328,23 @@ See the [wrapper's documentation](`IRewardClaimInstance`) for more details.*/
         pub fn call_builder<C: alloy_sol_types::SolCall>(
             &self,
             call: &C,
-        ) -> alloy_contract::SolCallBuilder<T, &P, C, N> {
+        ) -> alloy_contract::SolCallBuilder<&P, C, N> {
             alloy_contract::SolCallBuilder::new_sol(&self.provider, &self.address, call)
         }
     }
     /// Event filters.
     #[automatically_derived]
     impl<
-        T: alloy_contract::private::Transport + ::core::clone::Clone,
-        P: alloy_contract::private::Provider<T, N>,
+        P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
-    > IRewardClaimInstance<T, P, N> {
+    > IRewardClaimInstance<P, N> {
         /// Creates a new event filter using this contract instance's provider and address.
         ///
         /// Note that the type can be any event, not just those defined in this contract.
         /// Prefer using the other methods for building type-safe event filters.
         pub fn event_filter<E: alloy_sol_types::SolEvent>(
             &self,
-        ) -> alloy_contract::Event<T, &P, E, N> {
+        ) -> alloy_contract::Event<&P, E, N> {
             alloy_contract::Event::new_sol(&self.provider, &self.address)
         }
     }
@@ -449,6 +447,7 @@ pub mod RewardClaimPrototypeMock {
     pub static DEPLOYED_BYTECODE: alloy_sol_types::private::Bytes = alloy_sol_types::private::Bytes::from_static(
         b"`\x80`@R4\x80\x15a\0\x0FW__\xFD[P`\x046\x10a\0)W_5`\xE0\x1C\x80cS\xE0\x9B\xB6\x14a\0-W[__\xFD[a\0@a\0;6`\x04a\x01BV[a\0TV[`@Q\x90\x15\x15\x81R` \x01`@Q\x80\x91\x03\x90\xF3[_\x84a\0o\x85\x85a\0j6\x87\x90\x03\x87\x01\x87a\x01\xDBV[a\0yV[\x14\x95\x94PPPPPV[\x80Q_\x90_a\0\x87\x85a\0\xF6V[\x90P_[`\xA0\x81\x10\x15a\0\xECW_\x83\x82`\xA0\x81\x10a\0\xA7Wa\0\xA7a\x02bV[` \x02\x01Q\x90P`\x01\x88\x83\x1C\x16\x80\x15a\0\xD0W`@\x80Q\x83\x81R` \x81\x01\x86\x90R \x93Pa\0\xE2V[`@\x80Q\x85\x81R` \x81\x01\x84\x90R \x93P[PP`\x01\x01a\0\x8BV[P\x95\x94PPPPPV[__\x82`@Q` \x01a\x01\x0B\x91\x81R` \x01\x90V[`@\x80Q\x80\x83\x03`\x1F\x19\x01\x81R\x82\x82R\x80Q` \x91\x82\x01 \x81\x84\x01R\x81Q\x80\x84\x03\x82\x01\x81R\x92\x82\x01\x90\x91R\x81Q\x91\x01 \x93\x92PPPV[____\x84\x86\x03a\x14`\x81\x12\x15a\x01WW__\xFD[\x855\x94P` \x86\x015`\x01`\x01`\xA0\x1B\x03\x81\x16\x81\x14a\x01tW__\xFD[\x93P`@\x86\x015\x92Pa\x14\0`_\x19\x82\x01\x12\x15a\x01\x8FW__\xFD[P\x92\x95\x91\x94P\x92``\x01\x91PV[cNH{q`\xE0\x1B_R`A`\x04R`$_\xFD[`@Qa\x14\0\x81\x01g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x82\x82\x10\x17\x15a\x01\xD5Wa\x01\xD5a\x01\x9DV[`@R\x90V[_a\x14\0\x82\x84\x03\x12\x80\x15a\x01\xEDW__\xFD[P`@Q` \x81\x01g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x82\x82\x10\x17\x15a\x02\x11Wa\x02\x11a\x01\x9DV[`@R`\x1F\x83\x01\x84\x13a\x02\"W__\xFD[a\x02*a\x01\xB1V[\x80a\x14\0\x85\x01\x86\x81\x11\x15a\x02<W__\xFD[\x85[\x81\x81\x10\x15a\x02VW\x805\x84R` \x93\x84\x01\x93\x01a\x02>V[PP\x82RP\x93\x92PPPV[cNH{q`\xE0\x1B_R`2`\x04R`$_\xFD\xFE\xA1dsolcC\0\x08\x1C\0\n",
     );
+    #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `InvalidProofLength()` and selector `0x4dc5f6a4`.
 ```solidity
@@ -456,7 +455,7 @@ error InvalidProofLength();
 ```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
-    pub struct InvalidProofLength {}
+    pub struct InvalidProofLength;
     #[allow(
         non_camel_case_types,
         non_snake_case,
@@ -466,6 +465,7 @@ error InvalidProofLength();
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
+        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = ();
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = ();
@@ -491,7 +491,7 @@ error InvalidProofLength();
         #[doc(hidden)]
         impl ::core::convert::From<UnderlyingRustTuple<'_>> for InvalidProofLength {
             fn from(tuple: UnderlyingRustTuple<'_>) -> Self {
-                Self {}
+                Self
             }
         }
         #[automatically_derived]
@@ -512,8 +512,16 @@ error InvalidProofLength();
             fn tokenize(&self) -> Self::Token<'_> {
                 ()
             }
+            #[inline]
+            fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
+                <Self::Parameters<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                    .map(Self::new)
+            }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Debug, PartialEq, Eq, Hash)]
     /**Function with signature `verifyAuthRootCommitment(bytes32,address,uint256,(bytes32[160]))` and selector `0x53e09bb6`.
 ```solidity
@@ -531,6 +539,7 @@ function verifyAuthRootCommitment(bytes32 commitment, address account, uint256 a
         #[allow(missing_docs)]
         pub proof: <IRewardClaim::LifetimeRewardsProof as alloy::sol_types::SolType>::RustType,
     }
+    #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`verifyAuthRootCommitment(bytes32,address,uint256,(bytes32[160]))`](verifyAuthRootCommitmentCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
@@ -549,6 +558,7 @@ function verifyAuthRootCommitment(bytes32 commitment, address account, uint256 a
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
+            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (
                 alloy::sol_types::sol_data::FixedBytes<32>,
                 alloy::sol_types::sol_data::Address,
@@ -597,6 +607,7 @@ function verifyAuthRootCommitment(bytes32 commitment, address account, uint256 a
         }
         {
             #[doc(hidden)]
+            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Bool,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (bool,);
@@ -639,7 +650,7 @@ function verifyAuthRootCommitment(bytes32 commitment, address account, uint256 a
             type Token<'a> = <Self::Parameters<
                 'a,
             > as alloy_sol_types::SolType>::Token<'a>;
-            type Return = verifyAuthRootCommitmentReturn;
+            type Return = bool;
             type ReturnTuple<'a> = (alloy::sol_types::sol_data::Bool,);
             type ReturnToken<'a> = <Self::ReturnTuple<
                 'a,
@@ -670,18 +681,39 @@ function verifyAuthRootCommitment(bytes32 commitment, address account, uint256 a
                 )
             }
             #[inline]
-            fn abi_decode_returns(
+            fn tokenize_returns(ret: &Self::Return) -> Self::ReturnToken<'_> {
+                (
+                    <alloy::sol_types::sol_data::Bool as alloy_sol_types::SolType>::tokenize(
+                        ret,
+                    ),
+                )
+            }
+            #[inline]
+            fn abi_decode_returns(data: &[u8]) -> alloy_sol_types::Result<Self::Return> {
+                <Self::ReturnTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence(data)
+                    .map(|r| {
+                        let r: verifyAuthRootCommitmentReturn = r.into();
+                        r._0
+                    })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
                 data: &[u8],
-                validate: bool,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence(data, validate)
-                    .map(Into::into)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                    .map(|r| {
+                        let r: verifyAuthRootCommitmentReturn = r.into();
+                        r._0
+                    })
             }
         }
     };
     ///Container for all the [`RewardClaimPrototypeMock`](self) function calls.
+    #[derive(serde::Serialize, serde::Deserialize)]
     #[derive()]
     pub enum RewardClaimPrototypeMockCalls {
         #[allow(missing_docs)]
@@ -723,20 +755,16 @@ function verifyAuthRootCommitment(bytes32 commitment, address account, uint256 a
         fn abi_decode_raw(
             selector: [u8; 4],
             data: &[u8],
-            validate: bool,
         ) -> alloy_sol_types::Result<Self> {
             static DECODE_SHIMS: &[fn(
                 &[u8],
-                bool,
             ) -> alloy_sol_types::Result<RewardClaimPrototypeMockCalls>] = &[
                 {
                     fn verifyAuthRootCommitment(
                         data: &[u8],
-                        validate: bool,
                     ) -> alloy_sol_types::Result<RewardClaimPrototypeMockCalls> {
                         <verifyAuthRootCommitmentCall as alloy_sol_types::SolCall>::abi_decode_raw(
                                 data,
-                                validate,
                             )
                             .map(RewardClaimPrototypeMockCalls::verifyAuthRootCommitment)
                     }
@@ -751,7 +779,38 @@ function verifyAuthRootCommitment(bytes32 commitment, address account, uint256 a
                     ),
                 );
             };
-            DECODE_SHIMS[idx](data, validate)
+            DECODE_SHIMS[idx](data)
+        }
+        #[inline]
+        #[allow(non_snake_case)]
+        fn abi_decode_raw_validate(
+            selector: [u8; 4],
+            data: &[u8],
+        ) -> alloy_sol_types::Result<Self> {
+            static DECODE_VALIDATE_SHIMS: &[fn(
+                &[u8],
+            ) -> alloy_sol_types::Result<RewardClaimPrototypeMockCalls>] = &[
+                {
+                    fn verifyAuthRootCommitment(
+                        data: &[u8],
+                    ) -> alloy_sol_types::Result<RewardClaimPrototypeMockCalls> {
+                        <verifyAuthRootCommitmentCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
+                                data,
+                            )
+                            .map(RewardClaimPrototypeMockCalls::verifyAuthRootCommitment)
+                    }
+                    verifyAuthRootCommitment
+                },
+            ];
+            let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
+                return Err(
+                    alloy_sol_types::Error::unknown_selector(
+                        <Self as alloy_sol_types::SolInterface>::NAME,
+                        selector,
+                    ),
+                );
+            };
+            DECODE_VALIDATE_SHIMS[idx](data)
         }
         #[inline]
         fn abi_encoded_size(&self) -> usize {
@@ -776,6 +835,7 @@ function verifyAuthRootCommitment(bytes32 commitment, address account, uint256 a
         }
     }
     ///Container for all the [`RewardClaimPrototypeMock`](self) custom errors.
+    #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum RewardClaimPrototypeMockErrors {
         #[allow(missing_docs)]
@@ -817,20 +877,16 @@ function verifyAuthRootCommitment(bytes32 commitment, address account, uint256 a
         fn abi_decode_raw(
             selector: [u8; 4],
             data: &[u8],
-            validate: bool,
         ) -> alloy_sol_types::Result<Self> {
             static DECODE_SHIMS: &[fn(
                 &[u8],
-                bool,
             ) -> alloy_sol_types::Result<RewardClaimPrototypeMockErrors>] = &[
                 {
                     fn InvalidProofLength(
                         data: &[u8],
-                        validate: bool,
                     ) -> alloy_sol_types::Result<RewardClaimPrototypeMockErrors> {
                         <InvalidProofLength as alloy_sol_types::SolError>::abi_decode_raw(
                                 data,
-                                validate,
                             )
                             .map(RewardClaimPrototypeMockErrors::InvalidProofLength)
                     }
@@ -845,7 +901,38 @@ function verifyAuthRootCommitment(bytes32 commitment, address account, uint256 a
                     ),
                 );
             };
-            DECODE_SHIMS[idx](data, validate)
+            DECODE_SHIMS[idx](data)
+        }
+        #[inline]
+        #[allow(non_snake_case)]
+        fn abi_decode_raw_validate(
+            selector: [u8; 4],
+            data: &[u8],
+        ) -> alloy_sol_types::Result<Self> {
+            static DECODE_VALIDATE_SHIMS: &[fn(
+                &[u8],
+            ) -> alloy_sol_types::Result<RewardClaimPrototypeMockErrors>] = &[
+                {
+                    fn InvalidProofLength(
+                        data: &[u8],
+                    ) -> alloy_sol_types::Result<RewardClaimPrototypeMockErrors> {
+                        <InvalidProofLength as alloy_sol_types::SolError>::abi_decode_raw_validate(
+                                data,
+                            )
+                            .map(RewardClaimPrototypeMockErrors::InvalidProofLength)
+                    }
+                    InvalidProofLength
+                },
+            ];
+            let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
+                return Err(
+                    alloy_sol_types::Error::unknown_selector(
+                        <Self as alloy_sol_types::SolInterface>::NAME,
+                        selector,
+                    ),
+                );
+            };
+            DECODE_VALIDATE_SHIMS[idx](data)
         }
         #[inline]
         fn abi_encoded_size(&self) -> usize {
@@ -875,14 +962,13 @@ function verifyAuthRootCommitment(bytes32 commitment, address account, uint256 a
 See the [wrapper's documentation](`RewardClaimPrototypeMockInstance`) for more details.*/
     #[inline]
     pub const fn new<
-        T: alloy_contract::private::Transport + ::core::clone::Clone,
-        P: alloy_contract::private::Provider<T, N>,
+        P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
     >(
         address: alloy_sol_types::private::Address,
-        provider: P,
-    ) -> RewardClaimPrototypeMockInstance<T, P, N> {
-        RewardClaimPrototypeMockInstance::<T, P, N>::new(address, provider)
+        __provider: P,
+    ) -> RewardClaimPrototypeMockInstance<P, N> {
+        RewardClaimPrototypeMockInstance::<P, N>::new(address, __provider)
     }
     /**Deploys this contract using the given `provider` and constructor arguments, if any.
 
@@ -891,15 +977,14 @@ Returns a new instance of the contract, if the deployment was successful.
 For more fine-grained control over the deployment process, use [`deploy_builder`] instead.*/
     #[inline]
     pub fn deploy<
-        T: alloy_contract::private::Transport + ::core::clone::Clone,
-        P: alloy_contract::private::Provider<T, N>,
+        P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
     >(
-        provider: P,
+        __provider: P,
     ) -> impl ::core::future::Future<
-        Output = alloy_contract::Result<RewardClaimPrototypeMockInstance<T, P, N>>,
+        Output = alloy_contract::Result<RewardClaimPrototypeMockInstance<P, N>>,
     > {
-        RewardClaimPrototypeMockInstance::<T, P, N>::deploy(provider)
+        RewardClaimPrototypeMockInstance::<P, N>::deploy(__provider)
     }
     /**Creates a `RawCallBuilder` for deploying this contract using the given `provider`
 and constructor arguments, if any.
@@ -908,11 +993,10 @@ This is a simple wrapper around creating a `RawCallBuilder` with the data set to
 the bytecode concatenated with the constructor's ABI-encoded arguments.*/
     #[inline]
     pub fn deploy_builder<
-        T: alloy_contract::private::Transport + ::core::clone::Clone,
-        P: alloy_contract::private::Provider<T, N>,
+        P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
-    >(provider: P) -> alloy_contract::RawCallBuilder<T, P, N> {
-        RewardClaimPrototypeMockInstance::<T, P, N>::deploy_builder(provider)
+    >(__provider: P) -> alloy_contract::RawCallBuilder<P, N> {
+        RewardClaimPrototypeMockInstance::<P, N>::deploy_builder(__provider)
     }
     /**A [`RewardClaimPrototypeMock`](self) instance.
 
@@ -927,16 +1011,15 @@ be used to deploy a new instance of the contract.
 See the [module-level documentation](self) for all the available methods.*/
     #[derive(Clone)]
     pub struct RewardClaimPrototypeMockInstance<
-        T,
         P,
         N = alloy_contract::private::Ethereum,
     > {
         address: alloy_sol_types::private::Address,
         provider: P,
-        _network_transport: ::core::marker::PhantomData<(N, T)>,
+        _network: ::core::marker::PhantomData<N>,
     }
     #[automatically_derived]
-    impl<T, P, N> ::core::fmt::Debug for RewardClaimPrototypeMockInstance<T, P, N> {
+    impl<P, N> ::core::fmt::Debug for RewardClaimPrototypeMockInstance<P, N> {
         #[inline]
         fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
             f.debug_tuple("RewardClaimPrototypeMockInstance")
@@ -947,22 +1030,21 @@ See the [module-level documentation](self) for all the available methods.*/
     /// Instantiation and getters/setters.
     #[automatically_derived]
     impl<
-        T: alloy_contract::private::Transport + ::core::clone::Clone,
-        P: alloy_contract::private::Provider<T, N>,
+        P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
-    > RewardClaimPrototypeMockInstance<T, P, N> {
+    > RewardClaimPrototypeMockInstance<P, N> {
         /**Creates a new wrapper around an on-chain [`RewardClaimPrototypeMock`](self) contract instance.
 
 See the [wrapper's documentation](`RewardClaimPrototypeMockInstance`) for more details.*/
         #[inline]
         pub const fn new(
             address: alloy_sol_types::private::Address,
-            provider: P,
+            __provider: P,
         ) -> Self {
             Self {
                 address,
-                provider,
-                _network_transport: ::core::marker::PhantomData,
+                provider: __provider,
+                _network: ::core::marker::PhantomData,
             }
         }
         /**Deploys this contract using the given `provider` and constructor arguments, if any.
@@ -972,9 +1054,9 @@ Returns a new instance of the contract, if the deployment was successful.
 For more fine-grained control over the deployment process, use [`deploy_builder`] instead.*/
         #[inline]
         pub async fn deploy(
-            provider: P,
-        ) -> alloy_contract::Result<RewardClaimPrototypeMockInstance<T, P, N>> {
-            let call_builder = Self::deploy_builder(provider);
+            __provider: P,
+        ) -> alloy_contract::Result<RewardClaimPrototypeMockInstance<P, N>> {
+            let call_builder = Self::deploy_builder(__provider);
             let contract_address = call_builder.deploy().await?;
             Ok(Self::new(contract_address, call_builder.provider))
         }
@@ -984,9 +1066,9 @@ and constructor arguments, if any.
 This is a simple wrapper around creating a `RawCallBuilder` with the data set to
 the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         #[inline]
-        pub fn deploy_builder(provider: P) -> alloy_contract::RawCallBuilder<T, P, N> {
+        pub fn deploy_builder(__provider: P) -> alloy_contract::RawCallBuilder<P, N> {
             alloy_contract::RawCallBuilder::new_raw_deploy(
-                provider,
+                __provider,
                 ::core::clone::Clone::clone(&BYTECODE),
             )
         }
@@ -1011,24 +1093,23 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
             &self.provider
         }
     }
-    impl<T, P: ::core::clone::Clone, N> RewardClaimPrototypeMockInstance<T, &P, N> {
+    impl<P: ::core::clone::Clone, N> RewardClaimPrototypeMockInstance<&P, N> {
         /// Clones the provider and returns a new instance with the cloned provider.
         #[inline]
-        pub fn with_cloned_provider(self) -> RewardClaimPrototypeMockInstance<T, P, N> {
+        pub fn with_cloned_provider(self) -> RewardClaimPrototypeMockInstance<P, N> {
             RewardClaimPrototypeMockInstance {
                 address: self.address,
                 provider: ::core::clone::Clone::clone(&self.provider),
-                _network_transport: ::core::marker::PhantomData,
+                _network: ::core::marker::PhantomData,
             }
         }
     }
     /// Function calls.
     #[automatically_derived]
     impl<
-        T: alloy_contract::private::Transport + ::core::clone::Clone,
-        P: alloy_contract::private::Provider<T, N>,
+        P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
-    > RewardClaimPrototypeMockInstance<T, P, N> {
+    > RewardClaimPrototypeMockInstance<P, N> {
         /// Creates a new call builder using this contract instance's provider and address.
         ///
         /// Note that the call can be any function call, not just those defined in this
@@ -1036,7 +1117,7 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         pub fn call_builder<C: alloy_sol_types::SolCall>(
             &self,
             call: &C,
-        ) -> alloy_contract::SolCallBuilder<T, &P, C, N> {
+        ) -> alloy_contract::SolCallBuilder<&P, C, N> {
             alloy_contract::SolCallBuilder::new_sol(&self.provider, &self.address, call)
         }
         ///Creates a new call builder for the [`verifyAuthRootCommitment`] function.
@@ -1046,7 +1127,7 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
             account: alloy::sol_types::private::Address,
             amount: alloy::sol_types::private::primitives::aliases::U256,
             proof: <IRewardClaim::LifetimeRewardsProof as alloy::sol_types::SolType>::RustType,
-        ) -> alloy_contract::SolCallBuilder<T, &P, verifyAuthRootCommitmentCall, N> {
+        ) -> alloy_contract::SolCallBuilder<&P, verifyAuthRootCommitmentCall, N> {
             self.call_builder(
                 &verifyAuthRootCommitmentCall {
                     commitment,
@@ -1060,17 +1141,16 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
     /// Event filters.
     #[automatically_derived]
     impl<
-        T: alloy_contract::private::Transport + ::core::clone::Clone,
-        P: alloy_contract::private::Provider<T, N>,
+        P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
-    > RewardClaimPrototypeMockInstance<T, P, N> {
+    > RewardClaimPrototypeMockInstance<P, N> {
         /// Creates a new event filter using this contract instance's provider and address.
         ///
         /// Note that the type can be any event, not just those defined in this contract.
         /// Prefer using the other methods for building type-safe event filters.
         pub fn event_filter<E: alloy_sol_types::SolEvent>(
             &self,
-        ) -> alloy_contract::Event<T, &P, E, N> {
+        ) -> alloy_contract::Event<&P, E, N> {
             alloy_contract::Event::new_sol(&self.provider, &self.address)
         }
     }

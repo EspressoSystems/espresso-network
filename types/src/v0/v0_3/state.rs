@@ -1,6 +1,6 @@
 use alloy::primitives::{Address, U256};
 use derive_more::{derive::AddAssign, Add, Display, From, Into, Mul, Sub};
-use jf_merkle_tree::{
+use jf_merkle_tree_compat::{
     prelude::{Sha3Digest, Sha3Node},
     universal_merkle_tree::UniversalMerkleTree,
     MerkleTreeScheme, UniversalMerkleTreeScheme,

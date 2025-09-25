@@ -20,10 +20,11 @@ contract RewardClaimPrototypeMock {
      * @param proof The merkle proof for the claim
      * @return true if the claim is valid
      */
-    function verifyAuthRootCommitment(
+    function verifyRewardClaim(
         bytes32 commitment,
         address account,
-        uint256 amount,
+        uint256 lifetimeRewards,
+        bytes authData,
         IRewardClaim.LifetimeRewardsProof calldata proof
     ) external pure returns (bool) {
         return RewardMerkleTreeVerifier.computeRoot(account, amount, proof) == commitment;

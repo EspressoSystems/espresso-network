@@ -12,7 +12,7 @@ use espresso_types::{
     v0_4::REWARD_MERKLE_TREE_V2_HEIGHT,
 };
 use hotshot_contract_adapter::sol_types::{LifetimeRewardsProofSol, RewardClaimPrototypeMock};
-use jf_merkle_tree::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
+use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
 use rand::Rng as _;
 
 #[test_log::test(tokio::test)]
@@ -63,7 +63,7 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
     let wallet = EthereumWallet::from(signer);
     let provider = ProviderBuilder::new()
         .wallet(wallet)
-        .on_http(anvil.endpoint_url());
+        .connect_http(anvil.endpoint_url());
 
     // Deploy contract
     let contract = RewardClaimPrototypeMock::deploy(&provider).await?;
@@ -107,7 +107,7 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
         .call()
         .await?;
 
-    assert!(is_valid._0, "Membership proof invalid");
+    assert!(is_valid, "Membership proof invalid");
 
     let is_valid = contract
         .verifyAuthRootCommitment(
@@ -119,7 +119,7 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
         .call()
         .await?;
 
-    assert!(!is_valid._0, "Membership proof should be invalid");
+    assert!(!is_valid, "Membership proof should be invalid");
 
     let gas_used = contract
         .verifyAuthRootCommitment(root, account_sol, amount, proof_sol.siblings)

@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 
 use bincode::Options;
 use cdn_broker::reexports::{
-    connection::protocols::{Quic, Tcp, TcpTls},
+    connection::protocols::{Quic, Tcp},
     crypto::signature::{Serializable, SignatureScheme},
     def::{hook::NoMessageHook, ConnectionDef, RunDef, Topic as TopicTrait},
     discovery::{Embedded, Redis},
@@ -100,7 +100,6 @@ impl<T: SignatureKey> Serializable for WrappedSignatureKey<T> {
 pub struct ProductionDef<TYPES: NodeType>(PhantomData<TYPES>);
 impl<TYPES: NodeType> RunDef for ProductionDef<TYPES> {
     type User = UserDefQuic<TYPES>;
-    type User2 = UserDefTcp<TYPES>;
     type Broker = BrokerDef<TYPES>;
     type DiscoveryClientType = Redis;
     type Topic = Topic;
@@ -113,15 +112,6 @@ pub struct UserDefQuic<TYPES: NodeType>(PhantomData<TYPES>);
 impl<TYPES: NodeType> ConnectionDef for UserDefQuic<TYPES> {
     type Scheme = WrappedSignatureKey<TYPES::SignatureKey>;
     type Protocol = Quic;
-    type MessageHook = NoMessageHook;
-}
-
-/// The (parallel, TCP) user definition for the Push CDN.
-/// Uses the TCP+TLS protocol and untrusted middleware.
-pub struct UserDefTcp<TYPES: NodeType>(PhantomData<TYPES>);
-impl<TYPES: NodeType> ConnectionDef for UserDefTcp<TYPES> {
-    type Scheme = WrappedSignatureKey<TYPES::SignatureKey>;
-    type Protocol = TcpTls;
     type MessageHook = NoMessageHook;
 }
 
@@ -150,7 +140,6 @@ impl<TYPES: NodeType> ConnectionDef for ClientDef<TYPES> {
 pub struct TestingDef<TYPES: NodeType>(PhantomData<TYPES>);
 impl<TYPES: NodeType> RunDef for TestingDef<TYPES> {
     type User = UserDefQuic<TYPES>;
-    type User2 = UserDefTcp<TYPES>;
     type Broker = BrokerDef<TYPES>;
     type DiscoveryClientType = Embedded;
     type Topic = Topic;

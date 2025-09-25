@@ -20,7 +20,7 @@ use futures::stream::BoxStream;
 use hotshot::types::Event;
 use hotshot_events_service::events_source::{EventFilterSet, EventsSource, StartupInfo};
 use hotshot_types::{data::VidShare, event::LegacyEvent, traits::node_implementation::NodeType};
-use jf_merkle_tree::prelude::MerkleProof;
+use jf_merkle_tree_compat::prelude::MerkleProof;
 use tagged_base64::TaggedBase64;
 
 use super::VersionedDataSource;
