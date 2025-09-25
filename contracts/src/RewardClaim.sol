@@ -40,14 +40,12 @@ contract RewardClaim is IRewardClaim, Initializable, OwnableUpgradeable, UUPSUpg
         emit Upgrade(newImplementation);
     }
 
-    function claimRewards(
-        uint256 lifetimeRewards,
-        LifetimeRewardsProof calldata proof,
-        bytes32[7] calldata authRootInputs
-    ) external {
+    function claimRewards(uint256 lifetimeRewards, bytes memory authData) external {
         require(lifetimeRewards != 0, InvalidRewardAmount());
         require(claimedRewards[msg.sender] < lifetimeRewards, AlreadyClaimed());
 
+        (LifetimeRewardsProof memory proof, bytes32[7] memory authRootInputs) =
+            abi.decode(authData, (LifetimeRewardsProof, bytes32[7]));
         require(_verifyAuthRoot(lifetimeRewards, proof, authRootInputs), InvalidAuthRoot());
 
         uint256 availableToClaim = lifetimeRewards - claimedRewards[msg.sender];
@@ -68,8 +66,8 @@ contract RewardClaim is IRewardClaim, Initializable, OwnableUpgradeable, UUPSUpg
 
     function _verifyAuthRoot(
         uint256 lifetimeRewards,
-        LifetimeRewardsProof calldata proof,
-        bytes32[7] calldata authRootInputs
+        LifetimeRewardsProof memory proof,
+        bytes32[7] memory authRootInputs
     ) internal view virtual returns (bool) {
         bytes32 rewardCommitment =
             RewardMerkleTreeVerifier.computeRoot(msg.sender, lifetimeRewards, proof);
