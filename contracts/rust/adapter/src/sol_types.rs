@@ -46,7 +46,6 @@ pub use crate::bindings::{
     plonk_verifier_v2::PlonkVerifierV2,
     plonk_verifier_v3::PlonkVerifierV3,
     reward_claim::RewardClaim,
-    reward_claim_prototype_mock::RewardClaimPrototypeMock,
     safe_exit_timelock::SafeExitTimelock,
     stake_table::StakeTable,
     stake_table_v2::{

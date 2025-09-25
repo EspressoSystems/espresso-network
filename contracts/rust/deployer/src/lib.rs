@@ -971,13 +971,10 @@ pub async fn deploy_reward_claim_proxy(
         reward_claim_proxy.getVersion().call().await?,
         (1, 0, 0).into()
     );
-    assert_eq!(reward_claim_proxy.owner().call().await?._0, owner);
+    assert_eq!(reward_claim_proxy.owner().call().await?, owner);
+    assert_eq!(reward_claim_proxy.espToken().call().await?, esp_token_addr);
     assert_eq!(
-        reward_claim_proxy.espToken().call().await?._0,
-        esp_token_addr
-    );
-    assert_eq!(
-        reward_claim_proxy.lightClient().call().await?._0,
+        reward_claim_proxy.lightClient().call().await?,
         light_client_addr
     );
 
