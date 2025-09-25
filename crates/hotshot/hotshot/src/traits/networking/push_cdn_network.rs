@@ -56,6 +56,9 @@ use tracing::error;
 
 use super::NetworkError;
 
+#[cfg(feature = "hotshot-testing")]
+use crate::NodeType;
+
 /// CDN-specific metrics
 #[derive(Clone)]
 pub struct CdnMetricsValue {
@@ -282,7 +285,7 @@ impl<K: SignatureKey + 'static> PushCdnNetwork<K> {
 }
 
 #[cfg(feature = "hotshot-testing")]
-impl<TYPES: crate::NodeType> TestableNetworkingImplementation<TYPES>
+impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES>
     for PushCdnNetwork<TYPES::SignatureKey>
 {
     /// Generate n Push CDN clients, a marshal, and two brokers (that run locally).
