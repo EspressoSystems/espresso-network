@@ -306,6 +306,8 @@ opt-level = 0
 opt-level = 0
 [profile.test.package.hotshot-state-prover]
 opt-level = 3
+[profile.test.package.jf-merkle-tree]
+opt-level = 3
 
 # Geared towards building our docker images for local development
 # - Compile quickly

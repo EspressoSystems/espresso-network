@@ -2,7 +2,7 @@ use std::{borrow::Borrow, collections::HashSet, iter::once, str::FromStr};
 
 use alloy::primitives::{
     utils::{parse_units, ParseUnits},
-    Address, B256, U256,
+    Address, FixedBytes, B256, U256,
 };
 use anyhow::{bail, ensure, Context};
 use ark_serialize::{
@@ -80,8 +80,8 @@ impl FromStringOrInteger for RewardAmount {
     }
 
     fn from_string(s: String) -> anyhow::Result<Self> {
-        // For backwards compatibility, we have an ad hoc parser for WEI amounts represented as hex
-        // strings.
+        // For backwards compatibility, we have an ad hoc parser for WEI amounts
+        // represented as hex strings.
         if let Some(s) = s.strip_prefix("0x") {
             return Ok(Self(s.parse()?));
         }
@@ -438,7 +438,7 @@ impl TryInto<LifetimeRewardsProofSol> for RewardAccountProofV2 {
             bail!("Invalid proof: unexpected path length: {}", path.len());
         };
 
-        let siblings: Vec<B256> = proof
+        let siblings: [FixedBytes<32>; REWARD_MERKLE_TREE_V2_HEIGHT] = proof
             .proof
             .iter()
             .enumerate()
@@ -476,7 +476,10 @@ impl TryInto<LifetimeRewardsProofSol> for RewardAccountProofV2 {
                 }
                 _ => None,
             })
-            .collect();
+            .collect::<Vec<FixedBytes<32>>>().try_into().map_err(|err: Vec<_>| {
+                panic!("Invalid proof length: {:?}, this should never happen", err.len())
+            })
+            .unwrap();
 
         Ok(LifetimeRewardsProofSol { siblings })
     }
@@ -1012,8 +1015,8 @@ pub mod tests {
 
     #[test]
     fn test_reward_calculation_sanity_checks() {
-        // This test verifies that the total rewards distributed match the block reward.
-        // Due to rounding effects in distribution, the validator may receive a slightly higher amount
+        // This test verifies that the total rewards distributed match the block reward. Due to
+        // rounding effects in distribution, the validator may receive a slightly higher amount
         // because the remainder after delegator distribution is sent to the validator.
 
         let validator = Validator::mock();

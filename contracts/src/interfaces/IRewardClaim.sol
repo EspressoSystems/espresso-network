@@ -4,7 +4,7 @@ pragma solidity ^0.8.28;
 interface IRewardClaim {
     /// @notice Proof for rewards merkle tree. Obtained from Espresso query service API.
     struct LifetimeRewardsProof {
-        bytes32[] siblings;
+        bytes32[160] siblings;
     }
 
     /// @notice User claimed rewards

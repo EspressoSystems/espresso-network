@@ -22,7 +22,7 @@ async fn test_single_key_tree() -> Result<()> {
 
 #[test_log::test(tokio::test)]
 async fn test_large_tree() -> Result<()> {
-    test_tree_helper(1000).await
+    test_tree_helper(10_000).await
 }
 
 /// Tests that we can verify a proof in the solidity verifier

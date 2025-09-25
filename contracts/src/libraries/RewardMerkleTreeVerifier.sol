@@ -58,7 +58,7 @@ library RewardMerkleTreeVerifier {
         // TODO: benchmark gas cost by averaging gas cost over many different trees with
         //       realistic size.
         // TODO: optimize gas cost
-        bytes32[] memory siblings = proof.siblings;
+        bytes32[160] memory siblings = proof.siblings;
         require(siblings.length == TREE_DEPTH, InvalidProofLength());
 
         bytes32 currentHash = _hashLeaf(value);
