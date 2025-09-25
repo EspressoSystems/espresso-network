@@ -41,12 +41,6 @@ clippy *args:
     # check entire workspace (including sequencer-sqlite crate) with embedded-db feature
     cargo clippy --workspace --features "embedded-db testing" --all-targets {{args}}
 
-check-individually:
-  @for pkg in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name'); do \
-    echo "Checking $pkg"; \
-    cargo check -p $pkg || exit 1; \
-  done
-
 build profile="dev" features="":
     cargo build --profile {{profile}} {{features}}
     cargo build --profile {{profile}} -p sequencer-sqlite {{features}}
