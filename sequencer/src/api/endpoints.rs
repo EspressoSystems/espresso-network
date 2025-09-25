@@ -672,22 +672,42 @@ where
     let toml = toml::from_str::<toml::Value>(include_str!("../../api/submit.toml"))?;
     let mut api = Api::<S, Error, ApiVer>::new(toml)?;
 
-    api.with_version(api_ver).at("submit", |req, state| {
-        async move {
-            let tx = req
-                .body_auto::<Transaction, ApiVer>(ApiVer::instance())
-                .map_err(Error::from_request_error)?;
+    api.with_version(api_ver)
+        .at("submit", |req, state| {
+            async move {
+                let tx = req
+                    .body_auto::<Transaction, ApiVer>(ApiVer::instance())
+                    .map_err(Error::from_request_error)?;
 
-            let hash = tx.commit();
-            tracing::warn!("BlockBuilder: API submitting transaction: {:?}", tx);
-            state
-                .read(|state| state.submit(tx).boxed())
-                .await
-                .map_err(|err| Error::internal(err.to_string()))?;
-            Ok(hash)
-        }
-        .boxed()
-    })?;
+                let hash = tx.commit();
+                tracing::warn!("BlockBuilder: API submitting transaction: {:?}", tx);
+                state
+                    .read(|state| state.submit(vec![tx]).boxed())
+                    .await
+                    .map_err(|err| Error::internal(err.to_string()))?;
+                Ok(hash)
+            }
+            .boxed()
+        })?
+        .at("batch", |req, state| {
+            async move {
+                let txns = req
+                    .body_auto::<Vec<Transaction>, ApiVer>(ApiVer::instance())
+                    .map_err(Error::from_request_error)?;
+
+                let hashes = txns.iter().map(|tx| tx.commit()).collect::<Vec<_>>();
+                tracing::warn!(
+                    "BlockBuilder: API submitting batch transactions: {:?}",
+                    txns
+                );
+                state
+                    .read(|state| state.submit(txns).boxed())
+                    .await
+                    .map_err(|err| Error::internal(err.to_string()))?;
+                Ok(hashes)
+            }
+            .boxed()
+        })?;
 
     Ok(api)
 }

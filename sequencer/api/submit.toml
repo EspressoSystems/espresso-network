@@ -2,3 +2,8 @@
 PATH = ["/submit"]
 METHOD = "POST"
 DOC = "Submit transaction to HotShot handle."
+
+[route.batch]
+PATH = ["/batch"]
+METHOD = "POST"
+DOC = "Batch submit transactions to HotShot handle."

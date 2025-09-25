@@ -177,7 +177,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> EventsSo
 impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, V: Versions, P: SequencerPersistence>
     SubmitDataSource<N, P> for StorageState<N, P, D, V>
 {
-    async fn submit(&self, tx: Transaction) -> anyhow::Result<()> {
+    async fn submit(&self, tx: Vec<Transaction>) -> anyhow::Result<()> {
         self.as_ref().submit(tx).await
     }
 }
@@ -451,7 +451,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> SubmitDataSource<N, P>
     for ApiState<N, P, V>
 {
-    async fn submit(&self, tx: Transaction) -> anyhow::Result<()> {
+    async fn submit(&self, txns: Vec<Transaction>) -> anyhow::Result<()> {
         let handle = self.consensus().await;
 
         let consensus_read_lock = handle.read().await;
@@ -474,18 +474,25 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> SubmitDa
         };
 
         let max_block_size: u64 = cf.max_block_size.into();
-        let txn_size = tx.payload().len() as u64;
+        for tx in &txns {
+            let txn_size = tx.payload().len() as u64;
 
-        // reject transaction bigger than block size
-        if txn_size > max_block_size {
-            bail!("transaction size ({txn_size}) is greater than max_block_size ({max_block_size})")
+            // reject transaction bigger than block size
+            if txn_size > max_block_size {
+                bail!(
+                    "transaction size ({txn_size}) is greater than max_block_size \
+                     ({max_block_size})"
+                )
+            }
         }
 
-        tracing::warn!(
-            "BlockBuilder: Calling consensus_read_lock.submit_transaction for tx: {:?}",
-            tx
-        );
-        consensus_read_lock.submit_transaction(tx).await?;
+        for tx in txns {
+            tracing::warn!(
+                "BlockBuilder: Calling consensus_read_lock.submit_transaction for tx: {:?}",
+                tx
+            );
+            consensus_read_lock.submit_transaction(tx).await?;
+        }
         Ok(())
     }
 }

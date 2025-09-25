@@ -101,7 +101,7 @@ pub fn provider<V: Versions>(
 }
 
 pub(crate) trait SubmitDataSource<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> {
-    fn submit(&self, tx: Transaction) -> impl Send + Future<Output = anyhow::Result<()>>;
+    fn submit(&self, tx: Vec<Transaction>) -> impl Send + Future<Output = anyhow::Result<()>>;
 }
 
 pub(crate) trait HotShotConfigDataSource {

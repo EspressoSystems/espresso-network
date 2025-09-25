@@ -441,11 +441,12 @@ async fn submit_transactions<ApiVer: StaticVersionType>(
         txns.push(tx);
         hashes.push(hash);
 
-        let randomized_batch_size = if opt.use_public_mempool() {
-            1
-        } else {
-            rng.gen_range(opt.min_batch_size..=opt.max_batch_size)
-        };
+        //let randomized_batch_size = if opt.use_public_mempool() {
+        //    1
+        //} else {
+        //    rng.gen_range(opt.min_batch_size..=opt.max_batch_size)
+        //};
+        let randomized_batch_size = rng.gen_range(opt.min_batch_size..=opt.max_batch_size);
         let txns_batch_count = txns.len() as u64;
         if randomized_batch_size <= txns_batch_count {
             let base_url = opt.submit_url(&mut rng);
