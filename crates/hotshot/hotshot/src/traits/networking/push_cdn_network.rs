@@ -55,7 +55,6 @@ use tokio::{spawn, time::sleep};
 use tracing::error;
 
 use super::NetworkError;
-
 #[cfg(feature = "hotshot-testing")]
 use crate::NodeType;
 
