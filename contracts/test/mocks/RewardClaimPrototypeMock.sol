@@ -24,7 +24,7 @@ contract RewardClaimPrototypeMock {
         bytes32 root,
         address account,
         uint256 amount,
-        IRewardClaim.LifetimeRewardsProof calldata proof
+        bytes32[160] calldata proof
     ) external pure returns (bool) {
         return RewardMerkleTreeVerifier.verifyMembership(root, account, amount, proof);
     }
