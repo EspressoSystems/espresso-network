@@ -843,7 +843,7 @@ pub async fn distribute_block_reward(
     // we need to recompute the previously distributed rewards
     // using the fixed block reward and the number of blocks in which fixed reward was distributed
     if version >= DrbAndHeaderUpgradeVersion::version()
-        && parent_header.version() == EpochVersion::version()
+        && parent_header.version() < DrbAndHeaderUpgradeVersion::version()
     {
         ensure!(
             instance_state.epoch_start_block != 0,
