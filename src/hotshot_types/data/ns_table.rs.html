@@ -22,7 +22,7 @@
 <a href=#22 id=22 data-nosnippet>22</a>    <span class="kw">if </span>bytes.len() &lt; NUM_NSS_BYTE_LEN
 <a href=#23 id=23 data-nosnippet>23</a>        || !(bytes.len() - NUM_NSS_BYTE_LEN).is_multiple_of(NS_OFFSET_BYTE_LEN + NS_ID_BYTE_LEN)
 <a href=#24 id=24 data-nosnippet>24</a>    {
-<a href=#25 id=25 data-nosnippet>25</a>        <span class="macro">tracing::warn!</span>(
+<a href=#25 id=25 data-nosnippet>25</a>        <span class="macro">tracing::info!</span>(
 <a href=#26 id=26 data-nosnippet>26</a>            <span class="string">"Failed to parse the metadata as namespace table. Use a single namespace table \
 <a href=#27 id=27 data-nosnippet>27</a>             instead."
 <a href=#28 id=28 data-nosnippet>28</a>        </span>);
@@ -34,7 +34,7 @@
 <a href=#34 id=34 data-nosnippet>34</a>            / NS_ID_BYTE_LEN.saturating_add(NS_OFFSET_BYTE_LEN)
 <a href=#35 id=35 data-nosnippet>35</a>        || (num_entries == <span class="number">0 </span>&amp;&amp; payload_byte_len != <span class="number">0</span>)
 <a href=#36 id=36 data-nosnippet>36</a>    {
-<a href=#37 id=37 data-nosnippet>37</a>        <span class="macro">tracing::warn!</span>(
+<a href=#37 id=37 data-nosnippet>37</a>        <span class="macro">tracing::info!</span>(
 <a href=#38 id=38 data-nosnippet>38</a>            <span class="string">"Failed to parse the metadata as namespace table. Use a single namespace table \
 <a href=#39 id=39 data-nosnippet>39</a>             instead."
 <a href=#40 id=40 data-nosnippet>40</a>        </span>);
@@ -53,7 +53,7 @@
 <a href=#53 id=53 data-nosnippet>53</a>                .unwrap(),
 <a href=#54 id=54 data-nosnippet>54</a>        ) <span class="kw">as </span>usize;
 <a href=#55 id=55 data-nosnippet>55</a>        <span class="kw">if </span>r &lt; l || r &gt; payload_byte_len {
-<a href=#56 id=56 data-nosnippet>56</a>            <span class="macro">tracing::warn!</span>(
+<a href=#56 id=56 data-nosnippet>56</a>            <span class="macro">tracing::info!</span>(
 <a href=#57 id=57 data-nosnippet>57</a>                <span class="string">"Failed to parse the metadata as namespace table. Use a single namespace table \
 <a href=#58 id=58 data-nosnippet>58</a>                 instead."
 <a href=#59 id=59 data-nosnippet>59</a>            </span>);
@@ -63,7 +63,7 @@
 <a href=#63 id=63 data-nosnippet>63</a>        l = r;
 <a href=#64 id=64 data-nosnippet>64</a>    }
 <a href=#65 id=65 data-nosnippet>65</a>    <span class="kw">if </span>l != payload_byte_len {
-<a href=#66 id=66 data-nosnippet>66</a>        <span class="macro">tracing::warn!</span>(
+<a href=#66 id=66 data-nosnippet>66</a>        <span class="macro">tracing::info!</span>(
 <a href=#67 id=67 data-nosnippet>67</a>            <span class="string">"Failed to parse the metadata as namespace table. Use a single namespace table \
 <a href=#68 id=68 data-nosnippet>68</a>             instead."
 <a href=#69 id=69 data-nosnippet>69</a>        </span>);
