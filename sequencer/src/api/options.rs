@@ -39,6 +39,7 @@ use super::{
     ApiState, StorageState,
 };
 use crate::{
+    api::endpoints::RewardMerkleTreeVersion,
     catchup::CatchupStorage,
     context::{SequencerContext, TaskList},
     persistence,
@@ -427,7 +428,7 @@ impl Options {
                 SequencerApiVersion,
                 RewardMerkleTreeV1,
                 { RewardMerkleTreeV1::ARITY },
-            >(ver)
+            >(ver, RewardMerkleTreeVersion::V1)
             .context("failed to define reward-state api")
         })?;
 
@@ -438,7 +439,7 @@ impl Options {
                 SequencerApiVersion,
                 RewardMerkleTreeV2,
                 { RewardMerkleTreeV2::ARITY },
-            >(ver)
+            >(ver, RewardMerkleTreeVersion::V2)
             .context("failed to define reward-state api")
         })?;
 
