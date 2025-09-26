@@ -405,6 +405,7 @@ where
                 let handles = self.handles.clone();
                 let fut = async move {
                     tracing::info!("Starting node {id} back up");
+                    node.network.wait_for_ready().await;
                     let handle = node.run_tasks().await;
 
                     // Create the node and add it to the state, so we can shut them
