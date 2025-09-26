@@ -245,7 +245,7 @@ async fn init_consensus(
                     known_nodes_with_stake_clone,
                     storage.clone(),
                     network.clone(),
-                    pub_keys[node_id].clone(),
+                    pub_keys[node_id],
                     config.epoch_height,
                 );
 
