@@ -978,14 +978,6 @@ pub async fn main_entry_point<
             .join(",")
     );
 
-    let all_nodes = if cfg!(feature = "fixed-leader-election") {
-        let mut vec = run_config.config.known_nodes_with_stake.clone();
-        vec.truncate(run_config.config.fixed_leader_for_gpuvid);
-        vec
-    } else {
-        run_config.config.known_nodes_with_stake.clone()
-    };
-
     info!("Initializing networking");
     let run =
         RUNDA::initialize_networking(run_config.clone(), validator_config, args.advertise_address)
