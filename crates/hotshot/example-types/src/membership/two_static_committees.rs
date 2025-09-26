@@ -81,7 +81,7 @@ where
 
     fn stake_table(&self, epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
         let epoch = epoch.expect("epochs cannot be disabled with TwoStakeTables");
-        if epoch != 0 && epoch % 2 == 0 {
+        if epoch != 0 && epoch.is_multiple_of(2) {
             self.quorum_1_members.clone()
         } else {
             self.quorum_2_members.clone()
@@ -90,7 +90,7 @@ where
 
     fn da_stake_table(&self, epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
         let epoch = epoch.expect("epochs cannot be disabled with TwoStakeTables");
-        if epoch != 0 && epoch % 2 == 0 {
+        if epoch != 0 && epoch.is_multiple_of(2) {
             self.da_1_members.clone()
         } else {
             self.da_2_members.clone()
