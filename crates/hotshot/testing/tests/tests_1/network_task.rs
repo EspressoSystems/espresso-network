@@ -66,7 +66,7 @@ async fn test_network_task() {
         all_nodes,
         storage.clone(),
         network.clone(),
-        public_key.clone(),
+        public_key,
         config.epoch_height,
     )));
     let coordinator =
@@ -246,7 +246,7 @@ async fn test_network_storage_fail() {
         all_nodes,
         storage.clone(),
         network.clone(),
-        public_key.clone(),
+        public_key,
         config.epoch_height,
     )));
     let coordinator =

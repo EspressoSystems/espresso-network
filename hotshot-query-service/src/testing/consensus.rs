@@ -197,7 +197,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
                                 known_nodes_with_stake_clone,
                                 hs_storage.clone(),
                                 network.clone(),
-                                pub_keys[node_id].clone(),
+                                pub_keys[node_id],
                                 config.epoch_height,
                             )));
 

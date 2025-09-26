@@ -14,7 +14,6 @@ use hotshot::{
 use hotshot_example_types::{
     block_types::TestTransaction,
     node_types::{TestTypes, TestVersions},
-    storage_types::TestStorage,
 };
 use hotshot_types::{
     data::ViewNumber,
@@ -22,21 +21,12 @@ use hotshot_types::{
     signature_key::BLSPubKey,
     traits::{
         network::{BroadcastDelay, ConnectedNetwork, TestableNetworkingImplementation, Topic},
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        node_implementation::{ConsensusTime, NodeType},
     },
 };
 use rand::{rngs::StdRng, RngCore, SeedableRng};
-use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 use tracing::{instrument, trace};
-
-#[derive(Clone, Debug, Deserialize, Serialize, Hash, PartialEq, Eq)]
-pub struct TestImpl {}
-
-impl NodeImplementation<TestTypes> for TestImpl {
-    type Network = MemoryNetwork<<TestTypes as NodeType>::SignatureKey>;
-    type Storage = TestStorage<TestTypes>;
-}
 
 /// fake Eq
 /// we can't compare the votetokentype for equality, so we can't
