@@ -3,8 +3,10 @@ use std::{collections::BTreeMap, sync::Arc};
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
 use either::Either;
+use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
+    benchmarking::{LeaderViewStats, ReplicaViewStats},
     consensus::OuterConsensus,
     epoch_membership::EpochMembershipCoordinator,
     traits::node_implementation::{ConsensusTime, NodeType},
@@ -14,80 +16,9 @@ use hotshot_utils::{
     anytrace::{Error, Level, Result},
     line_info, warn,
 };
-use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::events::HotShotEvent;
-
-#[derive(Serialize, Deserialize)]
-pub struct LeaderViewStats<TYPES: NodeType> {
-    pub view: TYPES::View,
-    pub prev_proposal_send: Option<i128>,
-    pub proposal_send: Option<i128>,
-    pub vote_recv: Option<i128>,
-    pub da_proposal_send: Option<i128>,
-    pub builder_start: Option<i128>,
-    pub block_built: Option<i128>,
-    pub vid_disperse_send: Option<i128>,
-    pub timeout_certificate_formed: Option<i128>,
-    pub qc_formed: Option<i128>,
-    pub da_cert_send: Option<i128>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct ReplicaViewStats<TYPES: NodeType> {
-    pub view: TYPES::View,
-    pub view_change: Option<i128>,
-    pub proposal_recv: Option<i128>,
-    pub vote_send: Option<i128>,
-    pub timeout_vote_send: Option<i128>,
-    pub da_proposal_received: Option<i128>,
-    pub da_proposal_validated: Option<i128>,
-    pub da_certificate_recv: Option<i128>,
-    pub proposal_prelim_validated: Option<i128>,
-    pub proposal_validated: Option<i128>,
-    pub timeout_triggered: Option<i128>,
-    pub vid_share_validated: Option<i128>,
-    pub vid_share_recv: Option<i128>,
-}
-
-impl<TYPES: NodeType> LeaderViewStats<TYPES> {
-    fn new(view: TYPES::View) -> Self {
-        Self {
-            view,
-            prev_proposal_send: None,
-            proposal_send: None,
-            vote_recv: None,
-            da_proposal_send: None,
-            builder_start: None,
-            block_built: None,
-            vid_disperse_send: None,
-            timeout_certificate_formed: None,
-            qc_formed: None,
-            da_cert_send: None,
-        }
-    }
-}
-
-impl<TYPES: NodeType> ReplicaViewStats<TYPES> {
-    fn new(view: TYPES::View) -> Self {
-        Self {
-            view,
-            view_change: None,
-            proposal_recv: None,
-            vote_send: None,
-            timeout_vote_send: None,
-            da_proposal_received: None,
-            da_proposal_validated: None,
-            da_certificate_recv: None,
-            proposal_prelim_validated: None,
-            proposal_validated: None,
-            timeout_triggered: None,
-            vid_share_validated: None,
-            vid_share_recv: None,
-        }
-    }
-}
 
 pub struct StatsTaskState<TYPES: NodeType> {
     view: TYPES::View,
@@ -95,8 +26,9 @@ pub struct StatsTaskState<TYPES: NodeType> {
     public_key: TYPES::SignatureKey,
     consensus: OuterConsensus<TYPES>,
     membership_coordinator: EpochMembershipCoordinator<TYPES>,
-    leader_stats: BTreeMap<TYPES::View, LeaderViewStats<TYPES>>,
-    replica_stats: BTreeMap<TYPES::View, ReplicaViewStats<TYPES>>,
+    leader_stats: BTreeMap<TYPES::View, LeaderViewStats<TYPES::View>>,
+    replica_stats: BTreeMap<TYPES::View, ReplicaViewStats<TYPES::View>>,
+    orchestrator_client: OrchestratorClient,
 }
 
 impl<TYPES: NodeType> StatsTaskState<TYPES> {
@@ -106,6 +38,7 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
         public_key: TYPES::SignatureKey,
         consensus: OuterConsensus<TYPES>,
         membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        orchestrator_client: OrchestratorClient,
     ) -> Self {
         Self {
             view,
@@ -115,14 +48,15 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
             membership_coordinator,
             leader_stats: BTreeMap::new(),
             replica_stats: BTreeMap::new(),
+            orchestrator_client,
         }
     }
-    fn leader_entry(&mut self, view: TYPES::View) -> &mut LeaderViewStats<TYPES> {
+    fn leader_entry(&mut self, view: TYPES::View) -> &mut LeaderViewStats<TYPES::View> {
         self.leader_stats
             .entry(view)
             .or_insert_with(|| LeaderViewStats::new(view))
     }
-    fn replica_entry(&mut self, view: TYPES::View) -> &mut ReplicaViewStats<TYPES> {
+    fn replica_entry(&mut self, view: TYPES::View) -> &mut ReplicaViewStats<TYPES::View> {
         self.replica_stats
             .entry(view)
             .or_insert_with(|| ReplicaViewStats::new(view))

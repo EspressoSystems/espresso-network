@@ -38,12 +38,12 @@ dyn-clone = "1.0.17"
 either = { workspace = true }
 futures = { workspace = true, features = ["alloc"] }
 hotshot-utils = { workspace = true }
+jf-advz = { workspace = true }
 jf-crhf = { workspace = true }
 jf-pcs = { workspace = true }
 jf-rescue = { workspace = true }
 jf-signature = { workspace = true, features = ["bls", "schnorr"] }
 jf-utils = { workspace = true }
-jf-advz = { workspace = true }
 lazy_static = { workspace = true }
 libp2p-identity = { workspace = true }
 memoize = { workspace = true }
