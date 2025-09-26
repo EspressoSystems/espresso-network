@@ -12,6 +12,7 @@ import (
 
 	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
 	common "github.com/EspressoSystems/espresso-network/sdks/go/types/common"
+	"github.com/coder/websocket"
 )
 
 var _ QueryService = (*Client)(nil)
@@ -41,6 +42,9 @@ var ErrEphemeral = errors.New("retryable")
 // Transaction submission or fetch error due to invalid information or any failure that cannot be
 // resolved by a retry.
 var ErrPermanent = errors.New("not retryable")
+
+// Transaction submission or fetch error due to timeout.
+var ErrTimeout = fmt.Errorf("%w: timeout", ErrEphemeral)
 
 func (c *Client) FetchVidCommonByHeight(ctx context.Context, blockHeight uint64) (common.VidCommon, error) {
 	var res types.VidCommonQueryData
@@ -175,6 +179,51 @@ func (c *Client) SubmitTransaction(ctx context.Context, tx types.Transaction) (*
 	}
 
 	return &hash, nil
+}
+
+type WsStream[S any] struct {
+	conn *websocket.Conn
+}
+
+func (s *WsStream[S]) NextRaw(ctx context.Context) (json.RawMessage, error) {
+	typ, msg, err := s.conn.Read(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
+	}
+	if typ != websocket.MessageText {
+		return nil, fmt.Errorf("%w: %v", ErrPermanent, err)
+	}
+	return msg, nil
+}
+
+func (s *WsStream[S]) Next(ctx context.Context) (*S, error) {
+	typ, msg, err := s.conn.Read(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
+	}
+	if typ != websocket.MessageText {
+		return nil, fmt.Errorf("%w: %v", ErrPermanent, err)
+	}
+	var data S
+	if err := json.Unmarshal(msg, &data); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrPermanent, err)
+	}
+	return &data, nil
+}
+
+func (s *WsStream[S]) Close() error {
+	return s.conn.Close(websocket.StatusNormalClosure, "")
+}
+
+func (c *Client) StreamTransactions(ctx context.Context, height uint64) (Stream[types.TransactionQueryData], error) {
+	opts := &websocket.DialOptions{}
+	opts.HTTPClient = c.client
+	url := c.baseUrl + fmt.Sprintf("availability/stream/transactions/%d", height)
+	conn, _, err := websocket.Dial(ctx, url, opts)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
+	}
+	return &WsStream[types.TransactionQueryData]{conn: conn}, nil
 }
 
 type NamespaceResponse struct {
