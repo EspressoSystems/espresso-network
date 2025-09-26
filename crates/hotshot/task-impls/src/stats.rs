@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
@@ -9,7 +12,11 @@ use hotshot_types::{
     benchmarking::{LeaderViewStats, ReplicaViewStats},
     consensus::OuterConsensus,
     epoch_membership::EpochMembershipCoordinator,
-    traits::node_implementation::{ConsensusTime, NodeType},
+    traits::{
+        block_contents::BlockHeader,
+        node_implementation::{ConsensusTime, NodeType},
+        BlockPayload,
+    },
     vote::HasViewNumber,
 };
 use hotshot_utils::{
@@ -28,6 +35,10 @@ pub struct StatsTaskState<TYPES: NodeType> {
     membership_coordinator: EpochMembershipCoordinator<TYPES>,
     leader_stats: BTreeMap<TYPES::View, LeaderViewStats<TYPES::View>>,
     replica_stats: BTreeMap<TYPES::View, ReplicaViewStats<TYPES::View>>,
+    latencies_by_view: BTreeMap<TYPES::View, i128>,
+    sizes_by_view: BTreeMap<TYPES::View, i128>,
+    epoch_start_times: BTreeMap<TYPES::Epoch, i128>,
+    timeouts: BTreeSet<TYPES::View>,
     orchestrator_client: OrchestratorClient,
 }
 
@@ -48,6 +59,10 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
             membership_coordinator,
             leader_stats: BTreeMap::new(),
             replica_stats: BTreeMap::new(),
+            latencies_by_view: BTreeMap::new(),
+            sizes_by_view: BTreeMap::new(),
+            epoch_start_times: BTreeMap::new(),
+            timeouts: BTreeSet::new(),
             orchestrator_client,
         }
     }
@@ -64,6 +79,9 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
     fn garbage_collect(&mut self, view: TYPES::View) {
         self.leader_stats = self.leader_stats.split_off(&view);
         self.replica_stats = self.replica_stats.split_off(&view);
+        self.latencies_by_view = self.latencies_by_view.split_off(&view);
+        self.sizes_by_view = self.sizes_by_view.split_off(&view);
+        self.timeouts = BTreeSet::new();
     }
 
     fn dump_stats(&self) -> Result<()> {
@@ -96,6 +114,29 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
                 .map_err(|e| warn!("Failed to convert replica stats to string: {}", e))?
         );
         Ok(())
+    }
+
+    fn log_basic_stats(&self, now: i128, epoch: &TYPES::Epoch) {
+        let num_views = self.latencies_by_view.len();
+        let total_latency = self.latencies_by_view.values().sum::<i128>();
+        let average_latency = total_latency / num_views as i128;
+        tracing::warn!("Average latency: {}ms", average_latency);
+        tracing::warn!(
+            "Number of timeouts in epoch: {}, is {}",
+            epoch,
+            self.timeouts.len()
+        );
+        let total_size = self.sizes_by_view.values().sum::<i128>();
+        if total_size == 0 {
+            // Either no TXNs or we are not in the DA committee and don't know block sizes
+            return;
+        }
+        if let Some(epoch_start_time) = self.epoch_start_times.get(epoch) {
+            let elapsed_time = now - epoch_start_time;
+            // multiply by 1000 to convert to seconds
+            let throughput = (total_size / elapsed_time) * 1000;
+            tracing::warn!("Throughput: {} bytes/s", throughput);
+        }
     }
 }
 
@@ -174,6 +215,9 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
             HotShotEvent::QuorumProposalValidated(proposal, _) => {
                 self.replica_entry(proposal.data.view_number())
                     .proposal_validated = Some(now);
+                self.replica_entry(proposal.data.view_number())
+                    .proposal_timestamp =
+                    Some(proposal.data.block_header().timestamp_millis() as i128);
             },
             HotShotEvent::DaProposalSend(proposal, _) => {
                 self.leader_entry(proposal.data.view_number())
@@ -222,6 +266,7 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                 if self.view < *view {
                     self.view = *view;
                 }
+                let prev_epoch = self.epoch;
                 let mut new_epoch = false;
                 if self.epoch < *epoch {
                     self.epoch = *epoch;
@@ -232,6 +277,9 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                 }
 
                 if new_epoch {
+                    if let Some(prev_epoch) = prev_epoch {
+                        self.log_basic_stats(now, &prev_epoch);
+                    }
                     let _ = self.dump_stats();
                     self.garbage_collect(*view - 1);
                 }
@@ -246,8 +294,9 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                     self.leader_entry(*view).builder_start = Some(now);
                 }
             },
-            HotShotEvent::Timeout(..) => {
-                self.replica_entry(self.view).timeout_triggered = Some(now);
+            HotShotEvent::Timeout(view, _) => {
+                self.replica_entry(*view).timeout_triggered = Some(now);
+                self.timeouts.insert(*view);
             },
             HotShotEvent::TransactionsRecv(_txns) => {
                 // TODO: Track transactions by time
@@ -267,6 +316,23 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
             HotShotEvent::QuorumProposalPreliminarilyValidated(proposal) => {
                 self.replica_entry(proposal.data.view_number())
                     .proposal_prelim_validated = Some(now);
+            },
+            HotShotEvent::LeavesDecided(leaves) => {
+                for leaf in leaves {
+                    if leaf.view_number() == TYPES::View::genesis() {
+                        continue;
+                    }
+                    let view = leaf.view_number();
+                    let timestamp = leaf.block_header().timestamp_millis() as i128;
+                    let now_millis = now / 1_000_000;
+                    let latency = now_millis - timestamp;
+                    tracing::debug!("View {} Latency: {}ms", view, latency);
+                    self.latencies_by_view.insert(view, latency);
+                    self.sizes_by_view.insert(
+                        view,
+                        leaf.block_payload().map(|p| p.txn_bytes()).unwrap_or(0) as i128,
+                    );
+                }
             },
             _ => {},
         }
