@@ -891,7 +891,7 @@ mod test {
         // Check the consistency of every block/leaf pair.
         for i in 0..height {
             // Limit the number of blocks we validate in order to
-            // speeed up the tests.
+            // speed up the tests.
             if ![0, 1, height / 2, height - 1].contains(&i) {
                 continue;
             }
@@ -1229,7 +1229,7 @@ mod test {
         // Check the consistency of every block/leaf pair.
         for i in 0..height {
             // Limit the number of blocks we validate in order to
-            // speeed up the tests.
+            // speed up the tests.
             if ![0, 1, height / 2, height - 1].contains(&i) {
                 continue;
             }
