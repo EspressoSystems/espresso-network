@@ -173,7 +173,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
     /// If 5 < 0
     #[allow(clippy::too_many_lines)]
     pub async fn new(
-        config: NetworkNodeConfig<T>,
+        config: NetworkNodeConfig,
         dht_persistent_storage: D,
         consensus_key_to_pid_map: Arc<Mutex<BiMap<T::SignatureKey, PeerId>>>,
     ) -> Result<Self, NetworkError> {
@@ -186,10 +186,9 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
         // Get the `PeerId` from the `KeyPair`
         let peer_id = PeerId::from(keypair.public());
 
-        // Generate the transport from the keypair, membership, and auth message
+        // Generate the transport from the keypair and auth message
         let transport: BoxedTransport = gen_transport::<T>(
             keypair.clone(),
-            config.membership.clone(),
             config.auth_message.clone(),
             Arc::clone(&consensus_key_to_pid_map),
         )
