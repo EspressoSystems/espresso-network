@@ -83,6 +83,8 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         uint256 totalPendingWithdrawal;
         uint256 numPendingWithdrawals;
         uint256 numActiveDelegations;
+        uint256 totalStake;
+        uint256 totalValidatorStake;
     }
 
     // Actors can be validators and/or delegators
@@ -417,6 +419,8 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
 
     function trackDelegate(address actorAddr, address val, uint256 amount) internal {
         testState.totalDelegated += amount;
+        testState.totalStake += amount; // Add this
+        testState.totalValidatorStake += amount; // Add this
         actors.trackedFunds[actorAddr].delegated += amount;
         validators.staked.add(val);
 
@@ -431,6 +435,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
     function trackUndelegate(address actorAddr, address val, uint256 amount) internal {
         testState.totalDelegated -= amount;
         testState.totalPendingWithdrawal += amount;
+        testState.totalValidatorStake -= amount;
         actors.trackedFunds[actorAddr].delegated -= amount;
         actors.trackedFunds[actorAddr].pendingWithdrawal += amount;
         addPendingWithdrawal(actorAddr, val);
@@ -461,12 +466,16 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         validators.active.remove(val);
         validators.exited.add(val);
         validators.staked.remove(val);
+
+        (uint256 validatorDelegatedAmount,) = stakeTable.validators(val);
+        testState.totalValidatorStake -= validatorDelegatedAmount;
     }
 
     function trackClaimWithdrawal(address actorAddr, address val, uint256 undelegationAmount)
         internal
     {
         testState.totalPendingWithdrawal -= undelegationAmount;
+        testState.totalStake -= undelegationAmount;
         actors.trackedFunds[actorAddr].pendingWithdrawal -= undelegationAmount;
         delegators.pendingWithdrawals[val].remove(actorAddr);
         if (delegators.pendingWithdrawals[val].length() == 0) {
@@ -479,6 +488,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         internal
     {
         testState.totalDelegated -= delegatedAmount;
+        testState.totalStake -= delegatedAmount;
         actors.trackedFunds[actorAddr].delegated -= delegatedAmount;
         trackRemoveDelegation(val, actorAddr);
     }
@@ -555,6 +565,14 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
 
     function getTestState() external view returns (TestState memory) {
         return testState;
+    }
+
+    function getTotalStake() external view returns (uint256) {
+        return testState.totalStake;
+    }
+
+    function getTotalValidatorStake() external view returns (uint256) {
+        return testState.totalValidatorStake;
     }
 
     function getTotalSuccesses() external view returns (uint256) {
@@ -732,6 +750,12 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         // Verify no pending withdrawals remain
         require(testState.totalPendingWithdrawal == 0, "No pending withdrawals should remain");
         require(testState.totalDelegated == 0, "No delegations should remain");
+
+        require(testState.totalStake == 0, "Total stake should be zero after full withdrawal");
+        require(
+            testState.totalValidatorStake == 0,
+            "Total validator stake should be zero after full withdrawal"
+        );
     }
 
     /// @dev Assert sum of delegated amounts to a validator equals validator.delegatedAmount
@@ -756,5 +780,18 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
                 validatorDelegatedAmount == sumOfDelegations, "Validator delegatedAmount mismatch"
             );
         }
+    }
+
+    /// @dev Assert that contract's totalStake and totalValidatorStake match our tracking
+    function assertTotalStakeInvariants() public view {
+        require(
+            stakeTable.totalStake() == testState.totalStake,
+            "Contract totalStake does not match tracked totalStake"
+        );
+
+        require(
+            stakeTable.totalValidatorStake() == testState.totalValidatorStake,
+            "Contract totalValidatorStake does not match tracked totalValidatorStake"
+        );
     }
 }
