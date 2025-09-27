@@ -14,7 +14,6 @@ proc-macro2 = "1"
 # proc macro stuff
 quote = "1"
 syn = { version = "2", features = ["full", "extra-traits"] }
-workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [lints]
 workspace = true

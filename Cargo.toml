@@ -126,7 +126,7 @@ futures = "0.3"
 hex = "0.4"
 indexmap = { version = "2", features = ["serde"] }
 lazy_static = "1"
-libp2p-identity = "0.2"
+libp2p-identity = { version = "0.2", features = ["ed25519", "serde"] }
 libp2p-swarm-derive = { version = "0.35" }
 memoize = { version = "0.4", features = ["full"] }
 multiaddr = { version = "0.18" }

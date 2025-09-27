@@ -18,7 +18,6 @@ thiserror = { workspace = true }
 tide-disco = { workspace = true }
 toml = { workspace = true }
 vbs = { workspace = true }
-workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [lints]
 workspace = true
