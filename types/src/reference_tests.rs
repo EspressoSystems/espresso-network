@@ -57,13 +57,12 @@ use vbs::{
 };
 
 use crate::{
-    active_validator_set_from_l1_events,
     v0_1::{self, ADVZNsProof},
     v0_2,
     v0_3::{EventKey, StakeTableEvent},
-    ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
-    NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload, SeqTypes, StakeTableHash,
-    Transaction, ValidatedState,
+    validator_set_from_l1_events, ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header,
+    L1BlockInfo, NamespaceId, NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload,
+    SeqTypes, StakeTableHash, Transaction, ValidatedState,
 };
 
 type V1Serializer = vbs::Serializer<StaticVersion<0, 1>>;
@@ -215,9 +214,10 @@ fn reference_stake_table_hash() -> StakeTableHash {
     let events: Vec<(EventKey, StakeTableEvent)> = serde_json::from_str(&events_json).unwrap();
 
     // Reconstruct stake table from events
-    let (_, hash) =
-        active_validator_set_from_l1_events(events.into_iter().map(|(_, e)| e)).unwrap();
-    hash
+    validator_set_from_l1_events(events.into_iter().map(|(_, e)| e))
+        .unwrap()
+        .stake_table_hash
+        .unwrap()
 }
 
 const REFERENCE_FEE_INFO_COMMITMENT: &str = "FEE_INFO~xCCeTjJClBtwtOUrnAmT65LNTQGceuyjSJHUFfX6VRXR";

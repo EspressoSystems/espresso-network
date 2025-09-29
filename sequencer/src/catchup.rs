@@ -557,7 +557,6 @@ pub(crate) trait CatchupStorage: Sync {
         }
     }
 }
-
 impl CatchupStorage for hotshot_query_service::data_source::MetricsDataSource {}
 
 impl<T, S> CatchupStorage for hotshot_query_service::data_source::ExtensibleDataSource<T, S>

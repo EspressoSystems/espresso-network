@@ -8,15 +8,17 @@ use std::{
     time::Instant,
 };
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, bail, Context};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent, StakeTableEventLegacy},
-    Leaf, Leaf2, NetworkConfig, Payload, SeqTypes, StakeTableHash, ValidatorMap,
+    v0_3::{
+        EventKey, IndexedStake, RewardAmount, StakeTableEvent, StakeTableEventLegacy, Validator,
+    },
+    Leaf, Leaf2, NetworkConfig, Payload, PubKey, SeqTypes, StakeTableHash, ValidatorMap,
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
@@ -1962,6 +1964,68 @@ impl MembershipPersistence for Persistence {
                 events,
             ))
         }
+    }
+
+    async fn store_all_validators(
+        &self,
+        epoch: EpochNumber,
+        all_validators: ValidatorMap,
+    ) -> anyhow::Result<()> {
+        let inner = self.inner.read().await;
+        let dir_path = inner.stake_table_dir_path();
+        let validators_dir = dir_path.join("validators");
+
+        // Ensure validators directory exists
+        fs::create_dir_all(&validators_dir)
+            .with_context(|| format!("Failed to create validators dir: {validators_dir:?}"))?;
+
+        // Path = validators/epoch_<number>.json
+        let file_path = validators_dir.join(format!("epoch_{epoch}.json"));
+
+        let file = File::create(&file_path)
+            .with_context(|| format!("Failed to create validator file: {file_path:?}"))?;
+        let writer = BufWriter::new(file);
+
+        serde_json::to_writer_pretty(writer, &all_validators)
+            .with_context(|| format!("Failed to serialize validators for epoch {epoch}"))?;
+
+        Ok(())
+    }
+
+    async fn load_all_validators(
+        &self,
+        epoch: EpochNumber,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
+        let inner = self.inner.read().await;
+        let dir_path = inner.stake_table_dir_path();
+        let validators_dir = dir_path.join("validators");
+        let file_path = validators_dir.join(format!("epoch_{epoch}.json"));
+
+        if !file_path.exists() {
+            bail!("Validator file not found for epoch {epoch}");
+        }
+
+        let file = File::open(&file_path)
+            .with_context(|| format!("Failed to open validator file: {file_path:?}"))?;
+        let reader = BufReader::new(file);
+
+        let map: ValidatorMap = serde_json::from_reader(reader).with_context(|| {
+            format!("Failed to deserialize validators at {file_path:?}. epoch = {epoch}")
+        })?;
+
+        let mut values: Vec<Validator<PubKey>> = map.into_values().collect();
+        values.sort_by_key(|v| v.account);
+
+        let start = offset as usize;
+        let end = (start + limit as usize).min(values.len());
+
+        if start >= values.len() {
+            return Ok(vec![]);
+        }
+
+        Ok(values[start..end].to_vec())
     }
 }
 
