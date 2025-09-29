@@ -149,7 +149,7 @@ impl<TYPES: NodeType> OrchestratorState<TYPES> {
         let leader_results_csv_file = OpenOptions::new()
             .create(true)
             .append(true) // Open in append mode
-            .open(format!("scripts/benchmarks_results/Leader_results_{}.csv", result.node_index))
+            .open(format!("Leader_results_{}.csv", result.node_index))
             .unwrap();
         // Open a file for writing
         let mut wtr = Writer::from_writer(leader_results_csv_file);
@@ -161,7 +161,7 @@ impl<TYPES: NodeType> OrchestratorState<TYPES> {
         }
         let _ = wtr.flush();
         println!(
-            "Results successfully saved in scripts/benchmarks_results/leader_results_{}.csv",
+            "Results successfully saved in leader_results_{}.csv",
             result.node_index
         );
 
@@ -169,7 +169,7 @@ impl<TYPES: NodeType> OrchestratorState<TYPES> {
         let replica_results_csv_file = OpenOptions::new()
         .create(true)
         .append(true) // Open in append mode
-        .open(format!("scripts/benchmarks_results/replica_results_{}.csv", result.node_index))
+        .open(format!("replica_results_{}.csv", result.node_index))
         .unwrap();
         // Open a file for writing
         let mut wtr = Writer::from_writer(replica_results_csv_file);
@@ -185,7 +185,7 @@ impl<TYPES: NodeType> OrchestratorState<TYPES> {
         let latency_results_csv_file = OpenOptions::new()
             .create(true)
             .append(true) // Open in append mode
-            .open(format!("scripts/benchmarks_results/latency_results_{}.csv", result.node_index))
+            .open(format!("latency_results_{}.csv", result.node_index))
             .unwrap();
         let mut wtr = Writer::from_writer(latency_results_csv_file);
         let _ = wtr
@@ -197,14 +197,14 @@ impl<TYPES: NodeType> OrchestratorState<TYPES> {
         let sizes_results_csv_file = OpenOptions::new()
         .create(true)
         .append(true) // Open in append mode
-        .open(format!("scripts/benchmarks_results/sizes_results_{}.csv", result.node_index))
+        .open(format!("sizes_results_{}.csv", result.node_index))
         .unwrap();
         let mut wtr = Writer::from_writer(sizes_results_csv_file);
         let _ = wtr.serialize(result.sizes_by_view);
         let _ = wtr.flush();
 
         println!(
-            "Results successfully saved in scripts/benchmarks_results/replica_results_{}.csv",
+            "Results successfully saved in replica_results_{}.csv",
             result.node_index
         );
     }
