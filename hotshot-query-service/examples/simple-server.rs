@@ -269,6 +269,7 @@ async fn init_consensus(
                     ConsensusMetricsValue::new(&*data_source.populate_metrics()),
                     storage,
                     StorageMetricsValue::new(&*data_source.populate_metrics()),
+                    None,
                 )
                 .await
                 .unwrap()

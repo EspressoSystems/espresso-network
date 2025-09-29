@@ -51,6 +51,20 @@ pub struct BenchResults<V: ConsensusTime> {
     pub timeouts: BTreeSet<V>,
     pub total_time_millis: i128,
 }
+
+impl<V: ConsensusTime> Default for BenchResults<V> {
+    fn default() -> Self {
+        Self {
+            node_index: 0,
+            leader_view_stats: BTreeMap::new(),
+            replica_view_stats: BTreeMap::new(),
+            latencies_by_view: BTreeMap::new(),
+            sizes_by_view: BTreeMap::new(),
+            timeouts: BTreeSet::new(),
+            total_time_millis: 0,
+        }
+    }
+}
 // VALIDATOR
 
 #[derive(Parser, Debug, Clone)]

@@ -337,6 +337,7 @@ pub async fn create_test_handle<
                 ConsensusMetricsValue::default(),
                 storage,
                 StorageMetricsValue::default(),
+                None,
             )
             .await;
 

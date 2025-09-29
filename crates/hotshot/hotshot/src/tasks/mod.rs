@@ -364,6 +364,7 @@ where
             consensus_metrics,
             storage.clone(),
             storage_metrics,
+            None,
         )
         .await;
         let consensus_registry = ConsensusTaskRegistry::new();

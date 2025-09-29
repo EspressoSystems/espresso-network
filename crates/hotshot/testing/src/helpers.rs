@@ -147,6 +147,7 @@ pub async fn build_system_handle_from_launcher<
         ConsensusMetricsValue::default(),
         storage,
         StorageMetricsValue::default(),
+        None,
     )
     .await
     .expect("Could not init hotshot");

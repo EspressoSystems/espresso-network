@@ -348,11 +348,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 {
     async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
         StatsTaskState::<TYPES>::new(
+            handle.hotshot.id,
             handle.cur_view().await,
             handle.cur_epoch().await,
             handle.public_key().clone(),
             OuterConsensus::new(handle.hotshot.consensus()),
             handle.hotshot.membership_coordinator.clone(),
+            handle.hotshot.orchestrator_url.clone(),
         )
     }
 }

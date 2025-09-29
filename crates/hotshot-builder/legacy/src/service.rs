@@ -335,9 +335,9 @@ impl<Types: NodeType> GlobalState<Types> {
             .insert(state_id, response_msg);
 
         if let Some(previous_builder_state_entry) = previous_builder_state_entry {
-            tracing::warn!(
+            tracing::info!(
                 "block {id} overwrote previous block: {previous_builder_state_entry:?}. previous \
-                 cache entry: {previous_cache_entry.metadata:?}"
+                 cache entry: {previous_cache_entry:?}"
             );
         }
     }
