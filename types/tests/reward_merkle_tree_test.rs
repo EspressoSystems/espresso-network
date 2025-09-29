@@ -9,9 +9,9 @@ use anyhow::Result;
 use espresso_types::{
     v0::v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleTreeV2},
     v0_3::RewardAmount,
-    v0_4::REWARD_MERKLE_TREE_V2_HEIGHT,
+    v0_4::{RewardAccountQueryDataV2, REWARD_MERKLE_TREE_V2_HEIGHT},
 };
-use hotshot_contract_adapter::sol_types::{LifetimeRewardsProofSol, RewardClaimPrototypeMock};
+use hotshot_contract_adapter::sol_types::RewardClaimPrototypeMock;
 use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
 use rand::Rng as _;
 
@@ -29,22 +29,40 @@ async fn run_multiple_tests(num_keys: usize, iterations: usize) -> Result<()> {
     let mut gas_measurements = Vec::new();
 
     for i in 0..iterations {
-        println!("Running iteration {} of {} for {}-key tree", i + 1, iterations, num_keys);
+        println!(
+            "Running iteration {} of {} for {}-key tree",
+            i + 1,
+            iterations,
+            num_keys
+        );
         let gas_used = test_tree_helper(num_keys).await?;
         gas_measurements.push(gas_used as f64);
     }
 
     let mean = gas_measurements.iter().sum::<f64>() / gas_measurements.len() as f64;
-    let variance = gas_measurements.iter()
+    let variance = gas_measurements
+        .iter()
         .map(|x| (x - mean).powi(2))
-        .sum::<f64>() / gas_measurements.len() as f64;
+        .sum::<f64>()
+        / gas_measurements.len() as f64;
     let std_dev = variance.sqrt();
 
-    let min_gas = gas_measurements.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-    let max_gas = gas_measurements.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+    let min_gas = gas_measurements
+        .iter()
+        .fold(f64::INFINITY, |a, &b| a.min(b));
+    let max_gas = gas_measurements
+        .iter()
+        .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
 
-    println!("\n=== Gas Usage for {}-key tree ({} runs) ===", num_keys, iterations);
-    println!("Gas usage: {:.1} ± {:.2} k", mean / 1000.0, std_dev / 1000.0);
+    println!(
+        "\n=== Gas Usage for {}-key tree ({} runs) ===",
+        num_keys, iterations
+    );
+    println!(
+        "Gas usage: {:.1} ± {:.2} k",
+        mean / 1000.0,
+        std_dev / 1000.0
+    );
     println!("Range: {:.1}k - {:.1}k", min_gas / 1000.0, max_gas / 1000.0);
 
     Ok(())
@@ -94,27 +112,32 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
 
     println!("Generating proof for account: {test_account}");
 
-    let (proof, amount) =
-        RewardAccountProofV2::prove(&tree, test_account.0).expect("can generate proof");
-    assert_eq!(amount, test_amount.0);
+    let query_data: RewardAccountQueryDataV2 = RewardAccountProofV2::prove(&tree, test_account.0)
+        .expect("can generate proof")
+        .into();
+    assert_eq!(query_data.balance, test_amount.0);
 
-    let proof_sol: LifetimeRewardsProofSol = proof.try_into()?;
-    let account_sol = test_account.into();
+    let reward_claim_input = query_data.to_reward_claim_input(Default::default())?;
 
     // Verify membership using Solidity contract
     let is_valid = contract
-        .verifyAuthRootCommitment(root, account_sol, amount, proof_sol.siblings.clone())
+        .verifyRewardClaimAuthData(
+            root,
+            test_account.0,
+            test_amount.0,
+            reward_claim_input.auth_data.to_bytes(),
+        )
         .call()
         .await?;
 
     assert!(is_valid, "Membership proof invalid");
 
     let is_valid = contract
-        .verifyRewardClaim(
+        .verifyRewardClaimAuthData(
             root,
-            account_sol,
-            amount + U256::from(1),
-            proof_sol.siblings,
+            test_account.0,
+            test_amount.0 + U256::from(1),
+            reward_claim_input.auth_data.to_bytes(),
         )
         .call()
         .await?;
@@ -122,7 +145,12 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
     assert!(!is_valid, "Membership proof should be invalid");
 
     let gas_used = contract
-        .verifyAuthRootCommitment(root, account_sol, amount, proof_sol.siblings)
+        .verifyRewardClaimAuthData(
+            root,
+            test_account.0,
+            test_amount.0,
+            reward_claim_input.auth_data.to_bytes(),
+        )
         .estimate_gas()
         .await?;
 

@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
-use alloy::primitives::{Address, FixedBytes, U256};
+use alloy::primitives::{Address, U256};
 use derive_more::{Display, From, Into};
-use hotshot_contract_adapter::reward::RewardClaimInput;
+use hotshot_contract_adapter::reward::{RewardAuthData, RewardAuthRootInputs, RewardClaimInput};
 use jf_merkle_tree_compat::{
     universal_merkle_tree::UniversalMerkleTree, MerkleTreeScheme, UniversalMerkleTreeScheme,
 };
@@ -94,7 +94,7 @@ pub enum RewardClaimError {
 impl RewardAccountQueryDataV2 {
     pub fn to_reward_claim_input(
         self,
-        auth_root_inputs: [FixedBytes<32>; 7],
+        auth_root_inputs: RewardAuthRootInputs,
     ) -> Result<RewardClaimInput, RewardClaimError> {
         if self.balance == U256::ZERO {
             return Err(RewardClaimError::ZeroRewardError);
@@ -106,10 +106,12 @@ impl RewardAccountQueryDataV2 {
                 return Err(RewardClaimError::ZeroRewardError);
             },
         };
+
+        let auth_data = RewardAuthData::new(account_proof.try_into()?, auth_root_inputs);
+
         Ok(RewardClaimInput {
             lifetime_rewards: self.balance,
-            proof: account_proof.try_into()?,
-            auth_root_inputs,
+            auth_data,
         })
     }
 }

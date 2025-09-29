@@ -25,7 +25,6 @@ use std::{fmt::Debug, path::Path, str::FromStr};
 
 use alloy::primitives::{Address, U160, U256};
 use committable::Committable;
-use hotshot_contract_adapter::reward::RewardClaimInput;
 use hotshot_example_types::node_types::TestVersions;
 use hotshot_query_service::{
     availability::{
@@ -692,11 +691,9 @@ async fn test_reward_proof_endpoint_serialization() {
         insta::assert_yaml_snapshot!("reward_proof_v2", reward_proof);
     });
 
-    let reward_claim_input = RewardClaimInput {
-        lifetime_rewards: reward_proof.balance,
-        proof: reward_proof.proof.try_into().unwrap(),
-        auth_root_inputs: Default::default(),
-    };
+    let reward_claim_input = reward_proof
+        .to_reward_claim_input(Default::default())
+        .unwrap();
 
     settings.bind(|| {
         insta::assert_yaml_snapshot!("reward_claim_input_v2", reward_claim_input);

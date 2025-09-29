@@ -20,7 +20,7 @@ interface IRewardClaim {
     /// @param authData inputs required for authentication of lifetime rewards amount.
     ///
     /// @notice Obtain authData from the Espresso query service API.
-    function claimRewards(uint256 lifetimeRewards, bytes memory authData) external;
+    function claimRewards(uint256 lifetimeRewards, bytes calldata authData) external;
 
     /// @notice Check amount of rewards claimed by a user
     function claimedRewards(address claimer) external view returns (uint256);

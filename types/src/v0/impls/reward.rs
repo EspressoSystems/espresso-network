@@ -9,7 +9,7 @@ use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
 use hotshot::types::BLSPubKey;
-use hotshot_contract_adapter::sol_types::LifetimeRewardsProofSol;
+use hotshot_contract_adapter::reward::RewardProofSiblings;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     traits::{election::Membership, node_implementation::ConsensusTime},
@@ -412,16 +412,14 @@ impl RewardAccountProofV2 {
     }
 }
 
-impl TryInto<LifetimeRewardsProofSol> for RewardAccountProofV2 {
+impl TryInto<RewardProofSiblings> for RewardAccountProofV2 {
     type Error = anyhow::Error;
 
     /// Generate a Solidity-compatible proof for this account
     ///
     /// The proof is returned without leaf value. The caller is expected to
     /// obtain the leaf value from the jellyfish proof (Self).
-    ///
-    /// TODO: review error handling / panics
-    fn try_into(self) -> anyhow::Result<LifetimeRewardsProofSol> {
+    fn try_into(self) -> anyhow::Result<RewardProofSiblings> {
         // NOTE: rustfmt fails to format this file if the nesting is too deep.
         let proof = if let RewardMerkleProofV2::Presence(proof) = &self.proof {
             proof
@@ -478,7 +476,13 @@ impl TryInto<LifetimeRewardsProofSol> for RewardAccountProofV2 {
             })
             .collect();
 
-        Ok(LifetimeRewardsProofSol { siblings })
+        let siblings_len = siblings.len();
+        let array: [B256; REWARD_MERKLE_TREE_V2_HEIGHT] = siblings.try_into().map_err(|_| {
+            anyhow::anyhow!(
+                "Expected exactly {REWARD_MERKLE_TREE_V2_HEIGHT} siblings, got {siblings_len}"
+            )
+        })?;
+        Ok(array.into())
     }
 }
 
