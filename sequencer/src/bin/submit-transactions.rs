@@ -455,14 +455,14 @@ async fn submit_transactions<ApiVer: StaticVersionType>(
             if let Err(err) = if txns_batch_count == 1 {
                 // occasionally test the 'submit' endpoint, just for coverage
                 client
-                    .post::<()>("txn_submit/submit")
+                    .post::<()>("submit")
                     .body_binary(&txns[0])
                     .unwrap()
                     .send()
                     .await
             } else {
                 client
-                    .post::<()>("txn_submit/batch")
+                    .post::<()>("batch")
                     .body_binary(&txns)
                     .unwrap()
                     .send()
