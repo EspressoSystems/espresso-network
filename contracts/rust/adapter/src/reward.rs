@@ -2,8 +2,8 @@ use alloy::{
     primitives::{Bytes, B256, U256},
     sol_types::SolValue,
 };
-use derive_more::From;
-use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
+use derive_more::{From, Into};
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, From)]
 pub struct RewardProofSiblings([B256; 160]);
@@ -24,40 +24,43 @@ impl RewardAuthData {
             auth_root_inputs,
         }
     }
+}
 
-    pub fn from_bytes(bytes: impl AsRef<[u8]>) -> alloy::sol_types::Result<Self> {
-        let (siblings, auth_root_inputs): ([B256; 160], [B256; 7]) =
-            SolValue::abi_decode(bytes.as_ref())?;
-        Ok(RewardAuthData {
+impl From<([B256; 160], [B256; 7])> for RewardAuthData {
+    fn from((siblings, auth_root_inputs): ([B256; 160], [B256; 7])) -> Self {
+        RewardAuthData {
             siblings: siblings.into(),
             auth_root_inputs: auth_root_inputs.into(),
-        })
-    }
-
-    pub fn to_bytes(&self) -> Bytes {
-        (self.siblings.0, self.auth_root_inputs.0)
-            .abi_encode()
-            .into()
+        }
     }
 }
 
-impl Serialize for RewardAuthData {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        alloy::hex::serde::serialize(self.to_bytes(), serializer)
+impl TryFrom<RewardAuthDataEncoded> for RewardAuthData {
+    type Error = alloy::sol_types::Error;
+
+    fn try_from(value: RewardAuthDataEncoded) -> Result<Self, Self::Error> {
+        let decoded: ([B256; 160], [B256; 7]) = SolValue::abi_decode(&value.0)?;
+        Ok(decoded.into())
     }
 }
 
-impl<'de> Deserialize<'de> for RewardAuthData {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let bytes: Bytes = alloy::hex::serde::deserialize(deserializer)?;
-        RewardAuthData::from_bytes(bytes).map_err(D::Error::custom)
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, From, Into)]
+pub struct RewardAuthDataEncoded(Bytes);
+
+impl From<RewardAuthData> for RewardAuthDataEncoded {
+    fn from(value: RewardAuthData) -> Self {
+        Self(
+            (value.siblings.0, value.auth_root_inputs.0)
+                .abi_encode()
+                .into(),
+        )
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct RewardClaimInput {
     pub lifetime_rewards: U256,
-    pub auth_data: RewardAuthData,
+    pub auth_data: RewardAuthDataEncoded,
 }
 
 #[cfg(test)]
@@ -71,7 +74,7 @@ mod tests {
         let auth_root_inputs = RewardAuthRootInputs([B256::random(); 7]);
         RewardClaimInput {
             lifetime_rewards: B256::random().into(),
-            auth_data: RewardAuthData::new(siblings, auth_root_inputs),
+            auth_data: RewardAuthData::new(siblings, auth_root_inputs).into(),
         }
     }
 
@@ -86,6 +89,7 @@ mod tests {
     #[test]
     fn test_decode_abi_auth_data() {
         let original = test_input();
+        let auth_data = RewardAuthData::try_from(original.auth_data.clone()).unwrap();
         let json = serde_json::to_string(&original).unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         let auth_str = value.get("auth_data").unwrap().as_str().unwrap();
@@ -96,7 +100,7 @@ mod tests {
         // them.
         let (siblings, auth_root_inputs): ([B256; 160], [B256; 7]) =
             SolValue::abi_decode(&alloy::hex::decode(&auth_str[2..]).unwrap()).unwrap();
-        assert_eq!(siblings, original.auth_data.siblings.0);
-        assert_eq!(auth_root_inputs, original.auth_data.auth_root_inputs.0);
+        assert_eq!(siblings, auth_data.siblings.0);
+        assert_eq!(auth_root_inputs, auth_data.auth_root_inputs.0);
     }
 }

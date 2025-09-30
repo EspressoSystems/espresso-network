@@ -107,11 +107,9 @@ impl RewardAccountQueryDataV2 {
             },
         };
 
-        let auth_data = RewardAuthData::new(account_proof.try_into()?, auth_root_inputs);
-
         Ok(RewardClaimInput {
             lifetime_rewards: self.balance,
-            auth_data,
+            auth_data: RewardAuthData::new(account_proof.try_into()?, auth_root_inputs).into(),
         })
     }
 }

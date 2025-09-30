@@ -125,7 +125,7 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
             root,
             test_account.0,
             test_amount.0,
-            reward_claim_input.auth_data.to_bytes(),
+            reward_claim_input.clone().auth_data.into(),
         )
         .call()
         .await?;
@@ -137,7 +137,7 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
             root,
             test_account.0,
             test_amount.0 + U256::from(1),
-            reward_claim_input.auth_data.to_bytes(),
+            reward_claim_input.clone().auth_data.into(),
         )
         .call()
         .await?;
@@ -149,7 +149,7 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
             root,
             test_account.0,
             test_amount.0,
-            reward_claim_input.auth_data.to_bytes(),
+            reward_claim_input.auth_data.into(),
         )
         .estimate_gas()
         .await?;
