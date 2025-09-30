@@ -287,7 +287,9 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
 
         tokio::spawn(async move {
             let membership_clone = membership.clone();
-            let epoch_root_future = tokio::spawn(async move {
+
+            // First add the epoch root to `membership`
+            {
                 let start = Instant::now();
                 if let Err(e) = Membership::add_epoch_root(
                     Arc::clone(membership_clone.membership()),
@@ -299,25 +301,17 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
                     tracing::error!("Failed to add epoch root for epoch {next_epoch_number}: {e}");
                 }
                 tracing::info!("Time taken to add epoch root: {:?}", start.elapsed());
-            });
+            }
 
             let membership_clone = membership.clone();
 
-            let drb_result_future = tokio::spawn(async move {
-                membership_clone
-                    .compute_drb_result(next_epoch_number, decided_leaf.clone())
-                    .await
-            });
-
-            let (_, drb_result) = tokio::join!(epoch_root_future, drb_result_future);
+            let drb_result = membership_clone
+                .compute_drb_result(next_epoch_number, decided_leaf.clone())
+                .await;
 
             let drb_result = match drb_result {
-                Ok(Ok(result)) => result,
+                Ok(result) => result,
                 Err(e) => {
-                    tracing::error!("Failed to compute DRB result from decide: {e}");
-                    return;
-                },
-                Ok(Err(e)) => {
                     tracing::error!("Failed to compute DRB result from decide: {e}");
                     return;
                 },
