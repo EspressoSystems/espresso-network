@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["RewardAuthData","RewardAuthDataEncoded","RewardAuthRootInputs","RewardClaimInput","RewardProofSiblings"]};

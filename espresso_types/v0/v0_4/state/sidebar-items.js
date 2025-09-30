@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["REWARD_MERKLE_TREE_V2_ARITY","REWARD_MERKLE_TREE_V2_HEIGHT"],"enum":["RewardMerkleProofV2"],"struct":["Delta","RewardAccountProofV2","RewardAccountQueryDataV2","RewardAccountV2"],"type":["RewardMerkleCommitmentV2","RewardMerkleTreeV2"]};
+window.SIDEBAR_ITEMS = {"constant":["REWARD_MERKLE_TREE_V2_ARITY","REWARD_MERKLE_TREE_V2_HEIGHT"],"enum":["RewardClaimError","RewardMerkleProofV2"],"struct":["Delta","RewardAccountProofV2","RewardAccountQueryDataV2","RewardAccountV2"],"type":["RewardMerkleCommitmentV2","RewardMerkleTreeV2"]};
