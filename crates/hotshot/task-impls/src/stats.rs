@@ -385,9 +385,9 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                 self.replica_entry(proposal.data.view_number())
                     .proposal_prelim_validated = Some(now);
             },
-            HotShotEvent::LeavesDecided(leaves) => {
+            HotShotEvent::ViewDecided(leaves, _) => {
                 for leaf in leaves {
-                    if leaf.view_number() == TYPES::View::genesis() {
+                    if TYPES::View::genesis() == leaf.view_number() {
                         continue;
                     }
                     let view = leaf.view_number();
