@@ -671,6 +671,7 @@ where
 {
     let toml = toml::from_str::<toml::Value>(include_str!("../../api/submit.toml"))?;
     let mut api = Api::<S, Error, ApiVer>::new(toml)?;
+    tracing::error!("CALLING API SETUP FOR SEQUENCER");
 
     api.with_version(api_ver)
         .at("submit", |req, state| {
