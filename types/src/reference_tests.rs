@@ -23,9 +23,8 @@
 
 use std::{fmt::Debug, path::Path, str::FromStr};
 
-use alloy::primitives::{Address, U256};
+use alloy::primitives::{Address, U160, U256};
 use committable::Committable;
-use hotshot_contract_adapter::sol_types::AccruedRewardsProofSol;
 use hotshot_example_types::node_types::TestVersions;
 use hotshot_query_service::{
     availability::{
@@ -674,6 +673,16 @@ async fn test_reward_proof_endpoint_serialization() {
         .update(RewardAccountV2::from(address), reward_amount)
         .unwrap();
 
+    // Add some more entries to avoid having all zero siblings in the proof
+    for i in 0..100u64 {
+        let address = Address::from(U160::from(i + 1));
+        let balance: U256 = U256::from((i + 1) * 100);
+        let reward_amount = RewardAmount(balance);
+        reward_merkle_tree_v2
+            .update(RewardAccountV2::from(address), reward_amount)
+            .unwrap();
+    }
+
     let (proof, _) = RewardAccountProofV2::prove(&reward_merkle_tree_v2, address).unwrap();
 
     let reward_proof = RewardAccountQueryDataV2 { balance, proof };
@@ -682,9 +691,11 @@ async fn test_reward_proof_endpoint_serialization() {
         insta::assert_yaml_snapshot!("reward_proof_v2", reward_proof);
     });
 
-    let proof_sol: AccruedRewardsProofSol = reward_proof.proof.try_into().unwrap();
+    let reward_claim_input = reward_proof
+        .to_reward_claim_input(Default::default())
+        .unwrap();
 
     settings.bind(|| {
-        insta::assert_yaml_snapshot!("reward_proof_v2_sol", proof_sol);
+        insta::assert_yaml_snapshot!("reward_claim_input_v2", reward_claim_input);
     });
 }

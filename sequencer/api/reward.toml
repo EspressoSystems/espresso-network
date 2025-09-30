@@ -23,10 +23,16 @@ and a `RewardAccountProofV2`. This proof is based on `RewardMerkleTreeV2`, which
 Keccak256 hashing algorithm."""
 
 
-[route.get_reward_account_proof_sol]
-PATH = ["proof/solidity/:height/:address"]
+[route.get_reward_claim_input]
+PATH = ["reward-claim-input/:height/:address"]
 ":address" = "Literal"
 ":height" = "Integer"
-DOC = """The endpoint returns the Merkle proof for a reward account in a Solidity-compatible 
-format, where :address is the account address and :height is the block height. The response 
-is an `AccruedRewardsProof` type, which contains the proof as a list of 32-byte hash siblings."""
+DOC = """The endpoint returns all the function inputs required for a reward claim contract
+call, where :address is the account address and :height is the Espresso block height finalized
+in the Light Client contract. The response is a `RewardClaimInput` type with three fields: the
+lifetime rewards amount, the Merkle proof for the account, and the auth root inputs needed for
+the claimRewards function.
+
+The Espresso block height must be the same value that is currently finalized in the Light
+Client contract on Ethereum. Clients should query the Light Client contracts
+`finalizedState.blockHeight` to obtain the :height value for this query."""
