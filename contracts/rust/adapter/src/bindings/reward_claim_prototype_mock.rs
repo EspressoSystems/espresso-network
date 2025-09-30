@@ -1,370 +1,10 @@
-///Module containing a contract's types and functions.
-/**
-
-```solidity
-library RewardMerkleTreeVerifier {
-    struct AccruedRewardsProof { bytes32[] siblings; }
-}
-```*/
-#[allow(
-    non_camel_case_types,
-    non_snake_case,
-    clippy::pub_underscore_fields,
-    clippy::style,
-    clippy::empty_structs_with_brackets
-)]
-pub mod RewardMerkleTreeVerifier {
-    use super::*;
-    use alloy::sol_types as alloy_sol_types;
-    #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive(Default, Debug, PartialEq, Eq, Hash)]
-    /**```solidity
-struct AccruedRewardsProof { bytes32[] siblings; }
-```*/
-    #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
-    #[derive(Clone)]
-    pub struct AccruedRewardsProof {
-        #[allow(missing_docs)]
-        pub siblings: alloy::sol_types::private::Vec<
-            alloy::sol_types::private::FixedBytes<32>,
-        >,
-    }
-    #[allow(
-        non_camel_case_types,
-        non_snake_case,
-        clippy::pub_underscore_fields,
-        clippy::style
-    )]
-    const _: () = {
-        use alloy::sol_types as alloy_sol_types;
-        #[doc(hidden)]
-        #[allow(dead_code)]
-        type UnderlyingSolTuple<'a> = (
-            alloy::sol_types::sol_data::Array<
-                alloy::sol_types::sol_data::FixedBytes<32>,
-            >,
-        );
-        #[doc(hidden)]
-        type UnderlyingRustTuple<'a> = (
-            alloy::sol_types::private::Vec<alloy::sol_types::private::FixedBytes<32>>,
-        );
-        #[cfg(test)]
-        #[allow(dead_code, unreachable_patterns)]
-        fn _type_assertion(
-            _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
-        ) {
-            match _t {
-                alloy_sol_types::private::AssertTypeEq::<
-                    <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {}
-            }
-        }
-        #[automatically_derived]
-        #[doc(hidden)]
-        impl ::core::convert::From<AccruedRewardsProof> for UnderlyingRustTuple<'_> {
-            fn from(value: AccruedRewardsProof) -> Self {
-                (value.siblings,)
-            }
-        }
-        #[automatically_derived]
-        #[doc(hidden)]
-        impl ::core::convert::From<UnderlyingRustTuple<'_>> for AccruedRewardsProof {
-            fn from(tuple: UnderlyingRustTuple<'_>) -> Self {
-                Self { siblings: tuple.0 }
-            }
-        }
-        #[automatically_derived]
-        impl alloy_sol_types::SolValue for AccruedRewardsProof {
-            type SolType = Self;
-        }
-        #[automatically_derived]
-        impl alloy_sol_types::private::SolTypeValue<Self> for AccruedRewardsProof {
-            #[inline]
-            fn stv_to_tokens(&self) -> <Self as alloy_sol_types::SolType>::Token<'_> {
-                (
-                    <alloy::sol_types::sol_data::Array<
-                        alloy::sol_types::sol_data::FixedBytes<32>,
-                    > as alloy_sol_types::SolType>::tokenize(&self.siblings),
-                )
-            }
-            #[inline]
-            fn stv_abi_encoded_size(&self) -> usize {
-                if let Some(size) = <Self as alloy_sol_types::SolType>::ENCODED_SIZE {
-                    return size;
-                }
-                let tuple = <UnderlyingRustTuple<
-                    '_,
-                > as ::core::convert::From<Self>>::from(self.clone());
-                <UnderlyingSolTuple<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_encoded_size(&tuple)
-            }
-            #[inline]
-            fn stv_eip712_data_word(&self) -> alloy_sol_types::Word {
-                <Self as alloy_sol_types::SolStruct>::eip712_hash_struct(self)
-            }
-            #[inline]
-            fn stv_abi_encode_packed_to(
-                &self,
-                out: &mut alloy_sol_types::private::Vec<u8>,
-            ) {
-                let tuple = <UnderlyingRustTuple<
-                    '_,
-                > as ::core::convert::From<Self>>::from(self.clone());
-                <UnderlyingSolTuple<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_encode_packed_to(&tuple, out)
-            }
-            #[inline]
-            fn stv_abi_packed_encoded_size(&self) -> usize {
-                if let Some(size) = <Self as alloy_sol_types::SolType>::PACKED_ENCODED_SIZE {
-                    return size;
-                }
-                let tuple = <UnderlyingRustTuple<
-                    '_,
-                > as ::core::convert::From<Self>>::from(self.clone());
-                <UnderlyingSolTuple<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_packed_encoded_size(&tuple)
-            }
-        }
-        #[automatically_derived]
-        impl alloy_sol_types::SolType for AccruedRewardsProof {
-            type RustType = Self;
-            type Token<'a> = <UnderlyingSolTuple<
-                'a,
-            > as alloy_sol_types::SolType>::Token<'a>;
-            const SOL_NAME: &'static str = <Self as alloy_sol_types::SolStruct>::NAME;
-            const ENCODED_SIZE: Option<usize> = <UnderlyingSolTuple<
-                '_,
-            > as alloy_sol_types::SolType>::ENCODED_SIZE;
-            const PACKED_ENCODED_SIZE: Option<usize> = <UnderlyingSolTuple<
-                '_,
-            > as alloy_sol_types::SolType>::PACKED_ENCODED_SIZE;
-            #[inline]
-            fn valid_token(token: &Self::Token<'_>) -> bool {
-                <UnderlyingSolTuple<'_> as alloy_sol_types::SolType>::valid_token(token)
-            }
-            #[inline]
-            fn detokenize(token: Self::Token<'_>) -> Self::RustType {
-                let tuple = <UnderlyingSolTuple<
-                    '_,
-                > as alloy_sol_types::SolType>::detokenize(token);
-                <Self as ::core::convert::From<UnderlyingRustTuple<'_>>>::from(tuple)
-            }
-        }
-        #[automatically_derived]
-        impl alloy_sol_types::SolStruct for AccruedRewardsProof {
-            const NAME: &'static str = "AccruedRewardsProof";
-            #[inline]
-            fn eip712_root_type() -> alloy_sol_types::private::Cow<'static, str> {
-                alloy_sol_types::private::Cow::Borrowed(
-                    "AccruedRewardsProof(bytes32[] siblings)",
-                )
-            }
-            #[inline]
-            fn eip712_components() -> alloy_sol_types::private::Vec<
-                alloy_sol_types::private::Cow<'static, str>,
-            > {
-                alloy_sol_types::private::Vec::new()
-            }
-            #[inline]
-            fn eip712_encode_type() -> alloy_sol_types::private::Cow<'static, str> {
-                <Self as alloy_sol_types::SolStruct>::eip712_root_type()
-            }
-            #[inline]
-            fn eip712_encode_data(&self) -> alloy_sol_types::private::Vec<u8> {
-                <alloy::sol_types::sol_data::Array<
-                    alloy::sol_types::sol_data::FixedBytes<32>,
-                > as alloy_sol_types::SolType>::eip712_data_word(&self.siblings)
-                    .0
-                    .to_vec()
-            }
-        }
-        #[automatically_derived]
-        impl alloy_sol_types::EventTopic for AccruedRewardsProof {
-            #[inline]
-            fn topic_preimage_length(rust: &Self::RustType) -> usize {
-                0usize
-                    + <alloy::sol_types::sol_data::Array<
-                        alloy::sol_types::sol_data::FixedBytes<32>,
-                    > as alloy_sol_types::EventTopic>::topic_preimage_length(
-                        &rust.siblings,
-                    )
-            }
-            #[inline]
-            fn encode_topic_preimage(
-                rust: &Self::RustType,
-                out: &mut alloy_sol_types::private::Vec<u8>,
-            ) {
-                out.reserve(
-                    <Self as alloy_sol_types::EventTopic>::topic_preimage_length(rust),
-                );
-                <alloy::sol_types::sol_data::Array<
-                    alloy::sol_types::sol_data::FixedBytes<32>,
-                > as alloy_sol_types::EventTopic>::encode_topic_preimage(
-                    &rust.siblings,
-                    out,
-                );
-            }
-            #[inline]
-            fn encode_topic(
-                rust: &Self::RustType,
-            ) -> alloy_sol_types::abi::token::WordToken {
-                let mut out = alloy_sol_types::private::Vec::new();
-                <Self as alloy_sol_types::EventTopic>::encode_topic_preimage(
-                    rust,
-                    &mut out,
-                );
-                alloy_sol_types::abi::token::WordToken(
-                    alloy_sol_types::private::keccak256(out),
-                )
-            }
-        }
-    };
-    use alloy::contract as alloy_contract;
-    /**Creates a new wrapper around an on-chain [`RewardMerkleTreeVerifier`](self) contract instance.
-
-See the [wrapper's documentation](`RewardMerkleTreeVerifierInstance`) for more details.*/
-    #[inline]
-    pub const fn new<
-        P: alloy_contract::private::Provider<N>,
-        N: alloy_contract::private::Network,
-    >(
-        address: alloy_sol_types::private::Address,
-        __provider: P,
-    ) -> RewardMerkleTreeVerifierInstance<P, N> {
-        RewardMerkleTreeVerifierInstance::<P, N>::new(address, __provider)
-    }
-    /**A [`RewardMerkleTreeVerifier`](self) instance.
-
-Contains type-safe methods for interacting with an on-chain instance of the
-[`RewardMerkleTreeVerifier`](self) contract located at a given `address`, using a given
-provider `P`.
-
-If the contract bytecode is available (see the [`sol!`](alloy_sol_types::sol!)
-documentation on how to provide it), the `deploy` and `deploy_builder` methods can
-be used to deploy a new instance of the contract.
-
-See the [module-level documentation](self) for all the available methods.*/
-    #[derive(Clone)]
-    pub struct RewardMerkleTreeVerifierInstance<
-        P,
-        N = alloy_contract::private::Ethereum,
-    > {
-        address: alloy_sol_types::private::Address,
-        provider: P,
-        _network: ::core::marker::PhantomData<N>,
-    }
-    #[automatically_derived]
-    impl<P, N> ::core::fmt::Debug for RewardMerkleTreeVerifierInstance<P, N> {
-        #[inline]
-        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-            f.debug_tuple("RewardMerkleTreeVerifierInstance")
-                .field(&self.address)
-                .finish()
-        }
-    }
-    /// Instantiation and getters/setters.
-    #[automatically_derived]
-    impl<
-        P: alloy_contract::private::Provider<N>,
-        N: alloy_contract::private::Network,
-    > RewardMerkleTreeVerifierInstance<P, N> {
-        /**Creates a new wrapper around an on-chain [`RewardMerkleTreeVerifier`](self) contract instance.
-
-See the [wrapper's documentation](`RewardMerkleTreeVerifierInstance`) for more details.*/
-        #[inline]
-        pub const fn new(
-            address: alloy_sol_types::private::Address,
-            __provider: P,
-        ) -> Self {
-            Self {
-                address,
-                provider: __provider,
-                _network: ::core::marker::PhantomData,
-            }
-        }
-        /// Returns a reference to the address.
-        #[inline]
-        pub const fn address(&self) -> &alloy_sol_types::private::Address {
-            &self.address
-        }
-        /// Sets the address.
-        #[inline]
-        pub fn set_address(&mut self, address: alloy_sol_types::private::Address) {
-            self.address = address;
-        }
-        /// Sets the address and returns `self`.
-        pub fn at(mut self, address: alloy_sol_types::private::Address) -> Self {
-            self.set_address(address);
-            self
-        }
-        /// Returns a reference to the provider.
-        #[inline]
-        pub const fn provider(&self) -> &P {
-            &self.provider
-        }
-    }
-    impl<P: ::core::clone::Clone, N> RewardMerkleTreeVerifierInstance<&P, N> {
-        /// Clones the provider and returns a new instance with the cloned provider.
-        #[inline]
-        pub fn with_cloned_provider(self) -> RewardMerkleTreeVerifierInstance<P, N> {
-            RewardMerkleTreeVerifierInstance {
-                address: self.address,
-                provider: ::core::clone::Clone::clone(&self.provider),
-                _network: ::core::marker::PhantomData,
-            }
-        }
-    }
-    /// Function calls.
-    #[automatically_derived]
-    impl<
-        P: alloy_contract::private::Provider<N>,
-        N: alloy_contract::private::Network,
-    > RewardMerkleTreeVerifierInstance<P, N> {
-        /// Creates a new call builder using this contract instance's provider and address.
-        ///
-        /// Note that the call can be any function call, not just those defined in this
-        /// contract. Prefer using the other methods for building type-safe contract calls.
-        pub fn call_builder<C: alloy_sol_types::SolCall>(
-            &self,
-            call: &C,
-        ) -> alloy_contract::SolCallBuilder<&P, C, N> {
-            alloy_contract::SolCallBuilder::new_sol(&self.provider, &self.address, call)
-        }
-    }
-    /// Event filters.
-    #[automatically_derived]
-    impl<
-        P: alloy_contract::private::Provider<N>,
-        N: alloy_contract::private::Network,
-    > RewardMerkleTreeVerifierInstance<P, N> {
-        /// Creates a new event filter using this contract instance's provider and address.
-        ///
-        /// Note that the type can be any event, not just those defined in this contract.
-        /// Prefer using the other methods for building type-safe event filters.
-        pub fn event_filter<E: alloy_sol_types::SolEvent>(
-            &self,
-        ) -> alloy_contract::Event<&P, E, N> {
-            alloy_contract::Event::new_sol(&self.provider, &self.address)
-        }
-    }
-}
 /**
 
 Generated by the following Solidity interface...
 ```solidity
-library RewardMerkleTreeVerifier {
-    struct AccruedRewardsProof {
-        bytes32[] siblings;
-    }
-}
-
 interface RewardClaimPrototypeMock {
-    error InvalidProofLength();
-
-    function verifyRewardClaim(bytes32 root, address account, uint256 amount, RewardMerkleTreeVerifier.AccruedRewardsProof memory proof) external pure returns (bool);
+    function verifyRewardClaim(bytes32 root, address account, uint256 amount, bytes32[160] memory proof) external pure returns (bool);
+    function verifyRewardClaimAuthData(bytes32 root, address account, uint256 amount, bytes memory authData) external view returns (bool);
 }
 ```
 
@@ -392,15 +32,8 @@ interface RewardClaimPrototypeMock {
       },
       {
         "name": "proof",
-        "type": "tuple",
-        "internalType": "struct RewardMerkleTreeVerifier.AccruedRewardsProof",
-        "components": [
-          {
-            "name": "siblings",
-            "type": "bytes32[]",
-            "internalType": "bytes32[]"
-          }
-        ]
+        "type": "bytes32[160]",
+        "internalType": "bytes32[160]"
       }
     ],
     "outputs": [
@@ -413,9 +46,38 @@ interface RewardClaimPrototypeMock {
     "stateMutability": "pure"
   },
   {
-    "type": "error",
-    "name": "InvalidProofLength",
-    "inputs": []
+    "type": "function",
+    "name": "verifyRewardClaimAuthData",
+    "inputs": [
+      {
+        "name": "root",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "account",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "authData",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
   }
 ]
 ```*/
@@ -432,102 +94,28 @@ pub mod RewardClaimPrototypeMock {
     /// The creation / init bytecode of the contract.
     ///
     /// ```text
-    ///0x6080604052348015600e575f5ffd5b506102468061001c5f395ff3fe608060405234801561000f575f5ffd5b5060043610610029575f3560e01c80634c6d20d21461002d575b5f5ffd5b61004061003b36600461016a565b610054565b604051901515815260200160405180910390f35b5f6100618585858561006a565b95945050505050565b5f368161007784806101d8565b909250905060a0811461009d576040516313717da960e21b815260040160405180910390fd5b5f6100a78661011e565b90505f5b60a0811015610110575f8484838181106100c7576100c7610225565b6020029190910135915050600189831c1680156100f4576040805183815260208101869052209350610106565b60408051858152602081018490522093505b50506001016100ab565b509096149695505050505050565b5f5f8260405160200161013391815260200190565b60408051808303601f1901815282825280516020918201208184015281518084038201815292820190915281519101209392505050565b5f5f5f5f6080858703121561017d575f5ffd5b8435935060208501356001600160a01b038116811461019a575f5ffd5b925060408501359150606085013567ffffffffffffffff8111156101bc575f5ffd5b8501602081880312156101cd575f5ffd5b939692955090935050565b5f5f8335601e198436030181126101ed575f5ffd5b83018035915067ffffffffffffffff821115610207575f5ffd5b6020019150600581901b360382131561021e575f5ffd5b9250929050565b634e487b7160e01b5f52603260045260245ffdfea164736f6c634300081c000a
+    ///0x6080604052348015600e575f5ffd5b5061048c8061001c5f395ff3fe608060405234801561000f575f5ffd5b5060043610610034575f3560e01c806324bb977814610038578063eb2dbe081461005f575b5f5ffd5b61004b610046366004610218565b610072565b604051901515815260200160405180910390f35b61004b61006d366004610263565b6100b0565b5f6100a78585858560a080602002604051908101604052809291908260a0602002808284375f92019190915250610135915050565b95945050505050565b5f806100be8385018561036f565b5060405163049772ef60e31b815290915030906324bb9778906100eb908a908a908a9087906004016103f5565b602060405180830381865afa158015610106573d5f5f3e3d5ffd5b505050506040513d601f19601f8201168201806040525081019061012a9190610445565b979650505050505050565b5f5f610140846101b1565b90505f5b60a08110156101a5575f848260a081106101605761016061046b565b60200201519050600187831c16801561018957604080518381526020810186905220935061019b565b60408051858152602081018490522093505b5050600101610144565b50909414949350505050565b5f5f826040516020016101c691815260200190565b60408051808303601f1901815282825280516020918201208184015281518084038201815292820190915281519101209392505050565b80356001600160a01b0381168114610213575f5ffd5b919050565b5f5f5f5f611460858703121561022c575f5ffd5b8435935061023c602086016101fd565b9250604085013591506114608501861015610255575f5ffd5b509194909350909160600190565b5f5f5f5f5f60808688031215610277575f5ffd5b85359450610287602087016101fd565b935060408601359250606086013567ffffffffffffffff8111156102a9575f5ffd5b8601601f810188136102b9575f5ffd5b803567ffffffffffffffff8111156102cf575f5ffd5b8860208284010111156102e0575f5ffd5b959894975092955050506020019190565b604051601f8201601f1916810167ffffffffffffffff8111828210171561032657634e487b7160e01b5f52604160045260245ffd5b604052919050565b5f61033960e06102f1565b90508060e083018481111561034c575f5ffd5b835b8181101561036657803583526020928301920161034e565b50505092915050565b5f5f6114e08385031215610381575f5ffd5b5f84601f850112610390575f5ffd5b505f8061140061039f816102f1565b92508291508501868111156103b2575f5ffd5b855b818110156103cc5780358452602093840193016103b4565b508194508661141f8701126103df575f5ffd5b6103e9878261032e565b93505050509250929050565b8481526001600160a01b038416602082015260408101839052611460810160608201835f5b60a081101561043957815183526020928301929091019060010161041a565b50505095945050505050565b5f60208284031215610455575f5ffd5b81518015158114610464575f5ffd5b9392505050565b634e487b7160e01b5f52603260045260245ffdfea164736f6c634300081c000a
     /// ```
     #[rustfmt::skip]
     #[allow(clippy::all)]
     pub static BYTECODE: alloy_sol_types::private::Bytes = alloy_sol_types::private::Bytes::from_static(
-        b"`\x80`@R4\x80\x15`\x0EW__\xFD[Pa\x02F\x80a\0\x1C_9_\xF3\xFE`\x80`@R4\x80\x15a\0\x0FW__\xFD[P`\x046\x10a\0)W_5`\xE0\x1C\x80cLm \xD2\x14a\0-W[__\xFD[a\0@a\0;6`\x04a\x01jV[a\0TV[`@Q\x90\x15\x15\x81R` \x01`@Q\x80\x91\x03\x90\xF3[_a\0a\x85\x85\x85\x85a\0jV[\x95\x94PPPPPV[_6\x81a\0w\x84\x80a\x01\xD8V[\x90\x92P\x90P`\xA0\x81\x14a\0\x9DW`@Qc\x13q}\xA9`\xE2\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[_a\0\xA7\x86a\x01\x1EV[\x90P_[`\xA0\x81\x10\x15a\x01\x10W_\x84\x84\x83\x81\x81\x10a\0\xC7Wa\0\xC7a\x02%V[` \x02\x91\x90\x91\x015\x91PP`\x01\x89\x83\x1C\x16\x80\x15a\0\xF4W`@\x80Q\x83\x81R` \x81\x01\x86\x90R \x93Pa\x01\x06V[`@\x80Q\x85\x81R` \x81\x01\x84\x90R \x93P[PP`\x01\x01a\0\xABV[P\x90\x96\x14\x96\x95PPPPPPV[__\x82`@Q` \x01a\x013\x91\x81R` \x01\x90V[`@\x80Q\x80\x83\x03`\x1F\x19\x01\x81R\x82\x82R\x80Q` \x91\x82\x01 \x81\x84\x01R\x81Q\x80\x84\x03\x82\x01\x81R\x92\x82\x01\x90\x91R\x81Q\x91\x01 \x93\x92PPPV[____`\x80\x85\x87\x03\x12\x15a\x01}W__\xFD[\x845\x93P` \x85\x015`\x01`\x01`\xA0\x1B\x03\x81\x16\x81\x14a\x01\x9AW__\xFD[\x92P`@\x85\x015\x91P``\x85\x015g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x15a\x01\xBCW__\xFD[\x85\x01` \x81\x88\x03\x12\x15a\x01\xCDW__\xFD[\x93\x96\x92\x95P\x90\x93PPV[__\x835`\x1E\x19\x846\x03\x01\x81\x12a\x01\xEDW__\xFD[\x83\x01\x805\x91Pg\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x82\x11\x15a\x02\x07W__\xFD[` \x01\x91P`\x05\x81\x90\x1B6\x03\x82\x13\x15a\x02\x1EW__\xFD[\x92P\x92\x90PV[cNH{q`\xE0\x1B_R`2`\x04R`$_\xFD\xFE\xA1dsolcC\0\x08\x1C\0\n",
+        b"`\x80`@R4\x80\x15`\x0EW__\xFD[Pa\x04\x8C\x80a\0\x1C_9_\xF3\xFE`\x80`@R4\x80\x15a\0\x0FW__\xFD[P`\x046\x10a\x004W_5`\xE0\x1C\x80c$\xBB\x97x\x14a\08W\x80c\xEB-\xBE\x08\x14a\0_W[__\xFD[a\0Ka\0F6`\x04a\x02\x18V[a\0rV[`@Q\x90\x15\x15\x81R` \x01`@Q\x80\x91\x03\x90\xF3[a\0Ka\0m6`\x04a\x02cV[a\0\xB0V[_a\0\xA7\x85\x85\x85\x85`\xA0\x80` \x02`@Q\x90\x81\x01`@R\x80\x92\x91\x90\x82`\xA0` \x02\x80\x82\x847_\x92\x01\x91\x90\x91RPa\x015\x91PPV[\x95\x94PPPPPV[_\x80a\0\xBE\x83\x85\x01\x85a\x03oV[P`@Qc\x04\x97r\xEF`\xE3\x1B\x81R\x90\x91P0\x90c$\xBB\x97x\x90a\0\xEB\x90\x8A\x90\x8A\x90\x8A\x90\x87\x90`\x04\x01a\x03\xF5V[` `@Q\x80\x83\x03\x81\x86Z\xFA\x15\x80\x15a\x01\x06W=__>=_\xFD[PPPP`@Q=`\x1F\x19`\x1F\x82\x01\x16\x82\x01\x80`@RP\x81\x01\x90a\x01*\x91\x90a\x04EV[\x97\x96PPPPPPPV[__a\x01@\x84a\x01\xB1V[\x90P_[`\xA0\x81\x10\x15a\x01\xA5W_\x84\x82`\xA0\x81\x10a\x01`Wa\x01`a\x04kV[` \x02\x01Q\x90P`\x01\x87\x83\x1C\x16\x80\x15a\x01\x89W`@\x80Q\x83\x81R` \x81\x01\x86\x90R \x93Pa\x01\x9BV[`@\x80Q\x85\x81R` \x81\x01\x84\x90R \x93P[PP`\x01\x01a\x01DV[P\x90\x94\x14\x94\x93PPPPV[__\x82`@Q` \x01a\x01\xC6\x91\x81R` \x01\x90V[`@\x80Q\x80\x83\x03`\x1F\x19\x01\x81R\x82\x82R\x80Q` \x91\x82\x01 \x81\x84\x01R\x81Q\x80\x84\x03\x82\x01\x81R\x92\x82\x01\x90\x91R\x81Q\x91\x01 \x93\x92PPPV[\x805`\x01`\x01`\xA0\x1B\x03\x81\x16\x81\x14a\x02\x13W__\xFD[\x91\x90PV[____a\x14`\x85\x87\x03\x12\x15a\x02,W__\xFD[\x845\x93Pa\x02<` \x86\x01a\x01\xFDV[\x92P`@\x85\x015\x91Pa\x14`\x85\x01\x86\x10\x15a\x02UW__\xFD[P\x91\x94\x90\x93P\x90\x91``\x01\x90V[_____`\x80\x86\x88\x03\x12\x15a\x02wW__\xFD[\x855\x94Pa\x02\x87` \x87\x01a\x01\xFDV[\x93P`@\x86\x015\x92P``\x86\x015g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x15a\x02\xA9W__\xFD[\x86\x01`\x1F\x81\x01\x88\x13a\x02\xB9W__\xFD[\x805g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x15a\x02\xCFW__\xFD[\x88` \x82\x84\x01\x01\x11\x15a\x02\xE0W__\xFD[\x95\x98\x94\x97P\x92\x95PPP` \x01\x91\x90V[`@Q`\x1F\x82\x01`\x1F\x19\x16\x81\x01g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x82\x82\x10\x17\x15a\x03&WcNH{q`\xE0\x1B_R`A`\x04R`$_\xFD[`@R\x91\x90PV[_a\x039`\xE0a\x02\xF1V[\x90P\x80`\xE0\x83\x01\x84\x81\x11\x15a\x03LW__\xFD[\x83[\x81\x81\x10\x15a\x03fW\x805\x83R` \x92\x83\x01\x92\x01a\x03NV[PPP\x92\x91PPV[__a\x14\xE0\x83\x85\x03\x12\x15a\x03\x81W__\xFD[_\x84`\x1F\x85\x01\x12a\x03\x90W__\xFD[P_\x80a\x14\0a\x03\x9F\x81a\x02\xF1V[\x92P\x82\x91P\x85\x01\x86\x81\x11\x15a\x03\xB2W__\xFD[\x85[\x81\x81\x10\x15a\x03\xCCW\x805\x84R` \x93\x84\x01\x93\x01a\x03\xB4V[P\x81\x94P\x86a\x14\x1F\x87\x01\x12a\x03\xDFW__\xFD[a\x03\xE9\x87\x82a\x03.V[\x93PPPP\x92P\x92\x90PV[\x84\x81R`\x01`\x01`\xA0\x1B\x03\x84\x16` \x82\x01R`@\x81\x01\x83\x90Ra\x14`\x81\x01``\x82\x01\x83_[`\xA0\x81\x10\x15a\x049W\x81Q\x83R` \x92\x83\x01\x92\x90\x91\x01\x90`\x01\x01a\x04\x1AV[PPP\x95\x94PPPPPV[_` \x82\x84\x03\x12\x15a\x04UW__\xFD[\x81Q\x80\x15\x15\x81\x14a\x04dW__\xFD[\x93\x92PPPV[cNH{q`\xE0\x1B_R`2`\x04R`$_\xFD\xFE\xA1dsolcC\0\x08\x1C\0\n",
     );
     /// The runtime bytecode of the contract, as deployed on the network.
     ///
     /// ```text
-    ///0x608060405234801561000f575f5ffd5b5060043610610029575f3560e01c80634c6d20d21461002d575b5f5ffd5b61004061003b36600461016a565b610054565b604051901515815260200160405180910390f35b5f6100618585858561006a565b95945050505050565b5f368161007784806101d8565b909250905060a0811461009d576040516313717da960e21b815260040160405180910390fd5b5f6100a78661011e565b90505f5b60a0811015610110575f8484838181106100c7576100c7610225565b6020029190910135915050600189831c1680156100f4576040805183815260208101869052209350610106565b60408051858152602081018490522093505b50506001016100ab565b509096149695505050505050565b5f5f8260405160200161013391815260200190565b60408051808303601f1901815282825280516020918201208184015281518084038201815292820190915281519101209392505050565b5f5f5f5f6080858703121561017d575f5ffd5b8435935060208501356001600160a01b038116811461019a575f5ffd5b925060408501359150606085013567ffffffffffffffff8111156101bc575f5ffd5b8501602081880312156101cd575f5ffd5b939692955090935050565b5f5f8335601e198436030181126101ed575f5ffd5b83018035915067ffffffffffffffff821115610207575f5ffd5b6020019150600581901b360382131561021e575f5ffd5b9250929050565b634e487b7160e01b5f52603260045260245ffdfea164736f6c634300081c000a
+    ///0x608060405234801561000f575f5ffd5b5060043610610034575f3560e01c806324bb977814610038578063eb2dbe081461005f575b5f5ffd5b61004b610046366004610218565b610072565b604051901515815260200160405180910390f35b61004b61006d366004610263565b6100b0565b5f6100a78585858560a080602002604051908101604052809291908260a0602002808284375f92019190915250610135915050565b95945050505050565b5f806100be8385018561036f565b5060405163049772ef60e31b815290915030906324bb9778906100eb908a908a908a9087906004016103f5565b602060405180830381865afa158015610106573d5f5f3e3d5ffd5b505050506040513d601f19601f8201168201806040525081019061012a9190610445565b979650505050505050565b5f5f610140846101b1565b90505f5b60a08110156101a5575f848260a081106101605761016061046b565b60200201519050600187831c16801561018957604080518381526020810186905220935061019b565b60408051858152602081018490522093505b5050600101610144565b50909414949350505050565b5f5f826040516020016101c691815260200190565b60408051808303601f1901815282825280516020918201208184015281518084038201815292820190915281519101209392505050565b80356001600160a01b0381168114610213575f5ffd5b919050565b5f5f5f5f611460858703121561022c575f5ffd5b8435935061023c602086016101fd565b9250604085013591506114608501861015610255575f5ffd5b509194909350909160600190565b5f5f5f5f5f60808688031215610277575f5ffd5b85359450610287602087016101fd565b935060408601359250606086013567ffffffffffffffff8111156102a9575f5ffd5b8601601f810188136102b9575f5ffd5b803567ffffffffffffffff8111156102cf575f5ffd5b8860208284010111156102e0575f5ffd5b959894975092955050506020019190565b604051601f8201601f1916810167ffffffffffffffff8111828210171561032657634e487b7160e01b5f52604160045260245ffd5b604052919050565b5f61033960e06102f1565b90508060e083018481111561034c575f5ffd5b835b8181101561036657803583526020928301920161034e565b50505092915050565b5f5f6114e08385031215610381575f5ffd5b5f84601f850112610390575f5ffd5b505f8061140061039f816102f1565b92508291508501868111156103b2575f5ffd5b855b818110156103cc5780358452602093840193016103b4565b508194508661141f8701126103df575f5ffd5b6103e9878261032e565b93505050509250929050565b8481526001600160a01b038416602082015260408101839052611460810160608201835f5b60a081101561043957815183526020928301929091019060010161041a565b50505095945050505050565b5f60208284031215610455575f5ffd5b81518015158114610464575f5ffd5b9392505050565b634e487b7160e01b5f52603260045260245ffdfea164736f6c634300081c000a
     /// ```
     #[rustfmt::skip]
     #[allow(clippy::all)]
     pub static DEPLOYED_BYTECODE: alloy_sol_types::private::Bytes = alloy_sol_types::private::Bytes::from_static(
-        b"`\x80`@R4\x80\x15a\0\x0FW__\xFD[P`\x046\x10a\0)W_5`\xE0\x1C\x80cLm \xD2\x14a\0-W[__\xFD[a\0@a\0;6`\x04a\x01jV[a\0TV[`@Q\x90\x15\x15\x81R` \x01`@Q\x80\x91\x03\x90\xF3[_a\0a\x85\x85\x85\x85a\0jV[\x95\x94PPPPPV[_6\x81a\0w\x84\x80a\x01\xD8V[\x90\x92P\x90P`\xA0\x81\x14a\0\x9DW`@Qc\x13q}\xA9`\xE2\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[_a\0\xA7\x86a\x01\x1EV[\x90P_[`\xA0\x81\x10\x15a\x01\x10W_\x84\x84\x83\x81\x81\x10a\0\xC7Wa\0\xC7a\x02%V[` \x02\x91\x90\x91\x015\x91PP`\x01\x89\x83\x1C\x16\x80\x15a\0\xF4W`@\x80Q\x83\x81R` \x81\x01\x86\x90R \x93Pa\x01\x06V[`@\x80Q\x85\x81R` \x81\x01\x84\x90R \x93P[PP`\x01\x01a\0\xABV[P\x90\x96\x14\x96\x95PPPPPPV[__\x82`@Q` \x01a\x013\x91\x81R` \x01\x90V[`@\x80Q\x80\x83\x03`\x1F\x19\x01\x81R\x82\x82R\x80Q` \x91\x82\x01 \x81\x84\x01R\x81Q\x80\x84\x03\x82\x01\x81R\x92\x82\x01\x90\x91R\x81Q\x91\x01 \x93\x92PPPV[____`\x80\x85\x87\x03\x12\x15a\x01}W__\xFD[\x845\x93P` \x85\x015`\x01`\x01`\xA0\x1B\x03\x81\x16\x81\x14a\x01\x9AW__\xFD[\x92P`@\x85\x015\x91P``\x85\x015g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x15a\x01\xBCW__\xFD[\x85\x01` \x81\x88\x03\x12\x15a\x01\xCDW__\xFD[\x93\x96\x92\x95P\x90\x93PPV[__\x835`\x1E\x19\x846\x03\x01\x81\x12a\x01\xEDW__\xFD[\x83\x01\x805\x91Pg\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x82\x11\x15a\x02\x07W__\xFD[` \x01\x91P`\x05\x81\x90\x1B6\x03\x82\x13\x15a\x02\x1EW__\xFD[\x92P\x92\x90PV[cNH{q`\xE0\x1B_R`2`\x04R`$_\xFD\xFE\xA1dsolcC\0\x08\x1C\0\n",
+        b"`\x80`@R4\x80\x15a\0\x0FW__\xFD[P`\x046\x10a\x004W_5`\xE0\x1C\x80c$\xBB\x97x\x14a\08W\x80c\xEB-\xBE\x08\x14a\0_W[__\xFD[a\0Ka\0F6`\x04a\x02\x18V[a\0rV[`@Q\x90\x15\x15\x81R` \x01`@Q\x80\x91\x03\x90\xF3[a\0Ka\0m6`\x04a\x02cV[a\0\xB0V[_a\0\xA7\x85\x85\x85\x85`\xA0\x80` \x02`@Q\x90\x81\x01`@R\x80\x92\x91\x90\x82`\xA0` \x02\x80\x82\x847_\x92\x01\x91\x90\x91RPa\x015\x91PPV[\x95\x94PPPPPV[_\x80a\0\xBE\x83\x85\x01\x85a\x03oV[P`@Qc\x04\x97r\xEF`\xE3\x1B\x81R\x90\x91P0\x90c$\xBB\x97x\x90a\0\xEB\x90\x8A\x90\x8A\x90\x8A\x90\x87\x90`\x04\x01a\x03\xF5V[` `@Q\x80\x83\x03\x81\x86Z\xFA\x15\x80\x15a\x01\x06W=__>=_\xFD[PPPP`@Q=`\x1F\x19`\x1F\x82\x01\x16\x82\x01\x80`@RP\x81\x01\x90a\x01*\x91\x90a\x04EV[\x97\x96PPPPPPPV[__a\x01@\x84a\x01\xB1V[\x90P_[`\xA0\x81\x10\x15a\x01\xA5W_\x84\x82`\xA0\x81\x10a\x01`Wa\x01`a\x04kV[` \x02\x01Q\x90P`\x01\x87\x83\x1C\x16\x80\x15a\x01\x89W`@\x80Q\x83\x81R` \x81\x01\x86\x90R \x93Pa\x01\x9BV[`@\x80Q\x85\x81R` \x81\x01\x84\x90R \x93P[PP`\x01\x01a\x01DV[P\x90\x94\x14\x94\x93PPPPV[__\x82`@Q` \x01a\x01\xC6\x91\x81R` \x01\x90V[`@\x80Q\x80\x83\x03`\x1F\x19\x01\x81R\x82\x82R\x80Q` \x91\x82\x01 \x81\x84\x01R\x81Q\x80\x84\x03\x82\x01\x81R\x92\x82\x01\x90\x91R\x81Q\x91\x01 \x93\x92PPPV[\x805`\x01`\x01`\xA0\x1B\x03\x81\x16\x81\x14a\x02\x13W__\xFD[\x91\x90PV[____a\x14`\x85\x87\x03\x12\x15a\x02,W__\xFD[\x845\x93Pa\x02<` \x86\x01a\x01\xFDV[\x92P`@\x85\x015\x91Pa\x14`\x85\x01\x86\x10\x15a\x02UW__\xFD[P\x91\x94\x90\x93P\x90\x91``\x01\x90V[_____`\x80\x86\x88\x03\x12\x15a\x02wW__\xFD[\x855\x94Pa\x02\x87` \x87\x01a\x01\xFDV[\x93P`@\x86\x015\x92P``\x86\x015g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x15a\x02\xA9W__\xFD[\x86\x01`\x1F\x81\x01\x88\x13a\x02\xB9W__\xFD[\x805g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x15a\x02\xCFW__\xFD[\x88` \x82\x84\x01\x01\x11\x15a\x02\xE0W__\xFD[\x95\x98\x94\x97P\x92\x95PPP` \x01\x91\x90V[`@Q`\x1F\x82\x01`\x1F\x19\x16\x81\x01g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x82\x82\x10\x17\x15a\x03&WcNH{q`\xE0\x1B_R`A`\x04R`$_\xFD[`@R\x91\x90PV[_a\x039`\xE0a\x02\xF1V[\x90P\x80`\xE0\x83\x01\x84\x81\x11\x15a\x03LW__\xFD[\x83[\x81\x81\x10\x15a\x03fW\x805\x83R` \x92\x83\x01\x92\x01a\x03NV[PPP\x92\x91PPV[__a\x14\xE0\x83\x85\x03\x12\x15a\x03\x81W__\xFD[_\x84`\x1F\x85\x01\x12a\x03\x90W__\xFD[P_\x80a\x14\0a\x03\x9F\x81a\x02\xF1V[\x92P\x82\x91P\x85\x01\x86\x81\x11\x15a\x03\xB2W__\xFD[\x85[\x81\x81\x10\x15a\x03\xCCW\x805\x84R` \x93\x84\x01\x93\x01a\x03\xB4V[P\x81\x94P\x86a\x14\x1F\x87\x01\x12a\x03\xDFW__\xFD[a\x03\xE9\x87\x82a\x03.V[\x93PPPP\x92P\x92\x90PV[\x84\x81R`\x01`\x01`\xA0\x1B\x03\x84\x16` \x82\x01R`@\x81\x01\x83\x90Ra\x14`\x81\x01``\x82\x01\x83_[`\xA0\x81\x10\x15a\x049W\x81Q\x83R` \x92\x83\x01\x92\x90\x91\x01\x90`\x01\x01a\x04\x1AV[PPP\x95\x94PPPPPV[_` \x82\x84\x03\x12\x15a\x04UW__\xFD[\x81Q\x80\x15\x15\x81\x14a\x04dW__\xFD[\x93\x92PPPV[cNH{q`\xE0\x1B_R`2`\x04R`$_\xFD\xFE\xA1dsolcC\0\x08\x1C\0\n",
     );
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive(Default, Debug, PartialEq, Eq, Hash)]
-    /**Custom error with signature `InvalidProofLength()` and selector `0x4dc5f6a4`.
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    /**Function with signature `verifyRewardClaim(bytes32,address,uint256,bytes32[160])` and selector `0x24bb9778`.
 ```solidity
-error InvalidProofLength();
-```*/
-    #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
-    #[derive(Clone)]
-    pub struct InvalidProofLength;
-    #[allow(
-        non_camel_case_types,
-        non_snake_case,
-        clippy::pub_underscore_fields,
-        clippy::style
-    )]
-    const _: () = {
-        use alloy::sol_types as alloy_sol_types;
-        #[doc(hidden)]
-        #[allow(dead_code)]
-        type UnderlyingSolTuple<'a> = ();
-        #[doc(hidden)]
-        type UnderlyingRustTuple<'a> = ();
-        #[cfg(test)]
-        #[allow(dead_code, unreachable_patterns)]
-        fn _type_assertion(
-            _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
-        ) {
-            match _t {
-                alloy_sol_types::private::AssertTypeEq::<
-                    <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {}
-            }
-        }
-        #[automatically_derived]
-        #[doc(hidden)]
-        impl ::core::convert::From<InvalidProofLength> for UnderlyingRustTuple<'_> {
-            fn from(value: InvalidProofLength) -> Self {
-                ()
-            }
-        }
-        #[automatically_derived]
-        #[doc(hidden)]
-        impl ::core::convert::From<UnderlyingRustTuple<'_>> for InvalidProofLength {
-            fn from(tuple: UnderlyingRustTuple<'_>) -> Self {
-                Self
-            }
-        }
-        #[automatically_derived]
-        impl alloy_sol_types::SolError for InvalidProofLength {
-            type Parameters<'a> = UnderlyingSolTuple<'a>;
-            type Token<'a> = <Self::Parameters<
-                'a,
-            > as alloy_sol_types::SolType>::Token<'a>;
-            const SIGNATURE: &'static str = "InvalidProofLength()";
-            const SELECTOR: [u8; 4] = [77u8, 197u8, 246u8, 164u8];
-            #[inline]
-            fn new<'a>(
-                tuple: <Self::Parameters<'a> as alloy_sol_types::SolType>::RustType,
-            ) -> Self {
-                tuple.into()
-            }
-            #[inline]
-            fn tokenize(&self) -> Self::Token<'_> {
-                ()
-            }
-            #[inline]
-            fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
-            }
-        }
-    };
-    #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive(Default, Debug, PartialEq, Eq, Hash)]
-    /**Function with signature `verifyRewardClaim(bytes32,address,uint256,(bytes32[]))` and selector `0x4c6d20d2`.
-```solidity
-function verifyRewardClaim(bytes32 root, address account, uint256 amount, RewardMerkleTreeVerifier.AccruedRewardsProof memory proof) external pure returns (bool);
+function verifyRewardClaim(bytes32 root, address account, uint256 amount, bytes32[160] memory proof) external pure returns (bool);
 ```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -539,11 +127,12 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
         #[allow(missing_docs)]
         pub amount: alloy::sol_types::private::primitives::aliases::U256,
         #[allow(missing_docs)]
-        pub proof: <RewardMerkleTreeVerifier::AccruedRewardsProof as alloy::sol_types::SolType>::RustType,
+        #[serde(with = "serde_arrays")]
+        pub proof: [alloy::sol_types::private::FixedBytes<32>; 160usize],
     }
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Default, Debug, PartialEq, Eq, Hash)]
-    ///Container type for the return parameters of the [`verifyRewardClaim(bytes32,address,uint256,(bytes32[]))`](verifyRewardClaimCall) function.
+    ///Container type for the return parameters of the [`verifyRewardClaim(bytes32,address,uint256,bytes32[160])`](verifyRewardClaimCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct verifyRewardClaimReturn {
@@ -565,14 +154,17 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
                 alloy::sol_types::sol_data::FixedBytes<32>,
                 alloy::sol_types::sol_data::Address,
                 alloy::sol_types::sol_data::Uint<256>,
-                RewardMerkleTreeVerifier::AccruedRewardsProof,
+                alloy::sol_types::sol_data::FixedArray<
+                    alloy::sol_types::sol_data::FixedBytes<32>,
+                    160usize,
+                >,
             );
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (
                 alloy::sol_types::private::FixedBytes<32>,
                 alloy::sol_types::private::Address,
                 alloy::sol_types::private::primitives::aliases::U256,
-                <RewardMerkleTreeVerifier::AccruedRewardsProof as alloy::sol_types::SolType>::RustType,
+                [alloy::sol_types::private::FixedBytes<32>; 160usize],
             );
             #[cfg(test)]
             #[allow(dead_code, unreachable_patterns)]
@@ -647,7 +239,10 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
                 alloy::sol_types::sol_data::FixedBytes<32>,
                 alloy::sol_types::sol_data::Address,
                 alloy::sol_types::sol_data::Uint<256>,
-                RewardMerkleTreeVerifier::AccruedRewardsProof,
+                alloy::sol_types::sol_data::FixedArray<
+                    alloy::sol_types::sol_data::FixedBytes<32>,
+                    160usize,
+                >,
             );
             type Token<'a> = <Self::Parameters<
                 'a,
@@ -657,8 +252,8 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
             type ReturnToken<'a> = <Self::ReturnTuple<
                 'a,
             > as alloy_sol_types::SolType>::Token<'a>;
-            const SIGNATURE: &'static str = "verifyRewardClaim(bytes32,address,uint256,(bytes32[]))";
-            const SELECTOR: [u8; 4] = [76u8, 109u8, 32u8, 210u8];
+            const SIGNATURE: &'static str = "verifyRewardClaim(bytes32,address,uint256,bytes32[160])";
+            const SELECTOR: [u8; 4] = [36u8, 187u8, 151u8, 120u8];
             #[inline]
             fn new<'a>(
                 tuple: <Self::Parameters<'a> as alloy_sol_types::SolType>::RustType,
@@ -677,9 +272,10 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
                     <alloy::sol_types::sol_data::Uint<
                         256,
                     > as alloy_sol_types::SolType>::tokenize(&self.amount),
-                    <RewardMerkleTreeVerifier::AccruedRewardsProof as alloy_sol_types::SolType>::tokenize(
-                        &self.proof,
-                    ),
+                    <alloy::sol_types::sol_data::FixedArray<
+                        alloy::sol_types::sol_data::FixedBytes<32>,
+                        160usize,
+                    > as alloy_sol_types::SolType>::tokenize(&self.proof),
                 )
             }
             #[inline]
@@ -714,12 +310,205 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
+    /**Function with signature `verifyRewardClaimAuthData(bytes32,address,uint256,bytes)` and selector `0xeb2dbe08`.
+```solidity
+function verifyRewardClaimAuthData(bytes32 root, address account, uint256 amount, bytes memory authData) external view returns (bool);
+```*/
+    #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
+    #[derive(Clone)]
+    pub struct verifyRewardClaimAuthDataCall {
+        #[allow(missing_docs)]
+        pub root: alloy::sol_types::private::FixedBytes<32>,
+        #[allow(missing_docs)]
+        pub account: alloy::sol_types::private::Address,
+        #[allow(missing_docs)]
+        pub amount: alloy::sol_types::private::primitives::aliases::U256,
+        #[allow(missing_docs)]
+        pub authData: alloy::sol_types::private::Bytes,
+    }
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
+    ///Container type for the return parameters of the [`verifyRewardClaimAuthData(bytes32,address,uint256,bytes)`](verifyRewardClaimAuthDataCall) function.
+    #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
+    #[derive(Clone)]
+    pub struct verifyRewardClaimAuthDataReturn {
+        #[allow(missing_docs)]
+        pub _0: bool,
+    }
+    #[allow(
+        non_camel_case_types,
+        non_snake_case,
+        clippy::pub_underscore_fields,
+        clippy::style
+    )]
+    const _: () = {
+        use alloy::sol_types as alloy_sol_types;
+        {
+            #[doc(hidden)]
+            #[allow(dead_code)]
+            type UnderlyingSolTuple<'a> = (
+                alloy::sol_types::sol_data::FixedBytes<32>,
+                alloy::sol_types::sol_data::Address,
+                alloy::sol_types::sol_data::Uint<256>,
+                alloy::sol_types::sol_data::Bytes,
+            );
+            #[doc(hidden)]
+            type UnderlyingRustTuple<'a> = (
+                alloy::sol_types::private::FixedBytes<32>,
+                alloy::sol_types::private::Address,
+                alloy::sol_types::private::primitives::aliases::U256,
+                alloy::sol_types::private::Bytes,
+            );
+            #[cfg(test)]
+            #[allow(dead_code, unreachable_patterns)]
+            fn _type_assertion(
+                _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+            ) {
+                match _t {
+                    alloy_sol_types::private::AssertTypeEq::<
+                        <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
+                    >(_) => {}
+                }
+            }
+            #[automatically_derived]
+            #[doc(hidden)]
+            impl ::core::convert::From<verifyRewardClaimAuthDataCall>
+            for UnderlyingRustTuple<'_> {
+                fn from(value: verifyRewardClaimAuthDataCall) -> Self {
+                    (value.root, value.account, value.amount, value.authData)
+                }
+            }
+            #[automatically_derived]
+            #[doc(hidden)]
+            impl ::core::convert::From<UnderlyingRustTuple<'_>>
+            for verifyRewardClaimAuthDataCall {
+                fn from(tuple: UnderlyingRustTuple<'_>) -> Self {
+                    Self {
+                        root: tuple.0,
+                        account: tuple.1,
+                        amount: tuple.2,
+                        authData: tuple.3,
+                    }
+                }
+            }
+        }
+        {
+            #[doc(hidden)]
+            #[allow(dead_code)]
+            type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Bool,);
+            #[doc(hidden)]
+            type UnderlyingRustTuple<'a> = (bool,);
+            #[cfg(test)]
+            #[allow(dead_code, unreachable_patterns)]
+            fn _type_assertion(
+                _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+            ) {
+                match _t {
+                    alloy_sol_types::private::AssertTypeEq::<
+                        <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
+                    >(_) => {}
+                }
+            }
+            #[automatically_derived]
+            #[doc(hidden)]
+            impl ::core::convert::From<verifyRewardClaimAuthDataReturn>
+            for UnderlyingRustTuple<'_> {
+                fn from(value: verifyRewardClaimAuthDataReturn) -> Self {
+                    (value._0,)
+                }
+            }
+            #[automatically_derived]
+            #[doc(hidden)]
+            impl ::core::convert::From<UnderlyingRustTuple<'_>>
+            for verifyRewardClaimAuthDataReturn {
+                fn from(tuple: UnderlyingRustTuple<'_>) -> Self {
+                    Self { _0: tuple.0 }
+                }
+            }
+        }
+        #[automatically_derived]
+        impl alloy_sol_types::SolCall for verifyRewardClaimAuthDataCall {
+            type Parameters<'a> = (
+                alloy::sol_types::sol_data::FixedBytes<32>,
+                alloy::sol_types::sol_data::Address,
+                alloy::sol_types::sol_data::Uint<256>,
+                alloy::sol_types::sol_data::Bytes,
+            );
+            type Token<'a> = <Self::Parameters<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
+            type Return = bool;
+            type ReturnTuple<'a> = (alloy::sol_types::sol_data::Bool,);
+            type ReturnToken<'a> = <Self::ReturnTuple<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
+            const SIGNATURE: &'static str = "verifyRewardClaimAuthData(bytes32,address,uint256,bytes)";
+            const SELECTOR: [u8; 4] = [235u8, 45u8, 190u8, 8u8];
+            #[inline]
+            fn new<'a>(
+                tuple: <Self::Parameters<'a> as alloy_sol_types::SolType>::RustType,
+            ) -> Self {
+                tuple.into()
+            }
+            #[inline]
+            fn tokenize(&self) -> Self::Token<'_> {
+                (
+                    <alloy::sol_types::sol_data::FixedBytes<
+                        32,
+                    > as alloy_sol_types::SolType>::tokenize(&self.root),
+                    <alloy::sol_types::sol_data::Address as alloy_sol_types::SolType>::tokenize(
+                        &self.account,
+                    ),
+                    <alloy::sol_types::sol_data::Uint<
+                        256,
+                    > as alloy_sol_types::SolType>::tokenize(&self.amount),
+                    <alloy::sol_types::sol_data::Bytes as alloy_sol_types::SolType>::tokenize(
+                        &self.authData,
+                    ),
+                )
+            }
+            #[inline]
+            fn tokenize_returns(ret: &Self::Return) -> Self::ReturnToken<'_> {
+                (
+                    <alloy::sol_types::sol_data::Bool as alloy_sol_types::SolType>::tokenize(
+                        ret,
+                    ),
+                )
+            }
+            #[inline]
+            fn abi_decode_returns(data: &[u8]) -> alloy_sol_types::Result<Self::Return> {
+                <Self::ReturnTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence(data)
+                    .map(|r| {
+                        let r: verifyRewardClaimAuthDataReturn = r.into();
+                        r._0
+                    })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                <Self::ReturnTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                    .map(|r| {
+                        let r: verifyRewardClaimAuthDataReturn = r.into();
+                        r._0
+                    })
+            }
+        }
+    };
     ///Container for all the [`RewardClaimPrototypeMock`](self) function calls.
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive()]
     pub enum RewardClaimPrototypeMockCalls {
         #[allow(missing_docs)]
         verifyRewardClaim(verifyRewardClaimCall),
+        #[allow(missing_docs)]
+        verifyRewardClaimAuthData(verifyRewardClaimAuthDataCall),
     }
     #[automatically_derived]
     impl RewardClaimPrototypeMockCalls {
@@ -729,18 +518,24 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
         /// No guarantees are made about the order of the selectors.
         ///
         /// Prefer using `SolInterface` methods instead.
-        pub const SELECTORS: &'static [[u8; 4usize]] = &[[76u8, 109u8, 32u8, 210u8]];
+        pub const SELECTORS: &'static [[u8; 4usize]] = &[
+            [36u8, 187u8, 151u8, 120u8],
+            [235u8, 45u8, 190u8, 8u8],
+        ];
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for RewardClaimPrototypeMockCalls {
         const NAME: &'static str = "RewardClaimPrototypeMockCalls";
         const MIN_DATA_LENGTH: usize = 160usize;
-        const COUNT: usize = 1usize;
+        const COUNT: usize = 2usize;
         #[inline]
         fn selector(&self) -> [u8; 4] {
             match self {
                 Self::verifyRewardClaim(_) => {
                     <verifyRewardClaimCall as alloy_sol_types::SolCall>::SELECTOR
+                }
+                Self::verifyRewardClaimAuthData(_) => {
+                    <verifyRewardClaimAuthDataCall as alloy_sol_types::SolCall>::SELECTOR
                 }
             }
         }
@@ -771,6 +566,19 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
                             .map(RewardClaimPrototypeMockCalls::verifyRewardClaim)
                     }
                     verifyRewardClaim
+                },
+                {
+                    fn verifyRewardClaimAuthData(
+                        data: &[u8],
+                    ) -> alloy_sol_types::Result<RewardClaimPrototypeMockCalls> {
+                        <verifyRewardClaimAuthDataCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data,
+                            )
+                            .map(
+                                RewardClaimPrototypeMockCalls::verifyRewardClaimAuthData,
+                            )
+                    }
+                    verifyRewardClaimAuthData
                 },
             ];
             let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
@@ -803,6 +611,19 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
                     }
                     verifyRewardClaim
                 },
+                {
+                    fn verifyRewardClaimAuthData(
+                        data: &[u8],
+                    ) -> alloy_sol_types::Result<RewardClaimPrototypeMockCalls> {
+                        <verifyRewardClaimAuthDataCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
+                                data,
+                            )
+                            .map(
+                                RewardClaimPrototypeMockCalls::verifyRewardClaimAuthData,
+                            )
+                    }
+                    verifyRewardClaimAuthData
+                },
             ];
             let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
                 return Err(
@@ -822,6 +643,11 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
                         inner,
                     )
                 }
+                Self::verifyRewardClaimAuthData(inner) => {
+                    <verifyRewardClaimAuthDataCall as alloy_sol_types::SolCall>::abi_encoded_size(
+                        inner,
+                    )
+                }
             }
         }
         #[inline]
@@ -833,124 +659,8 @@ function verifyRewardClaim(bytes32 root, address account, uint256 amount, Reward
                         out,
                     )
                 }
-            }
-        }
-    }
-    ///Container for all the [`RewardClaimPrototypeMock`](self) custom errors.
-    #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive(Debug, PartialEq, Eq, Hash)]
-    pub enum RewardClaimPrototypeMockErrors {
-        #[allow(missing_docs)]
-        InvalidProofLength(InvalidProofLength),
-    }
-    #[automatically_derived]
-    impl RewardClaimPrototypeMockErrors {
-        /// All the selectors of this enum.
-        ///
-        /// Note that the selectors might not be in the same order as the variants.
-        /// No guarantees are made about the order of the selectors.
-        ///
-        /// Prefer using `SolInterface` methods instead.
-        pub const SELECTORS: &'static [[u8; 4usize]] = &[[77u8, 197u8, 246u8, 164u8]];
-    }
-    #[automatically_derived]
-    impl alloy_sol_types::SolInterface for RewardClaimPrototypeMockErrors {
-        const NAME: &'static str = "RewardClaimPrototypeMockErrors";
-        const MIN_DATA_LENGTH: usize = 0usize;
-        const COUNT: usize = 1usize;
-        #[inline]
-        fn selector(&self) -> [u8; 4] {
-            match self {
-                Self::InvalidProofLength(_) => {
-                    <InvalidProofLength as alloy_sol_types::SolError>::SELECTOR
-                }
-            }
-        }
-        #[inline]
-        fn selector_at(i: usize) -> ::core::option::Option<[u8; 4]> {
-            Self::SELECTORS.get(i).copied()
-        }
-        #[inline]
-        fn valid_selector(selector: [u8; 4]) -> bool {
-            Self::SELECTORS.binary_search(&selector).is_ok()
-        }
-        #[inline]
-        #[allow(non_snake_case)]
-        fn abi_decode_raw(
-            selector: [u8; 4],
-            data: &[u8],
-        ) -> alloy_sol_types::Result<Self> {
-            static DECODE_SHIMS: &[fn(
-                &[u8],
-            ) -> alloy_sol_types::Result<RewardClaimPrototypeMockErrors>] = &[
-                {
-                    fn InvalidProofLength(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimPrototypeMockErrors> {
-                        <InvalidProofLength as alloy_sol_types::SolError>::abi_decode_raw(
-                                data,
-                            )
-                            .map(RewardClaimPrototypeMockErrors::InvalidProofLength)
-                    }
-                    InvalidProofLength
-                },
-            ];
-            let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(
-                    alloy_sol_types::Error::unknown_selector(
-                        <Self as alloy_sol_types::SolInterface>::NAME,
-                        selector,
-                    ),
-                );
-            };
-            DECODE_SHIMS[idx](data)
-        }
-        #[inline]
-        #[allow(non_snake_case)]
-        fn abi_decode_raw_validate(
-            selector: [u8; 4],
-            data: &[u8],
-        ) -> alloy_sol_types::Result<Self> {
-            static DECODE_VALIDATE_SHIMS: &[fn(
-                &[u8],
-            ) -> alloy_sol_types::Result<RewardClaimPrototypeMockErrors>] = &[
-                {
-                    fn InvalidProofLength(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimPrototypeMockErrors> {
-                        <InvalidProofLength as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(RewardClaimPrototypeMockErrors::InvalidProofLength)
-                    }
-                    InvalidProofLength
-                },
-            ];
-            let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(
-                    alloy_sol_types::Error::unknown_selector(
-                        <Self as alloy_sol_types::SolInterface>::NAME,
-                        selector,
-                    ),
-                );
-            };
-            DECODE_VALIDATE_SHIMS[idx](data)
-        }
-        #[inline]
-        fn abi_encoded_size(&self) -> usize {
-            match self {
-                Self::InvalidProofLength(inner) => {
-                    <InvalidProofLength as alloy_sol_types::SolError>::abi_encoded_size(
-                        inner,
-                    )
-                }
-            }
-        }
-        #[inline]
-        fn abi_encode_raw(&self, out: &mut alloy_sol_types::private::Vec<u8>) {
-            match self {
-                Self::InvalidProofLength(inner) => {
-                    <InvalidProofLength as alloy_sol_types::SolError>::abi_encode_raw(
+                Self::verifyRewardClaimAuthData(inner) => {
+                    <verifyRewardClaimAuthDataCall as alloy_sol_types::SolCall>::abi_encode_raw(
                         inner,
                         out,
                     )
@@ -1128,7 +838,7 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
             root: alloy::sol_types::private::FixedBytes<32>,
             account: alloy::sol_types::private::Address,
             amount: alloy::sol_types::private::primitives::aliases::U256,
-            proof: <RewardMerkleTreeVerifier::AccruedRewardsProof as alloy::sol_types::SolType>::RustType,
+            proof: [alloy::sol_types::private::FixedBytes<32>; 160usize],
         ) -> alloy_contract::SolCallBuilder<&P, verifyRewardClaimCall, N> {
             self.call_builder(
                 &verifyRewardClaimCall {
@@ -1136,6 +846,23 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
                     account,
                     amount,
                     proof,
+                },
+            )
+        }
+        ///Creates a new call builder for the [`verifyRewardClaimAuthData`] function.
+        pub fn verifyRewardClaimAuthData(
+            &self,
+            root: alloy::sol_types::private::FixedBytes<32>,
+            account: alloy::sol_types::private::Address,
+            amount: alloy::sol_types::private::primitives::aliases::U256,
+            authData: alloy::sol_types::private::Bytes,
+        ) -> alloy_contract::SolCallBuilder<&P, verifyRewardClaimAuthDataCall, N> {
+            self.call_builder(
+                &verifyRewardClaimAuthDataCall {
+                    root,
+                    account,
+                    amount,
+                    authData,
                 },
             )
         }
