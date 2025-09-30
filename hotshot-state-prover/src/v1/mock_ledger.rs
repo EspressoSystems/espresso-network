@@ -18,11 +18,11 @@ use hotshot_types::{
 };
 use itertools::izip;
 use jf_pcs::prelude::UnivariateUniversalParams;
-use jf_plonk::{
+use jf_plonk_unsafe::{
     proof_system::{PlonkKzgSnark, UniversalSNARK},
     transcript::SolidityTranscript,
 };
-use jf_relation::{Arithmetization, Circuit, PlonkCircuit};
+use jf_relation_unsafe::{Arithmetization, Circuit, PlonkCircuit};
 use jf_signature::{
     bls_over_bn254::{BLSOverBN254CurveSignatureScheme, VerKey as BLSVerKey},
     schnorr::{SchnorrSignatureScheme, Signature},

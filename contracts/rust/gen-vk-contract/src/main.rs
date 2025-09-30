@@ -40,18 +40,18 @@ fn main() {
         }
     };
     let (_, vk) = if mock {
-        hotshot_state_prover::v3::preprocess(&srs, 10).expect("Circuit preprocess failed")
+        hotshot_state_prover::v1::preprocess(&srs, 10).expect("Circuit preprocess failed")
     } else {
-        hotshot_state_prover::v3::preprocess(&srs, DEFAULT_STAKE_TABLE_CAPACITY)
+        hotshot_state_prover::v1::preprocess(&srs, DEFAULT_STAKE_TABLE_CAPACITY)
             .expect("Circuit preprocess failed")
     };
-    let vk: VerifyingKeySol = vk.into();
+    let vk: VerifyingKeySol = hotshot_state_prover::v1::vk_to_sol(&vk);
 
     // calculate the path to solidity file
     let contract_name = if mock {
         "LightClientStateUpdateVKMock"
     } else {
-        "LightClientStateUpdateVKV3"
+        "LightClientStateUpdateVK"
     };
     let mut path = PathBuf::new();
     path.push(env!("CARGO_MANIFEST_DIR"));

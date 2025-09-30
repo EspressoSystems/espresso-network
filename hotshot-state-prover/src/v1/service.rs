@@ -22,7 +22,7 @@ use hotshot_types::{
     traits::signature_key::LCV1StateSignatureKey,
 };
 use jf_pcs::prelude::UnivariateUniversalParams;
-use jf_relation::Circuit as _;
+use jf_relation_unsafe::Circuit as _;
 use surf_disco::Client;
 use tide_disco::{error::ServerError, Api};
 use time::ext::InstantExt;
@@ -30,7 +30,10 @@ use tokio::{io, spawn, task::spawn_blocking, time::sleep};
 use vbs::version::StaticVersionType;
 
 use crate::{
-    v1::snark::{Proof, ProvingKey, PublicInput},
+    v1::{
+        proof_to_sol,
+        snark::{Proof, ProvingKey, PublicInput},
+    },
     ProverError, ProverServiceState, StateProverConfig,
 };
 
@@ -122,7 +125,7 @@ pub async fn submit_state_and_proof(
 ) -> Result<TransactionReceipt, ProverError> {
     let contract = LightClient::new(address, &provider);
     // prepare the input the contract call and the tx itself
-    let proof: PlonkProofSol = proof.into();
+    let proof: PlonkProofSol = proof_to_sol(&proof);
     let new_state: LightClientStateSol = public_input.lc_state.into();
 
     let tx = contract.newFinalizedState(new_state, proof);
