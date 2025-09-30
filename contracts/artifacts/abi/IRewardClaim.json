@@ -9,21 +9,9 @@
         "internalType": "uint256"
       },
       {
-        "name": "proof",
-        "type": "tuple",
-        "internalType": "struct IRewardClaim.LifetimeRewardsProof",
-        "components": [
-          {
-            "name": "siblings",
-            "type": "bytes32[]",
-            "internalType": "bytes32[]"
-          }
-        ]
-      },
-      {
-        "name": "authRootInputs",
-        "type": "bytes32[7]",
-        "internalType": "bytes32[7]"
+        "name": "authData",
+        "type": "bytes",
+        "internalType": "bytes"
       }
     ],
     "outputs": [],

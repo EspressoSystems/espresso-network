@@ -1338,6 +1338,11 @@
   },
   {
     "type": "error",
+    "name": "InvalidScalar",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "NoChangeRequired",
     "inputs": []
   },

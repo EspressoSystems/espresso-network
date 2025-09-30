@@ -9,8 +9,10 @@ use std::{
 use anyhow::Result;
 use committable::Committable;
 use espresso_types::{
-    v0_1::ADVZNsProof, v0_3::RewardAccountV1, v0_4::RewardAccountV2, FeeAccount, FeeMerkleTree,
-    NamespaceId, NsProof, PubKey, Transaction,
+    v0_1::ADVZNsProof,
+    v0_3::RewardAccountV1,
+    v0_4::{RewardAccountV2, RewardClaimError},
+    FeeAccount, FeeMerkleTree, NamespaceId, NsProof, PubKey, Transaction,
 };
 // re-exported here to avoid breaking changes in consumers
 // "deprecated" does not work with "pub use": https://github.com/rust-lang/rust/issues/30827
@@ -53,7 +55,9 @@ use super::{
     },
     StorageState,
 };
-use crate::{SeqTypes, SequencerApiVersion, SequencerPersistence};
+use crate::{
+    api::RewardAccountProofDataSource, SeqTypes, SequencerApiVersion, SequencerPersistence,
+};
 
 pub(super) fn fee<State, Ver>(
     api_ver: semver::Version,
@@ -92,8 +96,14 @@ where
     Ok(api)
 }
 
+pub enum RewardMerkleTreeVersion {
+    V1,
+    V2,
+}
+
 pub(super) fn reward<State, Ver, MT, const ARITY: usize>(
     api_ver: semver::Version,
+    merkle_tree_version: RewardMerkleTreeVersion,
 ) -> Result<Api<State, merklized_state::Error, Ver>>
 where
     State: 'static + Send + Sync + ReadState,
@@ -103,6 +113,7 @@ where
     <MT as MerklizedState<SeqTypes, ARITY>>::Entry: std::marker::Copy,
     <State as ReadState>::State: Send
         + Sync
+        + RewardAccountProofDataSource
         + MerklizedStateDataSource<SeqTypes, MT, ARITY>
         + MerklizedStateHeightPersistence,
 {
@@ -156,35 +167,120 @@ where
             Ok(path.elem().copied())
         }
         .boxed()
-    })?
-    .get("get_reward_account_proof", move |req, state| {
-        async move {
-            let address = req.string_param("address")?;
-            let height = state.get_last_state_height().await?;
-            let snapshot = Snapshot::Index(height as u64);
-            let key = address
-                .parse()
-                .map_err(|_| merklized_state::Error::Custom {
-                    message: "failed to parse reward address".to_string(),
-                    status: StatusCode::BAD_REQUEST,
-                })?;
-
-            let last_height = state.get_last_state_height().await?;
-
-            if height > last_height {
-                return Err(merklized_state::Error::Custom {
-                    message: format!(
-                        "requested height {height} is greater than last known height {last_height}"
-                    ),
-                    status: StatusCode::BAD_REQUEST,
-                });
-            }
-
-            let path = state.get_path(snapshot, key).await?;
-            Ok(path)
-        }
-        .boxed()
     })?;
+
+    match merkle_tree_version {
+        RewardMerkleTreeVersion::V1 => {
+            api.get("get_reward_account_proof", move |req, state| {
+                async move {
+                    let address = req.string_param("address")?;
+                    let height = req.integer_param("height")?;
+                    let account = address
+                        .parse()
+                        .map_err(|_| merklized_state::Error::Custom {
+                            message: format!("invalid reward address: {address}"),
+                            status: StatusCode::BAD_REQUEST,
+                        })?;
+
+                    state
+                        .load_v1_reward_account_proof(height, account)
+                        .await
+                        .map_err(|err| merklized_state::Error::Custom {
+                            message: format!(
+                                "failed to load v1 reward account {address} at height {height}: \
+                                 {err}"
+                            ),
+                            status: StatusCode::NOT_FOUND,
+                        })
+                }
+                .boxed()
+            })?;
+        },
+        RewardMerkleTreeVersion::V2 => {
+            api.get("get_reward_account_proof", move |req, state| {
+                async move {
+                    let address = req.string_param("address")?;
+                    let height = req.integer_param("height")?;
+                    let account = address
+                        .parse()
+                        .map_err(|_| merklized_state::Error::Custom {
+                            message: format!("invalid reward address: {address}"),
+                            status: StatusCode::BAD_REQUEST,
+                        })?;
+
+                    state
+                        .load_v2_reward_account_proof(height, account)
+                        .await
+                        .map_err(|err| merklized_state::Error::Custom {
+                            message: format!(
+                                "failed to load v2 reward account {address} at height {height}: \
+                                 {err}"
+                            ),
+                            status: StatusCode::NOT_FOUND,
+                        })
+                }
+                .boxed()
+            })?;
+
+            api.get("get_reward_claim_input", move |req, state| {
+                async move {
+                    let address = req.string_param("address")?;
+                    let height = req.integer_param("height")?;
+                    let account = address
+                        .parse()
+                        .map_err(|_| merklized_state::Error::Custom {
+                            message: format!("invalid reward address: {address}"),
+                            status: StatusCode::BAD_REQUEST,
+                        })?;
+
+                    let proof = state
+                        .load_v2_reward_account_proof(height, account)
+                        .await
+                        .map_err(|err| merklized_state::Error::Custom {
+                            message: format!(
+                                "failed to load v2 reward account {address} at height {height}: \
+                                 {err}"
+                            ),
+                            status: StatusCode::NOT_FOUND,
+                        })?;
+
+                    // TODO: (MA) this will eventually be the other (non reward MT root) auth root
+                    // inputs, for the foreseeable future they will be all zero. And it's as of yet
+                    // unclear. It seems reasonable to delay the required refactoring work until
+                    // we are closer to needing it.
+                    let claim_input = match proof.to_reward_claim_input(Default::default()) {
+                        Ok(input) => input,
+                        Err(RewardClaimError::ZeroRewardError) => {
+                            return Err(merklized_state::Error::Custom {
+                                message: format!(
+                                    "zero reward balance for {address} at height {height}"
+                                ),
+                                status: StatusCode::NOT_FOUND,
+                            })
+                        },
+                        Err(RewardClaimError::ProofConversionError(err)) => {
+                            let message = format!(
+                                "failed to create solidity proof for {address} at height \
+                                 {height}: {err}",
+                            );
+                            tracing::warn!("{message}");
+                            // Normally we would not want to return the internal error via the
+                            // API response but this is an error that should never occur. No
+                            // secret data involved so it seems fine to return it.
+                            return Err(merklized_state::Error::Custom {
+                                message,
+                                status: StatusCode::INTERNAL_SERVER_ERROR,
+                            });
+                        },
+                    };
+
+                    Ok(claim_input)
+                }
+                .boxed()
+            })?;
+        },
+    }
+
     Ok(api)
 }
 

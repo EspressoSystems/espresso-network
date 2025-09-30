@@ -2,6 +2,7 @@
 pragma solidity ^0.8.28;
 
 import "../../src/libraries/RewardMerkleTreeVerifier.sol";
+import "../../src/interfaces/IRewardClaim.sol";
 
 /**
  * @title RewardClaimPrototypeMock
@@ -23,8 +24,19 @@ contract RewardClaimPrototypeMock {
         bytes32 root,
         address account,
         uint256 amount,
-        RewardMerkleTreeVerifier.AccruedRewardsProof calldata proof
+        bytes32[160] calldata proof
     ) external pure returns (bool) {
         return RewardMerkleTreeVerifier.verifyMembership(root, account, amount, proof);
+    }
+
+    // Ensure we test the abi.decoding until we have the full reward claim contract.
+    function verifyRewardClaimAuthData(
+        bytes32 root,
+        address account,
+        uint256 amount,
+        bytes calldata authData
+    ) external view returns (bool) {
+        (bytes32[160] memory proof,) = abi.decode(authData, (bytes32[160], bytes32[7]));
+        return this.verifyRewardClaim(root, account, amount, proof);
     }
 }

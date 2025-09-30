@@ -9,27 +9,70 @@ use anyhow::Result;
 use espresso_types::{
     v0::v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleTreeV2},
     v0_3::RewardAmount,
-    v0_4::REWARD_MERKLE_TREE_V2_HEIGHT,
+    v0_4::{RewardAccountQueryDataV2, REWARD_MERKLE_TREE_V2_HEIGHT},
 };
-use hotshot_contract_adapter::sol_types::{AccruedRewardsProofSol, RewardClaimPrototypeMock};
+use hotshot_contract_adapter::sol_types::RewardClaimPrototypeMock;
 use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
 use rand::Rng as _;
 
 #[test_log::test(tokio::test)]
 async fn test_single_key_tree() -> Result<()> {
-    test_tree_helper(1).await
+    run_multiple_tests(1, 10).await
 }
 
 #[test_log::test(tokio::test)]
 async fn test_large_tree() -> Result<()> {
-    test_tree_helper(1000).await
+    run_multiple_tests(10_000, 10).await
+}
+
+async fn run_multiple_tests(num_keys: usize, iterations: usize) -> Result<()> {
+    let mut gas_measurements = Vec::new();
+
+    for i in 0..iterations {
+        println!(
+            "Running iteration {} of {} for {}-key tree",
+            i + 1,
+            iterations,
+            num_keys
+        );
+        let gas_used = test_tree_helper(num_keys).await?;
+        gas_measurements.push(gas_used as f64);
+    }
+
+    let mean = gas_measurements.iter().sum::<f64>() / gas_measurements.len() as f64;
+    let variance = gas_measurements
+        .iter()
+        .map(|x| (x - mean).powi(2))
+        .sum::<f64>()
+        / gas_measurements.len() as f64;
+    let std_dev = variance.sqrt();
+
+    let min_gas = gas_measurements
+        .iter()
+        .fold(f64::INFINITY, |a, &b| a.min(b));
+    let max_gas = gas_measurements
+        .iter()
+        .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+
+    println!(
+        "\n=== Gas Usage for {}-key tree ({} runs) ===",
+        num_keys, iterations
+    );
+    println!(
+        "Gas usage: {:.1} ± {:.2} k",
+        mean / 1000.0,
+        std_dev / 1000.0
+    );
+    println!("Range: {:.1}k - {:.1}k", min_gas / 1000.0, max_gas / 1000.0);
+
+    Ok(())
 }
 
 /// Tests that we can verify a proof in the solidity verifier
 ///
 /// Show that we maintain overall compatibility with jellyfish with reasonable
 /// gas cost as we develop reward claims.
-async fn test_tree_helper(num_keys: usize) -> Result<()> {
+async fn test_tree_helper(num_keys: usize) -> Result<u64> {
     // Start Anvil
     let anvil = Anvil::new().try_spawn()?;
 
@@ -42,11 +85,6 @@ async fn test_tree_helper(num_keys: usize) -> Result<()> {
 
     // Deploy contract
     let contract = RewardClaimPrototypeMock::deploy(&provider).await?;
-
-    println!(
-        "Testing {num_keys}-key RewardMerkleTreeV2 at: {}",
-        contract.address()
-    );
 
     let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
 
@@ -74,33 +112,47 @@ async fn test_tree_helper(num_keys: usize) -> Result<()> {
 
     println!("Generating proof for account: {test_account}");
 
-    let (proof, amount) =
-        RewardAccountProofV2::prove(&tree, test_account.0).expect("can generate proof");
-    assert_eq!(amount, test_amount.0);
+    let query_data: RewardAccountQueryDataV2 = RewardAccountProofV2::prove(&tree, test_account.0)
+        .expect("can generate proof")
+        .into();
+    assert_eq!(query_data.balance, test_amount.0);
 
-    let proof_sol: AccruedRewardsProofSol = proof.try_into()?;
-    let account_sol = test_account.into();
+    let reward_claim_input = query_data.to_reward_claim_input(Default::default())?;
 
     // Verify membership using Solidity contract
     let is_valid = contract
-        .verifyRewardClaim(root, account_sol, amount, proof_sol.clone())
+        .verifyRewardClaimAuthData(
+            root,
+            test_account.0,
+            test_amount.0,
+            reward_claim_input.clone().auth_data.into(),
+        )
         .call()
         .await?;
 
     assert!(is_valid, "Membership proof invalid");
 
     let is_valid = contract
-        .verifyRewardClaim(root, account_sol, amount + U256::from(1), proof_sol.clone())
+        .verifyRewardClaimAuthData(
+            root,
+            test_account.0,
+            test_amount.0 + U256::from(1),
+            reward_claim_input.clone().auth_data.into(),
+        )
         .call()
         .await?;
 
     assert!(!is_valid, "Membership proof should be invalid");
 
     let gas_used = contract
-        .verifyRewardClaim(root, account_sol, amount, proof_sol)
+        .verifyRewardClaimAuthData(
+            root,
+            test_account.0,
+            test_amount.0,
+            reward_claim_input.auth_data.into(),
+        )
         .estimate_gas()
         .await?;
-    println!("Gas used for membership verification: {gas_used}");
 
-    Ok(())
+    Ok(gas_used)
 }

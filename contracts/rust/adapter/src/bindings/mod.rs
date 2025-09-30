@@ -8,6 +8,7 @@ pub mod r#esp_token;
 pub mod r#esp_token_v2;
 pub mod r#fee_contract;
 pub mod r#i_plonk_verifier;
+pub mod r#i_reward_claim;
 pub mod r#light_client;
 pub mod r#light_client_arbitrum;
 pub mod r#light_client_arbitrum_v2;
