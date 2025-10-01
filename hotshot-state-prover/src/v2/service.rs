@@ -41,10 +41,7 @@ use url::Url;
 use vbs::version::{StaticVersion, StaticVersionType};
 
 use crate::{
-    v2::{
-        proof_to_sol,
-        snark::{Proof, ProvingKey, PublicInput},
-    },
+    v2::snark::{Proof, ProvingKey, PublicInput},
     ProverError, ProverServiceState, StateProverConfig,
 };
 
@@ -137,7 +134,7 @@ pub async fn submit_state_and_proof(
 ) -> Result<TransactionReceipt, ProverError> {
     let contract = LightClientV2::new(address, &provider);
     // prepare the input the contract call and the tx itself
-    let proof: PlonkProofSol = proof_to_sol(&proof);
+    let proof: PlonkProofSol = proof.into();
     let new_state: LightClientStateSol = public_input.lc_state.into();
     let next_stake_table: StakeTableStateSol = public_input.next_st_state.into();
 

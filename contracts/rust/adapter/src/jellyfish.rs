@@ -482,174 +482,28 @@ impl ChallengesSol {
 
 impl From<VerifyingKeyCompat<Bn254>> for VerifyingKeySol {
     fn from(vk: VerifyingKeyCompat<Bn254>) -> Self {
-        let g2_bytes = to_bytes!(&vk.open_key.powers_of_h[1]).unwrap();
-        assert!(g2_bytes.len() == 64);
-        let mut g2_lsb = [0u8; 32];
-        let mut g2_msb = [0u8; 32];
-        g2_lsb.copy_from_slice(&g2_bytes[..32]);
-        g2_msb.copy_from_slice(&g2_bytes[32..]);
-
-        // since G2 point from the Aztec's SRS we use is fixed
-        // remove these sanity check if using other SRS
-        // generated via:
-        // ```rust
-        // let srs = ark_srs::kzg10::aztec20::setup(2u64.pow(6) as usize + 2).expect("Aztec SRS fail to load");
-        // println!("{}", hex::encode(jf_utils::to_bytes!(&srs.beta_h).unwrap()));
-        // ```
-        assert_eq!(
-            g2_lsb.encode_hex(),
-            String::from("b0838893ec1f237e8b07323b0744599f4e97b598b3b589bcc2bc37b8d5c41801")
-        );
-        assert_eq!(
-            g2_msb.encode_hex(),
-            String::from("c18393c0fa30fe4e8b038e357ad851eae8de9107584effe7c7f1f651b2010e26")
-        );
-
-        Self {
-            domainSize: U256::from(vk.domain_size),
-            numInputs: U256::from(vk.num_inputs),
-            sigma0: vk.sigma_comms[0].0.into(),
-            sigma1: vk.sigma_comms[1].0.into(),
-            sigma2: vk.sigma_comms[2].0.into(),
-            sigma3: vk.sigma_comms[3].0.into(),
-            sigma4: vk.sigma_comms[4].0.into(),
-            q1: vk.selector_comms[0].0.into(),
-            q2: vk.selector_comms[1].0.into(),
-            q3: vk.selector_comms[2].0.into(),
-            q4: vk.selector_comms[3].0.into(),
-            qM12: vk.selector_comms[4].0.into(),
-            qM34: vk.selector_comms[5].0.into(),
-            qH1: vk.selector_comms[6].0.into(),
-            qH2: vk.selector_comms[7].0.into(),
-            qH3: vk.selector_comms[8].0.into(),
-            qH4: vk.selector_comms[9].0.into(),
-            qO: vk.selector_comms[10].0.into(),
-            qC: vk.selector_comms[11].0.into(),
-            qEcc: vk.selector_comms[12].0.into(),
-            g2LSB: g2_lsb.into(),
-            g2MSB: g2_msb.into(),
-        }
+        let vk: VerifyingKey<Bn254> = unsafe { std::mem::transmute(vk) };
+        vk.into()
     }
 }
 
 impl From<VerifyingKeySol> for VerifyingKeyCompat<Bn254> {
     fn from(vk: VerifyingKeySol) -> Self {
-        let sigma_comms = vec![
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(vk.sigma0)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(vk.sigma1)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(vk.sigma2)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(vk.sigma3)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(vk.sigma4)),
-        ];
-
-        let selector_comms = vec![
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(vk.q1)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(vk.q2)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(vk.q3)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(vk.q4)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(vk.qM12)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(vk.qM34)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(vk.qH1)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(vk.qH2)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(vk.qH3)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(vk.qH4)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(vk.qO)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(vk.qC)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(vk.qEcc)),
-        ];
-
-        Self {
-            domain_size: vk.domainSize.to::<usize>(),
-            num_inputs: vk.numInputs.to::<usize>(),
-            sigma_comms,
-            selector_comms,
-            k: coset_k(),
-            open_key: open_key(),
-            is_merged: false,
-            plookup_vk: None,
-        }
+        let vk: VerifyingKey<Bn254> = vk.into();
+        unsafe { std::mem::transmute(vk) }
     }
 }
 
 impl From<ProofCompat<Bn254>> for PlonkProofSol {
     fn from(proof: ProofCompat<Bn254>) -> Self {
-        Self {
-            wire0: proof.wires_poly_comms[0].0.into(),
-            wire1: proof.wires_poly_comms[1].0.into(),
-            wire2: proof.wires_poly_comms[2].0.into(),
-            wire3: proof.wires_poly_comms[3].0.into(),
-            wire4: proof.wires_poly_comms[4].0.into(),
-            prodPerm: proof.prod_perm_poly_comm.0.into(),
-            split0: proof.split_quot_poly_comms[0].0.into(),
-            split1: proof.split_quot_poly_comms[1].0.into(),
-            split2: proof.split_quot_poly_comms[2].0.into(),
-            split3: proof.split_quot_poly_comms[3].0.into(),
-            split4: proof.split_quot_poly_comms[4].0.into(),
-            zeta: proof.opening_proof.0.into(),
-            zetaOmega: proof.shifted_opening_proof.0.into(),
-            wireEval0: field_to_u256(proof.poly_evals.wires_evals[0]),
-            wireEval1: field_to_u256(proof.poly_evals.wires_evals[1]),
-            wireEval2: field_to_u256(proof.poly_evals.wires_evals[2]),
-            wireEval3: field_to_u256(proof.poly_evals.wires_evals[3]),
-            wireEval4: field_to_u256(proof.poly_evals.wires_evals[4]),
-            sigmaEval0: field_to_u256(proof.poly_evals.wire_sigma_evals[0]),
-            sigmaEval1: field_to_u256(proof.poly_evals.wire_sigma_evals[1]),
-            sigmaEval2: field_to_u256(proof.poly_evals.wire_sigma_evals[2]),
-            sigmaEval3: field_to_u256(proof.poly_evals.wire_sigma_evals[3]),
-            prodPermZetaOmegaEval: field_to_u256(proof.poly_evals.perm_next_eval),
-        }
+        let proof: Proof<Bn254> = unsafe { std::mem::transmute(proof) };
+        proof.into()
     }
 }
 
 impl From<PlonkProofSol> for ProofCompat<Bn254> {
     fn from(proof: PlonkProofSol) -> Self {
-        let wires_poly_comms = vec![
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(proof.wire0)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(proof.wire1)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(proof.wire2)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(proof.wire3)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(proof.wire4)),
-        ];
-        let split_quot_poly_comms = vec![
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(proof.split0)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(proof.split1)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(proof.split2)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(proof.split3)),
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(proof.split4)),
-        ];
-        let prod_perm_poly_comm =
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(proof.prodPerm));
-        let opening_proof = Commitment::from(<G1PointSol as Into<G1Affine>>::into(proof.zeta));
-        let shifted_opening_proof =
-            Commitment::from(<G1PointSol as Into<G1Affine>>::into(proof.zetaOmega));
-
-        let wires_evals = vec![
-            u256_to_field(proof.wireEval0),
-            u256_to_field(proof.wireEval1),
-            u256_to_field(proof.wireEval2),
-            u256_to_field(proof.wireEval3),
-            u256_to_field(proof.wireEval4),
-        ];
-        let wire_sigma_evals = vec![
-            u256_to_field(proof.sigmaEval0),
-            u256_to_field(proof.sigmaEval1),
-            u256_to_field(proof.sigmaEval2),
-            u256_to_field(proof.sigmaEval3),
-        ];
-        let perm_next_eval = u256_to_field(proof.prodPermZetaOmegaEval);
-
-        Self {
-            wires_poly_comms,
-            prod_perm_poly_comm,
-            split_quot_poly_comms,
-            opening_proof,
-            shifted_opening_proof,
-            poly_evals: jf_plonk_compat::proof_system::structs::ProofEvaluations {
-                wires_evals,
-                wire_sigma_evals,
-                perm_next_eval,
-            },
-            plookup_proof: None,
-        }
+        let proof: Proof<Bn254> = proof.into();
+        unsafe { std::mem::transmute(proof) }
     }
 }

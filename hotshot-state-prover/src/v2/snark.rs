@@ -1,12 +1,10 @@
 use alloy::primitives::U256;
 use ark_bn254::Bn254;
 use ark_ed_on_bn254::EdwardsConfig;
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{
     borrow::Borrow,
     rand::{CryptoRng, RngCore},
 };
-use hotshot_contract_adapter::sol_types::{PlonkProofSol, VerifyingKeySol};
 /// BLS verification key, base field and Schnorr verification key
 use hotshot_types::light_client::{CircuitField, LightClientState, StakeTableState, StateVerKey};
 use jf_plonk_compat::{
@@ -28,25 +26,6 @@ pub type UniversalSrs = jf_plonk_compat::proof_system::structs::UniversalSrs<Bn2
 /// Public input to the light client state prover service
 pub type PublicInput = super::circuit::GenericPublicInput<CircuitField>;
 
-pub fn proof_to_sol(proof: &Proof) -> PlonkProofSol {
-    let mut bytes = Vec::new();
-    proof.serialize_uncompressed(&mut bytes).unwrap();
-    jf_plonk::proof_system::structs::Proof::<Bn254>::deserialize_uncompressed_unchecked(
-        bytes.as_slice(),
-    )
-    .unwrap()
-    .into()
-}
-
-pub fn vk_to_sol(vk: &VerifyingKey) -> VerifyingKeySol {
-    let mut bytes = Vec::new();
-    vk.serialize_uncompressed(&mut bytes).unwrap();
-    jf_plonk::proof_system::structs::VerifyingKey::<Bn254>::deserialize_uncompressed_unchecked(
-        bytes.as_slice(),
-    )
-    .unwrap()
-    .into()
-}
 /// Given a SRS, returns the proving key and verifying key for state update
 /// # Errors
 /// Errors if unable to preprocess
