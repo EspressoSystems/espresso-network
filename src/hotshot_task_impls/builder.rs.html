@@ -73,12 +73,12 @@
 <a href=#73 id=73 data-nosnippet>73</a>    /// # Panics
 <a href=#74 id=74 data-nosnippet>74</a>    ///
 <a href=#75 id=75 data-nosnippet>75</a>    /// If the URL is malformed.
-<a href=#76 id=76 data-nosnippet>76</a>    </span><span class="kw">pub fn </span>new(base_url: <span class="kw">impl </span>Into&lt;Url&gt;) -&gt; <span class="self">Self </span>{
+<a href=#76 id=76 data-nosnippet>76</a>    </span><span class="kw">pub fn </span>new(base_url: <span class="kw">impl </span>Into&lt;Url&gt;, request_timeout: Duration) -&gt; <span class="self">Self </span>{
 <a href=#77 id=77 data-nosnippet>77</a>        <span class="kw">let </span>url = base_url.into();
 <a href=#78 id=78 data-nosnippet>78</a>
 <a href=#79 id=79 data-nosnippet>79</a>        <span class="self">Self </span>{
 <a href=#80 id=80 data-nosnippet>80</a>            client: Client::builder(url.clone())
-<a href=#81 id=81 data-nosnippet>81</a>                .set_timeout(<span class="prelude-val">Some</span>(Duration::from_secs(<span class="number">2</span>)))
+<a href=#81 id=81 data-nosnippet>81</a>                .set_timeout(<span class="prelude-val">Some</span>(request_timeout))
 <a href=#82 id=82 data-nosnippet>82</a>                .build(),
 <a href=#83 id=83 data-nosnippet>83</a>            _marker: std::marker::PhantomData,
 <a href=#84 id=84 data-nosnippet>84</a>        }
