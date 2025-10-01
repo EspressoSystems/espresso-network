@@ -226,6 +226,17 @@ func (c *Client) StreamTransactions(ctx context.Context, height uint64) (Stream[
 	return &WsStream[types.TransactionQueryData]{conn: conn}, nil
 }
 
+func (c *Client) StreamTransactionsInNamespace(ctx context.Context, height uint64, namespace uint64) (Stream[types.TransactionQueryData], error) {
+	opts := &websocket.DialOptions{}
+	opts.HTTPClient = c.client
+	url := c.baseUrl + fmt.Sprintf("availability/stream/transactions/%d/namespace/%d", height, namespace)
+	conn, _, err := websocket.Dial(ctx, url, opts)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
+	}
+	return &WsStream[types.TransactionQueryData]{conn: conn}, nil
+}
+
 type NamespaceResponse struct {
 	Proof        *json.RawMessage     `json:"proof"`
 	Transactions *[]types.Transaction `json:"transactions"`

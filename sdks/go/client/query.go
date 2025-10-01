@@ -29,6 +29,8 @@ type QueryService interface {
 	FetchExplorerTransactionByHash(ctx context.Context, hash *types.TaggedBase64) (types.ExplorerTransactionQueryData, error)
 	// Stream transactions starting from the given height.
 	StreamTransactions(ctx context.Context, height uint64) (Stream[types.TransactionQueryData], error)
+	// Stream transactions starting from the given height, filtered by namespace.
+	StreamTransactionsInNamespace(ctx context.Context, height uint64, namespace uint64) (Stream[types.TransactionQueryData], error)
 }
 
 type Stream[S any] interface {
