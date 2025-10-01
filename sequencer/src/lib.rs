@@ -45,9 +45,7 @@ use espresso_types::v0::traits::SequencerPersistence;
 pub use genesis::Genesis;
 use hotshot::{
     traits::implementations::{
-        derive_libp2p_multiaddr, derive_libp2p_peer_id, CdnMetricsValue, CdnTopic,
-        CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork, MemoryNetwork, PushCdnNetwork,
-        RequestResponseConfig, WrappedSignatureKey,
+        CdnTopic, GossipConfig, Libp2pNetwork, MemoryNetwork, RequestResponseConfig, derive_libp2p_multiaddr, derive_libp2p_peer_id
     },
     types::SignatureKey,
 };
@@ -420,17 +418,17 @@ where
         topics
     };
 
-    // Initialize the push CDN network (and perform the initial connection)
-    let cdn_network = PushCdnNetwork::new(
-        network_params.cdn_endpoint,
-        topics,
-        KeyPair {
-            public_key: WrappedSignatureKey(validator_config.public_key),
-            private_key: validator_config.private_key.clone(),
-        },
-        CdnMetricsValue::new(metrics),
-    )
-    .with_context(|| format!("Failed to create CDN network {node_index}"))?;
+    // // Initialize the push CDN network (and perform the initial connection)
+    // let cdn_network = PushCdnNetwork::new(
+    //     network_params.cdn_endpoint,
+    //     topics,
+    //     KeyPair {
+    //         public_key: WrappedSignatureKey(validator_config.public_key),
+    //         private_key: validator_config.private_key.clone(),
+    //     },
+    //     CdnMetricsValue::new(metrics),
+    // )
+    // .with_context(|| format!("Failed to create CDN network {node_index}"))?;
 
     // Configure gossipsub based on the command line options
     let gossip_config = GossipConfig {
@@ -562,45 +560,33 @@ where
     };
 
     // Initialize the Libp2p network
-    let network = {
-        let p2p_network = Libp2pNetwork::from_config(
-            network_config.clone(),
-            persistence.clone(),
-            coordinator.membership().clone(),
-            gossip_config,
-            request_response_config,
-            libp2p_bind_address,
-            &validator_config.public_key,
-            // We need the private key so we can derive our Libp2p keypair
-            // (using https://docs.rs/blake3/latest/blake3/fn.derive_key.html)
-            &validator_config.private_key,
-            hotshot::traits::implementations::Libp2pMetricsValue::new(metrics),
+    let network = Libp2pNetwork::from_config(
+        network_config.clone(),
+        persistence.clone(),
+        coordinator.membership().clone(),
+        gossip_config,
+        request_response_config,
+        libp2p_bind_address,
+        &validator_config.public_key,
+        // We need the private key so we can derive our Libp2p keypair
+        // (using https://docs.rs/blake3/latest/blake3/fn.derive_key.html)
+        &validator_config.private_key,
+        hotshot::traits::implementations::Libp2pMetricsValue::new(metrics),
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "Failed to create libp2p network on node {node_index}; binding to {:?}",
+            network_params.libp2p_bind_address
         )
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to create libp2p network on node {node_index}; binding to {:?}",
-                network_params.libp2p_bind_address
-            )
-        })?;
+    })?;
 
-        tracing::warn!("Waiting for at least one connection to be initialized");
-        select! {
-            _ = cdn_network.wait_for_ready() => {
-                tracing::warn!("CDN connection initialized");
-            },
-            _ = p2p_network.wait_for_ready() => {
-                tracing::warn!("P2P connection initialized");
-            },
-        };
-
-        // Combine the CDN and P2P networks
-        Arc::from(CombinedNetworks::new(
-            cdn_network,
-            p2p_network,
-            Some(Duration::from_secs(1)),
-        ))
-    };
+    tracing::warn!("Waiting for P2P connection to be initialized");
+    select! {
+        _ = network.wait_for_ready() => {
+            tracing::warn!("P2P connection initialized");
+        },
+    }
 
     let mut ctx = SequencerContext::init(
         network_config,
@@ -610,7 +596,7 @@ where
         storage,
         state_catchup_providers,
         persistence,
-        network,
+        Arc::new(network),
         Some(network_params.state_relay_server_url),
         metrics,
         genesis.stake_table.capacity,
