@@ -49,16 +49,16 @@ tracing = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
 # Dependencies below are for LCV1 backward compatibility
-jf-plonk-unsafe = { package = "jf-plonk", git = "https://github.com/EspressoSystems/jellyfish", branch = "jf-relation-v0.5.0-compat", features = [
+jf-plonk-compat = { package = "jf-plonk", git = "https://github.com/EspressoSystems/jellyfish", branch = "jf-relation-v0.5.0-compat", features = [
     "std",
 ] }
-jf-relation-unsafe = { package = "jf-relation", git = "https://github.com/EspressoSystems/jellyfish", branch = "jf-relation-v0.5.0-compat", features = [
+jf-relation-compat = { package = "jf-relation", git = "https://github.com/EspressoSystems/jellyfish", branch = "jf-relation-v0.5.0-compat", features = [
     "std",
 ] }
-jf-rescue-unsafe = { package = "jf-rescue", git = "https://github.com/EspressoSystems/jellyfish", branch = "jf-relation-v0.5.0-compat", features = [
+jf-rescue-compat = { package = "jf-rescue", git = "https://github.com/EspressoSystems/jellyfish", branch = "jf-relation-v0.5.0-compat", features = [
     "gadgets",
 ] }
-jf-signature-unsafe = { package = "jf-signature", git = "https://github.com/EspressoSystems/jellyfish", branch = "jf-relation-v0.5.0-compat", features = [
+jf-signature-compat = { package = "jf-signature", git = "https://github.com/EspressoSystems/jellyfish", branch = "jf-relation-v0.5.0-compat", features = [
     "schnorr", "bls", "gadgets",
 ] }
 

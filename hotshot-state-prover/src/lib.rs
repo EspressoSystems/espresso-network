@@ -145,7 +145,7 @@ pub enum ProverError {
     /// Epoch has already started on block {0}, please upgrade the contract to V2.
     EpochAlreadyStarted(u64),
     /// Internal error when generating the SNARK proof: {0}
-    UnsafePlonkError(jf_plonk_unsafe::errors::PlonkError),
+    UnsafePlonkError(jf_plonk_compat::errors::PlonkError),
 }
 
 impl From<PlonkError> for ProverError {
@@ -156,8 +156,8 @@ impl From<PlonkError> for ProverError {
 
 impl std::error::Error for ProverError {}
 
-impl From<jf_plonk_unsafe::errors::PlonkError> for ProverError {
-    fn from(err: jf_plonk_unsafe::errors::PlonkError) -> Self {
+impl From<jf_plonk_compat::errors::PlonkError> for ProverError {
+    fn from(err: jf_plonk_compat::errors::PlonkError) -> Self {
         Self::UnsafePlonkError(err)
     }
 }

@@ -2427,7 +2427,7 @@ dependencies = [
  "hotshot-example-types",
  "hotshot-state-prover",
  "hotshot-types",
- "jf-signature 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.3.0)",
+ "jf-signature 0.3.0",
  "portpicker",
  "rand 0.8.5",
  "sequencer",
@@ -2526,9 +2526,9 @@ checksum = "2e93abca9e28e0a1b9877922aacb20576e05d4679ffa78c3d6dc22a26a216659"
 
 [[package]]
 name = "c-kzg"
-version = "2.1.4"
+version = "2.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "137a2a2878ed823ef1bd73e5441e245602aae5360022113b8ad259ca4b5b8727"
+checksum = "e00bf4b112b07b505472dbefd19e37e53307e2bfed5a79e0cc161d58ccd0e687"
 dependencies = [
  "blst",
  "cc",
@@ -2591,7 +2591,7 @@ dependencies = [
  "clap 4.5.48",
  "console-subscriber",
  "derivative",
- "jf-signature 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.3.0)",
+ "jf-signature 0.3.0",
  "lazy_static",
  "local-ip-address",
  "parking_lot",
@@ -2612,7 +2612,7 @@ dependencies = [
  "cdn-proto",
  "clap 4.5.48",
  "derive_more 1.0.0",
- "jf-signature 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.3.0)",
+ "jf-signature 0.3.0",
  "parking_lot",
  "rand 0.8.5",
  "tokio",
@@ -2627,7 +2627,7 @@ source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.0#cc15fd411305
 dependencies = [
  "cdn-proto",
  "clap 4.5.48",
- "jf-signature 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.3.0)",
+ "jf-signature 0.3.0",
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.20",
@@ -2645,7 +2645,7 @@ dependencies = [
  "capnp",
  "derivative",
  "derive_more 1.0.0",
- "jf-signature 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.3.0)",
+ "jf-signature 0.3.0",
  "lazy_static",
  "mnemonic",
  "num_enum",
@@ -3811,8 +3811,8 @@ dependencies = [
  "hotshot-state-prover",
  "hotshot-types",
  "jf-pcs",
- "jf-plonk 0.6.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-plonk-v0.6.0)",
- "jf-signature 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.3.0)",
+ "jf-plonk 0.6.0",
+ "jf-signature 0.3.0",
  "jf-utils",
  "sha3",
 ]
@@ -4201,7 +4201,7 @@ dependencies = [
  "hotshot-types",
  "jf-crhf",
  "jf-merkle-tree-compat",
- "jf-rescue 0.2.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-rescue-v0.2.0)",
+ "jf-rescue 0.2.0",
  "openssl",
  "primitive-types 0.13.1",
  "serde",
@@ -5400,8 +5400,8 @@ dependencies = [
  "derive_more 2.0.1",
  "hotshot-types",
  "jf-pcs",
- "jf-plonk 0.6.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-plonk-v0.6.0)",
- "jf-signature 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.3.0)",
+ "jf-plonk 0.6.0",
+ "jf-signature 0.3.0",
  "jf-utils",
  "num-bigint",
  "num-traits",
@@ -5650,14 +5650,14 @@ dependencies = [
  "itertools 0.12.1",
  "jf-crhf",
  "jf-pcs",
- "jf-plonk 0.6.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-plonk-v0.6.0)",
- "jf-plonk 0.6.0 (git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat)",
+ "jf-plonk 0.6.0",
+ "jf-plonk 0.7.0",
  "jf-relation 0.5.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-relation-v0.5.0)",
  "jf-relation 0.5.0 (git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat)",
- "jf-rescue 0.2.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-rescue-v0.2.0)",
- "jf-rescue 0.2.0 (git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat)",
- "jf-signature 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.3.0)",
- "jf-signature 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat)",
+ "jf-rescue 0.2.0",
+ "jf-rescue 0.3.0",
+ "jf-signature 0.3.0",
+ "jf-signature 0.4.0",
  "jf-utils",
  "reqwest",
  "sequencer-utils",
@@ -5793,8 +5793,8 @@ dependencies = [
  "jf-advz",
  "jf-crhf",
  "jf-pcs",
- "jf-rescue 0.2.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-rescue-v0.2.0)",
- "jf-signature 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.3.0)",
+ "jf-rescue 0.2.0",
+ "jf-signature 0.3.0",
  "jf-utils",
  "lazy_static",
  "libp2p-identity",
@@ -6610,7 +6610,7 @@ dependencies = [
  "jf-crhf",
  "jf-poseidon2",
  "jf-relation 0.5.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-relation-v0.5.0)",
- "jf-rescue 0.2.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-rescue-v0.2.0)",
+ "jf-rescue 0.2.0",
  "jf-utils",
  "num-bigint",
  "num-traits",
@@ -6639,7 +6639,7 @@ dependencies = [
  "hashbrown 0.14.5",
  "itertools 0.12.1",
  "jf-relation 0.5.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-relation-v0.5.0)",
- "jf-rescue 0.2.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-rescue-v0.2.0)",
+ "jf-rescue 0.2.0",
  "jf-utils",
  "num-bigint",
  "num-traits",
@@ -6691,7 +6691,7 @@ dependencies = [
  "jf-crhf",
  "jf-pcs",
  "jf-relation 0.5.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-relation-v0.5.0)",
- "jf-rescue 0.2.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-rescue-v0.2.0)",
+ "jf-rescue 0.2.0",
  "jf-utils",
  "merlin",
  "num-bigint",
@@ -6704,8 +6704,8 @@ dependencies = [
 
 [[package]]
 name = "jf-plonk"
-version = "0.6.0"
-source = "git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat#6aec56901dd33a90239a5bde0eec4fffa0b6f86d"
+version = "0.7.0"
+source = "git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat#11e54d4e97858610d5f423bac2603a331c0046f6"
 dependencies = [
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
@@ -6722,7 +6722,7 @@ dependencies = [
  "jf-crhf",
  "jf-pcs",
  "jf-relation 0.5.0 (git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat)",
- "jf-rescue 0.2.0 (git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat)",
+ "jf-rescue 0.3.0",
  "jf-utils",
  "merlin",
  "num-bigint",
@@ -6788,7 +6788,7 @@ dependencies = [
 [[package]]
 name = "jf-relation"
 version = "0.5.0"
-source = "git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat#6aec56901dd33a90239a5bde0eec4fffa0b6f86d"
+source = "git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat#11e54d4e97858610d5f423bac2603a331c0046f6"
 dependencies = [
  "ark-bls12-377",
  "ark-bls12-381",
@@ -6838,13 +6838,14 @@ dependencies = [
 
 [[package]]
 name = "jf-rescue"
-version = "0.2.0"
-source = "git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat#6aec56901dd33a90239a5bde0eec4fffa0b6f86d"
+version = "0.3.0"
+source = "git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat#11e54d4e97858610d5f423bac2603a331c0046f6"
 dependencies = [
  "ark-bls12-377",
  "ark-bls12-381",
  "ark-bn254 0.5.0",
  "ark-bw6-761",
+ "ark-crypto-primitives",
  "ark-ed-on-bls12-377",
  "ark-ed-on-bls12-381",
  "ark-ed-on-bn254",
@@ -6881,7 +6882,7 @@ dependencies = [
  "itertools 0.12.1",
  "jf-crhf",
  "jf-relation 0.5.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-relation-v0.5.0)",
- "jf-rescue 0.2.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-rescue-v0.2.0)",
+ "jf-rescue 0.2.0",
  "jf-utils",
  "num-bigint",
  "num-traits",
@@ -6893,8 +6894,8 @@ dependencies = [
 
 [[package]]
 name = "jf-signature"
-version = "0.3.0"
-source = "git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat#6aec56901dd33a90239a5bde0eec4fffa0b6f86d"
+version = "0.4.0"
+source = "git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat#11e54d4e97858610d5f423bac2603a331c0046f6"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254 0.5.0",
@@ -6911,7 +6912,7 @@ dependencies = [
  "itertools 0.12.1",
  "jf-crhf",
  "jf-relation 0.5.0 (git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat)",
- "jf-rescue 0.2.0 (git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat)",
+ "jf-rescue 0.3.0",
  "jf-utils",
  "num-bigint",
  "num-traits",
@@ -10255,8 +10256,8 @@ dependencies = [
  "jf-advz",
  "jf-crhf",
  "jf-merkle-tree-compat",
- "jf-rescue 0.2.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-rescue-v0.2.0)",
- "jf-signature 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.3.0)",
+ "jf-rescue 0.2.0",
+ "jf-signature 0.3.0",
  "libp2p",
  "num_enum",
  "parking_lot",
@@ -11069,7 +11070,7 @@ dependencies = [
  "hotshot-contract-adapter",
  "hotshot-state-prover",
  "hotshot-types",
- "jf-signature 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.3.0)",
+ "jf-signature 0.3.0",
  "portpicker",
  "predicates",
  "rand 0.8.5",
@@ -11266,15 +11267,15 @@ dependencies = [
 
 [[package]]
 name = "sval"
-version = "2.14.1"
+version = "2.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cc9739f56c5d0c44a5ed45473ec868af02eb896af8c05f616673a31e1d1bb09"
+checksum = "d94c4464e595f0284970fd9c7e9013804d035d4a61ab74b113242c874c05814d"
 
 [[package]]
 name = "sval_buffer"
-version = "2.14.1"
+version = "2.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f39b07436a8c271b34dad5070c634d1d3d76d6776e938ee97b4a66a5e8003d0b"
+checksum = "a0f46e34b20a39e6a2bf02b926983149b3af6609fd1ee8a6e63f6f340f3e2164"
 dependencies = [
  "sval",
  "sval_ref",
@@ -11282,18 +11283,18 @@ dependencies = [
 
 [[package]]
 name = "sval_dynamic"
-version = "2.14.1"
+version = "2.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ffcb072d857431bf885580dacecf05ed987bac931230736739a79051dbf3499b"
+checksum = "03d0970e53c92ab5381d3b2db1828da8af945954d4234225f6dd9c3afbcef3f5"
 dependencies = [
  "sval",
 ]
 
 [[package]]
 name = "sval_fmt"
-version = "2.14.1"
+version = "2.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f214f427ad94a553e5ca5514c95c6be84667cbc5568cce957f03f3477d03d5c"
+checksum = "43e5e6e1613e1e7fc2e1a9fdd709622e54c122ceb067a60d170d75efd491a839"
 dependencies = [
  "itoa",
  "ryu",
@@ -11302,9 +11303,9 @@ dependencies = [
 
 [[package]]
 name = "sval_json"
-version = "2.14.1"
+version = "2.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "389ed34b32e638dec9a99c8ac92d0aa1220d40041026b625474c2b6a4d6f4feb"
+checksum = "aec382f7bfa6e367b23c9611f129b94eb7daaf3d8fae45a8d0a0211eb4d4c8e6"
 dependencies = [
  "itoa",
  "ryu",
@@ -11313,9 +11314,9 @@ dependencies = [
 
 [[package]]
 name = "sval_nested"
-version = "2.14.1"
+version = "2.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14bae8fcb2f24fee2c42c1f19037707f7c9a29a0cda936d2188d48a961c4bb2a"
+checksum = "3049d0f99ce6297f8f7d9953b35a0103b7584d8f638de40e64edb7105fa578ae"
 dependencies = [
  "sval",
  "sval_buffer",
@@ -11324,20 +11325,20 @@ dependencies = [
 
 [[package]]
 name = "sval_ref"
-version = "2.14.1"
+version = "2.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a4eaea3821d3046dcba81d4b8489421da42961889902342691fb7eab491d79e"
+checksum = "f88913e77506085c0a8bf6912bb6558591a960faf5317df6c1d9b227224ca6e1"
 dependencies = [
  "sval",
 ]
 
 [[package]]
 name = "sval_serde"
-version = "2.14.1"
+version = "2.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "172dd4aa8cb3b45c8ac8f3b4111d644cd26938b0643ede8f93070812b87fb339"
+checksum = "f579fd7254f4be6cd7b450034f856b78523404655848789c451bacc6aa8b387d"
 dependencies = [
- "serde",
+ "serde_core",
  "sval",
  "sval_nested",
 ]

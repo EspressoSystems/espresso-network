@@ -12,11 +12,11 @@ use hotshot_contract_adapter::{
     u256_to_field,
 };
 use hotshot_types::light_client::{GenericLightClientState, GenericStakeTableState};
-use jf_plonk_unsafe::PlonkError;
-use jf_relation_unsafe::{BoolVar, Circuit, CircuitError, PlonkCircuit, Variable};
-use jf_rescue_unsafe::{gadgets::RescueNativeGadget, RescueParameter};
+use jf_plonk_compat::PlonkError;
+use jf_relation_compat::{BoolVar, Circuit, CircuitError, PlonkCircuit, Variable};
+use jf_rescue_compat::{gadgets::RescueNativeGadget, RescueParameter};
 use jf_signature::schnorr::{Signature, VerKey as SchnorrVerKey};
-use jf_signature_unsafe::{
+use jf_signature_compat::{
     gadgets::schnorr::{SignatureGadget, VerKeyVar},
     schnorr::{Signature as UnsafeSignature, VerKey as UnsafeSchnorrVerKey},
 };
@@ -416,7 +416,7 @@ mod tests {
         light_client::LightClientState, signature_key::SchnorrPubKey,
         traits::signature_key::LCV1StateSignatureKey,
     };
-    use jf_relation_unsafe::Circuit;
+    use jf_relation_compat::Circuit;
     use jf_signature::schnorr::Signature;
     use jf_utils::test_rng;
 
