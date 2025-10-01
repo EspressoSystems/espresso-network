@@ -1723,6 +1723,10 @@ impl SequencerPersistence for Persistence {
                 b.push_bind(view).push_bind(payload_hash).push_bind(data);
             });
 
+            // Offset tracking prevents duplicate inserts
+            // Added as a safeguard.
+            query_builder.push(" ON CONFLICT DO NOTHING");
+
             let query = query_builder.build();
 
             let mut tx = self.db.write().await?;
