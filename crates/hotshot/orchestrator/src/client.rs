@@ -407,7 +407,7 @@ impl OrchestratorClient {
         libp2p_public_key: Option<PeerId>,
     ) -> NetworkConfig<TYPES> {
         let pubkey: Vec<u8> =
-            PeerConfig::<TYPES>::to_bytes(&validator_config.public_config()).clone();
+            PeerConfig::<TYPES>::to_bytes(&validator_config.public_config());
         let da_requested: bool = validator_config.is_da;
 
         // Serialize our (possible) libp2p-specific data
