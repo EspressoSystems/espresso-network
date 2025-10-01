@@ -43,9 +43,6 @@ var ErrEphemeral = errors.New("retryable")
 // resolved by a retry.
 var ErrPermanent = errors.New("not retryable")
 
-// Transaction submission or fetch error due to timeout.
-var ErrTimeout = fmt.Errorf("%w: timeout", ErrEphemeral)
-
 func (c *Client) FetchVidCommonByHeight(ctx context.Context, blockHeight uint64) (common.VidCommon, error) {
 	var res types.VidCommonQueryData
 	if err := c.get(ctx, &res, "availability/vid/common/%d", blockHeight); err != nil {
