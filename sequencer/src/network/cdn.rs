@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 
 use bincode::Options;
 use cdn_broker::reexports::{
-    connection::protocols::{Quic, Tcp},
+    connection::protocols::{Tcp, TcpTls},
     crypto::signature::{Serializable, SignatureScheme},
     def::{hook::NoMessageHook, ConnectionDef, RunDef, Topic as TopicTrait},
     discovery::{Embedded, Redis},
@@ -99,7 +99,7 @@ impl<T: SignatureKey> Serializable for WrappedSignatureKey<T> {
 /// Uses the real protocols and a Redis discovery client.
 pub struct ProductionDef<TYPES: NodeType>(PhantomData<TYPES>);
 impl<TYPES: NodeType> RunDef for ProductionDef<TYPES> {
-    type User = UserDefQuic<TYPES>;
+    type User = UserDefTcpTls<TYPES>;
     type Broker = BrokerDef<TYPES>;
     type DiscoveryClientType = Redis;
     type Topic = Topic;
@@ -108,10 +108,10 @@ impl<TYPES: NodeType> RunDef for ProductionDef<TYPES> {
 /// The user definition for the Push CDN.
 /// Uses the Quic protocol and untrusted middleware.
 /// RM TODO: Remove this, switching to TCP+TLS singularly when everyone has updated
-pub struct UserDefQuic<TYPES: NodeType>(PhantomData<TYPES>);
-impl<TYPES: NodeType> ConnectionDef for UserDefQuic<TYPES> {
+pub struct UserDefTcpTls<TYPES: NodeType>(PhantomData<TYPES>);
+impl<TYPES: NodeType> ConnectionDef for UserDefTcpTls<TYPES> {
     type Scheme = WrappedSignatureKey<TYPES::SignatureKey>;
-    type Protocol = Quic;
+    type Protocol = TcpTls;
     type MessageHook = NoMessageHook;
 }
 
@@ -131,7 +131,7 @@ impl<TYPES: NodeType> ConnectionDef for BrokerDef<TYPES> {
 pub struct ClientDef<TYPES: NodeType>(PhantomData<TYPES>);
 impl<TYPES: NodeType> ConnectionDef for ClientDef<TYPES> {
     type Scheme = WrappedSignatureKey<TYPES::SignatureKey>;
-    type Protocol = Quic;
+    type Protocol = TcpTls;
     type MessageHook = NoMessageHook;
 }
 
@@ -139,7 +139,7 @@ impl<TYPES: NodeType> ConnectionDef for ClientDef<TYPES> {
 /// Uses the real protocols, but with an embedded discovery client.
 pub struct TestingDef<TYPES: NodeType>(PhantomData<TYPES>);
 impl<TYPES: NodeType> RunDef for TestingDef<TYPES> {
-    type User = UserDefQuic<TYPES>;
+    type User = UserDefTcpTls<TYPES>;
     type Broker = BrokerDef<TYPES>;
     type DiscoveryClientType = Embedded;
     type Topic = Topic;
