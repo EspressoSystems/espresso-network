@@ -5,7 +5,9 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 //! Types and Traits for the `HotShot` consensus module
-use std::{fmt::Debug, future::Future, num::NonZeroUsize, pin::Pin, time::Duration};
+use std::{
+    collections::BTreeMap, fmt::Debug, future::Future, num::NonZeroUsize, pin::Pin, time::Duration,
+};
 
 use alloy::primitives::U256;
 use bincode::Options;
@@ -19,7 +21,7 @@ use traits::{
 use url::Url;
 use vec1::Vec1;
 
-use crate::utils::bincode_opts;
+use crate::{traits::node_implementation::ConsensusTime, utils::bincode_opts};
 pub mod bundle;
 pub mod consensus;
 pub mod constants;
@@ -195,6 +197,8 @@ pub struct HotShotConfig<TYPES: NodeType> {
     pub known_nodes_with_stake: Vec<PeerConfig<TYPES>>,
     /// All public keys known to be DA nodes
     pub known_da_nodes: Vec<PeerConfig<TYPES>>,
+    /// All public keys known to be DA nodes, by start epoch
+    pub da_committees: BTreeMap<u64, Vec<PeerConfig<TYPES>>>,
     /// List of DA committee (staking)nodes for static DA committee
     pub da_staked_committee_size: usize,
     /// Number of fixed leaders for GPU VID, normally it will be 0, it's only used when running GPU VID
@@ -265,5 +269,27 @@ impl<TYPES: NodeType> HotShotConfig<TYPES> {
     /// Return the `known_nodes_with_stake` as a `HSStakeTable`
     pub fn hotshot_stake_table(&self) -> HSStakeTable<TYPES> {
         self.known_nodes_with_stake.clone().into()
+    }
+
+    pub fn build_da_committees(&self) -> BTreeMap<TYPES::Epoch, Vec<PeerConfig<TYPES>>> {
+        if self.da_committees.is_empty() {
+            tracing::warn!(
+                "da_committees is not set, falling back to known_da_nodes, which is deprecated."
+            );
+
+            [(TYPES::Epoch::new(0), self.known_da_nodes.clone())].into()
+        } else {
+            if !self.known_da_nodes.is_empty() {
+                tracing::warn!(
+                    "Both known_da_nodes and da_committees are set, known_da_nodes is deprecated \
+                     and will be ignored."
+                );
+            }
+
+            self.da_committees
+                .iter()
+                .map(|(k, v)| (TYPES::Epoch::new(*k), v.clone()))
+                .collect()
+        }
     }
 }

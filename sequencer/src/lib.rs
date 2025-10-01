@@ -57,6 +57,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StateKeyPair, StateSignKey},
     signature_key::{BLSPrivKey, BLSPubKey},
+    stake_table::StakeTableEntry,
     traits::{
         metrics::{Metrics, NoMetrics},
         network::ConnectedNetwork,
@@ -390,6 +391,27 @@ where
     network_config.config.epoch_start_block = epoch_start_block;
     network_config.config.stake_table_capacity = stake_table_capacity;
 
+    if let Some(da_committees) = &genesis.da_committees {
+        tracing::warn!("setting da_committees from genesis");
+        network_config.config.da_committees = da_committees
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.into(),
+                    v.iter()
+                        .map(|pcd| hotshot_types::PeerConfig {
+                            stake_table_entry: StakeTableEntry {
+                                stake_key: pcd.stake_table_key,
+                                stake_amount: U256::from(pcd.stake),
+                            },
+                            state_ver_key: pcd.state_ver_key.clone(),
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+    }
+
     // If the `Libp2p` bootstrap nodes were supplied via the command line, override those
     // present in the config file.
     if let Some(bootstrap_nodes) = network_params.libp2p_bootstrap_nodes {
@@ -529,7 +551,7 @@ where
     // Create the HotShot membership
     let mut membership = EpochCommittees::new_stake(
         network_config.config.known_nodes_with_stake.clone(),
-        network_config.config.known_da_nodes.clone(),
+        network_config.config.build_da_committees(),
         block_reward,
         fetcher,
         epoch_height,
