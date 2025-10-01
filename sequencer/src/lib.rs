@@ -1042,6 +1042,7 @@ pub mod testing {
                 fixed_leader_for_gpuvid: 0,
                 num_nodes_with_stake: num_nodes.try_into().unwrap(),
                 known_da_nodes: known_nodes_with_stake.clone(),
+                da_committees: Default::default(),
                 known_nodes_with_stake: known_nodes_with_stake.clone(),
                 next_view_timeout: Duration::from_secs(5).as_millis() as u64,
                 num_bootstrap: 1usize,
@@ -1291,7 +1292,7 @@ pub mod testing {
             let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
             let mut membership = EpochCommittees::new_stake(
                 config.known_nodes_with_stake.clone(),
-                config.known_da_nodes.clone(),
+                config.build_da_committees(),
                 block_reward,
                 fetcher,
                 config.epoch_height,

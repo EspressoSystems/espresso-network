@@ -45,6 +45,7 @@ pub struct HotShotConfigFile<TYPES: NodeType> {
     #[serde(skip)]
     /// The known DA nodes' public key and stake values
     pub known_da_nodes: Vec<PeerConfig<TYPES>>,
+    #[serde(skip)]
     /// The known DA nodes' public keys and stake values, by start epoch
     pub da_committees: BTreeMap<u64, Vec<PeerConfig<TYPES>>>,
     /// Number of staking DA nodes
