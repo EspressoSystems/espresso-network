@@ -6,9 +6,10 @@ use std::{
 use alloy::primitives::Address;
 use anyhow::{Context, Ok};
 use espresso_types::{
-    v0_3::ChainConfig, FeeAccount, FeeAmount, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
-    Upgrade,
+    v0_3::ChainConfig, FeeAccount, FeeAmount, GenesisHeader, L1BlockInfo, L1Client, SeqTypes,
+    Timestamp, Upgrade,
 };
+use hotshot_types::traits::node_implementation::NodeType;
 use serde::{Deserialize, Serialize};
 use vbs::version::Version;
 
@@ -44,6 +45,48 @@ pub enum L1Finalized {
     Timestamp { timestamp: Timestamp },
 }
 
+/// Helper type to deal with TOML keys that are u64 but represented as strings
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TomlKeyU64(u64);
+
+impl<'de> Deserialize<'de> for TomlKeyU64 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        tracing::warn!("Using TomlKeyU64::deserialize");
+        let s = String::deserialize(deserializer)?;
+
+        let n = s
+            .parse::<u64>()
+            .map_err(|_| serde::de::Error::custom("invalid epoch"))?;
+
+        std::result::Result::Ok(TomlKeyU64(n))
+    }
+}
+
+impl Serialize for TomlKeyU64 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.0.to_string())
+    }
+}
+
+impl Into<u64> for &TomlKeyU64 {
+    fn into(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PeerConfigData {
+    pub stake_table_key: <SeqTypes as NodeType>::SignatureKey,
+    pub state_ver_key: <SeqTypes as NodeType>::StateSignatureKey,
+    pub stake: u64,
+}
+
 /// Genesis of an Espresso chain.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Genesis {
@@ -67,6 +110,7 @@ pub struct Genesis {
     #[serde(rename = "upgrade", with = "upgrade_ser")]
     #[serde(default)]
     pub upgrades: BTreeMap<Version, Upgrade>,
+    pub da_committees: Option<BTreeMap<TomlKeyU64, Vec<PeerConfigData>>>,
 }
 
 impl Genesis {

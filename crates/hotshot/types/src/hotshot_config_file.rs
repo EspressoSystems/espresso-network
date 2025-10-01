@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{num::NonZeroUsize, time::Duration};
+use std::{collections::BTreeMap, num::NonZeroUsize, time::Duration};
 
 use alloy::primitives::U256;
 use url::Url;
@@ -45,6 +45,8 @@ pub struct HotShotConfigFile<TYPES: NodeType> {
     #[serde(skip)]
     /// The known DA nodes' public key and stake values
     pub known_da_nodes: Vec<PeerConfig<TYPES>>,
+    /// The known DA nodes' public keys and stake values, by start epoch
+    pub da_committees: BTreeMap<u64, Vec<PeerConfig<TYPES>>>,
     /// Number of staking DA nodes
     pub staked_da_nodes: usize,
     /// Number of fixed leaders for GPU VID
@@ -89,6 +91,7 @@ impl<TYPES: NodeType> From<HotShotConfigFile<TYPES>> for HotShotConfig<TYPES> {
             start_threshold: val.start_threshold,
             num_nodes_with_stake: val.num_nodes_with_stake,
             known_da_nodes: val.known_da_nodes,
+            da_committees: val.da_committees,
             known_nodes_with_stake: val.known_nodes_with_stake,
             da_staked_committee_size: val.staked_da_nodes,
             fixed_leader_for_gpuvid: val.fixed_leader_for_gpuvid,
@@ -154,6 +157,7 @@ impl<TYPES: NodeType> HotShotConfigFile<TYPES> {
             known_nodes_with_stake: gen_known_nodes_with_stake,
             staked_da_nodes,
             known_da_nodes,
+            da_committees: Default::default(),
             fixed_leader_for_gpuvid: 1,
             next_view_timeout: 10000,
             view_sync_timeout: Duration::from_millis(1000),
