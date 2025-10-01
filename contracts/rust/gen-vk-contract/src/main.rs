@@ -45,7 +45,7 @@ fn main() {
         hotshot_state_prover::v1::preprocess(&srs, DEFAULT_STAKE_TABLE_CAPACITY)
             .expect("Circuit preprocess failed")
     };
-    let vk: VerifyingKeySol = hotshot_state_prover::v1::vk_to_sol(&vk);
+    let vk: VerifyingKeySol = vk.into();
 
     // calculate the path to solidity file
     let contract_name = if mock {
