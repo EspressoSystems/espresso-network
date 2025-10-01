@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 
 use bincode::Options;
 use cdn_broker::reexports::{
-    connection::protocols::{Tcp, TcpTls},
+    connection::protocols::Tcp,
     crypto::signature::{Serializable, SignatureScheme},
     def::{hook::NoMessageHook, ConnectionDef, RunDef, Topic as TopicTrait},
     discovery::{Embedded, Redis},
@@ -111,7 +111,7 @@ impl<TYPES: NodeType> RunDef for ProductionDef<TYPES> {
 pub struct UserDefTcpTls<TYPES: NodeType>(PhantomData<TYPES>);
 impl<TYPES: NodeType> ConnectionDef for UserDefTcpTls<TYPES> {
     type Scheme = WrappedSignatureKey<TYPES::SignatureKey>;
-    type Protocol = TcpTls;
+    type Protocol = Tcp;
     type MessageHook = NoMessageHook;
 }
 
@@ -131,7 +131,7 @@ impl<TYPES: NodeType> ConnectionDef for BrokerDef<TYPES> {
 pub struct ClientDef<TYPES: NodeType>(PhantomData<TYPES>);
 impl<TYPES: NodeType> ConnectionDef for ClientDef<TYPES> {
     type Scheme = WrappedSignatureKey<TYPES::SignatureKey>;
-    type Protocol = TcpTls;
+    type Protocol = Tcp;
     type MessageHook = NoMessageHook;
 }
 
