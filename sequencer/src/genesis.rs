@@ -74,9 +74,9 @@ impl Serialize for TomlKeyU64 {
     }
 }
 
-impl Into<u64> for &TomlKeyU64 {
-    fn into(self) -> u64 {
-        self.0
+impl From<&TomlKeyU64> for u64 {
+    fn from(val: &TomlKeyU64) -> Self {
+        val.0
     }
 }
 
@@ -110,6 +110,7 @@ pub struct Genesis {
     #[serde(rename = "upgrade", with = "upgrade_ser")]
     #[serde(default)]
     pub upgrades: BTreeMap<Version, Upgrade>,
+    #[serde(default)]
     pub da_committees: Option<BTreeMap<TomlKeyU64, Vec<PeerConfigData>>>,
 }
 
