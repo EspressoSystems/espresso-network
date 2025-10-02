@@ -4,7 +4,7 @@ use std::{
 };
 
 use alloy::primitives::U256;
-use async_broadcast::{broadcast, InactiveReceiver, Sender};
+use async_broadcast::{broadcast, InactiveReceiver, Receiver, Sender};
 use async_lock::{Mutex, RwLock};
 use committable::Commitment;
 use hotshot_utils::{
@@ -15,6 +15,7 @@ use hotshot_utils::{
 use crate::{
     data::Leaf2,
     drb::{compute_drb_result, DrbDifficultySelectorFn, DrbInput, DrbResult},
+    event::Event,
     stake_table::HSStakeTable,
     traits::{
         election::Membership,
@@ -100,6 +101,14 @@ where
             store_drb_result_fn: store_drb_result_fn(storage.clone()),
             drb_difficulty_selector: Arc::new(RwLock::new(None)),
         }
+    }
+
+    pub async fn set_external_channel(&mut self, external_channel: Receiver<Event<TYPES>>) {
+        self.membership
+            .write()
+            .await
+            .set_external_channel(external_channel)
+            .await;
     }
 
     /// Get a reference to the membership
