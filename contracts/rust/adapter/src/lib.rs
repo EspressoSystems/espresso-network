@@ -10,6 +10,7 @@ mod copy;
 pub mod evm;
 pub mod jellyfish;
 pub mod light_client;
+pub mod reward;
 pub mod sol_types;
 pub mod stake_table;
 

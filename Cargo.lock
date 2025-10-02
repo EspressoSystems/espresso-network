@@ -3028,6 +3028,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "console"
+version = "0.15.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "054ccb5b10f9f2cbf51eb355ca1d05c2d279ce1804688d0db74b4733a5aeafd8"
+dependencies = [
+ "encode_unicode",
+ "libc",
+ "once_cell",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "console-api"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4030,6 +4042,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
 
 [[package]]
+name = "encode_unicode"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34aa73646ffb006b8f5147f3dc182bd4bcb190227ce861fc4a4844bf8e3cb2c0"
+
+[[package]]
 name = "encoding_rs"
 version = "0.8.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4226,6 +4244,7 @@ dependencies = [
  "hotshot-types",
  "humantime",
  "indexmap 2.11.3",
+ "insta",
  "itertools 0.12.1",
  "jf-advz",
  "jf-merkle-tree-compat",
@@ -5207,7 +5226,6 @@ dependencies = [
  "tracing-subscriber 0.3.20",
  "url",
  "vbs",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5226,7 +5244,6 @@ dependencies = [
  "tide-disco",
  "toml",
  "vbs",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5372,6 +5389,8 @@ dependencies = [
  "num-traits",
  "rand 0.8.5",
  "serde",
+ "serde_arrays",
+ "serde_json",
  "thiserror 1.0.69",
  "tokio",
 ]
@@ -5426,7 +5445,6 @@ dependencies = [
  "tokio",
  "url",
  "vbs",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5462,7 +5480,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber 0.3.20",
  "url",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5494,7 +5511,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.20",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5505,7 +5521,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.106",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5529,7 +5544,6 @@ dependencies = [
  "toml",
  "tracing",
  "vbs",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5646,7 +5660,6 @@ dependencies = [
  "hotshot-utils",
  "tokio",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5685,7 +5698,6 @@ dependencies = [
  "url",
  "vbs",
  "vec1",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5727,7 +5739,6 @@ dependencies = [
  "url",
  "vbs",
  "vec1",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5786,7 +5797,6 @@ dependencies = [
  "vbs",
  "vec1",
  "vid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5794,7 +5804,6 @@ name = "hotshot-utils"
 version = "0.1.0"
 dependencies = [
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6351,6 +6360,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f97967975f448f1a7ddb12b0bc41069d09ed6a1c161a92687e057325db35d413"
 dependencies = [
  "bytes 1.10.1",
+]
+
+[[package]]
+name = "insta"
+version = "1.43.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46fdb647ebde000f43b5b53f773c30cf9b0cb4300453208713fa38b2c70935a0"
+dependencies = [
+ "console",
+ "once_cell",
+ "serde",
+ "similar",
 ]
 
 [[package]]
@@ -10204,6 +10225,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_arrays"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94a16b99c5ea4fe3daccd14853ad260ec00ea043b2708d1fd1da3106dcd8d9df"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "serde_bytes"
 version = "0.11.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10493,6 +10523,12 @@ name = "simdutf8"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
+
+[[package]]
+name = "similar"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
 
 [[package]]
 name = "siphasher"
@@ -13176,119 +13212,6 @@ name = "wit-bindgen"
 version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f17a85883d4e6d00e8a97c586de764dabcc06133f7f1d55dce5cdc070ad7fe59"
-
-[[package]]
-name = "workspace-hack"
-version = "0.1.0"
-dependencies = [
- "ahash 0.8.12",
- "alloy",
- "alloy-json-abi",
- "alloy-primitives",
- "alloy-sol-type-parser",
- "ark-bls12-377",
- "ark-bls12-381",
- "ark-bn254 0.5.0",
- "ark-bw6-761",
- "ark-ed-on-bls12-377",
- "ark-ed-on-bls12-381",
- "ark-ed-on-bn254",
- "ark-poly 0.5.0",
- "ark-std 0.5.0",
- "arrayvec",
- "async-std",
- "async-tungstenite",
- "base64 0.22.1",
- "bitvec",
- "byteorder",
- "bytes 1.10.1",
- "chrono",
- "clap 4.5.47",
- "clap_builder",
- "concurrent-queue",
- "const-hex",
- "crossbeam-utils",
- "crunchy",
- "crypto-common",
- "data-encoding",
- "derive_more 1.0.0",
- "derive_more 2.0.1",
- "derive_more-impl 1.0.0",
- "derive_more-impl 2.0.1",
- "digest 0.10.7",
- "displaydoc",
- "downcast-rs",
- "either",
- "event-listener 5.4.1",
- "event-listener-strategy",
- "form_urlencoded",
- "funty",
- "futures",
- "futures-channel",
- "futures-executor",
- "futures-io",
- "futures-sink",
- "futures-util",
- "generic-array",
- "getrandom 0.2.16",
- "getrandom 0.3.3",
- "hashbrown 0.12.3",
- "hashbrown 0.14.5",
- "hashbrown 0.15.5",
- "hex",
- "http-client",
- "indexmap 2.11.3",
- "itertools 0.12.1",
- "itertools 0.13.0",
- "itertools 0.14.0",
- "jf-relation",
- "jf-rescue",
- "jf-signature",
- "jf-utils",
- "libp2p-identity",
- "log",
- "memchr",
- "multihash",
- "num-bigint",
- "num-integer",
- "num-traits",
- "num_enum",
- "num_enum_derive",
- "once_cell",
- "p3-maybe-rayon",
- "parking_lot",
- "percent-encoding",
- "rand 0.8.5",
- "rand_chacha 0.3.1",
- "refinery-core",
- "regex",
- "regex-automata",
- "regex-syntax",
- "reqwest",
- "ruint",
- "rustls-pki-types",
- "serde",
- "serde_core",
- "serde_json",
- "serde_with",
- "smallvec",
- "standback",
- "strum 0.26.3",
- "syn 1.0.109",
- "syn 2.0.106",
- "thiserror 2.0.16",
- "time 0.3.43",
- "tiny-keccak",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-core",
- "tracing-log",
- "tracing-subscriber 0.3.20",
- "tungstenite 0.13.0",
- "winnow",
- "zeroize",
-]
 
 [[package]]
 name = "writeable"
