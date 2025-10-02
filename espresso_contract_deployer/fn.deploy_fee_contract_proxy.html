@@ -2,7 +2,7 @@
     provider: impl Provider,
     contracts: &amp;mut <a class="struct" href="struct.Contracts.html" title="struct espresso_contract_deployer::Contracts">Contracts</a>,
     admin: Address,
-) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.99/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;Address&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>The primary logic for deploying and initializing an upgradable fee contract.</p>
+) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.100/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;Address&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>The primary logic for deploying and initializing an upgradable fee contract.</p>
 <p>Deploy the upgradable proxy contract, point to a deployed fee contract as its implementation, and invoke <code>initialize()</code> on it.</p>
 <ul>
 <li><code>admin</code>: is the new owner (e.g. a multisig address) of the proxy contract</li>

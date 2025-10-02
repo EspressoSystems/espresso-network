@@ -6,7 +6,7 @@
     genesis_stake: <a class="struct" href="../hotshot_contract_adapter/bindings/light_client/LightClient/struct.StakeTableState.html" title="struct hotshot_contract_adapter::bindings::light_client::LightClient::StakeTableState">StakeTableStateSol</a>,
     admin: Address,
     prover: <a class="enum" href="https://doc.rust-lang.org/1.90.0/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;Address&gt;,
-) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.99/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;Address&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>The primary logic for deploying and initializing an upgradable light client contract.</p>
+) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.100/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;Address&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>The primary logic for deploying and initializing an upgradable light client contract.</p>
 <p>Deploy the upgradable proxy contract, point to an already deployed light client contract as its implementation, and invoke <code>initialize()</code> on it.
 This is run after <code>deploy_light_client_contract()</code>, returns the proxy address.
 This works for both mock and production light client proxy.</p>

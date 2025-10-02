@@ -4,7 +4,7 @@
     parent_leaf: &amp;<a class="type" href="../../type.Leaf2.html" title="type espresso_types::v0::Leaf2">Leaf2</a>,
     view_number: <a class="struct" href="../../../../hotshot_types/data/struct.ViewNumber.html" title="struct hotshot_types::data::ViewNumber">ViewNumber</a>,
     version: Version,
-) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.99/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;<a class="enum" href="https://doc.rust-lang.org/1.90.0/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="../../struct.RewardDistributor.html" title="struct espresso_types::v0::RewardDistributor">RewardDistributor</a>&gt;&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Distributes the block reward for a given block height</p>
+) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.100/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;<a class="enum" href="https://doc.rust-lang.org/1.90.0/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="../../struct.RewardDistributor.html" title="struct espresso_types::v0::RewardDistributor">RewardDistributor</a>&gt;&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Distributes the block reward for a given block height</p>
 <p>Rewards are only distributed if the block belongs to an epoch beyond the second epoch.</p>
 <p>The function also calculates the appropriate reward (fixed or dynamic) based
 on the protocol version.</p>

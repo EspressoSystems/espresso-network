@@ -5,7 +5,7 @@
     is_mock: <a class="primitive" href="https://doc.rust-lang.org/1.90.0/std/primitive.bool.html">bool</a>,
     rpc_url: <a class="struct" href="https://doc.rust-lang.org/1.90.0/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>,
     dry_run: <a class="enum" href="https://doc.rust-lang.org/1.90.0/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/1.90.0/std/primitive.bool.html">bool</a>&gt;,
-) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.99/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.90.0/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Upgrade the light client proxy to use LightClientV2.
+) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.100/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.90.0/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Upgrade the light client proxy to use LightClientV2.
 Internally, first detect existence of proxy, then deploy LCV2, then upgrade and initializeV2.
 Internal to “deploy LCV2”, we deploy PlonkVerifierV2 whose address will be used at LCV2 init time.
 Assumes:</p>
