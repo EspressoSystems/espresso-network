@@ -373,7 +373,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                     Ok(v) => v,
                     Err(e) => {
                         tracing::error!("Failed to calculate version: {e:?}");
-                        return None;
+                        return Ok(());
                     },
                 };
 
