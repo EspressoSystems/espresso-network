@@ -30,7 +30,6 @@ ark-ed-on-bn254 = { version = "0.5", features = ["std"] }
 ark-poly = { version = "0.5", features = ["parallel"] }
 ark-std = { version = "0.5", features = ["parallel"] }
 arrayvec = { version = "0.7", default-features = false, features = ["serde", "std"] }
-async-std = { version = "1", features = ["attributes", "tokio1", "unstable"] }
 async-tungstenite = { version = "0.13", features = ["async-native-tls", "async-tls"] }
 base64 = { version = "0.22" }
 bitvec = { version = "1", features = ["serde"] }
@@ -133,7 +132,6 @@ ark-ed-on-bn254 = { version = "0.5", features = ["std"] }
 ark-poly = { version = "0.5", features = ["parallel"] }
 ark-std = { version = "0.5", features = ["parallel"] }
 arrayvec = { version = "0.7", default-features = false, features = ["serde", "std"] }
-async-std = { version = "1", features = ["attributes", "tokio1", "unstable"] }
 async-tungstenite = { version = "0.13", features = ["async-native-tls", "async-tls"] }
 base64 = { version = "0.22" }
 bitvec = { version = "1", features = ["serde"] }

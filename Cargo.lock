@@ -13196,7 +13196,6 @@ dependencies = [
  "ark-poly 0.5.0",
  "ark-std 0.5.0",
  "arrayvec",
- "async-std",
  "async-tungstenite",
  "base64 0.22.1",
  "bitvec",
