@@ -1699,7 +1699,7 @@ impl EpochCommittees {
         let da_members = da_committees
             .get(&Epoch::new(0))
             .cloned()
-            .expect("Should always have an epoch 0 DA committee");
+            .unwrap_or_default(); // For testing reasons, we want to support being given an empty map
 
         // For each member, get the stake table entry
         let stake_table: Vec<_> = committee_members

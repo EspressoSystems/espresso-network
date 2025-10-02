@@ -55,6 +55,7 @@ pub struct PublicHotShotConfig {
     num_nodes_with_stake: NonZeroUsize,
     known_nodes_with_stake: Vec<PeerConfig<SeqTypes>>,
     known_da_nodes: Vec<PeerConfig<SeqTypes>>,
+    #[serde(default)]
     da_committees: BTreeMap<u64, Vec<PeerConfig<SeqTypes>>>,
     da_staked_committee_size: usize,
     fixed_leader_for_gpuvid: usize,
