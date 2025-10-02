@@ -739,7 +739,13 @@ pub trait SequencerPersistence:
 
     /// Update storage based on an event from consensus.
     async fn handle_event(&self, event: &Event, consumer: &(impl EventConsumer + 'static)) {
-        if let EventType::Decide { leaf_chain, qc, .. } = &event.event {
+        if let EventType::Decide {
+            leaf_chain,
+            qc,
+            qc2,
+            ..
+        } = &event.event
+        {
             let Some(LeafInfo { leaf, .. }) = leaf_chain.first() else {
                 // No new leaves.
                 return;
@@ -755,7 +761,7 @@ pub trait SequencerPersistence:
             );
 
             if let Err(err) = self
-                .append_decided_leaves(leaf.view_number(), chain, consumer)
+                .append_decided_leaves(leaf.view_number(), chain, qc2.clone(), consumer)
                 .await
             {
                 tracing::error!(
@@ -795,6 +801,7 @@ pub trait SequencerPersistence:
         &self,
         decided_view: ViewNumber,
         leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, QuorumCertificate2<SeqTypes>)> + Send,
+        deciding_qc: Option<Arc<QuorumCertificate2<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()>;
 

@@ -373,6 +373,7 @@ impl Inner {
     async fn generate_decide_events(
         &self,
         view: ViewNumber,
+        deciding_qc: Option<Arc<QuorumCertificate2<SeqTypes>>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<Vec<RangeInclusive<ViewNumber>>> {
         // Generate a decide event for each leaf, to be processed by the event consumer. We make a
@@ -438,11 +439,21 @@ impl Inner {
         let mut current_interval = None;
         for (view, (leaf, qc)) in leaves {
             let height = leaf.leaf.block_header().block_number();
+
+            // Insert the deciding QC at the appropriate position, with the last decide event in the
+            // chain.
+            let qc2 = if let Some(deciding_qc) = &deciding_qc {
+                (deciding_qc.view_number() == qc.view_number() + 1).then_some(deciding_qc.clone())
+            } else {
+                None
+            };
+
             consumer
                 .handle_event(&Event {
                     view_number: view,
                     event: EventType::Decide {
                         qc: Arc::new(qc),
+                        qc2,
                         leaf_chain: Arc::new(vec![leaf]),
                         block_size: None,
                     },
@@ -655,6 +666,7 @@ impl SequencerPersistence for Persistence {
         &self,
         view: ViewNumber,
         leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, QuorumCertificate2<SeqTypes>)> + Send,
+        deciding_qc: Option<Arc<QuorumCertificate2<SeqTypes>>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
@@ -701,7 +713,10 @@ impl SequencerPersistence for Persistence {
             )?;
         }
 
-        match inner.generate_decide_events(view, consumer).await {
+        match inner
+            .generate_decide_events(view, deciding_qc, consumer)
+            .await
+        {
             Err(err) => {
                 // Event processing failure is not an error, since by this point we have at least
                 // managed to persist the decided leaves successfully, and the event processing will
