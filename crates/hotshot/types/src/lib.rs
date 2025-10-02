@@ -52,6 +52,8 @@ pub mod utils;
 pub mod vid;
 pub mod vote;
 
+pub mod benchmarking;
+
 /// Pinned future that is Send and Sync
 pub type BoxSyncFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + Sync + 'a>>;
 

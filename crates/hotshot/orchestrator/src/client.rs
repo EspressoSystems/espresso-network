@@ -4,17 +4,23 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{net::SocketAddr, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::SocketAddr,
+    time::Duration,
+};
 
 use clap::Parser;
 use futures::{Future, FutureExt};
 use hotshot_types::{
+    benchmarking::{LeaderViewStats, ReplicaViewStats},
     network::{NetworkConfig, NetworkConfigSource},
-    traits::node_implementation::NodeType,
+    traits::node_implementation::{ConsensusTime, NodeType},
     PeerConfig, ValidatorConfig,
 };
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
+use serde::{Deserialize, Serialize};
 use surf_disco::{error::ClientError, Client};
 use tide_disco::Url;
 use tokio::time::sleep;
@@ -30,102 +36,35 @@ pub struct OrchestratorClient {
 }
 
 /// Struct describing a benchmark result
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, PartialEq)]
-pub struct BenchResults {
-    /// Whether it's partial collected results
-    pub partial_results: String,
-    /// The average latency of the transactions
-    pub avg_latency_in_sec: i64,
-    /// The number of transactions that were latency measured
-    pub num_latency: i64,
-    /// The minimum latency of the transactions
-    pub minimum_latency_in_sec: i64,
-    /// The maximum latency of the transactions
-    pub maximum_latency_in_sec: i64,
-    /// The throughput of the consensus protocol = number of transactions committed per second * transaction size in bytes
-    pub throughput_bytes_per_sec: u64,
-    /// The number of transactions committed during benchmarking
-    pub total_transactions_committed: u64,
-    /// The size of each transaction in bytes
-    pub transaction_size_in_bytes: u64,
-    /// The total time elapsed for benchmarking
-    pub total_time_elapsed_in_sec: u64,
-    /// The total number of views during benchmarking
-    pub total_num_views: usize,
-    /// The number of failed views during benchmarking
-    pub failed_num_views: usize,
-    /// The membership committee type used
-    pub committee_type: String,
+#[derive(Serialize, Deserialize, Clone)]
+pub struct BenchResults<V: ConsensusTime> {
+    pub node_index: u64,
+    #[serde(bound(deserialize = "V: ConsensusTime"))]
+    pub leader_view_stats: BTreeMap<V, LeaderViewStats<V>>,
+    #[serde(bound(deserialize = "V: ConsensusTime"))]
+    pub replica_view_stats: BTreeMap<V, ReplicaViewStats<V>>,
+    #[serde(bound(deserialize = "V: ConsensusTime"))]
+    pub latencies_by_view: BTreeMap<V, i128>,
+    #[serde(bound(deserialize = "V: ConsensusTime"))]
+    pub sizes_by_view: BTreeMap<V, i128>,
+    #[serde(bound(deserialize = "V: ConsensusTime"))]
+    pub timeouts: BTreeSet<V>,
+    pub total_time_millis: i128,
 }
 
-impl BenchResults {
-    /// printout the results of one example run
-    pub fn printout(&self) {
-        println!("=====================");
-        println!("{0} Benchmark results:", self.partial_results);
-        println!("Committee type: {}", self.committee_type);
-        println!(
-            "Average latency: {} seconds, Minimum latency: {} seconds, Maximum latency: {} seconds",
-            self.avg_latency_in_sec, self.minimum_latency_in_sec, self.maximum_latency_in_sec
-        );
-        println!("Throughput: {} bytes/sec", self.throughput_bytes_per_sec);
-        println!(
-            "Total transactions committed: {}",
-            self.total_transactions_committed
-        );
-        println!(
-            "Total number of views: {}, Failed number of views: {}",
-            self.total_num_views, self.failed_num_views
-        );
-        println!("=====================");
+impl<V: ConsensusTime> Default for BenchResults<V> {
+    fn default() -> Self {
+        Self {
+            node_index: 0,
+            leader_view_stats: BTreeMap::new(),
+            replica_view_stats: BTreeMap::new(),
+            latencies_by_view: BTreeMap::new(),
+            sizes_by_view: BTreeMap::new(),
+            timeouts: BTreeSet::new(),
+            total_time_millis: 0,
+        }
     }
 }
-
-/// Struct describing a benchmark result needed for download, also include the config
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, PartialEq)]
-pub struct BenchResultsDownloadConfig {
-    // Config starting here
-    /// The commit this benchmark was run on
-    pub commit_sha: String,
-    /// Total number of nodes
-    pub total_nodes: usize,
-    /// The size of the da committee
-    pub da_committee_size: usize,
-    /// The number of fixed_leader_for_gpuvid when we enable the feature [fixed-leader-election]
-    pub fixed_leader_for_gpuvid: usize,
-    /// Number of transactions submitted per round
-    pub transactions_per_round: usize,
-    /// The size of each transaction in bytes
-    pub transaction_size: u64,
-    /// The number of rounds
-    pub rounds: usize,
-
-    // Results starting here
-    /// Whether the results are partially collected
-    /// "One" when the results are collected for one node
-    /// "Half" when the results are collective for half running nodes if not all nodes terminate successfully
-    /// "Full" if the results are successfully collected from all nodes
-    pub partial_results: String,
-    /// The average latency of the transactions
-    pub avg_latency_in_sec: i64,
-    /// The minimum latency of the transactions
-    pub minimum_latency_in_sec: i64,
-    /// The maximum latency of the transactions
-    pub maximum_latency_in_sec: i64,
-    /// The throughput of the consensus protocol = number of transactions committed per second * transaction size in bytes
-    pub throughput_bytes_per_sec: u64,
-    /// The number of transactions committed during benchmarking
-    pub total_transactions_committed: u64,
-    /// The total time elapsed for benchmarking
-    pub total_time_elapsed_in_sec: u64,
-    /// The total number of views during benchmarking
-    pub total_num_views: usize,
-    /// The number of failed views during benchmarking
-    pub failed_num_views: usize,
-    /// The membership committee type used
-    pub committee_type: String,
-}
-
 // VALIDATOR
 
 #[derive(Parser, Debug, Clone)]
@@ -493,7 +432,10 @@ impl OrchestratorClient {
     /// # Panics
     /// Panics if unable to post
     #[instrument(skip_all, name = "orchestrator metrics")]
-    pub async fn post_bench_results(&self, bench_results: BenchResults) {
+    pub async fn post_bench_results<TYPES: NodeType>(
+        &self,
+        bench_results: BenchResults<TYPES::View>,
+    ) {
         let _send_metrics_f: Result<(), ClientError> = self
             .client
             .post("api/results")

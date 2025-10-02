@@ -64,7 +64,6 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeType, Versions},
         states::TestableState,
     },
-    utils::genesis_epoch_from_version,
     HotShotConfig, PeerConfig, ValidatorConfig,
 };
 use rand::{rngs::StdRng, SeedableRng};
@@ -366,6 +365,7 @@ pub trait RunDa<
     async fn initialize_state_and_hotshot(
         &self,
         membership: Arc<RwLock<<TYPES as NodeType>::Membership>>,
+        orchestrator_url: Option<Url>,
     ) -> SystemContextHandle<TYPES, NODE, V> {
         let initializer = hotshot::HotShotInitializer::<TYPES>::from_genesis::<V>(
             TestInstanceState::default(),
@@ -401,6 +401,7 @@ pub trait RunDa<
             ConsensusMetricsValue::default(),
             storage,
             StorageMetricsValue::default(),
+            orchestrator_url,
         )
         .await
         .expect("Could not init hotshot")
@@ -415,7 +416,7 @@ pub trait RunDa<
         transactions: &mut Vec<TestTransaction>,
         transactions_to_send_per_round: u64,
         transaction_size_in_bytes: u64,
-    ) -> BenchResults {
+    ) -> BenchResults<TYPES::View> {
         let NetworkConfig {
             rounds, node_index, ..
         } = self.config();
@@ -525,16 +526,6 @@ pub trait RunDa<
                 },
             }
         }
-        // Panic if we don't have the genesis epoch, there is no recovery from that
-        let num_eligible_leaders = context
-            .hotshot
-            .membership_coordinator
-            .membership_for_epoch(genesis_epoch_from_version::<V, TYPES>())
-            .await
-            .unwrap()
-            .stake_table()
-            .await
-            .len();
         let consensus_lock = context.hotshot.consensus();
         let consensus_reader = consensus_lock.read().await;
         let total_num_views = usize::try_from(consensus_reader.locked_view().u64()).unwrap();
@@ -566,23 +557,7 @@ pub trait RunDa<
                  {avg_latency_in_sec} sec."
             );
 
-            BenchResults {
-                partial_results: "Unset".to_string(),
-                avg_latency_in_sec,
-                num_latency,
-                minimum_latency_in_sec: minimum_latency,
-                maximum_latency_in_sec: maximum_latency,
-                throughput_bytes_per_sec,
-                total_transactions_committed,
-                transaction_size_in_bytes: transaction_size_in_bytes + 8, // extra 8 bytes for timestamp
-                total_time_elapsed_in_sec: total_time_elapsed.as_secs(),
-                total_num_views,
-                failed_num_views,
-                committee_type: format!(
-                    "{} with {num_eligible_leaders} eligible leaders",
-                    std::any::type_name::<TYPES::Membership>()
-                ),
-            }
+            BenchResults::default()
         } else {
             // all values with zero
             BenchResults::default()
@@ -994,7 +969,9 @@ pub async fn main_entry_point<
         &membership,
     )
     .await;
-    let hotshot = run.initialize_state_and_hotshot(membership).await;
+    let hotshot = run
+        .initialize_state_and_hotshot(membership, Some(args.url))
+        .await;
 
     if let Some(task) = builder_task {
         task.start(Box::new(hotshot.event_stream()));
@@ -1041,7 +1018,9 @@ pub async fn main_entry_point<
             (transaction_size + 8) as u64, // extra 8 bytes for transaction base, see `create_random_transaction`.
         )
         .await;
-    orchestrator_client.post_bench_results(bench_results).await;
+    orchestrator_client
+        .post_bench_results::<TYPES>(bench_results)
+        .await;
 }
 
 /// Sets correct builder_url and registers a builder with orchestrator if this node is running one.

@@ -5680,6 +5680,7 @@ dependencies = [
  "futures",
  "hotshot-builder-api",
  "hotshot-contract-adapter",
+ "hotshot-orchestrator",
  "hotshot-task",
  "hotshot-types",
  "hotshot-utils",

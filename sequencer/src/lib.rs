@@ -292,7 +292,7 @@ where
     info!("Libp2p advertise address: {}", libp2p_advertise_address);
 
     // Orchestrator client
-    let orchestrator_client = OrchestratorClient::new(network_params.orchestrator_url);
+    let orchestrator_client = OrchestratorClient::new(network_params.orchestrator_url.clone());
     let state_key_pair = StateKeyPair::from_sign_key(network_params.private_state_key);
     let validator_config = ValidatorConfig {
         public_key: pub_key,
@@ -617,6 +617,7 @@ where
         event_consumer,
         seq_versions,
         proposal_fetcher_config,
+        Some(network_params.orchestrator_url),
     )
     .await?;
     if wait_for_orchestrator {
@@ -1327,6 +1328,7 @@ pub mod testing {
                 event_consumer,
                 bind_version,
                 Default::default(),
+                None,
             )
             .await
             .unwrap()

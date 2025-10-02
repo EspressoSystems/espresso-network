@@ -25,6 +25,7 @@ either = { workspace = true }
 futures = { workspace = true }
 hotshot-builder-api = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
+hotshot-orchestrator = { workspace = true }
 hotshot-task = { workspace = true }
 hotshot-types = { workspace = true }
 hotshot-utils = { workspace = true }

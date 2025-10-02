@@ -6,8 +6,10 @@ use std::{
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
 use either::Either;
+use hotshot_orchestrator::client::{BenchResults, OrchestratorClient};
 use hotshot_task::task::TaskState;
 use hotshot_types::{
+    benchmarking::{LeaderViewStats, ReplicaViewStats},
     consensus::OuterConsensus,
     epoch_membership::EpochMembershipCoordinator,
     traits::{
@@ -21,106 +23,39 @@ use hotshot_utils::{
     anytrace::{Error, Level, Result},
     line_info, warn,
 };
-use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+use url::Url;
 
 use crate::events::HotShotEvent;
 
-#[derive(Serialize, Deserialize)]
-pub struct LeaderViewStats<TYPES: NodeType> {
-    pub view: TYPES::View,
-    pub prev_proposal_send: Option<i128>,
-    pub proposal_send: Option<i128>,
-    pub vote_recv: Option<i128>,
-    pub da_proposal_send: Option<i128>,
-    pub builder_start: Option<i128>,
-    pub block_built: Option<i128>,
-    pub vid_disperse_send: Option<i128>,
-    pub timeout_certificate_formed: Option<i128>,
-    pub qc_formed: Option<i128>,
-    pub da_cert_send: Option<i128>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct ReplicaViewStats<TYPES: NodeType> {
-    pub view: TYPES::View,
-    pub view_change: Option<i128>,
-    pub proposal_timestamp: Option<i128>,
-    pub proposal_recv: Option<i128>,
-    pub vote_send: Option<i128>,
-    pub timeout_vote_send: Option<i128>,
-    pub da_proposal_received: Option<i128>,
-    pub da_proposal_validated: Option<i128>,
-    pub da_certificate_recv: Option<i128>,
-    pub proposal_prelim_validated: Option<i128>,
-    pub proposal_validated: Option<i128>,
-    pub timeout_triggered: Option<i128>,
-    pub vid_share_validated: Option<i128>,
-    pub vid_share_recv: Option<i128>,
-}
-
-impl<TYPES: NodeType> LeaderViewStats<TYPES> {
-    fn new(view: TYPES::View) -> Self {
-        Self {
-            view,
-            prev_proposal_send: None,
-            proposal_send: None,
-            vote_recv: None,
-            da_proposal_send: None,
-            builder_start: None,
-            block_built: None,
-            vid_disperse_send: None,
-            timeout_certificate_formed: None,
-            qc_formed: None,
-            da_cert_send: None,
-        }
-    }
-}
-
-impl<TYPES: NodeType> ReplicaViewStats<TYPES> {
-    fn new(view: TYPES::View) -> Self {
-        Self {
-            view,
-            view_change: None,
-            proposal_timestamp: None,
-            proposal_recv: None,
-            vote_send: None,
-            timeout_vote_send: None,
-            da_proposal_received: None,
-            da_proposal_validated: None,
-            da_certificate_recv: None,
-            proposal_prelim_validated: None,
-            proposal_validated: None,
-            timeout_triggered: None,
-            vid_share_validated: None,
-            vid_share_recv: None,
-        }
-    }
-}
-
 pub struct StatsTaskState<TYPES: NodeType> {
+    node_index: u64,
     view: TYPES::View,
     epoch: Option<TYPES::Epoch>,
     public_key: TYPES::SignatureKey,
     consensus: OuterConsensus<TYPES>,
     membership_coordinator: EpochMembershipCoordinator<TYPES>,
-    leader_stats: BTreeMap<TYPES::View, LeaderViewStats<TYPES>>,
-    replica_stats: BTreeMap<TYPES::View, ReplicaViewStats<TYPES>>,
+    leader_stats: BTreeMap<TYPES::View, LeaderViewStats<TYPES::View>>,
+    replica_stats: BTreeMap<TYPES::View, ReplicaViewStats<TYPES::View>>,
     latencies_by_view: BTreeMap<TYPES::View, i128>,
     sizes_by_view: BTreeMap<TYPES::View, i128>,
     epoch_start_times: BTreeMap<TYPES::Epoch, i128>,
     timeouts: BTreeSet<TYPES::View>,
+    orchestrator_client: Option<OrchestratorClient>,
 }
 
 impl<TYPES: NodeType> StatsTaskState<TYPES> {
     pub fn new(
+        node_index: u64,
         view: TYPES::View,
         epoch: Option<TYPES::Epoch>,
         public_key: TYPES::SignatureKey,
         consensus: OuterConsensus<TYPES>,
         membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        orchestrator_url: Option<Url>,
     ) -> Self {
         Self {
+            node_index,
             view,
             epoch,
             public_key,
@@ -132,14 +67,15 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
             sizes_by_view: BTreeMap::new(),
             epoch_start_times: BTreeMap::new(),
             timeouts: BTreeSet::new(),
+            orchestrator_client: orchestrator_url.map(OrchestratorClient::new),
         }
     }
-    fn leader_entry(&mut self, view: TYPES::View) -> &mut LeaderViewStats<TYPES> {
+    fn leader_entry(&mut self, view: TYPES::View) -> &mut LeaderViewStats<TYPES::View> {
         self.leader_stats
             .entry(view)
             .or_insert_with(|| LeaderViewStats::new(view))
     }
-    fn replica_entry(&mut self, view: TYPES::View) -> &mut ReplicaViewStats<TYPES> {
+    fn replica_entry(&mut self, view: TYPES::View) -> &mut ReplicaViewStats<TYPES::View> {
         self.replica_stats
             .entry(view)
             .or_insert_with(|| ReplicaViewStats::new(view))
@@ -184,16 +120,21 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
         Ok(())
     }
 
-    fn log_basic_stats(&self, now: i128, epoch: &TYPES::Epoch) {
+    fn log_basic_stats(&self, now: i128, epoch: &TYPES::Epoch) -> i128 {
         let num_views = self.latencies_by_view.len();
         let total_size = self.sizes_by_view.values().sum::<i128>();
 
         // Either we have no views logged yet, no TXNs or we are not in the DA committee and don't know block sizes
         if num_views == 0 || total_size == 0 {
-            return;
+            return 0;
         }
 
         let total_latency = self.latencies_by_view.values().sum::<i128>();
+        let elapsed_time = if let Some(epoch_start_time) = self.epoch_start_times.get(epoch) {
+            now - epoch_start_time
+        } else {
+            0
+        };
         let average_latency = total_latency / num_views as i128;
         tracing::warn!("Average latency: {}ms", average_latency);
         tracing::warn!(
@@ -201,12 +142,18 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
             epoch,
             self.timeouts.len()
         );
-        if let Some(epoch_start_time) = self.epoch_start_times.get(epoch) {
-            let elapsed_time = now - epoch_start_time;
+        let total_size = self.sizes_by_view.values().sum::<i128>();
+        if total_size == 0 {
+            // Either no TXNs or we are not in the DA committee and don't know block sizes
+            return elapsed_time;
+        }
+        if elapsed_time > 0 {
             // multiply by 1000 to convert to seconds
             let throughput = (total_size / elapsed_time) * 1000;
             tracing::warn!("Throughput: {} bytes/s", throughput);
+            return elapsed_time;
         }
+        elapsed_time
     }
 }
 
@@ -347,10 +294,25 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                 }
 
                 if new_epoch {
-                    if let Some(prev_epoch) = prev_epoch {
-                        self.log_basic_stats(now, &prev_epoch);
-                    }
+                    let elapsed_time = if let Some(prev_epoch) = prev_epoch {
+                        self.log_basic_stats(now, &prev_epoch)
+                    } else {
+                        0
+                    };
                     let _ = self.dump_stats();
+                    if let Some(orchestrator_client) = self.orchestrator_client.as_ref() {
+                        orchestrator_client
+                            .post_bench_results::<TYPES>(BenchResults::<TYPES::View> {
+                                node_index: self.node_index,
+                                leader_view_stats: self.leader_stats.clone(),
+                                replica_view_stats: self.replica_stats.clone(),
+                                latencies_by_view: self.latencies_by_view.clone(),
+                                sizes_by_view: self.sizes_by_view.clone(),
+                                timeouts: self.timeouts.clone(),
+                                total_time_millis: elapsed_time,
+                            })
+                            .await;
+                    }
                     self.garbage_collect(*view - 1);
                 }
 
