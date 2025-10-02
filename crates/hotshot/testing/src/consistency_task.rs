@@ -384,7 +384,14 @@ impl<TYPES: NodeType<BlockHeader = TestBlockHeader>, V: Versions> TestTaskState
     /// Handles an event from one of multiple receivers.
     async fn handle_event(&mut self, (message, id): (Self::Event, usize)) -> Result<()> {
         if let Event {
-            event: EventType::Decide { leaf_chain, .. },
+            event:
+                EventType::Decide {
+                    leaf_chain,
+                    qc,
+                    qc2,
+                    ..
+                },
+            view_number,
             ..
         } = message
         {
@@ -397,6 +404,23 @@ impl<TYPES: NodeType<BlockHeader = TestBlockHeader>, V: Versions> TestTaskState
                 std::mem::swap(&mut self.timeout_task, &mut timeout_task);
 
                 timeout_task.abort();
+            }
+
+            match qc2 {
+                Some(qc2) => {
+                    let last_leaf = &leaf_chain[0].leaf;
+                    ensure!(qc.view_number == last_leaf.view_number());
+                    ensure!(qc.data.leaf_commit == last_leaf.commit());
+                    ensure!(qc2.view_number == qc.view_number + 1);
+                },
+                None => {
+                    // Only the genesis decide is special in that it doesn't have a 2-chain of QCs
+                    // extending the last decided leaf.
+                    ensure!(
+                        view_number == TYPES::View::genesis(),
+                        "expected 2nd deciding QC for non-genesis decide"
+                    );
+                },
             }
 
             for leaf_info in leaf_chain.iter().rev() {

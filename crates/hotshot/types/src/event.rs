@@ -202,6 +202,11 @@ pub enum EventType<TYPES: NodeType> {
         /// Note that the QC for each additional leaf in the chain can be obtained from the leaf
         /// before it using
         qc: Arc<QuorumCertificate2<TYPES>>,
+        /// A QC signing the leaf corresponding to `qc`.
+        ///
+        /// Together with `qc`, this forms a 2-chain, which is sufficient for a light client to
+        /// verify that the leaf chain contained in this event is in fact decided.
+        qc2: Option<Arc<QuorumCertificate2<TYPES>>>,
         /// Optional information of the number of transactions in the block, for logging purposes.
         block_size: Option<u64>,
     },
@@ -268,6 +273,7 @@ impl<TYPES: NodeType> EventType<TYPES> {
                 leaf_chain,
                 qc,
                 block_size,
+                ..
             } => LegacyEventType::Decide {
                 leaf_chain: Arc::new(
                     leaf_chain
