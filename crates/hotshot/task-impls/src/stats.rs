@@ -171,33 +171,43 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
 
         match event.as_ref() {
             HotShotEvent::BlockRecv(block_recv) => {
-                self.leader_entry(block_recv.view_number).block_built = Some(now);
+                self.leader_entry(block_recv.view_number)
+                    .block_built
+                    .get_or_insert(now);
             },
             HotShotEvent::QuorumProposalRecv(proposal, _) => {
                 self.replica_entry(proposal.data.view_number())
-                    .proposal_recv = Some(now);
+                    .proposal_recv
+                    .get_or_insert(now);
             },
             HotShotEvent::QuorumVoteRecv(_vote) => {},
             HotShotEvent::TimeoutVoteRecv(_vote) => {},
             HotShotEvent::TimeoutVoteSend(vote) => {
-                self.replica_entry(vote.view_number()).timeout_vote_send = Some(now);
+                self.replica_entry(vote.view_number())
+                    .timeout_vote_send
+                    .get_or_insert(now);
             },
             HotShotEvent::DaProposalRecv(proposal, _) => {
                 self.replica_entry(proposal.data.view_number())
-                    .da_proposal_received = Some(now);
+                    .da_proposal_received
+                    .get_or_insert(now);
             },
             HotShotEvent::DaProposalValidated(proposal, _) => {
                 self.replica_entry(proposal.data.view_number())
-                    .da_proposal_validated = Some(now);
+                    .da_proposal_validated
+                    .get_or_insert(now);
             },
             HotShotEvent::DaVoteRecv(_simple_vote) => {},
             HotShotEvent::DaCertificateRecv(simple_certificate) => {
                 self.replica_entry(simple_certificate.view_number())
-                    .da_certificate_recv = Some(now);
+                    .da_certificate_recv
+                    .get_or_insert(now);
             },
             HotShotEvent::DaCertificateValidated(_simple_certificate) => {},
             HotShotEvent::QuorumProposalSend(proposal, _) => {
-                self.leader_entry(proposal.data.view_number()).proposal_send = Some(now);
+                self.leader_entry(proposal.data.view_number())
+                    .proposal_send
+                    .get_or_insert(now);
 
                 // If the last view succeeded, add the metric for time between proposals
                 if proposal.data.view_change_evidence().is_none() {
@@ -206,7 +216,8 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                         .proposal_recv
                     {
                         self.leader_entry(proposal.data.view_number())
-                            .prev_proposal_send = Some(previous_proposal_time);
+                            .prev_proposal_send
+                            .get_or_insert(previous_proposal_time);
 
                         // calculate the elapsed time as milliseconds (from nanoseconds)
                         let elapsed_time = (now - previous_proposal_time) / 1_000_000;
@@ -224,58 +235,67 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                 }
             },
             HotShotEvent::QuorumVoteSend(simple_vote) => {
-                self.replica_entry(simple_vote.view_number()).vote_send = Some(now);
+                self.replica_entry(simple_vote.view_number())
+                    .vote_send
+                    .get_or_insert(now);
             },
             HotShotEvent::ExtendedQuorumVoteSend(simple_vote) => {
-                self.replica_entry(simple_vote.view_number()).vote_send = Some(now);
+                self.replica_entry(simple_vote.view_number())
+                    .vote_send
+                    .get_or_insert(now);
             },
             HotShotEvent::QuorumProposalValidated(proposal, _) => {
                 self.replica_entry(proposal.data.view_number())
-                    .proposal_validated = Some(now);
+                    .proposal_validated
+                    .get_or_insert(now);
                 self.replica_entry(proposal.data.view_number())
                     .proposal_timestamp =
                     Some(proposal.data.block_header().timestamp_millis() as i128);
             },
             HotShotEvent::DaProposalSend(proposal, _) => {
                 self.leader_entry(proposal.data.view_number())
-                    .da_proposal_send = Some(now);
+                    .da_proposal_send
+                    .get_or_insert(now);
             },
             HotShotEvent::DaVoteSend(simple_vote) => {
-                self.replica_entry(simple_vote.view_number()).vote_send = Some(now);
+                self.replica_entry(simple_vote.view_number())
+                    .vote_send
+                    .get_or_insert(now);
             },
             HotShotEvent::QcFormed(either) => {
                 match either {
-                    Either::Left(qc) => {
-                        self.leader_entry(qc.view_number() + 1).qc_formed = Some(now)
-                    },
-                    Either::Right(tc) => {
-                        self.leader_entry(tc.view_number())
-                            .timeout_certificate_formed = Some(now)
-                    },
+                    Either::Left(qc) => self
+                        .leader_entry(qc.view_number() + 1)
+                        .qc_formed
+                        .get_or_insert(now),
+                    Either::Right(tc) => self
+                        .leader_entry(tc.view_number())
+                        .timeout_certificate_formed
+                        .get_or_insert(now),
                 };
             },
             HotShotEvent::Qc2Formed(either) => {
                 match either {
-                    Either::Left(qc) => {
-                        self.leader_entry(qc.view_number() + 1).qc_formed = Some(now)
-                    },
-                    Either::Right(tc) => {
-                        self.leader_entry(tc.view_number())
-                            .timeout_certificate_formed = Some(now)
-                    },
+                    Either::Left(qc) => self
+                        .leader_entry(qc.view_number() + 1)
+                        .qc_formed
+                        .get_or_insert(now),
+                    Either::Right(tc) => self
+                        .leader_entry(tc.view_number())
+                        .timeout_certificate_formed
+                        .get_or_insert(now),
                 };
             },
             HotShotEvent::DacSend(simple_certificate, _) => {
                 self.leader_entry(simple_certificate.view_number())
-                    .da_cert_send = Some(now);
+                    .da_cert_send
+                    .get_or_insert(now);
             },
             HotShotEvent::ViewChange(view, epoch) => {
                 // Record the timestamp of the first observed view change
                 // This can happen when transitioning to the next view, either due to voting
                 // or receiving a proposal, but we only store the first one
-                if self.replica_entry(*view + 1).view_change.is_none() {
-                    self.replica_entry(*view + 1).view_change = Some(now);
-                }
+                self.replica_entry(*view + 1).view_change.get_or_insert(now);
 
                 if *epoch <= self.epoch && *view <= self.view {
                     return Ok(());
@@ -339,15 +359,18 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
             },
             HotShotEvent::VidShareRecv(_, proposal) => {
                 self.replica_entry(proposal.data.view_number())
-                    .vid_share_recv = Some(now);
+                    .vid_share_recv
+                    .get_or_insert(now);
             },
             HotShotEvent::VidShareValidated(proposal) => {
                 self.replica_entry(proposal.data.view_number())
-                    .vid_share_validated = Some(now);
+                    .vid_share_validated
+                    .get_or_insert(now);
             },
             HotShotEvent::QuorumProposalPreliminarilyValidated(proposal) => {
                 self.replica_entry(proposal.data.view_number())
-                    .proposal_prelim_validated = Some(now);
+                    .proposal_prelim_validated
+                    .get_or_insert(now);
             },
             HotShotEvent::LeavesDecided(leaves) => {
                 for leaf in leaves {
