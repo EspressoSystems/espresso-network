@@ -339,8 +339,8 @@ pub struct LeafChainTraversalOutcome<TYPES: NodeType> {
     /// The new decided view obtained from a 3 chain starting from the proposal's parent.
     pub new_decided_view_number: Option<TYPES::View>,
 
-    /// The qc for the decided chain.
-    pub new_decide_qc: Option<QuorumCertificate2<TYPES>>,
+    /// The 2-chain of qcs causing the chain to be decided.
+    pub new_decide_qcs: Option<[QuorumCertificate2<TYPES>; 2]>,
 
     /// The decided leaves with corresponding validated state and VID info.
     pub leaf_views: Vec<LeafInfo<TYPES>>,
@@ -361,7 +361,7 @@ impl<TYPES: NodeType + Default> Default for LeafChainTraversalOutcome<TYPES> {
         Self {
             new_locked_view_number: None,
             new_decided_view_number: None,
-            new_decide_qc: None,
+            new_decide_qcs: None,
             leaf_views: Vec::new(),
             included_txns: None,
             decided_upgrade_cert: None,
@@ -434,7 +434,10 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
     if grand_parent_info.leaf.view_number() + 1 != parent_info.leaf.view_number() {
         return res;
     }
-    res.new_decide_qc = Some(parent_info.leaf.justify_qc().clone());
+    res.new_decide_qcs = Some([
+        parent_info.leaf.justify_qc().clone(),
+        proposed_leaf.justify_qc().clone(),
+    ]);
     let decided_view_number = grand_parent_info.leaf.view_number();
     res.new_decided_view_number = Some(decided_view_number);
     // We've reached decide, now get the leaf chain all the way back to the last decided view, not including it.
@@ -563,6 +566,7 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>>
 
     let mut last_view_number_visited = view_number;
     let mut current_chain_length = 0usize;
+    let mut prev_qc = proposal.justify_qc().clone();
     let mut res = LeafChainTraversalOutcome::default();
 
     if let Err(e) = consensus_reader.visit_leaf_ancestors(
@@ -584,7 +588,7 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>>
                         res.new_locked_view_number = Some(leaf.view_number());
                         // The next leaf in the chain, if there is one, is decided, so this
                         // leaf's justify_qc would become the QC for the decided chain.
-                        res.new_decide_qc = Some(leaf.justify_qc().clone());
+                        res.new_decide_qcs = Some([leaf.justify_qc().clone(), prev_qc.clone()]);
                     } else if current_chain_length == 3 {
                         // And we decide when the chain length is 3.
                         res.new_decided_view_number = Some(leaf.view_number());
@@ -595,6 +599,7 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>>
                     return false;
                 }
             }
+            prev_qc = leaf.justify_qc().clone();
 
             // Now, if we *have* reached a decide, we need to do some state updates.
             if let Some(new_decided_view) = res.new_decided_view_number {
