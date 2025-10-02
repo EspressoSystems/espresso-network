@@ -50,7 +50,8 @@ async fn test_random_block_builder() {
 
     let builder_started = Instant::now();
 
-    let client: BuilderClient<TestTypes, StaticVersion<0, 1>> = BuilderClient::new(api_url);
+    let client: BuilderClient<TestTypes, StaticVersion<0, 1>> =
+        BuilderClient::new(api_url, Duration::from_secs(5));
     assert!(client.connect(Duration::from_millis(100)).await);
 
     let (pub_key, private_key) =

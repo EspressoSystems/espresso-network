@@ -14,4 +14,5 @@ extend-exclude = [
   "crates/hotshot/macros/src/lib.rs",
   "staking-cli/tests/cli.rs",
   "sdks/go/types/common/consts.go",
+  "data/insta_snapshots",
 ]

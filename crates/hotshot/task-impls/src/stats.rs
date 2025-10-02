@@ -122,6 +122,13 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
 
     fn log_basic_stats(&self, now: i128, epoch: &TYPES::Epoch) -> i128 {
         let num_views = self.latencies_by_view.len();
+        let total_size = self.sizes_by_view.values().sum::<i128>();
+
+        // Either we have no views logged yet, no TXNs or we are not in the DA committee and don't know block sizes
+        if num_views == 0 || total_size == 0 {
+            return 0;
+        }
+
         let total_latency = self.latencies_by_view.values().sum::<i128>();
         let elapsed_time = if let Some(epoch_start_time) = self.epoch_start_times.get(epoch) {
             now - epoch_start_time
