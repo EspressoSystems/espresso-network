@@ -118,14 +118,6 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
         block_epoch: Option<TYPES::Epoch>,
         vid: Option<VidCommitment>,
     ) -> Option<HotShotTaskCompleted> {
-        let _version = match self.upgrade_lock.version(block_view).await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::error!("Failed to calculate version: {e:?}");
-                return None;
-            },
-        };
-
         self.handle_view_change_legacy(event_stream, block_view, block_epoch, vid)
             .await
     }
@@ -376,7 +368,27 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
             HotShotEvent::QuorumProposalValidated(proposal, _leaf) => {
                 let view_number = proposal.data.view_number();
                 let next_view = view_number + 1;
+
+                let version = match self.upgrade_lock.version(next_view).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::error!("Failed to calculate version: {e:?}");
+                        return None;
+                    },
+                };
+
+                if version < V::DrbAndHeaderUpgrade::VERSION {
+                    return Ok(());
+                }
+
                 let vid = proposal.data.block_header().payload_commitment();
+                let block_height = proposal.data.block_header().block_number();
+                if is_epoch_transition(block_height, self.epoch_height) {
+                    return Ok(());
+                }
+                if is_last_block(block_height, self.epoch_height) {
+                    return Ok(());
+                }
                 if next_view <= self.cur_view {
                     return Ok(());
                 }
