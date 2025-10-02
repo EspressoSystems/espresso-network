@@ -7,21 +7,22 @@ use ark_std::{
 };
 /// BLS verification key, base field and Schnorr verification key
 use hotshot_types::light_client::{CircuitField, LightClientState, StakeTableState, StateVerKey};
-use jf_plonk::{
+use jf_plonk_compat::{
     errors::PlonkError,
     proof_system::{PlonkKzgSnark, UniversalSNARK},
     transcript::SolidityTranscript,
 };
-use jf_relation::Circuit;
+use jf_relation_compat::Circuit;
 use jf_signature::schnorr::Signature;
+
 /// Proving key
-pub type ProvingKey = jf_plonk::proof_system::structs::ProvingKey<Bn254>;
+pub type ProvingKey = jf_plonk_compat::proof_system::structs::ProvingKey<Bn254>;
 /// Verifying key
-pub type VerifyingKey = jf_plonk::proof_system::structs::VerifyingKey<Bn254>;
+pub type VerifyingKey = jf_plonk_compat::proof_system::structs::VerifyingKey<Bn254>;
 /// Proof
-pub type Proof = jf_plonk::proof_system::structs::Proof<Bn254>;
+pub type Proof = jf_plonk_compat::proof_system::structs::Proof<Bn254>;
 /// Universal SRS
-pub type UniversalSrs = jf_plonk::proof_system::structs::UniversalSrs<Bn254>;
+pub type UniversalSrs = jf_plonk_compat::proof_system::structs::UniversalSrs<Bn254>;
 /// Public input to the light client state prover service
 pub type PublicInput = super::circuit::GenericPublicInput<CircuitField>;
 
@@ -118,11 +119,11 @@ mod tests {
         light_client::LightClientState, signature_key::SchnorrPubKey,
         traits::signature_key::LCV2StateSignatureKey,
     };
-    use jf_plonk::{
+    use jf_plonk_compat::{
         proof_system::{PlonkKzgSnark, UniversalSNARK},
         transcript::SolidityTranscript,
     };
-    use jf_relation::Circuit;
+    use jf_relation_compat::Circuit;
     use jf_signature::schnorr::Signature;
     use jf_utils::test_rng;
 
