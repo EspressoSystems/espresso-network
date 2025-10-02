@@ -8,10 +8,14 @@
 //! initiate a proposal occurs.
 
 use std::{
+    collections::HashMap,
     marker::PhantomData,
-    sync::Arc,
+    sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
 };
+
+pub static PROPOSAL_CREATION_TIMES: LazyLock<Mutex<HashMap<u64, Instant>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 use async_broadcast::{Receiver, Sender};
 use committable::{Commitment, Committable};
@@ -652,6 +656,12 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             proposed_leaf.height(),
             proposed_leaf.justify_qc().view_number()
         );
+
+        // Add the proposal creation time to the map
+        PROPOSAL_CREATION_TIMES
+            .lock()
+            .unwrap()
+            .insert(*proposed_leaf.view_number(), Instant::now());
 
         broadcast_event(
             Arc::new(HotShotEvent::QuorumProposalSend(

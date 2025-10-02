@@ -40,7 +40,7 @@ use crate::{
     quorum_proposal::handlers::handle_eqc_formed,
 };
 
-mod handlers;
+pub mod handlers;
 
 /// The state for the quorum proposal task.
 pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {

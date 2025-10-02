@@ -41,6 +41,7 @@ use tracing::instrument;
 use crate::{
     events::{HotShotEvent, HotShotTaskCompleted},
     helpers::broadcast_event,
+    quorum_proposal::handlers::PROPOSAL_CREATION_TIMES,
 };
 
 /// the network message task state
@@ -1522,6 +1523,40 @@ impl<
                     return;
                 },
             };
+
+            // Get the view number from the message
+            let view_number = {
+                if let MessageKind::Consensus(SequencingMessage::General(
+                    GeneralConsensusMessage::Proposal(proposal),
+                )) = &message.kind
+                {
+                    Some(*proposal.data.view_number)
+                } else if let MessageKind::Consensus(SequencingMessage::General(
+                    GeneralConsensusMessage::Proposal2(proposal),
+                )) = &message.kind
+                {
+                    Some(*proposal.data.view_number)
+                } else if let MessageKind::Consensus(SequencingMessage::General(
+                    GeneralConsensusMessage::Proposal2Legacy(proposal),
+                )) = &message.kind
+                {
+                    Some(*proposal.data.view_number)
+                } else {
+                    None
+                }
+            };
+
+            // If the view number is not None, log the proposal creation time from the map
+            if let Some(view_number) = view_number {
+                let proposal_creation_time =
+                    PROPOSAL_CREATION_TIMES.lock().unwrap().remove(&view_number);
+                if let Some(proposal_creation_time) = proposal_creation_time {
+                    println!(
+                        "Proposal creation to send time for view {view_number}: {:?}",
+                        proposal_creation_time
+                    );
+                }
+            }
 
             let transmit_result = match transmit {
                 TransmitType::Direct(recipient) => {
