@@ -377,6 +377,13 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                 let view_number = proposal.data.view_number();
                 let next_view = view_number + 1;
                 let vid = proposal.data.block_header().payload_commitment();
+                let block_height = proposal.data.block_header().block_number();
+                if is_epoch_transition(block_height, self.epoch_height) {
+                    return Ok(());
+                }
+                if is_last_block(block_height, self.epoch_height) {
+                    return Ok(());
+                }
                 if next_view <= self.cur_view {
                     return Ok(());
                 }
