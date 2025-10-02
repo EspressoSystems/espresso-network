@@ -490,7 +490,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
 
         // Find commitment to the block we want to build upon
         let (parent_view, parent_comm) = if let Some(vid) = vid {
-            (block_view, vid)
+            (block_view - 1, vid)
         } else {
             match self
                 .last_vid_commitment_retry(block_view, task_start_time)
