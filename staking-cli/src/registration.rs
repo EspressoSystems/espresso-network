@@ -1,4 +1,9 @@
-use alloy::{primitives::Address, providers::Provider, rpc::types::TransactionReceipt};
+use alloy::{
+    eips::BlockId,
+    network::Ethereum,
+    primitives::Address,
+    providers::{PendingTransactionBuilder, Provider},
+};
 use anyhow::Result;
 use hotshot_contract_adapter::{
     evm::DecodeRevert as _,
@@ -16,7 +21,7 @@ pub async fn register_validator(
     stake_table_addr: Address,
     commission: Commission,
     payload: NodeSignatures,
-) -> Result<TransactionReceipt> {
+) -> Result<PendingTransactionBuilder<Ethereum>> {
     // NOTE: the StakeTableV2 ABI is a superset of the V1 ABI because the V2 inherits from V1 so we
     // can always use the V2 bindings for calling functions and decoding events, even if we are
     // connected to the V1 contract.
@@ -28,35 +33,29 @@ pub async fn register_validator(
     // to be mined. We're very unlikely to hit this in practice, and since we only perform the
     // upgrade on decaf this is acceptable.
     Ok(match version {
-        StakeTableContractVersion::V1 => {
-            stake_table
-                .registerValidator(
-                    sol_payload.bls_vk,
-                    sol_payload.schnorr_vk,
-                    sol_payload.bls_signature.into(),
-                    commission.to_evm(),
-                )
-                .send()
-                .await
-                .maybe_decode_revert::<StakeTableV2Errors>()?
-                .get_receipt()
-                .await?
-        },
-        StakeTableContractVersion::V2 => {
-            stake_table
-                .registerValidatorV2(
-                    sol_payload.bls_vk,
-                    sol_payload.schnorr_vk,
-                    sol_payload.bls_signature.into(),
-                    sol_payload.schnorr_signature.into(),
-                    commission.to_evm(),
-                )
-                .send()
-                .await
-                .maybe_decode_revert::<StakeTableV2Errors>()?
-                .get_receipt()
-                .await?
-        },
+        StakeTableContractVersion::V1 => stake_table
+            .registerValidator(
+                sol_payload.bls_vk,
+                sol_payload.schnorr_vk,
+                sol_payload.bls_signature.into(),
+                commission.to_evm(),
+            )
+            .block(BlockId::pending())
+            .send()
+            .await
+            .maybe_decode_revert::<StakeTableV2Errors>()?,
+        StakeTableContractVersion::V2 => stake_table
+            .registerValidatorV2(
+                sol_payload.bls_vk,
+                sol_payload.schnorr_vk,
+                sol_payload.bls_signature.into(),
+                sol_payload.schnorr_signature.into(),
+                commission.to_evm(),
+            )
+            .block(BlockId::pending())
+            .send()
+            .await
+            .maybe_decode_revert::<StakeTableV2Errors>()?,
     })
 }
 
@@ -64,7 +63,7 @@ pub async fn update_consensus_keys(
     provider: impl Provider,
     stake_table_addr: Address,
     payload: NodeSignatures,
-) -> Result<TransactionReceipt> {
+) -> Result<PendingTransactionBuilder<Ethereum>> {
     // NOTE: the StakeTableV2 ABI is a superset of the V1 ABI because the V2 inherits from V1 so we
     // can always use the V2 bindings for calling functions and decoding events, even if we are
     // connected to the V1 contract.
@@ -76,63 +75,55 @@ pub async fn update_consensus_keys(
     // upgrade on decaf this is acceptable.
     let version = stake_table.getVersion().call().await?.try_into()?;
     Ok(match version {
-        StakeTableContractVersion::V1 => {
-            stake_table
-                .updateConsensusKeys(
-                    sol_payload.bls_vk,
-                    sol_payload.schnorr_vk,
-                    sol_payload.bls_signature.into(),
-                )
-                .send()
-                .await
-                .maybe_decode_revert::<StakeTableV2Errors>()?
-                .get_receipt()
-                .await?
-        },
-        StakeTableContractVersion::V2 => {
-            stake_table
-                .updateConsensusKeysV2(
-                    sol_payload.bls_vk,
-                    sol_payload.schnorr_vk,
-                    sol_payload.bls_signature.into(),
-                    sol_payload.schnorr_signature.into(),
-                )
-                .send()
-                .await
-                .maybe_decode_revert::<StakeTableV2Errors>()?
-                .get_receipt()
-                .await?
-        },
+        StakeTableContractVersion::V1 => stake_table
+            .updateConsensusKeys(
+                sol_payload.bls_vk,
+                sol_payload.schnorr_vk,
+                sol_payload.bls_signature.into(),
+            )
+            .block(BlockId::pending())
+            .send()
+            .await
+            .maybe_decode_revert::<StakeTableV2Errors>()?,
+        StakeTableContractVersion::V2 => stake_table
+            .updateConsensusKeysV2(
+                sol_payload.bls_vk,
+                sol_payload.schnorr_vk,
+                sol_payload.bls_signature.into(),
+                sol_payload.schnorr_signature.into(),
+            )
+            .block(BlockId::pending())
+            .send()
+            .await
+            .maybe_decode_revert::<StakeTableV2Errors>()?,
     })
 }
 
 pub async fn deregister_validator(
     provider: impl Provider,
     stake_table_addr: Address,
-) -> Result<TransactionReceipt> {
+) -> Result<PendingTransactionBuilder<Ethereum>> {
     let stake_table = StakeTableV2::new(stake_table_addr, &provider);
-    Ok(stake_table
+    stake_table
         .deregisterValidator()
+        .block(BlockId::pending())
         .send()
         .await
-        .maybe_decode_revert::<StakeTableV2Errors>()?
-        .get_receipt()
-        .await?)
+        .maybe_decode_revert::<StakeTableV2Errors>()
 }
 
 pub async fn update_commission(
     provider: impl Provider,
     stake_table_addr: Address,
     new_commission: Commission,
-) -> Result<TransactionReceipt> {
+) -> Result<PendingTransactionBuilder<Ethereum>> {
     let stake_table = StakeTableV2::new(stake_table_addr, &provider);
-    Ok(stake_table
+    stake_table
         .updateCommission(new_commission.to_evm())
+        .block(BlockId::pending())
         .send()
         .await
-        .maybe_decode_revert::<StakeTableV2Errors>()?
-        .get_receipt()
-        .await?)
+        .maybe_decode_revert::<StakeTableV2Errors>()
 }
 
 pub async fn fetch_commission(
@@ -186,6 +177,8 @@ mod test {
             system.commission,
             payload,
         )
+        .await?
+        .get_receipt()
         .await?;
         assert!(receipt.status());
 
@@ -207,7 +200,10 @@ mod test {
         let system = TestSystem::deploy().await?;
         system.register_validator().await?;
 
-        let receipt = deregister_validator(&system.provider, system.stake_table).await?;
+        let receipt = deregister_validator(&system.provider, system.stake_table)
+            .await?
+            .get_receipt()
+            .await?;
         assert!(receipt.status());
 
         let event = receipt
@@ -227,7 +223,10 @@ mod test {
         let (_, new_bls, new_schnorr) = TestSystem::gen_keys(&mut rng);
         let payload = NodeSignatures::create(validator_address, &new_bls, &new_schnorr);
 
-        let receipt = update_consensus_keys(&system.provider, system.stake_table, payload).await?;
+        let receipt = update_consensus_keys(&system.provider, system.stake_table, payload)
+            .await?
+            .get_receipt()
+            .await?;
         assert!(receipt.status());
 
         let event = receipt
@@ -264,8 +263,10 @@ mod test {
         // Wait 2 seconds to ensure we're past the interval
         system.anvil_increase_time(U256::from(2)).await?;
 
-        let receipt =
-            update_commission(&system.provider, system.stake_table, new_commission).await?;
+        let receipt = update_commission(&system.provider, system.stake_table, new_commission)
+            .await?
+            .get_receipt()
+            .await?;
         assert!(receipt.status());
 
         let event = receipt

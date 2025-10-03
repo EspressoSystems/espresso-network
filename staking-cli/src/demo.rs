@@ -7,12 +7,13 @@ use alloy::{
         Address, U256,
     },
     providers::{Provider, ProviderBuilder, WalletProvider},
-    rpc::types::TransactionRequest,
+    rpc::types::{TransactionReceipt, TransactionRequest},
     signers::local::PrivateKeySigner,
 };
 use anyhow::Result;
 use clap::ValueEnum;
 use espresso_contract_deployer::{build_provider, build_random_provider, build_signer};
+use futures_util::future;
 use hotshot_contract_adapter::{
     evm::DecodeRevert,
     sol_types::EspToken::{self, EspTokenErrors},
@@ -23,7 +24,7 @@ use rand_chacha::ChaCha20Rng;
 use url::Url;
 
 use crate::{
-    delegation::delegate,
+    delegation::{approve, delegate},
     info::fetch_token_address,
     parse::{parse_bls_priv_key, parse_state_priv_key, Commission},
     registration::register_validator,
@@ -85,6 +86,7 @@ pub async fn setup_stake_table_contract_for_test(
     let seed = [42u8; 32];
     let mut rng = ChaCha20Rng::from_seed(seed);
 
+    let mut validator_info = vec![];
     for (val_index, (signer, bls_key_pair, state_key_pair)) in validators.into_iter().enumerate() {
         let validator_address = signer.address();
         let validator_wallet: EthereumWallet = EthereumWallet::from(signer);
@@ -92,23 +94,7 @@ pub async fn setup_stake_table_contract_for_test(
             .wallet(validator_wallet)
             .connect_http(rpc_url.clone());
 
-        tracing::info!("fund val {val_index} address: {validator_address}, {fund_amount_eth} ETH");
-        let tx = TransactionRequest::default()
-            .with_to(validator_address)
-            .with_value(fund_amount_eth);
-        let receipt = token_holder
-            .send_transaction(tx)
-            .await?
-            .get_receipt()
-            .await?;
-        assert!(receipt.status());
-
-        let bal = validator_provider.get_balance(validator_address).await?;
-
-        // 1% commission and more
         let commission = Commission::try_from(100u64 + 10u64 * val_index as u64)?;
-
-        // delegate 100 to 500 ESP
         let delegate_amount = match config {
             DelegationConfig::EqualAmounts => Some(parse_ether("100")?),
             DelegationConfig::MultipleDelegators | DelegationConfig::VariableAmounts => {
@@ -116,57 +102,112 @@ pub async fn setup_stake_table_contract_for_test(
             },
             DelegationConfig::NoSelfDelegation => None,
         };
-        let delegate_amount_esp = delegate_amount.map(format_ether).unwrap_or_default();
 
-        tracing::info!("validator {val_index} address: {validator_address}, balance: {bal}");
-
-        tracing::info!("transfer {fund_amount_esp} ESP to {validator_address}",);
-        let receipt = token
-            .transfer(validator_address, fund_amount_esp)
-            .send()
-            .await
-            .maybe_decode_revert::<EspTokenErrors>()?
-            .get_receipt()
-            .await?;
-        assert!(receipt.status());
-
-        tracing::info!("approve {fund_amount_esp} ESP for {stake_table_address}",);
-        let validator_token = EspToken::new(token_address, validator_provider.clone());
-        let receipt = validator_token
-            .approve(stake_table_address, fund_amount_esp)
-            .send()
-            .await
-            .maybe_decode_revert::<EspTokenErrors>()?
-            .get_receipt()
-            .await?;
-        assert!(receipt.status());
-
-        tracing::info!("deploy validator {val_index} with commission {commission}");
-        let payload = NodeSignatures::create(validator_address, &bls_key_pair, &state_key_pair);
-        let receipt = register_validator(
-            &validator_provider,
-            stake_table_address,
+        validator_info.push((
+            validator_address,
+            validator_provider,
             commission,
-            payload,
-        )
-        .await?;
-        assert!(receipt.status());
+            delegate_amount,
+            bls_key_pair,
+            state_key_pair,
+            val_index,
+        ));
+    }
 
+    let mut pending_txs = vec![];
+
+    for (validator_address, _, _, _, _, _, val_index) in &validator_info {
+        tracing::info!("fund val {val_index} address: {validator_address}, {fund_amount_eth} ETH");
+        let tx = TransactionRequest::default()
+            .with_to(*validator_address)
+            .with_value(fund_amount_eth);
+        pending_txs.push(token_holder.send_transaction(tx).await?);
+    }
+
+    for (validator_address, ..) in &validator_info {
+        tracing::info!("transfer {fund_amount_esp} ESP to {validator_address}",);
+        pending_txs.push(
+            token
+                .transfer(*validator_address, fund_amount_esp)
+                .send()
+                .await
+                .maybe_decode_revert::<EspTokenErrors>()?,
+        );
+    }
+
+    for (_, validator_provider, ..) in &validator_info {
+        tracing::info!("approve {fund_amount_esp} ESP for {stake_table_address}",);
+        pending_txs.push(
+            approve(
+                validator_provider,
+                token_address,
+                stake_table_address,
+                fund_amount_esp,
+            )
+            .await?,
+        );
+    }
+
+    for (
+        validator_address,
+        validator_provider,
+        commission,
+        _,
+        bls_key_pair,
+        state_key_pair,
+        val_index,
+    ) in &validator_info
+    {
+        tracing::info!("deploy validator {val_index} with commission {commission}");
+        let payload = NodeSignatures::create(*validator_address, bls_key_pair, state_key_pair);
+        pending_txs.push(
+            register_validator(
+                validator_provider,
+                stake_table_address,
+                *commission,
+                payload,
+            )
+            .await?,
+        );
+    }
+
+    let receipts: Vec<TransactionReceipt> =
+        future::try_join_all(pending_txs.into_iter().map(|tx| tx.get_receipt())).await?;
+
+    for receipt in receipts {
+        assert!(receipt.status());
+    }
+
+    let mut delegation_txs = vec![];
+    for (validator_address, validator_provider, _, delegate_amount, _, _, val_index) in
+        &validator_info
+    {
         if let Some(delegate_amount) = delegate_amount {
+            let delegate_amount_esp = format_ether(*delegate_amount);
             tracing::info!(
                 "delegate {delegate_amount_esp} ESP for validator {val_index} from \
                  {validator_address}"
             );
-            let receipt = delegate(
-                &validator_provider,
-                stake_table_address,
-                validator_address,
-                delegate_amount,
-            )
-            .await?;
-            assert!(receipt.status());
+            delegation_txs.push(
+                delegate(
+                    validator_provider,
+                    stake_table_address,
+                    *validator_address,
+                    *delegate_amount,
+                )
+                .await?,
+            );
         }
+    }
 
+    let delegation_receipts: Vec<TransactionReceipt> =
+        future::try_join_all(delegation_txs.into_iter().map(|tx| tx.get_receipt())).await?;
+
+    for receipt in delegation_receipts {
+        assert!(receipt.status());
+    }
+
+    for (validator_address, _, _, _, _, _, val_index) in &validator_info {
         match config {
             DelegationConfig::EqualAmounts | DelegationConfig::VariableAmounts => {
                 tracing::debug!("not adding extra delegators");
@@ -176,7 +217,7 @@ pub async fn setup_stake_table_contract_for_test(
                 let num_delegators = rng.gen_range(2..=5);
                 add_multiple_delegators(
                     &rpc_url,
-                    validator_address,
+                    *validator_address,
                     token_holder,
                     stake_table_address,
                     token_address,
@@ -205,63 +246,71 @@ async fn add_multiple_delegators(
     let fund_amount_esp = parse_ether("1000")?;
     let fund_amount_eth = parse_ether("10")?;
 
+    let mut delegator_info = vec![];
     for delegator_index in 0..num_delegators {
         let delegator_provider = build_random_provider(rpc_url.clone());
         let delegator_address = delegator_provider.default_signer_address();
-
-        tracing::info!("delegator {delegator_index}: address {delegator_address}");
-
-        let tx = TransactionRequest::default()
-            .with_to(delegator_address)
-            .with_value(fund_amount_eth);
-        let receipt = token_holder
-            .send_transaction(tx)
-            .await?
-            .get_receipt()
-            .await?;
-        assert!(receipt.status());
-
-        tracing::info!("delegator {delegator_index}: funded with {fund_amount_eth} ETH");
-
         let random_amount: u64 = rng.gen_range(100..=500);
         let delegate_amount = parse_ether(&random_amount.to_string())?;
-        let delegate_amount_esp = format_ether(delegate_amount);
-
-        let receipt = token
-            .transfer(delegator_address, fund_amount_esp)
-            .send()
-            .await?
-            .get_receipt()
-            .await?;
-        assert!(receipt.status());
-
-        tracing::info!("delegator {delegator_index}: received {fund_amount_esp} ESP");
-
-        let validator_token = EspToken::new(token_address, &delegator_provider);
-        let receipt = validator_token
-            .approve(stake_table_address, delegate_amount)
-            .send()
-            .await?
-            .get_receipt()
-            .await?;
-        assert!(receipt.status());
-
-        tracing::info!(
-            "delegator {delegator_index}: approved {delegate_amount_esp} ESP to stake table"
-        );
-
-        let receipt = delegate(
-            &delegator_provider,
-            stake_table_address,
-            validator_address,
+        delegator_info.push((
+            delegator_provider,
+            delegator_address,
             delegate_amount,
-        )
-        .await?;
-        assert!(receipt.status());
-
-        tracing::info!("delegator {delegator_index}: delegation complete");
+            delegator_index,
+        ));
     }
 
+    let mut pending_txs = vec![];
+
+    for (_, delegator_address, _, delegator_index) in &delegator_info {
+        tracing::info!("delegator {delegator_index}: address {delegator_address}");
+        let tx = TransactionRequest::default()
+            .with_to(*delegator_address)
+            .with_value(fund_amount_eth);
+        pending_txs.push(token_holder.send_transaction(tx).await?);
+    }
+
+    for (_, delegator_address, ..) in &delegator_info {
+        pending_txs.push(
+            token
+                .transfer(*delegator_address, fund_amount_esp)
+                .send()
+                .await?,
+        );
+    }
+
+    for (delegator_provider, _, delegate_amount, _) in &delegator_info {
+        pending_txs.push(
+            approve(
+                delegator_provider,
+                token_address,
+                stake_table_address,
+                *delegate_amount,
+            )
+            .await?,
+        );
+    }
+
+    for (delegator_provider, _, delegate_amount, _) in &delegator_info {
+        pending_txs.push(
+            delegate(
+                delegator_provider,
+                stake_table_address,
+                validator_address,
+                *delegate_amount,
+            )
+            .await?,
+        );
+    }
+
+    let receipts: Vec<TransactionReceipt> =
+        future::try_join_all(pending_txs.into_iter().map(|tx| tx.get_receipt())).await?;
+
+    for receipt in receipts {
+        assert!(receipt.status());
+    }
+
+    tracing::info!("all delegators funded and delegated");
     Ok(())
 }
 

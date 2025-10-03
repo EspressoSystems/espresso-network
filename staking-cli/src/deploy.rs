@@ -191,7 +191,10 @@ impl TestSystem {
             &self.state_key_pair.clone(),
         );
         let receipt =
-            register_validator(&self.provider, self.stake_table, self.commission, payload).await?;
+            register_validator(&self.provider, self.stake_table, self.commission, payload)
+                .await?
+                .get_receipt()
+                .await?;
         assert!(receipt.status());
         Ok(())
     }
