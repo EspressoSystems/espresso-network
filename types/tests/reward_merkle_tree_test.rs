@@ -1,7 +1,7 @@
 use alloy::{
     network::EthereumWallet,
     node_bindings::Anvil,
-    primitives::{Address, FixedBytes, U256},
+    primitives::{Address, B256, U256},
     providers::ProviderBuilder,
     signers::local::PrivateKeySigner,
     sol_types::SolValue as _,
@@ -14,9 +14,8 @@ use espresso_contract_deployer::{
 use espresso_types::{
     v0::v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleTreeV2},
     v0_3::RewardAmount,
-    v0_4::REWARD_MERKLE_TREE_V2_HEIGHT,
+    v0_4::{RewardAccountQueryDataV2, REWARD_MERKLE_TREE_V2_HEIGHT},
 };
-use hotshot_contract_adapter::sol_types::LifetimeRewardsProofSol;
 use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
 use rand::Rng as _;
 
@@ -189,23 +188,20 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
 
     // Get the tree root
     let commitment = tree.commitment();
-    let root_bytes: [u8; 32] = commitment.digest().as_ref().try_into().unwrap();
-    // TODO: a saner way to convert commitments to FixedBytes
-    let root = FixedBytes::from(root_bytes);
-    let root_u256 = U256::from_be_bytes(root_bytes);
+    let root = commitment.digest().into();
     println!("Tree root: {root}");
 
     // Set the authRoot in the light client mock
     // The authRoot should be keccak256 of 8 fields: [merkle_tree_root, 0, 0, 0, 0, 0, 0, 0]
-    let auth_root_fields: [FixedBytes<32>; 8] = [
-        root,                  // merkle tree root
-        FixedBytes::default(), // zero
-        FixedBytes::default(), // zero
-        FixedBytes::default(), // zero
-        FixedBytes::default(), // zero
-        FixedBytes::default(), // zero
-        FixedBytes::default(), // zero
-        FixedBytes::default(), // zero
+    let auth_root_fields: [B256; 8] = [
+        root,               // merkle tree root
+        Default::default(), // zero
+        Default::default(), // zero
+        Default::default(), // zero
+        Default::default(), // zero
+        Default::default(), // zero
+        Default::default(), // zero
+        Default::default(), // zero
     ];
     let auth_root_hash = alloy::primitives::keccak256(auth_root_fields.abi_encode());
     let auth_root_u256 = U256::from_be_bytes(auth_root_hash.0);
@@ -223,18 +219,13 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
 
     println!("Generating proof for account: {test_account}");
 
-    let (proof, amount) =
-        RewardAccountProofV2::prove(&tree, test_account.0).expect("can generate proof");
-    assert_eq!(amount, test_amount.0);
+    let query_data: RewardAccountQueryDataV2 = RewardAccountProofV2::prove(&tree, test_account.0)
+        .expect("can generate proof")
+        .into();
+    assert_eq!(query_data.balance, test_amount.0);
 
-    let proof_sol: LifetimeRewardsProofSol = proof.try_into()?;
     let account_sol = test_account.into();
-
-    // Prepare authData: encode (LifetimeRewardsProof, bytes32[7])
-    // The authRootInputs should match what we used to compute the authRoot
-    // But we only pass 7 fields to the contract (it adds the merkle tree root as the first field)
-    let auth_root_inputs: [FixedBytes<32>; 7] = [FixedBytes::default(); 7];
-    let auth_data = (proof_sol, auth_root_inputs).abi_encode();
+    let reward_claim_input = query_data.to_reward_claim_input(Default::default())?;
 
     println!("Attempting to claim rewards for account: {test_account}");
     println!("Amount: {test_amount}");
@@ -253,20 +244,16 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
     println!("Expected auth root: {auth_root_u256:#x}");
     assert_eq!(current_auth_root, auth_root_u256, "Auth roots should match");
 
-    // Check that the account hasn't claimed rewards yet
-    let already_claimed = reward_claim.claimedRewards(account_sol).call().await?;
-    println!("Already claimed by account: {already_claimed}");
-
     // Estimate gas for the claim transaction instead of sending it
     println!("Estimating gas for claim transaction...");
     let gas_estimate = reward_claim
-        .claimRewards(test_amount.0, auth_data.into())
+        .claimRewards(
+            reward_claim_input.lifetime_rewards,
+            reward_claim_input.auth_data.into(),
+        )
         .from(account_sol)
         .estimate_gas()
         .await?;
-
-    println!("Successfully estimated gas for reward claim!");
-    println!("Estimated gas: {}", gas_estimate);
 
     Ok(gas_estimate)
 }

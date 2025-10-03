@@ -44,8 +44,8 @@ contract RewardClaim is IRewardClaim, Initializable, OwnableUpgradeable, UUPSUpg
         require(lifetimeRewards != 0, InvalidRewardAmount());
         require(claimedRewards[msg.sender] < lifetimeRewards, AlreadyClaimed());
 
-        (LifetimeRewardsProof memory proof, bytes32[7] memory authRootInputs) =
-            abi.decode(authData, (LifetimeRewardsProof, bytes32[7]));
+        (bytes32[160] memory proof, bytes32[7] memory authRootInputs) =
+            abi.decode(authData, (bytes32[160], bytes32[7]));
         require(_verifyAuthRoot(lifetimeRewards, proof, authRootInputs), InvalidAuthRoot());
 
         uint256 availableToClaim = lifetimeRewards - claimedRewards[msg.sender];
@@ -66,7 +66,7 @@ contract RewardClaim is IRewardClaim, Initializable, OwnableUpgradeable, UUPSUpg
 
     function _verifyAuthRoot(
         uint256 lifetimeRewards,
-        LifetimeRewardsProof memory proof,
+        bytes32[160] memory proof,
         bytes32[7] memory authRootInputs
     ) internal view virtual returns (bool) {
         bytes32 rewardCommitment =

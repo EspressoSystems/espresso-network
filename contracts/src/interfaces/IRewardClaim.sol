@@ -2,11 +2,6 @@
 pragma solidity ^0.8.28;
 
 interface IRewardClaim {
-    /// @notice Proof for rewards merkle tree. Obtained from Espresso query service API.
-    struct LifetimeRewardsProof {
-        bytes32[160] siblings;
-    }
-
     /// @notice User claimed rewards
     event RewardsClaimed(address indexed user, uint256 amount);
 
@@ -21,12 +16,11 @@ interface IRewardClaim {
 
     /// @notice Claim staking rewards
     ///
-    /// @param lifetimeRewards Total earned lifetime rewards for the user
-    /// @param authData Merkle proof and auth root inputs required for authentication
-    ///        of lifetime rewards amount.
+    /// @param lifetimeRewards Total earned lifetime rewards for the user @param
+    /// @param authData inputs required for authentication of lifetime rewards amount.
     ///
     /// @notice Obtain authData from the Espresso query service API.
-    function claimRewards(uint256 lifetimeRewards, bytes memory authData) external;
+    function claimRewards(uint256 lifetimeRewards, bytes calldata authData) external;
 
     /// @notice Check amount of rewards claimed by a user
     function claimedRewards(address claimer) external view returns (uint256);

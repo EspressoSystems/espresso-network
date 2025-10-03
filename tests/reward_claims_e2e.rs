@@ -3,7 +3,7 @@ use std::{collections::HashMap, time::Duration};
 use alloy::{
     network::EthereumWallet,
     node_bindings::Anvil,
-    primitives::{FixedBytes, U256},
+    primitives::{B256, U256},
     providers::{Provider, ProviderBuilder, WalletProvider},
     rpc::client::RpcClient,
     signers::local::{coins_bip39::English, MnemonicBuilder},
@@ -13,12 +13,13 @@ use espresso_contract_deployer::{
     Contracts,
 };
 use espresso_types::{
-    v0_4::{ChainConfig, RewardAccountQueryDataV2},
-    DrbAndHeaderUpgradeVersion, L1ClientOptions, SeqTypes, SequencerVersions, ValidatedState,
+    v0_4::ChainConfig, DrbAndHeaderUpgradeVersion, L1ClientOptions, SeqTypes, SequencerVersions,
+    ValidatedState,
 };
 use futures::StreamExt;
-use hotshot_contract_adapter::sol_types::{
-    EspTokenV2, LifetimeRewardsProofSol, LightClientV3, RewardClaim,
+use hotshot_contract_adapter::{
+    reward::RewardClaimInput,
+    sol_types::{EspTokenV2, LightClientV3, RewardClaim},
 };
 use hotshot_query_service::data_source::SqlDataSource;
 use hotshot_state_prover::{v3::service::run_prover_once, StateProverConfig};
@@ -79,10 +80,10 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         .build()
         .expect("error opening wallet");
     let wallet = EthereumWallet::from(signer.clone());
-    let provider = ProviderBuilder::new()
+    let deployer_provider = ProviderBuilder::new()
         .wallet(wallet.clone())
-        .on_http(l1_url.clone());
-    let admin = provider.default_signer_address();
+        .connect_http(l1_url.clone());
+    let admin = deployer_provider.default_signer_address();
     println!("Admin address: {}", admin);
 
     let relay_server_port = pick_unused_port().unwrap();
@@ -117,7 +118,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     // Use DeployerArgsBuilder to deploy all contracts at once
     let exit_escrow_period = U256::from(300); // 300 seconds
     let args = DeployerArgsBuilder::default()
-        .deployer(provider.clone())
+        .deployer(deployer_provider.clone())
         .mock_light_client(true)
         .genesis_lc_state(genesis_state.clone())
         .genesis_st_state(genesis_stake.clone())
@@ -180,7 +181,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
 
     setup_stake_table_contract_for_test(
         l1_url.clone(),
-        &provider,
+        &deployer_provider,
         stake_table_proxy_addr,
         staking_priv_keys.clone(),
         DelegationConfig::default(),
@@ -190,9 +191,9 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
 
     // Grant minter role to reward claim contract
     println!("Granting MINTER_ROLE to RewardClaim contract...");
-    let esp_token_v2 = EspTokenV2::new(token_proxy_addr, &provider);
+    let esp_token_v2 = EspTokenV2::new(token_proxy_addr, &deployer_provider);
 
-    let minter_role = esp_token_v2.MINTER_ROLE().call().await?._0;
+    let minter_role = esp_token_v2.MINTER_ROLE().call().await?;
     let receipt = esp_token_v2
         .grantRole(minter_role, reward_claim_proxy_addr)
         .send()
@@ -345,13 +346,22 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
 
     // Get the finalized state from the Light Client contract
     println!("Getting finalized state from Light Client contract...");
-    let light_client_contract = LightClientV3::new(lc_proxy_addr, &provider);
+
+    // Create claimer wallet and provider for claiming rewards
+    let claimer_signer = staking_priv_keys[0].0.clone();
+    let claimer_wallet = EthereumWallet::from(claimer_signer.clone());
+    let claimer_provider = ProviderBuilder::new()
+        .wallet(claimer_wallet.clone())
+        .connect_http(l1_url.clone());
+
+    let light_client_contract = LightClientV3::new(lc_proxy_addr, &claimer_provider);
     let finalized_state = light_client_contract.finalizedState().call().await?;
     let auth_root = light_client_contract.authRoot().call().await?;
 
+    let auth_root_b256: B256 = auth_root.into();
     println!(
         "Light Client finalized state - Block height: {}, View: {}, Auth root: {:#x}",
-        finalized_state.blockHeight, finalized_state.viewNum, auth_root._0
+        finalized_state.blockHeight, finalized_state.viewNum, auth_root_b256
     );
 
     // Use the block height from the light client contract for the reward proof
@@ -384,35 +394,35 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         reward_account
     );
 
-    let reward_proof_url = format!(
-        "{}catchup/{}/{}/reward-account-v2/{}",
-        sequencer_url, lc_block_height, lc_view_number, reward_account
+    let reward_claim_url = format!(
+        "{}reward-state-v2/reward-claim-input/{}/{}",
+        sequencer_url, lc_block_height, reward_account
     );
-    println!("Fetching reward proof from: {}", reward_proof_url);
+    println!("Fetching reward claim input from: {}", reward_claim_url);
 
-    // Retry fetching the reward proof up to 5 times with 2 second delays
+    // Retry fetching the reward claim input up to 5 times with 2 second delays
     let http_client = reqwest::Client::new();
     let mut attempt = 0;
-    let reward_data = loop {
+    let claim_input = loop {
         attempt += 1;
         match http_client
-            .get(&reward_proof_url)
+            .get(&reward_claim_url)
             .header("Accept", "application/json")
             .send()
             .await
             .and_then(|r| r.error_for_status())
         {
-            Ok(response) => match response.json::<RewardAccountQueryDataV2>().await {
+            Ok(response) => match response.json::<RewardClaimInput>().await {
                 Ok(data) => {
                     break data;
                 },
                 Err(e) if attempt == 5 => {
-                    panic!("Failed to parse reward proof data: {}", e);
+                    panic!("Failed to parse reward claim input: {}", e);
                 },
                 Err(_) => {},
             },
             Err(e) if attempt == 5 => {
-                panic!("Request for reward proof failed: {}", e);
+                panic!("Request for reward claim input failed: {}", e);
             },
             Err(_) => {},
         }
@@ -420,23 +430,14 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     };
 
     println!(
-        "Reward data received: balance={}, proof account={}",
-        reward_data.balance, reward_data.proof.account
+        "Reward claim input received: lifetime_rewards={}",
+        claim_input.lifetime_rewards
     );
 
-    if reward_data.balance == U256::ZERO {
+    if claim_input.lifetime_rewards == U256::ZERO {
         panic!("Reward balance is zero for validator account {reward_account}");
     }
-    println!("Validator reward balance: {}", reward_data.balance);
-
-    let proof_sol: LifetimeRewardsProofSol = reward_data.proof.try_into().unwrap();
-
-    // Create claimer wallet and provider for claiming rewards
-    let claimer_signer = staking_priv_keys[0].0.clone();
-    let claimer_wallet = EthereumWallet::from(claimer_signer.clone());
-    let claimer_provider = ProviderBuilder::new()
-        .wallet(claimer_wallet.clone())
-        .on_http(l1_url.clone());
+    println!("Validator reward balance: {}", claim_input.lifetime_rewards);
 
     // check Eth balance of claimer
     let eth_balance = claimer_provider.get_balance(claimer_address).await?;
@@ -445,49 +446,49 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     let reward_claim_contract = RewardClaim::new(reward_claim_proxy_addr, &claimer_provider);
     let esp_token_contract = EspTokenV2::new(token_proxy_addr, &claimer_provider);
 
-    let balance_before = esp_token_contract
-        .balanceOf(claimer_address)
-        .call()
-        .await?
-        ._0;
+    let balance_before = esp_token_contract.balanceOf(claimer_address).call().await?;
     println!("ESP token balance before claim: {balance_before}");
 
-    let auth_root_inputs = [FixedBytes::default(); 7];
-
     println!("Attempting to claim with invalid proof");
-    let mut invalid_proof_sol = proof_sol.clone();
-    invalid_proof_sol.siblings[0].0[0] += invalid_proof_sol.siblings[0].0[0].wrapping_add(1);
+    let auth_data_bytes: alloy::primitives::Bytes = claim_input.auth_data.clone().into();
+    let mut invalid_auth_data_bytes = auth_data_bytes.to_vec();
+    // Corrupt the auth data by changing a byte
+    invalid_auth_data_bytes[0] = invalid_auth_data_bytes[0].wrapping_add(1);
 
     let invalid_proof_result = reward_claim_contract
-        .claimRewards(
-            reward_data.balance,
-            invalid_proof_sol.into(),
-            auth_root_inputs,
-        )
-        .send()
+        .claimRewards(claim_input.lifetime_rewards, invalid_auth_data_bytes.into())
+        .call()
         .await;
-    assert!(invalid_proof_result.is_err(),);
+    assert!(invalid_proof_result.is_err());
 
     println!("Attempting to claim with invalid balance");
-    let invalid_balance = reward_data.balance + U256::from(1);
+    let invalid_balance = claim_input.lifetime_rewards + U256::from(1);
 
     let invalid_balance_result = reward_claim_contract
-        .claimRewards(invalid_balance, proof_sol.clone().into(), auth_root_inputs)
-        .send()
+        .claimRewards(invalid_balance, claim_input.auth_data.clone().into())
+        .call()
         .await;
-    assert!(invalid_balance_result.is_err(),);
+    assert!(invalid_balance_result.is_err());
+
+    // check that we can claim
+    reward_claim_contract
+        .claimRewards(
+            claim_input.lifetime_rewards,
+            claim_input.auth_data.clone().into(),
+        )
+        .call()
+        .await?;
 
     println!("Attempting to claim rewards with valid proof");
-    let claim_receipt = reward_claim_contract
+    let pending = reward_claim_contract
         .claimRewards(
-            reward_data.balance,
-            proof_sol.clone().into(),
-            auth_root_inputs,
+            claim_input.lifetime_rewards,
+            claim_input.auth_data.clone().into(),
         )
         .send()
-        .await?
-        .get_receipt()
         .await?;
+    println!("pending tx: {:?}", pending);
+    let claim_receipt = pending.get_receipt().await?;
     assert!(claim_receipt.status(), "Valid claim should succeed");
     println!("Successful claim - Gas used: {}", claim_receipt.gas_used);
 
@@ -497,24 +498,20 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         .unwrap();
     println!("Emitted event: {:?}", log);
 
-    let balance_after = esp_token_contract
-        .balanceOf(claimer_address)
-        .call()
-        .await?
-        ._0;
-    println!("ESP token balance after claim: {balance_after}",);
+    let balance_after = esp_token_contract.balanceOf(claimer_address).call().await?;
+    println!("ESP token balance after claim: {balance_after}");
     assert_eq!(
         balance_after,
-        balance_before + reward_data.balance,
+        balance_before + claim_input.lifetime_rewards,
         "ESP token balance did not increase correctly"
     );
 
     println!("Attempting to double-claim rewards");
     let double_claim_result = reward_claim_contract
-        .claimRewards(reward_data.balance, proof_sol.into(), auth_root_inputs)
+        .claimRewards(claim_input.lifetime_rewards, claim_input.auth_data.into())
         .send()
         .await;
-    assert!(double_claim_result.is_err(),);
+    assert!(double_claim_result.is_err());
 
     println!("All reward claim tests passed successfully!");
     Ok(())

@@ -2,14 +2,14 @@ use std::{borrow::Borrow, collections::HashSet, iter::once, str::FromStr};
 
 use alloy::primitives::{
     utils::{parse_units, ParseUnits},
-    Address, FixedBytes, B256, U256,
+    Address, B256, U256,
 };
 use anyhow::{bail, ensure, Context};
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
 use hotshot::types::BLSPubKey;
-use hotshot_contract_adapter::sol_types::LifetimeRewardsProofSol;
+use hotshot_contract_adapter::reward::RewardProofSiblings;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     traits::{election::Membership, node_implementation::ConsensusTime},
@@ -412,16 +412,14 @@ impl RewardAccountProofV2 {
     }
 }
 
-impl TryInto<LifetimeRewardsProofSol> for RewardAccountProofV2 {
+impl TryInto<RewardProofSiblings> for RewardAccountProofV2 {
     type Error = anyhow::Error;
 
     /// Generate a Solidity-compatible proof for this account
     ///
     /// The proof is returned without leaf value. The caller is expected to
     /// obtain the leaf value from the jellyfish proof (Self).
-    ///
-    /// TODO: review error handling / panics
-    fn try_into(self) -> anyhow::Result<LifetimeRewardsProofSol> {
+    fn try_into(self) -> anyhow::Result<RewardProofSiblings> {
         // NOTE: rustfmt fails to format this file if the nesting is too deep.
         let proof = if let RewardMerkleProofV2::Presence(proof) = &self.proof {
             proof
@@ -438,7 +436,7 @@ impl TryInto<LifetimeRewardsProofSol> for RewardAccountProofV2 {
             bail!("Invalid proof: unexpected path length: {}", path.len());
         };
 
-        let siblings: [FixedBytes<32>; REWARD_MERKLE_TREE_V2_HEIGHT] = proof
+        let siblings: [B256; REWARD_MERKLE_TREE_V2_HEIGHT] = proof
             .proof
             .iter()
             .enumerate()
@@ -476,12 +474,12 @@ impl TryInto<LifetimeRewardsProofSol> for RewardAccountProofV2 {
                 }
                 _ => None,
             })
-            .collect::<Vec<FixedBytes<32>>>().try_into().map_err(|err: Vec<_>| {
+            .collect::<Vec<B256>>().try_into().map_err(|err: Vec<_>| {
                 panic!("Invalid proof length: {:?}, this should never happen", err.len())
             })
             .unwrap();
 
-        Ok(LifetimeRewardsProofSol { siblings })
+        Ok(siblings.into())
     }
 }
 

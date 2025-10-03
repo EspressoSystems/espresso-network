@@ -45,27 +45,21 @@ library RewardMerkleTreeVerifier {
      * @param proof The membership proof containing sibling hashes and numLeaves
      * @return The computed reward commitment
      */
-    function computeRoot(address key, uint256 value, IRewardClaim.LifetimeRewardsProof memory proof)
+    function computeRoot(address key, uint256 value, bytes32[TREE_DEPTH] memory proof)
         internal
         pure
         returns (bytes32)
     {
-        // NOTE: using memory instead of calldata for proof or siblings
-        //       increases gas cost by 20%
-        // NOTE: *not* defining siblings here increases gas cost by 20%
         // TODO: unittest this function
         // TODO: fuzz test this function
         // TODO: benchmark gas cost by averaging gas cost over many different trees with
         //       realistic size.
         // TODO: optimize gas cost
-        bytes32[160] memory siblings = proof.siblings;
-        require(siblings.length == TREE_DEPTH, InvalidProofLength());
-
         bytes32 currentHash = _hashLeaf(value);
 
         // Traverse from leaf to root using the same pattern as RewardMerkleTreeV2
         for (uint256 level = 0; level < TREE_DEPTH; level++) {
-            bytes32 sibling = siblings[level];
+            bytes32 sibling = proof[level];
 
             // Extract bit using direct right shift
             bool branch;
