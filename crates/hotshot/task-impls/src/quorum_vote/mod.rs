@@ -31,9 +31,11 @@ use hotshot_types::{
     },
     utils::{is_epoch_root, is_epoch_transition, is_last_block, option_epoch_from_block_number},
     vote::{Certificate, HasViewNumber},
+    PeerConfig,
 };
 use hotshot_utils::anytrace::*;
 use tracing::instrument;
+use vbs::version::Version;
 
 use crate::{
     events::HotShotEvent,
@@ -483,6 +485,9 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
 
     /// Stake table capacity for light client use
     pub stake_table_capacity: usize,
+
+    /// DA committees from HotShotConfig, to apply when an upgrade is decided
+    pub da_committees: BTreeMap<Version, (u64, Vec<PeerConfig<TYPES>>)>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskState<TYPES, I, V> {

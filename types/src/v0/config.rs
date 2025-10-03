@@ -1,4 +1,4 @@
-use std::{num::NonZeroUsize, time::Duration};
+use std::{collections::BTreeMap, num::NonZeroUsize, time::Duration};
 
 use hotshot_types::{
     network::{
@@ -105,6 +105,7 @@ impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
             num_nodes_with_stake,
             known_nodes_with_stake,
             known_da_nodes,
+            da_committees: _,
             da_staked_committee_size,
             fixed_leader_for_gpuvid,
             next_view_timeout,
@@ -165,6 +166,7 @@ impl PublicHotShotConfig {
             num_nodes_with_stake: self.num_nodes_with_stake,
             known_nodes_with_stake: self.known_nodes_with_stake,
             known_da_nodes: self.known_da_nodes,
+            da_committees: BTreeMap::new(),
             da_staked_committee_size: self.da_staked_committee_size,
             fixed_leader_for_gpuvid: self.fixed_leader_for_gpuvid,
             next_view_timeout: self.next_view_timeout,

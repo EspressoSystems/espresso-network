@@ -5,7 +5,9 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 //! Types and Traits for the `HotShot` consensus module
-use std::{fmt::Debug, future::Future, num::NonZeroUsize, pin::Pin, time::Duration};
+use std::{
+    collections::BTreeMap, fmt::Debug, future::Future, num::NonZeroUsize, pin::Pin, time::Duration,
+};
 
 use alloy::primitives::U256;
 use bincode::Options;
@@ -17,6 +19,7 @@ use traits::{
     signature_key::{SignatureKey, StateSignatureKey},
 };
 use url::Url;
+use vbs::version::Version;
 use vec1::Vec1;
 
 use crate::utils::bincode_opts;
@@ -195,6 +198,8 @@ pub struct HotShotConfig<TYPES: NodeType> {
     pub known_nodes_with_stake: Vec<PeerConfig<TYPES>>,
     /// All public keys known to be DA nodes
     pub known_da_nodes: Vec<PeerConfig<TYPES>>,
+    /// All public keys known to be DA nodes, by start epoch
+    pub da_committees: BTreeMap<Version, (u64, Vec<PeerConfig<TYPES>>)>,
     /// List of DA committee (staking)nodes for static DA committee
     pub da_staked_committee_size: usize,
     /// Number of fixed leaders for GPU VID, normally it will be 0, it's only used when running GPU VID
