@@ -1553,7 +1553,7 @@ impl<
                 if let Some(proposal_creation_time) = proposal_creation_time {
                     println!(
                         "Proposal creation to send time for view {view_number}: {:?}",
-                        proposal_creation_time
+                        proposal_creation_time.elapsed()
                     );
                 }
             }
