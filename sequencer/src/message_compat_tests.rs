@@ -69,7 +69,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
     let membership = EpochMembershipCoordinator::new(
         Arc::new(RwLock::new(EpochCommittees::new_stake(
             committee.clone(),
-            [(EpochNumber::new(0), committee)].into(),
+            committee,
             None,
             Fetcher::mock(),
             epoch_height,

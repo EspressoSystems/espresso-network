@@ -19,9 +19,10 @@ use traits::{
     signature_key::{SignatureKey, StateSignatureKey},
 };
 use url::Url;
+use vbs::version::Version;
 use vec1::Vec1;
 
-use crate::{traits::node_implementation::ConsensusTime, utils::bincode_opts};
+use crate::utils::bincode_opts;
 pub mod bundle;
 pub mod consensus;
 pub mod constants;
@@ -198,7 +199,7 @@ pub struct HotShotConfig<TYPES: NodeType> {
     /// All public keys known to be DA nodes
     pub known_da_nodes: Vec<PeerConfig<TYPES>>,
     /// All public keys known to be DA nodes, by start epoch
-    pub da_committees: BTreeMap<u64, Vec<PeerConfig<TYPES>>>,
+    pub da_committees: BTreeMap<Version, BTreeMap<u64, Vec<PeerConfig<TYPES>>>>,
     /// List of DA committee (staking)nodes for static DA committee
     pub da_staked_committee_size: usize,
     /// Number of fixed leaders for GPU VID, normally it will be 0, it's only used when running GPU VID
@@ -271,25 +272,10 @@ impl<TYPES: NodeType> HotShotConfig<TYPES> {
         self.known_nodes_with_stake.clone().into()
     }
 
-    pub fn build_da_committees(&self) -> BTreeMap<TYPES::Epoch, Vec<PeerConfig<TYPES>>> {
-        if self.da_committees.is_empty() {
-            tracing::warn!(
-                "da_committees is not set, falling back to known_da_nodes, which is deprecated."
-            );
-
-            [(TYPES::Epoch::new(0), self.known_da_nodes.clone())].into()
-        } else {
-            if !self.known_da_nodes.is_empty() {
-                tracing::warn!(
-                    "Both known_da_nodes and da_committees are set, known_da_nodes is deprecated \
-                     and will be ignored."
-                );
-            }
-
-            self.da_committees
-                .iter()
-                .map(|(k, v)| (TYPES::Epoch::new(*k), v.clone()))
-                .collect()
-        }
+    pub fn build_da_committees(&self) -> Vec<PeerConfig<TYPES>> {
+        // TODO: THIS IS A TEMPORARY FIX WITH THE WRONG RETURN TYPE.
+        // It's done so that we can start using this function and have the existing behavior
+        // (use known_da_nodes) while we transition to using da_committees.
+        self.known_da_nodes.clone()
     }
 }

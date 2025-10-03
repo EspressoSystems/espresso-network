@@ -8,6 +8,7 @@ use std::{collections::BTreeMap, num::NonZeroUsize, time::Duration};
 
 use alloy::primitives::U256;
 use url::Url;
+use vbs::version::Version;
 use vec1::Vec1;
 
 use crate::{
@@ -47,7 +48,7 @@ pub struct HotShotConfigFile<TYPES: NodeType> {
     pub known_da_nodes: Vec<PeerConfig<TYPES>>,
     #[serde(skip)]
     /// The known DA nodes' public keys and stake values, by start epoch
-    pub da_committees: BTreeMap<u64, Vec<PeerConfig<TYPES>>>,
+    pub da_committees: BTreeMap<Version, BTreeMap<u64, Vec<PeerConfig<TYPES>>>>,
     /// Number of staking DA nodes
     pub staked_da_nodes: usize,
     /// Number of fixed leaders for GPU VID
