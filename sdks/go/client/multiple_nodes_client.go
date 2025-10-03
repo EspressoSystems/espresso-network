@@ -168,6 +168,12 @@ func (c *MultipleNodesClient) SubmitTransaction(ctx context.Context, tx common.T
 	return nil, fmt.Errorf("%w: encountered an error with all nodes while attempting to SubmitTransaction.\n Errors: %v \n", ErrEphemeral, errs)
 }
 
+// A wrapper over multiple `Stream`s that are supposed to return the same
+// sequence of objects that verifies the items using majority rule.
+// An underlying stream that deviates from majority or responds with an error
+// is disabled for the rest of the MultiplexedStream's existence. If majority
+// of the underlying streams is disabled, calling Next on the MultiplexedStream
+// will always return an error.
 type MultiplexedStream[T any] struct {
 	nStreams       int
 	workingStreams []Stream[T]

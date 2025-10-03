@@ -178,6 +178,7 @@ func (c *Client) SubmitTransaction(ctx context.Context, tx types.Transaction) (*
 	return &hash, nil
 }
 
+// Stream of JSON-encoded objects over a WebSocket connection
 type WsStream[S any] struct {
 	conn *websocket.Conn
 }
@@ -212,6 +213,7 @@ func (s *WsStream[S]) Close() error {
 	return s.conn.Close(websocket.StatusNormalClosure, "")
 }
 
+// Open a `Stream` of Espresso transactions starting from a specific block height.
 func (c *Client) StreamTransactions(ctx context.Context, height uint64) (Stream[types.TransactionQueryData], error) {
 	opts := &websocket.DialOptions{}
 	opts.HTTPClient = c.client
@@ -223,6 +225,7 @@ func (c *Client) StreamTransactions(ctx context.Context, height uint64) (Stream[
 	return &WsStream[types.TransactionQueryData]{conn: conn}, nil
 }
 
+// Open a `Stream` of Espresso transactions starting from a specific block height, filtered by namespace.
 func (c *Client) StreamTransactionsInNamespace(ctx context.Context, height uint64, namespace uint64) (Stream[types.TransactionQueryData], error) {
 	opts := &websocket.DialOptions{}
 	opts.HTTPClient = c.client

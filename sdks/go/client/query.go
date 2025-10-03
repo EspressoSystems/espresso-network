@@ -33,9 +33,14 @@ type QueryService interface {
 	StreamTransactionsInNamespace(ctx context.Context, height uint64, namespace uint64) (Stream[types.TransactionQueryData], error)
 }
 
+// Interface representing a pollable stream of JSON-encoded objects
 type Stream[S any] interface {
+	// Get the next item from the stream. Equivalent to
+	// calling NextRaw(ctx) and decoding the result.
 	Next(ctx context.Context) (*S, error)
+	// Get next item from the stream as raw JSON objects.
 	NextRaw(ctx context.Context) (json.RawMessage, error)
+	// Close the underlying connection, if applicable
 	Close() error
 }
 
