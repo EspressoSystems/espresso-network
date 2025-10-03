@@ -197,7 +197,7 @@ func (ms *MultiplexedStream[T]) NextRaw(ctx context.Context) (json.RawMessage, e
 		}
 
 		values[hash]++
-		if values[hash] > majority {
+		if values[hash] >= majority {
 			returnValue = rawValue
 		}
 
@@ -207,7 +207,7 @@ func (ms *MultiplexedStream[T]) NextRaw(ctx context.Context) (json.RawMessage, e
 	ms.workingStreams = newWorkingStreams
 
 	if returnValue == nil {
-		return nil, ErrPermanent
+		return nil, fmt.Errorf("%w: no majority", ErrPermanent)
 	} else {
 		return returnValue, nil
 	}
