@@ -32,7 +32,7 @@ use hotshot_types::{
     },
 };
 use jf_pcs::prelude::UnivariateUniversalParams;
-use jf_relation::Circuit as _;
+use jf_relation_compat::Circuit as _;
 use surf_disco::Client;
 use tide_disco::{error::ServerError, Api};
 use time::ext::InstantExt;
