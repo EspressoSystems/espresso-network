@@ -32,8 +32,8 @@ number = 0
 [[upgrade]]
 start_voting_view = 0
 stop_voting_view = 999999999
-start_proposing_view = 0
-stop_proposing_view = 1
+start_proposing_view = 12100
+stop_proposing_view = 12700
 
 version = "0.4"
 [upgrade.drb_and_header]
