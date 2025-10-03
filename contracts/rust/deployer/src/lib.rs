@@ -174,6 +174,12 @@ pub struct DeployedContracts {
     /// Use an already-deployed StakeTable.sol proxy instead of deploying a new one.
     #[clap(long, env = Contract::StakeTableProxy)]
     stake_table_proxy: Option<Address>,
+    /// RewardClaim.sol
+    #[clap(long, env = Contract::RewardClaim)]
+    reward_claim: Option<Address>,
+    /// Use an already-deployed RewardClaim.sol proxy instead of deploying a new one.
+    #[clap(long, env = Contract::RewardClaimProxy)]
+    reward_claim_proxy: Option<Address>,
 }
 
 /// An identifier for a particular contract.
@@ -213,6 +219,10 @@ pub enum Contract {
     StakeTableV2,
     #[display("ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS")]
     StakeTableProxy,
+    #[display("ESPRESSO_SEQUENCER_REWARD_CLAIM_ADDRESS")]
+    RewardClaim,
+    #[display("ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS")]
+    RewardClaimProxy,
 }
 
 impl From<Contract> for OsStr {
@@ -278,6 +288,12 @@ impl From<DeployedContracts> for Contracts {
         }
         if let Some(addr) = deployed.stake_table_proxy {
             m.insert(Contract::StakeTableProxy, addr);
+        }
+        if let Some(addr) = deployed.reward_claim {
+            m.insert(Contract::RewardClaim, addr);
+        }
+        if let Some(addr) = deployed.reward_claim_proxy {
+            m.insert(Contract::RewardClaimProxy, addr);
         }
         Self(m)
     }
@@ -817,7 +833,7 @@ pub async fn deploy_token_proxy(
 }
 
 /// Upgrade the esp token proxy to use EspTokenV2.
-async fn upgrade_esp_token_v2(
+pub async fn upgrade_esp_token_v2(
     provider: impl Provider,
     contracts: &mut Contracts,
 ) -> Result<TransactionReceipt> {
@@ -833,9 +849,13 @@ async fn upgrade_esp_token_v2(
 
     assert!(is_contract(&provider, v2_addr).await?);
 
-    // invoke upgrade on proxy
+    // prepare init calldata for V2
+    let proxy_as_v2 = EspTokenV2::new(proxy_addr, &provider);
+    let init_data = proxy_as_v2.initializeV2().calldata().to_owned();
+
+    // invoke upgrade on proxy with initializeV2 call
     let receipt = proxy
-        .upgradeToAndCall(v2_addr, vec![].into() /* no new init data for V2 */)
+        .upgradeToAndCall(v2_addr, init_data)
         .send()
         .await?
         .get_receipt()
@@ -903,6 +923,62 @@ pub async fn deploy_stake_table_proxy(
     );
 
     Ok(st_proxy_addr)
+}
+
+/// Deploy and initialize the RewardClaim contract behind a proxy
+pub async fn deploy_reward_claim_proxy(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+    esp_token_addr: Address,
+    light_client_addr: Address,
+    owner: Address,
+) -> Result<Address> {
+    let reward_claim_addr = contracts
+        .deploy(
+            Contract::RewardClaim,
+            RewardClaim::deploy_builder(&provider),
+        )
+        .await?;
+    let reward_claim = RewardClaim::new(reward_claim_addr, &provider);
+
+    // verify the esp token address contains a contract
+    if !is_contract(&provider, esp_token_addr).await? {
+        anyhow::bail!("EspToken address is not a contract, can't deploy RewardClaimProxy");
+    }
+
+    // verify the light client address contains a contract
+    if !is_contract(&provider, light_client_addr).await? {
+        anyhow::bail!("LightClient address is not a contract, can't deploy RewardClaimProxy");
+    }
+
+    let init_data = reward_claim
+        .initialize(owner, esp_token_addr, light_client_addr)
+        .calldata()
+        .to_owned();
+    let reward_claim_proxy_addr = contracts
+        .deploy(
+            Contract::RewardClaimProxy,
+            ERC1967Proxy::deploy_builder(&provider, reward_claim_addr, init_data),
+        )
+        .await?;
+
+    if !is_proxy_contract(&provider, reward_claim_proxy_addr).await? {
+        panic!("RewardClaimProxy detected not as a proxy, report error!");
+    }
+
+    let reward_claim_proxy = RewardClaim::new(reward_claim_proxy_addr, &provider);
+    assert_eq!(
+        reward_claim_proxy.getVersion().call().await?,
+        (1, 0, 0).into()
+    );
+    assert_eq!(reward_claim_proxy.owner().call().await?, owner);
+    assert_eq!(reward_claim_proxy.espToken().call().await?, esp_token_addr);
+    assert_eq!(
+        reward_claim_proxy.lightClient().call().await?,
+        light_client_addr
+    );
+
+    Ok(reward_claim_proxy_addr)
 }
 
 /// Read commission values from L1 StakeTable V1 ValidatorRegistered events for V2 migration

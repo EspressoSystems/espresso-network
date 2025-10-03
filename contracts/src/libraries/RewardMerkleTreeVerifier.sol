@@ -39,19 +39,17 @@ library RewardMerkleTreeVerifier {
     }
 
     /**
-     * @dev Verify membership proof for a key-value pair
-     * @param root The merkle root to verify against
-     * @param key The key being proven - Ethereum address
-     * @param value The value associated with the key - reward amount
-     * @param proof The membership proof containing sibling hashes
-     * @return true if the proof is valid
+     * @dev Compute reward commitment from a key-value pair and proof
+     * @param key The key to prove - Ethereum address
+     * @param value The value to prove - lifetime earned rewards amount
+     * @param proof The membership proof containing sibling hashes and numLeaves
+     * @return The computed reward commitment
      */
-    function verifyMembership(
-        bytes32 root,
-        address key,
-        uint256 value,
-        bytes32[TREE_DEPTH] memory proof
-    ) internal pure returns (bool) {
+    function computeRoot(address key, uint256 value, bytes32[TREE_DEPTH] memory proof)
+        internal
+        pure
+        returns (bytes32)
+    {
         // TODO: unittest this function
         // TODO: fuzz test this function
         // TODO: benchmark gas cost by averaging gas cost over many different trees with
@@ -77,6 +75,6 @@ library RewardMerkleTreeVerifier {
             }
         }
 
-        return currentHash == root;
+        return currentHash;
     }
 }

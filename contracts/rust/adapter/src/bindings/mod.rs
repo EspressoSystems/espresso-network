@@ -23,7 +23,7 @@ pub mod r#ownable_upgradeable;
 pub mod r#plonk_verifier;
 pub mod r#plonk_verifier_v2;
 pub mod r#plonk_verifier_v3;
-pub mod r#reward_claim_prototype_mock;
+pub mod r#reward_claim;
 pub mod r#safe_exit_timelock;
 pub mod r#stake_table;
 pub mod r#stake_table_v2;

@@ -49,7 +49,7 @@ pub use crate::bindings::{
     plonk_verifier::PlonkVerifier,
     plonk_verifier_v2::PlonkVerifierV2,
     plonk_verifier_v3::PlonkVerifierV3,
-    reward_claim_prototype_mock::{self, RewardClaimPrototypeMock},
+    reward_claim::RewardClaim,
     safe_exit_timelock::SafeExitTimelock,
     stake_table::StakeTable,
     stake_table_v2::{
@@ -79,6 +79,10 @@ sol! {
         uint256 zeta;
         uint256 v;
         uint256 u;
+    }
+
+    struct LifetimeRewardsProofSol {
+        bytes32[160] siblings;
     }
 
 }
