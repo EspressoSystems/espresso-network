@@ -14,6 +14,7 @@ use hotshot::types::SignatureKey;
 use hotshot_types::{light_client::StateKeyPair, signature_key::BLSPubKey};
 use rand::{RngCore, SeedableRng};
 use sequencer_utils::logging;
+use tagged_base64::TaggedBase64;
 use tracing::info_span;
 
 #[derive(Clone, Copy, Debug, Display, Default, ValueEnum)]
@@ -54,6 +55,25 @@ impl Scheme {
             },
         }
         Ok(())
+    }
+
+    fn public(self, private_string: &str) -> anyhow::Result<()> {
+        match self {
+            Self::Bls => {
+                let private_key = TaggedBase64::parse(private_string)?.try_into()?;
+                let pub_key = BLSPubKey::from_private(&private_key);
+                tracing::info!(%pub_key, "public key");
+                Ok(())
+            },
+            Self::Schnorr => {
+                let private_key = TaggedBase64::parse(private_string)?.try_into()?;
+                let state_key_pair = StateKeyPair::from_sign_key(private_key);
+                let pub_key = state_key_pair.ver_key();
+                tracing::info!(%pub_key, "public key");
+                Ok(())
+            },
+            _ => Err(anyhow!("not implemented")),
+        }
     }
 }
 
@@ -99,6 +119,10 @@ struct Options {
 
     #[clap(flatten)]
     logging: logging::Config,
+
+    /// If specified, prints the public key for the given private key.
+    #[clap(long)]
+    private_key: Option<String>,
 }
 
 fn parse_seed(s: &str) -> Result<[u8; 32], anyhow::Error> {
@@ -118,6 +142,11 @@ fn gen_default_seed() -> [u8; 32] {
 fn main() -> anyhow::Result<()> {
     let opts = Options::parse();
     opts.logging.init();
+
+    if let Some(private_string) = opts.private_key {
+        opts.scheme.public(&private_string)?;
+        return Ok(());
+    }
 
     tracing::debug!(
         "Generating {} keypairs with scheme {}",
