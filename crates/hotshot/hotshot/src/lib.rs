@@ -282,12 +282,28 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let upgrade_lock =
             UpgradeLock::<TYPES, V>::from_certificate(&initializer.decided_upgrade_certificate);
 
+        let current_version = if let Some(cert) = initializer.decided_upgrade_certificate {
+            cert.data.new_version
+        } else {
+            V::Base::VERSION
+        };
+
         debug!("Setting DRB difficulty selector in membership");
         let drb_difficulty_selector = drb_difficulty_selector(upgrade_lock.clone(), &config);
 
         membership_coordinator
             .set_drb_difficulty_selector(drb_difficulty_selector)
             .await;
+
+        for (da_committee_version, (epoch, da_committee)) in config.da_committees.iter() {
+            if current_version >= *da_committee_version {
+                membership_coordinator
+                    .membership()
+                    .write()
+                    .await
+                    .update_da_committee(*epoch, da_committee.clone());
+            }
+        }
 
         // Allow overflow on the external channel, otherwise sending to it may block.
         external_rx.set_overflow(true);
