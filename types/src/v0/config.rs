@@ -8,6 +8,7 @@ use hotshot_types::{
 };
 use serde::{Deserialize, Serialize};
 use tide_disco::Url;
+use vbs::version::Version;
 use vec1::Vec1;
 
 use crate::{PubKey, SeqTypes};
@@ -56,7 +57,7 @@ pub struct PublicHotShotConfig {
     known_nodes_with_stake: Vec<PeerConfig<SeqTypes>>,
     known_da_nodes: Vec<PeerConfig<SeqTypes>>,
     #[serde(default)]
-    da_committees: BTreeMap<u64, Vec<PeerConfig<SeqTypes>>>,
+    da_committees: BTreeMap<Version, BTreeMap<u64, Vec<PeerConfig<SeqTypes>>>>,
     da_staked_committee_size: usize,
     fixed_leader_for_gpuvid: usize,
     next_view_timeout: u64,
@@ -200,10 +201,6 @@ impl PublicHotShotConfig {
 
     pub fn known_da_nodes(&self) -> Vec<PeerConfig<SeqTypes>> {
         self.known_da_nodes.clone()
-    }
-
-    pub fn da_committees(&self) -> BTreeMap<u64, Vec<PeerConfig<SeqTypes>>> {
-        self.da_committees.clone()
     }
 
     pub fn blocks_per_epoch(&self) -> u64 {

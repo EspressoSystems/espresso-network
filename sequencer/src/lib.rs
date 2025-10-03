@@ -397,14 +397,21 @@ where
             .iter()
             .map(|(k, v)| {
                 (
-                    k.into(),
+                    *k,
                     v.iter()
-                        .map(|pcd| hotshot_types::PeerConfig {
-                            stake_table_entry: StakeTableEntry {
-                                stake_key: pcd.stake_table_key,
-                                stake_amount: U256::from(pcd.stake),
-                            },
-                            state_ver_key: pcd.state_ver_key.clone(),
+                        .map(|(k, v)| {
+                            (
+                                k.into(),
+                                v.iter()
+                                    .map(|pcd| hotshot_types::PeerConfig {
+                                        stake_table_entry: StakeTableEntry {
+                                            stake_key: pcd.stake_table_key,
+                                            stake_amount: U256::from(pcd.stake),
+                                        },
+                                        state_ver_key: pcd.state_ver_key.clone(),
+                                    })
+                                    .collect(),
+                            )
                         })
                         .collect(),
                 )

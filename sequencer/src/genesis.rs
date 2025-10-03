@@ -111,7 +111,7 @@ pub struct Genesis {
     #[serde(default)]
     pub upgrades: BTreeMap<Version, Upgrade>,
     #[serde(default)]
-    pub da_committees: Option<BTreeMap<TomlKeyU64, Vec<PeerConfigData>>>,
+    pub da_committees: Option<BTreeMap<Version, BTreeMap<TomlKeyU64, Vec<PeerConfigData>>>>,
 }
 
 impl Genesis {

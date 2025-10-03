@@ -1689,18 +1689,11 @@ impl EpochCommittees {
         // TODO remove `new` from trait and rename this to `new`.
         // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
         committee_members: Vec<PeerConfig<SeqTypes>>,
-        da_committees: BTreeMap<Epoch, Vec<PeerConfig<SeqTypes>>>,
+        da_members: Vec<PeerConfig<SeqTypes>>,
         fixed_block_reward: Option<RewardAmount>,
         fetcher: Fetcher,
         epoch_height: u64,
     ) -> Self {
-        // TODO: Store da_committees in EpochCommittees. Currently we just pull da_members back out, but we
-        // will need to figure out how to integrate da_committees into EpochCommittee and the like.
-        let da_members = da_committees
-            .get(&Epoch::new(0))
-            .cloned()
-            .unwrap_or_default(); // For testing reasons, we want to support being given an empty map
-
         // For each member, get the stake table entry
         let stake_table: Vec<_> = committee_members
             .iter()
