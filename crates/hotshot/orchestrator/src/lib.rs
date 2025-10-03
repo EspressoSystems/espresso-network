@@ -147,6 +147,7 @@ impl<TYPES: NodeType> OrchestratorState<TYPES> {
     pub fn output_to_csv(result: BenchResults<TYPES::View>) {
         // Open the CSV file in append mode
         let leader_results_csv_file = OpenOptions::new()
+            .write(true)
             .create(true)
             .open(format!("Leader_results_{}.csv", result.node_index))
             .unwrap();
@@ -166,6 +167,7 @@ impl<TYPES: NodeType> OrchestratorState<TYPES> {
 
         // Do the same for the replica results
         let replica_results_csv_file = OpenOptions::new()
+            .write(true)
             .create(true)
             .open(format!("replica_results_{}.csv", result.node_index))
             .unwrap();
@@ -181,6 +183,7 @@ impl<TYPES: NodeType> OrchestratorState<TYPES> {
 
         // Log the Latencies of each block by view
         let latency_results_csv_file = OpenOptions::new()
+            .write(true)
             .create(true)
             .open(format!("latency_results_{}.csv", result.node_index))
             .unwrap();
@@ -193,6 +196,7 @@ impl<TYPES: NodeType> OrchestratorState<TYPES> {
 
         // Log the Sizes of each block by view
         let sizes_results_csv_file = OpenOptions::new()
+            .write(true)
             .create(true)
             .open(format!("sizes_results_{}.csv", result.node_index))
             .unwrap();
