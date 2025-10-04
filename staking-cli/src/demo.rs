@@ -114,15 +114,24 @@ pub async fn setup_stake_table_contract_for_test(
         ));
     }
 
-    let mut pending_txs = vec![];
-
+    // Fund ETH to validators first and await
+    let mut eth_funding_txs = vec![];
     for (validator_address, _, _, _, _, _, val_index) in &validator_info {
         tracing::info!("fund val {val_index} address: {validator_address}, {fund_amount_eth} ETH");
         let tx = TransactionRequest::default()
             .with_to(*validator_address)
             .with_value(fund_amount_eth);
-        pending_txs.push(token_holder.send_transaction(tx).await?);
+        eth_funding_txs.push(token_holder.send_transaction(tx).await?);
     }
+
+    let eth_receipts: Vec<TransactionReceipt> =
+        future::try_join_all(eth_funding_txs.into_iter().map(|tx| tx.get_receipt())).await?;
+    for receipt in eth_receipts {
+        assert!(receipt.status());
+    }
+
+    // Now that validators have ETH, send remaining transactions
+    let mut pending_txs = vec![];
 
     for (validator_address, ..) in &validator_info {
         tracing::info!("transfer {fund_amount_esp} ESP to {validator_address}",);
@@ -260,15 +269,24 @@ async fn add_multiple_delegators(
         ));
     }
 
-    let mut pending_txs = vec![];
-
+    // Fund ETH to delegators first and await
+    let mut eth_funding_txs = vec![];
     for (_, delegator_address, _, delegator_index) in &delegator_info {
         tracing::info!("delegator {delegator_index}: address {delegator_address}");
         let tx = TransactionRequest::default()
             .with_to(*delegator_address)
             .with_value(fund_amount_eth);
-        pending_txs.push(token_holder.send_transaction(tx).await?);
+        eth_funding_txs.push(token_holder.send_transaction(tx).await?);
     }
+
+    let eth_receipts: Vec<TransactionReceipt> =
+        future::try_join_all(eth_funding_txs.into_iter().map(|tx| tx.get_receipt())).await?;
+    for receipt in eth_receipts {
+        assert!(receipt.status());
+    }
+
+    // Now that delegators have ETH, send remaining transactions
+    let mut pending_txs = vec![];
 
     for (_, delegator_address, ..) in &delegator_info {
         pending_txs.push(
@@ -496,8 +514,13 @@ mod test {
         Ok(())
     }
 
+    #[rstest::rstest]
+    #[case::equal_amounts(DelegationConfig::EqualAmounts)]
+    #[case::variable_amounts(DelegationConfig::VariableAmounts)]
+    #[case::multiple_delegators(DelegationConfig::MultipleDelegators)]
+    #[case::no_self_delegation(DelegationConfig::NoSelfDelegation)]
     #[test_log::test(tokio::test)]
-    async fn test_setup_with_slow_blocks() -> Result<()> {
+    async fn test_setup_with_slow_blocks(#[case] config: DelegationConfig) -> Result<()> {
         let system = TestSystem::deploy().await?;
         system.provider.anvil_set_auto_mine(false).await?;
         system.provider.anvil_set_interval_mining(1).await?;
@@ -513,7 +536,7 @@ mod test {
             &system.provider,
             system.stake_table,
             keys,
-            DelegationConfig::VariableAmounts,
+            config,
         )
         .await?;
 
@@ -523,6 +546,11 @@ mod test {
         assert_eq!(st.len(), 2);
         assert!(st[0].stake > U256::ZERO);
         assert!(st[1].stake > U256::ZERO);
+
+        if let DelegationConfig::NoSelfDelegation = config {
+            assert!(!st[0].delegators.contains_key(&st[0].account));
+            assert!(!st[1].delegators.contains_key(&st[1].account));
+        }
 
         Ok(())
     }
