@@ -1,7 +1,8 @@
 use alloy::{
+    eips::BlockId,
+    network::Ethereum,
     primitives::{Address, U256},
-    providers::Provider,
-    rpc::types::TransactionReceipt,
+    providers::{PendingTransactionBuilder, Provider},
 };
 use anyhow::Result;
 use hotshot_contract_adapter::{
@@ -17,15 +18,14 @@ pub async fn approve(
     token_addr: Address,
     stake_table_address: Address,
     amount: U256,
-) -> Result<TransactionReceipt> {
+) -> Result<PendingTransactionBuilder<Ethereum>> {
     let token = EspToken::new(token_addr, &provider);
-    Ok(token
+    token
         .approve(stake_table_address, amount)
+        .block(BlockId::pending())
         .send()
         .await
-        .maybe_decode_revert::<EspTokenErrors>()?
-        .get_receipt()
-        .await?)
+        .maybe_decode_revert::<EspTokenErrors>()
 }
 
 pub async fn delegate(
@@ -33,15 +33,13 @@ pub async fn delegate(
     stake_table: Address,
     validator_address: Address,
     amount: U256,
-) -> Result<TransactionReceipt> {
+) -> Result<PendingTransactionBuilder<Ethereum>> {
     let st = StakeTable::new(stake_table, provider);
-    Ok(st
-        .delegate(validator_address, amount)
+    st.delegate(validator_address, amount)
+        .block(BlockId::pending())
         .send()
         .await
-        .maybe_decode_revert::<StakeTableErrors>()?
-        .get_receipt()
-        .await?)
+        .maybe_decode_revert::<StakeTableErrors>()
 }
 
 pub async fn undelegate(
@@ -49,15 +47,13 @@ pub async fn undelegate(
     stake_table: Address,
     validator_address: Address,
     amount: U256,
-) -> Result<TransactionReceipt> {
+) -> Result<PendingTransactionBuilder<Ethereum>> {
     let st = StakeTable::new(stake_table, provider);
-    Ok(st
-        .undelegate(validator_address, amount)
+    st.undelegate(validator_address, amount)
+        .block(BlockId::pending())
         .send()
         .await
-        .maybe_decode_revert::<StakeTableErrors>()?
-        .get_receipt()
-        .await?)
+        .maybe_decode_revert::<StakeTableErrors>()
 }
 
 #[cfg(test)]
@@ -78,6 +74,8 @@ mod test {
             validator_address,
             amount,
         )
+        .await?
+        .get_receipt()
         .await?;
         assert!(receipt.status());
 
@@ -102,6 +100,8 @@ mod test {
             validator_address,
             amount,
         )
+        .await?
+        .get_receipt()
         .await?;
         assert!(receipt.status());
 

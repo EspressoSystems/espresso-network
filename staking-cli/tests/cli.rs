@@ -129,7 +129,8 @@ async fn test_cli_register_validator(
                 .arg("--commission")
                 .arg("12.34")
                 .assert()
-                .success();
+                .success()
+                .stdout(str::contains("ValidatorRegistered"));
         },
         Signer::BrokeMnemonic => {
             cmd.arg("register-validator")
@@ -141,7 +142,7 @@ async fn test_cli_register_validator(
                 .arg("12.34")
                 .assert()
                 .failure()
-                .stdout(str::contains("zero Ethereum balance"));
+                .stderr(str::contains("zero Ethereum balance"));
         },
         Signer::Ledger => unreachable!(),
     };
@@ -164,7 +165,8 @@ async fn test_cli_update_consensus_keys(#[case] version: StakeTableContractVersi
         .arg("--state-private-key")
         .arg(new_state.sign_key().to_tagged_base64()?.to_string())
         .assert()
-        .success();
+        .success()
+        .stdout(str::contains("ConsensusKeysUpdated"));
     Ok(())
 }
 
@@ -183,7 +185,8 @@ async fn test_cli_update_commission() -> Result<()> {
         .arg("--new-commission")
         .arg("8.5")
         .assert()
-        .success();
+        .success()
+        .stdout(str::contains("CommissionUpdated"));
     assert_eq!(system.fetch_commission().await?, new_commission);
 
     Ok(())
@@ -204,7 +207,8 @@ async fn test_cli_increase_commission_too_soon() -> Result<()> {
         .arg("--new-commission")
         .arg(first_update.to_string())
         .assert()
-        .success();
+        .success()
+        .stdout(str::contains("CommissionUpdated"));
     assert_eq!(system.fetch_commission().await?, first_update);
 
     let interval = system.get_min_commission_increase_interval().await?;
@@ -219,7 +223,7 @@ async fn test_cli_increase_commission_too_soon() -> Result<()> {
         .arg(second_update.to_string())
         .assert()
         .failure()
-        .stdout(str::contains("TooSoon"));
+        .stderr(str::contains("TooSoon"));
     assert_eq!(system.fetch_commission().await?, first_update);
 
     system.anvil_increase_time(U256::from(5)).await?;
@@ -229,7 +233,8 @@ async fn test_cli_increase_commission_too_soon() -> Result<()> {
         .arg("--new-commission")
         .arg(second_update.to_string())
         .assert()
-        .success();
+        .success()
+        .stdout(str::contains("CommissionUpdated"));
     assert_eq!(system.fetch_commission().await?, second_update);
 
     Ok(())
@@ -247,7 +252,8 @@ async fn test_cli_delegate(#[case] version: StakeTableContractVersion) -> Result
         .arg("--amount")
         .arg("123")
         .assert()
-        .success();
+        .success()
+        .stdout(str::contains("Delegated"));
     Ok(())
 }
 
@@ -257,7 +263,10 @@ async fn test_cli_deregister_validator(#[case] version: StakeTableContractVersio
     system.register_validator().await?;
 
     let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("deregister-validator").assert().success();
+    cmd.arg("deregister-validator")
+        .assert()
+        .success()
+        .stdout(str::contains("ValidatorExit"));
     Ok(())
 }
 
@@ -275,7 +284,8 @@ async fn test_cli_undelegate(#[case] version: StakeTableContractVersion) -> Resu
         .arg("--amount")
         .arg(amount)
         .assert()
-        .success();
+        .success()
+        .stdout(str::contains("Undelegated"));
     Ok(())
 }
 
@@ -293,7 +303,8 @@ async fn test_cli_claim_withdrawal(#[case] version: StakeTableContractVersion) -
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
         .assert()
-        .success();
+        .success()
+        .stdout(str::contains("Withdrawal"));
     Ok(())
 }
 
@@ -311,7 +322,8 @@ async fn test_cli_claim_validator_exit(#[case] version: StakeTableContractVersio
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
         .assert()
-        .success();
+        .success()
+        .stdout(str::contains("Withdrawal"));
     Ok(())
 }
 
@@ -374,7 +386,8 @@ async fn test_cli_approve(#[case] version: StakeTableContractVersion) -> Result<
         .arg("--amount")
         .arg(amount)
         .assert()
-        .success();
+        .success()
+        .stdout(str::contains("Approval"));
 
     assert!(system.allowance(system.deployer_address).await? == parse_ether(amount)?);
 
@@ -457,7 +470,8 @@ async fn test_cli_transfer(#[case] version: StakeTableContractVersion) -> Result
         .arg("--amount")
         .arg(format_ether(amount))
         .assert()
-        .success();
+        .success()
+        .stdout(str::contains("Transfer"));
 
     assert_eq!(system.balance(addr).await?, amount);
 
@@ -546,7 +560,8 @@ async fn test_cli_transfer_ledger() -> Result<()> {
         .arg("--amount")
         .arg(format_ether(amount))
         .assert()
-        .success();
+        .success()
+        .stdout(str::contains("Transfer"));
 
     // Make a token transfer with the ledger
     println!("Sign the transaction in the ledger");
@@ -558,7 +573,8 @@ async fn test_cli_transfer_ledger() -> Result<()> {
         .arg("--amount")
         .arg(format_ether(amount))
         .assert()
-        .success();
+        .success()
+        .stdout(str::contains("Transfer"));
 
     assert_eq!(system.balance(addr).await?, amount);
 
@@ -585,7 +601,8 @@ async fn test_cli_delegate_ledger() -> Result<()> {
         .arg("--amount")
         .arg(format_ether(amount))
         .assert()
-        .success();
+        .success()
+        .stdout(str::contains("Approval"));
 
     println!("Sign the transaction in the ledger (again)");
     let mut cmd = system.cmd(Signer::Ledger);
@@ -595,7 +612,156 @@ async fn test_cli_delegate_ledger() -> Result<()> {
         .arg("--amount")
         .arg(format_ether(amount))
         .assert()
-        .success();
+        .success()
+        .stdout(str::contains("Delegated"));
+
+    Ok(())
+}
+
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
+async fn test_cli_all_operations_manual_inspect(
+    #[case] version: StakeTableContractVersion,
+) -> Result<()> {
+    let system = TestSystem::deploy_version(version).await?;
+
+    let output = system
+        .cmd(Signer::Mnemonic)
+        .arg("register-validator")
+        .arg("--consensus-private-key")
+        .arg(system.bls_private_key_str()?)
+        .arg("--state-private-key")
+        .arg(system.state_private_key_str()?)
+        .arg("--commission")
+        .arg("12.34")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    println!("{}", String::from_utf8_lossy(&output));
+
+    let addr = "0x1111111111111111111111111111111111111111";
+    let output = system
+        .cmd(Signer::Mnemonic)
+        .arg("transfer")
+        .arg("--to")
+        .arg(addr)
+        .arg("--amount")
+        .arg("100")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    println!("{}", String::from_utf8_lossy(&output));
+
+    let output = system
+        .cmd(Signer::Mnemonic)
+        .arg("approve")
+        .arg("--amount")
+        .arg("1000")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    println!("{}", String::from_utf8_lossy(&output));
+
+    let output = system
+        .cmd(Signer::Mnemonic)
+        .arg("delegate")
+        .arg("--validator-address")
+        .arg(system.deployer_address.to_string())
+        .arg("--amount")
+        .arg("500")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    println!("{}", String::from_utf8_lossy(&output));
+
+    if matches!(version, StakeTableContractVersion::V2) {
+        let output = system
+            .cmd(Signer::Mnemonic)
+            .arg("update-commission")
+            .arg("--new-commission")
+            .arg("15.5")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        println!("{}", String::from_utf8_lossy(&output));
+    }
+
+    let mut rng = StdRng::from_seed([99u8; 32]);
+    let (_, new_bls, new_state) = TestSystem::gen_keys(&mut rng);
+    let output = system
+        .cmd(Signer::Mnemonic)
+        .arg("update-consensus-keys")
+        .arg("--consensus-private-key")
+        .arg(new_bls.sign_key_ref().to_tagged_base64()?.to_string())
+        .arg("--state-private-key")
+        .arg(new_state.sign_key().to_tagged_base64()?.to_string())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    println!("{}", String::from_utf8_lossy(&output));
+
+    let output = system
+        .cmd(Signer::Mnemonic)
+        .arg("undelegate")
+        .arg("--validator-address")
+        .arg(system.deployer_address.to_string())
+        .arg("--amount")
+        .arg("200")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    println!("{}", String::from_utf8_lossy(&output));
+
+    system.warp_to_unlock_time().await?;
+
+    let output = system
+        .cmd(Signer::Mnemonic)
+        .arg("claim-withdrawal")
+        .arg("--validator-address")
+        .arg(system.deployer_address.to_string())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    println!("{}", String::from_utf8_lossy(&output));
+
+    let output = system
+        .cmd(Signer::Mnemonic)
+        .arg("deregister-validator")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    println!("{}", String::from_utf8_lossy(&output));
+
+    system.warp_to_unlock_time().await?;
+
+    let output = system
+        .cmd(Signer::Mnemonic)
+        .arg("claim-validator-exit")
+        .arg("--validator-address")
+        .arg(system.deployer_address.to_string())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    println!("{}", String::from_utf8_lossy(&output));
 
     Ok(())
 }

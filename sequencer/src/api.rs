@@ -5825,7 +5825,10 @@ mod test {
             .try_into()?;
             commissions.push((validator, commission, new_commission));
             tracing::info!(%validator, %commission, %new_commission, "Update commission");
-            update_commission(provider, st_addr, new_commission).await?;
+            update_commission(provider, st_addr, new_commission)
+                .await?
+                .get_receipt()
+                .await?;
         }
 
         // wait until new stake table takes effect
