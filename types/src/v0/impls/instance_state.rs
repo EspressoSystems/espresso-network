@@ -170,7 +170,7 @@ impl NodeState {
 
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
-            vec![],
+            Default::default(),
             None,
             Fetcher::mock(),
             0,
@@ -202,7 +202,7 @@ impl NodeState {
 
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
-            vec![],
+            Default::default(),
             None,
             Fetcher::mock(),
             0,
@@ -232,7 +232,7 @@ impl NodeState {
 
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
-            vec![],
+            Default::default(),
             None,
             Fetcher::mock(),
             0,
@@ -327,7 +327,7 @@ impl Default for NodeState {
 
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
-            vec![],
+            Default::default(),
             None,
             Fetcher::mock(),
             0,

@@ -668,6 +668,7 @@ impl TestNetwork {
                 .into_iter()
                 .collect(),
             genesis_version: Version { major: 0, minor: 1 },
+            da_committees: None,
         };
 
         let node_params = (0..da_nodes + regular_nodes)
