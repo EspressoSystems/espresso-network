@@ -980,7 +980,7 @@ pub mod test_helpers {
     use itertools::izip;
     use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme};
     use portpicker::pick_unused_port;
-    use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
+    use staking_cli::demo::{DelegationConfig, StakingTransactions};
     use surf_disco::Client;
     use tempfile::TempDir;
     use tide_disco::{error::ServerError, Api, App, Error, StatusCode};
@@ -1217,7 +1217,7 @@ pub mod test_helpers {
             let stake_table_address = contracts
                 .address(Contract::StakeTableProxy)
                 .expect("StakeTableProxy address not found");
-            setup_stake_table_contract_for_test(
+            StakingTransactions::create(
                 l1_url.clone(),
                 &deployer,
                 stake_table_address,
@@ -1225,7 +1225,10 @@ pub mod test_helpers {
                 delegation_config,
             )
             .await
-            .expect("stake table setup failed");
+            .expect("stake table setup failed")
+            .apply_all()
+            .await
+            .expect("send all txns failed");
 
             // enable interval mining with a 1s interval.
             // This ensures that blocks are finalized every second, even when there are no transactions.
@@ -3544,6 +3547,7 @@ mod test {
         let mut target_bh = 0;
         while let Some(header) = headers.next().await {
             let header = header.unwrap();
+            println!("got header with height {}", header.height());
             if header.height() == 0 {
                 continue;
             }

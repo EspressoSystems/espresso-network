@@ -695,7 +695,7 @@ pub mod testing {
     use portpicker::pick_unused_port;
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
-    use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
+    use staking_cli::demo::{DelegationConfig, StakingTransactions};
     use tokio::spawn;
     use vbs::version::Version;
 
@@ -938,7 +938,7 @@ pub mod testing {
                     let st_addr = contracts
                         .address(Contract::StakeTableProxy)
                         .expect("StakeTableProxy address not found");
-                    setup_stake_table_contract_for_test(
+                    StakingTransactions::create(
                         self.l1_url.clone(),
                         &deployer,
                         st_addr,
@@ -946,7 +946,10 @@ pub mod testing {
                         DelegationConfig::default(),
                     )
                     .await
-                    .expect("stake table setup failed");
+                    .expect("stake table setup failed")
+                    .apply_all()
+                    .await
+                    .expect("send all txns failed");
 
                     Upgrade::pos_view_based(st_addr)
                 },
@@ -1051,7 +1054,9 @@ pub mod testing {
                 drb_upgrade_difficulty: 20,
             };
 
-            let anvil = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
+            let anvil = Anvil::new()
+                .args(["--slots-in-an-epoch", "0", "--balance", "1000000"])
+                .spawn();
 
             let l1_client = L1Client::anvil(&anvil).expect("failed to create l1 client");
             let anvil_provider = AnvilProvider::new(l1_client.provider, Arc::new(anvil));

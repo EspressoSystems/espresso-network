@@ -22,10 +22,14 @@ pub async fn register_validator(
     commission: Commission,
     payload: NodeSignatures,
 ) -> Result<PendingTransactionBuilder<Ethereum>> {
+    tracing::info!(
+        "register validator {} with commission {commission}",
+        payload.address
+    );
     // NOTE: the StakeTableV2 ABI is a superset of the V1 ABI because the V2 inherits from V1 so we
     // can always use the V2 bindings for calling functions and decoding events, even if we are
     // connected to the V1 contract.
-    let stake_table = StakeTableV2::new(stake_table_addr, &provider);
+    let stake_table = StakeTableV2::new(stake_table_addr, provider);
     let sol_payload = NodeSignaturesSol::from(payload);
 
     let version = stake_table.getVersion().call().await?.try_into()?;
@@ -67,7 +71,7 @@ pub async fn update_consensus_keys(
     // NOTE: the StakeTableV2 ABI is a superset of the V1 ABI because the V2 inherits from V1 so we
     // can always use the V2 bindings for calling functions and decoding events, even if we are
     // connected to the V1 contract.
-    let stake_table = StakeTableV2::new(stake_table_addr, &provider);
+    let stake_table = StakeTableV2::new(stake_table_addr, provider);
     let sol_payload = NodeSignaturesSol::from(payload);
 
     // There is a race-condition here if the contract is upgraded while this transactions is waiting
@@ -103,7 +107,7 @@ pub async fn deregister_validator(
     provider: impl Provider,
     stake_table_addr: Address,
 ) -> Result<PendingTransactionBuilder<Ethereum>> {
-    let stake_table = StakeTableV2::new(stake_table_addr, &provider);
+    let stake_table = StakeTableV2::new(stake_table_addr, provider);
     stake_table
         .deregisterValidator()
         .block(BlockId::pending())
@@ -117,7 +121,7 @@ pub async fn update_commission(
     stake_table_addr: Address,
     new_commission: Commission,
 ) -> Result<PendingTransactionBuilder<Ethereum>> {
-    let stake_table = StakeTableV2::new(stake_table_addr, &provider);
+    let stake_table = StakeTableV2::new(stake_table_addr, provider);
     stake_table
         .updateCommission(new_commission.to_evm())
         .block(BlockId::pending())
@@ -131,7 +135,7 @@ pub async fn fetch_commission(
     stake_table_addr: Address,
     validator: Address,
 ) -> Result<Commission> {
-    let stake_table = StakeTableV2::new(stake_table_addr, &provider);
+    let stake_table = StakeTableV2::new(stake_table_addr, provider);
     let version: StakeTableContractVersion = stake_table.getVersion().call().await?.try_into()?;
     if matches!(version, StakeTableContractVersion::V1) {
         anyhow::bail!("fetching commission is not supported with stake table V1");

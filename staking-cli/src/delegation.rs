@@ -1,7 +1,7 @@
 use alloy::{
     eips::BlockId,
     network::Ethereum,
-    primitives::{Address, U256},
+    primitives::{utils::format_ether, Address, U256},
     providers::{PendingTransactionBuilder, Provider},
 };
 use anyhow::Result;
@@ -19,7 +19,11 @@ pub async fn approve(
     stake_table_address: Address,
     amount: U256,
 ) -> Result<PendingTransactionBuilder<Ethereum>> {
-    let token = EspToken::new(token_addr, &provider);
+    tracing::info!(
+        "approve {} ESP for {stake_table_address}",
+        format_ether(amount)
+    );
+    let token = EspToken::new(token_addr, provider);
     token
         .approve(stake_table_address, amount)
         .block(BlockId::pending())
@@ -34,6 +38,10 @@ pub async fn delegate(
     validator_address: Address,
     amount: U256,
 ) -> Result<PendingTransactionBuilder<Ethereum>> {
+    tracing::info!(
+        "delegate {} ESP to {validator_address}",
+        format_ether(amount)
+    );
     let st = StakeTable::new(stake_table, provider);
     st.delegate(validator_address, amount)
         .block(BlockId::pending())
@@ -48,6 +56,10 @@ pub async fn undelegate(
     validator_address: Address,
     amount: U256,
 ) -> Result<PendingTransactionBuilder<Ethereum>> {
+    tracing::info!(
+        "undelegate {} ESP from {validator_address}",
+        format_ether(amount)
+    );
     let st = StakeTable::new(stake_table, provider);
     st.undelegate(validator_address, amount)
         .block(BlockId::pending())

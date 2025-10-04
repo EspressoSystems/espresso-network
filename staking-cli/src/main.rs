@@ -376,7 +376,6 @@ pub async fn main() -> Result<()> {
             signature_args,
             commission,
         } => {
-            tracing::info!("Registering validator {account} with commission {commission}");
             let input = NodeSignatureInput::try_from((signature_args, &wallet))?;
             let payload = NodeSignatures::try_from((input, &wallet))?;
             register_validator(&provider, stake_table_addr, commission, payload).await?
@@ -396,26 +395,16 @@ pub async fn main() -> Result<()> {
             update_commission(&provider, stake_table_addr, new_commission).await?
         },
         Commands::Approve { amount } => {
-            tracing::info!(
-                "Approving stake table {} to spend {amount}",
-                config.stake_table_address
-            );
             approve(&provider, token_addr, stake_table_addr, amount).await?
         },
         Commands::Delegate {
             validator_address,
             amount,
-        } => {
-            tracing::info!("Delegating {amount} to {validator_address}");
-            delegate(&provider, stake_table_addr, validator_address, amount).await?
-        },
+        } => delegate(&provider, stake_table_addr, validator_address, amount).await?,
         Commands::Undelegate {
             validator_address,
             amount,
-        } => {
-            tracing::info!("Undelegating {amount} from {validator_address}");
-            undelegate(&provider, stake_table_addr, validator_address, amount).await?
-        },
+        } => undelegate(&provider, stake_table_addr, validator_address, amount).await?,
         Commands::ClaimWithdrawal { validator_address } => {
             tracing::info!("Claiming withdrawal for {validator_address}");
             claim_withdrawal(&provider, stake_table_addr, validator_address).await?

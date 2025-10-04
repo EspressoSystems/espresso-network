@@ -58,7 +58,7 @@ use itertools::Itertools;
 use options::Modules;
 use portpicker::pick_unused_port;
 use run::init_with_storage;
-use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
+use staking_cli::demo::{DelegationConfig, StakingTransactions};
 use surf_disco::{error::ClientError, Url};
 use tempfile::TempDir;
 use tokio::{
@@ -867,7 +867,7 @@ impl TestNetwork {
 
         tracing::info!(?stake_table_address, ?token_addr);
 
-        setup_stake_table_contract_for_test(
+        StakingTransactions::create(
             l1_url.clone(),
             &deployer,
             stake_table_address,
@@ -875,7 +875,10 @@ impl TestNetwork {
             delegation_config,
         )
         .await
-        .expect("stake table setup failed");
+        .expect("stake table setup failed")
+        .apply_all()
+        .await
+        .expect("send all txns failed");
 
         self.anvil
             .anvil_set_interval_mining(1)
