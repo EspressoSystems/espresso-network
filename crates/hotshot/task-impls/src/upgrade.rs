@@ -20,6 +20,7 @@ use hotshot_types::{
     simple_vote::{UpgradeProposalData, UpgradeVote},
     traits::{
         block_contents::BlockHeader,
+        election::Membership,
         node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::SignatureKey,
     },
@@ -449,4 +450,45 @@ impl<TYPES: NodeType, V: Versions> TaskState for UpgradeTaskState<TYPES, V> {
     }
 
     fn cancel_subtasks(&mut self) {}
+}
+
+// Test function. This doesn't belong here. Should be called once we accept an upgrade.
+async fn slice_membership_da_committees_for_upgrade<TYPES: NodeType>(
+    cur_epoch: Epoch,
+    version: Version,
+    da_committees: &BTreeMap<Version, BTreeMap<u64, Vec<PeerConfig<TYPES>>>>,
+    membership: &mut dyn Membership<TYPES>, // Needs to go through EpochMembershipCoordinator
+) {
+    if version < RotatingDaCommitteeVersion::VERSION {
+        return; // We aren't ready to start adding DA committees yet
+    }
+
+    let Some(committees) = da_committees.get(&version) else {
+        return; // No new da committees for this version
+    };
+
+    //let mut res = committees.range(cur_epoch + 1..).collect();
+    let mut res = BTreeMap::new();
+
+    for (epoch, committee) in committees.iter().reverse() {
+        if *epoch <= cur_epoch {
+            // We only want future epochs.
+            let should_add = if let Some((&k, _)) = res.first_key_value() {
+                k > cur_epoch + 1 // We should add an extra epoch if there's space between (cur_epoch + 1) and the next da_committee epoch
+            } else {
+                true
+            };
+
+            if should_add {
+                // This allows for the case where we transitioned into a new version partway into
+                // the defined epochs for that version.
+                res.insert(cur_epoch + 1, committee.clone());
+            }
+
+            break;
+        }
+        res.insert(*epoch, committee.clone());
+    }
+
+    membership.write().await.update_da_committees(res);
 }

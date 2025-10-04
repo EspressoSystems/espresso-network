@@ -5,12 +5,17 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 //! The election trait, used to decide which node is the leader and determine if a vote is valid.
-use std::{collections::BTreeSet, fmt::Debug, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Debug,
+    sync::Arc,
+};
 
 use alloy::primitives::U256;
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::Result;
+use vbs::version::Version;
 
 use super::node_implementation::NodeType;
 use crate::{
@@ -198,6 +203,13 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// Errors if the stake table is not available for the given epoch
     fn stake_table_hash(&self, _epoch: TYPES::Epoch) -> Option<Commitment<Self::StakeTableHash>> {
         None
+    }
+
+    fn update_da_committees(
+        &mut self,
+        da_committees: BTreeMap<TYPES::Epoch, Vec<PeerConfig<TYPES>>>,
+    ) {
+        // TODO: Make this not defaulted
     }
 }
 
