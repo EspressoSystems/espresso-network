@@ -382,6 +382,7 @@ pub async fn stake_for_demo(
 
 #[cfg(test)]
 mod test {
+    use alloy::providers::ext::AnvilApi as _;
     use espresso_types::v0_3::Validator;
     use hotshot_types::signature_key::BLSPubKey;
     use rand::rngs::StdRng;
@@ -491,6 +492,37 @@ mod test {
 
         // The stake amounts are not equal
         assert_ne!(val1.stake, val2.stake);
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_setup_with_slow_blocks() -> Result<()> {
+        let system = TestSystem::deploy().await?;
+        system.provider.anvil_set_auto_mine(false).await?;
+        system.provider.anvil_set_interval_mining(1).await?;
+
+        let mut rng = StdRng::from_seed([42u8; 32]);
+        let keys = vec![
+            TestSystem::gen_keys(&mut rng),
+            TestSystem::gen_keys(&mut rng),
+        ];
+
+        setup_stake_table_contract_for_test(
+            system.rpc_url.clone(),
+            &system.provider,
+            system.stake_table,
+            keys,
+            DelegationConfig::VariableAmounts,
+        )
+        .await?;
+
+        let l1_block_number = system.provider.get_block_number().await?;
+        let st = stake_table_info(system.rpc_url, system.stake_table, l1_block_number).await?;
+
+        assert_eq!(st.len(), 2);
+        assert!(st[0].stake > U256::ZERO);
+        assert!(st[1].stake > U256::ZERO);
 
         Ok(())
     }
