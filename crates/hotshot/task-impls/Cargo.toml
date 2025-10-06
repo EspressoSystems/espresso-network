@@ -43,6 +43,7 @@ tracing = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
 vec1 = { workspace = true }
+collector-common = { path = "../../collector-common" }
 
 [lints]
 workspace = true
