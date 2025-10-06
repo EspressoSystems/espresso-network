@@ -591,16 +591,16 @@ pub async fn stake_for_demo(
         ));
     }
 
-    let planned = StakingTransactions::create(
+    StakingTransactions::create(
         config.rpc_url.clone(),
         &grant_recipient,
         config.stake_table_address,
         validator_keys,
         delegation_config,
     )
+    .await?
+    .apply_all()
     .await?;
-
-    planned.apply_all().await?;
 
     Ok(())
 }
@@ -627,16 +627,16 @@ mod test {
             TestSystem::gen_keys(&mut rng),
         ];
 
-        let planned = StakingTransactions::create(
+        StakingTransactions::create(
             system.rpc_url.clone(),
             &system.provider,
             system.stake_table,
             keys,
             config,
         )
+        .await?
+        .apply_all()
         .await?;
-
-        planned.apply_all().await?;
         let l1_block_number = system.provider.get_block_number().await?;
         let st = stake_table_info(system.rpc_url, system.stake_table, l1_block_number).await?;
 
@@ -793,16 +793,16 @@ mod test {
             TestSystem::gen_keys(&mut rng),
         ];
 
-        let planned = StakingTransactions::create(
+        StakingTransactions::create(
             system.rpc_url.clone(),
             &system.provider,
             system.stake_table,
             keys,
             config,
         )
+        .await?
+        .apply_all()
         .await?;
-
-        planned.apply_all().await?;
         let l1_block_number = system.provider.get_block_number().await?;
         let st = stake_table_info(system.rpc_url, system.stake_table, l1_block_number).await?;
 
