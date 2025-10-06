@@ -120,6 +120,7 @@ pub mod testing {
             let config: HotShotConfig<SeqTypes> = HotShotConfig {
                 num_nodes_with_stake: NonZeroUsize::new(num_nodes_with_stake).unwrap(),
                 known_da_nodes: known_nodes_with_stake.clone(),
+                da_committees: std::collections::BTreeMap::new(),
                 known_nodes_with_stake: known_nodes_with_stake.clone(),
                 next_view_timeout: Duration::from_secs(5).as_millis() as u64,
                 num_bootstrap: 1usize,

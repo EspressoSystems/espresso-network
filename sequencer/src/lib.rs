@@ -1020,6 +1020,7 @@ pub mod testing {
                 fixed_leader_for_gpuvid: 0,
                 num_nodes_with_stake: num_nodes.try_into().unwrap(),
                 known_da_nodes: known_nodes_with_stake.clone(),
+                da_committees: BTreeMap::new(),
                 known_nodes_with_stake: known_nodes_with_stake.clone(),
                 next_view_timeout: Duration::from_secs(5).as_millis() as u64,
                 num_bootstrap: 1usize,
