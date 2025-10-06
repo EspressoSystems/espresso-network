@@ -9,11 +9,12 @@
 The HotShot light client is an on-chain contract that tracks the latest state of the HotShot consensus protocol. The
 light client maintains the following fields:
 
-| Field             | Details                                  |
-| ----------------- | ---------------------------------------- |
-| `view_number`     | The latest view number of the consensus  |
-| `block_height`    | The latest block height of the consensus |
-| `block_comm_root` | Root commitment of the block Merkle tree |
+| Field             | Version added | Details                                                |
+| ----------------- | ------------- | ------------------------------------------------------ |
+| `view_number`     | V1            | Latest view number of the consensus.                   |
+| `block_height`    | V1            | Latest block height of the consensus.                  |
+| `block_comm_root` | V1            | Root commitment of the block Merkle tree.              |
+| `auth_root`       | V3            | Keccak-256 hash of auxiliary information to be signed. |
 
 The block Merkle tree accumulates all historical blocks up to `block_height`. Its root commitment serves as an
 authenticated checkpoint for applications relying on HotShot consensus.
@@ -28,6 +29,12 @@ table consists of:
 2. A hash of all state signing keys
 3. A hash of all stake weights
 4. The threshold for the total weight required to update the contract state
+
+### Auth Root
+
+Starting from light client V3, the contract also tracks a new field `auth_root`, which is the Keccak-256 hash of some
+auxiliary information to be authenticated by the validator, so that the other applications on chain can easily verify.
+Currently, it includes the root commitment of the reward Merkle tree.
 
 ### HotShot State Prover
 
@@ -69,3 +76,8 @@ maintaining consensus integrity across epochs.
 
 The prover can also run in a legacy mode for older contract versions. The application automatically detects the contract
 version and runs the appropriate service. The legacy service implementation can be found in `src/legacy/service.rs`.
+
+## Important Notes
+
+Recently we fixed a critical bug in the circuit, details can be found [here](https://github.com/espressosystems/espresso-network/pull/126).
+The circuit change is breaking, resulting in the incompatibility between the old and the new prover/contract.
