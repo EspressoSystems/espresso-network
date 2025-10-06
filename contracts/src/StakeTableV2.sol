@@ -57,8 +57,8 @@ import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 ///
 /// 8. The commission rate for validators can be updated with the `updateCommission` function.
 ///
-/// 9. The `totalValidatorStake` and `totalStake` functions are added to allow governance to
-/// track the total stake in the contract. The totalValidatorStake is the total stake in active
+/// 9. The `activeStake` and `totalStake` functions are added to allow governance to
+/// track the total stake in the contract. The activeStake is the total stake in active
 /// validators and the totalStake is the total stake in all states (active + exiting +
 /// pendingWithdrawal).
 ///
@@ -90,7 +90,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     uint16 public maxCommissionIncrease;
 
     /// @notice Total stake in active (not marked for exit) validators in the contract
-    uint256 public totalValidatorStake;
+    uint256 public activeStake;
 
     /// @notice Commission tracking for each validator
     mapping(address validator => CommissionTracking tracking) public commissionTracking;
@@ -296,7 +296,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @dev This function is overridden to add pausable functionality
     function delegate(address validator, uint256 amount) public virtual override whenNotPaused {
         super.delegate(validator, amount);
-        totalValidatorStake += amount;
+        activeStake += amount;
     }
 
     /// @notice Undelegate funds from a validator
@@ -305,7 +305,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @dev This function is overridden to add pausable functionality
     function undelegate(address validator, uint256 amount) public virtual override whenNotPaused {
         super.undelegate(validator, amount);
-        totalValidatorStake -= amount;
+        activeStake -= amount;
     }
 
     /// @notice Deregister a validator
@@ -321,7 +321,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         validatorExits[validator] = block.timestamp + exitEscrowPeriod;
         // in v2, the delegatedAmount is not updated until withdrawal
 
-        totalValidatorStake -= validators[validator].delegatedAmount;
+        activeStake -= validators[validator].delegatedAmount;
         emit ValidatorExit(validator);
     }
 
