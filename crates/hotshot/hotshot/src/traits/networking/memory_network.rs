@@ -153,7 +153,7 @@ impl<K: SignatureKey> MemoryNetwork<K> {
         for topic in subscribed_topics {
             master_map
                 .subscribed_map
-                .entry(topic.clone())
+                .entry(*topic)
                 .or_default()
                 .push((pub_key.clone(), mn.clone()));
         }

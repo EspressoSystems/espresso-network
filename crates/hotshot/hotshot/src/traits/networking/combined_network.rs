@@ -358,12 +358,11 @@ impl<TYPES: NodeType> ConnectedNetwork<TYPES::SignatureKey> for CombinedNetworks
         let secondary = self.secondary().clone();
         let primary_message = message.clone();
         let secondary_message = message.clone();
-        let topic_clone = topic.clone();
         self.send_both_networks(
             message,
             async move {
                 primary
-                    .broadcast_message(primary_message, topic_clone, BroadcastDelay::None)
+                    .broadcast_message(primary_message, topic, BroadcastDelay::None)
                     .await
             },
             async move {
