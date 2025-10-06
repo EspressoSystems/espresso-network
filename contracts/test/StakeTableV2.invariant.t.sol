@@ -52,7 +52,7 @@ contract StakeTableV2InvariantTest is StdInvariant, Test {
 
         // verify the total stake invariants
         invariant_TotalStakeMatchesTracked();
-        invariant_TotalValidatorStakeMatchesTracked();
+        invariant_activeStakeMatchesTracked();
         invariant_TotalStakeEqualsContractBalance();
         invariant_ValidatorStakeNotExceedsTotalStake();
 
@@ -115,12 +115,12 @@ contract StakeTableV2InvariantTest is StdInvariant, Test {
         );
     }
 
-    /// @dev Contract's totalValidatorStake should match tracked totalValidatorStake
-    function invariant_TotalValidatorStakeMatchesTracked() public view {
+    /// @dev Contract's activeStake should match tracked activeStake
+    function invariant_activeStakeMatchesTracked() public view {
         assertEq(
-            handler.stakeTable().totalValidatorStake(),
-            handler.getTotalValidatorStake(),
-            "Contract totalValidatorStake does not match tracked totalValidatorStake"
+            handler.stakeTable().activeStake(),
+            handler.getactiveStake(),
+            "Contract activeStake does not match tracked activeStake"
         );
     }
 
@@ -137,7 +137,7 @@ contract StakeTableV2InvariantTest is StdInvariant, Test {
     /// @dev Total validator stake should not exceed total stake
     function invariant_ValidatorStakeNotExceedsTotalStake() public view {
         assertLe(
-            handler.stakeTable().totalValidatorStake(),
+            handler.stakeTable().activeStake(),
             handler.stakeTable().totalStake(),
             "Total validator stake should not exceed total stake"
         );

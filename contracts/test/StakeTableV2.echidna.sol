@@ -39,8 +39,8 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
     }
 
     /// @dev Total validator stake should equal sum of all delegated amounts
-    function echidna_TotalValidatorStakeMatchesTracked() public view returns (bool) {
-        return stakeTable.totalValidatorStake() == testState.totalValidatorStake;
+    function echidna_activeStakeMatchesTracked() public view returns (bool) {
+        return stakeTable.activeStake() == testState.activeStake;
     }
 
     /// @dev Total stake should equal contract balance
@@ -49,7 +49,7 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
     }
 
     /// @dev Total validator stake should not exceed total stake
-    function echidna_TotalValidatorStakeNotExceedsTotalStake() public view returns (bool) {
-        return stakeTable.totalValidatorStake() <= stakeTable.totalStake();
+    function echidna_activeStakeNotExceedsTotalStake() public view returns (bool) {
+        return stakeTable.activeStake() <= stakeTable.totalStake();
     }
 }
