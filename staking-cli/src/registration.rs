@@ -1,5 +1,4 @@
 use alloy::{
-    eips::BlockId,
     network::Ethereum,
     primitives::Address,
     providers::{PendingTransactionBuilder, Provider},
@@ -44,7 +43,6 @@ pub async fn register_validator(
                 sol_payload.bls_signature.into(),
                 commission.to_evm(),
             )
-            .block(BlockId::pending())
             .send()
             .await
             .maybe_decode_revert::<StakeTableV2Errors>()?,
@@ -56,7 +54,6 @@ pub async fn register_validator(
                 sol_payload.schnorr_signature.into(),
                 commission.to_evm(),
             )
-            .block(BlockId::pending())
             .send()
             .await
             .maybe_decode_revert::<StakeTableV2Errors>()?,
@@ -85,7 +82,6 @@ pub async fn update_consensus_keys(
                 sol_payload.schnorr_vk,
                 sol_payload.bls_signature.into(),
             )
-            .block(BlockId::pending())
             .send()
             .await
             .maybe_decode_revert::<StakeTableV2Errors>()?,
@@ -96,7 +92,6 @@ pub async fn update_consensus_keys(
                 sol_payload.bls_signature.into(),
                 sol_payload.schnorr_signature.into(),
             )
-            .block(BlockId::pending())
             .send()
             .await
             .maybe_decode_revert::<StakeTableV2Errors>()?,
@@ -110,7 +105,6 @@ pub async fn deregister_validator(
     let stake_table = StakeTableV2::new(stake_table_addr, provider);
     stake_table
         .deregisterValidator()
-        .block(BlockId::pending())
         .send()
         .await
         .maybe_decode_revert::<StakeTableV2Errors>()
@@ -124,7 +118,6 @@ pub async fn update_commission(
     let stake_table = StakeTableV2::new(stake_table_addr, provider);
     stake_table
         .updateCommission(new_commission.to_evm())
-        .block(BlockId::pending())
         .send()
         .await
         .maybe_decode_revert::<StakeTableV2Errors>()

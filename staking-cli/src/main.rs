@@ -428,7 +428,6 @@ pub async fn main() -> Result<()> {
             tracing::info!("Transferring {amount_esp} ESP to {to}");
             token
                 .transfer(to, amount)
-                .block(BlockId::pending())
                 .send()
                 .await
                 .maybe_decode_revert::<EspTokenErrors>()?

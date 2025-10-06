@@ -1,5 +1,4 @@
 use alloy::{
-    eips::BlockId,
     network::Ethereum,
     primitives::Address,
     providers::{PendingTransactionBuilder, Provider},
@@ -17,7 +16,6 @@ pub async fn claim_withdrawal(
 ) -> Result<PendingTransactionBuilder<Ethereum>> {
     let st = StakeTable::new(stake_table, provider);
     st.claimWithdrawal(validator_address)
-        .block(BlockId::pending())
         .send()
         .await
         .maybe_decode_revert::<StakeTableErrors>()
@@ -30,7 +28,6 @@ pub async fn claim_validator_exit(
 ) -> Result<PendingTransactionBuilder<Ethereum>> {
     let st = StakeTable::new(stake_table, provider);
     st.claimValidatorExit(validator_address)
-        .block(BlockId::pending())
         .send()
         .await
         .maybe_decode_revert::<StakeTableErrors>()

@@ -1,5 +1,4 @@
 use alloy::{
-    eips::BlockId,
     network::{Ethereum, TransactionBuilder as _},
     primitives::{Address, U256},
     providers::{PendingTransactionBuilder, Provider},
@@ -31,7 +30,6 @@ pub async fn send_esp(
     let token = EspToken::new(token_address, provider);
     token
         .transfer(to, amount)
-        .block(BlockId::pending())
         .send()
         .await
         .maybe_decode_revert::<EspTokenErrors>()

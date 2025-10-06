@@ -1,5 +1,4 @@
 use alloy::{
-    eips::BlockId,
     network::Ethereum,
     primitives::{utils::format_ether, Address, U256},
     providers::{PendingTransactionBuilder, Provider},
@@ -26,7 +25,6 @@ pub async fn approve(
     let token = EspToken::new(token_addr, provider);
     token
         .approve(stake_table_address, amount)
-        .block(BlockId::pending())
         .send()
         .await
         .maybe_decode_revert::<EspTokenErrors>()
@@ -44,7 +42,6 @@ pub async fn delegate(
     );
     let st = StakeTable::new(stake_table, provider);
     st.delegate(validator_address, amount)
-        .block(BlockId::pending())
         .send()
         .await
         .maybe_decode_revert::<StakeTableErrors>()
@@ -62,7 +59,6 @@ pub async fn undelegate(
     );
     let st = StakeTable::new(stake_table, provider);
     st.undelegate(validator_address, amount)
-        .block(BlockId::pending())
         .send()
         .await
         .maybe_decode_revert::<StakeTableErrors>()
