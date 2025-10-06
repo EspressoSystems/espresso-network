@@ -5535,6 +5535,7 @@ dependencies = [
  "csv",
  "futures",
  "hotshot-types",
+ "itertools 0.12.1",
  "libp2p-identity",
  "multiaddr",
  "serde",
