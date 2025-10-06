@@ -625,7 +625,7 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
     }
     // TODO: check if owner is a SAFE multisig
 
-    let (_init_commissions, init_data) =
+    let (_init_commissions, _init_active_stake, init_data) =
         crate::prepare_stake_table_v2_upgrade(&provider, proxy_addr, pauser, owner_addr).await?;
 
     let stake_table_v2_addr = contracts

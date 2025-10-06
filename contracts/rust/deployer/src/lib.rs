@@ -959,6 +959,60 @@ pub async fn fetch_commissions_for_stake_table_storage_migration(
     Ok(initial_commissions)
 }
 
+/// Read active stake from L1 StakeTable V1 Delegated events for V2 migration
+///
+/// Assumes an infura RPC is used, otherwise it may hit other rate limits.
+pub async fn fetch_active_stake_for_stake_table_storage_migration_to_v2(
+    l1_provider: impl Provider,
+    stake_table_address: Address,
+) -> Result<U256> {
+    let stake_table = StakeTable::new(stake_table_address, &l1_provider);
+
+    // Verify this is a V1 contract
+    let version = stake_table.getVersion().call().await?;
+    if version.majorVersion != 1 {
+        anyhow::bail!(
+            "Expected StakeTable V1 for active stake migration, found V{}",
+            version.majorVersion
+        );
+    }
+
+    let start_block = stake_table.initializedAtBlock().call().await?.to::<u64>();
+
+    tracing::info!(
+        "Reading Delegated events from L1 StakeTable V1 starting at block {}",
+        start_block
+    );
+
+    // Query Delegated events (V1) to get initial active stake values
+    let delegated_events = stake_table
+        .Delegated_filter()
+        .from_block(start_block)
+        .query()
+        .await
+        .context("Failed to query Delegated events from V1 contract")?;
+
+    // Create a vec to store active stake values
+    let mut initial_active_stake = U256::ZERO;
+
+    for (event, _log) in delegated_events {
+        tracing::debug!(
+            "Delegated: delegator={:?}, validator={:?}, amount={}",
+            event.delegator,
+            event.validator,
+            event.amount
+        );
+        initial_active_stake += event.amount;
+    }
+
+    tracing::info!(
+        "Found {} active stake to migrate from V1",
+        initial_active_stake
+    );
+
+    Ok(initial_active_stake)
+}
+
 /// Prepare the upgrade data for StakeTable V2, checking version and fetching commissions if needed.
 ///
 /// Returns:
@@ -969,7 +1023,11 @@ pub async fn prepare_stake_table_v2_upgrade(
     proxy_addr: Address,
     pauser: Address,
     admin: Address,
-) -> Result<(Option<Vec<StakeTableV2::InitialCommission>>, Option<Bytes>)> {
+) -> Result<(
+    Option<Vec<StakeTableV2::InitialCommission>>,
+    Option<U256>,
+    Option<Bytes>,
+)> {
     let proxy = StakeTable::new(proxy_addr, &provider);
 
     let current_version = proxy.getVersion().call().await?;
@@ -1001,26 +1059,33 @@ pub async fn prepare_stake_table_v2_upgrade(
             fetch_commissions_for_stake_table_storage_migration(&provider, proxy_addr).await?;
         tracing::info!("Fetched {} commissions from V1 contract", commissions.len());
 
+        tracing::info!("Fetching active stake from V1 contract for migration");
+        let active_stake =
+            fetch_active_stake_for_stake_table_storage_migration_to_v2(&provider, proxy_addr)
+                .await?;
+        tracing::info!("Fetched {} active stake from V1 contract", active_stake);
+
         tracing::info!(
             %pauser,
             %admin,
+            active_stake = %format!("{:?} wei", active_stake),
             commission_count = commissions.len(),
             "Init Data to be signed. Function: initializeV2",
         );
 
         // We can use any address here since we're just building calldata
         let data = StakeTableV2::new(Address::ZERO, &provider)
-            .initializeV2(pauser, admin, commissions.clone())
+            .initializeV2(pauser, admin, active_stake, commissions.clone())
             .calldata()
             .to_owned();
 
-        Ok((Some(commissions), Some(data)))
+        Ok((Some(commissions), Some(active_stake), Some(data)))
     } else {
         tracing::info!(
             "Proxy was already initialized for version {}",
             target_version
         );
-        Ok((None, None))
+        Ok((None, None, None))
     }
 }
 
@@ -1037,7 +1102,7 @@ pub async fn upgrade_stake_table_v2(
     };
 
     // First prepare upgrade data (including fetching commissions if needed)
-    let (init_commissions, init_data) =
+    let (init_commissions, init_active_stake, init_data) =
         prepare_stake_table_v2_upgrade(&provider, proxy_addr, pauser, admin).await?;
 
     // Then deploy the new implementation
@@ -1078,6 +1143,13 @@ pub async fn upgrade_stake_table_v2(
                 assert_eq!(tracking.commission, init_comm.commission);
             }
         }
+
+        tracing::info!("Verifying migrated active stake");
+        assert_eq!(
+            proxy_as_v2.activeStake().call().await?,
+            init_active_stake.unwrap_or_default(),
+            "migrated active stake does not match"
+        );
 
         tracing::info!(%v2_addr, "StakeTable successfully upgraded to");
     } else {
@@ -1741,6 +1813,128 @@ mod tests {
         Ok(())
     }
 
+    #[test_log::test(tokio::test)]
+    async fn test_fetch_active_stake_for_stake_table_storage_migration_to_v2() -> Result<()> {
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+        let owner = provider.get_accounts().await?[0];
+
+        let token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            owner,
+            owner,
+            U256::from(10_000_000u64),
+            "Test Token",
+            "TEST",
+        )
+        .await?;
+        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+        let exit_escrow_period = U256::from(1000);
+
+        let stake_table_proxy_addr = deploy_stake_table_proxy(
+            &provider,
+            &mut contracts,
+            token_addr,
+            lc_addr,
+            exit_escrow_period,
+            owner,
+        )
+        .await?;
+
+        // Use V2 interface even for V1 contract (V2 ABI is a superset of V1)
+        let stake_table = StakeTableV2::new(stake_table_proxy_addr, &provider);
+
+        let accounts = provider.get_accounts().await?;
+        let test_delegators = [
+            (accounts[0], U256::from(1000)),
+            (accounts[1], U256::from(1000)),
+            (accounts[2], U256::from(10_000)),
+        ];
+
+        let mut rng = StdRng::from_seed([42u8; 32]);
+        let validator_addr = accounts[4];
+        let commission = 0;
+        let bls_key_pair = BLSKeyPair::generate(&mut rng);
+        let state_key_pair = StateKeyPair::generate_from_seed(rng.gen());
+        let bls_vk_sol: G2PointSol = bls_key_pair.ver_key().to_affine().into();
+        let bls_sig_sol: G1PointSol =
+            sign_address_bls(&bls_key_pair, Address::from(*validator_addr)).into();
+        let schnorr_vk_sol: EdOnBN254PointSol = state_key_pair.ver_key().to_affine().into();
+
+        let receipt = stake_table
+            .registerValidator(bls_vk_sol, schnorr_vk_sol, bls_sig_sol.into(), commission)
+            .from(Address::from(*validator_addr))
+            .send()
+            .await?
+            .get_receipt()
+            .await?;
+        assert!(receipt.status());
+
+        let token = EspToken::new(token_addr, &provider);
+
+        for (delegator_addr, amount) in test_delegators.iter() {
+            let _receipt = token
+                .transfer(Address::from(*delegator_addr), *amount)
+                .from(Address::from(*owner))
+                .send()
+                .await?
+                .get_receipt()
+                .await?;
+
+            let receipt = token
+                .approve(stake_table_proxy_addr, *amount)
+                .from(*delegator_addr)
+                .send()
+                .await?
+                .get_receipt()
+                .await?;
+            assert!(receipt.status());
+
+            let receipt = stake_table
+                .delegate(validator_addr, *amount)
+                .from(*delegator_addr)
+                .send()
+                .await?
+                .get_receipt()
+                .await?;
+            assert!(receipt.status());
+        }
+
+        let fetched_active_stake = fetch_active_stake_for_stake_table_storage_migration_to_v2(
+            &provider,
+            stake_table_proxy_addr,
+        )
+        .await?;
+
+        assert_eq!(
+            fetched_active_stake,
+            test_delegators
+                .iter()
+                .map(|(_, amount)| *amount)
+                .sum::<U256>(),
+        );
+
+        assert!(
+            fetched_active_stake <= token.balanceOf(stake_table_proxy_addr).call().await?,
+            "fetched active stake should not exceed contract balance"
+        );
+
+        // Migration only applies to V1 contract
+        let stake_table_v2 = StakeTableV2::deploy(&provider).await?;
+        let err = fetch_active_stake_for_stake_table_storage_migration_to_v2(
+            &provider,
+            *stake_table_v2.address(),
+        )
+        .await
+        .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Expected StakeTable V1 for active stake migration, found V2"));
+
+        Ok(())
+    }
+
     /// Check that we can fetch the commissions on sepolia where we will do the
     /// commission migration.
     ///
@@ -1773,10 +1967,18 @@ mod tests {
             );
         }
 
+        let fetched_active_stake = fetch_active_stake_for_stake_table_storage_migration_to_v2(
+            &provider,
+            stake_table_address,
+        )
+        .await?;
+        assert!(!fetched_active_stake.is_zero());
+        println!("Fetched active stake: {}", fetched_active_stake);
+
         let pauser = Address::random();
         let admin = Address::random();
         let init_v2_calldata = StakeTableV2::new(stake_table_address, &provider)
-            .initializeV2(pauser, admin, fetched_commissions)
+            .initializeV2(pauser, admin, fetched_active_stake, fetched_commissions)
             .calldata()
             .clone();
         println!("Calldata size: {} bytes", init_v2_calldata.len());
