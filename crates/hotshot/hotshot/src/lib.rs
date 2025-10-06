@@ -301,7 +301,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                     .membership()
                     .write()
                     .await
-                    .update_da_committee(*epoch, da_committee.clone());
+                    .add_da_committee(*epoch, da_committee.clone());
             }
         }
 

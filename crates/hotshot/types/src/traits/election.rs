@@ -200,7 +200,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         None
     }
 
-    fn update_da_committee(&mut self, _first_epoch: u64, _da_committee: Vec<PeerConfig<TYPES>>) {}
+    fn add_da_committee(&mut self, _first_epoch: u64, _da_committee: Vec<PeerConfig<TYPES>>) {}
 }
 
 pub fn membership_spawn_add_epoch_root<TYPES: NodeType>(

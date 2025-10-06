@@ -176,7 +176,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
                     .membership()
                     .write()
                     .await
-                    .update_da_committee(*epoch, da_committee.clone());
+                    .add_da_committee(*epoch, da_committee.clone());
             }
         }
 
