@@ -1497,9 +1497,9 @@ mod tests {
         .expect("stake table setup failed");
 
         planned_txns
-            .apply_eth_funding()
+            .apply_prerequisites()
             .await
-            .expect("fund eth failed");
+            .expect("prerequisites failed");
 
         // Ensure we have at least one stake table affecting transaction
         planned_txns.apply_one().await.expect("send tx failed");

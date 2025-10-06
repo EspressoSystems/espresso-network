@@ -161,6 +161,7 @@ impl<P: Provider + Clone> StakeTableTx<P> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SetupPhase {
     Funding,
+    Approval,
     Registration,
     Delegation,
 }
@@ -168,7 +169,8 @@ enum SetupPhase {
 impl SetupPhase {
     fn next(self) -> Option<Self> {
         match self {
-            Self::Funding => Some(Self::Registration),
+            Self::Funding => Some(Self::Approval),
+            Self::Approval => Some(Self::Registration),
             Self::Registration => Some(Self::Delegation),
             Self::Delegation => None,
         }
@@ -193,6 +195,7 @@ struct DelegatorConfig {
 pub struct StakingTransactions<P> {
     funding: VecDeque<StakeTableTx<P>>,
     registration: VecDeque<StakeTableTx<P>>,
+    approvals: VecDeque<StakeTableTx<P>>,
     delegations: VecDeque<StakeTableTx<P>>,
     current_phase: SetupPhase,
 }
@@ -201,6 +204,7 @@ impl<P: Provider + Clone> StakingTransactions<P> {
     fn current_group_mut(&mut self) -> &mut VecDeque<StakeTableTx<P>> {
         match self.current_phase {
             SetupPhase::Funding => &mut self.funding,
+            SetupPhase::Approval => &mut self.approvals,
             SetupPhase::Registration => &mut self.registration,
             SetupPhase::Delegation => &mut self.delegations,
         }
@@ -218,14 +222,20 @@ impl<P: Provider + Clone> StakingTransactions<P> {
     /// The synchronization points are after
     ///
     /// 1. Ether + token funding
-    /// 2. Registrations
-    /// 3. Delegations
+    /// 2. Approvals
+    /// 3. Registrations
+    /// 4. Delegations
     ///
     /// For each them at least one L1 block will be required.
     pub async fn apply_all(self) -> Result<Vec<TransactionReceipt>> {
         let mut all_receipts = vec![];
 
-        for mut group in [self.funding, self.registration, self.delegations] {
+        for mut group in [
+            self.funding,
+            self.approvals,
+            self.registration,
+            self.delegations,
+        ] {
             let mut pending = vec![];
             while let Some(tx) = group.pop_front() {
                 pending.push(tx.send().await?);
@@ -266,35 +276,42 @@ impl<P: Provider + Clone> StakingTransactions<P> {
         Ok(Some(pending.assert_success().await?))
     }
 
-    /// Sends and awaits receipts on all Ether fundings transactions
+    /// Sends and awaits receipts on all funding and approval transactions
     ///
     /// If the caller wants more control but quickly get to a point where actual
     /// changes are made to the stake table it is useful to call this function
     /// first.
-    pub async fn apply_eth_funding(&mut self) -> Result<Vec<TransactionReceipt>> {
+    ///
+    /// This processes funding and approvals with a synchronization point between them.
+    pub async fn apply_prerequisites(&mut self) -> Result<Vec<TransactionReceipt>> {
         if !matches!(self.current_phase, SetupPhase::Funding) {
-            return Err(anyhow::anyhow!("apply_eth_funding must be called first"));
+            return Err(anyhow::anyhow!("apply_prerequisites must be called first"));
         }
 
-        if self.funding.is_empty() {
-            return Ok(vec![]);
-        }
+        let mut all_receipts = vec![];
 
-        let mut pending = vec![];
-        while let Some(tx) = self.funding.pop_front() {
-            pending.push(tx.send().await?);
-        }
+        for group in [&mut self.funding, &mut self.approvals] {
+            if group.is_empty() {
+                continue;
+            }
 
-        let receipts = future::try_join_all(
-            pending
-                .into_iter()
-                .map(|p| async move { p.assert_success().await }),
-        )
-        .await?;
+            let mut pending = vec![];
+            while let Some(tx) = group.pop_front() {
+                pending.push(tx.send().await?);
+            }
+
+            let receipts = future::try_join_all(
+                pending
+                    .into_iter()
+                    .map(|p| async move { p.assert_success().await }),
+            )
+            .await?;
+            all_receipts.extend(receipts);
+        }
 
         self.current_phase = SetupPhase::Registration;
 
-        Ok(receipts)
+        Ok(all_receipts)
     }
 }
 
@@ -453,6 +470,7 @@ impl StakingTransactions<HttpProviderWithWallet> {
             });
         }
 
+        let mut approvals = VecDeque::new();
         let mut delegations = VecDeque::new();
 
         for delegator in &delegator_info {
@@ -460,16 +478,13 @@ impl StakingTransactions<HttpProviderWithWallet> {
                 .wallet(EthereumWallet::from(delegator.signer.clone()))
                 .connect_http(rpc_url.clone());
 
-            delegations.push_back(StakeTableTx::Approve {
+            approvals.push_back(StakeTableTx::Approve {
                 provider: provider.clone(),
                 token,
                 stake_table,
                 amount: delegator.delegate_amount,
             });
 
-            // Delegate is sent from the same account as Approve, we we can rely on the
-            // "pending" block tag to get the correct nonce on private, single node
-            // networks.
             delegations.push_back(StakeTableTx::Delegate {
                 provider,
                 stake_table,
@@ -510,6 +525,7 @@ impl StakingTransactions<HttpProviderWithWallet> {
         Ok(StakingTransactions {
             funding,
             registration,
+            approvals,
             delegations,
             current_phase: SetupPhase::Funding,
         })
