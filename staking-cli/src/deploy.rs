@@ -149,13 +149,12 @@ impl TestSystem {
 
         let approval_amount = parse_ether("1000000")?;
         // Approve the stake table contract so it can transfer tokens to itself
-        let receipt = EspTokenInstance::new(token, &provider)
+        EspTokenInstance::new(token, &provider)
             .approve(stake_table, approval_amount)
             .send()
             .await?
-            .get_receipt()
+            .assert_success()
             .await?;
-        assert!(receipt.status());
 
         let mut rng = StdRng::from_seed([42u8; 32]);
         let (_, bls_key_pair, state_key_pair) = Self::gen_keys(&mut rng);

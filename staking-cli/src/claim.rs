@@ -38,7 +38,7 @@ mod test {
     use alloy::primitives::U256;
 
     use super::*;
-    use crate::deploy::TestSystem;
+    use crate::{deploy::TestSystem, receipt::ReceiptExt};
 
     #[tokio::test]
     async fn test_claim_withdrawal() -> Result<()> {
@@ -52,9 +52,8 @@ mod test {
         let validator_address = system.deployer_address;
         let receipt = claim_withdrawal(&system.provider, system.stake_table, validator_address)
             .await?
-            .get_receipt()
+            .assert_success()
             .await?;
-        assert!(receipt.status());
 
         let event = receipt.decoded_log::<StakeTable::Withdrawal>().unwrap();
         assert_eq!(event.amount, amount);
@@ -74,9 +73,8 @@ mod test {
         let validator_address = system.deployer_address;
         let receipt = claim_validator_exit(&system.provider, system.stake_table, validator_address)
             .await?
-            .get_receipt()
+            .assert_success()
             .await?;
-        assert!(receipt.status());
 
         let event = receipt.decoded_log::<StakeTable::Withdrawal>().unwrap();
         assert_eq!(event.amount, amount);

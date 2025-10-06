@@ -67,7 +67,7 @@ pub async fn undelegate(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::deploy::TestSystem;
+    use crate::{deploy::TestSystem, receipt::ReceiptExt};
 
     #[tokio::test]
     async fn test_delegate() -> Result<()> {
@@ -83,9 +83,8 @@ mod test {
             amount,
         )
         .await?
-        .get_receipt()
+        .assert_success()
         .await?;
-        assert!(receipt.status());
 
         let event = receipt.decoded_log::<StakeTable::Delegated>().unwrap();
         assert_eq!(event.validator, validator_address);
@@ -109,9 +108,8 @@ mod test {
             amount,
         )
         .await?
-        .get_receipt()
+        .assert_success()
         .await?;
-        assert!(receipt.status());
 
         let event = receipt.decoded_log::<StakeTable::Undelegated>().unwrap();
         assert_eq!(event.validator, validator_address);

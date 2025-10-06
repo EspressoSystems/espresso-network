@@ -600,7 +600,8 @@ pub async fn stake_for_demo(
     )
     .await?;
 
-    let _ = planned.apply_all().await?;
+    planned.apply_all().await?;
+
     Ok(())
 }
 
@@ -635,11 +636,7 @@ mod test {
         )
         .await?;
 
-        let receipts = planned.apply_all().await?;
-        for receipt in receipts {
-            assert!(receipt.status());
-        }
-
+        planned.apply_all().await?;
         let l1_block_number = system.provider.get_block_number().await?;
         let st = stake_table_info(system.rpc_url, system.stake_table, l1_block_number).await?;
 
@@ -805,11 +802,7 @@ mod test {
         )
         .await?;
 
-        let receipts = planned.apply_all().await?;
-        for receipt in receipts {
-            assert!(receipt.status());
-        }
-
+        planned.apply_all().await?;
         let l1_block_number = system.provider.get_block_number().await?;
         let st = stake_table_info(system.rpc_url, system.stake_table, l1_block_number).await?;
 

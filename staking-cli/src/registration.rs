@@ -156,7 +156,7 @@ mod test {
     use rand::{rngs::StdRng, SeedableRng as _};
 
     use super::*;
-    use crate::deploy::TestSystem;
+    use crate::{deploy::TestSystem, receipt::ReceiptExt};
 
     #[tokio::test]
     async fn test_register_validator() -> Result<()> {
@@ -175,9 +175,8 @@ mod test {
             payload,
         )
         .await?
-        .get_receipt()
+        .assert_success()
         .await?;
-        assert!(receipt.status());
 
         let event = receipt
             .decoded_log::<StakeTableV2::ValidatorRegisteredV2>()
@@ -199,9 +198,8 @@ mod test {
 
         let receipt = deregister_validator(&system.provider, system.stake_table)
             .await?
-            .get_receipt()
+            .assert_success()
             .await?;
-        assert!(receipt.status());
 
         let event = receipt
             .decoded_log::<StakeTableV2::ValidatorExit>()
@@ -222,9 +220,8 @@ mod test {
 
         let receipt = update_consensus_keys(&system.provider, system.stake_table, payload)
             .await?
-            .get_receipt()
+            .assert_success()
             .await?;
-        assert!(receipt.status());
 
         let event = receipt
             .decoded_log::<StakeTableV2::ConsensusKeysUpdatedV2>()
@@ -245,13 +242,12 @@ mod test {
 
         // Set commission update interval to 1 second for testing
         let stake_table = StakeTableV2::new(system.stake_table, &system.provider);
-        let receipt = stake_table
+        stake_table
             .setMinCommissionUpdateInterval(U256::from(1)) // 1 second
             .send()
             .await?
-            .get_receipt()
+            .assert_success()
             .await?;
-        assert!(receipt.status());
 
         system.register_validator().await?;
         let validator_address = system.deployer_address;
@@ -262,9 +258,8 @@ mod test {
 
         let receipt = update_commission(&system.provider, system.stake_table, new_commission)
             .await?
-            .get_receipt()
+            .assert_success()
             .await?;
-        assert!(receipt.status());
 
         let event = receipt
             .decoded_log::<StakeTableV2::CommissionUpdated>()
@@ -327,9 +322,8 @@ mod test {
             .send()
             .await
             .maybe_decode_revert::<StakeTableV2Errors>()?
-            .get_receipt()
+            .assert_success()
             .await?;
-        assert!(receipt.status());
 
         let l1 = L1Client::new(vec![system.rpc_url])?;
         let events = Fetcher::fetch_events_from_contract(
@@ -388,9 +382,8 @@ mod test {
             .send()
             .await
             .maybe_decode_revert::<StakeTableV2Errors>()?
-            .get_receipt()
+            .assert_success()
             .await?;
-        assert!(receipt.status());
 
         let l1 = L1Client::new(vec![system.rpc_url])?;
         let events = Fetcher::fetch_events_from_contract(
