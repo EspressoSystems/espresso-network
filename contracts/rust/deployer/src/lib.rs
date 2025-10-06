@@ -1875,7 +1875,7 @@ mod tests {
 
         for (delegator_addr, amount) in test_delegators.iter() {
             let _receipt = token
-                .transfer(Address::from(*delegator_addr), *amount)
+                .transfer(*delegator_addr, *amount)
                 .from(Address::from(*owner))
                 .send()
                 .await?
