@@ -168,6 +168,120 @@ func (c *MultipleNodesClient) SubmitTransaction(ctx context.Context, tx common.T
 	return nil, fmt.Errorf("%w: encountered an error with all nodes while attempting to SubmitTransaction.\n Errors: %v \n", ErrEphemeral, errs)
 }
 
+// A wrapper over multiple `Stream`s that are supposed to return the same
+// sequence of objects that verifies the items using majority rule.
+// An underlying stream that deviates from majority or responds with an error
+// is disabled for the rest of the MultiplexedStream's existence. If majority
+// of the underlying streams is disabled, calling Next on the MultiplexedStream
+// will always return an error.
+type MultiplexedStream[T any] struct {
+	nStreams       int
+	workingStreams []Stream[T]
+}
+
+func (ms *MultiplexedStream[T]) NextRaw(ctx context.Context) (json.RawMessage, error) {
+	newWorkingStreams := []Stream[T]{}
+
+	majority := (ms.nStreams / 2) + 1
+
+	values := make(map[string]int)
+	var returnValue json.RawMessage = nil
+
+	for _, stream := range ms.workingStreams {
+		rawValue, err := stream.NextRaw(ctx)
+		if err != nil {
+			continue
+		}
+
+		hash, err := hashNormalizedJSON(rawValue)
+		if err != nil {
+			continue
+		}
+
+		if _, ok := values[hash]; !ok {
+			values[hash] = 0
+		}
+
+		values[hash]++
+		if values[hash] >= majority {
+			returnValue = rawValue
+		}
+
+		newWorkingStreams = append(newWorkingStreams, stream)
+	}
+
+	ms.workingStreams = newWorkingStreams
+
+	if returnValue == nil {
+		return nil, fmt.Errorf("%w: no majority", ErrPermanent)
+	} else {
+		return returnValue, nil
+	}
+}
+
+func (ms *MultiplexedStream[T]) Next(ctx context.Context) (*T, error) {
+	next, err := ms.NextRaw(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var value T
+	err = json.Unmarshal(next, &value)
+	if err != nil {
+		return nil, err
+	}
+
+	return &value, nil
+}
+
+func (ms *MultiplexedStream[T]) Close() error {
+	var returnErr error
+	for _, stream := range ms.workingStreams {
+		err := stream.Close()
+		if err != nil {
+			returnErr = err
+		}
+	}
+
+	return returnErr
+}
+
+func (c *MultipleNodesClient) StreamTransactions(ctx context.Context, height uint64) (Stream[types.TransactionQueryData], error) {
+
+	workingStreams := []Stream[types.TransactionQueryData]{}
+	for _, node := range c.nodes {
+		stream, err := node.StreamTransactions(ctx, height)
+		if err != nil {
+			return nil, err
+		}
+
+		workingStreams = append(workingStreams, stream)
+	}
+
+	return &MultiplexedStream[types.TransactionQueryData]{
+		nStreams:       len(c.nodes),
+		workingStreams: workingStreams,
+	}, nil
+}
+
+func (c *MultipleNodesClient) StreamTransactionsInNamespace(ctx context.Context, height uint64, namespace uint64) (Stream[types.TransactionQueryData], error) {
+
+	workingStreams := []Stream[types.TransactionQueryData]{}
+	for _, node := range c.nodes {
+		stream, err := node.StreamTransactionsInNamespace(ctx, height, namespace)
+		if err != nil {
+			return nil, err
+		}
+
+		workingStreams = append(workingStreams, stream)
+	}
+
+	return &MultiplexedStream[types.TransactionQueryData]{
+		nStreams:       len(c.nodes),
+		workingStreams: workingStreams,
+	}, nil
+}
+
 func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T) (json.RawMessage, error)) (json.RawMessage, error) {
 	type result struct {
 		value json.RawMessage
