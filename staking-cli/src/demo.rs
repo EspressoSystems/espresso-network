@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     fmt,
 };
 
@@ -450,20 +450,23 @@ impl StakingTransactions<HttpProviderWithWallet> {
             });
         }
 
+        // Only create one provider per address to avoid nonce errors.
+        let mut providers: HashMap<Address, _> = HashMap::new();
+
         let mut registration = VecDeque::new();
 
         for validator in &validator_info {
-            let provider = ProviderBuilder::new()
-                .wallet(EthereumWallet::from(validator.signer.clone()))
-                .connect_http(rpc_url.clone());
+            let address = validator.signer.address();
+            let provider = providers.entry(address).or_insert_with(|| {
+                ProviderBuilder::new()
+                    .wallet(EthereumWallet::from(validator.signer.clone()))
+                    .connect_http(rpc_url.clone())
+            });
 
-            let payload = NodeSignatures::create(
-                validator.signer.address(),
-                &validator.bls_key_pair,
-                &validator.state_key_pair,
-            );
+            let payload =
+                NodeSignatures::create(address, &validator.bls_key_pair, &validator.state_key_pair);
             registration.push_back(StakeTableTx::RegisterValidator {
-                provider,
+                provider: provider.clone(),
                 stake_table,
                 commission: validator.commission,
                 payload: Box::new(payload),
@@ -474,9 +477,12 @@ impl StakingTransactions<HttpProviderWithWallet> {
         let mut delegations = VecDeque::new();
 
         for delegator in &delegator_info {
-            let provider = ProviderBuilder::new()
-                .wallet(EthereumWallet::from(delegator.signer.clone()))
-                .connect_http(rpc_url.clone());
+            let address = delegator.signer.address();
+            let provider = providers.entry(address).or_insert_with(|| {
+                ProviderBuilder::new()
+                    .wallet(EthereumWallet::from(delegator.signer.clone()))
+                    .connect_http(rpc_url.clone())
+            });
 
             approvals.push_back(StakeTableTx::Approve {
                 provider: provider.clone(),
@@ -486,7 +492,7 @@ impl StakingTransactions<HttpProviderWithWallet> {
             });
 
             delegations.push_back(StakeTableTx::Delegate {
-                provider,
+                provider: provider.clone(),
                 stake_table,
                 validator: delegator.validator,
                 amount: delegator.delegate_amount,
