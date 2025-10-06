@@ -73,12 +73,12 @@ impl<TYPES: NodeType, Ver: StaticVersionType> BuilderClient<TYPES, Ver> {
     /// # Panics
     ///
     /// If the URL is malformed.
-    pub fn new(base_url: impl Into<Url>) -> Self {
+    pub fn new(base_url: impl Into<Url>, request_timeout: Duration) -> Self {
         let url = base_url.into();
 
         Self {
             client: Client::builder(url.clone())
-                .set_timeout(Some(Duration::from_secs(8)))
+                .set_timeout(Some(request_timeout))
                 .build(),
             _marker: std::marker::PhantomData,
         }

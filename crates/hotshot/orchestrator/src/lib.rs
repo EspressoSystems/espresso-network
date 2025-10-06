@@ -147,8 +147,8 @@ impl<TYPES: NodeType> OrchestratorState<TYPES> {
     pub fn output_to_csv(result: BenchResults<TYPES::View>) {
         // Open the CSV file in append mode
         let leader_results_csv_file = OpenOptions::new()
+            .write(true)
             .create(true)
-            .append(true) // Open in append mode
             .open(format!("Leader_results_{}.csv", result.node_index))
             .unwrap();
         // Open a file for writing
@@ -167,10 +167,10 @@ impl<TYPES: NodeType> OrchestratorState<TYPES> {
 
         // Do the same for the replica results
         let replica_results_csv_file = OpenOptions::new()
-        .create(true)
-        .append(true) // Open in append mode
-        .open(format!("replica_results_{}.csv", result.node_index))
-        .unwrap();
+            .write(true)
+            .create(true)
+            .open(format!("replica_results_{}.csv", result.node_index))
+            .unwrap();
         // Open a file for writing
         let mut wtr = Writer::from_writer(replica_results_csv_file);
 
@@ -183,24 +183,28 @@ impl<TYPES: NodeType> OrchestratorState<TYPES> {
 
         // Log the Latencies of each block by view
         let latency_results_csv_file = OpenOptions::new()
+            .write(true)
             .create(true)
-            .append(true) // Open in append mode
             .open(format!("latency_results_{}.csv", result.node_index))
             .unwrap();
         let mut wtr = Writer::from_writer(latency_results_csv_file);
-        let _ = wtr
-            .serialize(result.latencies_by_view)
-            .map_err(|e| tracing::warn!("Failed to serialize latency stats: {}", e));
+        let _ = wtr.write_record(["view", "latency"]);
+        for (view, latency) in result.latencies_by_view {
+            let _ = wtr.write_record([view.to_string(), latency.to_string()]);
+        }
         let _ = wtr.flush();
 
         // Log the Sizes of each block by view
         let sizes_results_csv_file = OpenOptions::new()
-        .create(true)
-        .append(true) // Open in append mode
-        .open(format!("sizes_results_{}.csv", result.node_index))
-        .unwrap();
+            .write(true)
+            .create(true)
+            .open(format!("sizes_results_{}.csv", result.node_index))
+            .unwrap();
         let mut wtr = Writer::from_writer(sizes_results_csv_file);
-        let _ = wtr.serialize(result.sizes_by_view);
+        let _ = wtr.write_record(["view", "size"]);
+        for (view, size) in result.sizes_by_view {
+            let _ = wtr.write_record([view.to_string(), size.to_string()]);
+        }
         let _ = wtr.flush();
 
         println!(
