@@ -857,6 +857,15 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
             return Err(NetworkError::NoPeersYet);
         };
 
+        // If we are subscribed to the DA topic, send the message to ourselves first
+        let topic = Topic::Da.to_string();
+        if self.inner.subscribed_topics.contains(&topic) {
+            self.inner.sender.try_send(message.clone()).map_err(|_| {
+                self.inner.metrics.num_failed_messages.add(1);
+                NetworkError::ShutDown
+            })?;
+        }
+
         let future_results = recipients
             .into_iter()
             .map(|r| self.direct_message(message.clone(), r));
