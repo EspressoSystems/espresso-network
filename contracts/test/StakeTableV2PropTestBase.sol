@@ -83,7 +83,6 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         uint256 totalPendingWithdrawal;
         uint256 numPendingWithdrawals;
         uint256 numActiveDelegations;
-        uint256 totalStake;
         uint256 activeStake;
     }
 
@@ -419,7 +418,6 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
 
     function trackDelegate(address actorAddr, address val, uint256 amount) internal {
         testState.totalDelegated += amount;
-        testState.totalStake += amount; // Add this
         testState.activeStake += amount; // Add this
         actors.trackedFunds[actorAddr].delegated += amount;
         validators.staked.add(val);
@@ -475,7 +473,6 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         internal
     {
         testState.totalPendingWithdrawal -= undelegationAmount;
-        testState.totalStake -= undelegationAmount;
         actors.trackedFunds[actorAddr].pendingWithdrawal -= undelegationAmount;
         delegators.pendingWithdrawals[val].remove(actorAddr);
         if (delegators.pendingWithdrawals[val].length() == 0) {
@@ -488,7 +485,6 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         internal
     {
         testState.totalDelegated -= delegatedAmount;
-        testState.totalStake -= delegatedAmount;
         actors.trackedFunds[actorAddr].delegated -= delegatedAmount;
         trackRemoveDelegation(val, actorAddr);
     }
@@ -565,10 +561,6 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
 
     function getTestState() external view returns (TestState memory) {
         return testState;
-    }
-
-    function getTotalStake() external view returns (uint256) {
-        return testState.totalStake;
     }
 
     function getactiveStake() external view returns (uint256) {
@@ -751,7 +743,6 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         require(testState.totalPendingWithdrawal == 0, "No pending withdrawals should remain");
         require(testState.totalDelegated == 0, "No delegations should remain");
 
-        require(testState.totalStake == 0, "Total stake should be zero after full withdrawal");
         require(
             testState.activeStake == 0, "Total validator stake should be zero after full withdrawal"
         );
@@ -781,13 +772,8 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         }
     }
 
-    /// @dev Assert that contract's totalStake and activeStake match our tracking
-    function assertTotalStakeInvariants() public view {
-        require(
-            stakeTable.totalStake() == testState.totalStake,
-            "Contract totalStake does not match tracked totalStake"
-        );
-
+    /// @dev Assert that contract's token balance and activeStake match our tracking
+    function assertStakeInvariants() public view {
         require(
             stakeTable.activeStake() == testState.activeStake,
             "Contract activeStake does not match tracked activeStake"

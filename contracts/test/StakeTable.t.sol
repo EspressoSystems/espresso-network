@@ -1376,7 +1376,6 @@ contract StakeTableUpgradeV2Test is Test {
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.Delegated(delegator, validator, originalDelegateAmount);
         stakeTable.delegate(validator, originalDelegateAmount);
-        assertEq(stakeTable.totalStake(), originalDelegateAmount);
         assertEq(stakeTable.activeStake(), originalDelegateAmount);
 
         // undelegate
@@ -1386,7 +1385,6 @@ contract StakeTableUpgradeV2Test is Test {
         emit S.Undelegated(delegator, validator, amountUndelegated);
         stakeTable.undelegate(validator, amountUndelegated);
         vm.stopPrank();
-        assertEq(stakeTable.totalStake(), originalDelegateAmount);
         assertEq(stakeTable.activeStake(), originalDelegateAmount - amountUndelegated);
 
         // Validator Exits
@@ -1395,7 +1393,6 @@ contract StakeTableUpgradeV2Test is Test {
         emit S.ValidatorExit(validator);
         stakeTable.deregisterValidator();
         vm.stopPrank();
-        assertEq(stakeTable.totalStake(), originalDelegateAmount);
         assertEq(stakeTable.activeStake(), 0);
 
         // amount delegated to validator is still the same until the delegator(s) claim(s) the
@@ -1430,7 +1427,6 @@ contract StakeTableUpgradeV2Test is Test {
         emit S.Withdrawal(delegator, remainderDelegation);
         stakeTable.claimValidatorExit(validator);
         vm.stopPrank();
-        assertEq(stakeTable.totalStake(), originalDelegateAmount - remainderDelegation);
         assertEq(stakeTable.activeStake(), 0);
 
         assertEq(
@@ -1464,7 +1460,6 @@ contract StakeTableUpgradeV2Test is Test {
         emit S.Withdrawal(delegator, amountUndelegated);
         stakeTable.claimWithdrawal(validator);
         vm.stopPrank();
-        assertEq(stakeTable.totalStake(), 0);
         assertEq(stakeTable.activeStake(), 0);
 
         assertEq(
@@ -1504,7 +1499,6 @@ contract StakeTableUpgradeV2Test is Test {
         emit S.Delegated(delegator, validator, amountDelegated);
         stakeTable.delegate(validator, amountDelegated);
         vm.stopPrank();
-        assertEq(stakeTable.totalStake(), amountDelegated);
         assertEq(stakeTable.activeStake(), amountDelegated);
 
         // validator exits
@@ -1513,7 +1507,6 @@ contract StakeTableUpgradeV2Test is Test {
         emit S.ValidatorExit(validator);
         stakeTable.deregisterValidator();
         vm.stopPrank();
-        assertEq(stakeTable.totalStake(), amountDelegated);
         assertEq(stakeTable.activeStake(), 0);
 
         // check the validator's delegatedAmount and undelegations
@@ -1541,7 +1534,6 @@ contract StakeTableUpgradeV2Test is Test {
         emit S.Withdrawal(delegator, amountDelegated);
         stakeTable.claimValidatorExit(validator);
         vm.stopPrank();
-        assertEq(stakeTable.totalStake(), 0);
         assertEq(stakeTable.activeStake(), 0);
 
         assertEq(
@@ -1589,14 +1581,12 @@ contract StakeTableUpgradeV2Test is Test {
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.Delegated(delegator, validator1, amountDelegated / 3);
         stakeTable.delegate(validator1, amountDelegated / 3);
-        assertEq(stakeTable.totalStake(), amountDelegated / 3);
         assertEq(stakeTable.activeStake(), amountDelegated / 3);
 
         // delegate 1/3 of balance to validator2
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.Delegated(delegator, validator2, amountDelegated / 3);
         stakeTable.delegate(validator2, amountDelegated / 3);
-        assertEq(stakeTable.totalStake(), amountDelegated / 3 + amountDelegated / 3);
         assertEq(stakeTable.activeStake(), amountDelegated / 3 + amountDelegated / 3);
 
         // undelegate 1/3 of balance from validator1
@@ -1618,7 +1608,6 @@ contract StakeTableUpgradeV2Test is Test {
             0,
             "the validator's delegatedAmount should be zero as the delegator has undelegated"
         );
-        assertEq(stakeTable.totalStake(), amountDelegated / 3 + amountDelegated / 3);
         assertEq(stakeTable.activeStake(), amountDelegated / 3);
 
         // undelegate from validator 2
@@ -1638,7 +1627,6 @@ contract StakeTableUpgradeV2Test is Test {
             0,
             "the validator's delegatedAmount should be zero as the delegator has undelegated"
         );
-        assertEq(stakeTable.totalStake(), amountDelegated / 3 + amountDelegated / 3);
         assertEq(stakeTable.activeStake(), 0);
 
         vm.warp(block.timestamp + stakeTable.exitEscrowPeriod());
@@ -1650,7 +1638,6 @@ contract StakeTableUpgradeV2Test is Test {
             stakeTable.token().balanceOf(delegator), delegatorBalanceBefore + amountDelegated / 3
         );
         assertEq(stakeTable.token().balanceOf(address(stakeTable)), amountDelegated / 3);
-        assertEq(stakeTable.totalStake(), amountDelegated / 3);
         assertEq(stakeTable.activeStake(), 0);
 
         delegatorBalanceBefore = stakeTable.token().balanceOf(delegator);
@@ -1661,7 +1648,6 @@ contract StakeTableUpgradeV2Test is Test {
             stakeTable.token().balanceOf(delegator), delegatorBalanceBefore + amountDelegated / 3
         );
         assertEq(stakeTable.token().balanceOf(address(stakeTable)), 0);
-        assertEq(stakeTable.totalStake(), 0);
         assertEq(stakeTable.activeStake(), 0);
 
         vm.stopPrank();
@@ -1690,7 +1676,6 @@ contract StakeTableUpgradeV2Test is Test {
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.Delegated(delegator, validator, amountFirstDelegated);
         stakeTable.delegate(validator, amountFirstDelegated);
-        assertEq(stakeTable.totalStake(), amountFirstDelegated);
         assertEq(stakeTable.activeStake(), amountFirstDelegated);
 
         // undelegate a 1/3 of the balance
@@ -1698,7 +1683,6 @@ contract StakeTableUpgradeV2Test is Test {
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.Undelegated(delegator, validator, amountToUndelegate);
         stakeTable.undelegate(validator, amountToUndelegate);
-        assertEq(stakeTable.totalStake(), amountFirstDelegated);
         assertEq(stakeTable.activeStake(), amountFirstDelegated - amountToUndelegate);
         assertEq(
             stakeTable.delegations(validator, delegator), amountFirstDelegated - amountToUndelegate
@@ -1743,7 +1727,6 @@ contract StakeTableUpgradeV2Test is Test {
             amountFirstDelegated - amountToUndelegate,
             "the validator's delegatedAmount should be the full amount minus the amount undelegated"
         );
-        assertEq(stakeTable.totalStake(), amountFirstDelegated - amountToUndelegate);
         assertEq(stakeTable.activeStake(), amountFirstDelegated - amountToUndelegate);
         vm.stopPrank();
     }
@@ -1772,7 +1755,6 @@ contract StakeTableUpgradeV2Test is Test {
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.Delegated(delegator, validator, 3 ether);
         stakeTable.delegate(validator, 3 ether);
-        assertEq(stakeTable.totalStake(), 3 ether);
         assertEq(stakeTable.activeStake(), 3 ether);
         assertEq(stakeTable.token().balanceOf(delegator), initialBalance - 3 ether);
         assertEq(stakeTable.token().balanceOf(address(stakeTable)), 3 ether);
@@ -1785,7 +1767,6 @@ contract StakeTableUpgradeV2Test is Test {
             delegatedAmountBefore - 2 ether,
             "the validator's delegated amount after the undelegation method is reduced by the undelegation amount"
         );
-        assertEq(stakeTable.totalStake(), 3 ether);
         assertEq(stakeTable.activeStake(), 1 ether);
 
         vm.expectRevert(S.UndelegationAlreadyExists.selector);
@@ -1802,14 +1783,12 @@ contract StakeTableUpgradeV2Test is Test {
         assertEq(stakeTable.token().balanceOf(delegator), initialBalance - 3 ether + 2 ether);
 
         assertEq(stakeTable.delegations(validator, delegator), 1 ether);
-        assertEq(stakeTable.totalStake(), 1 ether);
         assertEq(stakeTable.activeStake(), 1 ether);
 
         // now the delegator can undelegate again
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.Undelegated(delegator, validator, 1 ether);
         stakeTable.undelegate(validator, 1 ether);
-        assertEq(stakeTable.totalStake(), 1 ether);
         assertEq(stakeTable.activeStake(), 0);
 
         assertEq(stakeTable.delegations(validator, delegator), 0);
@@ -1829,7 +1808,6 @@ contract StakeTableUpgradeV2Test is Test {
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.Withdrawal(delegator, 1 ether);
         stakeTable.claimWithdrawal(validator);
-        assertEq(stakeTable.totalStake(), 0);
         assertEq(stakeTable.activeStake(), 0);
 
         assertEq(stakeTable.token().balanceOf(delegator), initialBalance);
@@ -1840,7 +1818,7 @@ contract StakeTableUpgradeV2Test is Test {
         vm.stopPrank();
     }
 
-    function test_TotalStakeTracking() public {
+    function test_StakeTracking() public {
         stakeTableRegisterTest.setUp();
         vm.startPrank(stakeTableRegisterTest.admin());
         stakeTableRegisterTest.stakeTable().upgradeToAndCall(address(new StakeTableV2()), "");
@@ -1870,12 +1848,10 @@ contract StakeTableUpgradeV2Test is Test {
         assertEq(stakeTable.token().balanceOf(address(stakeTable)), 3 ether);
 
         assertEq(stakeTable.activeStake(), 3 ether);
-        assertEq(stakeTable.totalStake(), 3 ether);
 
         stakeTable.undelegate(validator, 2 ether);
 
         assertEq(stakeTable.activeStake(), 1 ether);
-        assertEq(stakeTable.totalStake(), 3 ether);
 
         vm.warp(block.timestamp + stakeTable.exitEscrowPeriod());
         vm.expectEmit(false, false, false, true, address(stakeTable));
@@ -1883,7 +1859,6 @@ contract StakeTableUpgradeV2Test is Test {
         stakeTable.claimWithdrawal(validator);
 
         assertEq(stakeTable.activeStake(), 1 ether);
-        assertEq(stakeTable.totalStake(), 1 ether);
 
         vm.stopPrank();
     }

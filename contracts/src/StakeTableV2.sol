@@ -57,10 +57,9 @@ import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 ///
 /// 8. The commission rate for validators can be updated with the `updateCommission` function.
 ///
-/// 9. The `activeStake` and `totalStake` functions are added to allow governance to
-/// track the total stake in the contract. The activeStake is the total stake in active
-/// validators and the totalStake is the total stake in all states (active + exiting +
-/// pendingWithdrawal).
+/// 9. The `activeStake` variable is added to allow governance to
+/// track the total stake in the contract. The activeStake is the
+/// total stake that is not awaiting exit or in exited state.
 ///
 /// @notice The StakeTableV2 contract ABI is a superset of the original ABI. Consumers of the
 /// contract can use the V2 ABI, even if they would like to maintain backwards compatibility.
@@ -555,12 +554,5 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         BN254.G1Point memory
     ) external pure override {
         revert DeprecatedFunction();
-    }
-
-    /// @notice Total stake in all states (active + exiting + pendingWithdrawal) in the contract
-    /// @dev doesn't account for the fact that arbitrary tokens can be sent to the contract
-    /// TODO: remove this function once the code change is approved
-    function totalStake() public view returns (uint256) {
-        return token.balanceOf(address(this));
     }
 }

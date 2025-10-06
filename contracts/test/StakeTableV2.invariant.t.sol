@@ -51,10 +51,8 @@ contract StakeTableV2InvariantTest is StdInvariant, Test {
         invariant_TotalSupply();
 
         // verify the total stake invariants
-        invariant_TotalStakeMatchesTracked();
         invariant_activeStakeMatchesTracked();
-        invariant_TotalStakeEqualsContractBalance();
-        invariant_ValidatorStakeNotExceedsTotalStake();
+        invariant_ValidatorStakeNotExceedsContractBalance();
 
         // additionally check the actor balances
         assertActorsRecoveredFunds();
@@ -89,12 +87,6 @@ contract StakeTableV2InvariantTest is StdInvariant, Test {
             totalTracked,
             "Contract balance should equal active delegations + pending withdrawals"
         );
-
-        assertEq(
-            contractBalance,
-            handler.stakeTable().totalStake(),
-            "Contract balance should equal totalStake"
-        );
     }
 
     /// @dev Total supply must remain constant
@@ -103,15 +95,6 @@ contract StakeTableV2InvariantTest is StdInvariant, Test {
             handler.token().totalSupply(),
             handler.getTestState().trackedTotalSupply,
             "Total supply invariant violated"
-        );
-    }
-
-    /// @dev Contract's totalStake should match tracked totalStake
-    function invariant_TotalStakeMatchesTracked() public view {
-        assertEq(
-            handler.stakeTable().totalStake(),
-            handler.getTotalStake(),
-            "Contract totalStake does not match tracked totalStake"
         );
     }
 
@@ -124,22 +107,12 @@ contract StakeTableV2InvariantTest is StdInvariant, Test {
         );
     }
 
-    /// @dev Total stake should equal contract balance
-    function invariant_TotalStakeEqualsContractBalance() public view {
-        uint256 contractBalance = handler.token().balanceOf(address(handler.stakeTable()));
-        assertEq(
-            handler.stakeTable().totalStake(),
-            contractBalance,
-            "Total stake should equal contract balance"
-        );
-    }
-
-    /// @dev Total validator stake should not exceed total stake
-    function invariant_ValidatorStakeNotExceedsTotalStake() public view {
+    /// @dev Total validator stake should not exceed contract balance
+    function invariant_ValidatorStakeNotExceedsContractBalance() public view {
         assertLe(
             handler.stakeTable().activeStake(),
-            handler.stakeTable().totalStake(),
-            "Total validator stake should not exceed total stake"
+            handler.stakeTable().token().balanceOf(address(handler.stakeTable())),
+            "Total validator stake should not exceed contract balance"
         );
     }
 }
