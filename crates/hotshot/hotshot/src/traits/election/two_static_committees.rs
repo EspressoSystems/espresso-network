@@ -337,11 +337,23 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
     ) -> Result<TYPES::SignatureKey> {
         let epoch = epoch.expect("epochs cannot be disabled with TwoStaticCommittees");
         if *epoch != 0 && *epoch % 2 == 0 {
+            if self.eligible_leaders.0.is_empty() {
+                return Err(hotshot_utils::anytrace::Error {
+                    level: hotshot_utils::anytrace::Level::Unspecified,
+                    message: "No eligible leaders configured for committee 0".to_string(),
+                });
+            }
             #[allow(clippy::cast_possible_truncation)]
             let index = *view_number as usize % self.eligible_leaders.0.len();
             let res = self.eligible_leaders.0[index].clone();
             Ok(TYPES::SignatureKey::public_key(&res.stake_table_entry))
         } else {
+            if self.eligible_leaders.1.is_empty() {
+                return Err(hotshot_utils::anytrace::Error {
+                    level: hotshot_utils::anytrace::Level::Unspecified,
+                    message: "No eligible leaders configured for committee 1".to_string(),
+                });
+            }
             #[allow(clippy::cast_possible_truncation)]
             let index = *view_number as usize % self.eligible_leaders.1.len();
             let res = self.eligible_leaders.1[index].clone();

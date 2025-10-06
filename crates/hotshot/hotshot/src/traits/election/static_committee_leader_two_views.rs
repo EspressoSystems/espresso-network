@@ -187,6 +187,12 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommitteeLeaderForTwoViews<TYP
         view_number: <TYPES as NodeType>::View,
         _epoch: Option<<TYPES as NodeType>::Epoch>,
     ) -> Result<TYPES::SignatureKey> {
+        if self.eligible_leaders.is_empty() {
+            return Err(hotshot_utils::anytrace::Error {
+                level: hotshot_utils::anytrace::Level::Unspecified,
+                message: "No eligible leaders configured".to_string(),
+            });
+        }
         let index =
             usize::try_from((*view_number / 2) % self.eligible_leaders.len() as u64).unwrap();
         let res = self.eligible_leaders[index].clone();

@@ -21,6 +21,7 @@ use hotshot_types::{
     PeerConfig,
 };
 use hotshot_utils::anytrace::Result;
+use hotshot_utils::anytrace::{Error as AnyError, Level as AnyLevel};
 use rand::{rngs::StdRng, Rng};
 use tracing::error;
 
@@ -386,6 +387,13 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig, DaConfig: QuorumFilterConfig> 
                 .map(|(idx, v)| (idx, v.clone()))
                 .collect();
 
+            if leader_vec.is_empty() {
+                return Err(AnyError {
+                    level: AnyLevel::Unspecified,
+                    message: format!("No eligible leaders after quorum filter for epoch {epoch}"),
+                });
+            }
+
             let mut rng: StdRng = rand::SeedableRng::seed_from_u64(*view_number);
 
             let randomized_view_number: u64 = rng.gen_range(0..=u64::MAX);
@@ -406,6 +414,12 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig, DaConfig: QuorumFilterConfig> 
 
             let randomized_view_number: u64 = rng.gen_range(0..=u64::MAX);
             #[allow(clippy::cast_possible_truncation)]
+            if self.eligible_leaders.is_empty() {
+                return Err(AnyError {
+                    level: AnyLevel::Unspecified,
+                    message: "No eligible leaders configured".to_string(),
+                });
+            }
             let index = randomized_view_number as usize % self.eligible_leaders.len();
 
             let res = self.eligible_leaders[index].clone();
