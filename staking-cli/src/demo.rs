@@ -38,7 +38,7 @@ use crate::{
 };
 
 #[derive(Debug, Error)]
-pub enum CreateError {
+pub enum CreateTransactionsError {
     #[error(
         "insufficient ESP balance: have {have} ESP, need {need} ESP to fund {delegators} \
          delegators"
@@ -322,32 +322,33 @@ impl StakingTransactions<HttpProviderWithWallet> {
     /// The transactions can be applied with different levels of concurrency using the methods on
     /// the returned instance.
     ///
+    /// Amounts used for funding, delegations, number of delegators are chosen somewhat arbitrarily.
+    ///
     /// Assumptions:
     ///
     /// - Full control of Validators Ethereum wallets and the Ethereum node. Transactions are
-    ///   constructed in a way that they should always succeed, but if they don't the easiest fix is
-    ///   probably to re-deploy the ethereum network. Recovery, replacing of transactions is not
-    ///   implemented.
-    ///
-    /// - Running against a single node Ethereum network. The nonces are not tracked in our rust
-    ///   code and we rely on sending transactions with "pending" block tag. This won't work well
-    ///   for a real, distributed ethereum network.
+    ///   constructed in a way that they should always apply, if some (but not all) transactions
+    ///   fail to apply the easiest fix is probably to re-deploy the Ethereum network. Recovery,
+    ///   replacing of transactions is not implemented.
     ///
     /// - Nobody else is using the Ethereum accounts for anything else between calling this function
     ///   and applying the returned transactions.
     ///
     /// Requirements:
     ///
-    /// - token_holder: requires Eth to fund validators and delegators, ESP tokens to fund delegators
+    /// - token_holder: Requires Eth to fund validators and delegators, ESP tokens to fund delegators.
     ///
-    /// Amounts used for funding, delegations, number of delegators are chosen somewhat arbitrarily.
+    /// Errors:
+    ///
+    /// - If Eth or ESP balances of the token_holder are insufficient.
+    /// - If any RPC request to the Ethereum node or contract calls fail.
     pub async fn create(
         rpc_url: Url,
         token_holder: &(impl Provider + WalletProvider<Wallet = EthereumWallet>),
         stake_table: Address,
         validators: Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)>,
         config: DelegationConfig,
-    ) -> Result<Self, CreateError> {
+    ) -> Result<Self, CreateTransactionsError> {
         tracing::info!(%stake_table, "staking to stake table contract for demo");
 
         let token = fetch_token_address(rpc_url.clone(), stake_table).await?;
@@ -499,34 +500,25 @@ impl StakingTransactions<HttpProviderWithWallet> {
             });
         }
 
-        let total_esp_required = fund_amount_esp * U256::from(delegator_info.len());
-        let total_eth_required = fund_amount_eth * U256::from(eth_recipients.len()) * U256::from(2);
+        let esp_required = fund_amount_esp * U256::from(delegator_info.len());
+        let eth_required = fund_amount_eth * U256::from(eth_recipients.len()) * U256::from(2);
 
-        if token_balance < total_esp_required {
-            return Err(CreateError::InsufficientEsp {
+        if token_balance < esp_required {
+            return Err(CreateTransactionsError::InsufficientEsp {
                 have: format_ether(token_balance),
-                need: format_ether(total_esp_required),
+                need: format_ether(esp_required),
                 delegators: delegator_info.len(),
             });
         }
 
         let eth_balance = token_holder_provider.get_balance(token_holder_addr).await?;
-        if eth_balance < total_eth_required {
-            return Err(CreateError::InsufficientEth {
+        if eth_balance < eth_required {
+            return Err(CreateTransactionsError::InsufficientEth {
                 have: format_ether(eth_balance),
-                need: format_ether(total_eth_required),
+                need: format_ether(eth_required),
                 recipients: eth_recipients.len(),
             });
         }
-
-        tracing::info!(
-            "balance check passed: {} ESP available (need {}), {} ETH available (need {} \
-             including gas buffer)",
-            format_ether(token_balance),
-            format_ether(total_esp_required),
-            format_ether(eth_balance),
-            format_ether(total_eth_required)
-        );
 
         Ok(StakingTransactions {
             funding,
@@ -723,28 +715,28 @@ mod test {
         Ok(())
     }
 
-    enum FailureCase {
+    enum Failure {
         Esp,
         Eth,
     }
 
     #[rstest::rstest]
-    #[case::esp(FailureCase::Esp)]
-    #[case::eth(FailureCase::Eth)]
+    #[case::esp(Failure::Esp)]
+    #[case::eth(Failure::Eth)]
     #[test_log::test(tokio::test)]
-    async fn test_insufficient_balance(#[case] case: FailureCase) -> Result<()> {
+    async fn test_insufficient_balance(#[case] case: Failure) -> Result<()> {
         let system = TestSystem::deploy().await?;
 
         let drain_address = PrivateKeySigner::random().address();
 
         match case {
-            FailureCase::Esp => {
+            Failure::Esp => {
                 let balance = system
                     .balance(system.provider.default_signer_address())
                     .await?;
                 system.transfer(drain_address, balance).await?;
             },
-            FailureCase::Eth => {
+            Failure::Eth => {
                 let eth_balance = system
                     .provider
                     .get_balance(system.provider.default_signer_address())
@@ -769,9 +761,9 @@ mod test {
 
         let err = result.expect_err("should fail with insufficient balance");
         match case {
-            FailureCase::Esp => assert_matches!(err, CreateError::InsufficientEsp { .. }),
-            FailureCase::Eth => assert_matches!(err, CreateError::InsufficientEth { .. }),
-        }
+            Failure::Esp => assert_matches!(err, CreateTransactionsError::InsufficientEsp { .. }),
+            Failure::Eth => assert_matches!(err, CreateTransactionsError::InsufficientEth { .. }),
+        };
 
         Ok(())
     }
