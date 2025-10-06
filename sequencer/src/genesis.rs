@@ -45,46 +45,19 @@ pub enum L1Finalized {
     Timestamp { timestamp: Timestamp },
 }
 
-/// Helper type to deal with TOML keys that are u64 but represented as strings
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TomlKeyU64(u64);
-
-impl<'de> Deserialize<'de> for TomlKeyU64 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        tracing::warn!("Using TomlKeyU64::deserialize");
-        let s = String::deserialize(deserializer)?;
-
-        let n = s
-            .parse::<u64>()
-            .map_err(|_| serde::de::Error::custom("invalid epoch"))?;
-
-        std::result::Result::Ok(TomlKeyU64(n))
-    }
-}
-
-impl Serialize for TomlKeyU64 {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&self.0.to_string())
-    }
-}
-
-impl From<&TomlKeyU64> for u64 {
-    fn from(val: &TomlKeyU64) -> Self {
-        val.0
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PeerConfigData {
     pub stake_table_key: <SeqTypes as NodeType>::SignatureKey,
     pub state_ver_key: <SeqTypes as NodeType>::StateSignatureKey,
     pub stake: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct VersionedDaCommittee {
+    #[serde(with = "version_ser")]
+    pub start_version: Version,
+    pub start_epoch: u64,
+    pub committee: Vec<PeerConfigData>,
 }
 
 /// Genesis of an Espresso chain.
@@ -111,7 +84,7 @@ pub struct Genesis {
     #[serde(default)]
     pub upgrades: BTreeMap<Version, Upgrade>,
     #[serde(default)]
-    pub da_committees: Option<BTreeMap<Version, BTreeMap<TomlKeyU64, Vec<PeerConfigData>>>>,
+    pub da_committees: Option<Vec<VersionedDaCommittee>>,
 }
 
 impl Genesis {

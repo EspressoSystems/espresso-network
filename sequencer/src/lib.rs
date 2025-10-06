@@ -65,7 +65,7 @@ use hotshot_types::{
         storage::Storage,
     },
     utils::BuilderCommitment,
-    ValidatorConfig,
+    ValidatorConfig, VersionedDaCommittee,
 };
 pub use options::Options;
 use serde::{Deserialize, Serialize};
@@ -395,26 +395,20 @@ where
         tracing::warn!("setting da_committees from genesis");
         network_config.config.da_committees = da_committees
             .iter()
-            .map(|(k, v)| {
-                (
-                    *k,
-                    v.iter()
-                        .map(|(k, v)| {
-                            (
-                                k.into(),
-                                v.iter()
-                                    .map(|pcd| hotshot_types::PeerConfig {
-                                        stake_table_entry: StakeTableEntry {
-                                            stake_key: pcd.stake_table_key,
-                                            stake_amount: U256::from(pcd.stake),
-                                        },
-                                        state_ver_key: pcd.state_ver_key.clone(),
-                                    })
-                                    .collect(),
-                            )
-                        })
-                        .collect(),
-                )
+            .map(|src| VersionedDaCommittee::<SeqTypes> {
+                start_version: src.start_version,
+                start_epoch: src.start_epoch,
+                committee: src
+                    .committee
+                    .iter()
+                    .map(|pcd| hotshot_types::PeerConfig {
+                        stake_table_entry: StakeTableEntry {
+                            stake_key: pcd.stake_table_key,
+                            stake_amount: U256::from(pcd.stake),
+                        },
+                        state_ver_key: pcd.state_ver_key.clone(),
+                    })
+                    .collect(),
             })
             .collect();
     }

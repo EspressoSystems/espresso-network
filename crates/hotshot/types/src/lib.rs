@@ -5,9 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 //! Types and Traits for the `HotShot` consensus module
-use std::{
-    collections::BTreeMap, fmt::Debug, future::Future, num::NonZeroUsize, pin::Pin, time::Duration,
-};
+use std::{fmt::Debug, future::Future, num::NonZeroUsize, pin::Pin, time::Duration};
 
 use alloy::primitives::U256;
 use bincode::Options;
@@ -184,6 +182,14 @@ impl<TYPES: NodeType> Debug for PeerConfig<TYPES> {
     }
 }
 
+#[derive(Clone, derive_more::Debug, serde::Serialize, serde::Deserialize)]
+#[serde(bound(deserialize = ""))]
+pub struct VersionedDaCommittee<TYPES: NodeType> {
+    pub start_version: Version,
+    pub start_epoch: u64,
+    pub committee: Vec<PeerConfig<TYPES>>,
+}
+
 /// Holds configuration for a `HotShot`
 #[derive(Clone, derive_more::Debug, serde::Serialize, serde::Deserialize)]
 #[serde(bound(deserialize = ""))]
@@ -199,7 +205,7 @@ pub struct HotShotConfig<TYPES: NodeType> {
     /// All public keys known to be DA nodes
     pub known_da_nodes: Vec<PeerConfig<TYPES>>,
     /// All public keys known to be DA nodes, by start epoch
-    pub da_committees: BTreeMap<Version, BTreeMap<u64, Vec<PeerConfig<TYPES>>>>,
+    pub da_committees: Vec<VersionedDaCommittee<TYPES>>,
     /// List of DA committee (staking)nodes for static DA committee
     pub da_staked_committee_size: usize,
     /// Number of fixed leaders for GPU VID, normally it will be 0, it's only used when running GPU VID
