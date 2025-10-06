@@ -90,72 +90,29 @@ impl fmt::Display for DelegationConfig {
 }
 
 #[derive(Clone, Debug)]
-enum StakeTableTx<P> {
+enum StakeTableTx {
     SendEth {
-        provider: P,
         to: Address,
         amount: U256,
     },
     SendEsp {
-        provider: P,
-        token: Address,
         to: Address,
         amount: U256,
     },
     RegisterValidator {
-        provider: P,
-        stake_table: Address,
+        from: Address,
         commission: Commission,
         payload: Box<NodeSignatures>,
     },
     Approve {
-        provider: P,
-        token: Address,
-        stake_table: Address,
+        from: Address,
         amount: U256,
     },
     Delegate {
-        provider: P,
-        stake_table: Address,
+        from: Address,
         validator: Address,
         amount: U256,
     },
-}
-
-impl<P: Provider + Clone> StakeTableTx<P> {
-    async fn send(self) -> Result<PendingTransactionBuilder<Ethereum>> {
-        match self {
-            Self::SendEth {
-                provider,
-                to,
-                amount,
-            } => send_eth(provider, to, amount).await,
-            Self::SendEsp {
-                provider,
-                token,
-                to,
-                amount,
-            } => send_esp(provider, token, to, amount).await,
-            Self::RegisterValidator {
-                provider,
-                stake_table,
-                commission,
-                payload,
-            } => register_validator(provider, stake_table, commission, *payload).await,
-            Self::Approve {
-                provider,
-                token,
-                stake_table,
-                amount,
-            } => approve(provider, token, stake_table, amount).await,
-            Self::Delegate {
-                provider,
-                stake_table,
-                validator,
-                amount,
-            } => delegate(provider, stake_table, validator, amount).await,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,22 +149,89 @@ struct DelegatorConfig {
 }
 
 #[derive(Clone, Debug)]
-pub struct StakingTransactions<P> {
-    funding: VecDeque<StakeTableTx<P>>,
-    registration: VecDeque<StakeTableTx<P>>,
-    approvals: VecDeque<StakeTableTx<P>>,
-    delegations: VecDeque<StakeTableTx<P>>,
+struct TransactionQueues {
+    funding: VecDeque<StakeTableTx>,
+    approvals: VecDeque<StakeTableTx>,
+    registration: VecDeque<StakeTableTx>,
+    delegations: VecDeque<StakeTableTx>,
     current_phase: SetupPhase,
 }
 
-impl<P: Provider + Clone> StakingTransactions<P> {
-    fn current_group_mut(&mut self) -> &mut VecDeque<StakeTableTx<P>> {
+impl TransactionQueues {
+    fn current_group_mut(&mut self) -> &mut VecDeque<StakeTableTx> {
         match self.current_phase {
             SetupPhase::Funding => &mut self.funding,
             SetupPhase::Approval => &mut self.approvals,
             SetupPhase::Registration => &mut self.registration,
             SetupPhase::Delegation => &mut self.delegations,
         }
+    }
+
+    fn pop_next(&mut self) -> Option<StakeTableTx> {
+        loop {
+            if let Some(tx) = self.current_group_mut().pop_front() {
+                return Some(tx);
+            }
+            self.current_phase = self.current_phase.next()?;
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct StakingTransactions<P> {
+    providers: HashMap<Address, P>,
+    funder: P,
+    stake_table: Address,
+    token: Address,
+    queues: TransactionQueues,
+}
+
+impl<P: Provider + Clone> StakingTransactions<P> {
+    fn provider(&self, address: Address) -> Result<&P> {
+        self.providers
+            .get(&address)
+            .ok_or_else(|| anyhow::anyhow!("provider not found for {address}"))
+    }
+
+    async fn send_next(&self, tx: StakeTableTx) -> Result<PendingTransactionBuilder<Ethereum>> {
+        match tx {
+            StakeTableTx::SendEth { to, amount } => send_eth(&self.funder, to, amount).await,
+            StakeTableTx::SendEsp { to, amount } => {
+                send_esp(&self.funder, self.token, to, amount).await
+            },
+            StakeTableTx::RegisterValidator {
+                from,
+                commission,
+                payload,
+            } => {
+                register_validator(self.provider(from)?, self.stake_table, commission, *payload)
+                    .await
+            },
+            StakeTableTx::Approve { from, amount } => {
+                approve(self.provider(from)?, self.token, self.stake_table, amount).await
+            },
+            StakeTableTx::Delegate {
+                from,
+                validator,
+                amount,
+            } => delegate(self.provider(from)?, self.stake_table, validator, amount).await,
+        }
+    }
+
+    async fn process_group(
+        &self,
+        txs: &mut VecDeque<StakeTableTx>,
+    ) -> Result<Vec<TransactionReceipt>> {
+        let mut pending = vec![];
+        while let Some(tx) = txs.pop_front() {
+            pending.push(self.send_next(tx).await?);
+        }
+        future::try_join_all(
+            pending
+                .into_iter()
+                .map(|p| async move { p.assert_success().await }),
+        )
+        .await
     }
 
     /// Sends and awaits all transactions with high concurrency.
@@ -227,53 +251,22 @@ impl<P: Provider + Clone> StakingTransactions<P> {
     /// 4. Delegations
     ///
     /// For each them at least one L1 block will be required.
-    pub async fn apply_all(self) -> Result<Vec<TransactionReceipt>> {
-        let mut all_receipts = vec![];
+    pub async fn apply_all(&mut self) -> Result<Vec<TransactionReceipt>> {
+        let mut funding = std::mem::take(&mut self.queues.funding);
+        let r1 = self.process_group(&mut funding).await?;
 
-        for mut group in [
-            self.funding,
-            self.approvals,
-            self.registration,
-            self.delegations,
-        ] {
-            let mut pending = vec![];
-            while let Some(tx) = group.pop_front() {
-                pending.push(tx.send().await?);
-            }
+        let mut approvals = std::mem::take(&mut self.queues.approvals);
+        let r2 = self.process_group(&mut approvals).await?;
 
-            let receipts = future::try_join_all(
-                pending
-                    .into_iter()
-                    .map(|p| async move { p.assert_success().await }),
-            )
-            .await?;
-            all_receipts.extend(receipts);
-        }
+        let mut registration = std::mem::take(&mut self.queues.registration);
+        let r3 = self.process_group(&mut registration).await?;
+
+        let mut delegations = std::mem::take(&mut self.queues.delegations);
+        let r4 = self.process_group(&mut delegations).await?;
 
         tracing::info!("completed all staking transactions");
 
-        Ok(all_receipts)
-    }
-
-    fn pop_next(&mut self) -> Option<StakeTableTx<P>> {
-        loop {
-            if let Some(tx) = self.current_group_mut().pop_front() {
-                return Some(tx);
-            }
-            self.current_phase = self.current_phase.next()?;
-        }
-    }
-
-    /// Sends and awaits one transaction
-    ///
-    /// The caller can use this function to rate limit changes to the L1 stake
-    /// table contract during setup.
-    pub async fn apply_one(&mut self) -> Result<Option<TransactionReceipt>> {
-        let Some(tx) = self.pop_next() else {
-            return Ok(None);
-        };
-        let pending = tx.send().await?;
-        Ok(Some(pending.assert_success().await?))
+        Ok([r1, r2, r3, r4].concat())
     }
 
     /// Sends and awaits receipts on all funding and approval transactions
@@ -284,34 +277,31 @@ impl<P: Provider + Clone> StakingTransactions<P> {
     ///
     /// This processes funding and approvals with a synchronization point between them.
     pub async fn apply_prerequisites(&mut self) -> Result<Vec<TransactionReceipt>> {
-        if !matches!(self.current_phase, SetupPhase::Funding) {
+        if !matches!(self.queues.current_phase, SetupPhase::Funding) {
             return Err(anyhow::anyhow!("apply_prerequisites must be called first"));
         }
 
-        let mut all_receipts = vec![];
+        let mut funding = std::mem::take(&mut self.queues.funding);
+        let r1 = self.process_group(&mut funding).await?;
 
-        for group in [&mut self.funding, &mut self.approvals] {
-            if group.is_empty() {
-                continue;
-            }
+        let mut approvals = std::mem::take(&mut self.queues.approvals);
+        let r2 = self.process_group(&mut approvals).await?;
 
-            let mut pending = vec![];
-            while let Some(tx) = group.pop_front() {
-                pending.push(tx.send().await?);
-            }
+        self.queues.current_phase = SetupPhase::Registration;
 
-            let receipts = future::try_join_all(
-                pending
-                    .into_iter()
-                    .map(|p| async move { p.assert_success().await }),
-            )
-            .await?;
-            all_receipts.extend(receipts);
-        }
+        Ok([r1, r2].concat())
+    }
 
-        self.current_phase = SetupPhase::Registration;
-
-        Ok(all_receipts)
+    /// Sends and awaits one transaction
+    ///
+    /// The caller can use this function to rate limit changes to the L1 stake
+    /// table contract during setup.
+    pub async fn apply_one(&mut self) -> Result<Option<TransactionReceipt>> {
+        let Some(tx) = self.queues.pop_next() else {
+            return Ok(None);
+        };
+        let pending = self.send_next(tx).await?;
+        Ok(Some(pending.assert_success().await?))
     }
 }
 
@@ -436,7 +426,6 @@ impl StakingTransactions<HttpProviderWithWallet> {
 
         for &address in &eth_recipients {
             funding.push_back(StakeTableTx::SendEth {
-                provider: token_holder_provider.clone(),
                 to: address,
                 amount: fund_amount_eth,
             });
@@ -444,8 +433,6 @@ impl StakingTransactions<HttpProviderWithWallet> {
 
         for delegator in &delegator_info {
             funding.push_back(StakeTableTx::SendEsp {
-                provider: token_holder_provider.clone(),
-                token,
                 to: delegator.signer.address(),
                 amount: fund_amount_esp,
             });
@@ -458,7 +445,7 @@ impl StakingTransactions<HttpProviderWithWallet> {
 
         for validator in &validator_info {
             let address = validator.signer.address();
-            let provider = providers.entry(address).or_insert_with(|| {
+            providers.entry(address).or_insert_with(|| {
                 ProviderBuilder::new()
                     .wallet(EthereumWallet::from(validator.signer.clone()))
                     .connect_http(rpc_url.clone())
@@ -467,8 +454,7 @@ impl StakingTransactions<HttpProviderWithWallet> {
             let payload =
                 NodeSignatures::create(address, &validator.bls_key_pair, &validator.state_key_pair);
             registration.push_back(StakeTableTx::RegisterValidator {
-                provider: provider.clone(),
-                stake_table,
+                from: address,
                 commission: validator.commission,
                 payload: Box::new(payload),
             });
@@ -479,22 +465,19 @@ impl StakingTransactions<HttpProviderWithWallet> {
 
         for delegator in &delegator_info {
             let address = delegator.signer.address();
-            let provider = providers.entry(address).or_insert_with(|| {
+            providers.entry(address).or_insert_with(|| {
                 ProviderBuilder::new()
                     .wallet(EthereumWallet::from(delegator.signer.clone()))
                     .connect_http(rpc_url.clone())
             });
 
             approvals.push_back(StakeTableTx::Approve {
-                provider: provider.clone(),
-                token,
-                stake_table,
+                from: address,
                 amount: delegator.delegate_amount,
             });
 
             delegations.push_back(StakeTableTx::Delegate {
-                provider: provider.clone(),
-                stake_table,
+                from: address,
                 validator: delegator.validator,
                 amount: delegator.delegate_amount,
             });
@@ -521,11 +504,17 @@ impl StakingTransactions<HttpProviderWithWallet> {
         }
 
         Ok(StakingTransactions {
-            funding,
-            registration,
-            approvals,
-            delegations,
-            current_phase: SetupPhase::Funding,
+            providers,
+            funder: token_holder_provider,
+            stake_table,
+            token,
+            queues: TransactionQueues {
+                funding,
+                approvals,
+                registration,
+                delegations,
+                current_phase: SetupPhase::Funding,
+            },
         })
     }
 }
