@@ -170,6 +170,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// The validator commission has already been initialized
     error CommissionAlreadyInitialized(address validator);
 
+    /// The initial active stake exceeds the balance of the contract
+    error InitialActiveStakeExceedsBalance();
+
     /// The Schnorr key has been previously registered in the contract.
     error SchnorrKeyAlreadyUsed();
 
@@ -183,6 +186,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     ///
     /// @param admin The address to be granted the default admin role
     /// @param pauser The address to be granted the pauser role
+    /// @param initialActiveStake The initial active stake in the contract
     /// @param initialCommissions commissions of validators
     ///
     /// @notice initialCommissions must be an empty array if the contract we're
@@ -194,6 +198,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     function initializeV2(
         address pauser,
         address admin,
+        uint256 initialActiveStake,
         InitialCommission[] calldata initialCommissions
     ) public reinitializer(2) {
         __AccessControl_init();
@@ -208,6 +213,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
         // initialize commissions (if the contract under upgrade has existing state)
         _initializeCommissions(initialCommissions);
+        _initializeActiveStake(initialActiveStake);
     }
 
     /// @notice Get the version of the contract
@@ -488,6 +494,16 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
             commissionTracking[validator] =
                 CommissionTracking({ commission: commission, lastIncreaseTime: 0 });
         }
+    }
+
+    /// @notice Initialize the active stake in the contract
+    /// @param initialActiveStake The initial active stake in the contract
+    function _initializeActiveStake(uint256 initialActiveStake) private {
+        require(
+            initialActiveStake <= token.balanceOf(address(this)), InitialActiveStakeExceedsBalance()
+        );
+
+        activeStake = initialActiveStake;
     }
 
     /// @notice Update the exit escrow period

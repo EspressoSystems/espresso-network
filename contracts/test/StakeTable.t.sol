@@ -1862,6 +1862,99 @@ contract StakeTableUpgradeV2Test is Test {
 
         vm.stopPrank();
     }
+
+    function test_initializeActiveStake() public {
+        stakeTableRegisterTest.setUp();
+        address delegator = makeAddr("delegator");
+        address validator = makeAddr("validator");
+        uint256 initialBalance = 5 ether;
+
+        vm.startPrank(stakeTableRegisterTest.tokenGrantRecipient());
+        stakeTableRegisterTest.stakeTable().token().transfer(delegator, initialBalance);
+        vm.stopPrank();
+
+        vm.startPrank(validator);
+        uint16 commission = 0;
+        registerValidatorOnStakeTableV1(
+            validator, "1", commission, stakeTableRegisterTest.stakeTable()
+        );
+        vm.stopPrank();
+
+        vm.startPrank(delegator);
+        stakeTableRegisterTest.stakeTable().token().approve(
+            address(stakeTableRegisterTest.stakeTable()), initialBalance / 2
+        );
+        stakeTableRegisterTest.stakeTable().delegate(validator, initialBalance / 2);
+        vm.stopPrank();
+
+        StakeTableV2.InitialCommission[] memory initialCommissions =
+            new StakeTableV2.InitialCommission[](1);
+        initialCommissions[0] =
+            StakeTableV2.InitialCommission({ validator: validator, commission: commission });
+
+        //upgrade to staketablev2
+        vm.startPrank(stakeTableRegisterTest.admin());
+        StakeTableV2 stakeTableV2 = StakeTableV2(address(stakeTableRegisterTest.stakeTable()));
+
+        stakeTableV2.upgradeToAndCall(
+            address(new StakeTableV2()),
+            abi.encodeWithSelector(
+                StakeTableV2.initializeV2.selector,
+                stakeTableRegisterTest.admin(),
+                stakeTableRegisterTest.admin(),
+                initialBalance / 2,
+                initialCommissions
+            )
+        );
+        vm.stopPrank();
+
+        assertEq(stakeTableV2.activeStake(), initialBalance / 2);
+    }
+
+    function test_revertWhenInvalidInitialActiveStake() public {
+        stakeTableRegisterTest.setUp();
+        address delegator = makeAddr("delegator");
+        address validator = makeAddr("validator");
+        uint256 initialBalance = 5 ether;
+
+        vm.startPrank(stakeTableRegisterTest.tokenGrantRecipient());
+        stakeTableRegisterTest.stakeTable().token().transfer(delegator, initialBalance);
+        vm.stopPrank();
+
+        vm.startPrank(validator);
+        uint16 commission = 0;
+        registerValidatorOnStakeTableV1(
+            validator, "1", commission, stakeTableRegisterTest.stakeTable()
+        );
+        vm.stopPrank();
+
+        vm.startPrank(delegator);
+        stakeTableRegisterTest.stakeTable().token().approve(
+            address(stakeTableRegisterTest.stakeTable()), initialBalance / 2
+        );
+        stakeTableRegisterTest.stakeTable().delegate(validator, initialBalance / 2);
+        vm.stopPrank();
+
+        StakeTableV2.InitialCommission[] memory initialCommissions =
+            new StakeTableV2.InitialCommission[](1);
+        initialCommissions[0] =
+            StakeTableV2.InitialCommission({ validator: validator, commission: commission });
+
+        //upgrade to staketablev2
+        vm.startPrank(stakeTableRegisterTest.admin());
+        StakeTableV2 stakeTableV2 = StakeTableV2(address(stakeTableRegisterTest.stakeTable()));
+
+        address newImpl = address(new StakeTableV2());
+        address admin = stakeTableRegisterTest.admin();
+        vm.expectRevert(StakeTableV2.InitialActiveStakeExceedsBalance.selector);
+        stakeTableV2.upgradeToAndCall(
+            newImpl,
+            abi.encodeWithSelector(
+                StakeTableV2.initializeV2.selector, admin, admin, initialBalance, initialCommissions
+            )
+        );
+        vm.stopPrank();
+    }
 }
 
 contract StakeTableTimelockTest is Test {
@@ -2274,7 +2367,7 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         address admin = stakeTableV2.owner();
         vm.expectRevert(Initializable.InvalidInitialization.selector);
         StakeTableV2.InitialCommission[] memory emptyCommissions;
-        stakeTableV2.initializeV2(pauser, admin, emptyCommissions);
+        stakeTableV2.initializeV2(pauser, admin, 0, emptyCommissions);
     }
 
     function test_StorageLayout_IsCompatible_V1V2() public {

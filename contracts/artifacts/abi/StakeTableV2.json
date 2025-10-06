@@ -355,6 +355,11 @@
         "internalType": "address"
       },
       {
+        "name": "initialActiveStake",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
         "name": "initialCommissions",
         "type": "tuple[]",
         "internalType": "struct StakeTableV2.InitialCommission[]",
@@ -1749,6 +1754,11 @@
   {
     "type": "error",
     "name": "FailedInnerCall",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InitialActiveStakeExceedsBalance",
     "inputs": []
   },
   {
