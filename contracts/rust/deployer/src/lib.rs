@@ -615,6 +615,15 @@ pub async fn upgrade_light_client_v3(
         Some(proxy_addr) => {
             let proxy = LightClient::new(proxy_addr, &provider);
 
+            //check proxy version, if not atleast V2, can't upgrade to V3
+            let version = proxy.getVersion().call().await?;
+            if version.majorVersion < 2 {
+                anyhow::bail!(
+                    "LightClientProxy is V{}, can't upgrade to V3",
+                    version.majorVersion
+                );
+            }
+
             // first deploy PlonkVerifierV3.sol
             let pv3_addr = contracts
                 .deploy(
@@ -672,7 +681,15 @@ pub async fn upgrade_light_client_v3(
 
             // prepare init calldata
             let lcv3 = LightClientV3::new(lcv3_addr, &provider);
-            let init_data = lcv3.initializeV3().calldata().to_owned();
+
+            // set init data unless already initialized
+            let init_data =
+                if already_initialized(&provider, proxy_addr, Contract::LightClientV3, 3).await? {
+                    "0x".into()
+                } else {
+                    lcv3.initializeV3().calldata().to_owned()
+                };
+
             // invoke upgrade on proxy
             let receipt = proxy
                 .upgradeToAndCall(lcv3_addr, init_data)
