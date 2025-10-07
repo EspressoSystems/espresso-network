@@ -80,11 +80,6 @@ sol! {
         uint256 v;
         uint256 u;
     }
-
-    struct LifetimeRewardsProofSol {
-        bytes32[160] siblings;
-    }
-
 }
 
 // Due to <https://github.com/foundry-rs/foundry/issues/10153> the rust bindings contain duplicate types for our solidity types.
