@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
+import "../interfaces/IRewardClaim.sol";
+
 /* solhint-disable no-inline-assembly */
 
 /**
@@ -16,10 +18,6 @@ library RewardMerkleTreeVerifier {
     error InvalidProofLength();
 
     uint256 public constant TREE_DEPTH = 160;
-
-    struct AccruedRewardsProof {
-        bytes32[] siblings;
-    }
 
     function _hashLeaf(uint256 value) internal pure returns (bytes32) {
         bytes32 firstHash = keccak256(abi.encodePacked(value));
@@ -52,24 +50,18 @@ library RewardMerkleTreeVerifier {
         bytes32 root,
         address key,
         uint256 value,
-        AccruedRewardsProof calldata proof
+        bytes32[TREE_DEPTH] memory proof
     ) internal pure returns (bool) {
-        // NOTE: using memory instead of calldata for proof or siblings
-        //       increases gas cost by 20%
-        // NOTE: *not* defining siblings here increases gas cost by 20%
         // TODO: unittest this function
         // TODO: fuzz test this function
         // TODO: benchmark gas cost by averaging gas cost over many different trees with
         //       realistic size.
         // TODO: optimize gas cost
-        bytes32[] calldata siblings = proof.siblings;
-        require(siblings.length == TREE_DEPTH, InvalidProofLength());
-
         bytes32 currentHash = _hashLeaf(value);
 
         // Traverse from leaf to root using the same pattern as RewardMerkleTreeV2
         for (uint256 level = 0; level < TREE_DEPTH; level++) {
-            bytes32 sibling = siblings[level];
+            bytes32 sibling = proof[level];
 
             // Extract bit using direct right shift
             bool branch;

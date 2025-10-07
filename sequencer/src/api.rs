@@ -14,8 +14,11 @@ use espresso_types::{
     config::PublicNetworkConfig,
     retain_accounts,
     v0::traits::SequencerPersistence,
-    v0_3::{ChainConfig, RewardAccountV1, RewardAmount, RewardMerkleTreeV1, Validator},
-    v0_4::{RewardAccountV2, RewardMerkleTreeV2},
+    v0_3::{
+        ChainConfig, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount, RewardMerkleTreeV1,
+        Validator,
+    },
+    v0_4::{RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction, ValidatorMap,
 };
@@ -910,6 +913,57 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSig
             .read()
             .await
             .get_state_signature(height)
+            .await
+    }
+}
+
+pub(crate) trait RewardAccountProofDataSource: Sync {
+    fn load_v1_reward_account_proof(
+        &self,
+        _height: u64,
+        _account: RewardAccountV1,
+    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV1>> {
+        async {
+            bail!("reward merklized state is not supported for this data source");
+        }
+    }
+
+    fn load_v2_reward_account_proof(
+        &self,
+        _height: u64,
+        _account: RewardAccountV2,
+    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV2>> {
+        async {
+            bail!("reward merklized state is not supported for this data source");
+        }
+    }
+}
+
+impl RewardAccountProofDataSource for hotshot_query_service::data_source::MetricsDataSource {}
+
+impl<T, S> RewardAccountProofDataSource
+    for hotshot_query_service::data_source::ExtensibleDataSource<T, S>
+where
+    T: RewardAccountProofDataSource,
+    S: Sync,
+{
+    async fn load_v1_reward_account_proof(
+        &self,
+        height: u64,
+        account: RewardAccountV1,
+    ) -> anyhow::Result<RewardAccountQueryDataV1> {
+        self.inner()
+            .load_v1_reward_account_proof(height, account)
+            .await
+    }
+
+    async fn load_v2_reward_account_proof(
+        &self,
+        height: u64,
+        account: RewardAccountV2,
+    ) -> anyhow::Result<RewardAccountQueryDataV2> {
+        self.inner()
+            .load_v2_reward_account_proof(height, account)
             .await
     }
 }
@@ -2139,8 +2193,8 @@ mod test {
     use espresso_types::{
         config::PublicHotShotConfig,
         traits::{NullEventConsumer, PersistenceOptions},
-        v0_3::{Fetcher, RewardAmount, COMMISSION_BASIS_POINTS, REWARD_MERKLE_TREE_V1_ARITY},
-        v0_4::REWARD_MERKLE_TREE_V2_ARITY,
+        v0_3::{Fetcher, RewardAmount, RewardMerkleProofV1, COMMISSION_BASIS_POINTS},
+        v0_4::RewardMerkleProofV2,
         validators_from_l1_events, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAmount, FeeVersion,
         Header, L1ClientOptions, MockSequencerVersions, NamespaceId, RewardDistributor,
         SequencerVersions, ValidatedState,
@@ -2151,6 +2205,7 @@ mod test {
     };
     use hotshot::types::EventType;
     use hotshot_contract_adapter::{
+        reward::RewardClaimInput,
         sol_types::{EspToken, StakeTableV2},
         stake_table::StakeTableContractVersion,
     };
@@ -4939,7 +4994,7 @@ mod test {
             if let EventType::Decide { leaf_chain, .. } = event.event {
                 let leaf = leaf_chain[0].leaf.clone();
                 let epoch = leaf.epoch(epoch_height);
-                tracing::info!(
+                println!(
                     "Node decided at height: {}, epoch: {:?}",
                     leaf.height(),
                     epoch
@@ -5862,6 +5917,7 @@ mod test {
 
         Ok(())
     }
+
     #[rstest]
     #[case(PosVersionV3::new())]
     #[case(PosVersionV4::new())]
@@ -5878,7 +5934,7 @@ mod test {
             .build();
 
         let api_port = pick_unused_port().expect("No ports free for query service");
-        tracing::info!("API PORT = {api_port}");
+        println!("API PORT = {api_port}");
 
         let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
         let persistence: [_; NUM_NODES] = storage
@@ -5918,10 +5974,10 @@ mod test {
 
         let url = format!("http://localhost:{api_port}").parse().unwrap();
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
-        network.stop_consensus().await;
 
         let validated_state = network.server.decided_state().await;
-        let height = validated_state.block_merkle_tree.num_leaves() - 1;
+        let decided_leaf = network.server.decided_leaf().await;
+        let height = decided_leaf.height();
 
         async fn wait_until_block_height(
             client: &Client<ServerError, StaticVersion<0, 1>>,
@@ -5935,9 +5991,9 @@ mod test {
                     .await
                     .expect("block height not found");
 
-                tracing::info!("{endpoint}: block height = {bh}");
+                println!("{endpoint}: block height = {bh}");
 
-                if bh > height {
+                if bh >= height {
                     return;
                 }
                 sleep(Duration::from_secs(3)).await;
@@ -5956,6 +6012,8 @@ mod test {
             // V1 case
             wait_until_block_height(&client, "reward-state/block-height", height).await;
 
+            network.stop_consensus().await;
+
             for (address, _) in validated_state.reward_merkle_tree_v1.iter() {
                 let (_, expected_proof) = validated_state
                     .reward_merkle_tree_v1
@@ -5963,49 +6021,70 @@ mod test {
                     .expect_ok()
                     .unwrap();
 
-                let api_proof = client
-                    .get::<MerkleProof<
-                        RewardAmount,
-                        RewardAccountV1,
-                        Sha3Node,
-                        { REWARD_MERKLE_TREE_V1_ARITY },
-                    >>(&format!("reward-state/proof/{height}/{address}"))
+                let res = client
+                    .get::<RewardAccountQueryDataV1>(&format!(
+                        "reward-state/proof/{height}/{address}"
+                    ))
                     .send()
                     .await
                     .unwrap();
 
-                assert_eq!(
-                    api_proof, expected_proof,
-                    "Proof mismatch for V1 at {height}, addr={address}"
-                );
+                match res.proof.proof {
+                    RewardMerkleProofV1::Presence(p) => {
+                        assert_eq!(
+                            p, expected_proof,
+                            "Proof mismatch for V1 at {height}, addr={address}"
+                        );
+                    },
+                    other => panic!(
+                        "Expected Present proof for V1 at {height}, addr={address}, got {other:?}"
+                    ),
+                }
             }
         } else {
             // V2 case
             wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
 
-            for (address, _) in validated_state.reward_merkle_tree_v2.iter() {
-                use espresso_types::sparse_mt::KeccakNode;
+            network.stop_consensus().await;
 
+            for (address, _) in validated_state.reward_merkle_tree_v2.iter() {
                 let (_, expected_proof) = validated_state
                     .reward_merkle_tree_v2
                     .lookup(*address)
                     .expect_ok()
                     .unwrap();
 
-                let api_proof = client
-                    .get::<MerkleProof<
-                        RewardAmount,
-                        RewardAccountV2,
-                        KeccakNode,
-                        { REWARD_MERKLE_TREE_V2_ARITY },
-                    >>(&format!("reward-state-v2/proof/{height}/{address}"))
+                let res = client
+                    .get::<RewardAccountQueryDataV2>(&format!(
+                        "reward-state-v2/proof/{height}/{address}"
+                    ))
+                    .send()
+                    .await
+                    .unwrap();
+
+                match res.proof.proof.clone() {
+                    RewardMerkleProofV2::Presence(p) => {
+                        assert_eq!(
+                            p, expected_proof,
+                            "Proof mismatch for V2 at {height}, addr={address}"
+                        );
+                    },
+                    other => panic!(
+                        "Expected Present proof for V2 at {height}, addr={address}, got {other:?}"
+                    ),
+                }
+
+                let reward_claim_input = client
+                    .get::<RewardClaimInput>(&format!(
+                        "reward-state-v2/reward-claim-input/{height}/{address}"
+                    ))
                     .send()
                     .await
                     .unwrap();
 
                 assert_eq!(
-                    api_proof, expected_proof,
-                    "Proof mismatch for V2 at {height}, addr={address}"
+                    reward_claim_input,
+                    res.to_reward_claim_input(Default::default())?
                 );
             }
         }

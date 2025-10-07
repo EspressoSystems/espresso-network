@@ -23,7 +23,7 @@
 
 use std::{fmt::Debug, path::Path, str::FromStr};
 
-use alloy::primitives::U256;
+use alloy::primitives::{Address, U160, U256};
 use committable::Committable;
 use hotshot_example_types::node_types::TestVersions;
 use hotshot_query_service::{
@@ -44,7 +44,7 @@ use hotshot_types::{
     vid::{advz::advz_scheme, avidm::init_avidm_param},
 };
 use jf_advz::VidScheme;
-use jf_merkle_tree_compat::MerkleTreeScheme;
+use jf_merkle_tree_compat::{MerkleTreeScheme, UniversalMerkleTreeScheme};
 use pretty_assertions::assert_eq;
 use rand::{Rng, RngCore};
 use sequencer_utils::commitment_to_u256;
@@ -57,9 +57,14 @@ use vbs::{
 };
 
 use crate::{
+    active_validator_set_from_l1_events,
     v0_1::{self, ADVZNsProof},
     v0_2,
-    v0_3::{EventKey, StakeTableEvent},
+    v0_3::{EventKey, RewardAmount, StakeTableEvent},
+    v0_4::{
+        RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
+        REWARD_MERKLE_TREE_V2_HEIGHT,
+    },
     validator_set_from_l1_events, ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header,
     L1BlockInfo, NamespaceId, NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload,
     SeqTypes, StakeTableHash, Transaction, ValidatedState,
@@ -650,4 +655,48 @@ async fn test_state_cert_query_data_v4() {
     let light_client_cert = LightClientStateUpdateCertificateV2::<SeqTypes>::genesis();
     let state_cert = StateCertQueryDataV2(light_client_cert);
     reference_test_without_committable("v4", "state_cert", &state_cert);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reward_proof_endpoint_serialization() {
+    let mut settings = insta::Settings::clone_current();
+
+    let data_dir =
+        Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../data/insta_snapshots");
+
+    settings.set_snapshot_path(data_dir);
+
+    let mut reward_merkle_tree_v2 = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+    let address = Address::from_slice(&[1; 20]);
+    let balance: U256 = 123_u64.try_into().unwrap();
+    let reward_amount = RewardAmount(balance);
+    reward_merkle_tree_v2
+        .update(RewardAccountV2::from(address), reward_amount)
+        .unwrap();
+
+    // Add some more entries to avoid having all zero siblings in the proof
+    for i in 0..100u64 {
+        let address = Address::from(U160::from(i + 1));
+        let balance: U256 = U256::from((i + 1) * 100);
+        let reward_amount = RewardAmount(balance);
+        reward_merkle_tree_v2
+            .update(RewardAccountV2::from(address), reward_amount)
+            .unwrap();
+    }
+
+    let (proof, _) = RewardAccountProofV2::prove(&reward_merkle_tree_v2, address).unwrap();
+
+    let reward_proof = RewardAccountQueryDataV2 { balance, proof };
+
+    settings.bind(|| {
+        insta::assert_yaml_snapshot!("reward_proof_v2", reward_proof);
+    });
+
+    let reward_claim_input = reward_proof
+        .to_reward_claim_input(Default::default())
+        .unwrap();
+
+    settings.bind(|| {
+        insta::assert_yaml_snapshot!("reward_claim_input_v2", reward_claim_input);
+    });
 }
