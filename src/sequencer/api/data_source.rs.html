@@ -155,155 +155,162 @@
 <a href=#155 id=155 data-nosnippet>155</a>    </span><span class="kw">fn </span>previous_proposal_participation(
 <a href=#156 id=156 data-nosnippet>156</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
 <a href=#157 id=157 data-nosnippet>157</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = HashMap&lt;BLSPubKey, f64&gt;&gt;;
-<a href=#158 id=158 data-nosnippet>158</a>}
-<a href=#159 id=159 data-nosnippet>159</a>
-<a href=#160 id=160 data-nosnippet>160</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">trait </span>CatchupDataSource: Sync {
-<a href=#161 id=161 data-nosnippet>161</a>    <span class="doccomment">/// Get the state of the requested `account`.
-<a href=#162 id=162 data-nosnippet>162</a>    ///
-<a href=#163 id=163 data-nosnippet>163</a>    /// The state is fetched from a snapshot at the given height and view, which _must_ correspond!
-<a href=#164 id=164 data-nosnippet>164</a>    /// `height` is provided to simplify lookups for backends where data is not indexed by view.
-<a href=#165 id=165 data-nosnippet>165</a>    /// This function is intended to be used for catchup, so `view` should be no older than the last
-<a href=#166 id=166 data-nosnippet>166</a>    /// decided view.
-<a href=#167 id=167 data-nosnippet>167</a>    </span><span class="kw">fn </span>get_account(
-<a href=#168 id=168 data-nosnippet>168</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#169 id=169 data-nosnippet>169</a>        instance: <span class="kw-2">&amp;</span>NodeState,
-<a href=#170 id=170 data-nosnippet>170</a>        height: u64,
-<a href=#171 id=171 data-nosnippet>171</a>        view: ViewNumber,
-<a href=#172 id=172 data-nosnippet>172</a>        account: FeeAccount,
-<a href=#173 id=173 data-nosnippet>173</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;AccountQueryData&gt;&gt; {
-<a href=#174 id=174 data-nosnippet>174</a>        <span class="kw">async move </span>{
-<a href=#175 id=175 data-nosnippet>175</a>            <span class="kw">let </span>tree = <span class="self">self
-<a href=#176 id=176 data-nosnippet>176</a>                </span>.get_accounts(instance, height, view, <span class="kw-2">&amp;</span>[account])
-<a href=#177 id=177 data-nosnippet>177</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#178 id=178 data-nosnippet>178</a>            <span class="kw">let </span>(proof, balance) = FeeAccountProof::prove(<span class="kw-2">&amp;</span>tree, account.into()).context(
-<a href=#179 id=179 data-nosnippet>179</a>                <span class="macro">format!</span>(<span class="string">"account {account} not available for height {height}, view {view}"</span>),
-<a href=#180 id=180 data-nosnippet>180</a>            )<span class="question-mark">?</span>;
-<a href=#181 id=181 data-nosnippet>181</a>            <span class="prelude-val">Ok</span>(AccountQueryData { balance, proof })
-<a href=#182 id=182 data-nosnippet>182</a>        }
-<a href=#183 id=183 data-nosnippet>183</a>    }
-<a href=#184 id=184 data-nosnippet>184</a>
-<a href=#185 id=185 data-nosnippet>185</a>    <span class="doccomment">/// Get the state of the requested `accounts`.
-<a href=#186 id=186 data-nosnippet>186</a>    ///
-<a href=#187 id=187 data-nosnippet>187</a>    /// The state is fetched from a snapshot at the given height and view, which _must_ correspond!
-<a href=#188 id=188 data-nosnippet>188</a>    /// `height` is provided to simplify lookups for backends where data is not indexed by view.
-<a href=#189 id=189 data-nosnippet>189</a>    /// This function is intended to be used for catchup, so `view` should be no older than the last
-<a href=#190 id=190 data-nosnippet>190</a>    /// decided view.
-<a href=#191 id=191 data-nosnippet>191</a>    </span><span class="kw">fn </span>get_accounts(
-<a href=#192 id=192 data-nosnippet>192</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#193 id=193 data-nosnippet>193</a>        instance: <span class="kw-2">&amp;</span>NodeState,
-<a href=#194 id=194 data-nosnippet>194</a>        height: u64,
-<a href=#195 id=195 data-nosnippet>195</a>        view: ViewNumber,
-<a href=#196 id=196 data-nosnippet>196</a>        accounts: <span class="kw-2">&amp;</span>[FeeAccount],
-<a href=#197 id=197 data-nosnippet>197</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;FeeMerkleTree&gt;&gt;;
-<a href=#198 id=198 data-nosnippet>198</a>
-<a href=#199 id=199 data-nosnippet>199</a>    <span class="doccomment">/// Get the blocks Merkle tree frontier.
-<a href=#200 id=200 data-nosnippet>200</a>    ///
-<a href=#201 id=201 data-nosnippet>201</a>    /// The state is fetched from a snapshot at the given height and view, which _must_ correspond!
-<a href=#202 id=202 data-nosnippet>202</a>    /// `height` is provided to simplify lookups for backends where data is not indexed by view.
-<a href=#203 id=203 data-nosnippet>203</a>    /// This function is intended to be used for catchup, so `view` should be no older than the last
-<a href=#204 id=204 data-nosnippet>204</a>    /// decided view.
-<a href=#205 id=205 data-nosnippet>205</a>    </span><span class="kw">fn </span>get_frontier(
-<a href=#206 id=206 data-nosnippet>206</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#207 id=207 data-nosnippet>207</a>        instance: <span class="kw-2">&amp;</span>NodeState,
-<a href=#208 id=208 data-nosnippet>208</a>        height: u64,
-<a href=#209 id=209 data-nosnippet>209</a>        view: ViewNumber,
-<a href=#210 id=210 data-nosnippet>210</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;BlocksFrontier&gt;&gt;;
-<a href=#211 id=211 data-nosnippet>211</a>
-<a href=#212 id=212 data-nosnippet>212</a>    <span class="kw">fn </span>get_chain_config(
+<a href=#158 id=158 data-nosnippet>158</a>
+<a href=#159 id=159 data-nosnippet>159</a>    <span class="kw">fn </span>get_all_validators(
+<a href=#160 id=160 data-nosnippet>160</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#161 id=161 data-nosnippet>161</a>        epoch: &lt;T <span class="kw">as </span>NodeType&gt;::Epoch,
+<a href=#162 id=162 data-nosnippet>162</a>        offset: u64,
+<a href=#163 id=163 data-nosnippet>163</a>        limit: u64,
+<a href=#164 id=164 data-nosnippet>164</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;Vec&lt;Validator&lt;PubKey&gt;&gt;&gt;&gt;;
+<a href=#165 id=165 data-nosnippet>165</a>}
+<a href=#166 id=166 data-nosnippet>166</a>
+<a href=#167 id=167 data-nosnippet>167</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">trait </span>CatchupDataSource: Sync {
+<a href=#168 id=168 data-nosnippet>168</a>    <span class="doccomment">/// Get the state of the requested `account`.
+<a href=#169 id=169 data-nosnippet>169</a>    ///
+<a href=#170 id=170 data-nosnippet>170</a>    /// The state is fetched from a snapshot at the given height and view, which _must_ correspond!
+<a href=#171 id=171 data-nosnippet>171</a>    /// `height` is provided to simplify lookups for backends where data is not indexed by view.
+<a href=#172 id=172 data-nosnippet>172</a>    /// This function is intended to be used for catchup, so `view` should be no older than the last
+<a href=#173 id=173 data-nosnippet>173</a>    /// decided view.
+<a href=#174 id=174 data-nosnippet>174</a>    </span><span class="kw">fn </span>get_account(
+<a href=#175 id=175 data-nosnippet>175</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#176 id=176 data-nosnippet>176</a>        instance: <span class="kw-2">&amp;</span>NodeState,
+<a href=#177 id=177 data-nosnippet>177</a>        height: u64,
+<a href=#178 id=178 data-nosnippet>178</a>        view: ViewNumber,
+<a href=#179 id=179 data-nosnippet>179</a>        account: FeeAccount,
+<a href=#180 id=180 data-nosnippet>180</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;AccountQueryData&gt;&gt; {
+<a href=#181 id=181 data-nosnippet>181</a>        <span class="kw">async move </span>{
+<a href=#182 id=182 data-nosnippet>182</a>            <span class="kw">let </span>tree = <span class="self">self
+<a href=#183 id=183 data-nosnippet>183</a>                </span>.get_accounts(instance, height, view, <span class="kw-2">&amp;</span>[account])
+<a href=#184 id=184 data-nosnippet>184</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#185 id=185 data-nosnippet>185</a>            <span class="kw">let </span>(proof, balance) = FeeAccountProof::prove(<span class="kw-2">&amp;</span>tree, account.into()).context(
+<a href=#186 id=186 data-nosnippet>186</a>                <span class="macro">format!</span>(<span class="string">"account {account} not available for height {height}, view {view}"</span>),
+<a href=#187 id=187 data-nosnippet>187</a>            )<span class="question-mark">?</span>;
+<a href=#188 id=188 data-nosnippet>188</a>            <span class="prelude-val">Ok</span>(AccountQueryData { balance, proof })
+<a href=#189 id=189 data-nosnippet>189</a>        }
+<a href=#190 id=190 data-nosnippet>190</a>    }
+<a href=#191 id=191 data-nosnippet>191</a>
+<a href=#192 id=192 data-nosnippet>192</a>    <span class="doccomment">/// Get the state of the requested `accounts`.
+<a href=#193 id=193 data-nosnippet>193</a>    ///
+<a href=#194 id=194 data-nosnippet>194</a>    /// The state is fetched from a snapshot at the given height and view, which _must_ correspond!
+<a href=#195 id=195 data-nosnippet>195</a>    /// `height` is provided to simplify lookups for backends where data is not indexed by view.
+<a href=#196 id=196 data-nosnippet>196</a>    /// This function is intended to be used for catchup, so `view` should be no older than the last
+<a href=#197 id=197 data-nosnippet>197</a>    /// decided view.
+<a href=#198 id=198 data-nosnippet>198</a>    </span><span class="kw">fn </span>get_accounts(
+<a href=#199 id=199 data-nosnippet>199</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#200 id=200 data-nosnippet>200</a>        instance: <span class="kw-2">&amp;</span>NodeState,
+<a href=#201 id=201 data-nosnippet>201</a>        height: u64,
+<a href=#202 id=202 data-nosnippet>202</a>        view: ViewNumber,
+<a href=#203 id=203 data-nosnippet>203</a>        accounts: <span class="kw-2">&amp;</span>[FeeAccount],
+<a href=#204 id=204 data-nosnippet>204</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;FeeMerkleTree&gt;&gt;;
+<a href=#205 id=205 data-nosnippet>205</a>
+<a href=#206 id=206 data-nosnippet>206</a>    <span class="doccomment">/// Get the blocks Merkle tree frontier.
+<a href=#207 id=207 data-nosnippet>207</a>    ///
+<a href=#208 id=208 data-nosnippet>208</a>    /// The state is fetched from a snapshot at the given height and view, which _must_ correspond!
+<a href=#209 id=209 data-nosnippet>209</a>    /// `height` is provided to simplify lookups for backends where data is not indexed by view.
+<a href=#210 id=210 data-nosnippet>210</a>    /// This function is intended to be used for catchup, so `view` should be no older than the last
+<a href=#211 id=211 data-nosnippet>211</a>    /// decided view.
+<a href=#212 id=212 data-nosnippet>212</a>    </span><span class="kw">fn </span>get_frontier(
 <a href=#213 id=213 data-nosnippet>213</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#214 id=214 data-nosnippet>214</a>        commitment: Commitment&lt;ChainConfig&gt;,
-<a href=#215 id=215 data-nosnippet>215</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;ChainConfig&gt;&gt;;
-<a href=#216 id=216 data-nosnippet>216</a>
-<a href=#217 id=217 data-nosnippet>217</a>    <span class="kw">fn </span>get_leaf_chain(
-<a href=#218 id=218 data-nosnippet>218</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#219 id=219 data-nosnippet>219</a>        height: u64,
-<a href=#220 id=220 data-nosnippet>220</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;Vec&lt;Leaf2&gt;&gt;&gt;;
-<a href=#221 id=221 data-nosnippet>221</a>
-<a href=#222 id=222 data-nosnippet>222</a>    <span class="doccomment">/// Get the state of the requested `account`.
-<a href=#223 id=223 data-nosnippet>223</a>    ///
-<a href=#224 id=224 data-nosnippet>224</a>    /// The state is fetched from a snapshot at the given height and view, which _must_ correspond!
-<a href=#225 id=225 data-nosnippet>225</a>    /// `height` is provided to simplify lookups for backends where data is not indexed by view.
-<a href=#226 id=226 data-nosnippet>226</a>    /// This function is intended to be used for catchup, so `view` should be no older than the last
-<a href=#227 id=227 data-nosnippet>227</a>    /// decided view.
-<a href=#228 id=228 data-nosnippet>228</a>    </span><span class="kw">fn </span>get_reward_account_v2(
-<a href=#229 id=229 data-nosnippet>229</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#230 id=230 data-nosnippet>230</a>        instance: <span class="kw-2">&amp;</span>NodeState,
-<a href=#231 id=231 data-nosnippet>231</a>        height: u64,
-<a href=#232 id=232 data-nosnippet>232</a>        view: ViewNumber,
-<a href=#233 id=233 data-nosnippet>233</a>        account: RewardAccountV2,
-<a href=#234 id=234 data-nosnippet>234</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;RewardAccountQueryDataV2&gt;&gt; {
-<a href=#235 id=235 data-nosnippet>235</a>        <span class="kw">async move </span>{
-<a href=#236 id=236 data-nosnippet>236</a>            <span class="kw">let </span>tree = <span class="self">self
-<a href=#237 id=237 data-nosnippet>237</a>                </span>.get_reward_accounts_v2(instance, height, view, <span class="kw-2">&amp;</span>[account])
-<a href=#238 id=238 data-nosnippet>238</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#239 id=239 data-nosnippet>239</a>            <span class="kw">let </span>(proof, balance) = RewardAccountProofV2::prove(<span class="kw-2">&amp;</span>tree, account.into()).context(
-<a href=#240 id=240 data-nosnippet>240</a>                <span class="macro">format!</span>(<span class="string">"reward account {account} not available for height {height}, view {view}"</span>),
-<a href=#241 id=241 data-nosnippet>241</a>            )<span class="question-mark">?</span>;
-<a href=#242 id=242 data-nosnippet>242</a>            <span class="prelude-val">Ok</span>(RewardAccountQueryDataV2 { balance, proof })
-<a href=#243 id=243 data-nosnippet>243</a>        }
-<a href=#244 id=244 data-nosnippet>244</a>    }
-<a href=#245 id=245 data-nosnippet>245</a>
-<a href=#246 id=246 data-nosnippet>246</a>    <span class="kw">fn </span>get_reward_accounts_v2(
-<a href=#247 id=247 data-nosnippet>247</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#248 id=248 data-nosnippet>248</a>        instance: <span class="kw-2">&amp;</span>NodeState,
-<a href=#249 id=249 data-nosnippet>249</a>        height: u64,
-<a href=#250 id=250 data-nosnippet>250</a>        view: ViewNumber,
-<a href=#251 id=251 data-nosnippet>251</a>        accounts: <span class="kw-2">&amp;</span>[RewardAccountV2],
-<a href=#252 id=252 data-nosnippet>252</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;RewardMerkleTreeV2&gt;&gt;;
-<a href=#253 id=253 data-nosnippet>253</a>
-<a href=#254 id=254 data-nosnippet>254</a>    <span class="kw">fn </span>get_reward_account_v1(
-<a href=#255 id=255 data-nosnippet>255</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#256 id=256 data-nosnippet>256</a>        instance: <span class="kw-2">&amp;</span>NodeState,
-<a href=#257 id=257 data-nosnippet>257</a>        height: u64,
-<a href=#258 id=258 data-nosnippet>258</a>        view: ViewNumber,
-<a href=#259 id=259 data-nosnippet>259</a>        account: RewardAccountV1,
-<a href=#260 id=260 data-nosnippet>260</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;RewardAccountQueryDataV1&gt;&gt; {
-<a href=#261 id=261 data-nosnippet>261</a>        <span class="kw">async move </span>{
-<a href=#262 id=262 data-nosnippet>262</a>            <span class="kw">let </span>tree = <span class="self">self
-<a href=#263 id=263 data-nosnippet>263</a>                </span>.get_reward_accounts_v1(instance, height, view, <span class="kw-2">&amp;</span>[account])
-<a href=#264 id=264 data-nosnippet>264</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#265 id=265 data-nosnippet>265</a>            <span class="kw">let </span>(proof, balance) = RewardAccountProofV1::prove(<span class="kw-2">&amp;</span>tree, account.into()).context(
-<a href=#266 id=266 data-nosnippet>266</a>                <span class="macro">format!</span>(<span class="string">"reward account {account} not available for height {height}, view {view}"</span>),
-<a href=#267 id=267 data-nosnippet>267</a>            )<span class="question-mark">?</span>;
-<a href=#268 id=268 data-nosnippet>268</a>            <span class="prelude-val">Ok</span>(RewardAccountQueryDataV1 { balance, proof })
-<a href=#269 id=269 data-nosnippet>269</a>        }
-<a href=#270 id=270 data-nosnippet>270</a>    }
-<a href=#271 id=271 data-nosnippet>271</a>
-<a href=#272 id=272 data-nosnippet>272</a>    <span class="kw">fn </span>get_reward_accounts_v1(
-<a href=#273 id=273 data-nosnippet>273</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#274 id=274 data-nosnippet>274</a>        instance: <span class="kw-2">&amp;</span>NodeState,
-<a href=#275 id=275 data-nosnippet>275</a>        height: u64,
-<a href=#276 id=276 data-nosnippet>276</a>        view: ViewNumber,
-<a href=#277 id=277 data-nosnippet>277</a>        accounts: <span class="kw-2">&amp;</span>[RewardAccountV1],
-<a href=#278 id=278 data-nosnippet>278</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;RewardMerkleTreeV1&gt;&gt;;
-<a href=#279 id=279 data-nosnippet>279</a>}
-<a href=#280 id=280 data-nosnippet>280</a>
-<a href=#281 id=281 data-nosnippet>281</a><span class="attr">#[async_trait]
-<a href=#282 id=282 data-nosnippet>282</a></span><span class="kw">pub trait </span>RequestResponseDataSource&lt;Types: NodeType&gt; {
-<a href=#283 id=283 data-nosnippet>283</a>    <span class="kw">async fn </span>request_vid_shares(
-<a href=#284 id=284 data-nosnippet>284</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#285 id=285 data-nosnippet>285</a>        block_number: u64,
-<a href=#286 id=286 data-nosnippet>286</a>        vid_common_data: VidCommonQueryData&lt;Types&gt;,
-<a href=#287 id=287 data-nosnippet>287</a>        duration: Duration,
-<a href=#288 id=288 data-nosnippet>288</a>    ) -&gt; anyhow::Result&lt;Vec&lt;VidShare&gt;&gt;;
-<a href=#289 id=289 data-nosnippet>289</a>}
-<a href=#290 id=290 data-nosnippet>290</a>
-<a href=#291 id=291 data-nosnippet>291</a><span class="attr">#[cfg(any(test, feature = <span class="string">"testing"</span>))]
-<a href=#292 id=292 data-nosnippet>292</a></span><span class="kw">pub mod </span>testing {
-<a href=#293 id=293 data-nosnippet>293</a>    <span class="kw">use super</span>::{<span class="kw">super</span>::Options, <span class="kw-2">*</span>};
-<a href=#294 id=294 data-nosnippet>294</a>
-<a href=#295 id=295 data-nosnippet>295</a>    <span class="attr">#[async_trait]
-<a href=#296 id=296 data-nosnippet>296</a>    </span><span class="kw">pub trait </span>TestableSequencerDataSource: SequencerDataSource {
-<a href=#297 id=297 data-nosnippet>297</a>        <span class="kw">type </span>Storage: Sync;
-<a href=#298 id=298 data-nosnippet>298</a>
-<a href=#299 id=299 data-nosnippet>299</a>        <span class="kw">async fn </span>create_storage() -&gt; <span class="self">Self</span>::Storage;
-<a href=#300 id=300 data-nosnippet>300</a>        <span class="kw">fn </span>persistence_options(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage) -&gt; <span class="self">Self</span>::Options;
-<a href=#301 id=301 data-nosnippet>301</a>        <span class="kw">fn </span>leaf_only_ds_options(
-<a href=#302 id=302 data-nosnippet>302</a>            _storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage,
-<a href=#303 id=303 data-nosnippet>303</a>            _opt: Options,
-<a href=#304 id=304 data-nosnippet>304</a>        ) -&gt; anyhow::Result&lt;Options&gt; {
-<a href=#305 id=305 data-nosnippet>305</a>            <span class="macro">anyhow::bail!</span>(<span class="string">"not supported"</span>)
-<a href=#306 id=306 data-nosnippet>306</a>        }
-<a href=#307 id=307 data-nosnippet>307</a>        <span class="kw">fn </span>options(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage, opt: Options) -&gt; Options;
-<a href=#308 id=308 data-nosnippet>308</a>    }
-<a href=#309 id=309 data-nosnippet>309</a>}</code></pre></div></section></main></body></html>
+<a href=#214 id=214 data-nosnippet>214</a>        instance: <span class="kw-2">&amp;</span>NodeState,
+<a href=#215 id=215 data-nosnippet>215</a>        height: u64,
+<a href=#216 id=216 data-nosnippet>216</a>        view: ViewNumber,
+<a href=#217 id=217 data-nosnippet>217</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;BlocksFrontier&gt;&gt;;
+<a href=#218 id=218 data-nosnippet>218</a>
+<a href=#219 id=219 data-nosnippet>219</a>    <span class="kw">fn </span>get_chain_config(
+<a href=#220 id=220 data-nosnippet>220</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#221 id=221 data-nosnippet>221</a>        commitment: Commitment&lt;ChainConfig&gt;,
+<a href=#222 id=222 data-nosnippet>222</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;ChainConfig&gt;&gt;;
+<a href=#223 id=223 data-nosnippet>223</a>
+<a href=#224 id=224 data-nosnippet>224</a>    <span class="kw">fn </span>get_leaf_chain(
+<a href=#225 id=225 data-nosnippet>225</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#226 id=226 data-nosnippet>226</a>        height: u64,
+<a href=#227 id=227 data-nosnippet>227</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;Vec&lt;Leaf2&gt;&gt;&gt;;
+<a href=#228 id=228 data-nosnippet>228</a>
+<a href=#229 id=229 data-nosnippet>229</a>    <span class="doccomment">/// Get the state of the requested `account`.
+<a href=#230 id=230 data-nosnippet>230</a>    ///
+<a href=#231 id=231 data-nosnippet>231</a>    /// The state is fetched from a snapshot at the given height and view, which _must_ correspond!
+<a href=#232 id=232 data-nosnippet>232</a>    /// `height` is provided to simplify lookups for backends where data is not indexed by view.
+<a href=#233 id=233 data-nosnippet>233</a>    /// This function is intended to be used for catchup, so `view` should be no older than the last
+<a href=#234 id=234 data-nosnippet>234</a>    /// decided view.
+<a href=#235 id=235 data-nosnippet>235</a>    </span><span class="kw">fn </span>get_reward_account_v2(
+<a href=#236 id=236 data-nosnippet>236</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#237 id=237 data-nosnippet>237</a>        instance: <span class="kw-2">&amp;</span>NodeState,
+<a href=#238 id=238 data-nosnippet>238</a>        height: u64,
+<a href=#239 id=239 data-nosnippet>239</a>        view: ViewNumber,
+<a href=#240 id=240 data-nosnippet>240</a>        account: RewardAccountV2,
+<a href=#241 id=241 data-nosnippet>241</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;RewardAccountQueryDataV2&gt;&gt; {
+<a href=#242 id=242 data-nosnippet>242</a>        <span class="kw">async move </span>{
+<a href=#243 id=243 data-nosnippet>243</a>            <span class="kw">let </span>tree = <span class="self">self
+<a href=#244 id=244 data-nosnippet>244</a>                </span>.get_reward_accounts_v2(instance, height, view, <span class="kw-2">&amp;</span>[account])
+<a href=#245 id=245 data-nosnippet>245</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#246 id=246 data-nosnippet>246</a>            <span class="kw">let </span>(proof, balance) = RewardAccountProofV2::prove(<span class="kw-2">&amp;</span>tree, account.into()).context(
+<a href=#247 id=247 data-nosnippet>247</a>                <span class="macro">format!</span>(<span class="string">"reward account {account} not available for height {height}, view {view}"</span>),
+<a href=#248 id=248 data-nosnippet>248</a>            )<span class="question-mark">?</span>;
+<a href=#249 id=249 data-nosnippet>249</a>            <span class="prelude-val">Ok</span>(RewardAccountQueryDataV2 { balance, proof })
+<a href=#250 id=250 data-nosnippet>250</a>        }
+<a href=#251 id=251 data-nosnippet>251</a>    }
+<a href=#252 id=252 data-nosnippet>252</a>
+<a href=#253 id=253 data-nosnippet>253</a>    <span class="kw">fn </span>get_reward_accounts_v2(
+<a href=#254 id=254 data-nosnippet>254</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#255 id=255 data-nosnippet>255</a>        instance: <span class="kw-2">&amp;</span>NodeState,
+<a href=#256 id=256 data-nosnippet>256</a>        height: u64,
+<a href=#257 id=257 data-nosnippet>257</a>        view: ViewNumber,
+<a href=#258 id=258 data-nosnippet>258</a>        accounts: <span class="kw-2">&amp;</span>[RewardAccountV2],
+<a href=#259 id=259 data-nosnippet>259</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;RewardMerkleTreeV2&gt;&gt;;
+<a href=#260 id=260 data-nosnippet>260</a>
+<a href=#261 id=261 data-nosnippet>261</a>    <span class="kw">fn </span>get_reward_account_v1(
+<a href=#262 id=262 data-nosnippet>262</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#263 id=263 data-nosnippet>263</a>        instance: <span class="kw-2">&amp;</span>NodeState,
+<a href=#264 id=264 data-nosnippet>264</a>        height: u64,
+<a href=#265 id=265 data-nosnippet>265</a>        view: ViewNumber,
+<a href=#266 id=266 data-nosnippet>266</a>        account: RewardAccountV1,
+<a href=#267 id=267 data-nosnippet>267</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;RewardAccountQueryDataV1&gt;&gt; {
+<a href=#268 id=268 data-nosnippet>268</a>        <span class="kw">async move </span>{
+<a href=#269 id=269 data-nosnippet>269</a>            <span class="kw">let </span>tree = <span class="self">self
+<a href=#270 id=270 data-nosnippet>270</a>                </span>.get_reward_accounts_v1(instance, height, view, <span class="kw-2">&amp;</span>[account])
+<a href=#271 id=271 data-nosnippet>271</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#272 id=272 data-nosnippet>272</a>            <span class="kw">let </span>(proof, balance) = RewardAccountProofV1::prove(<span class="kw-2">&amp;</span>tree, account.into()).context(
+<a href=#273 id=273 data-nosnippet>273</a>                <span class="macro">format!</span>(<span class="string">"reward account {account} not available for height {height}, view {view}"</span>),
+<a href=#274 id=274 data-nosnippet>274</a>            )<span class="question-mark">?</span>;
+<a href=#275 id=275 data-nosnippet>275</a>            <span class="prelude-val">Ok</span>(RewardAccountQueryDataV1 { balance, proof })
+<a href=#276 id=276 data-nosnippet>276</a>        }
+<a href=#277 id=277 data-nosnippet>277</a>    }
+<a href=#278 id=278 data-nosnippet>278</a>
+<a href=#279 id=279 data-nosnippet>279</a>    <span class="kw">fn </span>get_reward_accounts_v1(
+<a href=#280 id=280 data-nosnippet>280</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#281 id=281 data-nosnippet>281</a>        instance: <span class="kw-2">&amp;</span>NodeState,
+<a href=#282 id=282 data-nosnippet>282</a>        height: u64,
+<a href=#283 id=283 data-nosnippet>283</a>        view: ViewNumber,
+<a href=#284 id=284 data-nosnippet>284</a>        accounts: <span class="kw-2">&amp;</span>[RewardAccountV1],
+<a href=#285 id=285 data-nosnippet>285</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;RewardMerkleTreeV1&gt;&gt;;
+<a href=#286 id=286 data-nosnippet>286</a>}
+<a href=#287 id=287 data-nosnippet>287</a>
+<a href=#288 id=288 data-nosnippet>288</a><span class="attr">#[async_trait]
+<a href=#289 id=289 data-nosnippet>289</a></span><span class="kw">pub trait </span>RequestResponseDataSource&lt;Types: NodeType&gt; {
+<a href=#290 id=290 data-nosnippet>290</a>    <span class="kw">async fn </span>request_vid_shares(
+<a href=#291 id=291 data-nosnippet>291</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#292 id=292 data-nosnippet>292</a>        block_number: u64,
+<a href=#293 id=293 data-nosnippet>293</a>        vid_common_data: VidCommonQueryData&lt;Types&gt;,
+<a href=#294 id=294 data-nosnippet>294</a>        duration: Duration,
+<a href=#295 id=295 data-nosnippet>295</a>    ) -&gt; anyhow::Result&lt;Vec&lt;VidShare&gt;&gt;;
+<a href=#296 id=296 data-nosnippet>296</a>}
+<a href=#297 id=297 data-nosnippet>297</a>
+<a href=#298 id=298 data-nosnippet>298</a><span class="attr">#[cfg(any(test, feature = <span class="string">"testing"</span>))]
+<a href=#299 id=299 data-nosnippet>299</a></span><span class="kw">pub mod </span>testing {
+<a href=#300 id=300 data-nosnippet>300</a>    <span class="kw">use super</span>::{<span class="kw">super</span>::Options, <span class="kw-2">*</span>};
+<a href=#301 id=301 data-nosnippet>301</a>
+<a href=#302 id=302 data-nosnippet>302</a>    <span class="attr">#[async_trait]
+<a href=#303 id=303 data-nosnippet>303</a>    </span><span class="kw">pub trait </span>TestableSequencerDataSource: SequencerDataSource {
+<a href=#304 id=304 data-nosnippet>304</a>        <span class="kw">type </span>Storage: Sync;
+<a href=#305 id=305 data-nosnippet>305</a>
+<a href=#306 id=306 data-nosnippet>306</a>        <span class="kw">async fn </span>create_storage() -&gt; <span class="self">Self</span>::Storage;
+<a href=#307 id=307 data-nosnippet>307</a>        <span class="kw">fn </span>persistence_options(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage) -&gt; <span class="self">Self</span>::Options;
+<a href=#308 id=308 data-nosnippet>308</a>        <span class="kw">fn </span>leaf_only_ds_options(
+<a href=#309 id=309 data-nosnippet>309</a>            _storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage,
+<a href=#310 id=310 data-nosnippet>310</a>            _opt: Options,
+<a href=#311 id=311 data-nosnippet>311</a>        ) -&gt; anyhow::Result&lt;Options&gt; {
+<a href=#312 id=312 data-nosnippet>312</a>            <span class="macro">anyhow::bail!</span>(<span class="string">"not supported"</span>)
+<a href=#313 id=313 data-nosnippet>313</a>        }
+<a href=#314 id=314 data-nosnippet>314</a>        <span class="kw">fn </span>options(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage, opt: Options) -&gt; Options;
+<a href=#315 id=315 data-nosnippet>315</a>    }
+<a href=#316 id=316 data-nosnippet>316</a>}</code></pre></div></section></main></body></html>
