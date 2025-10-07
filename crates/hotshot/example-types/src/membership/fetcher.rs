@@ -129,9 +129,9 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
 
                         let Some(leaf) = leaves.get(&requested_height) else {
                             tracing::error!(
-                                "Block at height {requested_height} not found in storage"
+                                "Block at height {requested_height} not found in storage.\n\n \
+                                 stored leaves: {leaves:?}"
                             );
-                            tracing::error!("stored leaves: {leaves:?}");
                             continue;
                         };
 
