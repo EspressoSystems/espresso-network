@@ -288,9 +288,13 @@ impl<
     ) -> anyhow::Result<Leaf2<TYPES>> {
         let membership_reader = membership.read().await;
 
-        for node in membership_reader.inner.full_stake_table() {
-            if let Ok(leaf) = membership_reader
-                .fetcher
+        let full_stake_table = membership_reader.inner.full_stake_table();
+        let fetcher = membership_reader.fetcher.clone();
+
+        drop(membership_reader);
+
+        for node in full_stake_table {
+            if let Ok(leaf) = fetcher
                 .read()
                 .await
                 .fetch_leaf(block_height, node.signature_key)
@@ -308,7 +312,15 @@ impl<
         epoch: TYPES::Epoch,
     ) -> anyhow::Result<DrbResult> {
         let membership_reader = membership.read().await;
-        if let Ok(drb_result) = membership_reader.inner.get_epoch_drb(*epoch) {
+
+        let epoch_height = membership_reader.epoch_height;
+        let epoch_drb = membership_reader.inner.get_epoch_drb(*epoch);
+        let full_stake_table = membership_reader.inner.full_stake_table();
+        let fetcher = membership_reader.fetcher.clone();
+
+        drop(membership_reader);
+
+        if let Ok(drb_result) = epoch_drb {
             Ok(drb_result)
         } else {
             let previous_epoch = match epoch.checked_sub(1) {
@@ -318,14 +330,12 @@ impl<
                 },
             };
 
-            let drb_block_height =
-                transition_block_for_epoch(previous_epoch, membership_reader.epoch_height);
+            let drb_block_height = transition_block_for_epoch(previous_epoch, epoch_height);
 
             let mut drb_leaf = None;
 
-            for node in membership_reader.inner.full_stake_table() {
-                if let Ok(leaf) = membership_reader
-                    .fetcher
+            for node in full_stake_table {
+                if let Ok(leaf) = fetcher
                     .read()
                     .await
                     .fetch_leaf(drb_block_height, node.signature_key)
