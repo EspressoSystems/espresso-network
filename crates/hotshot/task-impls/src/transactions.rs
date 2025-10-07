@@ -55,6 +55,59 @@ const BUILDER_MINIMUM_QUERY_TIME: Duration = Duration::from_millis(300);
 /// Delay between re-tries on unsuccessful calls
 const RETRY_DELAY: Duration = Duration::from_millis(100);
 
+/// Send the event to the event stream that we are proposing an empty block
+pub async fn send_empty_block<TYPES: NodeType, V: Versions>(
+    consensus: &OuterConsensus<TYPES>,
+    membership_coordinator: &EpochMembershipCoordinator<TYPES>,
+    event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,
+    block_view: TYPES::View,
+    block_epoch: Option<TYPES::Epoch>,
+    version: Version,
+) {
+    // If we couldn't get a block, send an empty block
+    tracing::info!("Failed to get a block for view {block_view}, proposing empty block");
+
+    // Increment the metric for number of empty blocks proposed
+    consensus
+        .write()
+        .await
+        .metrics
+        .number_of_empty_blocks_proposed
+        .add(1);
+
+    let num_storage_nodes = match membership_coordinator
+        .stake_table_for_epoch(block_epoch)
+        .await
+    {
+        Ok(epoch_stake_table) => epoch_stake_table.total_nodes().await,
+        Err(e) => {
+            tracing::warn!("Failed to get num_storage_nodes for epoch {block_epoch:?}: {e}");
+            return;
+        },
+    };
+
+    let Some(null_fee) = null_block::builder_fee::<TYPES, V>(num_storage_nodes, version) else {
+        tracing::error!("Failed to get null fee");
+        return;
+    };
+
+    // Create an empty block payload and metadata
+    let (_, metadata) = <TYPES as NodeType>::BlockPayload::empty();
+
+    // Broadcast the empty block
+    broadcast_event(
+        Arc::new(HotShotEvent::BlockRecv(PackedBundle::new(
+            vec![].into(),
+            metadata,
+            block_view,
+            block_epoch,
+            vec1::vec1![null_fee],
+        ))),
+        event_stream,
+    )
+    .await;
+}
+
 /// Builder Provided Responses
 pub struct BuilderResponse<TYPES: NodeType> {
     /// Fee information
@@ -170,8 +223,15 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                         + 1
                 {
                     tracing::warn!("High QC in epoch version and not the first QC after upgrade");
-                    self.send_empty_block(event_stream, block_view, block_epoch, version)
-                        .await;
+                    send_empty_block::<TYPES, V>(
+                        &self.consensus,
+                        &self.membership_coordinator,
+                        event_stream,
+                        block_view,
+                        block_epoch,
+                        version,
+                    )
+                    .await;
                     return None;
                 }
                 // 0 here so we use the highest block number in the calculation below
@@ -200,8 +260,15 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                         "Sending empty block event. View number: {block_view}. Parent Block \
                          number: {high_qc_block_number}"
                     );
-                    self.send_empty_block(event_stream, block_view, block_epoch, version)
-                        .await;
+                    send_empty_block::<TYPES, V>(
+                        &self.consensus,
+                        &self.membership_coordinator,
+                        event_stream,
+                        block_view,
+                        block_epoch,
+                        version,
+                    )
+                    .await;
                     return None;
                 }
             }
@@ -241,64 +308,18 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
             )
             .await;
         } else {
-            self.send_empty_block(event_stream, block_view, block_epoch, version)
-                .await;
+            send_empty_block::<TYPES, V>(
+                &self.consensus,
+                &self.membership_coordinator,
+                event_stream,
+                block_view,
+                block_epoch,
+                version,
+            )
+            .await;
         };
 
         return None;
-    }
-
-    /// Send the event to the event stream that we are proposing an empty block
-    async fn send_empty_block(
-        &self,
-        event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,
-        block_view: TYPES::View,
-        block_epoch: Option<TYPES::Epoch>,
-        version: Version,
-    ) {
-        // If we couldn't get a block, send an empty block
-        tracing::info!("Failed to get a block for view {block_view}, proposing empty block");
-
-        // Increment the metric for number of empty blocks proposed
-        self.consensus
-            .write()
-            .await
-            .metrics
-            .number_of_empty_blocks_proposed
-            .add(1);
-
-        let num_storage_nodes = match self
-            .membership_coordinator
-            .stake_table_for_epoch(block_epoch)
-            .await
-        {
-            Ok(epoch_stake_table) => epoch_stake_table.total_nodes().await,
-            Err(e) => {
-                tracing::warn!("Failed to get num_storage_nodes for epoch {block_epoch:?}: {e}");
-                return;
-            },
-        };
-
-        let Some(null_fee) = null_block::builder_fee::<TYPES, V>(num_storage_nodes, version) else {
-            tracing::error!("Failed to get null fee");
-            return;
-        };
-
-        // Create an empty block payload and metadata
-        let (_, metadata) = <TYPES as NodeType>::BlockPayload::empty();
-
-        // Broadcast the empty block
-        broadcast_event(
-            Arc::new(HotShotEvent::BlockRecv(PackedBundle::new(
-                vec![].into(),
-                metadata,
-                block_view,
-                block_epoch,
-                vec1::vec1![null_fee],
-            ))),
-            event_stream,
-        )
-        .await;
     }
 
     /// Produce a null block
