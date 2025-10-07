@@ -295,7 +295,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             .set_drb_difficulty_selector(drb_difficulty_selector)
             .await;
 
-        for da_committee in config.da_committees.iter() {
+        for da_committee in &config.da_committees {
             if current_version >= da_committee.start_version {
                 membership_coordinator
                     .membership()

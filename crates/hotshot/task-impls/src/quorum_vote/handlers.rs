@@ -169,7 +169,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
             .await;
         }
 
-        for da_committee in task_state.da_committees.iter() {
+        for da_committee in &task_state.da_committees {
             if cert.data.new_version >= da_committee.start_version {
                 task_state
                     .membership
