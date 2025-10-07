@@ -691,9 +691,7 @@ async fn test_reward_proof_endpoint_serialization() {
         insta::assert_yaml_snapshot!("reward_proof_v2", reward_proof);
     });
 
-    let reward_claim_input = reward_proof
-        .to_reward_claim_input(Default::default())
-        .unwrap();
+    let reward_claim_input = reward_proof.to_reward_claim_input().unwrap();
 
     settings.bind(|| {
         insta::assert_yaml_snapshot!("reward_claim_input_v2", reward_claim_input);

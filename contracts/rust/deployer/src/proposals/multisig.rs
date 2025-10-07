@@ -563,8 +563,14 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
         Address::random()
     };
 
-    // no reinitializer so empty init data
-    let init_data = "0x".to_string();
+    let reward_claim_addr = contracts
+        .address(Contract::RewardClaimProxy)
+        .ok_or_else(|| anyhow!("RewardClaimProxy not found"))?;
+    let proxy_as_v2 = EspTokenV2::new(proxy_addr, &provider);
+    let init_data = proxy_as_v2
+        .initializeV2(reward_claim_addr)
+        .calldata()
+        .to_owned();
 
     // invoke upgrade on proxy via the safeSDK
     let result = call_upgrade_proxy_script(
@@ -577,10 +583,15 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
     )
     .await?;
 
-    tracing::info!("No init data to be signed");
+    tracing::info!(
+        %reward_claim_addr,
+        "Data to be signed: Function: initializeV2 Arguments:"
+    );
+
     if !dry_run {
         tracing::info!(
-                "EspTokenProxy upgrade proposal sent. Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
+                "EspTokenProxy upgrade proposal sent. Send this link to the signers to \
+                 sign the proposal: https://app.safe.global/transactions/queue?safe={}",
                 owner_addr
             );
     }

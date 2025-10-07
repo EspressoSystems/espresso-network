@@ -550,6 +550,9 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
     pub async fn deploy_all(&self, contracts: &mut Contracts) -> Result<()> {
         self.deploy_to_stake_table_v1(contracts).await?;
         self.deploy(contracts, Contract::StakeTableV2).await?;
+        self.deploy(contracts, Contract::LightClientV3).await?;
+        self.deploy(contracts, Contract::EspTokenV2).await?;
+        self.deploy(contracts, Contract::RewardClaimProxy).await?;
         Ok(())
     }
 

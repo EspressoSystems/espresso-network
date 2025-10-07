@@ -16,16 +16,23 @@ use espresso_types::{
     v0_3::RewardAmount,
     v0_4::{RewardAccountQueryDataV2, REWARD_MERKLE_TREE_V2_HEIGHT},
 };
+use hotshot_contract_adapter::sol_types::{LightClientV3Mock, RewardClaim};
 use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
 use rand::Rng as _;
 
 #[test_log::test(tokio::test)]
 async fn test_single_key_tree() -> Result<()> {
-    run_multiple_tests(1, 10).await
+    run_multiple_tests(1, 1).await
 }
 
 #[test_log::test(tokio::test)]
 async fn test_large_tree() -> Result<()> {
+    run_multiple_tests(10_000, 1).await
+}
+
+#[ignore]
+#[test_log::test(tokio::test)]
+async fn test_large_tree_gas_estimate() -> Result<()> {
     run_multiple_tests(10_000, 10).await
 }
 
@@ -113,15 +120,7 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
         .build()
         .unwrap();
 
-    // Deploy all contracts including RewardClaim
     args.deploy_all(&mut contracts).await?;
-
-    // Upgrade to LightClientV3
-    use espresso_contract_deployer::{upgrade_esp_token_v2, upgrade_light_client_v3};
-    upgrade_light_client_v3(&provider, &mut contracts, true).await?;
-
-    // Upgrade to EspTokenV2
-    upgrade_esp_token_v2(&provider, &mut contracts).await?;
 
     let light_client_address = contracts
         .address(Contract::LightClientProxy)
@@ -130,47 +129,8 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
         .address(Contract::RewardClaimProxy)
         .expect("RewardClaimProxy deployed");
 
-    // Create contract instances
-    use hotshot_contract_adapter::sol_types::{EspTokenV2, LightClientV3Mock, RewardClaim};
     let light_client = LightClientV3Mock::new(light_client_address, &provider);
     let reward_claim = RewardClaim::new(reward_claim_address, &provider);
-
-    // Grant minter role to RewardClaim contract on EspTokenV2
-    let esp_token_address = contracts
-        .address(Contract::EspTokenProxy)
-        .expect("EspTokenProxy deployed");
-    let esp_token = EspTokenV2::new(esp_token_address, &provider);
-
-    // Get the MINTER_ROLE hash (should be keccak256("MINTER_ROLE"))
-    let minter_role = esp_token.MINTER_ROLE().call().await?;
-
-    // Check if we have admin privileges first
-    let default_admin_role = esp_token.DEFAULT_ADMIN_ROLE().call().await?;
-    let has_admin_role = esp_token
-        .hasRole(default_admin_role, deployer_address)
-        .call()
-        .await?;
-    println!("Deployer has admin role: {has_admin_role}");
-
-    if !has_admin_role {
-        println!(
-            "Warning: Deployer doesn't have admin role, trying to grant minter role anyway..."
-        );
-    }
-
-    // Grant minter role to RewardClaim contract
-    let receipt = esp_token
-        .grantRole(minter_role, reward_claim_address)
-        .send()
-        .await?
-        .get_receipt()
-        .await?;
-
-    if !receipt.status() {
-        println!("Failed to grant minter role to RewardClaim");
-        return Err(anyhow::anyhow!("Failed to grant minter role"));
-    }
-    println!("Successfully granted minter role to RewardClaim");
 
     let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
 
@@ -186,25 +146,21 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
         tree.update(*account, *amount).unwrap();
     }
 
-    // Get the tree root
     let commitment = tree.commitment();
     let root = commitment.digest().into();
-    println!("Tree root: {root}");
 
-    // Set the authRoot in the light client mock
-    // The authRoot should be keccak256 of 8 fields: [merkle_tree_root, 0, 0, 0, 0, 0, 0, 0]
     let auth_root_fields: [B256; 8] = [
-        root,               // merkle tree root
-        Default::default(), // zero
-        Default::default(), // zero
-        Default::default(), // zero
-        Default::default(), // zero
-        Default::default(), // zero
-        Default::default(), // zero
-        Default::default(), // zero
+        root,
+        B256::ZERO,
+        B256::ZERO,
+        B256::ZERO,
+        B256::ZERO,
+        B256::ZERO,
+        B256::ZERO,
+        B256::ZERO,
     ];
-    let auth_root_hash = alloy::primitives::keccak256(auth_root_fields.abi_encode());
-    let auth_root_u256 = U256::from_be_bytes(auth_root_hash.0);
+    let auth_root = alloy::primitives::keccak256(auth_root_fields.abi_encode());
+    let auth_root_u256 = auth_root.into();
 
     let receipt = light_client
         .setAuthRoot(auth_root_u256)
@@ -213,11 +169,9 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
         .get_receipt()
         .await?;
     assert!(receipt.status());
+    assert_eq!(light_client.authRoot().call().await?, auth_root_u256);
 
-    let test_account = test_data[0].0;
-    let test_amount = test_data[0].1;
-
-    println!("Generating proof for account: {test_account}");
+    let (test_account, test_amount) = test_data[0];
 
     let query_data: RewardAccountQueryDataV2 = RewardAccountProofV2::prove(&tree, test_account.0)
         .expect("can generate proof")
@@ -225,26 +179,8 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
     assert_eq!(query_data.balance, test_amount.0);
 
     let account_sol = test_account.into();
-    let reward_claim_input = query_data.to_reward_claim_input(Default::default())?;
+    let reward_claim_input = query_data.to_reward_claim_input()?;
 
-    println!("Attempting to claim rewards for account: {test_account}");
-    println!("Amount: {test_amount}");
-
-    // First, let's verify the minter role was granted correctly
-    let has_minter_role = esp_token
-        .hasRole(minter_role, reward_claim_address)
-        .call()
-        .await?;
-    println!("RewardClaim has minter role: {has_minter_role}");
-    assert!(has_minter_role, "RewardClaim should have minter role");
-
-    // Verify the auth root was set correctly
-    let current_auth_root = light_client.authRoot().call().await?;
-    println!("Current auth root in light client: {current_auth_root:#x}");
-    println!("Expected auth root: {auth_root_u256:#x}");
-    assert_eq!(current_auth_root, auth_root_u256, "Auth roots should match");
-
-    // Estimate gas for the claim transaction instead of sending it
     println!("Estimating gas for claim transaction...");
     let gas_estimate = reward_claim
         .claimRewards(

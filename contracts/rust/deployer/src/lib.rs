@@ -850,8 +850,14 @@ pub async fn upgrade_esp_token_v2(
     assert!(is_contract(&provider, v2_addr).await?);
 
     // prepare init calldata for V2
+    let reward_claim_addr = contracts
+        .address(Contract::RewardClaimProxy)
+        .ok_or_else(|| anyhow!("RewardClaimProxy not found"))?;
     let proxy_as_v2 = EspTokenV2::new(proxy_addr, &provider);
-    let init_data = proxy_as_v2.initializeV2().calldata().to_owned();
+    let init_data = proxy_as_v2
+        .initializeV2(reward_claim_addr)
+        .calldata()
+        .to_owned();
 
     // invoke upgrade on proxy with initializeV2 call
     let receipt = proxy
@@ -866,7 +872,8 @@ pub async fn upgrade_esp_token_v2(
         let proxy_as_v2 = EspTokenV2::new(proxy_addr, &provider);
         assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
         assert_eq!(proxy_as_v2.name().call().await?, "Espresso");
-        tracing::info!(%v2_addr, "EspToken successfully upgraded to")
+        assert_eq!(proxy_as_v2.rewardClaim().call().await?, reward_claim_addr);
+        tracing::info!(%v2_addr, "EspToken successfully upgraded to");
     } else {
         anyhow::bail!("EspToken upgrade failed: {:?}", receipt);
     }
@@ -2595,7 +2602,7 @@ mod tests {
         // deploy token
         let init_recipient = provider.get_accounts().await?[1];
         let token_owner = provider.get_accounts().await?[0];
-        let token_name = "Espresso Token";
+        let token_name = "Espresso";
         let token_symbol = "ESP";
         let initial_supply = U256::from(3590000000u64);
         let token_proxy_addr = deploy_token_proxy(
@@ -2610,6 +2617,9 @@ mod tests {
         .await?;
         let esp_token = EspToken::new(token_proxy_addr, &provider);
         assert_eq!(esp_token.name().call().await?, token_name);
+
+        let fake_reward_claim = Address::random();
+        contracts.insert(Contract::RewardClaimProxy, fake_reward_claim);
 
         // upgrade to v2
         upgrade_esp_token_v2(&provider, &mut contracts).await?;
@@ -2637,6 +2647,8 @@ mod tests {
             esp_token_v2.balanceOf(token_owner).call().await?,
             U256::ZERO
         );
+
+        assert_eq!(esp_token_v2.rewardClaim().call().await?, fake_reward_claim);
 
         Ok(())
     }
@@ -2744,6 +2756,14 @@ mod tests {
         let esp_token = EspToken::new(esp_token_proxy_addr, &provider);
         assert_eq!(esp_token.owner().call().await?, multisig_admin);
 
+        let fake_reward_claim = Address::random();
+        contracts.insert(Contract::RewardClaimProxy, fake_reward_claim);
+
+        let init_data = EspTokenV2::new(Address::ZERO, &provider)
+            .initializeV2(fake_reward_claim)
+            .calldata()
+            .to_owned();
+
         // then send upgrade proposal to the multisig wallet
         let result = upgrade_esp_token_v2_multisig_owner(
             &provider,
@@ -2761,7 +2781,7 @@ mod tests {
             assert_eq!(data["rpcUrl"], sepolia_rpc_url);
             assert_eq!(data["safeAddress"], multisig_admin.to_string());
             assert_eq!(data["proxyAddress"], esp_token_proxy_addr.to_string());
-            assert_eq!(data["initData"], "0x");
+            assert_eq!(data["initData"], init_data.to_string());
             assert_eq!(data["useHardwareWallet"], false);
         }
         // v1 state persistence cannot be tested here because the upgrade proposal is not yet executed

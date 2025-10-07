@@ -2,29 +2,41 @@
 pragma solidity ^0.8.0;
 
 import "./EspToken.sol";
-import { AccessControlUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 
-contract EspTokenV2 is EspToken, AccessControlUpgradeable {
-    bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
+/// @title EspTokenV2
+/// @notice Upgrades EspToken to allow minting by the RewardClaim contract
+contract EspTokenV2 is EspToken {
+    /// @notice Address of the RewardClaim contract authorized to mint tokens
+    /// @notice Can only be set once, during initialization.
+    address public rewardClaim;
+
+    /// @notice A non-RewardClaim address attempts to mint
+    error OnlyRewardClaim();
 
     constructor() {
         _disableInitializers();
     }
 
-    function initializeV2() public reinitializer(2) {
-        __AccessControl_init();
-        _grantRole(DEFAULT_ADMIN_ROLE, owner());
+    /// @notice Initializes the V2 upgrade with the RewardClaim contract address
+    /// @param _rewardClaim Address of the RewardClaim contract
+    function initializeV2(address _rewardClaim) public reinitializer(2) {
+        rewardClaim = _rewardClaim;
     }
 
-    function mint(address to, uint256 amount) public onlyRole(MINTER_ROLE) {
+    /// @notice Mints new tokens to a specified address
+    /// @notice Only the RewardClaim contract can mint new tokens
+    ///
+    /// @param to Address to receive the minted tokens
+    /// @param amount Number of tokens to mint
+    function mint(address to, uint256 amount) public {
+        require(msg.sender == rewardClaim, OnlyRewardClaim());
         _mint(to, amount);
     }
 
-    function name() public pure override returns (string memory) {
-        return "Espresso";
-    }
-
+    /// @notice Returns the contract version
+    /// @return majorVersion Major version number
+    /// @return minorVersion Minor version number
+    /// @return patchVersion Patch version number
     function getVersion()
         public
         pure

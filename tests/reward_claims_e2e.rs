@@ -118,38 +118,30 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     // Use DeployerArgsBuilder to deploy all contracts at once
     let exit_escrow_period = U256::from(300); // 300 seconds
     let args = DeployerArgsBuilder::default()
-        .deployer(deployer_provider.clone())
-        .mock_light_client(true)
-        .genesis_lc_state(genesis_state.clone())
-        .genesis_st_state(genesis_stake.clone())
         .blocks_per_epoch(blocks_per_epoch)
+        .deployer(deployer_provider.clone())
         .epoch_start_block(epoch_start_block)
         .exit_escrow_period(exit_escrow_period)
+        .genesis_lc_state(genesis_state.clone())
+        .genesis_st_state(genesis_stake.clone())
         .initial_token_supply(U256::from(INITIAL_TOKEN_SUPPLY))
+        .mock_light_client(true)
+        .multisig_pauser(admin)
+        .ops_timelock_admin(admin)
+        .ops_timelock_delay(U256::from(0))
+        .ops_timelock_executors(vec![admin])
+        .ops_timelock_proposers(vec![admin])
+        .safe_exit_timelock_admin(admin)
+        .safe_exit_timelock_delay(U256::from(10))
+        .safe_exit_timelock_executors(vec![admin])
+        .safe_exit_timelock_proposers(vec![admin])
         .token_name(TOKEN_NAME.to_string())
         .token_symbol(TOKEN_SYMBOL.to_string())
-        .multisig_pauser(admin)
         .use_timelock_owner(false)
         .build()
         .unwrap();
 
-    args.deploy(&mut l1_contracts, Contract::FeeContractProxy)
-        .await?;
-    args.deploy(&mut l1_contracts, Contract::EspTokenProxy)
-        .await?;
-    args.deploy(&mut l1_contracts, Contract::EspTokenV2).await?;
-    args.deploy(&mut l1_contracts, Contract::LightClientProxy)
-        .await?;
-    args.deploy(&mut l1_contracts, Contract::LightClientV2)
-        .await?;
-    args.deploy(&mut l1_contracts, Contract::LightClientV3)
-        .await?;
-    args.deploy(&mut l1_contracts, Contract::StakeTableProxy)
-        .await?;
-    args.deploy(&mut l1_contracts, Contract::RewardClaimProxy)
-        .await?;
-    args.deploy(&mut l1_contracts, Contract::StakeTableV2)
-        .await?;
+    args.deploy_all(&mut l1_contracts).await?;
 
     // Get contract addresses
     let lc_proxy_addr = l1_contracts
@@ -189,18 +181,15 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     .await?;
     println!("Stake table populated with validators");
 
-    // Grant minter role to reward claim contract
-    println!("Granting MINTER_ROLE to RewardClaim contract...");
+    // Verify RewardClaim address is configured in EspTokenV2
+    println!("Verifying RewardClaim address in EspTokenV2...");
     let esp_token_v2 = EspTokenV2::new(token_proxy_addr, &deployer_provider);
 
-    let minter_role = esp_token_v2.MINTER_ROLE().call().await?;
-    let receipt = esp_token_v2
-        .grantRole(minter_role, reward_claim_proxy_addr)
-        .send()
-        .await?
-        .get_receipt()
-        .await?;
-    assert!(receipt.status());
+    let configured_reward_claim = esp_token_v2.rewardClaim().call().await?;
+    assert_eq!(
+        configured_reward_claim, reward_claim_proxy_addr,
+        "RewardClaim address should be configured correctly"
+    );
 
     // Set up chain config for TestNetwork
     let chain_config = ChainConfig {

@@ -18,10 +18,14 @@ pub struct RewardAuthData {
 }
 
 impl RewardAuthData {
-    pub fn new(siblings: RewardProofSiblings, auth_root_inputs: RewardAuthRootInputs) -> Self {
+    /// Create reward auth data from proof siblings.
+    ///
+    /// Auth root inputs (other than the reward merkle tree root) are currently
+    /// all zero placeholder values.
+    pub fn new(siblings: RewardProofSiblings) -> Self {
         RewardAuthData {
             siblings,
-            auth_root_inputs,
+            auth_root_inputs: Default::default(),
         }
     }
 }
@@ -69,18 +73,27 @@ mod tests {
 
     use super::*;
 
-    fn test_input() -> RewardClaimInput {
-        let siblings = RewardProofSiblings([B256::random(); 160]);
-        let auth_root_inputs = RewardAuthRootInputs([B256::random(); 7]);
-        RewardClaimInput {
-            lifetime_rewards: B256::random().into(),
-            auth_data: RewardAuthData::new(siblings, auth_root_inputs).into(),
+    impl RewardAuthData {
+        fn random() -> Self {
+            Self {
+                siblings: RewardProofSiblings([B256::random(); 160]),
+                auth_root_inputs: RewardAuthRootInputs([B256::random(); 7]),
+            }
+        }
+    }
+
+    impl RewardClaimInput {
+        fn random() -> Self {
+            Self {
+                lifetime_rewards: B256::random().into(),
+                auth_data: RewardAuthData::random().into(),
+            }
         }
     }
 
     #[test]
     fn test_reward_claim_input_roundtrip_json() {
-        let original = test_input();
+        let original = RewardClaimInput::random();
         let json = serde_json::to_string(&original).unwrap();
         let decoded: RewardClaimInput = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, original);
@@ -88,16 +101,15 @@ mod tests {
 
     #[test]
     fn test_decode_abi_auth_data() {
-        let original = test_input();
+        let original = RewardClaimInput::random();
         let auth_data = RewardAuthData::try_from(original.auth_data.clone()).unwrap();
         let json = serde_json::to_string(&original).unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         let auth_str = value.get("auth_data").unwrap().as_str().unwrap();
         assert!(auth_str.starts_with("0x"));
 
-        // The auth data is sent "as-is" to the reward claim contract and need
-        // to ABI decode to the inner types in order for the contract to process
-        // them.
+        // The auth data is sent "as-is" to the reward claim contract and needs to ABI decode to the
+        // inner types in order for the contract to process thenm.
         let (siblings, auth_root_inputs): ([B256; 160], [B256; 7]) =
             SolValue::abi_decode(&alloy::hex::decode(&auth_str[2..]).unwrap()).unwrap();
         assert_eq!(siblings, auth_data.siblings.0);

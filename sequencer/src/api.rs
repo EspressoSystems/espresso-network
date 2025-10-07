@@ -6060,10 +6060,7 @@ mod test {
                     .await
                     .unwrap();
 
-                assert_eq!(
-                    reward_claim_input,
-                    res.to_reward_claim_input(Default::default())?
-                );
+                assert_eq!(reward_claim_input, res.to_reward_claim_input()?);
             }
         }
 
