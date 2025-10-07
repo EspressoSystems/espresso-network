@@ -178,15 +178,14 @@ impl TransactionQueues {
 }
 
 #[derive(Clone, Debug)]
-pub struct StakingTransactions<P> {
+struct TransactionProcessor<P> {
     providers: HashMap<Address, P>,
     funder: P,
     stake_table: Address,
     token: Address,
-    queues: TransactionQueues,
 }
 
-impl<P: Provider + Clone> StakingTransactions<P> {
+impl<P: Provider + Clone> TransactionProcessor<P> {
     fn provider(&self, address: Address) -> Result<&P> {
         self.providers
             .get(&address)
@@ -233,7 +232,15 @@ impl<P: Provider + Clone> StakingTransactions<P> {
         )
         .await
     }
+}
 
+#[derive(Clone, Debug)]
+pub struct StakingTransactions<P> {
+    processor: TransactionProcessor<P>,
+    queues: TransactionQueues,
+}
+
+impl<P: Provider + Clone> StakingTransactions<P> {
     /// Sends and awaits all transactions with high concurrency.
     ///
     /// This is the preferred way to make the changes to the stake table
@@ -252,21 +259,20 @@ impl<P: Provider + Clone> StakingTransactions<P> {
     ///
     /// For each them at least one L1 block will be required.
     pub async fn apply_all(&mut self) -> Result<Vec<TransactionReceipt>> {
-        let mut funding = std::mem::take(&mut self.queues.funding);
-        let r1 = self.process_group(&mut funding).await?;
+        let mut receipts = Vec::new();
 
-        let mut approvals = std::mem::take(&mut self.queues.approvals);
-        let r2 = self.process_group(&mut approvals).await?;
-
-        let mut registration = std::mem::take(&mut self.queues.registration);
-        let r3 = self.process_group(&mut registration).await?;
-
-        let mut delegations = std::mem::take(&mut self.queues.delegations);
-        let r4 = self.process_group(&mut delegations).await?;
+        for queue in [
+            &mut self.queues.funding,
+            &mut self.queues.approvals,
+            &mut self.queues.registration,
+            &mut self.queues.delegations,
+        ] {
+            receipts.extend(self.processor.process_group(queue).await?);
+        }
 
         tracing::info!("completed all staking transactions");
 
-        Ok([r1, r2, r3, r4].concat())
+        Ok(receipts)
     }
 
     /// Sends and awaits receipts on all funding and approval transactions
@@ -281,15 +287,15 @@ impl<P: Provider + Clone> StakingTransactions<P> {
             return Err(anyhow::anyhow!("apply_prerequisites must be called first"));
         }
 
-        let mut funding = std::mem::take(&mut self.queues.funding);
-        let r1 = self.process_group(&mut funding).await?;
+        let mut receipts = Vec::new();
 
-        let mut approvals = std::mem::take(&mut self.queues.approvals);
-        let r2 = self.process_group(&mut approvals).await?;
+        for queue in [&mut self.queues.funding, &mut self.queues.approvals] {
+            receipts.extend(self.processor.process_group(queue).await?);
+        }
 
         self.queues.current_phase = SetupPhase::Registration;
 
-        Ok([r1, r2].concat())
+        Ok(receipts)
     }
 
     /// Sends and awaits one transaction
@@ -300,7 +306,7 @@ impl<P: Provider + Clone> StakingTransactions<P> {
         let Some(tx) = self.queues.pop_next() else {
             return Ok(None);
         };
-        let pending = self.send_next(tx).await?;
+        let pending = self.processor.send_next(tx).await?;
         Ok(Some(pending.assert_success().await?))
     }
 }
@@ -504,10 +510,12 @@ impl StakingTransactions<HttpProviderWithWallet> {
         }
 
         Ok(StakingTransactions {
-            providers,
-            funder: token_holder_provider,
-            stake_table,
-            token,
+            processor: TransactionProcessor {
+                providers,
+                funder: token_holder_provider,
+                stake_table,
+                token,
+            },
             queues: TransactionQueues {
                 funding,
                 approvals,
