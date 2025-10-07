@@ -2346,7 +2346,7 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         address admin = proxy.owner();
         StakeTableV2.InitialCommission[] memory emptyCommissions;
         bytes memory initData = abi.encodeWithSelector(
-            StakeTableV2.initializeV2.selector, pauser, admin, emptyCommissions
+            StakeTableV2.initializeV2.selector, pauser, admin, 0, emptyCommissions
         );
         proxy.upgradeToAndCall(address(new StakeTableV2()), initData);
 
