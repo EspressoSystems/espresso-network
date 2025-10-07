@@ -12,8 +12,6 @@ import "./libraries/RewardMerkleTreeVerifier.sol";
 import "./interfaces/IRewardClaim.sol";
 
 contract RewardClaim is IRewardClaim, Initializable, OwnableUpgradeable, UUPSUpgradeable {
-    using RewardMerkleTreeVerifier for bytes32;
-
     EspTokenV2 public espToken;
     LightClientV3 public lightClient;
 
@@ -26,11 +24,11 @@ contract RewardClaim is IRewardClaim, Initializable, OwnableUpgradeable, UUPSUpg
         _disableInitializers();
     }
 
-    function initialize(address owner, address _espToken, address _lightClient)
+    function initialize(address _owner, address _espToken, address _lightClient)
         public
         initializer
     {
-        __Ownable_init(owner);
+        __Ownable_init(_owner);
         __UUPSUpgradeable_init();
         espToken = EspTokenV2(_espToken);
         lightClient = LightClientV3(_lightClient);

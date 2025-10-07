@@ -30,7 +30,7 @@ interface RewardClaim {
     function claimedRewards(address claimer) external view returns (uint256 claimed);
     function espToken() external view returns (address);
     function getVersion() external pure returns (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion);
-    function initialize(address owner, address _espToken, address _lightClient) external;
+    function initialize(address _owner, address _espToken, address _lightClient) external;
     function lightClient() external view returns (address);
     function owner() external view returns (address);
     function proxiableUUID() external view returns (bytes32);
@@ -139,7 +139,7 @@ interface RewardClaim {
     "name": "initialize",
     "inputs": [
       {
-        "name": "owner",
+        "name": "_owner",
         "type": "address",
         "internalType": "address"
       },
@@ -2838,13 +2838,13 @@ function getVersion() external pure returns (uint8 majorVersion, uint8 minorVers
     #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `initialize(address,address,address)` and selector `0xc0c53b8b`.
 ```solidity
-function initialize(address owner, address _espToken, address _lightClient) external;
+function initialize(address _owner, address _espToken, address _lightClient) external;
 ```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct initializeCall {
         #[allow(missing_docs)]
-        pub owner: alloy::sol_types::private::Address,
+        pub _owner: alloy::sol_types::private::Address,
         #[allow(missing_docs)]
         pub _espToken: alloy::sol_types::private::Address,
         #[allow(missing_docs)]
@@ -2891,7 +2891,7 @@ function initialize(address owner, address _espToken, address _lightClient) exte
             #[doc(hidden)]
             impl ::core::convert::From<initializeCall> for UnderlyingRustTuple<'_> {
                 fn from(value: initializeCall) -> Self {
-                    (value.owner, value._espToken, value._lightClient)
+                    (value._owner, value._espToken, value._lightClient)
                 }
             }
             #[automatically_derived]
@@ -2899,7 +2899,7 @@ function initialize(address owner, address _espToken, address _lightClient) exte
             impl ::core::convert::From<UnderlyingRustTuple<'_>> for initializeCall {
                 fn from(tuple: UnderlyingRustTuple<'_>) -> Self {
                     Self {
-                        owner: tuple.0,
+                        _owner: tuple.0,
                         _espToken: tuple.1,
                         _lightClient: tuple.2,
                     }
@@ -2972,7 +2972,7 @@ function initialize(address owner, address _espToken, address _lightClient) exte
             fn tokenize(&self) -> Self::Token<'_> {
                 (
                     <alloy::sol_types::sol_data::Address as alloy_sol_types::SolType>::tokenize(
-                        &self.owner,
+                        &self._owner,
                     ),
                     <alloy::sol_types::sol_data::Address as alloy_sol_types::SolType>::tokenize(
                         &self._espToken,
@@ -5359,13 +5359,13 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         ///Creates a new call builder for the [`initialize`] function.
         pub fn initialize(
             &self,
-            owner: alloy::sol_types::private::Address,
+            _owner: alloy::sol_types::private::Address,
             _espToken: alloy::sol_types::private::Address,
             _lightClient: alloy::sol_types::private::Address,
         ) -> alloy_contract::SolCallBuilder<&P, initializeCall, N> {
             self.call_builder(
                 &initializeCall {
-                    owner,
+                    _owner,
                     _espToken,
                     _lightClient,
                 },
