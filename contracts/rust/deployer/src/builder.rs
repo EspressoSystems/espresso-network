@@ -546,7 +546,6 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         self.deploy(contracts, Contract::LightClientProxy).await?;
         self.deploy(contracts, Contract::LightClientV2).await?;
         self.deploy(contracts, Contract::StakeTableProxy).await?;
-        self.deploy(contracts, Contract::RewardClaimProxy).await?;
         Ok(())
     }
 
@@ -555,8 +554,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         self.deploy_to_stake_table_v1(contracts).await?;
         self.deploy(contracts, Contract::StakeTableV2).await?;
         self.deploy(contracts, Contract::LightClientV3).await?;
-        self.deploy(contracts, Contract::EspTokenV2).await?;
         self.deploy(contracts, Contract::RewardClaimProxy).await?;
+        self.deploy(contracts, Contract::EspTokenV2).await?;
         Ok(())
     }
 
