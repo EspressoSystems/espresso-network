@@ -12,6 +12,7 @@ use hotshot_types::{
     benchmarking::{LeaderViewStats, ReplicaViewStats},
     consensus::OuterConsensus,
     epoch_membership::EpochMembershipCoordinator,
+    simple_vote::HasEpoch,
     traits::{
         block_contents::BlockHeader,
         node_implementation::{ConsensusTime, NodeType},
@@ -179,6 +180,17 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                 self.replica_entry(proposal.data.view_number())
                     .proposal_recv
                     .get_or_insert(now);
+                let leader = self
+                    .membership_coordinator
+                    .membership_for_epoch(proposal.data.epoch())
+                    .await?
+                    .leader(proposal.data.view_number() + 1)
+                    .await?;
+                if leader == self.public_key {
+                    self.leader_entry(proposal.data.view_number() + 1)
+                        .builder_start
+                        .get_or_insert(now);
+                }
             },
             HotShotEvent::QuorumVoteRecv(_vote) => {},
             HotShotEvent::TimeoutVoteRecv(_vote) => {},
@@ -343,7 +355,7 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                     .leader(*view)
                     .await?;
                 if leader == self.public_key {
-                    self.leader_entry(*view).builder_start = Some(now);
+                    self.leader_entry(*view).builder_start.get_or_insert(now);
                 }
             },
             HotShotEvent::Timeout(view, _) => {
@@ -355,7 +367,9 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                 // #3526 https://github.com/EspressoSystems/espresso-network/issues/3526
             },
             HotShotEvent::SendPayloadCommitmentAndMetadata(_, _, _, view, _) => {
-                self.leader_entry(*view).vid_disperse_send = Some(now);
+                self.leader_entry(*view)
+                    .vid_disperse_send
+                    .get_or_insert(now);
             },
             HotShotEvent::VidShareRecv(_, proposal) => {
                 self.replica_entry(proposal.data.view_number())

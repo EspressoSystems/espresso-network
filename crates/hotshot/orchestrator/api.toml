@@ -102,3 +102,11 @@ METHOD = "POST"
 DOC = """
 Register a builder URL to orchestrator's pool of builder URLs
 """
+
+
+# GET whether or not to start the run
+[route.get_metrics]
+PATH = ["metrics"]
+DOC = """
+Get the normalized metrics for the most recent epoch
+"""

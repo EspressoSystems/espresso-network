@@ -9,6 +9,9 @@
 /// The orchestrator's clients
 pub mod client;
 
+/// Metrics for a benchmark run, collected by the orchestrator
+pub mod metrics;
+
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs::{self, OpenOptions},
@@ -45,6 +48,8 @@ use vbs::{
     version::{StaticVersion, StaticVersionType},
     BinarySerializer,
 };
+
+use crate::metrics::NormalizedViewTimeline;
 
 /// Orchestrator is not, strictly speaking, bound to the network; it can have its own versioning.
 /// Orchestrator Version (major)
@@ -259,6 +264,10 @@ pub trait OrchestratorApi<TYPES: NodeType> {
     /// # Errors
     /// if unable to serve
     fn post_run_results(&mut self, metrics: BenchResults<TYPES::View>) -> Result<(), ServerError>;
+    /// get endpoint for the normalized metrics for the most recent epoch
+    /// # Errors
+    /// if unable to serve
+    fn get_metrics(&self) -> Result<BTreeMap<u64, NormalizedViewTimeline>, ServerError>;
     /// A node POSTs its public key to let the orchestrator know that it is ready
     /// # Errors
     /// if unable to serve
@@ -635,6 +644,23 @@ where
         Ok(())
     }
 
+    fn get_metrics(&self) -> Result<BTreeMap<u64, NormalizedViewTimeline>, ServerError> {
+        let mut leader_stats = BTreeMap::new();
+        let mut replica_stats = BTreeMap::new();
+        for (_id, stats) in self.bench_results.iter() {
+            for (view, leader_stat) in stats.leader_view_stats.iter() {
+                leader_stats.insert(**view, leader_stat.clone().into());
+            }
+            for (view, replica_stat) in stats.replica_view_stats.iter() {
+                replica_stats
+                    .entry(**view)
+                    .or_insert(Vec::new())
+                    .push(replica_stat.clone().into());
+            }
+        }
+        Ok(metrics::get_metrics(&replica_stats, leader_stats))
+    }
+
     fn post_builder(&mut self, builder: Url) -> Result<(), ServerError> {
         self.builders.push(builder);
         Ok(())
@@ -764,6 +790,9 @@ where
             state.post_run_results(metrics.unwrap())
         }
         .boxed()
+    })?
+    .get("get_metrics", |_req, state| {
+        async move { state.get_metrics() }.boxed()
     })?
     .post("post_builder", |req, state| {
         async move {
