@@ -57,7 +57,6 @@ use vbs::{
 };
 
 use crate::{
-    active_validator_set_from_l1_events,
     v0_1::{self, ADVZNsProof},
     v0_2,
     v0_3::{EventKey, RewardAmount, StakeTableEvent},
