@@ -155,6 +155,13 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     fn previous_proposal_participation(
         &self,
     ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
+
+    fn get_all_validators(
+        &self,
+        epoch: <T as NodeType>::Epoch,
+        offset: u64,
+        limit: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<Validator<PubKey>>>>;
 }
 
 pub(crate) trait CatchupDataSource: Sync {
