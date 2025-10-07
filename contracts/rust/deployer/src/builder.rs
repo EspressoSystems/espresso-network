@@ -508,9 +508,13 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 .await?;
 
                 if let Some(use_timelock_owner) = self.use_timelock_owner {
+                    // TODO: (MA) this needs to be discussed before finalizing.
+                    //
                     // RewardClaim uses SafeExitTimelock because:
-                    // - It handles token minting but is not as critical as the core protocol
-                    // - SafeExitTimelock provides sufficient security for reward operations
+                    // - It is not expected to require urgent upgrades.
+                    // - In emergency situations it can be paused.
+                    // - It can mint ESP tokens, users should have enough time
+                    //   to react if they do not agree with an upgrade.
                     tracing::info!("Transferring ownership to SafeExitTimelock");
                     if use_timelock_owner {
                         let timelock_addr = contracts
