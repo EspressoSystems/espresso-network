@@ -2231,6 +2231,7 @@ mod test {
     };
     use jf_merkle_tree_compat::prelude::{MerkleProof, Sha3Node};
     use portpicker::pick_unused_port;
+    use pretty_assertions::assert_matches;
     use rand::seq::SliceRandom;
     use rstest::rstest;
     use staking_cli::{
@@ -2242,7 +2243,7 @@ mod test {
         catchup_test_helper, state_signature_test_helper, status_test_helper, submit_test_helper,
         TestNetwork, TestNetworkConfigBuilder,
     };
-    use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus};
+    use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus, StatusCode};
     use tokio::time::sleep;
     use vbs::version::{StaticVersion, StaticVersionType};
 
@@ -2763,7 +2764,8 @@ mod test {
     async fn test_chain_config_from_instance() {
         // This test uses a ValidatedState which only has the default chain config commitment.
         // The NodeState has the full chain config.
-        // Both chain config commitments will match, so the ValidatedState should have the full chain config after a non-genesis block is decided.
+        // Both chain config commitments will match, so the ValidatedState should have the
+        // full chain config after a non-genesis block is decided.
 
         let port = pick_unused_port().expect("No ports free");
 
@@ -3381,8 +3383,8 @@ mod test {
     async fn test_cumulative_pos_rewards() -> anyhow::Result<()> {
         // This test registers 5 validators and multiple delegators for each validator.
         // One of the delegators is also a validator.
-        // The test verifies that the cumulative reward at each block height equals the total block reward,
-        // which is a constant.
+        // The test verifies that the cumulative reward at each block height equals
+        // the total block reward, which is a constant.
 
         let epoch_height = 20;
 
@@ -6136,6 +6138,18 @@ mod test {
         let network = TestNetwork::new(config, V4::new()).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        let err = client
+            .get::<Vec<Validator<PubKey>>>("node/all-validators/1/0/1001")
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .unwrap_err();
+
+        assert_matches!(err, ServerError { status, message} if
+                status == StatusCode::BAD_REQUEST
+                && message.contains("Limit cannot be greater than 1000")
+        );
 
         // Wait for the chain to progress beyond epoch 3
         let mut events = network.peers[0].event_stream().await;

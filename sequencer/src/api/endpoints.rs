@@ -733,6 +733,12 @@ where
             let offset = req.integer_param::<_, u64>("offset")?;
 
             let limit = req.integer_param::<_, u64>("limit")?;
+            if limit > 1000 {
+                return Err(hotshot_query_service::node::Error::Custom {
+                    message: "Limit cannot be greater than 1000".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                });
+            }
 
             state
                 .read(|state| {
@@ -743,7 +749,7 @@ where
                 .await
                 .map_err(|err| hotshot_query_service::node::Error::Custom {
                     message: format!("failed to get all validators : err: {err}"),
-                    status: StatusCode::NOT_FOUND,
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
                 })
         }
         .boxed()
