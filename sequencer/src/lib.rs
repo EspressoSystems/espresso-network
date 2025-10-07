@@ -552,7 +552,7 @@ where
     // Create the HotShot membership
     let mut membership = EpochCommittees::new_stake(
         network_config.config.known_nodes_with_stake.clone(),
-        network_config.config.build_da_committees(),
+        network_config.config.known_da_nodes.clone(),
         block_reward,
         fetcher,
         epoch_height,
@@ -1293,7 +1293,7 @@ pub mod testing {
             let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
             let mut membership = EpochCommittees::new_stake(
                 config.known_nodes_with_stake.clone(),
-                config.build_da_committees(),
+                config.known_da_nodes.clone(),
                 block_reward,
                 fetcher,
                 config.epoch_height,

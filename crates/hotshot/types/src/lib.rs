@@ -277,11 +277,4 @@ impl<TYPES: NodeType> HotShotConfig<TYPES> {
     pub fn hotshot_stake_table(&self) -> HSStakeTable<TYPES> {
         self.known_nodes_with_stake.clone().into()
     }
-
-    pub fn build_da_committees(&self) -> Vec<PeerConfig<TYPES>> {
-        // TODO: THIS IS A TEMPORARY FIX WITH THE WRONG RETURN TYPE.
-        // It's done so that we can start using this function and have the existing behavior
-        // (use known_da_nodes) while we transition to using da_committees.
-        self.known_da_nodes.clone()
-    }
 }
