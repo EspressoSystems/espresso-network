@@ -16,6 +16,7 @@ use espresso_types::{
     v0::traits::SequencerPersistence,
     v0_3::{
         ChainConfig, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount, RewardMerkleTreeV1,
+        Validator,
     },
     v0_4::{RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
@@ -221,6 +222,15 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     async fn previous_proposal_participation(&self) -> HashMap<PubKey, f64> {
         self.as_ref().previous_proposal_participation().await
     }
+
+    async fn get_all_validators(
+        &self,
+        epoch: <SeqTypes as NodeType>::Epoch,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
+        self.as_ref().get_all_validators(epoch, offset, limit).await
+    }
 }
 
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
@@ -329,6 +339,18 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             .read()
             .await
             .previous_proposal_participation()
+    }
+
+    async fn get_all_validators(
+        &self,
+        epoch: <SeqTypes as NodeType>::Epoch,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
+        let handle = self.consensus().await;
+        let handle_read = handle.read().await;
+        let storage = handle_read.storage();
+        storage.load_all_validators(epoch, offset, limit).await
     }
 }
 
@@ -2209,6 +2231,7 @@ mod test {
     };
     use jf_merkle_tree_compat::prelude::{MerkleProof, Sha3Node};
     use portpicker::pick_unused_port;
+    use pretty_assertions::assert_matches;
     use rand::seq::SliceRandom;
     use rstest::rstest;
     use staking_cli::{
@@ -2220,7 +2243,7 @@ mod test {
         catchup_test_helper, state_signature_test_helper, status_test_helper, submit_test_helper,
         TestNetwork, TestNetworkConfigBuilder,
     };
-    use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus};
+    use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus, StatusCode};
     use tokio::time::sleep;
     use vbs::version::{StaticVersion, StaticVersionType};
 
@@ -2741,7 +2764,8 @@ mod test {
     async fn test_chain_config_from_instance() {
         // This test uses a ValidatedState which only has the default chain config commitment.
         // The NodeState has the full chain config.
-        // Both chain config commitments will match, so the ValidatedState should have the full chain config after a non-genesis block is decided.
+        // Both chain config commitments will match, so the ValidatedState should have the
+        // full chain config after a non-genesis block is decided.
 
         let port = pick_unused_port().expect("No ports free");
 
@@ -3359,8 +3383,8 @@ mod test {
     async fn test_cumulative_pos_rewards() -> anyhow::Result<()> {
         // This test registers 5 validators and multiple delegators for each validator.
         // One of the delegators is also a validator.
-        // The test verifies that the cumulative reward at each block height equals the total block reward,
-        // which is a constant.
+        // The test verifies that the cumulative reward at each block height equals
+        // the total block reward, which is a constant.
 
         let epoch_height = 20;
 
@@ -6063,6 +6087,96 @@ mod test {
                 assert_eq!(reward_claim_input, res.to_reward_claim_input()?);
             }
         }
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_all_validators_endpoint() -> anyhow::Result<()> {
+        const EPOCH_HEIGHT: u64 = 20;
+
+        type V4 = SequencerVersions<StaticVersion<0, 4>, StaticVersion<0, 0>>;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        const NUM_NODES: usize = 5;
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<V4>(DelegationConfig::MultipleDelegators, Default::default())
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, V4::new()).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        let err = client
+            .get::<Vec<Validator<PubKey>>>("node/all-validators/1/0/1001")
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .unwrap_err();
+
+        assert_matches!(err, ServerError { status, message} if
+                status == StatusCode::BAD_REQUEST
+                && message.contains("Limit cannot be greater than 1000")
+        );
+
+        // Wait for the chain to progress beyond epoch 3
+        let mut events = network.peers[0].event_stream().await;
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, 3).await;
+
+        // Verify that there are no validators for epoch # 1 and epoch # 2
+        {
+            client
+                .get::<Vec<Validator<PubKey>>>("node/all-validators/1/0/100")
+                .send()
+                .await
+                .unwrap()
+                .is_empty();
+
+            client
+                .get::<Vec<Validator<PubKey>>>("node/all-validators/2/0/100")
+                .send()
+                .await
+                .unwrap()
+                .is_empty();
+        }
+
+        // Get the epoch # 3 validators
+        let validators = client
+            .get::<Vec<Validator<PubKey>>>("node/all-validators/3/0/100")
+            .send()
+            .await
+            .expect("validators");
+
+        assert!(!validators.is_empty());
 
         Ok(())
     }

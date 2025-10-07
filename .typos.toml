@@ -20,3 +20,5 @@ extend-exclude = [
 
 [default.extend-words]
 Forgetten = "Forgetten"
+# Common "spelling" of "type" in Rust/go
+typ = "typ"

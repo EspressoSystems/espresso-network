@@ -719,6 +719,39 @@ where
         }
         .boxed()
     })?
+    .at("get_all_validators", |req, state| {
+        async move {
+            let epoch = req.integer_param::<_, u64>("epoch_number").map_err(|_| {
+                hotshot_query_service::node::Error::Custom {
+                    message: "Epoch number is required".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                }
+            })?;
+
+            let offset = req.integer_param::<_, u64>("offset")?;
+
+            let limit = req.integer_param::<_, u64>("limit")?;
+            if limit > 1000 {
+                return Err(hotshot_query_service::node::Error::Custom {
+                    message: "Limit cannot be greater than 1000".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                });
+            }
+
+            state
+                .read(|state| {
+                    state
+                        .get_all_validators(EpochNumber::new(epoch), offset, limit)
+                        .boxed()
+                })
+                .await
+                .map_err(|err| hotshot_query_service::node::Error::Custom {
+                    message: format!("failed to get all validators : err: {err}"),
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                })
+        }
+        .boxed()
+    })?
     .at("current_proposal_participation", |_, state| {
         async move {
             Ok(state
