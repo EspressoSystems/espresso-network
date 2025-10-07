@@ -4,7 +4,7 @@ networks:
 
 services:
   demo-l1-network:
-    image: ghcr.io/espressosystems/geth-l1:main
+    image: ghcr.io/espressosystems/geth-l1:update-genesis
     command: --dev --dev.period=1
     ports:
       - $ESPRESSO_SEQUENCER_L1_PORT:8545
