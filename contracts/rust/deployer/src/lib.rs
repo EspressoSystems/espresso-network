@@ -548,12 +548,16 @@ pub async fn upgrade_light_client_v2(
             let owner_addr = owner;
             tracing::info!("Proxy owner: {owner_addr:#x}");
 
-            // prepare init calldata
+            // prepare init calldata (checks if already initialized)
             let lcv2 = LightClientV2::new(lcv2_addr, &provider);
-            let init_data = lcv2
-                .initializeV2(blocks_per_epoch, epoch_start_block)
-                .calldata()
-                .to_owned();
+            let init_data =
+                if already_initialized(&provider, proxy_addr, Contract::LightClientV2, 2).await? {
+                    vec![].into()
+                } else {
+                    lcv2.initializeV2(blocks_per_epoch, epoch_start_block)
+                        .calldata()
+                        .to_owned()
+                };
             // invoke upgrade on proxy
             let receipt = proxy
                 .upgradeToAndCall(lcv2_addr, init_data)
@@ -685,7 +689,7 @@ pub async fn upgrade_light_client_v3(
             // set init data unless already initialized
             let init_data =
                 if already_initialized(&provider, proxy_addr, Contract::LightClientV3, 3).await? {
-                    "0x".into()
+                    vec![].into()
                 } else {
                     lcv3.initializeV3().calldata().to_owned()
                 };
@@ -806,6 +810,7 @@ pub async fn deploy_token_proxy(
         )
         .calldata()
         .to_owned();
+
     let token_proxy_addr = contracts
         .deploy(
             Contract::EspTokenProxy,
@@ -898,6 +903,7 @@ pub async fn deploy_stake_table_proxy(
         .initialize(token_addr, light_client_addr, exit_escrow_period, owner)
         .calldata()
         .to_owned();
+
     let st_proxy_addr = contracts
         .deploy(
             Contract::StakeTableProxy,
