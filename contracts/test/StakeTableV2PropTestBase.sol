@@ -422,7 +422,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
 
     function trackDelegate(address actorAddr, address val, uint256 amount) internal {
         testState.totalDelegated += amount;
-        testState.activeStake += amount; // Add this
+        testState.activeStake += amount;
         actors.trackedFunds[actorAddr].delegated += amount;
         validators.staked.add(val);
 
@@ -567,7 +567,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         return testState;
     }
 
-    function getactiveStake() external view returns (uint256) {
+    function getActiveStake() external view returns (uint256) {
         return testState.activeStake;
     }
 
@@ -776,7 +776,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         }
     }
 
-    /// @dev Assert that contract's token balance and activeStake match our tracking
+    /// @dev Assert that contract's activeStake matches our tracking
     function assertStakeInvariants() public view {
         require(
             stakeTable.activeStake() == testState.activeStake,

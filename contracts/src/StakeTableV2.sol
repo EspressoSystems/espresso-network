@@ -276,23 +276,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @param validator The validator to withdraw from
     /// @dev This function is overridden to add pausable functionality
     function claimWithdrawal(address validator) public virtual override whenNotPaused {
-        address delegator = msg.sender;
-        // If entries are missing at any of the levels of the mapping this will return zero
-        uint256 amount = undelegations[validator][delegator].amount;
-        if (amount == 0) {
-            revert NothingToWithdraw();
-        }
-
-        if (block.timestamp < undelegations[validator][delegator].unlocksAt) {
-            revert PrematureWithdrawal();
-        }
-
-        // Mark funds as spent
-        delete undelegations[validator][delegator];
-
-        SafeTransferLib.safeTransfer(token, delegator, amount);
-
-        emit Withdrawal(delegator, amount);
+        super.claimWithdrawal(validator);
     }
 
     /// @notice Delegate funds to a validator

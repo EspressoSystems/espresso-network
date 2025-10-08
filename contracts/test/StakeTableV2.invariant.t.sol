@@ -102,7 +102,7 @@ contract StakeTableV2InvariantTest is StdInvariant, Test {
     function invariant_activeStakeMatchesTracked() public view {
         assertEq(
             handler.stakeTable().activeStake(),
-            handler.getactiveStake(),
+            handler.getActiveStake(),
             "Contract activeStake does not match tracked activeStake"
         );
     }
