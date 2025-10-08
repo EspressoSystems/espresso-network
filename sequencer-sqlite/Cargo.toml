@@ -5,6 +5,10 @@ name = "sequencer-sqlite"
 version = "0.1.0"
 edition = "2021"
 
+[profile.release]
+strip = "none"
+debug = "full"
+
 [features]
 fee = ["sequencer/fee"]
 pos = ["sequencer/pos"]

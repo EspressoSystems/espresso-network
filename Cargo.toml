@@ -256,6 +256,10 @@ zeroize = "1.7"
 # may prevent accidental deadlocks from holding guards over match statments
 significant_drop_in_scrutinee = "warn"
 
+[profile.release]
+strip = "none"
+debug = "full"
+
 # NOTE: when making changes here also update sequencer-sqlite/Cargo.toml.
 [profile.dev]
 # Probably the least demanding setting in terms of compilation time and memory

@@ -10,6 +10,10 @@ normal = ["hotshot-testing"]
 [package.metadata.cargo-machete]
 ignored = ["vergen", "include_dir", "hotshot_builder_api"]
 
+[profile.release]
+strip = "none"
+debug = "full"
+
 [[bin]]
 name = "espresso-dev-node"
 path = "src/bin/espresso-dev-node.rs"
