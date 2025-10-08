@@ -1114,18 +1114,23 @@ where
         sender: Types::SignatureKey,
         signature: &<<Types as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType,
     ) -> Result<AvailableBlockData<Types>, BuildError> {
-        let now = OffsetDateTime::now_utc().unix_timestamp_nanos();
         self.global_state
             .write_arc()
             .await
-            .add_claim_block_request_timestamp(view_number, now);
+            .add_claim_block_request_timestamp(
+                view_number,
+                OffsetDateTime::now_utc().unix_timestamp_nanos(),
+            );
         let result = self
             .claim_block_implementation(block_hash, view_number, sender, signature)
             .await?;
         self.global_state
             .write_arc()
             .await
-            .add_claim_block_response_timestamp(view_number, now);
+            .add_claim_block_response_timestamp(
+                view_number,
+                OffsetDateTime::now_utc().unix_timestamp_nanos(),
+            );
         Ok(result)
     }
 
@@ -1139,18 +1144,23 @@ where
     ) -> Result<AvailableBlockData<Types>, BuildError> {
         // Update the stored `num_nodes` with the given value, which will be used for VID computation.
         self.global_state.write_arc().await.num_nodes = num_nodes;
-        let now = OffsetDateTime::now_utc().unix_timestamp_nanos();
         self.global_state
             .write_arc()
             .await
-            .add_claim_block_request_timestamp(view_number, now);
+            .add_claim_block_request_timestamp(
+                view_number,
+                OffsetDateTime::now_utc().unix_timestamp_nanos(),
+            );
         let result = self
             .claim_block_implementation(block_hash, view_number, sender, signature)
             .await?;
         self.global_state
             .write_arc()
             .await
-            .add_claim_block_response_timestamp(view_number, now);
+            .add_claim_block_response_timestamp(
+                view_number,
+                OffsetDateTime::now_utc().unix_timestamp_nanos(),
+            );
         Ok(result)
     }
 
@@ -1161,18 +1171,23 @@ where
         sender: Types::SignatureKey,
         signature: &<<Types as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType,
     ) -> Result<AvailableBlockHeaderInputV1<Types>, BuildError> {
-        let now = OffsetDateTime::now_utc().unix_timestamp_nanos();
         self.global_state
             .write_arc()
             .await
-            .add_claim_block_header_input_request_timestamp(view_number, now);
+            .add_claim_block_header_input_request_timestamp(
+                view_number,
+                OffsetDateTime::now_utc().unix_timestamp_nanos(),
+            );
         let result = self
             .claim_block_header_input_implementation(block_hash, view_number, sender, signature)
             .await?;
         self.global_state
             .write_arc()
             .await
-            .add_claim_block_header_input_response_timestamp(view_number, now);
+            .add_claim_block_header_input_response_timestamp(
+                view_number,
+                OffsetDateTime::now_utc().unix_timestamp_nanos(),
+            );
         Ok(result)
     }
 
