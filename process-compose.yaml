@@ -11,16 +11,16 @@ availability:
     restart: exit_on_failure
 
 environment:
-  - ESPRESSO_SEQUENCER_CDN_ENDPOINT=127.0.0.1:$ESPRESSO_CDN_SERVER_PORT
-  - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL=http://localhost:$ESPRESSO_ORCHESTRATOR_PORT
-  - ESPRESSO_SEQUENCER_URL=http://localhost:$ESPRESSO_SEQUENCER_API_PORT
-  - ESPRESSO_SEQUENCER_URLS=http://localhost:$ESPRESSO_SEQUENCER_API_PORT,http://localhost:$ESPRESSO_SEQUENCER1_API_PORT
-  - ESPRESSO_SEQUENCER_L1_PROVIDER=http://localhost:$ESPRESSO_SEQUENCER_L1_PORT
-  - ESPRESSO_SEQUENCER_GENESIS_FILE=$ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE
-  - ESPRESSO_BUILDER_GENESIS_FILE=$ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE
-  - ESPRESSO_STATE_RELAY_SERVER_URL=http://localhost:$ESPRESSO_STATE_RELAY_SERVER_PORT
-  - QUERY_SERVICE_URI=http://localhost:$ESPRESSO_SEQUENCER1_API_PORT/v0/
-  - NODE_VALIDATOR_URI=ws://localhost:$ESPRESSO_NODE_VALIDATOR_PORT/v0/
+  - ESPRESSO_SEQUENCER_CDN_ENDPOINT=127.0.0.1:${ESPRESSO_CDN_SERVER_PORT}
+  - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL=http://localhost:${ESPRESSO_ORCHESTRATOR_PORT}
+  - ESPRESSO_SEQUENCER_URL=http://localhost:${ESPRESSO_SEQUENCER0_API_PORT}
+  - ESPRESSO_SEQUENCER_URLS=http://localhost:${ESPRESSO_SEQUENCER0_API_PORT},http://localhost:${ESPRESSO_SEQUENCER1_API_PORT}
+  - ESPRESSO_SEQUENCER_L1_PROVIDER=http://localhost:${ESPRESSO_SEQUENCER_L1_PORT}
+  - ESPRESSO_SEQUENCER_GENESIS_FILE=${ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE:-data/genesis/demo.toml}
+  - ESPRESSO_BUILDER_GENESIS_FILE=${ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE:-data/genesis/demo.toml}
+  - ESPRESSO_STATE_RELAY_SERVER_URL=http://localhost:${ESPRESSO_STATE_RELAY_SERVER_PORT}
+  - QUERY_SERVICE_URI=http://localhost:${ESPRESSO_SEQUENCER1_API_PORT}/v0/
+  - NODE_VALIDATOR_URI=ws://localhost:${ESPRESSO_NODE_VALIDATOR_PORT}/v0/
 processes:
   # Cheating a bit here but since we don't usually have to debug go-ethereum
   # it's using the docker compose service which is a bit easier.
@@ -31,7 +31,7 @@ processes:
         command: >-
           curl -H "Content-Type: application/json"
           --data '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
-          http://localhost:$ESPRESSO_SEQUENCER_L1_PORT
+          http://localhost:${ESPRESSO_SEQUENCER_L1_PORT}
       failure_threshold: 6
       initial_delay_seconds: 5
     availability: *run-forever
@@ -71,12 +71,12 @@ processes:
     command: espresso-bridge deposit
     namespace: setup
     environment:
-      - L1_PROVIDER=http://localhost:$ESPRESSO_SEQUENCER_L1_PORT
-      - L1_POLLING_INTERVAL=$ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
-      - ESPRESSO_PROVIDER=http://localhost:$ESPRESSO_SEQUENCER1_API_PORT
-      - CONTRACT_ADDRESS=$ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
-      - MNEMONIC=$ESPRESSO_BUILDER_ETH_MNEMONIC
-      - ACCOUNT_INDEX=$ESPRESSO_BUILDER_ETH_ACCOUNT_INDEX
+      - L1_PROVIDER=http://localhost:${ESPRESSO_SEQUENCER_L1_PORT}
+      - L1_POLLING_INTERVAL=${ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL}
+      - ESPRESSO_PROVIDER=http://localhost:${ESPRESSO_SEQUENCER1_API_PORT}
+      - CONTRACT_ADDRESS=${ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS}
+      - MNEMONIC=${ESPRESSO_BUILDER_ETH_MNEMONIC}
+      - ACCOUNT_INDEX=${ESPRESSO_BUILDER_ETH_ACCOUNT_INDEX}
       - AMOUNT=1000000000000000000
       - CONFIRMATIONS=1
     depends_on:
@@ -92,11 +92,11 @@ processes:
     command: staking-cli stake-for-demo
     namespace: setup
     environment:
-      - L1_PROVIDER=http://localhost:$ESPRESSO_SEQUENCER_L1_PORT
-      - MNEMONIC=$ESPRESSO_SEQUENCER_ETH_MNEMONIC
-      - ACCOUNT_INDEX=$ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ACCOUNT_INDEX
-      - ESP_TOKEN_ADDRESS=$ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
-      - STAKE_TABLE_ADDRESS=$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS
+      - L1_PROVIDER=http://localhost:${ESPRESSO_SEQUENCER_L1_PORT}
+      - MNEMONIC=${ESPRESSO_SEQUENCER_ETH_MNEMONIC}
+      - ACCOUNT_INDEX=${ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ACCOUNT_INDEX}
+      - ESP_TOKEN_ADDRESS=${ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS}
+      - STAKE_TABLE_ADDRESS=${ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS}
     depends_on:
       deploy-sequencer-contracts:
         condition: process_completed
@@ -109,12 +109,12 @@ processes:
   orchestrator:
     command: orchestrator
     environment:
-      - ESPRESSO_ORCHESTRATOR_BUILDER_URLS=http://localhost:$ESPRESSO_BUILDER_SERVER_PORT
+      - ESPRESSO_ORCHESTRATOR_BUILDER_URLS=http://localhost:${ESPRESSO_BUILDER_SERVER_PORT}
     readiness_probe:
       http_get:
         scheme: http
         host: localhost
-        port: $ESPRESSO_ORCHESTRATOR_PORT
+        port: ${ESPRESSO_ORCHESTRATOR_PORT}
         path: /healthcheck
       initial_delay_seconds: 0
       period_seconds: 1
@@ -131,7 +131,7 @@ processes:
       http_get:
         scheme: http
         host: localhost
-        port: $ESPRESSO_STATE_RELAY_SERVER_PORT
+        port: ${ESPRESSO_STATE_RELAY_SERVER_PORT}
         path: /healthcheck
     availability: *run-forever
 
@@ -139,8 +139,8 @@ processes:
     # to avoid interfering so much with other work, "nice" the state prover process
     command: nice state-prover -d
     environment:
-      - MNEMONIC=$ESPRESSO_SEQUENCER_ETH_MNEMONIC
-      - RAYON_NUM_THREADS=$PROVER_RAYON_NUM_THREADS
+      - MNEMONIC=${ESPRESSO_SEQUENCER_ETH_MNEMONIC}
+      - RAYON_NUM_THREADS=${PROVER_RAYON_NUM_THREADS}
     depends_on:
       sequencer0:
         condition: process_healthy
@@ -155,18 +155,18 @@ processes:
   sequencer0:
     command: sequencer -- storage-sql -- http -- query -- submit -- hotshot-events -- config -- catchup
     environment:
-      - ESPRESSO_SEQUENCER_API_PORT=$ESPRESSO_SEQUENCER_API_PORT
-      - ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS=0.0.0.0:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_0
-      - ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS=localhost:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_0
-      - ESPRESSO_SEQUENCER_API_PEERS=http://localhost:$ESPRESSO_SEQUENCER1_API_PORT
-      - ESPRESSO_SEQUENCER_STATE_PEERS=http://localhost:$ESPRESSO_SEQUENCER1_API_PORT
+      - ESPRESSO_SEQUENCER_API_PORT=${ESPRESSO_SEQUENCER0_API_PORT}
+      - ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_0}
+      - ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS=localhost:${ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_0}
+      - ESPRESSO_SEQUENCER_API_PEERS=http://localhost:${ESPRESSO_SEQUENCER1_API_PORT}
+      - ESPRESSO_SEQUENCER_STATE_PEERS=http://localhost:${ESPRESSO_SEQUENCER1_API_PORT}
       - ESPRESSO_SEQUENCER_POSTGRES_HOST=localhost
-      - ESPRESSO_SEQUENCER_POSTGRES_PORT=$ESPRESSO_SEQUENCER0_DB_PORT
+      - ESPRESSO_SEQUENCER_POSTGRES_PORT=${ESPRESSO_SEQUENCER0_DB_PORT}
       - ESPRESSO_SEQUENCER_POSTGRES_USER=root
       - ESPRESSO_SEQUENCER_POSTGRES_PASSWORD=password
       - ESPRESSO_SEQUENCER_POSTGRES_DATABASE=sequencer
-      - ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY=$ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_0
-      - ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY=$ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_0
+      - ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY=${ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_0}
+      - ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY=${ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_0}
       - ESPRESSO_SEQUENCER_IS_DA=true
       - ESPRESSO_SEQUENCER_IDENTITY_NODE_NAME=sequencer0
       - ESPRESSO_SEQUENCER_IDENTITY_WALLET_ADDRESS=0x0000000000000000000000000000000000000000
@@ -177,7 +177,7 @@ processes:
       - ESPRESSO_SEQUENCER_IDENTITY_COUNTRY_CODE=US
       - ESPRESSO_SEQUENCER_IDENTITY_LATITUDE=40.7128
       - ESPRESSO_SEQUENCER_IDENTITY_LONGITUDE=-74.0060
-      - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://localhost:$ESPRESSO_SEQUENCER_API_PORT/
+      - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://localhost:${ESPRESSO_SEQUENCER0_API_PORT}/
     depends_on:
       orchestrator:
         condition: process_healthy
@@ -201,7 +201,7 @@ processes:
       http_get:
         scheme: http
         host: localhost
-        port: $ESPRESSO_SEQUENCER_API_PORT
+        port: ${ESPRESSO_SEQUENCER0_API_PORT}
         path: /healthcheck
       period_seconds: 1
       failure_threshold: 100
@@ -209,18 +209,18 @@ processes:
   sequencer1:
     command: sequencer -- storage-sql -- http -- query -- explorer -- catchup
     environment:
-      - ESPRESSO_SEQUENCER_API_PORT=$ESPRESSO_SEQUENCER1_API_PORT
-      - ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS=0.0.0.0:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_1
-      - ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS=localhost:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_1
-      - ESPRESSO_SEQUENCER_API_PEERS=http://localhost:$ESPRESSO_SEQUENCER_API_PORT
-      - ESPRESSO_SEQUENCER_STATE_PEERS=http://localhost:$ESPRESSO_SEQUENCER2_API_PORT
+      - ESPRESSO_SEQUENCER_API_PORT=${ESPRESSO_SEQUENCER1_API_PORT}
+      - ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_1}
+      - ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS=localhost:${ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_1}
+      - ESPRESSO_SEQUENCER_API_PEERS=http://localhost:${ESPRESSO_SEQUENCER0_API_PORT}
+      - ESPRESSO_SEQUENCER_STATE_PEERS=http://localhost:${ESPRESSO_SEQUENCER2_API_PORT}
       - ESPRESSO_SEQUENCER_POSTGRES_HOST=localhost
-      - ESPRESSO_SEQUENCER_POSTGRES_PORT=$ESPRESSO_SEQUENCER1_DB_PORT
+      - ESPRESSO_SEQUENCER_POSTGRES_PORT=${ESPRESSO_SEQUENCER1_DB_PORT}
       - ESPRESSO_SEQUENCER_POSTGRES_USER=root
       - ESPRESSO_SEQUENCER_POSTGRES_PASSWORD=password
       - ESPRESSO_SEQUENCER_POSTGRES_DATABASE=sequencer
-      - ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY=$ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_1
-      - ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY=$ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_1
+      - ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY=${ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_1}
+      - ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY=${ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_1}
       - ESPRESSO_SEQUENCER_IS_DA=true
       - ESPRESSO_SEQUENCER_IDENTITY_NODE_NAME=sequencer1
       - ESPRESSO_SEQUENCER_IDENTITY_WALLET_ADDRESS=0x0000000000000000000000000000000000000001
@@ -231,8 +231,8 @@ processes:
       - ESPRESSO_SEQUENCER_IDENTITY_COUNTRY_CODE=GR
       - ESPRESSO_SEQUENCER_IDENTITY_LATITUDE=39.0742
       - ESPRESSO_SEQUENCER_IDENTITY_LONGITUDE=21.8243
-      - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://localhost:$ESPRESSO_SEQUENCER1_API_PORT/
-      - ESPRESSO_SEQUENCER_L1_WS_PROVIDER=ws://localhost:$ESPRESSO_SEQUENCER_L1_WS_PORT
+      - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://localhost:${ESPRESSO_SEQUENCER1_API_PORT}/
+      - ESPRESSO_SEQUENCER_L1_WS_PROVIDER=ws://localhost:${ESPRESSO_SEQUENCER_L1_WS_PORT}
     depends_on:
       orchestrator:
         condition: process_healthy
@@ -254,7 +254,7 @@ processes:
       http_get:
         scheme: http
         host: localhost
-        port: $ESPRESSO_SEQUENCER1_API_PORT
+        port: ${ESPRESSO_SEQUENCER1_API_PORT}
         path: /healthcheck
       period_seconds: 1
       failure_threshold: 100
@@ -263,14 +263,14 @@ processes:
   sequencer2:
     command: sequencer -- http
     environment:
-      - ESPRESSO_SEQUENCER_API_PORT=$ESPRESSO_SEQUENCER2_API_PORT
-      - ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS=0.0.0.0:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_2
-      - ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS=localhost:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_2
-      - ESPRESSO_SEQUENCER_STATE_PEERS=http://localhost:$ESPRESSO_SEQUENCER3_API_PORT
-      - ESPRESSO_SEQUENCER_API_PEERS=http://localhost:$ESPRESSO_SEQUENCER_API_PORT
-      - ESPRESSO_SEQUENCER_STORAGE_PATH=$ESPRESSO_BASE_STORAGE_PATH/seq2
-      - ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY=$ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_2
-      - ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY=$ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_2
+      - ESPRESSO_SEQUENCER_API_PORT=${ESPRESSO_SEQUENCER2_API_PORT}
+      - ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_2}
+      - ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS=localhost:${ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_2}
+      - ESPRESSO_SEQUENCER_STATE_PEERS=http://localhost:${ESPRESSO_SEQUENCER3_API_PORT}
+      - ESPRESSO_SEQUENCER_API_PEERS=http://localhost:${ESPRESSO_SEQUENCER0_API_PORT}
+      - ESPRESSO_SEQUENCER_STORAGE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq2
+      - ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY=${ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_2}
+      - ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY=${ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_2}
       - ESPRESSO_SEQUENCER_IS_DA=true
       - ESPRESSO_SEQUENCER_IDENTITY_NODE_NAME=sequencer2
       - ESPRESSO_SEQUENCER_IDENTITY_WALLET_ADDRESS=0x0000000000000000000000000000000000000002
@@ -281,7 +281,7 @@ processes:
       - ESPRESSO_SEQUENCER_IDENTITY_COUNTRY_CODE=CN
       - ESPRESSO_SEQUENCER_IDENTITY_LATITUDE=35.8617
       - ESPRESSO_SEQUENCER_IDENTITY_LONGITUDE=104.1954
-      - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://localhost:$ESPRESSO_SEQUENCER2_API_PORT/
+      - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://localhost:${ESPRESSO_SEQUENCER2_API_PORT}/
     depends_on:
       orchestrator:
         condition: process_healthy
@@ -301,7 +301,7 @@ processes:
       http_get:
         scheme: http
         host: localhost
-        port: $ESPRESSO_SEQUENCER2_API_PORT
+        port: ${ESPRESSO_SEQUENCER2_API_PORT}
         path: /healthcheck
       failure_threshold: 100
       period_seconds: 1
@@ -310,14 +310,14 @@ processes:
   sequencer3:
     command: sequencer -- http -- query -- storage-fs
     environment:
-      - ESPRESSO_SEQUENCER_API_PORT=$ESPRESSO_SEQUENCER3_API_PORT
-      - ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS=0.0.0.0:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_3
-      - ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS=localhost:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_3
-      - ESPRESSO_SEQUENCER_STATE_PEERS=http://localhost:$ESPRESSO_SEQUENCER4_API_PORT
-      - ESPRESSO_SEQUENCER_API_PEERS=http://localhost:$ESPRESSO_SEQUENCER_API_PORT
-      - ESPRESSO_SEQUENCER_STORAGE_PATH=$ESPRESSO_BASE_STORAGE_PATH/seq3
-      - ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY=$ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_3
-      - ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY=$ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_3
+      - ESPRESSO_SEQUENCER_API_PORT=${ESPRESSO_SEQUENCER3_API_PORT}
+      - ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_3}
+      - ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS=localhost:${ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_3}
+      - ESPRESSO_SEQUENCER_STATE_PEERS=http://localhost:${ESPRESSO_SEQUENCER4_API_PORT}
+      - ESPRESSO_SEQUENCER_API_PEERS=http://localhost:${ESPRESSO_SEQUENCER0_API_PORT}
+      - ESPRESSO_SEQUENCER_STORAGE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq3
+      - ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY=${ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_3}
+      - ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY=${ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_3}
       - ESPRESSO_SEQUENCER_IDENTITY_NODE_NAME=sequencer3
       - ESPRESSO_SEQUENCER_IDENTITY_WALLET_ADDRESS=0x0000000000000000000000000000000000000003
       - ESPRESSO_SEQUENCER_IDENTITY_COMPANY_NAME=Espresso Systems
@@ -328,8 +328,8 @@ processes:
       - ESPRESSO_SEQUENCER_IDENTITY_COUNTRY_CODE=CN
       - ESPRESSO_SEQUENCER_IDENTITY_LATITUDE=35.8617
       - ESPRESSO_SEQUENCER_IDENTITY_LONGITUDE=104.1954
-      - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://localhost:$ESPRESSO_SEQUENCER3_API_PORT/
-      - ESPRESSO_SEQUENCER_L1_WS_PROVIDER=ws://localhost:$ESPRESSO_SEQUENCER_L1_WS_PORT
+      - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://localhost:${ESPRESSO_SEQUENCER3_API_PORT}/
+      - ESPRESSO_SEQUENCER_L1_WS_PROVIDER=ws://localhost:${ESPRESSO_SEQUENCER_L1_WS_PORT}
     depends_on:
       orchestrator:
         condition: process_healthy
@@ -349,7 +349,7 @@ processes:
       http_get:
         scheme: http
         host: localhost
-        port: $ESPRESSO_SEQUENCER3_API_PORT
+        port: ${ESPRESSO_SEQUENCER3_API_PORT}
         path: /healthcheck
       failure_threshold: 100
       period_seconds: 1
@@ -359,12 +359,12 @@ processes:
     command: sequencer-sqlite -- storage-sql -- http -- query
     environment:
       - ESPRESSO_SEQUENCER_LIGHTWEIGHT=true
-      - ESPRESSO_SEQUENCER_API_PORT=$ESPRESSO_SEQUENCER4_API_PORT
-      - ESPRESSO_SEQUENCER_STATE_PEERS=http://localhost:$ESPRESSO_SEQUENCER_API_PORT
-      - ESPRESSO_SEQUENCER_API_PEERS=http://localhost:$ESPRESSO_SEQUENCER_API_PORT
-      - ESPRESSO_SEQUENCER_STORAGE_PATH=$ESPRESSO_BASE_STORAGE_PATH/seq4
-      - ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY=$ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_4
-      - ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY=$ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_4
+      - ESPRESSO_SEQUENCER_API_PORT=${ESPRESSO_SEQUENCER4_API_PORT}
+      - ESPRESSO_SEQUENCER_STATE_PEERS=http://localhost:${ESPRESSO_SEQUENCER0_API_PORT}
+      - ESPRESSO_SEQUENCER_API_PEERS=http://localhost:${ESPRESSO_SEQUENCER0_API_PORT}
+      - ESPRESSO_SEQUENCER_STORAGE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq4
+      - ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY=${ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_4}
+      - ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY=${ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_4}
       - ESPRESSO_SEQUENCER_IDENTITY_NODE_NAME=sequencer4
       - ESPRESSO_SEQUENCER_IDENTITY_WALLET_ADDRESS=0x0000000000000000000000000000000000000004
       - ESPRESSO_SEQUENCER_IDENTITY_COMPANY_NAME=Espresso Systems
@@ -374,7 +374,7 @@ processes:
       - ESPRESSO_SEQUENCER_IDENTITY_COUNTRY_CODE=AU
       - ESPRESSO_SEQUENCER_IDENTITY_LATITUDE=-25.2744
       - ESPRESSO_SEQUENCER_IDENTITY_LONGITUDE=133.7751
-      - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://localhost:$ESPRESSO_SEQUENCER4_API_PORT/
+      - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://localhost:${ESPRESSO_SEQUENCER4_API_PORT}/
       - ESPRESSO_SEQUENCER_IS_DA=true
     depends_on:
       orchestrator:
@@ -395,7 +395,7 @@ processes:
       http_get:
         scheme: http
         host: localhost
-        port: $ESPRESSO_SEQUENCER4_API_PORT
+        port: ${ESPRESSO_SEQUENCER4_API_PORT}
         path: /healthcheck
       failure_threshold: 100
       period_seconds: 1
@@ -404,9 +404,9 @@ processes:
   node_validator:
     command: node-metrics --
     environment:
-      - ESPRESSO_NODE_VALIDATOR_STAKE_TABLE_SOURCE_BASE_URL=http://localhost:$ESPRESSO_SEQUENCER_API_PORT/v0/
-      - ESPRESSO_NODE_VALIDATOR_LEAF_STREAM_SOURCE_BASE_URL=http://localhost:$ESPRESSO_SEQUENCER_API_PORT/v0/
-      - ESPRESSO_NODE_VALIDATOR_INITIAL_NODE_PUBLIC_BASE_URLS=http://localhost:$ESPRESSO_SEQUENCER_API_PORT/,http://localhost:$ESPRESSO_SEQUENCER1_API_PORT/,http://localhost:$ESPRESSO_SEQUENCER2_API_PORT/,http://localhost:$ESPRESSO_SEQUENCER3_API_PORT/,http://localhost:$ESPRESSO_SEQUENCER4_API_PORT/
+      - ESPRESSO_NODE_VALIDATOR_STAKE_TABLE_SOURCE_BASE_URL=http://localhost:${ESPRESSO_SEQUENCER0_API_PORT}/v0/
+      - ESPRESSO_NODE_VALIDATOR_LEAF_STREAM_SOURCE_BASE_URL=http://localhost:${ESPRESSO_SEQUENCER0_API_PORT}/v0/
+      - ESPRESSO_NODE_VALIDATOR_INITIAL_NODE_PUBLIC_BASE_URLS=http://localhost:${ESPRESSO_SEQUENCER0_API_PORT}/,http://localhost:${ESPRESSO_SEQUENCER1_API_PORT}/,http://localhost:${ESPRESSO_SEQUENCER2_API_PORT}/,http://localhost:${ESPRESSO_SEQUENCER3_API_PORT}/,http://localhost:${ESPRESSO_SEQUENCER4_API_PORT}/
     depends_on:
       broker_0:
         condition: process_healthy
@@ -426,7 +426,7 @@ processes:
       http_get:
         scheme: http
         host: localhost
-        port: $ESPRESSO_SEQUENCER1_API_PORT
+        port: ${ESPRESSO_SEQUENCER1_API_PORT}
         path: /healthcheck
       period_seconds: 1
       failure_threshold: 100
@@ -449,7 +449,7 @@ processes:
 
   # The CDN system's main entry point; where users contact first.
   marshal_0:
-    command: cdn-marshal -d "redis://:changeme!@localhost:6379" -b $ESPRESSO_CDN_SERVER_PORT -m 127.0.0.1:9093
+    command: cdn-marshal -d "redis://:changeme!@localhost:6379" -b ${ESPRESSO_CDN_SERVER_PORT} -m 127.0.0.1:9093
     depends_on:
       keydb:
         condition: process_healthy
@@ -500,7 +500,7 @@ processes:
     availability: *run-forever
 
   cdn-whitelist:
-    command: cdn-whitelist -d redis://:changeme!@localhost:6379 -o http://localhost:$ESPRESSO_ORCHESTRATOR_PORT
+    command: cdn-whitelist -d redis://:changeme!@localhost:6379 -o http://localhost:${ESPRESSO_ORCHESTRATOR_PORT}
     namespace: setup
     depends_on:
       orchestrator:
@@ -512,7 +512,7 @@ processes:
   submit-transactions-public:
     command: submit-transactions
     environment:
-      - ESPRESSO_SUBMIT_TRANSACTIONS_PORT=$ESPRESSO_SUBMIT_TRANSACTIONS_PUBLIC_PORT
+      - ESPRESSO_SUBMIT_TRANSACTIONS_PORT=${ESPRESSO_SUBMIT_TRANSACTIONS_PUBLIC_PORT}
     depends_on:
       sequencer0:
         condition: process_healthy
@@ -524,7 +524,7 @@ processes:
       http_get:
         scheme: http
         host: localhost
-        port: $ESPRESSO_SUBMIT_TRANSACTIONS_PUBLIC_PORT
+        port: ${ESPRESSO_SUBMIT_TRANSACTIONS_PUBLIC_PORT}
         path: /healthcheck
       failure_threshold: 100
       period_seconds: 1
@@ -533,8 +533,8 @@ processes:
   submit-transactions-private:
     command: submit-transactions
     environment:
-      - ESPRESSO_SUBMIT_TRANSACTIONS_PORT=$ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT
-      - ESPRESSO_SUBMIT_TRANSACTIONS_SUBMIT_URL=http://localhost:$ESPRESSO_BUILDER_SERVER_PORT/txn_submit
+      - ESPRESSO_SUBMIT_TRANSACTIONS_PORT=${ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT}
+      - ESPRESSO_SUBMIT_TRANSACTIONS_SUBMIT_URL=http://localhost:${ESPRESSO_BUILDER_SERVER_PORT}/txn_submit
     depends_on:
       sequencer0:
         condition: process_healthy
@@ -544,7 +544,7 @@ processes:
       http_get:
         scheme: http
         host: localhost
-        port: $ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT
+        port: ${ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT}
         path: /healthcheck
       failure_threshold: 100
       period_seconds: 1
@@ -552,12 +552,11 @@ processes:
 
   permissionless-builder:
     command: permissionless-builder
-    ports:
-      - "$ESPRESSO_BUILDER_SERVER_PORT:$ESPRESSO_BUILDER_SERVER_PORT"
     environment:
-      - ESPRESSO_SEQUENCER_STATE_PEERS=http://localhost:$ESPRESSO_SEQUENCER_API_PORT
-      - ESPRESSO_SEQUENCER_URL=http://localhost:$ESPRESSO_SEQUENCER_API_PORT
+      - ESPRESSO_SEQUENCER_STATE_PEERS=http://localhost:${ESPRESSO_SEQUENCER0_API_PORT}
+      - ESPRESSO_SEQUENCER_URL=http://localhost:${ESPRESSO_SEQUENCER0_API_PORT}
       - ESPRESSO_BUILDER_GENESIS_FILE
+      - ESPRESSO_BUILDER_L1_PROVIDER=http://localhost:${ESPRESSO_SEQUENCER_L1_PORT}
     depends_on:
       sequencer0:
         condition: process_healthy
@@ -567,7 +566,7 @@ processes:
       http_get:
         scheme: http
         host: localhost
-        port: $ESPRESSO_BUILDER_SERVER_PORT
+        port: ${ESPRESSO_BUILDER_SERVER_PORT}
         path: /healthcheck
       failure_threshold: 100
       period_seconds: 1
@@ -577,7 +576,7 @@ processes:
     command: nasty-client
     environment:
       # Point the nasty client at sequencer1, the only one running the state API.
-      - ESPRESSO_SEQUENCER_URL=http://localhost:$ESPRESSO_SEQUENCER1_API_PORT
+      - ESPRESSO_SEQUENCER_URL=http://localhost:${ESPRESSO_SEQUENCER1_API_PORT}
     depends_on:
       sequencer0:
         condition: process_healthy
@@ -585,21 +584,21 @@ processes:
       http_get:
         scheme: http
         host: localhost
-        port: $ESPRESSO_NASTY_CLIENT_PORT
+        port: ${ESPRESSO_NASTY_CLIENT_PORT}
         path: /healthcheck
       failure_threshold: 100
     availability: *run-forever
 
   sequencer-db-0:
     command:
-      docker run -e POSTGRES_PASSWORD -e POSTGRES_USER -e POSTGRES_DB -p $ESPRESSO_SEQUENCER0_DB_PORT:5432 postgres
+      docker run -e POSTGRES_PASSWORD -e POSTGRES_USER -e POSTGRES_DB -p ${ESPRESSO_SEQUENCER0_DB_PORT}:5432 postgres
     environment:
       - POSTGRES_PASSWORD=password
       - POSTGRES_USER=root
       - POSTGRES_DB=sequencer
     readiness_probe:
       exec:
-        command: pg_isready -h localhost -p $ESPRESSO_SEQUENCER0_DB_PORT
+        command: pg_isready -h localhost -p ${ESPRESSO_SEQUENCER0_DB_PORT}
       initial_delay_seconds: 5
       period_seconds: 5
       timeout_seconds: 4
@@ -611,14 +610,14 @@ processes:
 
   sequencer-db-1:
     command:
-      docker run -e POSTGRES_PASSWORD -e POSTGRES_USER -e POSTGRES_DB -p $ESPRESSO_SEQUENCER1_DB_PORT:5432 postgres
+      docker run -e POSTGRES_PASSWORD -e POSTGRES_USER -e POSTGRES_DB -p ${ESPRESSO_SEQUENCER1_DB_PORT}:5432 postgres
     environment:
       - POSTGRES_PASSWORD=password
       - POSTGRES_USER=root
       - POSTGRES_DB=sequencer
     readiness_probe:
       exec:
-        command: pg_isready -h localhost -p $ESPRESSO_SEQUENCER1_DB_PORT
+        command: pg_isready -h localhost -p ${ESPRESSO_SEQUENCER1_DB_PORT}
       initial_delay_seconds: 5
       period_seconds: 5
       timeout_seconds: 4
@@ -630,7 +629,7 @@ processes:
 
   block-explorer:
     command:
-      docker run --rm -p $ESPRESSO_BLOCK_EXPLORER_PORT:3000 -e QUERY_SERVICE_URI -e NODE_VALIDATOR_URI
+      docker run --rm -p ${ESPRESSO_BLOCK_EXPLORER_PORT}:3000 -e QUERY_SERVICE_URI -e NODE_VALIDATOR_URI
       ghcr.io/espressosystems/espresso-block-explorer:main
     depends_on:
       sequencer1:
