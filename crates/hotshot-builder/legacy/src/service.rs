@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     fmt::Display,
+    fs::OpenOptions,
     num::NonZeroUsize,
     sync::Arc,
     time::{Duration, Instant},
@@ -11,6 +12,7 @@ use async_broadcast::{Sender as BroadcastSender, TrySendError};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
+use csv::Writer;
 use futures::{future::BoxFuture, stream::StreamExt, Stream};
 use hotshot::types::Event;
 use hotshot_builder_api::{
@@ -27,7 +29,7 @@ use hotshot_types::{
     event::EventType,
     message::Proposal,
     traits::{
-        block_contents::{BlockPayload, Transaction},
+        block_contents::{BlockHeader, BlockPayload, Transaction},
         node_implementation::{ConsensusTime, NodeType},
         signature_key::{BuilderSignatureKey, SignatureKey},
     },
@@ -519,48 +521,43 @@ impl<Types: NodeType> GlobalState<Types> {
         }
     }
     pub fn add_available_blocks_request_timestamp(&mut self, view_number: u64, timestamp: i128) {
-        self.timestamps
-            .entry(view_number)
-            .or_default()
-            .requests
-            .available_blocks
-            .get_or_insert(timestamp);
+        let entry = self.timestamps.entry(view_number).or_default();
+        let replaced = entry.requests.available_blocks.replace(timestamp);
+        if replaced.is_some() {
+            entry.requests.retries += 1;
+        }
     }
     pub fn add_claim_block_request_timestamp(&mut self, view_number: u64, timestamp: i128) {
-        self.timestamps
-            .entry(view_number)
-            .or_default()
-            .requests
-            .claim_block
-            .get_or_insert(timestamp);
+        let entry = self.timestamps.entry(view_number).or_default();
+        let replaced = entry.requests.claim_block.replace(timestamp);
+        if replaced.is_some() {
+            entry.requests.retries += 1;
+        }
     }
     pub fn add_claim_block_header_input_request_timestamp(
         &mut self,
         view_number: u64,
         timestamp: i128,
     ) {
-        self.timestamps
-            .entry(view_number)
-            .or_default()
-            .requests
-            .claim_block_header_input
-            .get_or_insert(timestamp);
+        let entry = self.timestamps.entry(view_number).or_default();
+        let replaced = entry.requests.claim_block_header_input.replace(timestamp);
+        if replaced.is_some() {
+            entry.requests.retries += 1;
+        }
     }
     pub fn add_available_blocks_response_timestamp(&mut self, view_number: u64, timestamp: i128) {
         self.timestamps
             .entry(view_number)
             .or_default()
             .responses
-            .available_blocks
-            .get_or_insert(timestamp);
+            .available_blocks = Some(timestamp);
     }
     pub fn add_claim_block_response_timestamp(&mut self, view_number: u64, timestamp: i128) {
         self.timestamps
             .entry(view_number)
             .or_default()
             .responses
-            .claim_block
-            .get_or_insert(timestamp);
+            .claim_block = Some(timestamp);
     }
     pub fn add_claim_block_header_input_response_timestamp(
         &mut self,
@@ -571,8 +568,54 @@ impl<Types: NodeType> GlobalState<Types> {
             .entry(view_number)
             .or_default()
             .responses
-            .claim_block_header_input
-            .get_or_insert(timestamp);
+            .claim_block_header_input = Some(timestamp);
+    }
+
+    pub fn log_timestamps(&self) {
+        let leader_results_csv_file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open("timestamps.csv")
+            .unwrap();
+        let mut wtr = Writer::from_writer(leader_results_csv_file);
+        let _ = wtr.write_record([
+            "view_number",
+            "proposal_recv",
+            "da_proposal_recv",
+            "decided",
+            "available_blocks_recv",
+            "claim_block_recv",
+            "claim_block_header_input_recv",
+            "retries",
+            "available_blocks_send",
+            "claim_block_send",
+            "claim_block_header_input_send",
+        ]);
+        for (view_number, entry) in self.timestamps.iter() {
+            let _ = wtr.write_record([
+                view_number.to_string(),
+                entry.events.quorum_proposal_recv.unwrap_or(0).to_string(),
+                entry.events.da_proposal_recv.unwrap_or(0).to_string(),
+                entry.events.decide_recv.unwrap_or(0).to_string(),
+                entry.requests.available_blocks.unwrap_or(0).to_string(),
+                entry.requests.claim_block.unwrap_or(0).to_string(),
+                entry
+                    .requests
+                    .claim_block_header_input
+                    .unwrap_or(0)
+                    .to_string(),
+                entry.requests.retries.to_string(),
+                entry.responses.available_blocks.unwrap_or(0).to_string(),
+                entry.responses.claim_block.unwrap_or(0).to_string(),
+                entry
+                    .responses
+                    .claim_block_header_input
+                    .unwrap_or(0)
+                    .to_string(),
+            ]);
+        }
+        wtr.flush().unwrap();
     }
 }
 
@@ -1225,6 +1268,7 @@ struct BuilderRequestTimestamps {
     pub available_blocks: Option<i128>,
     pub claim_block: Option<i128>,
     pub claim_block_header_input: Option<i128>,
+    pub retries: u64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1333,6 +1377,9 @@ pub async fn run_non_permissioned_standalone_builder_service<
             },
             // QC proposal event
             EventType::QuorumProposal { proposal, sender } => {
+                if proposal.data.block_header().block_number() % 1000 == 0 {
+                    global_state.read_arc().await.log_timestamps();
+                }
                 // get the leader for current view
                 handle_quorum_event(&quorum_sender, Arc::new(proposal), sender).await;
             },
