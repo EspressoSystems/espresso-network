@@ -1658,4 +1658,86 @@ mod tests {
 
         Ok(())
     }
+
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_store_and_load_all_validators<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) -> anyhow::Result<()> {
+        let tmp = P::tmp_storage().await;
+        let mut opt = P::options(&tmp);
+        let storage = opt.create().await.unwrap();
+
+        let mut vmap1 = IndexMap::new();
+        for _i in 0..25 {
+            let v = Validator::mock();
+            vmap1.insert(v.account, v);
+        }
+        storage
+            .store_all_validators(EpochNumber::new(10), vmap1.clone())
+            .await?;
+
+        let mut expected_all: Vec<_> = vmap1.clone().into_values().collect();
+        expected_all.sort_by_key(|v| v.account);
+
+        // Load all
+        let loaded_all = storage
+            .load_all_validators(EpochNumber::new(10), 0, 100)
+            .await?;
+        // SQLite returns a different ordered list even though there is an `ORDER BY address ASC` clause
+        assert_eq!(expected_all, loaded_all);
+
+        // Load first 10
+        let loaded_first_10 = storage
+            .load_all_validators(EpochNumber::new(10), 0, 10)
+            .await?;
+
+        assert_eq!(expected_all[..10], loaded_first_10);
+
+        // Load next 10
+        let loaded_next_10 = storage
+            .load_all_validators(EpochNumber::new(10), 10, 10)
+            .await?;
+
+        assert_eq!(expected_all[10..20], loaded_next_10);
+
+        // Load remaining 5
+        let loaded_last_5 = storage
+            .load_all_validators(EpochNumber::new(10), 20, 10)
+            .await?;
+
+        assert_eq!(expected_all[20..], loaded_last_5);
+
+        // offset beyond size should return empty
+        let loaded_empty = storage
+            .load_all_validators(EpochNumber::new(10), 100, 10)
+            .await?;
+        assert!(loaded_empty.is_empty());
+
+        // epoch 11
+        let validator2 = Validator::mock();
+        let mut vmap2 = IndexMap::new();
+        vmap2.insert(validator2.account, validator2.clone());
+
+        storage
+            .store_all_validators(EpochNumber::new(11), vmap2.clone())
+            .await?;
+
+        let mut expected_epoch11: Vec<_> = vmap2.clone().into_values().collect();
+        expected_epoch11.sort_by_key(|v| v.account);
+
+        let loaded2 = storage
+            .load_all_validators(EpochNumber::new(11), 0, 100)
+            .await?;
+
+        assert_eq!(expected_epoch11, loaded2);
+
+        // Epoch 10 still there
+        let loaded1_again = storage
+            .load_all_validators(EpochNumber::new(10), 0, 100)
+            .await?;
+
+        assert_eq!(expected_all, loaded1_again);
+
+        Ok(())
+    }
 }
