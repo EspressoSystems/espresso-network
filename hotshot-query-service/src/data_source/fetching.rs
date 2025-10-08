@@ -2153,7 +2153,9 @@ impl<Types: NodeType> Storable<Types> for BlockInfo<Types> {
         storage: &mut (impl UpdateAvailabilityStorage<Types> + Send),
         leaf_only: bool,
     ) -> anyhow::Result<()> {
-        self.leaf.store(storage, leaf_only).await?;
+        storage
+            .insert_leaf_with_qc_chain(self.leaf, self.qc_chain)
+            .await?;
 
         if let Some(common) = self.vid_common {
             (common, self.vid_share).store(storage, leaf_only).await?;

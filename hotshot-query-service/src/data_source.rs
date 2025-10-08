@@ -134,7 +134,7 @@ pub mod availability_tests {
     use super::test_helpers::*;
     use crate::{
         availability::{payload_size, BlockId},
-        data_source::storage::NodeStorage,
+        data_source::storage::{AvailabilityStorage, NodeStorage},
         node::NodeDataSource,
         testing::{
             consensus::{MockNetwork, TestableDataSource},
@@ -143,7 +143,10 @@ pub mod availability_tests {
         types::HeightIndexed,
     };
 
-    async fn validate(ds: &impl TestableDataSource) {
+    async fn validate<D: TestableDataSource>(ds: &D)
+    where
+        for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes> + NodeStorage<MockTypes>,
+    {
         // Check the consistency of every block/leaf pair. Keep track of payloads and transactions
         // we've seen so we can detect duplicates.
         let mut seen_payloads = HashMap::new();
@@ -287,12 +290,27 @@ pub mod availability_tests {
                 }
             }
         }
+
+        // Validate consistency of latest QC chain.
+        {
+            let mut tx = ds.read().await.unwrap();
+            let block_height = NodeStorage::block_height(&mut tx).await.unwrap();
+            tracing::info!(block_height, "checking QC chain");
+
+            let last_leaf = tx.get_leaf((block_height - 1).into()).await.unwrap();
+            let qc_chain = tx.latest_qc_chain().await.unwrap().unwrap();
+
+            assert_eq!(last_leaf.height(), (block_height - 1) as u64);
+            assert_eq!(qc_chain[0].view_number, last_leaf.leaf().view_number());
+            assert_eq!(qc_chain[0].data.leaf_commit, last_leaf.hash());
+            assert_eq!(qc_chain[1].view_number, qc_chain[0].view_number + 1);
+        }
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_update<D: TestableDataSource>()
     where
-        for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
+        for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes> + NodeStorage<MockTypes>,
     {
         let mut network = MockNetwork::<D, MockVersions>::init().await;
         let ds = network.data_source();
@@ -764,14 +782,15 @@ pub mod node_tests {
     use hotshot::traits::BlockPayload;
     use hotshot_example_types::{
         block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
-        node_types::TestTypes,
+        node_types::{TestTypes, TestVersions},
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
-        data::{vid_commitment, VidCommitment, VidShare},
+        data::{vid_commitment, VidCommitment, VidShare, ViewNumber},
+        simple_certificate::QuorumCertificate2,
         traits::{
             block_contents::{BlockHeader, EncodeBytes},
-            node_implementation::Versions,
+            node_implementation::{ConsensusTime, Versions},
         },
         vid::advz::{advz_scheme, ADVZScheme},
     };
@@ -791,7 +810,7 @@ pub mod node_tests {
             sleep,
         },
         types::HeightIndexed,
-        Header, VidCommon,
+        Header, Leaf2, VidCommon,
     };
 
     fn block_header_timestamp(header: &Header<MockTypes>) -> u64 {
@@ -1387,6 +1406,89 @@ pub mod node_tests {
             .unwrap();
         assert_eq!(res.window, blocks[2..].to_vec());
         assert_eq!(res.next, Some(test_blocks[2][0].clone()));
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub async fn test_latest_qc_chain<D: TestableDataSource>()
+    where
+        for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
+    {
+        let storage = D::create(0).await;
+        let ds = D::connect(&storage).await;
+
+        {
+            let mut tx = ds.read().await.unwrap();
+            assert_eq!(tx.latest_qc_chain().await.unwrap(), None);
+        }
+
+        async fn leaf_with_qc_chain(
+            number: u64,
+        ) -> (LeafQueryData<MockTypes>, [QuorumCertificate2<MockTypes>; 2]) {
+            let mut leaf = Leaf2::<MockTypes>::genesis::<TestVersions>(
+                &Default::default(),
+                &Default::default(),
+            )
+            .await;
+            leaf.block_header_mut().block_number = number;
+
+            let mut qc1 = QuorumCertificate2::<MockTypes>::genesis::<TestVersions>(
+                &Default::default(),
+                &Default::default(),
+            )
+            .await;
+            qc1.view_number = ViewNumber::new(1);
+            qc1.data.leaf_commit = Committable::commit(&leaf);
+
+            let mut qc2 = qc1.clone();
+            qc2.view_number += 1;
+
+            let leaf = LeafQueryData::new(leaf, qc1.clone()).unwrap();
+            (leaf, [qc1, qc2])
+        }
+
+        // Insert a leaf with QC chain.
+        {
+            let (leaf, qcs) = leaf_with_qc_chain(2).await;
+            let mut tx = ds.write().await.unwrap();
+            tx.insert_leaf_with_qc_chain(leaf, Some(qcs.clone()))
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+
+            assert_eq!(
+                ds.read().await.unwrap().latest_qc_chain().await.unwrap(),
+                Some(qcs)
+            );
+        }
+
+        // Insert a later leaf without a QC chain. This should clear the previously saved QC chain,
+        // which is no longer up to date.
+        {
+            let (leaf, _) = leaf_with_qc_chain(3).await;
+            let mut tx = ds.write().await.unwrap();
+            tx.insert_leaf_with_qc_chain(leaf, None).await.unwrap();
+            tx.commit().await.unwrap();
+
+            assert_eq!(
+                ds.read().await.unwrap().latest_qc_chain().await.unwrap(),
+                None
+            );
+        }
+
+        // Insert an earlier leaf with a QC chain. This should not be saved since it is not the
+        // latest leaf.
+        {
+            let (leaf, qcs) = leaf_with_qc_chain(1).await;
+            let mut tx = ds.write().await.unwrap();
+            tx.insert_leaf_with_qc_chain(leaf, Some(qcs)).await.unwrap();
+            tx.commit().await.unwrap();
+
+            assert_eq!(
+                ds.read().await.unwrap().latest_qc_chain().await.unwrap(),
+                None
+            );
+        }
     }
 }
 

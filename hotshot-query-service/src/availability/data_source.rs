@@ -24,6 +24,7 @@ use futures::{
 };
 use hotshot_types::{
     data::{VidCommitment, VidShare},
+    simple_certificate::QuorumCertificate2,
     traits::node_implementation::NodeType,
 };
 
@@ -309,6 +310,7 @@ pub struct BlockInfo<Types: NodeType> {
     pub vid_common: Option<VidCommonQueryData<Types>>,
     pub vid_share: Option<VidShare>,
     pub state_cert: Option<StateCertQueryDataV2<Types>>,
+    pub qc_chain: Option<[QuorumCertificate2<Types>; 2]>,
 }
 
 impl<Types: NodeType> From<LeafQueryData<Types>> for BlockInfo<Types> {
@@ -337,7 +339,13 @@ impl<Types: NodeType> BlockInfo<Types> {
             vid_common,
             vid_share,
             state_cert,
+            qc_chain: None,
         }
+    }
+
+    pub fn with_qc_chain(mut self, qc_chain: [QuorumCertificate2<Types>; 2]) -> Self {
+        self.qc_chain = Some(qc_chain);
+        self
     }
 }
 
