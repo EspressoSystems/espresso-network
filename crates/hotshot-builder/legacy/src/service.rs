@@ -1,6 +1,7 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fmt::Display,
+    fs::OpenOptions,
     num::NonZeroUsize,
     sync::Arc,
     time::{Duration, Instant},
@@ -11,6 +12,7 @@ use async_broadcast::{Sender as BroadcastSender, TrySendError};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
+use csv::Writer;
 use futures::{future::BoxFuture, stream::StreamExt, Stream};
 use hotshot::types::Event;
 use hotshot_builder_api::{
@@ -27,16 +29,18 @@ use hotshot_types::{
     event::EventType,
     message::Proposal,
     traits::{
-        block_contents::{BlockPayload, Transaction},
+        block_contents::{BlockHeader, BlockPayload, Transaction},
         node_implementation::{ConsensusTime, NodeType},
         signature_key::{BuilderSignatureKey, SignatureKey},
     },
     utils::BuilderCommitment,
+    vote::HasViewNumber,
 };
 use lru::LruCache;
 use sha2::{Digest, Sha256};
 use tagged_base64::TaggedBase64;
 use tide_disco::method::ReadState;
+use time::OffsetDateTime;
 use tokio::{
     sync::{mpsc::unbounded_channel, oneshot},
     time::{sleep, timeout},
@@ -47,7 +51,6 @@ use crate::builder_state::{
     BuildBlockInfo, DaProposalMessage, DecideMessage, MessageType, QuorumProposalMessage,
     RequestMessage, ResponseMessage, TransactionSource, TriggerStatus,
 };
-
 // It holds all the necessary information for a block
 #[derive(Debug)]
 pub struct BlockInfo<Types: NodeType> {
@@ -180,6 +183,16 @@ pub struct GlobalState<Types: NodeType> {
     ///
     /// Initial value may be updated by the `claim_block_with_num_nodes` endpoint.
     pub num_nodes: usize,
+
+    /// Timestamps for stats
+    timestamps: BTreeMap<u64, BuilderTimestamps>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct BuilderTimestamps {
+    pub events: BuilderEventTimestamps,
+    pub requests: BuilderRequestTimestamps,
+    pub responses: BuilderResponseTimestamps,
 }
 
 /// `GetChannelForMatchingBuilderError` is an error enum that represents the
@@ -245,6 +258,7 @@ impl<Types: NodeType> GlobalState<Types> {
                 NonZeroUsize::new(max_txn_num).expect("max_txn_num must be greater than zero"),
             )),
             num_nodes,
+            timestamps: Default::default(),
         }
     }
 
@@ -474,6 +488,134 @@ impl<Types: NodeType> GlobalState<Types> {
     ) -> bool {
         *builder_view == self.highest_view_num_builder_id.parent_view
             && !self.check_builder_state_existence_for_a_view(proposal_view)
+    }
+    pub fn add_event_timestamp(&mut self, timestamp: i128, event: &EventType<Types>) {
+        match event {
+            EventType::DaProposal { proposal, .. } => {
+                self.timestamps
+                    .entry(*proposal.data.view_number())
+                    .or_default()
+                    .events
+                    .da_proposal_recv
+                    .get_or_insert(timestamp);
+            },
+            EventType::QuorumProposal { proposal, .. } => {
+                self.timestamps
+                    .entry(*proposal.data.view_number())
+                    .or_default()
+                    .events
+                    .quorum_proposal_recv
+                    .get_or_insert(timestamp);
+            },
+            EventType::Decide { leaf_chain, .. } => {
+                for leaf in leaf_chain.iter() {
+                    self.timestamps
+                        .entry(*leaf.leaf.view_number())
+                        .or_default()
+                        .events
+                        .decide_recv
+                        .get_or_insert(timestamp);
+                }
+            },
+            _ => {},
+        }
+    }
+    pub fn add_available_blocks_request_timestamp(&mut self, view_number: u64, timestamp: i128) {
+        let entry = self.timestamps.entry(view_number).or_default();
+        let replaced = entry.requests.available_blocks.replace(timestamp);
+        if replaced.is_some() {
+            entry.requests.retries += 1;
+        }
+    }
+    pub fn add_claim_block_request_timestamp(&mut self, view_number: u64, timestamp: i128) {
+        let entry = self.timestamps.entry(view_number).or_default();
+        let replaced = entry.requests.claim_block.replace(timestamp);
+        if replaced.is_some() {
+            entry.requests.retries += 1;
+        }
+    }
+    pub fn add_claim_block_header_input_request_timestamp(
+        &mut self,
+        view_number: u64,
+        timestamp: i128,
+    ) {
+        let entry = self.timestamps.entry(view_number).or_default();
+        let replaced = entry.requests.claim_block_header_input.replace(timestamp);
+        if replaced.is_some() {
+            entry.requests.retries += 1;
+        }
+    }
+    pub fn add_available_blocks_response_timestamp(&mut self, view_number: u64, timestamp: i128) {
+        self.timestamps
+            .entry(view_number)
+            .or_default()
+            .responses
+            .available_blocks = Some(timestamp);
+    }
+    pub fn add_claim_block_response_timestamp(&mut self, view_number: u64, timestamp: i128) {
+        self.timestamps
+            .entry(view_number)
+            .or_default()
+            .responses
+            .claim_block = Some(timestamp);
+    }
+    pub fn add_claim_block_header_input_response_timestamp(
+        &mut self,
+        view_number: u64,
+        timestamp: i128,
+    ) {
+        self.timestamps
+            .entry(view_number)
+            .or_default()
+            .responses
+            .claim_block_header_input = Some(timestamp);
+    }
+
+    pub fn log_timestamps(&self) {
+        let leader_results_csv_file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open("timestamps.csv")
+            .unwrap();
+        let mut wtr = Writer::from_writer(leader_results_csv_file);
+        let _ = wtr.write_record([
+            "view_number",
+            "proposal_recv",
+            "da_proposal_recv",
+            "decided",
+            "available_blocks_recv",
+            "claim_block_recv",
+            "claim_block_header_input_recv",
+            "retries",
+            "available_blocks_send",
+            "claim_block_send",
+            "claim_block_header_input_send",
+        ]);
+        for (view_number, entry) in self.timestamps.iter() {
+            let _ = wtr.write_record([
+                view_number.to_string(),
+                entry.events.quorum_proposal_recv.unwrap_or(0).to_string(),
+                entry.events.da_proposal_recv.unwrap_or(0).to_string(),
+                entry.events.decide_recv.unwrap_or(0).to_string(),
+                entry.requests.available_blocks.unwrap_or(0).to_string(),
+                entry.requests.claim_block.unwrap_or(0).to_string(),
+                entry
+                    .requests
+                    .claim_block_header_input
+                    .unwrap_or(0)
+                    .to_string(),
+                entry.requests.retries.to_string(),
+                entry.responses.available_blocks.unwrap_or(0).to_string(),
+                entry.responses.claim_block.unwrap_or(0).to_string(),
+                entry
+                    .responses
+                    .claim_block_header_input
+                    .unwrap_or(0)
+                    .to_string(),
+            ]);
+        }
+        wtr.flush().unwrap();
     }
 }
 
@@ -950,9 +1092,19 @@ where
         sender: Types::SignatureKey,
         signature: &<Types::SignatureKey as SignatureKey>::PureAssembledSignatureType,
     ) -> Result<Vec<AvailableBlockInfo<Types>>, BuildError> {
-        Ok(self
+        let now = OffsetDateTime::now_utc().unix_timestamp_nanos();
+        self.global_state
+            .write_arc()
+            .await
+            .add_available_blocks_request_timestamp(view_number + 1, now);
+        let result = self
             .available_blocks_implementation(for_parent, view_number, sender, signature)
-            .await?)
+            .await?;
+        self.global_state
+            .write_arc()
+            .await
+            .add_available_blocks_response_timestamp(view_number + 1, now);
+        Ok(result)
     }
 
     async fn claim_block(
@@ -962,9 +1114,24 @@ where
         sender: Types::SignatureKey,
         signature: &<<Types as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType,
     ) -> Result<AvailableBlockData<Types>, BuildError> {
-        Ok(self
+        self.global_state
+            .write_arc()
+            .await
+            .add_claim_block_request_timestamp(
+                view_number,
+                OffsetDateTime::now_utc().unix_timestamp_nanos(),
+            );
+        let result = self
             .claim_block_implementation(block_hash, view_number, sender, signature)
-            .await?)
+            .await?;
+        self.global_state
+            .write_arc()
+            .await
+            .add_claim_block_response_timestamp(
+                view_number,
+                OffsetDateTime::now_utc().unix_timestamp_nanos(),
+            );
+        Ok(result)
     }
 
     async fn claim_block_with_num_nodes(
@@ -977,9 +1144,24 @@ where
     ) -> Result<AvailableBlockData<Types>, BuildError> {
         // Update the stored `num_nodes` with the given value, which will be used for VID computation.
         self.global_state.write_arc().await.num_nodes = num_nodes;
-
-        self.claim_block(block_hash, view_number, sender, signature)
+        self.global_state
+            .write_arc()
             .await
+            .add_claim_block_request_timestamp(
+                view_number,
+                OffsetDateTime::now_utc().unix_timestamp_nanos(),
+            );
+        let result = self
+            .claim_block_implementation(block_hash, view_number, sender, signature)
+            .await?;
+        self.global_state
+            .write_arc()
+            .await
+            .add_claim_block_response_timestamp(
+                view_number,
+                OffsetDateTime::now_utc().unix_timestamp_nanos(),
+            );
+        Ok(result)
     }
 
     async fn claim_block_header_input(
@@ -989,9 +1171,24 @@ where
         sender: Types::SignatureKey,
         signature: &<<Types as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType,
     ) -> Result<AvailableBlockHeaderInputV1<Types>, BuildError> {
-        Ok(self
+        self.global_state
+            .write_arc()
+            .await
+            .add_claim_block_header_input_request_timestamp(
+                view_number,
+                OffsetDateTime::now_utc().unix_timestamp_nanos(),
+            );
+        let result = self
             .claim_block_header_input_implementation(block_hash, view_number, sender, signature)
-            .await?)
+            .await?;
+        self.global_state
+            .write_arc()
+            .await
+            .add_claim_block_header_input_response_timestamp(
+                view_number,
+                OffsetDateTime::now_utc().unix_timestamp_nanos(),
+            );
+        Ok(result)
     }
 
     /// Returns the public key of the builder
@@ -1075,6 +1272,26 @@ impl<Types: NodeType> ReadState for ProxyGlobalState<Types> {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+struct BuilderEventTimestamps {
+    pub da_proposal_recv: Option<i128>,
+    pub quorum_proposal_recv: Option<i128>,
+    pub decide_recv: Option<i128>,
+}
+#[derive(Debug, Clone, Default)]
+struct BuilderRequestTimestamps {
+    pub available_blocks: Option<i128>,
+    pub claim_block: Option<i128>,
+    pub claim_block_header_input: Option<i128>,
+    pub retries: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BuilderResponseTimestamps {
+    pub available_blocks: Option<i128>,
+    pub claim_block: Option<i128>,
+    pub claim_block_header_input: Option<i128>,
+}
 /*
 Running Non-Permissioned Builder Service
 */
@@ -1110,6 +1327,11 @@ pub async fn run_non_permissioned_standalone_builder_service<
         let Some(event) = hotshot_event_stream.next().await else {
             anyhow::bail!("Event stream ended");
         };
+        let now = OffsetDateTime::now_utc().unix_timestamp_nanos();
+        global_state
+            .write_arc()
+            .await
+            .add_event_timestamp(now, &event.event);
 
         match event.event {
             EventType::Error { error } => {
@@ -1170,6 +1392,9 @@ pub async fn run_non_permissioned_standalone_builder_service<
             },
             // QC proposal event
             EventType::QuorumProposal { proposal, sender } => {
+                if proposal.data.block_header().block_number() % 1000 == 0 {
+                    global_state.read_arc().await.log_timestamps();
+                }
                 // get the leader for current view
                 handle_quorum_event(&quorum_sender, Arc::new(proposal), sender).await;
             },
