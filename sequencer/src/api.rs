@@ -69,6 +69,7 @@ use crate::{
 pub mod data_source;
 pub mod endpoints;
 pub mod fs;
+pub mod light_client;
 pub mod options;
 pub mod sql;
 mod update;
