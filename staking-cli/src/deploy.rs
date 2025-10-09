@@ -86,7 +86,7 @@ impl TestSystem {
             }
         };
 
-        let rpc_url = format!("http://localhost:{port}").parse()?;
+        let rpc_url: Url = format!("http://localhost:{port}").parse()?;
         let deployer_address = provider.default_signer_address();
         // I don't know how to get the signer out of the provider, by default anvil uses the dev
         // mnemonic and the default signer is the first account.
@@ -111,6 +111,7 @@ impl TestSystem {
         let mut contracts = Contracts::new();
         let args = DeployerArgsBuilder::default()
             .deployer(provider.clone())
+            .rpc_url(rpc_url.clone())
             .mock_light_client(true)
             .genesis_lc_state(genesis_state)
             .genesis_st_state(genesis_stake)

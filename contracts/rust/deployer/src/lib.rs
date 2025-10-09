@@ -22,6 +22,7 @@ use alloy::{
 use anyhow::{anyhow, Context, Result};
 use clap::{builder::OsStr, Parser};
 use derive_more::{derive::Deref, Display};
+use espresso_types::{v0_1::L1Client, v0_3::Fetcher};
 use hotshot_contract_adapter::sol_types::*;
 
 pub mod builder;
@@ -103,6 +104,22 @@ pub fn build_random_provider(url: Url) -> HttpProviderWithWallet {
         .expect("fail to build signer");
     let wallet = EthereumWallet::from(signer);
     ProviderBuilder::new().wallet(wallet).connect_http(url)
+}
+
+/// Create Anvil instance with provider and L1Client
+#[cfg(test)]
+fn build_anvil_provider_and_l1_client() -> Result<(
+    alloy::node_bindings::AnvilInstance,
+    HttpProviderWithWallet,
+    L1Client,
+)> {
+    let anvil = alloy::node_bindings::Anvil::new().spawn();
+    let wallet = anvil.wallet().unwrap();
+    let provider = ProviderBuilder::new()
+        .wallet(wallet)
+        .connect_http(anvil.endpoint_url());
+    let l1_client = L1Client::anvil(&anvil)?;
+    Ok((anvil, provider, l1_client))
 }
 
 // We pass this during `forge bind --libraries` as a placeholder for the actual deployed library address
@@ -905,163 +922,56 @@ pub async fn deploy_stake_table_proxy(
     Ok(st_proxy_addr)
 }
 
-/// Read commission values from L1 StakeTable V1 ValidatorRegistered events for V2 migration
+/// Read stake table data from L1 StakeTable V1 events for V2 migration
 ///
+/// Returns both the active stake and commissions needed for StakeTable V2 initialization.
 /// Assumes an infura RPC is used, otherwise it may hit other rate limits.
-pub async fn fetch_commissions_for_stake_table_storage_migration(
-    l1_provider: impl Provider,
+pub async fn fetch_stake_table_for_stake_table_storage_migration(
+    l1_client: L1Client,
     stake_table_address: Address,
-) -> Result<Vec<StakeTableV2::InitialCommission>> {
-    let stake_table = StakeTable::new(stake_table_address, &l1_provider);
+) -> Result<(U256, Vec<StakeTableV2::InitialCommission>)> {
+    let stake_table = StakeTable::new(stake_table_address, &l1_client);
 
     // Verify this is a V1 contract
     let version = stake_table.getVersion().call().await?;
     if version.majorVersion != 1 {
         anyhow::bail!(
-            "Expected StakeTable V1 for commission migration, found V{}",
+            "Expected StakeTable V1 for migration, found V{}",
             version.majorVersion
         );
     }
 
-    let start_block = stake_table.initializedAtBlock().call().await?.to::<u64>();
+    tracing::info!("Fetching all validators from StakeTable V1 contract");
+
+    // Get the latest L1 block to query up to
+    let latest_block = l1_client.provider.get_block_number().await?;
+
+    // Use Fetcher to get all validators from contract events
+    let (validators, _stake_table_hash) =
+        Fetcher::fetch_all_validators_from_contract(l1_client, stake_table_address, latest_block)
+            .await
+            .context("Failed to fetch validators from V1 contract")?;
+
+    // Sum up total active stake from all validators
+    let active_stake = validators.values().map(|v| v.stake).sum::<U256>();
+
+    // Extract commissions from validators
+    let commissions = validators
+        .values()
+        .map(|v| StakeTableV2::InitialCommission {
+            validator: v.account,
+            commission: v.commission,
+        })
+        .collect::<Vec<_>>();
 
     tracing::info!(
-        "Reading ValidatorRegistered events from L1 StakeTable V1 starting at block {}",
-        start_block
+        "Found {} active stake and {} commissions from {} validators to migrate from V1",
+        active_stake,
+        commissions.len(),
+        validators.len()
     );
 
-    // Query ValidatorRegistered events (V1) to get initial commission values
-    let registration_events = stake_table
-        .ValidatorRegistered_filter()
-        .from_block(start_block)
-        .query()
-        .await
-        .context("Failed to query ValidatorRegistered events from V1 contract")?;
-
-    // Create a vec to store commissions in chronological order
-    // Note: V1 events only have initial registration, no updates
-    let mut initial_commissions = Vec::<StakeTableV2::InitialCommission>::new();
-
-    for (event, _log) in registration_events {
-        tracing::debug!(
-            "ValidatorRegistered: validator={:?}, commission={}",
-            event.account,
-            event.commission
-        );
-        initial_commissions.push(event.into());
-    }
-
-    tracing::info!(
-        "Found {} validators with commissions to migrate from V1",
-        initial_commissions.len()
-    );
-
-    Ok(initial_commissions)
-}
-
-/// Read active stake from L1 StakeTable V1 Delegated events for V2 migration
-///
-/// Assumes an infura RPC is used, otherwise it may hit other rate limits.
-pub async fn fetch_active_stake_for_stake_table_storage_migration_to_v2(
-    l1_provider: impl Provider,
-    stake_table_address: Address,
-) -> Result<U256> {
-    let stake_table = StakeTable::new(stake_table_address, &l1_provider);
-
-    // Verify this is a V1 contract
-    let version = stake_table.getVersion().call().await?;
-    if version.majorVersion != 1 {
-        anyhow::bail!(
-            "Expected StakeTable V1 for active stake migration, found V{}",
-            version.majorVersion
-        );
-    }
-
-    let start_block = stake_table.initializedAtBlock().call().await?.to::<u64>();
-    let current_block = l1_provider.get_block_number().await?;
-
-    tracing::info!(
-        "Reading validator events from L1 StakeTable V1 from block {} to {}",
-        start_block,
-        current_block
-    );
-
-    let registered_events = stake_table
-        .ValidatorRegistered_filter()
-        .from_block(start_block)
-        .to_block(current_block)
-        .query()
-        .await
-        .context("Failed to query ValidatorRegistered events from V1 contract")?;
-    let registered_validators: std::collections::HashSet<Address> = registered_events
-        .iter()
-        .map(|(event, _log)| event.account)
-        .collect();
-
-    let exit_events = stake_table
-        .ValidatorExit_filter()
-        .from_block(start_block)
-        .to_block(current_block)
-        .query()
-        .await
-        .context("Failed to query ValidatorExit events from V1 contract")?;
-    let exited_validators: std::collections::HashSet<Address> = exit_events
-        .iter()
-        .map(|(event, _log)| event.validator)
-        .collect();
-
-    // Get currently active validators (registered but not exited)
-    let active_validators: Vec<Address> = registered_validators
-        .difference(&exited_validators)
-        .cloned()
-        .collect();
-
-    tracing::info!("Found {} active validators", active_validators.len());
-
-    let all_delegated_events = stake_table
-        .Delegated_filter()
-        .from_block(start_block)
-        .to_block(current_block)
-        .query()
-        .await
-        .context("Failed to query Delegated events from V1 contract")?;
-
-    let all_unique_delegators: std::collections::HashSet<Address> = all_delegated_events
-        .iter()
-        .map(|(event, _log)| event.delegator)
-        .collect();
-
-    tracing::info!("Found {} unique delegators", all_unique_delegators.len());
-
-    // for each active validator, query the delegations mapping for all delegators
-    let mut total_active_stake = U256::ZERO;
-    for validator in &active_validators {
-        let mut validator_stake = U256::ZERO;
-
-        for delegator in &all_unique_delegators {
-            let delegation_amount = stake_table
-                .delegations(*validator, *delegator)
-                .call()
-                .await
-                .context("Failed to query delegation amount")?;
-
-            validator_stake += delegation_amount;
-        }
-
-        total_active_stake += validator_stake;
-        tracing::debug!(
-            "Validator {} has {} total stake",
-            validator,
-            validator_stake
-        );
-    }
-
-    tracing::info!(
-        "Found {} active stake to migrate from V1",
-        total_active_stake
-    );
-
-    Ok(total_active_stake)
+    Ok((active_stake, commissions))
 }
 
 /// Prepare the upgrade data for StakeTable V2, checking version and fetching commissions if needed.
@@ -1070,7 +980,7 @@ pub async fn fetch_active_stake_for_stake_table_storage_migration_to_v2(
 /// - The initialization commissions (maybe used for post deployment verification)
 /// - The initialization calldata (if initialization is needed)
 pub async fn prepare_stake_table_v2_upgrade(
-    provider: impl Provider,
+    l1_client: L1Client,
     proxy_addr: Address,
     pauser: Address,
     admin: Address,
@@ -1079,7 +989,7 @@ pub async fn prepare_stake_table_v2_upgrade(
     Option<U256>,
     Option<Bytes>,
 )> {
-    let proxy = StakeTable::new(proxy_addr, &provider);
+    let proxy = StakeTable::new(proxy_addr, &l1_client);
 
     let current_version = proxy.getVersion().call().await?;
     let target_version = 2;
@@ -1092,7 +1002,7 @@ pub async fn prepare_stake_table_v2_upgrade(
 
     // For a non-major version upgrade the proxy storage must already be initialized.
     let needs_initialization = !already_initialized(
-        &provider,
+        &l1_client,
         proxy_addr,
         Contract::StakeTableV2,
         target_version,
@@ -1105,16 +1015,10 @@ pub async fn prepare_stake_table_v2_upgrade(
     );
 
     if needs_initialization {
-        tracing::info!("Fetching commissions from V1 contract for migration");
-        let commissions =
-            fetch_commissions_for_stake_table_storage_migration(&provider, proxy_addr).await?;
-        tracing::info!("Fetched {} commissions from V1 contract", commissions.len());
-
-        tracing::info!("Fetching active stake from V1 contract for migration");
-        let active_stake =
-            fetch_active_stake_for_stake_table_storage_migration_to_v2(&provider, proxy_addr)
+        tracing::info!("Fetching stake table data from V1 contract for migration");
+        let (active_stake, commissions) =
+            fetch_stake_table_for_stake_table_storage_migration(l1_client.clone(), proxy_addr)
                 .await?;
-        tracing::info!("Fetched {} active stake from V1 contract", active_stake);
 
         tracing::info!(
             %pauser,
@@ -1125,7 +1029,7 @@ pub async fn prepare_stake_table_v2_upgrade(
         );
 
         // We can use any address here since we're just building calldata
-        let data = StakeTableV2::new(Address::ZERO, &provider)
+        let data = StakeTableV2::new(Address::ZERO, &l1_client)
             .initializeV2(pauser, admin, active_stake, commissions.clone())
             .calldata()
             .to_owned();
@@ -1143,6 +1047,7 @@ pub async fn prepare_stake_table_v2_upgrade(
 /// Upgrade the stake table proxy from V1 to V2, or patch V2
 pub async fn upgrade_stake_table_v2(
     provider: impl Provider,
+    l1_client: L1Client,
     contracts: &mut Contracts,
     pauser: Address,
     admin: Address,
@@ -1154,7 +1059,7 @@ pub async fn upgrade_stake_table_v2(
 
     // First prepare upgrade data (including fetching commissions if needed)
     let (init_commissions, init_active_stake, init_data) =
-        prepare_stake_table_v2_upgrade(&provider, proxy_addr, pauser, admin).await?;
+        prepare_stake_table_v2_upgrade(l1_client, proxy_addr, pauser, admin).await?;
 
     // Then deploy the new implementation
     let v2_addr = contracts
@@ -1489,12 +1394,8 @@ mod tests {
         providers::{ext::AnvilApi, layers::AnvilProvider, ProviderBuilder},
         sol_types::SolValue,
     };
-    use hotshot_contract_adapter::{
-        sol_types::{EdOnBN254PointSol, G1PointSol, G2PointSol, StakeTableV2},
-        stake_table::sign_address_bls,
-    };
-    use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
-    use rand::{rngs::StdRng, Rng, SeedableRng};
+    use espresso_types::testing::TestValidator;
+    use hotshot_contract_adapter::sol_types::StakeTableV2;
 
     use super::*;
     use crate::{
@@ -1784,8 +1685,8 @@ mod tests {
     }
 
     #[test_log::test(tokio::test)]
-    async fn test_fetch_commissions_for_stake_table_storage_migration() -> Result<()> {
-        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+    async fn test_fetch_stake_table_for_stake_table_storage_migration() -> Result<()> {
+        let (_anvil, provider, l1_client) = build_anvil_provider_and_l1_client()?;
         let mut contracts = Contracts::new();
         let owner = provider.get_accounts().await?[0];
 
@@ -1816,23 +1717,20 @@ mod tests {
         let stake_table = StakeTableV2::new(stake_table_proxy_addr, &provider);
 
         let accounts = provider.get_accounts().await?;
-        let test_validators = [
-            (accounts[0], 0u16),
-            (accounts[1], 100u16),
-            (accounts[2], 10_000u16),
+        let validators = [
+            TestValidator::random_update_keys(accounts[4], 1234),
+            TestValidator::random_update_keys(accounts[5], 4567),
         ];
 
-        let mut rng = StdRng::from_seed([42u8; 32]);
-        for (validator_addr, commission) in test_validators.iter() {
-            let bls_key_pair = BLSKeyPair::generate(&mut rng);
-            let state_key_pair = StateKeyPair::generate_from_seed(rng.gen());
-            let bls_vk_sol: G2PointSol = bls_key_pair.ver_key().to_affine().into();
-            let bls_sig_sol: G1PointSol = sign_address_bls(&bls_key_pair, *validator_addr).into();
-            let schnorr_vk_sol: EdOnBN254PointSol = state_key_pair.ver_key().to_affine().into();
-
+        for validator in validators.iter() {
             let receipt = stake_table
-                .registerValidator(bls_vk_sol, schnorr_vk_sol, bls_sig_sol.into(), *commission)
-                .from(*validator_addr)
+                .registerValidator(
+                    validator.bls_vk,
+                    validator.schnorr_vk,
+                    validator.bls_sig.into(),
+                    validator.commission,
+                )
+                .from(validator.account)
                 .send()
                 .await?
                 .get_receipt()
@@ -1840,21 +1738,100 @@ mod tests {
             assert!(receipt.status());
         }
 
-        let fetched_commissions =
-            fetch_commissions_for_stake_table_storage_migration(&provider, stake_table_proxy_addr)
+        let delegators = [
+            (accounts[0], validators[0].account, U256::from(1000)),
+            (accounts[1], validators[1].account, U256::from(1000)),
+            (accounts[2], validators[0].account, U256::from(10_000)),
+        ];
+
+        let token = EspToken::new(token_addr, &provider);
+
+        for (delegator, validator, amount) in delegators.iter() {
+            let receipt = token
+                .transfer(*delegator, *amount)
+                .from(Address::from(*owner))
+                .send()
+                .await?
+                .get_receipt()
                 .await?;
+            assert!(receipt.status());
 
-        assert_eq!(fetched_commissions.len(), test_validators.len(),);
+            let receipt = token
+                .approve(stake_table_proxy_addr, *amount)
+                .from(*delegator)
+                .send()
+                .await?
+                .get_receipt()
+                .await?;
+            assert!(receipt.status());
 
-        for ((validator, commission), fetched) in test_validators.iter().zip(&fetched_commissions) {
-            assert_eq!(fetched.validator, *validator);
-            assert_eq!(fetched.commission, *commission);
+            let receipt = stake_table
+                .delegate(*validator, *amount)
+                .from(*delegator)
+                .send()
+                .await?
+                .get_receipt()
+                .await?;
+            assert!(receipt.status());
         }
+
+        let receipt = stake_table
+            .deregisterValidator()
+            .from(validators[1].account)
+            .send()
+            .await?
+            .get_receipt()
+            .await?;
+        assert!(receipt.status());
+
+        let undelegations = [
+            (accounts[0], validators[0].account, U256::from(500)),
+            (accounts[2], validators[0].account, U256::from(300)),
+        ];
+
+        for (delegator_addr, validator_addr, amount) in undelegations.iter() {
+            let receipt = stake_table
+                .undelegate(*validator_addr, *amount)
+                .from(*delegator_addr)
+                .send()
+                .await?
+                .get_receipt()
+                .await?;
+            assert!(receipt.status());
+        }
+
+        let (fetched_active_stake, fetched_commissions) =
+            fetch_stake_table_for_stake_table_storage_migration(
+                l1_client.clone(),
+                stake_table_proxy_addr,
+            )
+            .await?;
+
+        let expected_active_stake: U256 = delegators
+            .iter()
+            .map(|(_, _, amount)| *amount)
+            .sum::<U256>()
+            - delegators
+                .iter()
+                .filter(|(_, validator, _)| *validator == validators[1].account)
+                .map(|(_, _, amount)| *amount)
+                .sum::<U256>()
+            - undelegations
+                .iter()
+                .map(|(_, _, amount)| *amount)
+                .sum::<U256>();
+
+        assert_eq!(fetched_active_stake, expected_active_stake);
+        assert!(fetched_active_stake <= token.balanceOf(stake_table_proxy_addr).call().await?);
+
+        assert_eq!(fetched_commissions.len(), 1);
+        assert_eq!(fetched_commissions[0].validator, validators[0].account);
+        assert_eq!(fetched_commissions[0].commission, validators[0].commission);
 
         // Migration only applies to V1 contract
         let stake_table_v2 = StakeTableV2::deploy(&provider).await?;
-        let err = fetch_commissions_for_stake_table_storage_migration(
-            &provider,
+        let err = fetch_stake_table_for_stake_table_storage_migration(
+            l1_client.clone(),
             *stake_table_v2.address(),
         )
         .await
@@ -1864,195 +1841,28 @@ mod tests {
         Ok(())
     }
 
-    #[test_log::test(tokio::test)]
-    async fn test_fetch_active_stake_for_stake_table_storage_migration_to_v2() -> Result<()> {
-        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
-        let mut contracts = Contracts::new();
-        let owner = provider.get_accounts().await?[0];
-
-        let token_addr = deploy_token_proxy(
-            &provider,
-            &mut contracts,
-            owner,
-            owner,
-            U256::from(10_000_000u64),
-            "Test Token",
-            "TEST",
-        )
-        .await?;
-        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
-        let exit_escrow_period = U256::from(1000);
-
-        let stake_table_proxy_addr = deploy_stake_table_proxy(
-            &provider,
-            &mut contracts,
-            token_addr,
-            lc_addr,
-            exit_escrow_period,
-            owner,
-        )
-        .await?;
-
-        // Use V2 interface even for V1 contract (V2 ABI is a superset of V1)
-        let stake_table = StakeTableV2::new(stake_table_proxy_addr, &provider);
-
-        let accounts = provider.get_accounts().await?;
-        let test_delegators = [
-            (accounts[0], U256::from(1000)),
-            (accounts[1], U256::from(1000)),
-            (accounts[2], U256::from(10_000)),
-        ];
-
-        let mut rng = StdRng::from_seed([42u8; 32]);
-        let validator_addr = accounts[4];
-        let commission = 0;
-        let bls_key_pair = BLSKeyPair::generate(&mut rng);
-        let state_key_pair = StateKeyPair::generate_from_seed(rng.gen());
-        let bls_vk_sol: G2PointSol = bls_key_pair.ver_key().to_affine().into();
-        let bls_sig_sol: G1PointSol =
-            sign_address_bls(&bls_key_pair, Address::from(*validator_addr)).into();
-        let schnorr_vk_sol: EdOnBN254PointSol = state_key_pair.ver_key().to_affine().into();
-
-        let receipt = stake_table
-            .registerValidator(bls_vk_sol, schnorr_vk_sol, bls_sig_sol.into(), commission)
-            .from(Address::from(*validator_addr))
-            .send()
-            .await?
-            .get_receipt()
-            .await?;
-        assert!(receipt.status());
-
-        let token = EspToken::new(token_addr, &provider);
-
-        for (delegator_addr, amount) in test_delegators.iter() {
-            let _receipt = token
-                .transfer(*delegator_addr, *amount)
-                .from(Address::from(*owner))
-                .send()
-                .await?
-                .get_receipt()
-                .await?;
-
-            let receipt = token
-                .approve(stake_table_proxy_addr, *amount)
-                .from(*delegator_addr)
-                .send()
-                .await?
-                .get_receipt()
-                .await?;
-            assert!(receipt.status());
-
-            let receipt = stake_table
-                .delegate(validator_addr, *amount)
-                .from(*delegator_addr)
-                .send()
-                .await?
-                .get_receipt()
-                .await?;
-            assert!(receipt.status());
-        }
-
-        let mut fetched_active_stake = fetch_active_stake_for_stake_table_storage_migration_to_v2(
-            &provider,
-            stake_table_proxy_addr,
-        )
-        .await?;
-
-        assert_eq!(
-            fetched_active_stake,
-            test_delegators
-                .iter()
-                .map(|(_, amount)| *amount)
-                .sum::<U256>(),
-        );
-
-        assert!(
-            fetched_active_stake == token.balanceOf(stake_table_proxy_addr).call().await?,
-            "fetched active stake should be equal to the contract's balance"
-        );
-
-        // delegator 1, undelegate 1/2 of its tokens
-        let receipt = stake_table
-            .undelegate(
-                validator_addr,
-                U256::from(test_delegators[0].1 / U256::from(2)),
-            )
-            .from(test_delegators[0].0)
-            .send()
-            .await?
-            .get_receipt()
-            .await?;
-        assert!(receipt.status());
-
-        fetched_active_stake = fetch_active_stake_for_stake_table_storage_migration_to_v2(
-            &provider,
-            stake_table_proxy_addr,
-        )
-        .await?;
-
-        assert!(
-            fetched_active_stake
-                == token.balanceOf(stake_table_proxy_addr).call().await?
-                    - test_delegators[0].1 / U256::from(2),
-            "fetched active stake should be the contract balance minus the undelegated amount"
-        );
-
-        // validator deregisters
-        let receipt = stake_table
-            .deregisterValidator()
-            .from(validator_addr)
-            .send()
-            .await?
-            .get_receipt()
-            .await?;
-        assert!(receipt.status());
-
-        fetched_active_stake = fetch_active_stake_for_stake_table_storage_migration_to_v2(
-            &provider,
-            stake_table_proxy_addr,
-        )
-        .await?;
-
-        assert!(
-            fetched_active_stake == U256::ZERO,
-            "fetched active stake should be 0 after validator deregistration"
-        );
-
-        // Migration only applies to V1 contract
-        let stake_table_v2 = StakeTableV2::deploy(&provider).await?;
-        let err = fetch_active_stake_for_stake_table_storage_migration_to_v2(
-            &provider,
-            *stake_table_v2.address(),
-        )
-        .await
-        .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Expected StakeTable V1 for active stake migration, found V2"));
-
-        Ok(())
-    }
-
-    /// Check that we can fetch the commissions on sepolia where we will do the
-    /// commission migration.
+    /// Check that we can fetch stake table data on sepolia for the migration.
     ///
-    /// Assumes an infura RPC is used, otherwise fetching commissions may hit other rate limits.
+    /// Assumes an infura RPC is used, otherwise fetching may hit other rate limits.
     ///
-    /// env RPC_URL=... cargo test -p espresso-contract-deployer -- --ignored test_fetch_commissions_sepolia
+    /// env RPC_URL=... cargo test -p espresso-contract-deployer -- --ignored test_fetch_stake_table_sepolia
     #[ignore]
     #[test_log::test(tokio::test)]
-    async fn test_fetch_commissions_sepolia() -> Result<()> {
-        let rpc_url = std::env::var("RPC_URL")
+    async fn test_fetch_stake_table_sepolia() -> Result<()> {
+        let rpc_url: Url = std::env::var("RPC_URL")
             .expect("RPC_URL environment variable not set")
             .parse()?;
-        let provider = ProviderBuilder::new().connect_http(rpc_url);
+        let provider = ProviderBuilder::new().connect_http(rpc_url.clone());
+        let l1_client = L1Client::new(vec![rpc_url])?;
 
         // Decaf / sepolia stake table address
         let stake_table_address: Address = "0x40304FbE94D5E7D1492Dd90c53a2D63E8506a037".parse()?;
-        let fetched_commissions =
-            fetch_commissions_for_stake_table_storage_migration(&provider, stake_table_address)
+        let (fetched_active_stake, fetched_commissions) =
+            fetch_stake_table_for_stake_table_storage_migration(l1_client, stake_table_address)
                 .await?;
+
         assert!(!fetched_commissions.is_empty());
+        assert!(!fetched_active_stake.is_zero());
 
         println!(
             "Fetched {} commissions from Sepolia StakeTable",
@@ -2064,13 +1874,6 @@ mod tests {
                 commission.validator, commission.commission
             );
         }
-
-        let fetched_active_stake = fetch_active_stake_for_stake_table_storage_migration_to_v2(
-            &provider,
-            stake_table_address,
-        )
-        .await?;
-        assert!(!fetched_active_stake.is_zero());
         println!("Fetched active stake: {}", fetched_active_stake);
 
         let pauser = Address::random();
@@ -2122,7 +1925,9 @@ mod tests {
         let provider = ProviderBuilder::new()
             .filler(ImpersonateFiller::new(proxy_owner))
             .connect_http(anvil.endpoint().parse()?);
-        let anvil_provider = AnvilProvider::new(provider.clone(), Arc::new(anvil));
+        let l1_client = L1Client::anvil(&anvil)?;
+        let anvil_arc = Arc::new(anvil);
+        let anvil_provider = AnvilProvider::new(provider.clone(), anvil_arc);
         anvil_provider.anvil_auto_impersonate_account(true).await?;
         anvil_provider
             .anvil_set_balance(proxy_owner, parse_ether("100")?)
@@ -2134,7 +1939,7 @@ mod tests {
         let pauser = Address::random();
         let admin = proxy_owner;
 
-        upgrade_stake_table_v2(&provider, &mut contracts, pauser, admin).await?;
+        upgrade_stake_table_v2(&provider, l1_client, &mut contracts, pauser, admin).await?;
         Ok(())
     }
 
@@ -2525,7 +2330,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_upgrade_stake_table_v2() -> Result<()> {
-        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+        let (_anvil, provider, l1_client) = build_anvil_provider_and_l1_client()?;
         let mut contracts = Contracts::new();
 
         // deploy token
@@ -2578,7 +2383,7 @@ mod tests {
 
         // upgrade to v2
         let pauser = Address::random();
-        upgrade_stake_table_v2(&provider, &mut contracts, pauser, owner).await?;
+        upgrade_stake_table_v2(&provider, l1_client.clone(), &mut contracts, pauser, owner).await?;
 
         let stake_table_v2 = StakeTableV2::new(stake_table_addr, &provider);
 
@@ -2597,7 +2402,7 @@ mod tests {
 
         // ensure we can upgrade (again) to a V2 patch version
         let current_impl = read_proxy_impl(&provider, stake_table_addr).await?;
-        upgrade_stake_table_v2(&provider, &mut contracts_v1, pauser, owner).await?;
+        upgrade_stake_table_v2(&provider, l1_client, &mut contracts_v1, pauser, owner).await?;
         assert_ne!(
             read_proxy_impl(&provider, stake_table_addr).await?,
             current_impl
@@ -2617,7 +2422,7 @@ mod tests {
     async fn test_upgrade_stake_table_to_v2_multisig_owner_helper(dry_run: bool) -> Result<()> {
         let mut sepolia_rpc_url = "http://localhost:8545".to_string();
         let mut multisig_admin = Address::random();
-        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+        let (_anvil, provider, l1_client) = build_anvil_provider_and_l1_client()?;
         let mut contracts = Contracts::new();
         let init_recipient = provider.get_accounts().await?[0];
         let token_owner = Address::random();
@@ -2690,6 +2495,7 @@ mod tests {
         let pauser = Address::random();
         upgrade_stake_table_v2_multisig_owner(
             &provider,
+            l1_client,
             &mut contracts,
             sepolia_rpc_url,
             multisig_admin,
@@ -3096,7 +2902,7 @@ mod tests {
             std::path::Path::new("../../../scripts/multisig-upgrade-entrypoint").exists(),
             "Script not found!"
         );
-        let mut sepolia_rpc_url = "http://127.0.0.1:8545".to_string();
+        let mut sepolia_rpc_url = "http://127.0.0.1:8545".parse::<Url>()?;
         let mut multisig_admin = Address::random();
         let mut timelock = Address::random();
         let mut mnemonic =
@@ -3112,7 +2918,7 @@ mod tests {
             {
                 let (key, val) = item?;
                 if key == "ESPRESSO_SEQUENCER_L1_PROVIDER" {
-                    sepolia_rpc_url = val.to_string();
+                    sepolia_rpc_url = val.parse()?;
                 } else if key == "ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS" {
                     multisig_admin = val.parse::<Address>()?;
                 } else if key == "ESPRESSO_SEQUENCER_ETH_MNEMONIC" {
@@ -3124,7 +2930,7 @@ mod tests {
                 }
             }
 
-            if sepolia_rpc_url.is_empty() || multisig_admin.is_zero() || timelock.is_zero() {
+            if multisig_admin.is_zero() || timelock.is_zero() {
                 panic!(
                     "ESPRESSO_SEQUENCER_L1_PROVIDER, ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS, \
                      ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS must be set in .env.deployer.rs.test"
@@ -3142,13 +2948,11 @@ mod tests {
         let provider = if !dry_run {
             ProviderBuilder::new()
                 .wallet(admin_signer)
-                .connect(&sepolia_rpc_url)
-                .await?
+                .connect_http(sepolia_rpc_url.clone())
         } else {
             ProviderBuilder::new()
                 .wallet(admin_signer)
-                .connect(&anvil.endpoint())
-                .await?
+                .connect_http(anvil.endpoint_url())
         };
 
         // prepare `initialize()` input
@@ -3269,7 +3073,7 @@ mod tests {
         let stdout = String::from_utf8_lossy(&result.stdout);
         let first_line = stdout.lines().next().unwrap();
         let data: serde_json::Value = serde_json::from_str(first_line)?;
-        assert_eq!(data["rpcUrl"], sepolia_rpc_url);
+        assert_eq!(data["rpcUrl"], sepolia_rpc_url.to_string());
         assert_eq!(data["safeAddress"], multisig_admin.to_string());
 
         let expected_init_data = match contract_type {
