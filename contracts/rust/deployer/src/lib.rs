@@ -1717,12 +1717,12 @@ mod tests {
         let stake_table = StakeTableV2::new(stake_table_proxy_addr, &provider);
 
         let accounts = provider.get_accounts().await?;
-        let test_validators = [
+        let validators = [
             TestValidator::random_update_keys(accounts[4], 1234),
             TestValidator::random_update_keys(accounts[5], 4567),
         ];
 
-        for validator in test_validators.iter() {
+        for validator in validators.iter() {
             let receipt = stake_table
                 .registerValidator(
                     validator.bls_vk,
@@ -1730,7 +1730,7 @@ mod tests {
                     validator.bls_sig.into(),
                     validator.commission,
                 )
-                .from(Address::from(validator.account))
+                .from(validator.account)
                 .send()
                 .await?
                 .get_receipt()
@@ -1738,17 +1738,17 @@ mod tests {
             assert!(receipt.status());
         }
 
-        let test_delegators = [
-            (accounts[0], test_validators[0].account, U256::from(1000)),
-            (accounts[1], test_validators[1].account, U256::from(1000)),
-            (accounts[2], test_validators[0].account, U256::from(10_000)),
+        let delegators = [
+            (accounts[0], validators[0].account, U256::from(1000)),
+            (accounts[1], validators[1].account, U256::from(1000)),
+            (accounts[2], validators[0].account, U256::from(10_000)),
         ];
 
         let token = EspToken::new(token_addr, &provider);
 
-        for (delegator_addr, validator_addr, amount) in test_delegators.iter() {
+        for (delegator, validator, amount) in delegators.iter() {
             let receipt = token
-                .transfer(*delegator_addr, *amount)
+                .transfer(*delegator, *amount)
                 .from(Address::from(*owner))
                 .send()
                 .await?
@@ -1758,7 +1758,7 @@ mod tests {
 
             let receipt = token
                 .approve(stake_table_proxy_addr, *amount)
-                .from(*delegator_addr)
+                .from(*delegator)
                 .send()
                 .await?
                 .get_receipt()
@@ -1766,8 +1766,8 @@ mod tests {
             assert!(receipt.status());
 
             let receipt = stake_table
-                .delegate(*validator_addr, *amount)
-                .from(*delegator_addr)
+                .delegate(*validator, *amount)
+                .from(*delegator)
                 .send()
                 .await?
                 .get_receipt()
@@ -1777,7 +1777,7 @@ mod tests {
 
         let receipt = stake_table
             .deregisterValidator()
-            .from(Address::from(test_validators[1].account))
+            .from(validators[1].account)
             .send()
             .await?
             .get_receipt()
@@ -1785,8 +1785,8 @@ mod tests {
         assert!(receipt.status());
 
         let undelegations = [
-            (accounts[0], test_validators[0].account, U256::from(500)),
-            (accounts[2], test_validators[0].account, U256::from(300)),
+            (accounts[0], validators[0].account, U256::from(500)),
+            (accounts[2], validators[0].account, U256::from(300)),
         ];
 
         for (delegator_addr, validator_addr, amount) in undelegations.iter() {
@@ -1807,13 +1807,13 @@ mod tests {
             )
             .await?;
 
-        let expected_active_stake: U256 = test_delegators
+        let expected_active_stake: U256 = delegators
             .iter()
             .map(|(_, _, amount)| *amount)
             .sum::<U256>()
-            - test_delegators
+            - delegators
                 .iter()
-                .filter(|(_, validator, _)| *validator == test_validators[1].account)
+                .filter(|(_, validator, _)| *validator == validators[1].account)
                 .map(|(_, _, amount)| *amount)
                 .sum::<U256>()
             - undelegations
@@ -1821,18 +1821,12 @@ mod tests {
                 .map(|(_, _, amount)| *amount)
                 .sum::<U256>();
 
-        assert_eq!(
-            fetched_active_stake, expected_active_stake,
-            "fetched active stake should account for undelegations and validator exits"
-        );
+        assert_eq!(fetched_active_stake, expected_active_stake);
         assert!(fetched_active_stake <= token.balanceOf(stake_table_proxy_addr).call().await?);
 
         assert_eq!(fetched_commissions.len(), 1);
-        assert_eq!(fetched_commissions[0].validator, test_validators[0].account);
-        assert_eq!(
-            fetched_commissions[0].commission,
-            test_validators[0].commission
-        );
+        assert_eq!(fetched_commissions[0].validator, validators[0].account);
+        assert_eq!(fetched_commissions[0].commission, validators[0].commission);
 
         // Migration only applies to V1 contract
         let stake_table_v2 = StakeTableV2::deploy(&provider).await?;
