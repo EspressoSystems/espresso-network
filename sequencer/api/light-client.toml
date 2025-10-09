@@ -1,0 +1,32 @@
+[route.leaf]
+PATH = ["/leaf/:number", "/leaf/:number/:finalized"]
+":number" = "Integer"
+":finalized" = "Integer"
+DOC = """
+Fetch a leaf plus a proof of it's finality (a chain of leaves leading from that leaf to either a
+3-chain of consecutive valid leaves or a known-finalized leaf).
+
+`:number`, and `:finalized` if provided, must both be block numbers. If provided, `:finalized` must
+be greater than `:number`.
+
+The returned proof contains the requested leaf along with sufficient other leaves/QCs to prove the
+requested leaf is finalized (possibly assuming that the leaf at height `:finalized` is already known
+to be finalized). This consists of a chain of valid leaves from the requested leaf until reaching
+either
+* a 3-chain of QCs
+* the `:finalized` leaf
+
+In the event that the latest finalized leaf is reached without encountering either of these stopping
+conditions, the proof will additionally include two extra QCs. These correspond to
+not-necessarily-finalized views, but they chain off of the last leaf in the provided `chain` of
+leaves to prove that this latest leaf is finalized.
+
+Returns
+```json
+{
+    "chain": [Leaf],
+    "first_qc": QC | null,
+    "second_qc": QC | null
+}
+```
+"""
