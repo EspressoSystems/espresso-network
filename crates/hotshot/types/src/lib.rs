@@ -185,6 +185,7 @@ impl<TYPES: NodeType> Debug for PeerConfig<TYPES> {
 #[derive(Clone, derive_more::Debug, serde::Serialize, serde::Deserialize)]
 #[serde(bound(deserialize = ""))]
 pub struct VersionedDaCommittee<TYPES: NodeType> {
+    #[serde(with = "version_ser")]
     pub start_version: Version,
     pub start_epoch: u64,
     pub committee: Vec<PeerConfig<TYPES>>,
@@ -276,5 +277,38 @@ impl<TYPES: NodeType> HotShotConfig<TYPES> {
     /// Return the `known_nodes_with_stake` as a `HSStakeTable`
     pub fn hotshot_stake_table(&self) -> HSStakeTable<TYPES> {
         self.known_nodes_with_stake.clone().into()
+    }
+}
+
+pub mod version_ser {
+
+    use serde::{de, Deserialize, Deserializer, Serializer};
+    use vbs::version::Version;
+
+    pub fn serialize<S>(ver: &Version, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&ver.to_string())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Version, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let version_str = String::deserialize(deserializer)?;
+
+        let version: Vec<_> = version_str.split('.').collect();
+
+        let version = Version {
+            major: version[0]
+                .parse()
+                .map_err(|_| de::Error::custom("invalid version format"))?,
+            minor: version[1]
+                .parse()
+                .map_err(|_| de::Error::custom("invalid version format"))?,
+        };
+
+        Ok(version)
     }
 }

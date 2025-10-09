@@ -81,8 +81,8 @@ jf-crhf = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 jf-rescue = { workspace = true }
 
-jf-signature = { workspace = true, features = ["bls", "schnorr"] }
 jf-advz = { workspace = true }
+jf-signature = { workspace = true, features = ["bls", "schnorr"] }
 libp2p = { workspace = true }
 num_enum = "0.7"
 parking_lot = "0.12"
