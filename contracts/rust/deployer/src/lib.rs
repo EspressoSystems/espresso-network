@@ -978,39 +978,90 @@ pub async fn fetch_active_stake_for_stake_table_storage_migration_to_v2(
     }
 
     let start_block = stake_table.initializedAtBlock().call().await?.to::<u64>();
+    let current_block = l1_provider.get_block_number().await?;
 
     tracing::info!(
-        "Reading Delegated events from L1 StakeTable V1 starting at block {}",
-        start_block
+        "Reading validator events from L1 StakeTable V1 from block {} to {}",
+        start_block,
+        current_block
     );
 
-    // Query Delegated events (V1) to get initial active stake values
-    let delegated_events = stake_table
+    let registered_events = stake_table
+        .ValidatorRegistered_filter()
+        .from_block(start_block)
+        .to_block(current_block)
+        .query()
+        .await
+        .context("Failed to query ValidatorRegistered events from V1 contract")?;
+    let registered_validators: std::collections::HashSet<Address> = registered_events
+        .iter()
+        .map(|(event, _log)| event.account)
+        .collect();
+
+    let exit_events = stake_table
+        .ValidatorExit_filter()
+        .from_block(start_block)
+        .to_block(current_block)
+        .query()
+        .await
+        .context("Failed to query ValidatorExit events from V1 contract")?;
+    let exited_validators: std::collections::HashSet<Address> = exit_events
+        .iter()
+        .map(|(event, _log)| event.validator)
+        .collect();
+
+    // Get currently active validators (registered but not exited)
+    let active_validators: Vec<Address> = registered_validators
+        .difference(&exited_validators)
+        .cloned()
+        .collect();
+
+    tracing::info!("Found {} active validators", active_validators.len());
+
+    let all_delegated_events = stake_table
         .Delegated_filter()
         .from_block(start_block)
+        .to_block(current_block)
         .query()
         .await
         .context("Failed to query Delegated events from V1 contract")?;
 
-    // Create a vec to store active stake values
-    let mut initial_active_stake = U256::ZERO;
+    let all_unique_delegators: std::collections::HashSet<Address> = all_delegated_events
+        .iter()
+        .map(|(event, _log)| event.delegator)
+        .collect();
 
-    for (event, _log) in delegated_events {
+    tracing::info!("Found {} unique delegators", all_unique_delegators.len());
+
+    // for each active validator, query the delegations mapping for all delegators
+    let mut total_active_stake = U256::ZERO;
+    for validator in &active_validators {
+        let mut validator_stake = U256::ZERO;
+
+        for delegator in &all_unique_delegators {
+            let delegation_amount = stake_table
+                .delegations(*validator, *delegator)
+                .call()
+                .await
+                .context("Failed to query delegation amount")?;
+
+            validator_stake += delegation_amount;
+        }
+
+        total_active_stake += validator_stake;
         tracing::debug!(
-            "Delegated: delegator={:?}, validator={:?}, amount={}",
-            event.delegator,
-            event.validator,
-            event.amount
+            "Validator {} has {} total stake",
+            validator,
+            validator_stake
         );
-        initial_active_stake += event.amount;
     }
 
     tracing::info!(
         "Found {} active stake to migrate from V1",
-        initial_active_stake
+        total_active_stake
     );
 
-    Ok(initial_active_stake)
+    Ok(total_active_stake)
 }
 
 /// Prepare the upgrade data for StakeTable V2, checking version and fetching commissions if needed.
@@ -1901,7 +1952,7 @@ mod tests {
             assert!(receipt.status());
         }
 
-        let fetched_active_stake = fetch_active_stake_for_stake_table_storage_migration_to_v2(
+        let mut fetched_active_stake = fetch_active_stake_for_stake_table_storage_migration_to_v2(
             &provider,
             stake_table_proxy_addr,
         )
@@ -1916,8 +1967,55 @@ mod tests {
         );
 
         assert!(
-            fetched_active_stake <= token.balanceOf(stake_table_proxy_addr).call().await?,
-            "fetched active stake should not exceed contract balance"
+            fetched_active_stake == token.balanceOf(stake_table_proxy_addr).call().await?,
+            "fetched active stake should be equal to the contract's balance"
+        );
+
+        // delegator 1, undelegate 1/2 of its tokens
+        let receipt = stake_table
+            .undelegate(
+                validator_addr,
+                U256::from(test_delegators[0].1 / U256::from(2)),
+            )
+            .from(test_delegators[0].0)
+            .send()
+            .await?
+            .get_receipt()
+            .await?;
+        assert!(receipt.status());
+
+        fetched_active_stake = fetch_active_stake_for_stake_table_storage_migration_to_v2(
+            &provider,
+            stake_table_proxy_addr,
+        )
+        .await?;
+
+        assert!(
+            fetched_active_stake
+                == token.balanceOf(stake_table_proxy_addr).call().await?
+                    - test_delegators[0].1 / U256::from(2),
+            "fetched active stake should be the contract balance minus the undelegated amount"
+        );
+
+        // validator deregisters
+        let receipt = stake_table
+            .deregisterValidator()
+            .from(validator_addr)
+            .send()
+            .await?
+            .get_receipt()
+            .await?;
+        assert!(receipt.status());
+
+        fetched_active_stake = fetch_active_stake_for_stake_table_storage_migration_to_v2(
+            &provider,
+            stake_table_proxy_addr,
+        )
+        .await?;
+
+        assert!(
+            fetched_active_stake == U256::ZERO,
+            "fetched active stake should be 0 after validator deregistration"
         );
 
         // Migration only applies to V1 contract
