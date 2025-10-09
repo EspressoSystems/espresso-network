@@ -7,6 +7,7 @@ use alloy::{
 };
 use anyhow::{Context, Result};
 use derive_builder::Builder;
+use espresso_types::v0_1::L1Client;
 use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
 
 use crate::{
@@ -395,10 +396,12 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 let multisig_pauser = self.multisig_pauser.context(
                     "Multisig pauser address must be set for the upgrade to StakeTableV2",
                 )?;
+                let l1_client = L1Client::new(vec![self.rpc_url.parse()?])?;
                 tracing::info!(?dry_run, ?use_multisig, "Upgrading to StakeTableV2 with ");
                 if use_multisig {
                     upgrade_stake_table_v2_multisig_owner(
                         provider,
+                        l1_client,
                         contracts,
                         self.rpc_url.clone(),
                         self.multisig.context(
@@ -410,8 +413,14 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     )
                     .await?;
                 } else {
-                    crate::upgrade_stake_table_v2(provider, contracts, multisig_pauser, admin)
-                        .await?;
+                    crate::upgrade_stake_table_v2(
+                        provider,
+                        l1_client,
+                        contracts,
+                        multisig_pauser,
+                        admin,
+                    )
+                    .await?;
 
                     let addr = contracts
                         .address(Contract::StakeTableProxy)
