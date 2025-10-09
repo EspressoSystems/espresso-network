@@ -19,7 +19,7 @@ contract EspTokenV2 is EspToken {
 
     /// @notice Initializes the V2 upgrade with the RewardClaim contract address
     /// @param _rewardClaim Address of the RewardClaim contract
-    function initializeV2(address _rewardClaim) public reinitializer(2) {
+    function initializeV2(address _rewardClaim) public onlyOwner reinitializer(2) {
         rewardClaim = _rewardClaim;
     }
 
