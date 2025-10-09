@@ -111,11 +111,12 @@ pub mod RewardClaimPrototypeMock {
     pub static DEPLOYED_BYTECODE: alloy_sol_types::private::Bytes = alloy_sol_types::private::Bytes::from_static(
         b"`\x80`@R4\x80\x15a\0\x0FW__\xFD[P`\x046\x10a\x004W_5`\xE0\x1C\x80c$\xBB\x97x\x14a\08W\x80c\xEB-\xBE\x08\x14a\0_W[__\xFD[a\0Ka\0F6`\x04a\x02\x18V[a\0rV[`@Q\x90\x15\x15\x81R` \x01`@Q\x80\x91\x03\x90\xF3[a\0Ka\0m6`\x04a\x02cV[a\0\xB0V[_a\0\xA7\x85\x85\x85\x85`\xA0\x80` \x02`@Q\x90\x81\x01`@R\x80\x92\x91\x90\x82`\xA0` \x02\x80\x82\x847_\x92\x01\x91\x90\x91RPa\x015\x91PPV[\x95\x94PPPPPV[_\x80a\0\xBE\x83\x85\x01\x85a\x03oV[P`@Qc\x04\x97r\xEF`\xE3\x1B\x81R\x90\x91P0\x90c$\xBB\x97x\x90a\0\xEB\x90\x8A\x90\x8A\x90\x8A\x90\x87\x90`\x04\x01a\x03\xF5V[` `@Q\x80\x83\x03\x81\x86Z\xFA\x15\x80\x15a\x01\x06W=__>=_\xFD[PPPP`@Q=`\x1F\x19`\x1F\x82\x01\x16\x82\x01\x80`@RP\x81\x01\x90a\x01*\x91\x90a\x04EV[\x97\x96PPPPPPPV[__a\x01@\x84a\x01\xB1V[\x90P_[`\xA0\x81\x10\x15a\x01\xA5W_\x84\x82`\xA0\x81\x10a\x01`Wa\x01`a\x04kV[` \x02\x01Q\x90P`\x01\x87\x83\x1C\x16\x80\x15a\x01\x89W`@\x80Q\x83\x81R` \x81\x01\x86\x90R \x93Pa\x01\x9BV[`@\x80Q\x85\x81R` \x81\x01\x84\x90R \x93P[PP`\x01\x01a\x01DV[P\x90\x94\x14\x94\x93PPPPV[__\x82`@Q` \x01a\x01\xC6\x91\x81R` \x01\x90V[`@\x80Q\x80\x83\x03`\x1F\x19\x01\x81R\x82\x82R\x80Q` \x91\x82\x01 \x81\x84\x01R\x81Q\x80\x84\x03\x82\x01\x81R\x92\x82\x01\x90\x91R\x81Q\x91\x01 \x93\x92PPPV[\x805`\x01`\x01`\xA0\x1B\x03\x81\x16\x81\x14a\x02\x13W__\xFD[\x91\x90PV[____a\x14`\x85\x87\x03\x12\x15a\x02,W__\xFD[\x845\x93Pa\x02<` \x86\x01a\x01\xFDV[\x92P`@\x85\x015\x91Pa\x14`\x85\x01\x86\x10\x15a\x02UW__\xFD[P\x91\x94\x90\x93P\x90\x91``\x01\x90V[_____`\x80\x86\x88\x03\x12\x15a\x02wW__\xFD[\x855\x94Pa\x02\x87` \x87\x01a\x01\xFDV[\x93P`@\x86\x015\x92P``\x86\x015g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x15a\x02\xA9W__\xFD[\x86\x01`\x1F\x81\x01\x88\x13a\x02\xB9W__\xFD[\x805g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x15a\x02\xCFW__\xFD[\x88` \x82\x84\x01\x01\x11\x15a\x02\xE0W__\xFD[\x95\x98\x94\x97P\x92\x95PPP` \x01\x91\x90V[`@Q`\x1F\x82\x01`\x1F\x19\x16\x81\x01g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x82\x82\x10\x17\x15a\x03&WcNH{q`\xE0\x1B_R`A`\x04R`$_\xFD[`@R\x91\x90PV[_a\x039`\xE0a\x02\xF1V[\x90P\x80`\xE0\x83\x01\x84\x81\x11\x15a\x03LW__\xFD[\x83[\x81\x81\x10\x15a\x03fW\x805\x83R` \x92\x83\x01\x92\x01a\x03NV[PPP\x92\x91PPV[__a\x14\xE0\x83\x85\x03\x12\x15a\x03\x81W__\xFD[_\x84`\x1F\x85\x01\x12a\x03\x90W__\xFD[P_\x80a\x14\0a\x03\x9F\x81a\x02\xF1V[\x92P\x82\x91P\x85\x01\x86\x81\x11\x15a\x03\xB2W__\xFD[\x85[\x81\x81\x10\x15a\x03\xCCW\x805\x84R` \x93\x84\x01\x93\x01a\x03\xB4V[P\x81\x94P\x86a\x14\x1F\x87\x01\x12a\x03\xDFW__\xFD[a\x03\xE9\x87\x82a\x03.V[\x93PPPP\x92P\x92\x90PV[\x84\x81R`\x01`\x01`\xA0\x1B\x03\x84\x16` \x82\x01R`@\x81\x01\x83\x90Ra\x14`\x81\x01``\x82\x01\x83_[`\xA0\x81\x10\x15a\x049W\x81Q\x83R` \x92\x83\x01\x92\x90\x91\x01\x90`\x01\x01a\x04\x1AV[PPP\x95\x94PPPPPV[_` \x82\x84\x03\x12\x15a\x04UW__\xFD[\x81Q\x80\x15\x15\x81\x14a\x04dW__\xFD[\x93\x92PPPV[cNH{q`\xE0\x1B_R`2`\x04R`$_\xFD\xFE\xA1dsolcC\0\x08\x1C\0\n",
     );
-    #[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq, Eq, Hash)]
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     /**Function with signature `verifyRewardClaim(bytes32,address,uint256,bytes32[160])` and selector `0x24bb9778`.
-    ```solidity
-    function verifyRewardClaim(bytes32 root, address account, uint256 amount, bytes32[160] memory proof) external pure returns (bool);
-    ```*/
+```solidity
+function verifyRewardClaim(bytes32 root, address account, uint256 amount, bytes32[160] memory proof) external pure returns (bool);
+```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct verifyRewardClaimCall {
@@ -129,7 +130,8 @@ pub mod RewardClaimPrototypeMock {
         #[serde(with = "serde_arrays")]
         pub proof: [alloy::sol_types::private::FixedBytes<32>; 160usize],
     }
-    #[derive(serde::Serialize, serde::Deserialize, Default, Debug, PartialEq, Eq, Hash)]
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`verifyRewardClaim(bytes32,address,uint256,bytes32[160])`](verifyRewardClaimCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -166,23 +168,27 @@ pub mod RewardClaimPrototypeMock {
             );
             #[cfg(test)]
             #[allow(dead_code, unreachable_patterns)]
-            fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+            fn _type_assertion(
+                _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+            ) {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {},
+                    >(_) => {}
                 }
             }
             #[automatically_derived]
             #[doc(hidden)]
-            impl ::core::convert::From<verifyRewardClaimCall> for UnderlyingRustTuple<'_> {
+            impl ::core::convert::From<verifyRewardClaimCall>
+            for UnderlyingRustTuple<'_> {
                 fn from(value: verifyRewardClaimCall) -> Self {
                     (value.root, value.account, value.amount, value.proof)
                 }
             }
             #[automatically_derived]
             #[doc(hidden)]
-            impl ::core::convert::From<UnderlyingRustTuple<'_>> for verifyRewardClaimCall {
+            impl ::core::convert::From<UnderlyingRustTuple<'_>>
+            for verifyRewardClaimCall {
                 fn from(tuple: UnderlyingRustTuple<'_>) -> Self {
                     Self {
                         root: tuple.0,
@@ -201,23 +207,27 @@ pub mod RewardClaimPrototypeMock {
             type UnderlyingRustTuple<'a> = (bool,);
             #[cfg(test)]
             #[allow(dead_code, unreachable_patterns)]
-            fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+            fn _type_assertion(
+                _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+            ) {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {},
+                    >(_) => {}
                 }
             }
             #[automatically_derived]
             #[doc(hidden)]
-            impl ::core::convert::From<verifyRewardClaimReturn> for UnderlyingRustTuple<'_> {
+            impl ::core::convert::From<verifyRewardClaimReturn>
+            for UnderlyingRustTuple<'_> {
                 fn from(value: verifyRewardClaimReturn) -> Self {
                     (value._0,)
                 }
             }
             #[automatically_derived]
             #[doc(hidden)]
-            impl ::core::convert::From<UnderlyingRustTuple<'_>> for verifyRewardClaimReturn {
+            impl ::core::convert::From<UnderlyingRustTuple<'_>>
+            for verifyRewardClaimReturn {
                 fn from(tuple: UnderlyingRustTuple<'_>) -> Self {
                     Self { _0: tuple.0 }
                 }
@@ -234,12 +244,15 @@ pub mod RewardClaimPrototypeMock {
                     160usize,
                 >,
             );
-            type Token<'a> = <Self::Parameters<'a> as alloy_sol_types::SolType>::Token<'a>;
+            type Token<'a> = <Self::Parameters<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
             type Return = bool;
             type ReturnTuple<'a> = (alloy::sol_types::sol_data::Bool,);
-            type ReturnToken<'a> = <Self::ReturnTuple<'a> as alloy_sol_types::SolType>::Token<'a>;
-            const SIGNATURE: &'static str =
-                "verifyRewardClaim(bytes32,address,uint256,bytes32[160])";
+            type ReturnToken<'a> = <Self::ReturnTuple<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
+            const SIGNATURE: &'static str = "verifyRewardClaim(bytes32,address,uint256,bytes32[160])";
             const SELECTOR: [u8; 4] = [36u8, 187u8, 151u8, 120u8];
             #[inline]
             fn new<'a>(
@@ -267,34 +280,42 @@ pub mod RewardClaimPrototypeMock {
             }
             #[inline]
             fn tokenize_returns(ret: &Self::Return) -> Self::ReturnToken<'_> {
-                (<alloy::sol_types::sol_data::Bool as alloy_sol_types::SolType>::tokenize(ret),)
+                (
+                    <alloy::sol_types::sol_data::Bool as alloy_sol_types::SolType>::tokenize(
+                        ret,
+                    ),
+                )
             }
             #[inline]
             fn abi_decode_returns(data: &[u8]) -> alloy_sol_types::Result<Self::Return> {
-                <Self::ReturnTuple<'_> as alloy_sol_types::SolType>::abi_decode_sequence(data).map(
-                    |r| {
+                <Self::ReturnTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence(data)
+                    .map(|r| {
                         let r: verifyRewardClaimReturn = r.into();
                         r._0
-                    },
-                )
+                    })
             }
             #[inline]
-            fn abi_decode_returns_validate(data: &[u8]) -> alloy_sol_types::Result<Self::Return> {
-                <Self::ReturnTuple<'_> as alloy_sol_types::SolType>::abi_decode_sequence_validate(
-                    data,
-                )
-                .map(|r| {
-                    let r: verifyRewardClaimReturn = r.into();
-                    r._0
-                })
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                <Self::ReturnTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                    .map(|r| {
+                        let r: verifyRewardClaimReturn = r.into();
+                        r._0
+                    })
             }
         }
     };
-    #[derive(serde::Serialize, serde::Deserialize, Default, Debug, PartialEq, Eq, Hash)]
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `verifyRewardClaimAuthData(bytes32,address,uint256,bytes)` and selector `0xeb2dbe08`.
-    ```solidity
-    function verifyRewardClaimAuthData(bytes32 root, address account, uint256 amount, bytes memory authData) external view returns (bool);
-    ```*/
+```solidity
+function verifyRewardClaimAuthData(bytes32 root, address account, uint256 amount, bytes memory authData) external view returns (bool);
+```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct verifyRewardClaimAuthDataCall {
@@ -307,7 +328,8 @@ pub mod RewardClaimPrototypeMock {
         #[allow(missing_docs)]
         pub authData: alloy::sol_types::private::Bytes,
     }
-    #[derive(serde::Serialize, serde::Deserialize, Default, Debug, PartialEq, Eq, Hash)]
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`verifyRewardClaimAuthData(bytes32,address,uint256,bytes)`](verifyRewardClaimAuthDataCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -341,23 +363,27 @@ pub mod RewardClaimPrototypeMock {
             );
             #[cfg(test)]
             #[allow(dead_code, unreachable_patterns)]
-            fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+            fn _type_assertion(
+                _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+            ) {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {},
+                    >(_) => {}
                 }
             }
             #[automatically_derived]
             #[doc(hidden)]
-            impl ::core::convert::From<verifyRewardClaimAuthDataCall> for UnderlyingRustTuple<'_> {
+            impl ::core::convert::From<verifyRewardClaimAuthDataCall>
+            for UnderlyingRustTuple<'_> {
                 fn from(value: verifyRewardClaimAuthDataCall) -> Self {
                     (value.root, value.account, value.amount, value.authData)
                 }
             }
             #[automatically_derived]
             #[doc(hidden)]
-            impl ::core::convert::From<UnderlyingRustTuple<'_>> for verifyRewardClaimAuthDataCall {
+            impl ::core::convert::From<UnderlyingRustTuple<'_>>
+            for verifyRewardClaimAuthDataCall {
                 fn from(tuple: UnderlyingRustTuple<'_>) -> Self {
                     Self {
                         root: tuple.0,
@@ -376,23 +402,27 @@ pub mod RewardClaimPrototypeMock {
             type UnderlyingRustTuple<'a> = (bool,);
             #[cfg(test)]
             #[allow(dead_code, unreachable_patterns)]
-            fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+            fn _type_assertion(
+                _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+            ) {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {},
+                    >(_) => {}
                 }
             }
             #[automatically_derived]
             #[doc(hidden)]
-            impl ::core::convert::From<verifyRewardClaimAuthDataReturn> for UnderlyingRustTuple<'_> {
+            impl ::core::convert::From<verifyRewardClaimAuthDataReturn>
+            for UnderlyingRustTuple<'_> {
                 fn from(value: verifyRewardClaimAuthDataReturn) -> Self {
                     (value._0,)
                 }
             }
             #[automatically_derived]
             #[doc(hidden)]
-            impl ::core::convert::From<UnderlyingRustTuple<'_>> for verifyRewardClaimAuthDataReturn {
+            impl ::core::convert::From<UnderlyingRustTuple<'_>>
+            for verifyRewardClaimAuthDataReturn {
                 fn from(tuple: UnderlyingRustTuple<'_>) -> Self {
                     Self { _0: tuple.0 }
                 }
@@ -406,12 +436,15 @@ pub mod RewardClaimPrototypeMock {
                 alloy::sol_types::sol_data::Uint<256>,
                 alloy::sol_types::sol_data::Bytes,
             );
-            type Token<'a> = <Self::Parameters<'a> as alloy_sol_types::SolType>::Token<'a>;
+            type Token<'a> = <Self::Parameters<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
             type Return = bool;
             type ReturnTuple<'a> = (alloy::sol_types::sol_data::Bool,);
-            type ReturnToken<'a> = <Self::ReturnTuple<'a> as alloy_sol_types::SolType>::Token<'a>;
-            const SIGNATURE: &'static str =
-                "verifyRewardClaimAuthData(bytes32,address,uint256,bytes)";
+            type ReturnToken<'a> = <Self::ReturnTuple<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
+            const SIGNATURE: &'static str = "verifyRewardClaimAuthData(bytes32,address,uint256,bytes)";
             const SELECTOR: [u8; 4] = [235u8, 45u8, 190u8, 8u8];
             #[inline]
             fn new<'a>(
@@ -438,31 +471,39 @@ pub mod RewardClaimPrototypeMock {
             }
             #[inline]
             fn tokenize_returns(ret: &Self::Return) -> Self::ReturnToken<'_> {
-                (<alloy::sol_types::sol_data::Bool as alloy_sol_types::SolType>::tokenize(ret),)
+                (
+                    <alloy::sol_types::sol_data::Bool as alloy_sol_types::SolType>::tokenize(
+                        ret,
+                    ),
+                )
             }
             #[inline]
             fn abi_decode_returns(data: &[u8]) -> alloy_sol_types::Result<Self::Return> {
-                <Self::ReturnTuple<'_> as alloy_sol_types::SolType>::abi_decode_sequence(data).map(
-                    |r| {
+                <Self::ReturnTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence(data)
+                    .map(|r| {
                         let r: verifyRewardClaimAuthDataReturn = r.into();
                         r._0
-                    },
-                )
+                    })
             }
             #[inline]
-            fn abi_decode_returns_validate(data: &[u8]) -> alloy_sol_types::Result<Self::Return> {
-                <Self::ReturnTuple<'_> as alloy_sol_types::SolType>::abi_decode_sequence_validate(
-                    data,
-                )
-                .map(|r| {
-                    let r: verifyRewardClaimAuthDataReturn = r.into();
-                    r._0
-                })
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                <Self::ReturnTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                    .map(|r| {
+                        let r: verifyRewardClaimAuthDataReturn = r.into();
+                        r._0
+                    })
             }
         }
     };
     ///Container for all the [`RewardClaimPrototypeMock`](self) function calls.
     #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive()]
     pub enum RewardClaimPrototypeMockCalls {
         #[allow(missing_docs)]
         verifyRewardClaim(verifyRewardClaimCall),
@@ -477,8 +518,10 @@ pub mod RewardClaimPrototypeMock {
         /// No guarantees are made about the order of the selectors.
         ///
         /// Prefer using `SolInterface` methods instead.
-        pub const SELECTORS: &'static [[u8; 4usize]] =
-            &[[36u8, 187u8, 151u8, 120u8], [235u8, 45u8, 190u8, 8u8]];
+        pub const SELECTORS: &'static [[u8; 4usize]] = &[
+            [36u8, 187u8, 151u8, 120u8],
+            [235u8, 45u8, 190u8, 8u8],
+        ];
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for RewardClaimPrototypeMockCalls {
@@ -490,10 +533,10 @@ pub mod RewardClaimPrototypeMock {
             match self {
                 Self::verifyRewardClaim(_) => {
                     <verifyRewardClaimCall as alloy_sol_types::SolCall>::SELECTOR
-                },
+                }
                 Self::verifyRewardClaimAuthData(_) => {
                     <verifyRewardClaimAuthDataCall as alloy_sol_types::SolCall>::SELECTOR
-                },
+                }
             }
         }
         #[inline]
@@ -506,17 +549,20 @@ pub mod RewardClaimPrototypeMock {
         }
         #[inline]
         #[allow(non_snake_case)]
-        fn abi_decode_raw(selector: [u8; 4], data: &[u8]) -> alloy_sol_types::Result<Self> {
+        fn abi_decode_raw(
+            selector: [u8; 4],
+            data: &[u8],
+        ) -> alloy_sol_types::Result<Self> {
             static DECODE_SHIMS: &[fn(
                 &[u8],
-            )
-                -> alloy_sol_types::Result<RewardClaimPrototypeMockCalls>] = &[
+            ) -> alloy_sol_types::Result<RewardClaimPrototypeMockCalls>] = &[
                 {
                     fn verifyRewardClaim(
                         data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimPrototypeMockCalls>
-                    {
-                        <verifyRewardClaimCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                    ) -> alloy_sol_types::Result<RewardClaimPrototypeMockCalls> {
+                        <verifyRewardClaimCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data,
+                            )
                             .map(RewardClaimPrototypeMockCalls::verifyRewardClaim)
                     }
                     verifyRewardClaim
@@ -524,21 +570,24 @@ pub mod RewardClaimPrototypeMock {
                 {
                     fn verifyRewardClaimAuthData(
                         data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimPrototypeMockCalls>
-                    {
+                    ) -> alloy_sol_types::Result<RewardClaimPrototypeMockCalls> {
                         <verifyRewardClaimAuthDataCall as alloy_sol_types::SolCall>::abi_decode_raw(
-                            data,
-                        )
-                        .map(RewardClaimPrototypeMockCalls::verifyRewardClaimAuthData)
+                                data,
+                            )
+                            .map(
+                                RewardClaimPrototypeMockCalls::verifyRewardClaimAuthData,
+                            )
                     }
                     verifyRewardClaimAuthData
                 },
             ];
             let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(alloy_sol_types::Error::unknown_selector(
-                    <Self as alloy_sol_types::SolInterface>::NAME,
-                    selector,
-                ));
+                return Err(
+                    alloy_sol_types::Error::unknown_selector(
+                        <Self as alloy_sol_types::SolInterface>::NAME,
+                        selector,
+                    ),
+                );
             };
             DECODE_SHIMS[idx](data)
         }
@@ -550,14 +599,11 @@ pub mod RewardClaimPrototypeMock {
         ) -> alloy_sol_types::Result<Self> {
             static DECODE_VALIDATE_SHIMS: &[fn(
                 &[u8],
-            ) -> alloy_sol_types::Result<
-                RewardClaimPrototypeMockCalls,
-            >] = &[
+            ) -> alloy_sol_types::Result<RewardClaimPrototypeMockCalls>] = &[
                 {
                     fn verifyRewardClaim(
                         data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimPrototypeMockCalls>
-                    {
+                    ) -> alloy_sol_types::Result<RewardClaimPrototypeMockCalls> {
                         <verifyRewardClaimCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
                                 data,
                             )
@@ -568,8 +614,7 @@ pub mod RewardClaimPrototypeMock {
                 {
                     fn verifyRewardClaimAuthData(
                         data: &[u8],
-                    ) -> alloy_sol_types::Result<RewardClaimPrototypeMockCalls>
-                    {
+                    ) -> alloy_sol_types::Result<RewardClaimPrototypeMockCalls> {
                         <verifyRewardClaimAuthDataCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
                                 data,
                             )
@@ -581,10 +626,12 @@ pub mod RewardClaimPrototypeMock {
                 },
             ];
             let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(alloy_sol_types::Error::unknown_selector(
-                    <Self as alloy_sol_types::SolInterface>::NAME,
-                    selector,
-                ));
+                return Err(
+                    alloy_sol_types::Error::unknown_selector(
+                        <Self as alloy_sol_types::SolInterface>::NAME,
+                        selector,
+                    ),
+                );
             };
             DECODE_VALIDATE_SHIMS[idx](data)
         }
@@ -592,33 +639,39 @@ pub mod RewardClaimPrototypeMock {
         fn abi_encoded_size(&self) -> usize {
             match self {
                 Self::verifyRewardClaim(inner) => {
-                    <verifyRewardClaimCall as alloy_sol_types::SolCall>::abi_encoded_size(inner)
-                },
+                    <verifyRewardClaimCall as alloy_sol_types::SolCall>::abi_encoded_size(
+                        inner,
+                    )
+                }
                 Self::verifyRewardClaimAuthData(inner) => {
                     <verifyRewardClaimAuthDataCall as alloy_sol_types::SolCall>::abi_encoded_size(
                         inner,
                     )
-                },
+                }
             }
         }
         #[inline]
         fn abi_encode_raw(&self, out: &mut alloy_sol_types::private::Vec<u8>) {
             match self {
                 Self::verifyRewardClaim(inner) => {
-                    <verifyRewardClaimCall as alloy_sol_types::SolCall>::abi_encode_raw(inner, out)
-                },
+                    <verifyRewardClaimCall as alloy_sol_types::SolCall>::abi_encode_raw(
+                        inner,
+                        out,
+                    )
+                }
                 Self::verifyRewardClaimAuthData(inner) => {
                     <verifyRewardClaimAuthDataCall as alloy_sol_types::SolCall>::abi_encode_raw(
-                        inner, out,
+                        inner,
+                        out,
                     )
-                },
+                }
             }
         }
     }
     use alloy::contract as alloy_contract;
     /**Creates a new wrapper around an on-chain [`RewardClaimPrototypeMock`](self) contract instance.
 
-    See the [wrapper's documentation](`RewardClaimPrototypeMockInstance`) for more details.*/
+See the [wrapper's documentation](`RewardClaimPrototypeMockInstance`) for more details.*/
     #[inline]
     pub const fn new<
         P: alloy_contract::private::Provider<N>,
@@ -631,11 +684,14 @@ pub mod RewardClaimPrototypeMock {
     }
     /**Deploys this contract using the given `provider` and constructor arguments, if any.
 
-    Returns a new instance of the contract, if the deployment was successful.
+Returns a new instance of the contract, if the deployment was successful.
 
-    For more fine-grained control over the deployment process, use [`deploy_builder`] instead.*/
+For more fine-grained control over the deployment process, use [`deploy_builder`] instead.*/
     #[inline]
-    pub fn deploy<P: alloy_contract::private::Provider<N>, N: alloy_contract::private::Network>(
+    pub fn deploy<
+        P: alloy_contract::private::Provider<N>,
+        N: alloy_contract::private::Network,
+    >(
         __provider: P,
     ) -> impl ::core::future::Future<
         Output = alloy_contract::Result<RewardClaimPrototypeMockInstance<P, N>>,
@@ -643,32 +699,33 @@ pub mod RewardClaimPrototypeMock {
         RewardClaimPrototypeMockInstance::<P, N>::deploy(__provider)
     }
     /**Creates a `RawCallBuilder` for deploying this contract using the given `provider`
-    and constructor arguments, if any.
+and constructor arguments, if any.
 
-    This is a simple wrapper around creating a `RawCallBuilder` with the data set to
-    the bytecode concatenated with the constructor's ABI-encoded arguments.*/
+This is a simple wrapper around creating a `RawCallBuilder` with the data set to
+the bytecode concatenated with the constructor's ABI-encoded arguments.*/
     #[inline]
     pub fn deploy_builder<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
-    >(
-        __provider: P,
-    ) -> alloy_contract::RawCallBuilder<P, N> {
+    >(__provider: P) -> alloy_contract::RawCallBuilder<P, N> {
         RewardClaimPrototypeMockInstance::<P, N>::deploy_builder(__provider)
     }
     /**A [`RewardClaimPrototypeMock`](self) instance.
 
-    Contains type-safe methods for interacting with an on-chain instance of the
-    [`RewardClaimPrototypeMock`](self) contract located at a given `address`, using a given
-    provider `P`.
+Contains type-safe methods for interacting with an on-chain instance of the
+[`RewardClaimPrototypeMock`](self) contract located at a given `address`, using a given
+provider `P`.
 
-    If the contract bytecode is available (see the [`sol!`](alloy_sol_types::sol!)
-    documentation on how to provide it), the `deploy` and `deploy_builder` methods can
-    be used to deploy a new instance of the contract.
+If the contract bytecode is available (see the [`sol!`](alloy_sol_types::sol!)
+documentation on how to provide it), the `deploy` and `deploy_builder` methods can
+be used to deploy a new instance of the contract.
 
-    See the [module-level documentation](self) for all the available methods.*/
+See the [module-level documentation](self) for all the available methods.*/
     #[derive(Clone)]
-    pub struct RewardClaimPrototypeMockInstance<P, N = alloy_contract::private::Ethereum> {
+    pub struct RewardClaimPrototypeMockInstance<
+        P,
+        N = alloy_contract::private::Ethereum,
+    > {
         address: alloy_sol_types::private::Address,
         provider: P,
         _network: ::core::marker::PhantomData<N>,
@@ -684,14 +741,18 @@ pub mod RewardClaimPrototypeMock {
     }
     /// Instantiation and getters/setters.
     #[automatically_derived]
-    impl<P: alloy_contract::private::Provider<N>, N: alloy_contract::private::Network>
-        RewardClaimPrototypeMockInstance<P, N>
-    {
+    impl<
+        P: alloy_contract::private::Provider<N>,
+        N: alloy_contract::private::Network,
+    > RewardClaimPrototypeMockInstance<P, N> {
         /**Creates a new wrapper around an on-chain [`RewardClaimPrototypeMock`](self) contract instance.
 
-        See the [wrapper's documentation](`RewardClaimPrototypeMockInstance`) for more details.*/
+See the [wrapper's documentation](`RewardClaimPrototypeMockInstance`) for more details.*/
         #[inline]
-        pub const fn new(address: alloy_sol_types::private::Address, __provider: P) -> Self {
+        pub const fn new(
+            address: alloy_sol_types::private::Address,
+            __provider: P,
+        ) -> Self {
             Self {
                 address,
                 provider: __provider,
@@ -700,9 +761,9 @@ pub mod RewardClaimPrototypeMock {
         }
         /**Deploys this contract using the given `provider` and constructor arguments, if any.
 
-        Returns a new instance of the contract, if the deployment was successful.
+Returns a new instance of the contract, if the deployment was successful.
 
-        For more fine-grained control over the deployment process, use [`deploy_builder`] instead.*/
+For more fine-grained control over the deployment process, use [`deploy_builder`] instead.*/
         #[inline]
         pub async fn deploy(
             __provider: P,
@@ -712,10 +773,10 @@ pub mod RewardClaimPrototypeMock {
             Ok(Self::new(contract_address, call_builder.provider))
         }
         /**Creates a `RawCallBuilder` for deploying this contract using the given `provider`
-        and constructor arguments, if any.
+and constructor arguments, if any.
 
-        This is a simple wrapper around creating a `RawCallBuilder` with the data set to
-        the bytecode concatenated with the constructor's ABI-encoded arguments.*/
+This is a simple wrapper around creating a `RawCallBuilder` with the data set to
+the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         #[inline]
         pub fn deploy_builder(__provider: P) -> alloy_contract::RawCallBuilder<P, N> {
             alloy_contract::RawCallBuilder::new_raw_deploy(
@@ -757,9 +818,10 @@ pub mod RewardClaimPrototypeMock {
     }
     /// Function calls.
     #[automatically_derived]
-    impl<P: alloy_contract::private::Provider<N>, N: alloy_contract::private::Network>
-        RewardClaimPrototypeMockInstance<P, N>
-    {
+    impl<
+        P: alloy_contract::private::Provider<N>,
+        N: alloy_contract::private::Network,
+    > RewardClaimPrototypeMockInstance<P, N> {
         /// Creates a new call builder using this contract instance's provider and address.
         ///
         /// Note that the call can be any function call, not just those defined in this
@@ -778,12 +840,14 @@ pub mod RewardClaimPrototypeMock {
             amount: alloy::sol_types::private::primitives::aliases::U256,
             proof: [alloy::sol_types::private::FixedBytes<32>; 160usize],
         ) -> alloy_contract::SolCallBuilder<&P, verifyRewardClaimCall, N> {
-            self.call_builder(&verifyRewardClaimCall {
-                root,
-                account,
-                amount,
-                proof,
-            })
+            self.call_builder(
+                &verifyRewardClaimCall {
+                    root,
+                    account,
+                    amount,
+                    proof,
+                },
+            )
         }
         ///Creates a new call builder for the [`verifyRewardClaimAuthData`] function.
         pub fn verifyRewardClaimAuthData(
@@ -793,19 +857,22 @@ pub mod RewardClaimPrototypeMock {
             amount: alloy::sol_types::private::primitives::aliases::U256,
             authData: alloy::sol_types::private::Bytes,
         ) -> alloy_contract::SolCallBuilder<&P, verifyRewardClaimAuthDataCall, N> {
-            self.call_builder(&verifyRewardClaimAuthDataCall {
-                root,
-                account,
-                amount,
-                authData,
-            })
+            self.call_builder(
+                &verifyRewardClaimAuthDataCall {
+                    root,
+                    account,
+                    amount,
+                    authData,
+                },
+            )
         }
     }
     /// Event filters.
     #[automatically_derived]
-    impl<P: alloy_contract::private::Provider<N>, N: alloy_contract::private::Network>
-        RewardClaimPrototypeMockInstance<P, N>
-    {
+    impl<
+        P: alloy_contract::private::Provider<N>,
+        N: alloy_contract::private::Network,
+    > RewardClaimPrototypeMockInstance<P, N> {
         /// Creates a new event filter using this contract instance's provider and address.
         ///
         /// Note that the type can be any event, not just those defined in this contract.
