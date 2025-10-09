@@ -1,7 +1,7 @@
 use alloy::{
     hex,
     hex::ToHexExt,
-    primitives::{Address, Bytes, U256},
+    primitives::{Address, Bytes, B256, U256},
     sol_types::SolValue,
 };
 use ark_bn254::{Bn254, Fq, Fr, G1Affine, G2Affine};
@@ -11,11 +11,17 @@ use ark_ff::field_hashers::{DefaultFieldHasher, HashToField};
 use ark_poly::{domain::radix2::Radix2EvaluationDomain, EvaluationDomain};
 use ark_std::rand::{rngs::StdRng, Rng, RngCore, SeedableRng};
 use clap::{Parser, ValueEnum};
+use espresso_types::{
+    v0::v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleTreeV2},
+    v0_3::RewardAmount,
+    v0_4::{RewardAccountQueryDataV2, REWARD_MERKLE_TREE_V2_HEIGHT},
+};
 use hotshot_contract_adapter::{field_to_u256, jellyfish::*, sol_types::*, u256_to_field};
 use hotshot_state_prover::v3::mock_ledger::{
     gen_plonk_proof_for_test, MockLedger, MockSystemParam, STAKE_TABLE_CAPACITY_FOR_TEST,
 };
 use hotshot_types::utils::{epoch_from_block_number, is_epoch_root, is_ge_epoch_root};
+use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
 use jf_pcs::prelude::Commitment;
 use jf_plonk::{
     proof_system::{
@@ -91,6 +97,12 @@ enum Action {
     EpochCompute,
     /// Compute two updates in two first and second epoch epochs
     FirstAndSecondEpochUpdate,
+    /// Generate reward claim test fixtures with configurable accounts and seeds
+    GenRewardFixture,
+    /// Generate reward claim test fixtures with specific account and amount
+    GenRewardFixtureWithAccountAndAmount,
+    /// Generate reward claim test fixtures with specific amount for all accounts
+    GenRewardFixtureWithAmount,
 }
 
 #[allow(clippy::type_complexity)]
@@ -582,6 +594,160 @@ fn main() {
                     .abi_encode_params()
                     .encode_hex()
             );
+        },
+        Action::GenRewardFixture => {
+            if cli.args.is_empty() || cli.args.len() > 2 {
+                panic!("Should provide arg1=numAccounts, arg2(optional)=seed");
+            }
+
+            let num_accounts = cli.args[0].parse::<usize>().unwrap();
+            let seed = if cli.args.len() > 1 {
+                cli.args[1].parse::<u64>().unwrap()
+            } else {
+                0
+            };
+
+            let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+            let mut rng = StdRng::seed_from_u64(seed);
+
+            let mut test_cases = Vec::new();
+            for _ in 0..num_accounts {
+                let account = RewardAccountV2::from(Address::random());
+                let amount = RewardAmount::from(rng.gen::<u64>());
+                tree.update(account, amount).unwrap();
+                test_cases.push((account, amount));
+            }
+
+            let commitment = tree.commitment();
+            let reward_commitment: B256 = commitment.digest().into();
+            let auth_root_fields: [B256; 8] = [
+                reward_commitment,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+            ];
+            let auth_root = alloy::primitives::keccak256(auth_root_fields.abi_encode());
+            let auth_root_u256: U256 = auth_root.into();
+
+            let mut fixtures: Vec<(Address, U256, Bytes)> = Vec::new();
+            for (account, _) in test_cases {
+                let proof = RewardAccountProofV2::prove(&tree, account.0).unwrap();
+                let query_data: RewardAccountQueryDataV2 = proof.into();
+                let claim_input = query_data.to_reward_claim_input().unwrap();
+
+                fixtures.push((
+                    account.0,
+                    claim_input.lifetime_rewards,
+                    claim_input.auth_data.into(),
+                ));
+            }
+
+            let res = (auth_root_u256, fixtures);
+            println!("{}", res.abi_encode_params().encode_hex());
+        },
+        Action::GenRewardFixtureWithAmount => {
+            if cli.args.len() < 2 || cli.args.len() > 3 {
+                panic!("Should provide arg1=numAccounts, arg2=amount, arg3(optional)=seed");
+            }
+
+            let num_accounts = cli.args[0].parse::<usize>().unwrap();
+            let amount = cli.args[1].parse::<U256>().unwrap();
+
+            let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+
+            let mut test_cases = Vec::new();
+            for _ in 0..num_accounts {
+                let account = RewardAccountV2::from(Address::random());
+                let reward_amount = RewardAmount(amount);
+                tree.update(account, reward_amount).unwrap();
+                test_cases.push((account, reward_amount));
+            }
+
+            let commitment = tree.commitment();
+            let reward_commitment: B256 = commitment.digest().into();
+            let auth_root_fields: [B256; 8] = [
+                reward_commitment,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+            ];
+            let auth_root = alloy::primitives::keccak256(auth_root_fields.abi_encode());
+            let auth_root_u256: U256 = auth_root.into();
+
+            let mut fixtures: Vec<(Address, U256, Bytes)> = Vec::new();
+            for (account, _amount) in test_cases {
+                let proof = RewardAccountProofV2::prove(&tree, account.0).unwrap();
+                let query_data: RewardAccountQueryDataV2 = proof.into();
+
+                if _amount.0 == U256::ZERO {
+                    fixtures.push((account.0, U256::ZERO, Bytes::new()));
+                } else {
+                    let claim_input = query_data.to_reward_claim_input().unwrap();
+                    fixtures.push((
+                        account.0,
+                        claim_input.lifetime_rewards,
+                        claim_input.auth_data.into(),
+                    ));
+                }
+            }
+
+            let res = (auth_root_u256, fixtures);
+            println!("{}", res.abi_encode_params().encode_hex());
+        },
+        Action::GenRewardFixtureWithAccountAndAmount => {
+            if cli.args.len() < 2 || cli.args.len() > 3 {
+                panic!("Should provide arg1=account, arg2=amount, arg3(optional)=seed");
+            }
+
+            let account_bytes = hex::decode(&cli.args[0]).unwrap();
+            let account = Address::from_slice(&account_bytes);
+            let amount = cli.args[1].parse::<U256>().unwrap();
+
+            let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+
+            let reward_account = RewardAccountV2::from(account);
+            let reward_amount = RewardAmount(amount);
+            tree.update(reward_account, reward_amount).unwrap();
+
+            let commitment = tree.commitment();
+            let reward_commitment: B256 = commitment.digest().into();
+            let auth_root_fields: [B256; 8] = [
+                reward_commitment,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+            ];
+            let auth_root = alloy::primitives::keccak256(auth_root_fields.abi_encode());
+            let auth_root_u256: U256 = auth_root.into();
+
+            let proof = RewardAccountProofV2::prove(&tree, account).unwrap();
+            let query_data: RewardAccountQueryDataV2 = proof.into();
+
+            let fixtures: Vec<(Address, U256, Bytes)> = if amount == U256::ZERO {
+                vec![(account, U256::ZERO, Bytes::new())]
+            } else {
+                let claim_input = query_data.to_reward_claim_input().unwrap();
+                vec![(
+                    account,
+                    claim_input.lifetime_rewards,
+                    claim_input.auth_data.into(),
+                )]
+            };
+
+            let res = (auth_root_u256, fixtures);
+            println!("{}", res.abi_encode_params().encode_hex());
         },
     };
 }
