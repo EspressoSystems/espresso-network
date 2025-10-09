@@ -2902,7 +2902,7 @@ mod tests {
             std::path::Path::new("../../../scripts/multisig-upgrade-entrypoint").exists(),
             "Script not found!"
         );
-        let mut sepolia_rpc_url = "http://127.0.0.1:8545".to_string();
+        let mut sepolia_rpc_url = "http://127.0.0.1:8545".parse::<Url>()?;
         let mut multisig_admin = Address::random();
         let mut timelock = Address::random();
         let mut mnemonic =
@@ -2918,7 +2918,7 @@ mod tests {
             {
                 let (key, val) = item?;
                 if key == "ESPRESSO_SEQUENCER_L1_PROVIDER" {
-                    sepolia_rpc_url = val.to_string();
+                    sepolia_rpc_url = val.parse()?;
                 } else if key == "ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS" {
                     multisig_admin = val.parse::<Address>()?;
                 } else if key == "ESPRESSO_SEQUENCER_ETH_MNEMONIC" {
@@ -2930,7 +2930,7 @@ mod tests {
                 }
             }
 
-            if sepolia_rpc_url.is_empty() || multisig_admin.is_zero() || timelock.is_zero() {
+            if multisig_admin.is_zero() || timelock.is_zero() {
                 panic!(
                     "ESPRESSO_SEQUENCER_L1_PROVIDER, ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS, \
                      ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS must be set in .env.deployer.rs.test"
@@ -2948,13 +2948,11 @@ mod tests {
         let provider = if !dry_run {
             ProviderBuilder::new()
                 .wallet(admin_signer)
-                .connect(&sepolia_rpc_url)
-                .await?
+                .connect_http(sepolia_rpc_url.clone())
         } else {
             ProviderBuilder::new()
                 .wallet(admin_signer)
-                .connect(&anvil.endpoint())
-                .await?
+                .connect_http(anvil.endpoint_url())
         };
 
         // prepare `initialize()` input
@@ -3075,7 +3073,7 @@ mod tests {
         let stdout = String::from_utf8_lossy(&result.stdout);
         let first_line = stdout.lines().next().unwrap();
         let data: serde_json::Value = serde_json::from_str(first_line)?;
-        assert_eq!(data["rpcUrl"], sepolia_rpc_url);
+        assert_eq!(data["rpcUrl"], sepolia_rpc_url.to_string());
         assert_eq!(data["safeAddress"], multisig_admin.to_string());
 
         let expected_init_data = match contract_type {

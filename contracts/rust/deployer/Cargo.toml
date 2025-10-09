@@ -20,6 +20,7 @@ surf-disco = { workspace = true }
 tide-disco = { workspace = true }
 tokio = { workspace = true }
 tracing = "0.1.37"
+url = { workspace = true }
 vbs = { workspace = true }
  
 [dev-dependencies]

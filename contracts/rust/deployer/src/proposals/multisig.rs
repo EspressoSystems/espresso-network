@@ -16,13 +16,14 @@ use hotshot_contract_adapter::sol_types::{
     LightClientV3Mock, OwnableUpgradeable, PlonkVerifierV2, PlonkVerifierV3, StakeTable,
     StakeTableV2,
 };
+use url::Url;
 
 use crate::{Contract, Contracts, LIBRARY_PLACEHOLDER_ADDRESS};
 
 #[derive(Clone)]
 pub struct TransferOwnershipParams {
     pub new_owner: Address,
-    pub rpc_url: String,
+    pub rpc_url: Url,
     pub safe_addr: Address,
     pub use_hardware_wallet: bool,
     pub dry_run: bool,
@@ -47,7 +48,7 @@ pub async fn call_transfer_ownership_script(
         .arg("--new-owner")
         .arg(params.new_owner.to_string())
         .arg("--rpc-url")
-        .arg(params.rpc_url)
+        .arg(params.rpc_url.to_string())
         .arg("--safe-address")
         .arg(params.safe_addr.to_string())
         .arg("--dry-run")

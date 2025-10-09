@@ -111,7 +111,7 @@ impl TestSystem {
         let mut contracts = Contracts::new();
         let args = DeployerArgsBuilder::default()
             .deployer(provider.clone())
-            .rpc_url(rpc_url.clone().to_string())
+            .rpc_url(rpc_url.clone())
             .mock_light_client(true)
             .genesis_lc_state(genesis_state)
             .genesis_st_state(genesis_stake)
