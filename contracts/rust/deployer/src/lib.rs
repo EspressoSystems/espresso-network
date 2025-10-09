@@ -548,16 +548,18 @@ pub async fn upgrade_light_client_v2(
             let owner_addr = owner;
             tracing::info!("Proxy owner: {owner_addr:#x}");
 
-            // prepare init calldata (checks if already initialized)
+            // prepare initial function call calldata (checks if already initialized)
+            // you cannot initialize a proxy that is already initialized
+            // so if one wanted to use this function to upgrade a proxy to v2, that's already v2
+            // then we shouldn't call the initialize function
             let lcv2 = LightClientV2::new(lcv2_addr, &provider);
-            let init_data =
-                if already_initialized(&provider, proxy_addr, Contract::LightClientV2, 2).await? {
-                    vec![].into()
-                } else {
-                    lcv2.initializeV2(blocks_per_epoch, epoch_start_block)
-                        .calldata()
-                        .to_owned()
-                };
+            let init_data = if already_initialized(&provider, proxy_addr, 2).await? {
+                vec![].into()
+            } else {
+                lcv2.initializeV2(blocks_per_epoch, epoch_start_block)
+                    .calldata()
+                    .to_owned()
+            };
             // invoke upgrade on proxy
             let receipt = proxy
                 .upgradeToAndCall(lcv2_addr, init_data)
@@ -619,11 +621,13 @@ pub async fn upgrade_light_client_v3(
         Some(proxy_addr) => {
             let proxy = LightClient::new(proxy_addr, &provider);
 
-            //check proxy version, if not atleast V2, can't upgrade to V3
+            // Check proxy version, V3 requires at least V2 as a prerequisite
+            // This ensures we don't try to upgrade from V1 directly to V3
+            // V1 -> V2 -> V3 is the correct upgrade path
             let version = proxy.getVersion().call().await?;
             if version.majorVersion < 2 {
                 anyhow::bail!(
-                    "LightClientProxy is V{}, can't upgrade to V3",
+                    "LightClientProxy is V{}, can't upgrade to V3. Must upgrade to V2 first.",
                     version.majorVersion
                 );
             }
@@ -683,16 +687,17 @@ pub async fn upgrade_light_client_v3(
             let owner_addr = owner;
             tracing::info!("Proxy owner: {owner_addr:#x}");
 
-            // prepare init calldata
             let lcv3 = LightClientV3::new(lcv3_addr, &provider);
 
-            // set init data unless already initialized
-            let init_data =
-                if already_initialized(&provider, proxy_addr, Contract::LightClientV3, 3).await? {
-                    vec![].into()
-                } else {
-                    lcv3.initializeV3().calldata().to_owned()
-                };
+            // prepare initial function call calldata (checks if already initialized)
+            // you cannot initialize a proxy that is already initialized
+            // so if one wanted to use this function to upgrade a proxy to v3, that's already v3
+            // then we shouldn't call the initialize function
+            let init_data = if already_initialized(&provider, proxy_addr, 3).await? {
+                vec![].into()
+            } else {
+                lcv3.initializeV3().calldata().to_owned()
+            };
 
             // invoke upgrade on proxy
             let receipt = proxy
@@ -718,27 +723,14 @@ pub async fn upgrade_light_client_v3(
 async fn already_initialized(
     provider: impl Provider,
     proxy_addr: Address,
-    contract: Contract,
     expected_major_version: u8,
 ) -> Result<bool> {
     let initialized = get_proxy_initialized_version(&provider, proxy_addr).await?;
     tracing::info!("Initialized version: {}", initialized);
 
-    let contract_major_version = match contract {
-        Contract::LightClientV2 => {
-            let contract_proxy = LightClientV2::new(proxy_addr, &provider);
-            contract_proxy.getVersion().call().await?.majorVersion
-        },
-        Contract::LightClientV3 => {
-            let contract_proxy = LightClientV3::new(proxy_addr, &provider);
-            contract_proxy.getVersion().call().await?.majorVersion
-        },
-        Contract::StakeTableV2 => {
-            let contract_proxy = StakeTableV2::new(proxy_addr, &provider);
-            contract_proxy.getVersion().call().await?.majorVersion
-        },
-        _ => anyhow::bail!("Unsupported contract type for already_initialized"),
-    };
+    // since all upgradable contracts have a getVersion() function, we can use it to get the major version
+    let contract_proxy = LightClientV2::new(proxy_addr, &provider);
+    let contract_major_version = contract_proxy.getVersion().call().await?.majorVersion;
 
     Ok(initialized == contract_major_version && contract_major_version == expected_major_version)
 }
@@ -1005,13 +997,7 @@ pub async fn prepare_stake_table_v2_upgrade(
     }
 
     // For a non-major version upgrade the proxy storage must already be initialized.
-    let needs_initialization = !already_initialized(
-        &provider,
-        proxy_addr,
-        Contract::StakeTableV2,
-        target_version,
-    )
-    .await?;
+    let needs_initialization = !already_initialized(&provider, proxy_addr, target_version).await?;
     assert_eq!(
         needs_initialization,
         current_version.majorVersion < target_version,
@@ -3175,5 +3161,81 @@ mod tests {
             },
         )
         .await
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_get_proxy_initialized_version_initialized() -> Result<()> {
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+        let owner = provider.get_accounts().await?[0];
+
+        let token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            owner,
+            owner,
+            U256::from(10_000_000u64),
+            "Test Token",
+            "TEST",
+        )
+        .await?;
+
+        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+        let exit_escrow_period = U256::from(1000);
+
+        let stake_table_proxy_addr = deploy_stake_table_proxy(
+            &provider,
+            &mut contracts,
+            token_addr,
+            lc_addr,
+            exit_escrow_period,
+            owner,
+        )
+        .await?;
+
+        let version = get_proxy_initialized_version(&provider, stake_table_proxy_addr).await?;
+        assert_eq!(version, 1, "Initialized proxy should return version 1");
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_get_proxy_initialized_version_reinitialized() -> Result<()> {
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+        let owner = provider.get_accounts().await?[0];
+
+        let token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            owner,
+            owner,
+            U256::from(10_000_000u64),
+            "Test Token",
+            "TEST",
+        )
+        .await?;
+
+        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+        let exit_escrow_period = U256::from(1000);
+
+        let stake_table_proxy_addr = deploy_stake_table_proxy(
+            &provider,
+            &mut contracts,
+            token_addr,
+            lc_addr,
+            exit_escrow_period,
+            owner,
+        )
+        .await?;
+
+        let pauser = Address::random();
+        let admin = Address::random();
+        upgrade_stake_table_v2(&provider, &mut contracts, pauser, admin).await?;
+
+        let version = get_proxy_initialized_version(&provider, stake_table_proxy_addr).await?;
+        assert_eq!(version, 2, "Reinitialized proxy should return version 2");
+
+        Ok(())
     }
 }
