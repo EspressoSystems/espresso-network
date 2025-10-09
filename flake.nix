@@ -14,9 +14,6 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  # See https://github.com/EspressoSystems/espresso-network/issues/3240
-  inputs.nixpkgs-legacy-process-compose.url = "github:NixOS/nixpkgs/3730d8a308f94996a9ba7c7138ede69c1b9ac4ae";
-
   inputs.foundry-nix.url = "github:shazow/foundry.nix/monthly"; # Use monthly branch for permanent releases
 
   inputs.rust-overlay.url = "github:oxalica/rust-overlay";
@@ -35,7 +32,6 @@
   outputs =
     { self
     , nixpkgs
-    , nixpkgs-legacy-process-compose
     , foundry-nix
     , rust-overlay
     , nixpkgs-cross-overlay
@@ -83,10 +79,6 @@
         (final: prev: {
           solhint =
             solhintPkg { inherit (prev) buildNpmPackage fetchFromGitHub; };
-        })
-        (final: prev: {
-          process-compose =
-            (import nixpkgs-legacy-process-compose { inherit system; }).process-compose;
         })
 
         (final: prev: {
