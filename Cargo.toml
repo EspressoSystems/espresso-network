@@ -260,12 +260,13 @@ significant_drop_in_scrutinee = "warn"
 strip = "none"
 debug = "full"
 
+
 # NOTE: when making changes here also update sequencer-sqlite/Cargo.toml.
 [profile.dev]
 # Probably the least demanding setting in terms of compilation time and memory
 # that still provide tracebacks with line numbers.
 strip = "none"
-debug = "line-tables-only"
+debug = "full"
 
 [profile.dev-debug]
 # This profile should allow connecting debuggers. Compiles more slowly and

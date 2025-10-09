@@ -14,6 +14,10 @@ ignored = ["vergen", "include_dir", "hotshot_builder_api"]
 strip = "none"
 debug = "full"
 
+[profile.dev]
+strip = "none"
+debug = "full"
+
 [[bin]]
 name = "espresso-dev-node"
 path = "src/bin/espresso-dev-node.rs"

@@ -9,6 +9,10 @@ edition = "2021"
 strip = "none"
 debug = "full"
 
+[profile.dev]
+strip = "none"
+debug = "full"
+
 [features]
 fee = ["sequencer/fee"]
 pos = ["sequencer/pos"]
