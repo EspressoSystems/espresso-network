@@ -16,7 +16,7 @@ async fn test_native_demo_pos_base() -> Result<()> {
     let _child = NativeDemo::run(
         None,
         Some(vec![(
-            "ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE".to_string(),
+            "ESPRESSO_SEQUENCER_GENESIS_FILE".to_string(),
             // process compose runs from the root of the repo
             genesis_path.to_string(),
         )]),

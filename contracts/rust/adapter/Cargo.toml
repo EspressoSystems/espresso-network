@@ -27,6 +27,9 @@ derive_more = { workspace = true }
 hotshot-types = { workspace = true }
 jf-pcs = { workspace = true }
 jf-plonk = { workspace = true }
+jf-plonk-compat = { package = "jf-plonk", git = "https://github.com/EspressoSystems/jellyfish", branch = "jf-relation-v0.5.0-compat", features = [
+    "std",
+] }
 jf-signature = { workspace = true, features = ["bls", "schnorr"] }
 jf-utils = { workspace = true }
 num-bigint = { version = "0.4", default-features = false }
