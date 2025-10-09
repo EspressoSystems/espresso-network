@@ -75,7 +75,7 @@ services:
     image: ghcr.io/espressosystems/espresso-sequencer/bridge:${DOCKER_TAG:-main}
     command: espresso-bridge deposit
     environment:
-      - L1_PROVIDER=$ESPRESSO_SEQUENCER_L1_PROVIDER
+      - L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
       - L1_POLLING_INTERVAL=$ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
       - ESPRESSO_PROVIDER=http://sequencer1:$ESPRESSO_SEQUENCER1_API_PORT
       - CONTRACT_ADDRESS=$ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
@@ -97,7 +97,7 @@ services:
     image: ghcr.io/espressosystems/espresso-sequencer/staking-cli:main
     command: staking-cli stake-for-demo
     environment:
-      - L1_PROVIDER=$ESPRESSO_SEQUENCER_L1_PROVIDER
+      - L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
       - MNEMONIC=$ESPRESSO_SEQUENCER_ETH_MNEMONIC
       - ACCOUNT_INDEX=$ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ACCOUNT_INDEX
       - ESP_TOKEN_ADDRESS=$ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
