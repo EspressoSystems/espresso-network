@@ -23,6 +23,7 @@ tracing = "0.1.37"
 vbs = { workspace = true }
  
 [dev-dependencies]
+espresso-types = { path = "../../../types", features = ["testing"] }
 rand = { workspace = true }
 sequencer-utils = { version = "0.1.0", path = "../../../utils" }
 test-log = { workspace = true }

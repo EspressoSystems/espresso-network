@@ -1394,12 +1394,8 @@ mod tests {
         providers::{ext::AnvilApi, layers::AnvilProvider, ProviderBuilder},
         sol_types::SolValue,
     };
-    use hotshot_contract_adapter::{
-        sol_types::{EdOnBN254PointSol, G1PointSol, G2PointSol, StakeTableV2},
-        stake_table::sign_address_bls,
-    };
-    use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
-    use rand::{rngs::StdRng, Rng, SeedableRng};
+    use espresso_types::testing::TestValidator;
+    use hotshot_contract_adapter::sol_types::StakeTableV2;
 
     use super::*;
     use crate::{
@@ -1721,41 +1717,44 @@ mod tests {
         let stake_table = StakeTableV2::new(stake_table_proxy_addr, &provider);
 
         let accounts = provider.get_accounts().await?;
-        let test_delegators = [
-            (accounts[0], U256::from(1000)),
-            (accounts[1], U256::from(1000)),
-            (accounts[2], U256::from(10_000)),
+        let test_validators = [
+            TestValidator::random_update_keys(accounts[4], 1234),
+            TestValidator::random_update_keys(accounts[5], 4567),
         ];
 
-        let mut rng = StdRng::from_seed([42u8; 32]);
-        let validator_addr = accounts[4];
-        let commission = 0;
-        let bls_key_pair = BLSKeyPair::generate(&mut rng);
-        let state_key_pair = StateKeyPair::generate_from_seed(rng.gen());
-        let bls_vk_sol: G2PointSol = bls_key_pair.ver_key().to_affine().into();
-        let bls_sig_sol: G1PointSol =
-            sign_address_bls(&bls_key_pair, Address::from(*validator_addr)).into();
-        let schnorr_vk_sol: EdOnBN254PointSol = state_key_pair.ver_key().to_affine().into();
+        for validator in test_validators.iter() {
+            let receipt = stake_table
+                .registerValidator(
+                    validator.bls_vk,
+                    validator.schnorr_vk,
+                    validator.bls_sig.into(),
+                    validator.commission,
+                )
+                .from(Address::from(validator.account))
+                .send()
+                .await?
+                .get_receipt()
+                .await?;
+            assert!(receipt.status());
+        }
 
-        let receipt = stake_table
-            .registerValidator(bls_vk_sol, schnorr_vk_sol, bls_sig_sol.into(), commission)
-            .from(Address::from(*validator_addr))
-            .send()
-            .await?
-            .get_receipt()
-            .await?;
-        assert!(receipt.status());
+        let test_delegators = [
+            (accounts[0], test_validators[0].account, U256::from(1000)),
+            (accounts[1], test_validators[1].account, U256::from(1000)),
+            (accounts[2], test_validators[0].account, U256::from(10_000)),
+        ];
 
         let token = EspToken::new(token_addr, &provider);
 
-        for (delegator_addr, amount) in test_delegators.iter() {
-            let _receipt = token
+        for (delegator_addr, validator_addr, amount) in test_delegators.iter() {
+            let receipt = token
                 .transfer(*delegator_addr, *amount)
                 .from(Address::from(*owner))
                 .send()
                 .await?
                 .get_receipt()
                 .await?;
+            assert!(receipt.status());
 
             let receipt = token
                 .approve(stake_table_proxy_addr, *amount)
@@ -1767,7 +1766,32 @@ mod tests {
             assert!(receipt.status());
 
             let receipt = stake_table
-                .delegate(validator_addr, *amount)
+                .delegate(*validator_addr, *amount)
+                .from(*delegator_addr)
+                .send()
+                .await?
+                .get_receipt()
+                .await?;
+            assert!(receipt.status());
+        }
+
+        let receipt = stake_table
+            .deregisterValidator()
+            .from(Address::from(test_validators[1].account))
+            .send()
+            .await?
+            .get_receipt()
+            .await?;
+        assert!(receipt.status());
+
+        let undelegations = [
+            (accounts[0], test_validators[0].account, U256::from(500)),
+            (accounts[2], test_validators[0].account, U256::from(300)),
+        ];
+
+        for (delegator_addr, validator_addr, amount) in undelegations.iter() {
+            let receipt = stake_table
+                .undelegate(*validator_addr, *amount)
                 .from(*delegator_addr)
                 .send()
                 .await?
@@ -1783,24 +1807,32 @@ mod tests {
             )
             .await?;
 
-        // Verify active stake
-        assert_eq!(
-            fetched_active_stake,
-            test_delegators
+        let expected_active_stake: U256 = test_delegators
+            .iter()
+            .map(|(_, _, amount)| *amount)
+            .sum::<U256>()
+            - test_delegators
                 .iter()
-                .map(|(_, amount)| *amount)
-                .sum::<U256>(),
-        );
+                .filter(|(_, validator, _)| *validator == test_validators[1].account)
+                .map(|(_, _, amount)| *amount)
+                .sum::<U256>()
+            - undelegations
+                .iter()
+                .map(|(_, _, amount)| *amount)
+                .sum::<U256>();
 
-        assert!(
-            fetched_active_stake <= token.balanceOf(stake_table_proxy_addr).call().await?,
-            "fetched active stake should not exceed contract balance"
+        assert_eq!(
+            fetched_active_stake, expected_active_stake,
+            "fetched active stake should account for undelegations and validator exits"
         );
+        assert!(fetched_active_stake <= token.balanceOf(stake_table_proxy_addr).call().await?);
 
-        // Verify commissions
         assert_eq!(fetched_commissions.len(), 1);
-        assert_eq!(fetched_commissions[0].validator, validator_addr);
-        assert_eq!(fetched_commissions[0].commission, commission);
+        assert_eq!(fetched_commissions[0].validator, test_validators[0].account);
+        assert_eq!(
+            fetched_commissions[0].commission,
+            test_validators[0].commission
+        );
 
         // Migration only applies to V1 contract
         let stake_table_v2 = StakeTableV2::deploy(&provider).await?;

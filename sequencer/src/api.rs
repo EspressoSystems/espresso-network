@@ -2174,7 +2174,7 @@ mod test {
         v0_3::{Fetcher, RewardAmount, RewardMerkleProofV1, COMMISSION_BASIS_POINTS},
         v0_4::RewardMerkleProofV2,
         validators_from_l1_events, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAmount, FeeVersion,
-        Header, L1ClientOptions, MockSequencerVersions, NamespaceId, RewardDistributor,
+        Header, L1Client, L1ClientOptions, MockSequencerVersions, NamespaceId, RewardDistributor,
         SequencerVersions, ValidatedState,
     };
     use futures::{
@@ -5809,7 +5809,14 @@ mod test {
         let deployer_addr = network.cfg.signer().address();
         let mut contracts = network.contracts.unwrap();
         let st_addr = contracts.address(Contract::StakeTableProxy).unwrap();
-        upgrade_stake_table_v2(provider, &mut contracts, deployer_addr, deployer_addr).await?;
+        upgrade_stake_table_v2(
+            provider,
+            L1Client::new(vec![network.cfg.l1_url()])?,
+            &mut contracts,
+            deployer_addr,
+            deployer_addr,
+        )
+        .await?;
 
         let mut commissions = vec![];
         for (i, (validator, provider)) in
