@@ -245,6 +245,9 @@ where
             if let Some(explorer) = modules.explorer {
                 http_opt = http_opt.explorer(explorer);
             }
+            if let Some(light_client) = modules.light_client {
+                http_opt = http_opt.light_client(light_client);
+            }
             if let Some(config) = modules.config {
                 http_opt = http_opt.config(config);
             }

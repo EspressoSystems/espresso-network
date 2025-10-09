@@ -74,10 +74,10 @@ hotshot-types = { workspace = true }
 # Dependencies enabled by feature "sql-data-source".
 include_dir = { version = "0.7", optional = true }
 itertools = "0.12.1"
-jf-merkle-tree-compat = { workspace = true , features = [
+jf-advz = { workspace = true }
+jf-merkle-tree-compat = { workspace = true, features = [
     "std",
 ] }
-jf-advz = { workspace = true }
 lazy_static = "1"
 log = { version = "0.4", optional = true }
 portpicker = { version = "0.1", optional = true }
