@@ -954,6 +954,7 @@ pub async fn deploy_reward_claim_proxy(
     esp_token_addr: Address,
     light_client_addr: Address,
     owner: Address,
+    pauser: Address,
 ) -> Result<Address> {
     let reward_claim_addr = contracts
         .deploy(
@@ -974,7 +975,7 @@ pub async fn deploy_reward_claim_proxy(
     }
 
     let init_data = reward_claim
-        .initialize(owner, esp_token_addr, light_client_addr)
+        .initialize(owner, esp_token_addr, light_client_addr, pauser)
         .calldata()
         .to_owned();
     let reward_claim_proxy_addr = contracts
