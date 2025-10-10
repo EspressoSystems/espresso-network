@@ -111,12 +111,7 @@ where
     async fn handle_event(&mut self, (message, _id): (Self::Event, usize)) -> Result<()> {
         let Event { view_number, event } = message;
 
-        if let EventType::Decide {
-            leaf_chain,
-            qc: _,
-            block_size: _,
-        } = event
-        {
+        if let EventType::Decide { leaf_chain, .. } = event {
             let leaf = leaf_chain.first().unwrap().leaf.clone();
             if leaf.view_number() > self.last_decided_leaf.view_number() {
                 self.last_decided_leaf = leaf;
