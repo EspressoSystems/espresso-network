@@ -1101,7 +1101,7 @@ contract LightClient_V2ToV3UpgradeTest is LightClientCommonTest {
 
         LCV3 lcv3 = new LCV3();
         vm.startPrank(admin);
-        LCV2(proxyAddr).upgradeToAndCall(address(lcv3), "0x");
+        LCV2(proxyAddr).upgradeToAndCall(address(lcv3), "");
         vm.stopPrank();
 
         vm.startPrank(nonOwner);

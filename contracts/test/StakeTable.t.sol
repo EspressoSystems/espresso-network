@@ -2234,6 +2234,7 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         assertEq(majorVersionNew, 2);
 
         address admin = stakeTableV2.owner();
+        vm.startPrank(admin);
         vm.expectRevert(Initializable.InvalidInitialization.selector);
         StakeTableV2.InitialCommission[] memory emptyCommissions;
         stakeTableV2.initializeV2(pauser, admin, emptyCommissions);
