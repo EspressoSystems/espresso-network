@@ -674,7 +674,7 @@ pub mod testing {
             implementations::{MasterMap, MemoryNetwork},
             BlockPayload,
         },
-        types::EventType::Decide,
+        types::EventType::{self, Decide},
     };
     use hotshot_builder_refactored::service::{
         BuilderConfig as LegacyBuilderConfig, GlobalState as LegacyGlobalState,
@@ -683,12 +683,14 @@ pub mod testing {
         BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,
     };
     use hotshot_types::{
+        data::EpochNumber,
         event::LeafInfo,
         light_client::StateKeyPair,
         signature_key::BLSKeyPair,
         traits::{
             block_contents::BlockHeader, metrics::NoMetrics, network::Topic,
-            signature_key::BuilderSignatureKey, EncodeBytes,
+            node_implementation::ConsensusTime as _, signature_key::BuilderSignatureKey,
+            EncodeBytes,
         },
         HotShotConfig, PeerConfig,
     };
@@ -1371,6 +1373,30 @@ pub mod testing {
                 }
             } else {
                 // Keep waiting
+            }
+        }
+    }
+
+    /// Waits until a node has reached the given target epoch (exclusive).
+    /// The function returns once the first event indicates an epoch higher than `target_epoch`.
+    pub async fn wait_for_epochs(
+        events: &mut (impl futures::Stream<Item = hotshot_types::event::Event<SeqTypes>>
+                  + std::marker::Unpin),
+        epoch_height: u64,
+        target_epoch: u64,
+    ) {
+        while let Some(event) = events.next().await {
+            if let EventType::Decide { leaf_chain, .. } = event.event {
+                let leaf = leaf_chain[0].leaf.clone();
+                let epoch = leaf.epoch(epoch_height);
+                println!(
+                    "Node decided at height: {}, epoch: {epoch:?}",
+                    leaf.height(),
+                );
+
+                if epoch > Some(EpochNumber::new(target_epoch)) {
+                    break;
+                }
             }
         }
     }

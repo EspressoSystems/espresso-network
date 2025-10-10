@@ -26,10 +26,9 @@ use sequencer::{
         data_source::testing::TestableSequencerDataSource,
         options,
         test_helpers::{TestNetwork, TestNetworkConfigBuilder, STAKE_TABLE_CAPACITY_FOR_TEST},
-        test_utils::wait_for_epochs,
     },
     state_signature::relay_server::{run_relay_server_with_state, StateRelayServerState},
-    testing::TestConfigBuilder,
+    testing::{wait_for_epochs, TestConfigBuilder},
     SequencerApiVersion,
 };
 use staking_cli::demo::DelegationConfig;
