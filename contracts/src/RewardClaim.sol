@@ -182,11 +182,10 @@ contract RewardClaim is
             _currentDay = today;
             _claimedToday = 0;
         }
-        uint256 newTotal = _claimedToday + amount;
-        if (newTotal > dailyLimit) {
+        _claimedToday += amount;
+        if (_claimedToday > dailyLimit) {
             revert DailyLimitExceeded();
         }
-        _claimedToday = newTotal;
     }
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {

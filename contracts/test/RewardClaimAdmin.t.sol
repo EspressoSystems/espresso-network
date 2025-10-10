@@ -11,7 +11,7 @@ contract RewardClaimAdminTest is RewardClaimTest {
         uint256 newLimit = DAILY_LIMIT * 2;
 
         vm.prank(owner);
-        vm.expectEmit(true, true, true, true);
+        vm.expectEmit();
         emit RewardClaim.DailyLimitUpdated(DAILY_LIMIT, newLimit);
         rewardClaim.setDailyLimit(newLimit);
 
