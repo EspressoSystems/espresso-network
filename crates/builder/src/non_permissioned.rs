@@ -66,7 +66,7 @@ pub fn build_instance_state<V: Versions>(
     let coordinator = EpochMembershipCoordinator::new(
         Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
-            vec![],
+            Default::default(),
             None,
             fetcher,
             genesis.epoch_height.unwrap_or_default(),

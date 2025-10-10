@@ -86,7 +86,7 @@ where
     let _demo = NativeDemo::run(
         None,
         Some(vec![(
-            "ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE".to_string(),
+            "ESPRESSO_SEQUENCER_GENESIS_FILE".to_string(),
             genesis_path.to_string(),
         )]),
     )?;
