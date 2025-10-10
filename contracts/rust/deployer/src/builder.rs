@@ -193,9 +193,9 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     // - It's a simple ERC20 token with minimal upgrade complexity
                     // - No emergency updates are expected for token functionality
                     // - SafeExitTimelock provides sufficient security for token operations
-                    tracing::info!("Transferring ownership to SafeExitTimelock");
                     // deployer is the timelock owner
                     if use_timelock_owner {
+                        tracing::info!("Transferring ownership to SafeExitTimelock");
                         let timelock_addr = contracts
                             .address(Contract::SafeExitTimelock)
                             .expect("fail to get SafeExitTimelock address");
@@ -223,9 +223,9 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         .expect("fail to get EspTokenProxy address");
 
                     if let Some(use_timelock_owner) = self.use_timelock_owner {
-                        tracing::info!("Transferring ownership to SafeExitTimelock");
                         // deployer is the timelock owner
                         if use_timelock_owner {
+                            tracing::info!("Transferring ownership to SafeExitTimelock");
                             let timelock_addr = contracts
                                 .address(Contract::SafeExitTimelock)
                                 .expect("fail to get SafeExitTimelock address");
@@ -495,6 +495,36 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 )
                 .await?;
             },
+            Contract::RewardClaimProxy => {
+                let token_addr = contracts
+                    .address(Contract::EspTokenProxy)
+                    .context("no ESP token proxy address")?;
+                let lc_addr = contracts
+                    .address(Contract::LightClientProxy)
+                    .context("no LightClient proxy address")?;
+                let addr = crate::deploy_reward_claim_proxy(
+                    provider, contracts, token_addr, lc_addr, admin,
+                )
+                .await?;
+
+                if let Some(use_timelock_owner) = self.use_timelock_owner {
+                    // RewardClaim uses SafeExitTimelock because:
+                    // - It is not expected to require urgent upgrades.
+                    // - In emergency situations it can be paused.
+                    // - It can mint ESP tokens, users should have enough time
+                    //   to react if they do not agree with an upgrade.
+                    tracing::info!("Transferring ownership to SafeExitTimelock");
+                    if use_timelock_owner {
+                        let timelock_addr = contracts
+                            .address(Contract::SafeExitTimelock)
+                            .expect("fail to get SafeExitTimelock address");
+                        crate::transfer_ownership(provider, target, addr, timelock_addr).await?;
+                    }
+                } else if let Some(multisig) = self.multisig {
+                    tracing::info!("Transferring ownership to multisig: {:?}", multisig);
+                    crate::transfer_ownership(provider, target, addr, multisig).await?;
+                }
+            },
             _ => {
                 panic!("Deploying {target} not supported.");
             },
@@ -521,6 +551,9 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
     pub async fn deploy_all(&self, contracts: &mut Contracts) -> Result<()> {
         self.deploy_to_stake_table_v1(contracts).await?;
         self.deploy(contracts, Contract::StakeTableV2).await?;
+        self.deploy(contracts, Contract::LightClientV3).await?;
+        self.deploy(contracts, Contract::RewardClaimProxy).await?;
+        self.deploy(contracts, Contract::EspTokenV2).await?;
         Ok(())
     }
 

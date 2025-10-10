@@ -244,11 +244,9 @@ where
                             status: StatusCode::NOT_FOUND,
                         })?;
 
-                    // TODO: (MA) this will eventually be the other (non reward MT root) auth root
-                    // inputs, for the foreseeable future they will be all zero. And it's as of yet
-                    // unclear. It seems reasonable to delay the required refactoring work until
-                    // we are closer to needing it.
-                    let claim_input = match proof.to_reward_claim_input(Default::default()) {
+                    // Auth root inputs (other than the reward merkle tree root) are currently
+                    // all zero placeholder values. This may be extended in the future.
+                    let claim_input = match proof.to_reward_claim_input() {
                         Ok(input) => input,
                         Err(RewardClaimError::ZeroRewardError) => {
                             return Err(merklized_state::Error::Custom {
