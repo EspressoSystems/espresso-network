@@ -9,7 +9,7 @@ use espresso_types::{
     v0_3::ChainConfig, FeeAccount, FeeAmount, GenesisHeader, L1BlockInfo, L1Client, SeqTypes,
     Timestamp, Upgrade,
 };
-use hotshot_types::{traits::node_implementation::NodeType, version_ser, VersionedDaCommittee};
+use hotshot_types::{version_ser, VersionedDaCommittee};
 use serde::{Deserialize, Serialize};
 use vbs::version::Version;
 
