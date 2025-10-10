@@ -4,13 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{
-    collections::{BTreeMap, HashMap},
-    num::NonZeroUsize,
-    rc::Rc,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, num::NonZeroUsize, rc::Rc, sync::Arc, time::Duration};
 
 use async_lock::RwLock;
 use hotshot::{
@@ -76,7 +70,7 @@ pub fn default_hotshot_config<TYPES: NodeType>(
         start_threshold: (1, 1),
         num_nodes_with_stake: NonZeroUsize::new(known_nodes_with_stake.len()).unwrap(),
         known_da_nodes: known_da_nodes.clone(),
-        da_committees: BTreeMap::new(),
+        da_committees: Default::default(),
         num_bootstrap: num_bootstrap_nodes,
         known_nodes_with_stake: known_nodes_with_stake.clone(),
         da_staked_committee_size: known_da_nodes.len(),

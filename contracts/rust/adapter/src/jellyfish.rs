@@ -20,6 +20,9 @@ use jf_plonk::{
     testing_apis::Challenges,
     transcript::SolidityTranscript,
 };
+use jf_plonk_compat::proof_system::structs::{
+    Proof as ProofCompat, VerifyingKey as VerifyingKeyCompat,
+};
 use jf_utils::to_bytes;
 use num_bigint::BigUint;
 use num_traits::Num;
@@ -474,5 +477,33 @@ impl ChallengesSol {
             v: field_to_u256(Fr::rand(rng)),
             u: field_to_u256(Fr::rand(rng)),
         }
+    }
+}
+
+impl From<VerifyingKeyCompat<Bn254>> for VerifyingKeySol {
+    fn from(vk: VerifyingKeyCompat<Bn254>) -> Self {
+        let vk: VerifyingKey<Bn254> = unsafe { std::mem::transmute(vk) };
+        vk.into()
+    }
+}
+
+impl From<VerifyingKeySol> for VerifyingKeyCompat<Bn254> {
+    fn from(vk: VerifyingKeySol) -> Self {
+        let vk: VerifyingKey<Bn254> = vk.into();
+        unsafe { std::mem::transmute(vk) }
+    }
+}
+
+impl From<ProofCompat<Bn254>> for PlonkProofSol {
+    fn from(proof: ProofCompat<Bn254>) -> Self {
+        let proof: Proof<Bn254> = unsafe { std::mem::transmute(proof) };
+        proof.into()
+    }
+}
+
+impl From<PlonkProofSol> for ProofCompat<Bn254> {
+    fn from(proof: PlonkProofSol) -> Self {
+        let proof: Proof<Bn254> = proof.into();
+        unsafe { std::mem::transmute(proof) }
     }
 }

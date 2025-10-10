@@ -17,6 +17,7 @@ ark-bn254 = { workspace = true }
 ark-ec = { workspace = true }
 ark-ed-on-bn254 = { workspace = true }
 ark-ff = { workspace = true }
+ark-serialize = { workspace = true }
 ark-srs = { workspace = true }
 ark-std = { workspace = true }
 clap = { workspace = true }
@@ -32,9 +33,22 @@ itertools = { workspace = true }
 jf-crhf = { workspace = true }
 jf-pcs = { workspace = true }
 jf-plonk = { workspace = true }
+# Dependencies below are for LCV1 backward compatibility
+jf-plonk-compat = { package = "jf-plonk", git = "https://github.com/EspressoSystems/jellyfish", branch = "jf-relation-v0.5.0-compat", features = [
+    "std",
+] }
 jf-relation = { workspace = true }
+jf-relation-compat = { package = "jf-relation", git = "https://github.com/EspressoSystems/jellyfish", branch = "jf-relation-v0.5.0-compat", features = [
+    "std",
+] }
 jf-rescue = { workspace = true, features = ["gadgets"] }
+jf-rescue-compat = { package = "jf-rescue", git = "https://github.com/EspressoSystems/jellyfish", branch = "jf-relation-v0.5.0-compat", features = [
+    "gadgets",
+] }
 jf-signature = { workspace = true, features = ["schnorr", "bls", "gadgets"] }
+jf-signature-compat = { package = "jf-signature", git = "https://github.com/EspressoSystems/jellyfish", branch = "jf-relation-v0.5.0-compat", features = [
+    "schnorr", "bls", "gadgets",
+] }
 jf-utils = { workspace = true }
 reqwest = { workspace = true }
 sequencer-utils = { path = "../utils" }

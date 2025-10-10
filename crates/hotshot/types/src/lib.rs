@@ -5,9 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 //! Types and Traits for the `HotShot` consensus module
-use std::{
-    collections::BTreeMap, fmt::Debug, future::Future, num::NonZeroUsize, pin::Pin, time::Duration,
-};
+use std::{fmt::Debug, future::Future, num::NonZeroUsize, pin::Pin, time::Duration};
 
 use alloy::primitives::U256;
 use bincode::Options;
@@ -184,6 +182,15 @@ impl<TYPES: NodeType> Debug for PeerConfig<TYPES> {
     }
 }
 
+#[derive(Clone, derive_more::Debug, serde::Serialize, serde::Deserialize)]
+#[serde(bound(deserialize = ""))]
+pub struct VersionedDaCommittee<TYPES: NodeType> {
+    #[serde(with = "version_ser")]
+    pub start_version: Version,
+    pub start_epoch: u64,
+    pub committee: Vec<PeerConfig<TYPES>>,
+}
+
 /// Holds configuration for a `HotShot`
 #[derive(Clone, derive_more::Debug, serde::Serialize, serde::Deserialize)]
 #[serde(bound(deserialize = ""))]
@@ -199,7 +206,7 @@ pub struct HotShotConfig<TYPES: NodeType> {
     /// All public keys known to be DA nodes
     pub known_da_nodes: Vec<PeerConfig<TYPES>>,
     /// All public keys known to be DA nodes, by start epoch
-    pub da_committees: BTreeMap<Version, (u64, Vec<PeerConfig<TYPES>>)>,
+    pub da_committees: Vec<VersionedDaCommittee<TYPES>>,
     /// List of DA committee (staking)nodes for static DA committee
     pub da_staked_committee_size: usize,
     /// Number of fixed leaders for GPU VID, normally it will be 0, it's only used when running GPU VID
@@ -270,5 +277,38 @@ impl<TYPES: NodeType> HotShotConfig<TYPES> {
     /// Return the `known_nodes_with_stake` as a `HSStakeTable`
     pub fn hotshot_stake_table(&self) -> HSStakeTable<TYPES> {
         self.known_nodes_with_stake.clone().into()
+    }
+}
+
+pub mod version_ser {
+
+    use serde::{de, Deserialize, Deserializer, Serializer};
+    use vbs::version::Version;
+
+    pub fn serialize<S>(ver: &Version, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&ver.to_string())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Version, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let version_str = String::deserialize(deserializer)?;
+
+        let version: Vec<_> = version_str.split('.').collect();
+
+        let version = Version {
+            major: version[0]
+                .parse()
+                .map_err(|_| de::Error::custom("invalid version format"))?,
+            minor: version[1]
+                .parse()
+                .map_err(|_| de::Error::custom("invalid version format"))?,
+        };
+
+        Ok(version)
     }
 }

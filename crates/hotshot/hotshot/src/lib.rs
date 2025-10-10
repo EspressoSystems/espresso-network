@@ -295,13 +295,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             .set_drb_difficulty_selector(drb_difficulty_selector)
             .await;
 
-        for (da_committee_version, (epoch, da_committee)) in config.da_committees.iter() {
-            if current_version >= *da_committee_version {
+        for da_committee in config.da_committees.iter() {
+            if current_version >= da_committee.start_version {
                 membership_coordinator
                     .membership()
                     .write()
                     .await
-                    .add_da_committee(*epoch, da_committee.clone());
+                    .add_da_committee(da_committee.start_epoch, da_committee.committee.clone());
             }
         }
 

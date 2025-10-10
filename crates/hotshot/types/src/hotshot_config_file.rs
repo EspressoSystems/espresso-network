@@ -4,16 +4,15 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{collections::BTreeMap, num::NonZeroUsize, time::Duration};
+use std::{num::NonZeroUsize, time::Duration};
 
 use alloy::primitives::U256;
 use url::Url;
-use vbs::version::Version;
 use vec1::Vec1;
 
 use crate::{
     constants::REQUEST_DATA_DELAY, upgrade_config::UpgradeConfig, HotShotConfig, NodeType,
-    PeerConfig, ValidatorConfig,
+    PeerConfig, ValidatorConfig, VersionedDaCommittee,
 };
 
 /// Default builder URL, used as placeholder
@@ -48,7 +47,7 @@ pub struct HotShotConfigFile<TYPES: NodeType> {
     pub known_da_nodes: Vec<PeerConfig<TYPES>>,
     #[serde(skip)]
     /// The known DA nodes' public keys and stake values, by start epoch
-    pub da_committees: BTreeMap<Version, (u64, Vec<PeerConfig<TYPES>>)>,
+    pub da_committees: Vec<VersionedDaCommittee<TYPES>>,
     /// Number of staking DA nodes
     pub staked_da_nodes: usize,
     /// Number of fixed leaders for GPU VID
@@ -159,7 +158,7 @@ impl<TYPES: NodeType> HotShotConfigFile<TYPES> {
             known_nodes_with_stake: gen_known_nodes_with_stake,
             staked_da_nodes,
             known_da_nodes,
-            da_committees: BTreeMap::new(),
+            da_committees: Default::default(),
             fixed_leader_for_gpuvid: 1,
             next_view_timeout: 10000,
             view_sync_timeout: Duration::from_millis(1000),

@@ -169,14 +169,14 @@ pub(crate) async fn handle_quorum_proposal_validated<
             .await;
         }
 
-        for (da_committee_version, (epoch, da_committee)) in task_state.da_committees.iter() {
-            if cert.data.new_version >= *da_committee_version {
+        for da_committee in task_state.da_committees.iter() {
+            if cert.data.new_version >= da_committee.start_version {
                 task_state
                     .membership
                     .membership()
                     .write()
                     .await
-                    .add_da_committee(*epoch, da_committee.clone());
+                    .add_da_committee(da_committee.start_epoch, da_committee.committee.clone());
             }
         }
 
