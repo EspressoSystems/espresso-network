@@ -13,6 +13,9 @@ contract EspTokenV2 is EspToken {
     /// @notice A non-RewardClaim address attempts to mint
     error OnlyRewardClaim();
 
+    /// @notice RewardClaim address cannot be zero
+    error ZeroRewardClaimAddress();
+
     constructor() {
         _disableInitializers();
     }
@@ -20,6 +23,7 @@ contract EspTokenV2 is EspToken {
     /// @notice Initializes the V2 upgrade with the RewardClaim contract address
     /// @param _rewardClaim Address of the RewardClaim contract
     function initializeV2(address _rewardClaim) public onlyOwner reinitializer(2) {
+        require(_rewardClaim != address(0), ZeroRewardClaimAddress());
         rewardClaim = _rewardClaim;
     }
 

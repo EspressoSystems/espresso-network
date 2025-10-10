@@ -76,4 +76,19 @@ contract EspTokenV2Test is Test {
         vm.expectRevert(EspTokenV2.OnlyRewardClaim.selector);
         token.mint(user, 1);
     }
+
+    function test_initializeV2_WithZeroAddressReverts() public {
+        EspToken implementation = new EspToken();
+        bytes memory initData = abi.encodeWithSelector(
+            EspToken.initialize.selector, owner, owner, 1000000, "Espresso Token", "ESP"
+        );
+        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
+
+        EspToken(address(proxy)).upgradeToAndCall(address(new EspTokenV2()), "");
+
+        EspTokenV2 newToken = EspTokenV2(address(proxy));
+
+        vm.expectRevert(EspTokenV2.ZeroRewardClaimAddress.selector);
+        newToken.initializeV2(address(0));
+    }
 }
