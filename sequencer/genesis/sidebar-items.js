@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["L1Finalized"],"mod":["upgrade_ser","version_ser"],"struct":["Genesis","StakeTableConfig"]};
+window.SIDEBAR_ITEMS = {"enum":["L1Finalized"],"mod":["upgrade_ser"],"struct":["Genesis","StakeTableConfig"]};
