@@ -4185,6 +4185,7 @@ dependencies = [
  "tide-disco",
  "tokio",
  "tracing",
+ "url",
  "vbs",
 ]
 

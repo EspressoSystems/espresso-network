@@ -31,7 +31,7 @@ contract StakeTableV2CommissionTest is Test {
         address admin = baseProxy.owner();
         StakeTableV2.InitialCommission[] memory emptyCommissions;
         bytes memory initData = abi.encodeWithSelector(
-            StakeTableV2.initializeV2.selector, pauser, admin, emptyCommissions
+            StakeTableV2.initializeV2.selector, pauser, admin, 0, emptyCommissions
         );
         baseProxy.upgradeToAndCall(address(new StakeTableV2()), initData);
         proxy = StakeTableV2(address(baseProxy));
@@ -227,7 +227,7 @@ contract StakeTableV2CommissionTest is Test {
             StakeTableV2.InitialCommission({ validator: validator, commission: 500 });
 
         bytes memory initData = abi.encodeWithSelector(
-            StakeTableV2.initializeV2.selector, pauser, upgradeTest.admin(), wrongCommissions
+            StakeTableV2.initializeV2.selector, pauser, upgradeTest.admin(), 0, wrongCommissions
         );
 
         vm.startPrank(upgradeTest.admin());
@@ -254,7 +254,7 @@ contract StakeTableV2CommissionTest is Test {
             StakeTableV2.InitialCommission({ validator: validator, commission: 500 });
 
         bytes memory initData = abi.encodeWithSelector(
-            StakeTableV2.initializeV2.selector, pauser, upgradeTest.admin(), duplicateCommissions
+            StakeTableV2.initializeV2.selector, pauser, upgradeTest.admin(), 0, duplicateCommissions
         );
 
         vm.startPrank(upgradeTest.admin());
