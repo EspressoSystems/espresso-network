@@ -4,7 +4,7 @@ PATH = ["/leaf/:number", "/leaf/:number/:finalized"]
 ":finalized" = "Integer"
 DOC = """
 Fetch a leaf plus a proof of it's finality (a chain of leaves leading from that leaf to either a
-3-chain of consecutive valid leaves or a known-finalized leaf).
+2-chain of consecutive valid QCs or a known-finalized leaf).
 
 `:number`, and `:finalized` if provided, must both be block numbers. If provided, `:finalized` must
 be greater than `:number`.
@@ -13,20 +13,14 @@ The returned proof contains the requested leaf along with sufficient other leave
 requested leaf is finalized (possibly assuming that the leaf at height `:finalized` is already known
 to be finalized). This consists of a chain of valid leaves from the requested leaf until reaching
 either
-* a 3-chain of QCs
-* the `:finalized` leaf
-
-In the event that the latest finalized leaf is reached without encountering either of these stopping
-conditions, the proof will additionally include two extra QCs. These correspond to
-not-necessarily-finalized views, but they chain off of the last leaf in the provided `chain` of
-leaves to prove that this latest leaf is finalized.
+* a 2-chain of QCs
+* the `:finalized` leaf (in which case the returned QC chain is `null`)
 
 Returns
 ```json
 {
-    "chain": [Leaf],
-    "first_qc": QC | null,
-    "second_qc": QC | null
+    "leaves": [Leaf],
+    "qcs": [QC, QC] | null
 }
 ```
 """
