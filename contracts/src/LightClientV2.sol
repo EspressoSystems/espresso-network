@@ -31,6 +31,7 @@ contract LightClientV2 is LightClient {
     /// @notice Initialize V2
     function initializeV2(uint64 _blocksPerEpoch, uint64 _epochStartBlock)
         public
+        onlyOwner
         reinitializer(2)
     {
         // the transitioning period (from epoch root to last block) takes 5 blocks,

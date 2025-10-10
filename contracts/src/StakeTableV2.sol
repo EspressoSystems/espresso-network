@@ -188,7 +188,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         address pauser,
         address admin,
         InitialCommission[] calldata initialCommissions
-    ) public reinitializer(2) {
+    ) public onlyOwner reinitializer(2) {
         __AccessControl_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);

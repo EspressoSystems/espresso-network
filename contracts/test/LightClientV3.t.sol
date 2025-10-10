@@ -9,6 +9,8 @@ import "forge-std/Test.sol";
 import { IPlonkVerifier as V } from "../src/interfaces/IPlonkVerifier.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import { OwnableUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
 // Target contract
 import { LightClient as LC } from "../src/LightClient.sol";
@@ -1040,6 +1042,77 @@ contract LightClient_V2ToV3UpgradeTest is LightClientCommonTest {
             LCV3Mock(proxy).firstEpoch(),
             LCV3Mock(proxy).epochFromBlockNumber(V2_EPOCH_START_BLOCK, V2_BLOCKS_PER_EPOCH)
         );
+        vm.stopPrank();
+    }
+
+    /// @dev Test that only owner can call initializeV2 and initializeV3
+    function test_OnlyOwnerCanCallInitializeV2AndV3() public {
+        string[] memory cmds = new string[](3);
+        cmds[0] = "diff-test";
+        cmds[1] = "mock-genesis";
+        cmds[2] = vm.toString(NUM_INIT_VALIDATORS);
+
+        bytes memory result = vm.ffi(cmds);
+        (LC.LightClientState memory state, LC.StakeTableState memory stakeState) =
+            abi.decode(result, (LC.LightClientState, LC.StakeTableState));
+        genesis = state;
+        genesisStakeTableState = stakeState;
+
+        // Now, we need to properly upgrade V1 -> V2 -> V3:
+        // - deploy LCV1
+        // - deploy proxy while setting current impl to LCV1 and initialize
+        // - set permissioned prover on the LC proxy
+        // - upgrade LCV1 to LCV2 and initialize V2
+        // - upgrade LCV2 to LCV3Mock and initialize V3
+        LC lcv1 = new LC();
+        bytes memory lcv1InitData = abi.encodeWithSignature(
+            "initialize((uint64,uint64,uint256),(uint256,uint256,uint256,uint256),uint32,address)",
+            genesis,
+            genesisStakeTableState,
+            MAX_HISTORY_SECONDS,
+            admin
+        );
+        ERC1967Proxy lcProxy = new ERC1967Proxy(address(lcv1), lcv1InitData);
+        proxyAddr = payable(address(lcProxy));
+
+        // set permissioned flag
+        vm.expectEmit(true, true, true, true);
+        emit LC.PermissionedProverRequired(prover);
+        vm.prank(admin);
+        LC(proxyAddr).setPermissionedProver(prover);
+
+        // First upgrade V1 to V2
+        LCV2 lcv2 = new LCV2();
+        vm.prank(admin);
+        LC(proxyAddr).upgradeToAndCall(address(lcv2), "");
+        vm.stopPrank();
+
+        address nonOwner = makeAddr("nonOwner");
+        vm.startPrank(nonOwner);
+        vm.expectRevert(
+            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, nonOwner)
+        );
+        LCV2(proxyAddr).initializeV2(BLOCKS_PER_EPOCH, EPOCH_START_BLOCK);
+        vm.stopPrank();
+
+        vm.startPrank(admin);
+        LCV2(proxyAddr).initializeV2(BLOCKS_PER_EPOCH, EPOCH_START_BLOCK);
+        vm.stopPrank();
+
+        LCV3 lcv3 = new LCV3();
+        vm.startPrank(admin);
+        LCV2(proxyAddr).upgradeToAndCall(address(lcv3), "");
+        vm.stopPrank();
+
+        vm.startPrank(nonOwner);
+        vm.expectRevert(
+            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, nonOwner)
+        );
+        LCV3(proxyAddr).initializeV3();
+        vm.stopPrank();
+
+        vm.startPrank(admin);
+        LCV3(proxyAddr).initializeV3();
         vm.stopPrank();
     }
 }
