@@ -169,6 +169,17 @@ pub(crate) async fn handle_quorum_proposal_validated<
             .await;
         }
 
+        for da_committee in &task_state.da_committees {
+            if cert.data.new_version >= da_committee.start_version {
+                task_state
+                    .membership
+                    .membership()
+                    .write()
+                    .await
+                    .add_da_committee(da_committee.start_epoch, da_committee.committee.clone());
+            }
+        }
+
         let _ = task_state
             .storage
             .update_decided_upgrade_certificate(Some(cert.clone()))
