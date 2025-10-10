@@ -141,6 +141,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
             num_bootstrap: 0,
             da_staked_committee_size: pub_keys.len(),
             known_da_nodes: known_nodes_with_stake.clone(),
+            da_committees: Default::default(),
             data_request_delay: Duration::from_millis(200),
             view_sync_timeout: Duration::from_millis(250),
             start_threshold: (

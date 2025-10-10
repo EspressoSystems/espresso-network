@@ -201,6 +201,7 @@ async fn init_consensus(
         next_view_timeout: 10000,
         num_bootstrap: 0,
         known_da_nodes: known_nodes_with_stake.clone(),
+        da_committees: Default::default(),
         da_staked_committee_size: pub_keys.len(),
         data_request_delay: Duration::from_millis(200),
         view_sync_timeout: Duration::from_millis(250),

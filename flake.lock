@@ -177,22 +177,6 @@
         "type": "github"
       }
     },
-    "nixpkgs-legacy-process-compose": {
-      "locked": {
-        "lastModified": 1746461020,
-        "narHash": "sha256-7+pG1I9jvxNlmln4YgnlW4o+w0TZX24k688mibiFDUE=",
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "3730d8a308f94996a9ba7c7138ede69c1b9ac4ae",
-        "type": "github"
-      },
-      "original": {
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "3730d8a308f94996a9ba7c7138ede69c1b9ac4ae",
-        "type": "github"
-      }
-    },
     "nixpkgs_2": {
       "locked": {
         "lastModified": 1758198701,
@@ -299,7 +283,6 @@
         "foundry-nix": "foundry-nix",
         "nixpkgs": "nixpkgs_2",
         "nixpkgs-cross-overlay": "nixpkgs-cross-overlay",
-        "nixpkgs-legacy-process-compose": "nixpkgs-legacy-process-compose",
         "pre-commit-hooks": "pre-commit-hooks",
         "rust-overlay": "rust-overlay_2",
         "solc-bin": "solc-bin"
