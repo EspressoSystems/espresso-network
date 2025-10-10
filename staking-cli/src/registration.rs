@@ -294,7 +294,7 @@ mod test {
         // NOTE: we can't register a validator with a bad BLS signature because the contract will revert
 
         let provider = build_provider(
-            "test test test test test test test test test test test junk".to_string(),
+            "test test test test test test test test test test test junk",
             1,
             system.rpc_url.clone(),
             /* polling_interval */ None,

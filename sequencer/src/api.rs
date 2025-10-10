@@ -2260,7 +2260,7 @@ mod test {
         },
         catchup::{NullStateCatchup, StatePeers},
         persistence::no_storage,
-        testing::{wait_for_decide_on_handle, TestConfig, TestConfigBuilder},
+        testing::{wait_for_decide_on_handle, wait_for_epochs, TestConfig, TestConfigBuilder},
     };
 
     type PosVersionV3 = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
@@ -4983,30 +4983,6 @@ mod test {
         }
 
         Ok(())
-    }
-
-    /// Waits until a node has reached the given target epoch (exclusive).
-    /// The function returns once the first event indicates an epoch higher than `target_epoch`.
-    async fn wait_for_epochs(
-        events: &mut (impl futures::Stream<Item = Event<SeqTypes>> + std::marker::Unpin),
-        epoch_height: u64,
-        target_epoch: u64,
-    ) {
-        while let Some(event) = events.next().await {
-            if let EventType::Decide { leaf_chain, .. } = event.event {
-                let leaf = leaf_chain[0].leaf.clone();
-                let epoch = leaf.epoch(epoch_height);
-                println!(
-                    "Node decided at height: {}, epoch: {:?}",
-                    leaf.height(),
-                    epoch
-                );
-
-                if epoch > Some(EpochNumber::new(target_epoch)) {
-                    break;
-                }
-            }
-        }
     }
 
     #[rstest]

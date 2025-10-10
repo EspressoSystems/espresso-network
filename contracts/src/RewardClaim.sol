@@ -170,6 +170,7 @@ contract RewardClaim is
     function getVersion()
         external
         pure
+        virtual
         returns (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion)
     {
         return (1, 0, 0);

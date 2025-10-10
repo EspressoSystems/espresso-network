@@ -16,7 +16,7 @@ contract RewardClaimPauseTest is RewardClaimTest {
         rewardClaim.claimRewards(1, "");
     }
 
-    function test_Pause_Upause() public {
+    function test_Pause_Unpause() public {
         vm.prank(pauser);
         rewardClaim.pause();
 
