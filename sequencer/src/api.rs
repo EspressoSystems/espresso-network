@@ -2171,6 +2171,37 @@ mod api_tests {
     }
 }
 
+/// Waits until a node has reached the given target epoch (exclusive).
+/// The function returns once the first event indicates an epoch higher than `target_epoch`.
+#[cfg(feature = "testing")]
+pub mod test_utils {
+    use espresso_types::SeqTypes;
+    use futures::stream::StreamExt;
+    use hotshot::types::{Event, EventType};
+    use hotshot_types::{data::EpochNumber, traits::node_implementation::ConsensusTime as _};
+
+    pub async fn wait_for_epochs(
+        events: &mut (impl futures::Stream<Item = Event<SeqTypes>> + std::marker::Unpin),
+        epoch_height: u64,
+        target_epoch: u64,
+    ) {
+        while let Some(event) = events.next().await {
+            if let EventType::Decide { leaf_chain, .. } = event.event {
+                let leaf = leaf_chain[0].leaf.clone();
+                let epoch = leaf.epoch(epoch_height);
+                println!(
+                    "Node decided at height: {}, epoch: {epoch:?}",
+                    leaf.height(),
+                );
+
+                if epoch > Some(EpochNumber::new(target_epoch)) {
+                    break;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::{
@@ -4983,30 +5014,6 @@ mod test {
         }
 
         Ok(())
-    }
-
-    /// Waits until a node has reached the given target epoch (exclusive).
-    /// The function returns once the first event indicates an epoch higher than `target_epoch`.
-    async fn wait_for_epochs(
-        events: &mut (impl futures::Stream<Item = Event<SeqTypes>> + std::marker::Unpin),
-        epoch_height: u64,
-        target_epoch: u64,
-    ) {
-        while let Some(event) = events.next().await {
-            if let EventType::Decide { leaf_chain, .. } = event.event {
-                let leaf = leaf_chain[0].leaf.clone();
-                let epoch = leaf.epoch(epoch_height);
-                println!(
-                    "Node decided at height: {}, epoch: {:?}",
-                    leaf.height(),
-                    epoch
-                );
-
-                if epoch > Some(EpochNumber::new(target_epoch)) {
-                    break;
-                }
-            }
-        }
     }
 
     #[rstest]

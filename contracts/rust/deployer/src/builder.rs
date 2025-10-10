@@ -508,8 +508,6 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 .await?;
 
                 if let Some(use_timelock_owner) = self.use_timelock_owner {
-                    // TODO: (MA) this needs to be discussed before finalizing.
-                    //
                     // RewardClaim uses SafeExitTimelock because:
                     // - It is not expected to require urgent upgrades.
                     // - In emergency situations it can be paused.

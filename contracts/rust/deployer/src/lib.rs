@@ -42,12 +42,12 @@ pub type HttpProviderWithWallet = FillProvider<
 /// a handy thin wrapper around wallet builder and provider builder that directly
 /// returns an instantiated `Provider` with default fillers with wallet, ready to send tx
 pub fn build_provider(
-    mnemonic: String,
+    mnemonic: impl AsRef<str>,
     account_index: u32,
     url: Url,
     poll_interval: Option<Duration>,
 ) -> HttpProviderWithWallet {
-    let signer = build_signer(mnemonic, account_index);
+    let signer = build_signer(mnemonic.as_ref(), account_index);
     let wallet = EthereumWallet::from(signer);
 
     // alloy sets the polling interval automatically. It tries to guess if an RPC is local, but this
@@ -87,9 +87,9 @@ pub fn build_provider_ledger(
     }
 }
 
-pub fn build_signer(mnemonic: String, account_index: u32) -> PrivateKeySigner {
+pub fn build_signer(mnemonic: impl AsRef<str>, account_index: u32) -> PrivateKeySigner {
     MnemonicBuilder::<English>::default()
-        .phrase(mnemonic)
+        .phrase(mnemonic.as_ref())
         .index(account_index)
         .expect("wrong mnemonic or index")
         .build()
