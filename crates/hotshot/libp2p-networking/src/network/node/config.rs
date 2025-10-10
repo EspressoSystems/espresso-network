@@ -4,10 +4,8 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{collections::HashSet, num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{collections::HashSet, num::NonZeroUsize, time::Duration};
 
-use async_lock::RwLock;
-use hotshot_types::traits::node_implementation::NodeType;
 use libp2p::{identity::Keypair, Multiaddr};
 use libp2p_identity::PeerId;
 
@@ -18,7 +16,7 @@ pub const DEFAULT_REPLICATION_FACTOR: Option<NonZeroUsize> = NonZeroUsize::new(2
 
 /// describe the configuration of the network
 #[derive(Default, derive_builder::Builder, derive_more::Debug)]
-pub struct NetworkNodeConfig<T: NodeType> {
+pub struct NetworkNodeConfig {
     /// The keypair for the node
     #[builder(setter(into, strip_option), default)]
     #[debug(skip)]
@@ -51,11 +49,6 @@ pub struct NetworkNodeConfig<T: NodeType> {
     #[builder(default)]
     pub ttl: Option<Duration>,
 
-    /// The stake table. Used for authenticating other nodes. If not supplied
-    /// we will not check other nodes against the stake table
-    #[builder(default)]
-    pub membership: Option<Arc<RwLock<T::Membership>>>,
-
     /// The path to the file to save the DHT to
     #[builder(default)]
     pub dht_file_path: Option<String>,
@@ -70,7 +63,7 @@ pub struct NetworkNodeConfig<T: NodeType> {
     pub dht_timeout: Option<Duration>,
 }
 
-impl<T: NodeType> Clone for NetworkNodeConfig<T> {
+impl Clone for NetworkNodeConfig {
     fn clone(&self) -> Self {
         Self {
             keypair: self.keypair.clone(),
@@ -81,7 +74,6 @@ impl<T: NodeType> Clone for NetworkNodeConfig<T> {
             to_connect_addrs: self.to_connect_addrs.clone(),
             republication_interval: self.republication_interval,
             ttl: self.ttl,
-            membership: self.membership.as_ref().map(Arc::clone),
             dht_file_path: self.dht_file_path.clone(),
             auth_message: self.auth_message.clone(),
             dht_timeout: self.dht_timeout,

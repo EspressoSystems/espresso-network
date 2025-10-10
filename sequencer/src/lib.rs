@@ -571,7 +571,6 @@ where
         let p2p_network = Libp2pNetwork::from_config(
             network_config.clone(),
             persistence.clone(),
-            coordinator.membership().clone(),
             gossip_config,
             request_response_config,
             libp2p_bind_address,

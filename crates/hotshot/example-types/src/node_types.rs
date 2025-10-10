@@ -3,20 +3,12 @@
 
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
-
-use std::{hash::Hash, marker::PhantomData};
-
-pub use hotshot::traits::election::helpers::{
-    RandomOverlapQuorumFilterConfig, StableQuorumFilterConfig,
+use std::{
+    hash::{Hash, Hasher},
+    marker::PhantomData,
 };
+
 use hotshot::traits::{
-    election::{
-        dummy_catchup_membership::DummyCatchupCommittee, helpers::QuorumFilterConfig,
-        randomized_committee::Committee, randomized_committee_members::RandomizedCommitteeMembers,
-        static_committee::StaticCommittee,
-        static_committee_leader_two_views::StaticCommitteeLeaderForTwoViews,
-        two_static_committees::TwoStaticCommittees,
-    },
     implementations::{CombinedNetworks, Libp2pNetwork, MemoryNetwork, PushCdnNetwork},
     NodeImplementation,
 };
@@ -24,17 +16,22 @@ use hotshot_types::{
     constants::TEST_UPGRADE_CONSTANTS,
     data::{EpochNumber, ViewNumber},
     signature_key::{BLSPubKey, BuilderKey, SchnorrPubKey},
-    traits::{
-        node_implementation::{NodeType, Versions},
-        signature_key::SignatureKey,
-    },
+    traits::node_implementation::{NodeType, Versions},
     upgrade_config::UpgradeConstants,
 };
 use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersion;
 
+pub use crate::membership::helpers::{RandomOverlapQuorumFilterConfig, StableQuorumFilterConfig};
 use crate::{
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
+    membership::{
+        helpers::QuorumFilterConfig, randomized_committee::RandomizedStakeTable,
+        randomized_committee_members::RandomizedCommitteeMembers, stake_table::TestStakeTable,
+        static_committee::StaticStakeTable,
+        static_committee_leader_two_views::StaticStakeTableLeaderForTwoViews,
+        strict_membership::StrictMembership, two_static_committees::TwoStakeTables,
+    },
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
 };
@@ -66,7 +63,7 @@ impl NodeType for TestTypes {
     type Transaction = TestTransaction;
     type ValidatedState = TestValidatedState;
     type InstanceState = TestInstanceState;
-    type Membership = StaticCommittee<TestTypes>;
+    type Membership = StrictMembership<TestTypes, StaticStakeTable<BLSPubKey, SchnorrPubKey>>;
     type BuilderSignatureKey = BuilderKey;
     type StateSignatureKey = SchnorrPubKey;
 }
@@ -98,42 +95,61 @@ impl NodeType for TestTypesRandomizedLeader {
     type Transaction = TestTransaction;
     type ValidatedState = TestValidatedState;
     type InstanceState = TestInstanceState;
-    type Membership = Committee<TestTypesRandomizedLeader>;
+    type Membership =
+        StrictMembership<TestTypesRandomizedLeader, RandomizedStakeTable<BLSPubKey, SchnorrPubKey>>;
     type BuilderSignatureKey = BuilderKey;
     type StateSignatureKey = SchnorrPubKey;
 }
 
-#[derive(
-    Copy,
-    Clone,
-    Debug,
-    Default,
-    Hash,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    serde::Serialize,
-    serde::Deserialize,
-)]
-pub struct TestTypesEpochCatchupTypes<V: Versions, InnerTypes: NodeType> {
-    _ph: PhantomData<V>,
-    _pd: PhantomData<InnerTypes>,
+#[derive(Debug, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+pub struct TestTypesEpochCatchupTypes<StakeTable: TestStakeTable<BLSPubKey, SchnorrPubKey>> {
+    _pd: PhantomData<StakeTable>,
 }
-impl<V: Versions + Default + Ord + Hash, InnerTypes: NodeType> NodeType
-    for TestTypesEpochCatchupTypes<V, InnerTypes>
-where
-    InnerTypes::Epoch: From<EpochNumber>,
-    EpochNumber: From<InnerTypes::Epoch>,
-    InnerTypes::View: From<ViewNumber>,
-    BLSPubKey: From<InnerTypes::SignatureKey>,
-    for<'a> &'a InnerTypes::SignatureKey: From<&'a BLSPubKey>,
-    <InnerTypes::SignatureKey as SignatureKey>::StakeTableEntry:
-        From<<BLSPubKey as SignatureKey>::StakeTableEntry>,
-    InnerTypes::StateSignatureKey: From<SchnorrPubKey>,
-    <BLSPubKey as SignatureKey>::StakeTableEntry:
-        From<<InnerTypes::SignatureKey as SignatureKey>::StakeTableEntry>,
-    SchnorrPubKey: From<InnerTypes::StateSignatureKey>,
+
+impl<StakeTable: TestStakeTable<BLSPubKey, SchnorrPubKey>> Default
+    for TestTypesEpochCatchupTypes<StakeTable>
+{
+    fn default() -> Self {
+        Self { _pd: PhantomData }
+    }
+}
+
+impl<StakeTable: TestStakeTable<BLSPubKey, SchnorrPubKey>> Hash
+    for TestTypesEpochCatchupTypes<StakeTable>
+{
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self._pd.hash(state);
+    }
+}
+
+impl<StakeTable: TestStakeTable<BLSPubKey, SchnorrPubKey>> PartialEq
+    for TestTypesEpochCatchupTypes<StakeTable>
+{
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl<StakeTable: TestStakeTable<BLSPubKey, SchnorrPubKey>> Eq
+    for TestTypesEpochCatchupTypes<StakeTable>
+{
+}
+
+impl<StakeTable: TestStakeTable<BLSPubKey, SchnorrPubKey>> Copy
+    for TestTypesEpochCatchupTypes<StakeTable>
+{
+}
+
+impl<StakeTable: TestStakeTable<BLSPubKey, SchnorrPubKey>> Clone
+    for TestTypesEpochCatchupTypes<StakeTable>
+{
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<StakeTable: TestStakeTable<BLSPubKey, SchnorrPubKey> + 'static> NodeType
+    for TestTypesEpochCatchupTypes<StakeTable>
 {
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
@@ -145,8 +161,7 @@ where
     type Transaction = TestTransaction;
     type ValidatedState = TestValidatedState;
     type InstanceState = TestInstanceState;
-    type Membership =
-        DummyCatchupCommittee<TestTypesEpochCatchupTypes<V, InnerTypes>, V, InnerTypes>;
+    type Membership = StrictMembership<TestTypesEpochCatchupTypes<StakeTable>, StakeTable>;
     type BuilderSignatureKey = BuilderKey;
     type StateSignatureKey = SchnorrPubKey;
 }
@@ -167,15 +182,15 @@ where
 /// filler struct to implement node type and allow us
 /// to select our traits
 pub struct TestTypesRandomizedCommitteeMembers<
-    CONFIG: QuorumFilterConfig,
+    QuorumConfig: QuorumFilterConfig,
     DaConfig: QuorumFilterConfig,
 > {
-    _pd: PhantomData<CONFIG>,
+    _pd: PhantomData<QuorumConfig>,
     _dd: PhantomData<DaConfig>,
 }
 
-impl<CONFIG: QuorumFilterConfig, DaConfig: QuorumFilterConfig> NodeType
-    for TestTypesRandomizedCommitteeMembers<CONFIG, DaConfig>
+impl<QuorumConfig: QuorumFilterConfig, DaConfig: QuorumFilterConfig> NodeType
+    for TestTypesRandomizedCommitteeMembers<QuorumConfig, DaConfig>
 {
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
@@ -187,10 +202,9 @@ impl<CONFIG: QuorumFilterConfig, DaConfig: QuorumFilterConfig> NodeType
     type Transaction = TestTransaction;
     type ValidatedState = TestValidatedState;
     type InstanceState = TestInstanceState;
-    type Membership = RandomizedCommitteeMembers<
-        TestTypesRandomizedCommitteeMembers<CONFIG, DaConfig>,
-        CONFIG,
-        DaConfig,
+    type Membership = StrictMembership<
+        TestTypesRandomizedCommitteeMembers<QuorumConfig, DaConfig>,
+        RandomizedCommitteeMembers<BLSPubKey, SchnorrPubKey, QuorumConfig, DaConfig>,
     >;
     type BuilderSignatureKey = BuilderKey;
     type StateSignatureKey = SchnorrPubKey;
@@ -223,7 +237,10 @@ impl NodeType for TestConsecutiveLeaderTypes {
     type Transaction = TestTransaction;
     type ValidatedState = TestValidatedState;
     type InstanceState = TestInstanceState;
-    type Membership = StaticCommitteeLeaderForTwoViews<TestConsecutiveLeaderTypes>;
+    type Membership = StrictMembership<
+        TestConsecutiveLeaderTypes,
+        StaticStakeTableLeaderForTwoViews<BLSPubKey, SchnorrPubKey>,
+    >;
     type BuilderSignatureKey = BuilderKey;
     type StateSignatureKey = SchnorrPubKey;
 }
@@ -255,7 +272,8 @@ impl NodeType for TestTwoStakeTablesTypes {
     type Transaction = TestTransaction;
     type ValidatedState = TestValidatedState;
     type InstanceState = TestInstanceState;
-    type Membership = TwoStaticCommittees<TestTwoStakeTablesTypes>;
+    type Membership =
+        StrictMembership<TestTwoStakeTablesTypes, TwoStakeTables<BLSPubKey, SchnorrPubKey>>;
     type BuilderSignatureKey = BuilderKey;
     type StateSignatureKey = SchnorrPubKey;
 }
@@ -279,9 +297,6 @@ pub struct WebImpl;
 /// Combined Network implementation (libp2p + web server)
 #[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
 pub struct CombinedImpl;
-
-/// static committee type alias
-pub type StaticMembership = StaticCommittee<TestTypes>;
 
 impl<TYPES: NodeType> NodeImplementation<TYPES> for PushCdnImpl {
     type Network = PushCdnNetwork<TYPES::SignatureKey>;
