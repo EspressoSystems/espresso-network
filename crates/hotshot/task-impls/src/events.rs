@@ -65,17 +65,67 @@ impl<TYPES: NodeType> Eq for ProposalMissing<TYPES> {}
 #[derive(Eq, PartialEq, Debug, Clone)]
 pub struct HotShotTaskCompleted;
 
-/// All of the possible events that can be passed between Sequencing `HotShot` tasks
-#[derive(Eq, PartialEq, Debug, Clone)]
-#[allow(clippy::large_enum_variant)]
-pub enum HotShotEvent<TYPES: NodeType> {
+pub enum DaHotShotEvent<TYPES: NodeType> {
     /// Shutdown the task
     Shutdown,
+    /// A DA proposal has been received from the network; handled by the DA task
+    DaProposalRecv(Proposal<TYPES, DaProposal2<TYPES>>, TYPES::SignatureKey),
+    /// A DA proposal has been validated; handled by the DA task and VID task
+    DaProposalValidated(Proposal<TYPES, DaProposal2<TYPES>>, TYPES::SignatureKey),
+    /// A DA vote has been received by the network; handled by the DA task
+    DaVoteRecv(DaVote2<TYPES>),
+    /// Receive transactions from the network
+    TransactionsRecv(Vec<TYPES::Transaction>),
+}
+
+pub enum ReplicaHotShotEvent<TYPES: NodeType> {
+    /// The current view has changed; emitted by the replica in the consensus task or replica in the view sync task; received by almost all other tasks
+    ViewChange(TYPES::View, Option<TYPES::Epoch>),
+    /// Shutdown the task
+    Shutdown,
+    /// A consensus view has timed out; emitted by a replica in the consensus task; received by the view sync task; internal event only
+    Timeout(TYPES::View, Option<TYPES::Epoch>),
     /// A quorum proposal has been received from the network; handled by the consensus task
     QuorumProposalRecv(
         Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
         TYPES::SignatureKey,
     ),
+    /// A quorum proposal with the given parent leaf is validated.
+    /// The full validation checks include:
+    /// 1. The proposal is not for an old view
+    /// 2. The proposal has been correctly signed by the leader of the current view
+    /// 3. The justify QC is valid
+    /// 4. The proposal passes either liveness or safety check.
+    QuorumProposalValidated(Proposal<TYPES, QuorumProposalWrapper<TYPES>>, Leaf2<TYPES>),
+
+    /// The view and epoch number of the first epoch
+    SetFirstEpoch(TYPES::View, TYPES::Epoch),
+    /// A Data Availability Certificate (DAC) has been received by the network; handled by the consensus task
+    DaCertificateRecv(DaCertificate2<TYPES>),
+    /// A DAC is validated.
+    DaCertificateValidated(DaCertificate2<TYPES>),
+    /// Vid disperse share has been received from the network; handled by the consensus task
+    ///
+    /// Like [`HotShotEvent::DaProposalRecv`].
+    VidShareRecv(
+        TYPES::SignatureKey,
+        Proposal<TYPES, VidDisperseShare<TYPES>>,
+    ),
+    /// VID share data is validated.
+    VidShareValidated(Proposal<TYPES, VidDisperseShare<TYPES>>),
+    /// A replica sent us an extended QuorumCertificate and NextEpochQuorumCertificate
+    ExtendedQcRecv(
+        QuorumCertificate2<TYPES>,
+        NextEpochQuorumCertificate2<TYPES>,
+        TYPES::SignatureKey,
+    ),
+}
+
+pub enum LeaderHotShotEvent<TYPES: NodeType> {
+    /// The current view has changed; emitted by the replica in the consensus task or replica in the view sync task; received by almost all other tasks
+    ViewChange(TYPES::View, Option<TYPES::Epoch>),
+    /// Shutdown the task
+    Shutdown,
     /// A quorum vote has been received from the network; handled by the consensus task
     QuorumVoteRecv(QuorumVote2<TYPES>),
     /// A quorum vote for the epoch root has been received from the network; handled by the consensus task
@@ -83,18 +133,57 @@ pub enum HotShotEvent<TYPES: NodeType> {
     EpochRootQuorumVoteRecv(EpochRootQuorumVote2<TYPES>),
     /// A timeout vote received from the network; handled by consensus task
     TimeoutVoteRecv(TimeoutVote2<TYPES>),
+    /// The next leader has collected enough votes to form a QC; emitted by the next leader in the consensus task; an internal event only
+    QcFormed(Either<QuorumCertificate<TYPES>, TimeoutCertificate<TYPES>>),
+    /// The next leader has collected enough votes to form a QC; emitted by the next leader in the consensus task; an internal event only
+    Qc2Formed(Either<QuorumCertificate2<TYPES>, TimeoutCertificate2<TYPES>>),
+    /// The next leader has collected enough votes to form an epoch root QC; emitted by the next leader in the consensus task; an internal event only
+    EpochRootQcFormed(EpochRootQuorumCertificateV2<TYPES>),
+    /// The next leader has collected enough votes from the next epoch nodes to form a QC; emitted by the next leader in the consensus task; an internal event only
+    NextEpochQc2Formed(Either<NextEpochQuorumCertificate2<TYPES>, TimeoutCertificate<TYPES>>),
+    /// A validator formed both a current epoch eQC and a next epoch eQC
+    ExtendedQc2Formed(QuorumCertificate2<TYPES>),
+
+    /// Send VID shares to VID storage nodes; emitted by the DA leader
+    ///
+    /// Like [`HotShotEvent::DaProposalSend`].
+    VidDisperseSend(Proposal<TYPES, VidDisperse<TYPES>>, TYPES::SignatureKey),
+    /// Event to send block payload commitment and metadata from DA leader to the quorum; internal event only
+    SendPayloadCommitmentAndMetadata(
+        VidCommitment,
+        BuilderCommitment,
+        <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+        TYPES::View,
+        Vec1<BuilderFee<TYPES>>,
+    ),
+    /// Event when the transactions task has sequenced transactions. Contains the encoded transactions, the metadata, and the view number
+    BlockRecv(PackedBundle<TYPES>),
+
+    /// Upgrade certificate has been sent to the network
+    UpgradeCertificateFormed(UpgradeCertificate<TYPES>),
+    /// A quorum proposal has been preliminarily validated.
+    /// The preliminary checks include:
+    /// 1. The proposal is not for an old view
+    /// 2. The proposal has been correctly signed by the leader of the current view
+    /// 3. The justify QC is valid
+    QuorumProposalPreliminarilyValidated(Proposal<TYPES, QuorumProposalWrapper<TYPES>>),
+    /// A replica send us a High QC
+    HighQcRecv(
+        QuorumCertificate2<TYPES>,
+        Option<NextEpochQuorumCertificate2<TYPES>>,
+        TYPES::SignatureKey,
+    ),
+    /// A replica receives an epoch root QC
+    EpochRootQcRecv(EpochRootQuorumCertificateV2<TYPES>, TYPES::SignatureKey),
+}
+
+pub enum NetworkSendEvent<TYPES: NodeType> {
+    /// The current view has changed; emitted by the replica in the consensus task or replica in the view sync task; received by almost all other tasks
+    ViewChange(TYPES::View, Option<TYPES::Epoch>),
+    /// Shutdown the task
+    Shutdown,
     /// Send a timeout vote to the network; emitted by consensus task replicas
     TimeoutVoteSend(TimeoutVote2<TYPES>),
-    /// A DA proposal has been received from the network; handled by the DA task
-    DaProposalRecv(Proposal<TYPES, DaProposal2<TYPES>>, TYPES::SignatureKey),
-    /// A DA proposal has been validated; handled by the DA task and VID task
-    DaProposalValidated(Proposal<TYPES, DaProposal2<TYPES>>, TYPES::SignatureKey),
-    /// A DA vote has been received by the network; handled by the DA task
-    DaVoteRecv(DaVote2<TYPES>),
-    /// A Data Availability Certificate (DAC) has been received by the network; handled by the consensus task
-    DaCertificateRecv(DaCertificate2<TYPES>),
-    /// A DAC is validated.
-    DaCertificateValidated(DaCertificate2<TYPES>),
     /// Send a quorum proposal to the network; emitted by the leader in the consensus task
     QuorumProposalSend(
         Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
@@ -106,20 +195,9 @@ pub enum HotShotEvent<TYPES: NodeType> {
     ExtendedQuorumVoteSend(QuorumVote2<TYPES>),
     /// Send a epoch root quorum vote to the next leader; emitted by a replica in the consensus task after seeing a valid quorum proposal
     EpochRootQuorumVoteSend(EpochRootQuorumVote2<TYPES>),
-    /// A quorum proposal with the given parent leaf is validated.
-    /// The full validation checks include:
-    /// 1. The proposal is not for an old view
-    /// 2. The proposal has been correctly signed by the leader of the current view
-    /// 3. The justify QC is valid
-    /// 4. The proposal passes either liveness or safety check.
-    QuorumProposalValidated(Proposal<TYPES, QuorumProposalWrapper<TYPES>>, Leaf2<TYPES>),
+
     /// A quorum proposal is missing for a view that we need.
     QuorumProposalRequestSend(
-        ProposalRequestPayload<TYPES>,
-        <TYPES::SignatureKey as SignatureKey>::PureAssembledSignatureType,
-    ),
-    /// A quorum proposal was requested by a node for a view.
-    QuorumProposalRequestRecv(
         ProposalRequestPayload<TYPES>,
         <TYPES::SignatureKey as SignatureKey>::PureAssembledSignatureType,
     ),
@@ -128,28 +206,88 @@ pub enum HotShotEvent<TYPES: NodeType> {
         TYPES::SignatureKey,
         Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
     ),
-    /// A quorum proposal was requested by a node for a view.
-    QuorumProposalResponseRecv(Proposal<TYPES, QuorumProposalWrapper<TYPES>>),
     /// Send a DA proposal to the DA committee; emitted by the DA leader (which is the same node as the leader of view v + 1) in the DA task
     DaProposalSend(Proposal<TYPES, DaProposal2<TYPES>>, TYPES::SignatureKey),
     /// Send a DA vote to the DA leader; emitted by DA committee members in the DA task after seeing a valid DA proposal
     DaVoteSend(DaVote2<TYPES>),
-    /// The next leader has collected enough votes to form a QC; emitted by the next leader in the consensus task; an internal event only
-    QcFormed(Either<QuorumCertificate<TYPES>, TimeoutCertificate<TYPES>>),
-    /// The next leader has collected enough votes to form a QC; emitted by the next leader in the consensus task; an internal event only
-    Qc2Formed(Either<QuorumCertificate2<TYPES>, TimeoutCertificate2<TYPES>>),
-    /// The next leader has collected enough votes to form an epoch root QC; emitted by the next leader in the consensus task; an internal event only
-    EpochRootQcFormed(EpochRootQuorumCertificateV2<TYPES>),
-    /// The next leader has collected enough votes from the next epoch nodes to form a QC; emitted by the next leader in the consensus task; an internal event only
-    NextEpochQc2Formed(Either<NextEpochQuorumCertificate2<TYPES>, TimeoutCertificate<TYPES>>),
-    /// A validator formed both a current epoch eQC and a next epoch eQC
-    ExtendedQc2Formed(QuorumCertificate2<TYPES>),
     /// The DA leader has collected enough votes to form a DAC; emitted by the DA leader in the DA task; sent to the entire network via the networking task
     DacSend(DaCertificate2<TYPES>, TYPES::SignatureKey),
+    /// Send transactions to the network
+    TransactionSend(TYPES::Transaction, TYPES::SignatureKey),
+    /// Upgrade proposal has been sent to the network
+    UpgradeProposalSend(Proposal<TYPES, UpgradeProposal<TYPES>>, TYPES::SignatureKey),
+
+    /// Upgrade vote has been sent to the network
+    UpgradeVoteSend(UpgradeVote<TYPES>),
+    /// Send a VID request to the network; emitted to on of the members of DA committee.
+    /// Includes the data request, node's public key and signature as well as public key of DA committee who we want to send to.
+    VidRequestSend(
+        DataRequest<TYPES>,
+        // Sender
+        TYPES::SignatureKey,
+        // Recipient
+        TYPES::SignatureKey,
+    ),
+    /// Send a VID response to the network; emitted to the sending node.
+    /// Includes nodes public key, recipient public key, and vid disperse
+    VidResponseSend(
+        /// Sender key
+        TYPES::SignatureKey,
+        /// Recipient key
+        TYPES::SignatureKey,
+        Proposal<TYPES, VidDisperseShare<TYPES>>,
+    ),
+    /// Send our HighQc to the next leader, should go to the same leader as our vote
+    HighQcSend(
+        QuorumCertificate2<TYPES>,
+        Option<NextEpochQuorumCertificate2<TYPES>>,
+        TYPES::SignatureKey,
+        TYPES::SignatureKey,
+    ),
+    /// Send our extended QuorumCertificate and NextEpochQuorumCertificate to all nodes in the old and new epoch
+    ExtendedQcSend(
+        QuorumCertificate2<TYPES>,
+        NextEpochQuorumCertificate2<TYPES>,
+        TYPES::SignatureKey,
+    ),
+
+    /// A replica sends us an epoch root QC
+    EpochRootQcSend(
+        EpochRootQuorumCertificateV2<TYPES>,
+        TYPES::SignatureKey,
+        TYPES::SignatureKey,
+    ),
+}
+
+pub enum RequestResponseEvent<TYPES: NodeType> {
     /// The current view has changed; emitted by the replica in the consensus task or replica in the view sync task; received by almost all other tasks
     ViewChange(TYPES::View, Option<TYPES::Epoch>),
-    /// The view and epoch number of the first epoch
-    SetFirstEpoch(TYPES::View, TYPES::Epoch),
+    /// Shutdown the task
+    Shutdown,
+    /// A quorum proposal was requested by a node for a view.
+    QuorumProposalRequestRecv(
+        ProposalRequestPayload<TYPES>,
+        <TYPES::SignatureKey as SignatureKey>::PureAssembledSignatureType,
+    ),
+
+    /// A quorum proposal was requested by a node for a view.
+    QuorumProposalResponseRecv(Proposal<TYPES, QuorumProposalWrapper<TYPES>>),
+    /// Receive a VID request from the network; Received by a node in the DA committee.
+    /// Includes the data request and nodes public key.
+    VidRequestRecv(DataRequest<TYPES>, TYPES::SignatureKey),
+    /// Receive a VID response from the network; received by the node that triggered the VID request.
+    VidResponseRecv(
+        TYPES::SignatureKey,
+        Proposal<TYPES, VidDisperseShare<TYPES>>,
+    ),
+}
+
+pub enum ViewSyncInternalEvent<TYPES: NodeType> {
+    /// The current view has changed; emitted by the replica in the consensus task or replica in the view sync task; received by almost all other tasks
+    ViewChange(TYPES::View, Option<TYPES::Epoch>),
+    /// Shutdown the task
+    Shutdown,
+
     /// Timeout for the view sync protocol; emitted by a replica in the view sync task
     ViewSyncTimeout(TYPES::View, u64, ViewSyncPhase),
 
@@ -185,120 +323,21 @@ pub enum HotShotEvent<TYPES: NodeType> {
     ViewSyncTrigger(TYPES::View),
     /// A consensus view has timed out; emitted by a replica in the consensus task; received by the view sync task; internal event only
     Timeout(TYPES::View, Option<TYPES::Epoch>),
-    /// Receive transactions from the network
-    TransactionsRecv(Vec<TYPES::Transaction>),
-    /// Send transactions to the network
-    TransactionSend(TYPES::Transaction, TYPES::SignatureKey),
-    /// Event to send block payload commitment and metadata from DA leader to the quorum; internal event only
-    SendPayloadCommitmentAndMetadata(
-        VidCommitment,
-        BuilderCommitment,
-        <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-        TYPES::View,
-        Vec1<BuilderFee<TYPES>>,
-    ),
-    /// Event when the transactions task has sequenced transactions. Contains the encoded transactions, the metadata, and the view number
-    BlockRecv(PackedBundle<TYPES>),
-    /// Send VID shares to VID storage nodes; emitted by the DA leader
-    ///
-    /// Like [`HotShotEvent::DaProposalSend`].
-    VidDisperseSend(Proposal<TYPES, VidDisperse<TYPES>>, TYPES::SignatureKey),
-    /// Vid disperse share has been received from the network; handled by the consensus task
-    ///
-    /// Like [`HotShotEvent::DaProposalRecv`].
-    VidShareRecv(
-        TYPES::SignatureKey,
-        Proposal<TYPES, VidDisperseShare<TYPES>>,
-    ),
-    /// VID share data is validated.
-    VidShareValidated(Proposal<TYPES, VidDisperseShare<TYPES>>),
-    /// Upgrade proposal has been received from the network
-    UpgradeProposalRecv(Proposal<TYPES, UpgradeProposal<TYPES>>, TYPES::SignatureKey),
-    /// Upgrade proposal has been sent to the network
-    UpgradeProposalSend(Proposal<TYPES, UpgradeProposal<TYPES>>, TYPES::SignatureKey),
-    /// Upgrade vote has been received from the network
-    UpgradeVoteRecv(UpgradeVote<TYPES>),
-    /// Upgrade vote has been sent to the network
-    UpgradeVoteSend(UpgradeVote<TYPES>),
-    /// Upgrade certificate has been sent to the network
-    UpgradeCertificateFormed(UpgradeCertificate<TYPES>),
-    /// A quorum proposal has been preliminarily validated.
-    /// The preliminary checks include:
-    /// 1. The proposal is not for an old view
-    /// 2. The proposal has been correctly signed by the leader of the current view
-    /// 3. The justify QC is valid
-    QuorumProposalPreliminarilyValidated(Proposal<TYPES, QuorumProposalWrapper<TYPES>>),
-
-    /// Send a VID request to the network; emitted to on of the members of DA committee.
-    /// Includes the data request, node's public key and signature as well as public key of DA committee who we want to send to.
-    VidRequestSend(
-        DataRequest<TYPES>,
-        // Sender
-        TYPES::SignatureKey,
-        // Recipient
-        TYPES::SignatureKey,
-    ),
-
-    /// Receive a VID request from the network; Received by a node in the DA committee.
-    /// Includes the data request and nodes public key.
-    VidRequestRecv(DataRequest<TYPES>, TYPES::SignatureKey),
-
-    /// Send a VID response to the network; emitted to the sending node.
-    /// Includes nodes public key, recipient public key, and vid disperse
-    VidResponseSend(
-        /// Sender key
-        TYPES::SignatureKey,
-        /// Recipient key
-        TYPES::SignatureKey,
-        Proposal<TYPES, VidDisperseShare<TYPES>>,
-    ),
-
-    /// Receive a VID response from the network; received by the node that triggered the VID request.
-    VidResponseRecv(
-        TYPES::SignatureKey,
-        Proposal<TYPES, VidDisperseShare<TYPES>>,
-    ),
-
-    /// A replica send us a High QC
-    HighQcRecv(
-        QuorumCertificate2<TYPES>,
-        Option<NextEpochQuorumCertificate2<TYPES>>,
-        TYPES::SignatureKey,
-    ),
-
-    /// Send our HighQc to the next leader, should go to the same leader as our vote
-    HighQcSend(
-        QuorumCertificate2<TYPES>,
-        Option<NextEpochQuorumCertificate2<TYPES>>,
-        TYPES::SignatureKey,
-        TYPES::SignatureKey,
-    ),
-
-    /// A replica sent us an extended QuorumCertificate and NextEpochQuorumCertificate
-    ExtendedQcRecv(
-        QuorumCertificate2<TYPES>,
-        NextEpochQuorumCertificate2<TYPES>,
-        TYPES::SignatureKey,
-    ),
-
-    /// Send our extended QuorumCertificate and NextEpochQuorumCertificate to all nodes in the old and new epoch
-    ExtendedQcSend(
-        QuorumCertificate2<TYPES>,
-        NextEpochQuorumCertificate2<TYPES>,
-        TYPES::SignatureKey,
-    ),
-
-    /// A replica sends us an epoch root QC
-    EpochRootQcSend(
-        EpochRootQuorumCertificateV2<TYPES>,
-        TYPES::SignatureKey,
-        TYPES::SignatureKey,
-    ),
-    /// A replica receives an epoch root QC
-    EpochRootQcRecv(EpochRootQuorumCertificateV2<TYPES>, TYPES::SignatureKey),
     /// We decided the given leaves
     LeavesDecided(Vec<Leaf2<TYPES>>),
 }
+
+pub enum UpgradeEvent<TYPES: NodeType> {
+    /// Upgrade proposal has been received from the network
+    UpgradeProposalRecv(Proposal<TYPES, UpgradeProposal<TYPES>>, TYPES::SignatureKey),
+    /// Upgrade vote has been received from the network
+    UpgradeVoteRecv(UpgradeVote<TYPES>),
+}
+
+/// All of the possible events that can be passed between Sequencing `HotShot` tasks
+#[derive(Eq, PartialEq, Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
+pub enum HotShotEvent<TYPES: NodeType> {}
 
 impl<TYPES: NodeType> HotShotEvent<TYPES> {
     #[allow(clippy::too_many_lines)]
