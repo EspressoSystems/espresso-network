@@ -45,13 +45,6 @@ pub enum L1Finalized {
     Timestamp { timestamp: Timestamp },
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct PeerConfigData {
-    pub stake_table_key: <SeqTypes as NodeType>::SignatureKey,
-    pub state_ver_key: <SeqTypes as NodeType>::StateSignatureKey,
-    pub stake: u64,
-}
-
 /// Genesis of an Espresso chain.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Genesis {
