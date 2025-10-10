@@ -64,3 +64,5 @@ pub mod rewind;
 
 /// Task for collecting stats
 pub mod stats;
+
+pub mod stat_collector;
