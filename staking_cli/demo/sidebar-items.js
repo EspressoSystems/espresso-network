@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["DelegationConfig"],"fn":["add_multiple_delegators","setup_stake_table_contract_for_test","stake_for_demo"]};
+window.SIDEBAR_ITEMS = {"enum":["CreateTransactionsError","DelegationConfig","SetupPhase","StakeTableTx"],"fn":["stake_for_demo"],"struct":["DelegatorConfig","StakingTransactions","TransactionProcessor","TransactionQueues","ValidatorConfig"]};
