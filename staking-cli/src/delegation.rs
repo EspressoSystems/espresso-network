@@ -1,7 +1,7 @@
 use alloy::{
-    primitives::{Address, U256},
-    providers::Provider,
-    rpc::types::TransactionReceipt,
+    network::Ethereum,
+    primitives::{utils::format_ether, Address, U256},
+    providers::{PendingTransactionBuilder, Provider},
 };
 use anyhow::Result;
 use hotshot_contract_adapter::{
@@ -17,15 +17,17 @@ pub async fn approve(
     token_addr: Address,
     stake_table_address: Address,
     amount: U256,
-) -> Result<TransactionReceipt> {
-    let token = EspToken::new(token_addr, &provider);
-    Ok(token
+) -> Result<PendingTransactionBuilder<Ethereum>> {
+    tracing::info!(
+        "approve {} ESP for {stake_table_address}",
+        format_ether(amount)
+    );
+    let token = EspToken::new(token_addr, provider);
+    token
         .approve(stake_table_address, amount)
         .send()
         .await
-        .maybe_decode_revert::<EspTokenErrors>()?
-        .get_receipt()
-        .await?)
+        .maybe_decode_revert::<EspTokenErrors>()
 }
 
 pub async fn delegate(
@@ -33,15 +35,16 @@ pub async fn delegate(
     stake_table: Address,
     validator_address: Address,
     amount: U256,
-) -> Result<TransactionReceipt> {
+) -> Result<PendingTransactionBuilder<Ethereum>> {
+    tracing::info!(
+        "delegate {} ESP to {validator_address}",
+        format_ether(amount)
+    );
     let st = StakeTable::new(stake_table, provider);
-    Ok(st
-        .delegate(validator_address, amount)
+    st.delegate(validator_address, amount)
         .send()
         .await
-        .maybe_decode_revert::<StakeTableErrors>()?
-        .get_receipt()
-        .await?)
+        .maybe_decode_revert::<StakeTableErrors>()
 }
 
 pub async fn undelegate(
@@ -49,21 +52,22 @@ pub async fn undelegate(
     stake_table: Address,
     validator_address: Address,
     amount: U256,
-) -> Result<TransactionReceipt> {
+) -> Result<PendingTransactionBuilder<Ethereum>> {
+    tracing::info!(
+        "undelegate {} ESP from {validator_address}",
+        format_ether(amount)
+    );
     let st = StakeTable::new(stake_table, provider);
-    Ok(st
-        .undelegate(validator_address, amount)
+    st.undelegate(validator_address, amount)
         .send()
         .await
-        .maybe_decode_revert::<StakeTableErrors>()?
-        .get_receipt()
-        .await?)
+        .maybe_decode_revert::<StakeTableErrors>()
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::deploy::TestSystem;
+    use crate::{deploy::TestSystem, receipt::ReceiptExt};
 
     #[tokio::test]
     async fn test_delegate() -> Result<()> {
@@ -78,8 +82,9 @@ mod test {
             validator_address,
             amount,
         )
+        .await?
+        .assert_success()
         .await?;
-        assert!(receipt.status());
 
         let event = receipt.decoded_log::<StakeTable::Delegated>().unwrap();
         assert_eq!(event.validator, validator_address);
@@ -102,8 +107,9 @@ mod test {
             validator_address,
             amount,
         )
+        .await?
+        .assert_success()
         .await?;
-        assert!(receipt.status());
 
         let event = receipt.decoded_log::<StakeTable::Undelegated>().unwrap();
         assert_eq!(event.validator, validator_address);

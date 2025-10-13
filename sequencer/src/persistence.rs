@@ -79,7 +79,7 @@ mod tests {
     };
     use indexmap::IndexMap;
     use portpicker::pick_unused_port;
-    use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
+    use staking_cli::demo::{DelegationConfig, StakingTransactions};
     use surf_disco::Client;
     use tide_disco::error::ServerError;
     use tokio::{spawn, time::sleep};
@@ -1438,14 +1438,14 @@ mod tests {
         )
         .unwrap();
 
-        let (_, priv_keys): (Vec<_>, Vec<_>) = (0..200)
+        let (_, priv_keys): (Vec<_>, Vec<_>) = (0..20)
             .map(|i| <PubKey as SignatureKey>::generated_from_seed_indexed([1; 32], i as u64))
             .unzip();
-        let state_key_pairs = (0..200)
+        let state_key_pairs = (0..20)
             .map(|i| StateKeyPair::generate_from_seed_indexed([2; 32], i as u64))
             .collect::<Vec<_>>();
 
-        let validators = staking_priv_keys(&priv_keys, &state_key_pairs, 1000);
+        let validators = staking_priv_keys(&priv_keys, &state_key_pairs, 20);
 
         let deployer = ProviderBuilder::new()
             .wallet(EthereumWallet::from(network_config.signer().clone()))
@@ -1486,6 +1486,24 @@ mod tests {
             .expect("StakeTableProxy deployed");
         let l1_url = network_config.l1_url().clone();
 
+        let mut planned_txns = StakingTransactions::create(
+            l1_url.clone(),
+            &deployer,
+            st_addr,
+            validators,
+            DelegationConfig::MultipleDelegators,
+        )
+        .await
+        .expect("stake table setup failed");
+
+        planned_txns
+            .apply_prerequisites()
+            .await
+            .expect("prerequisites failed");
+
+        // Ensure we have at least one stake table affecting transaction
+        planned_txns.apply_one().await.expect("send tx failed");
+
         // new block every 1s
         anvil_provider
             .anvil_set_interval_mining(1)
@@ -1496,18 +1514,13 @@ mod tests {
         // this is going to keep registering validators and multiple delegators
         // the interval mining is set to 1s so each transaction finalization would take atleast 1s
         spawn({
-            let l1_url = l1_url.clone();
             async move {
                 {
-                    setup_stake_table_contract_for_test(
-                        l1_url,
-                        &deployer,
-                        st_addr,
-                        validators,
-                        DelegationConfig::MultipleDelegators,
-                    )
-                    .await
-                    .expect("stake table setup failed");
+                    while let Some(receipt) =
+                        planned_txns.apply_one().await.expect("send tx failed")
+                    {
+                        tracing::debug!(?receipt, "transaction finalized");
+                    }
                 }
             }
         });
