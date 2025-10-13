@@ -27,12 +27,14 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
+use tokio::sync::mpsc;
 use tracing::instrument;
 use vbs::version::StaticVersionType;
 
 use crate::{
     events::HotShotEvent,
     helpers::broadcast_event,
+    stat_collector::BenchmarkEvent,
     vote_collection::{handle_vote, VoteCollectorsMap},
 };
 
@@ -97,6 +99,9 @@ pub struct UpgradeTaskState<TYPES: NodeType, V: Versions> {
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+
+    /// The sender for the benchmark events
+    pub stats_tx: mpsc::Sender<BenchmarkEvent>,
 }
 
 impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {

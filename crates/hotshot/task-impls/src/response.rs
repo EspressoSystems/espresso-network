@@ -21,10 +21,10 @@ use hotshot_types::{
     utils::{View, ViewInner},
 };
 use sha2::{Digest, Sha256};
-use tokio::{spawn, task::JoinHandle, time::sleep};
+use tokio::{spawn, sync::mpsc, task::JoinHandle, time::sleep};
 use tracing::instrument;
 
-use crate::{events::HotShotEvent, helpers::broadcast_event};
+use crate::{events::HotShotEvent, helpers::broadcast_event, stat_collector::BenchmarkEvent};
 /// Time to wait for txns before sending `ResponseMessage::NotFound`
 const TXNS_TIMEOUT: Duration = Duration::from_millis(100);
 
@@ -49,6 +49,9 @@ pub struct NetworkResponseState<TYPES: NodeType, V: Versions> {
 
     /// Lock for a decided upgrade
     upgrade_lock: UpgradeLock<TYPES, V>,
+
+    /// The sender for the benchmark events
+    pub stats_tx: mpsc::Sender<BenchmarkEvent>,
 }
 
 impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
@@ -60,6 +63,7 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
         private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
         id: u64,
         upgrade_lock: UpgradeLock<TYPES, V>,
+        stats_tx: mpsc::Sender<BenchmarkEvent>,
     ) -> Self {
         Self {
             consensus,
@@ -68,6 +72,7 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
             private_key,
             id,
             upgrade_lock,
+            stats_tx,
         }
     }
 

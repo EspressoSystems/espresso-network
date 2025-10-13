@@ -29,7 +29,10 @@ use hotshot_types::{
     utils::{is_epoch_transition, is_last_block, ViewInner},
 };
 use hotshot_utils::anytrace::*;
-use tokio::time::{sleep, timeout};
+use tokio::{
+    sync::mpsc,
+    time::{sleep, timeout},
+};
 use tracing::instrument;
 use vbs::version::{StaticVersionType, Version};
 
@@ -37,6 +40,7 @@ use crate::{
     builder::v0_1::BuilderClient as BuilderClientBase,
     events::{HotShotEvent, HotShotTaskCompleted},
     helpers::broadcast_event,
+    stat_collector::BenchmarkEvent,
 };
 
 // Parameters for builder querying algorithm
@@ -107,6 +111,9 @@ pub struct TransactionTaskState<TYPES: NodeType, V: Versions> {
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+
+    /// The sender for the benchmark events
+    pub stats_tx: mpsc::Sender<BenchmarkEvent>,
 }
 
 impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {

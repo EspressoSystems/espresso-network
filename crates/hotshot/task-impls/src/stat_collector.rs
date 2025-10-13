@@ -4,7 +4,7 @@ use either::Either;
 use hotshot_types::{traits::node_implementation::NodeType, vote::HasViewNumber};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
-use tokio::sync::mpsc;
+use tokio::{spawn, sync::mpsc};
 
 use crate::events::HotShotEvent;
 
@@ -332,17 +332,20 @@ impl BenchmarkEventCollector {
         }
     }
 
-    pub async fn run(&mut self) {
-        while let Some(event) = self.receiver.recv().await {
-            if matches!(event.event_type, BenchmarkEventType::Shutdown) {
-                return;
+    pub fn run(mut self) {
+        spawn(async move {
+            while let Some(event) = self.receiver.recv().await {
+                if matches!(event.event_type, BenchmarkEventType::Shutdown) {
+                    return;
+                }
+                self.events
+                    .entry(event.view_number)
+                    .or_default()
+                    .push(event);
             }
-            self.events
-                .entry(event.view_number)
-                .or_default()
-                .push(event);
-        }
+        });
     }
+
     pub fn get_view_data(&self) -> Vec<ViewData> {
         let mut views = Vec::new();
         for (view_number, events) in self.events.iter() {

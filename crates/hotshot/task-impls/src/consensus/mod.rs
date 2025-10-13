@@ -26,7 +26,7 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
-use tokio::task::JoinHandle;
+use tokio::{sync::mpsc, task::JoinHandle};
 use tracing::instrument;
 
 use self::handlers::{
@@ -35,6 +35,7 @@ use self::handlers::{
 use crate::{
     events::HotShotEvent,
     helpers::{broadcast_view_change, validate_qc_and_next_epoch_qc},
+    stat_collector::BenchmarkEvent,
     vote_collection::{EpochRootVoteCollectorsMap, VoteCollectorsMap},
 };
 
@@ -114,6 +115,9 @@ pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: 
 
     /// First view in which epoch version takes effect
     pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+
+    /// The sender for the benchmark events
+    pub stats_tx: mpsc::Sender<BenchmarkEvent>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskState<TYPES, I, V> {

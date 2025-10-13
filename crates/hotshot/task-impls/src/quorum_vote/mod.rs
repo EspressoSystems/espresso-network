@@ -33,12 +33,14 @@ use hotshot_types::{
     vote::{Certificate, HasViewNumber},
 };
 use hotshot_utils::anytrace::*;
+use tokio::sync::mpsc;
 use tracing::instrument;
 
 use crate::{
     events::HotShotEvent,
     helpers::{broadcast_event, broadcast_view_change, wait_for_second_vid_share},
     quorum_vote::handlers::{handle_quorum_proposal_validated, submit_vote, update_shared_state},
+    stat_collector::BenchmarkEvent,
 };
 
 /// Event handlers for `QuorumProposalValidated`.
@@ -109,6 +111,9 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     pub stake_table_capacity: usize,
 
     pub cancel_receiver: Receiver<()>,
+
+    /// The sender for the benchmark events
+    pub stats_tx: mpsc::Sender<BenchmarkEvent>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> HandleDepOutput
@@ -483,6 +488,9 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
 
     /// Stake table capacity for light client use
     pub stake_table_capacity: usize,
+
+    /// The sender for the benchmark events
+    pub stats_tx: mpsc::Sender<BenchmarkEvent>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskState<TYPES, I, V> {
@@ -608,6 +616,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 first_epoch: self.first_epoch,
                 stake_table_capacity: self.stake_table_capacity,
                 cancel_receiver,
+                stats_tx: self.stats_tx.clone(),
             },
         );
         self.vote_dependencies.insert(view_number, cancel_sender);

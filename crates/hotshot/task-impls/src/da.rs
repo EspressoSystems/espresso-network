@@ -29,12 +29,13 @@ use hotshot_types::{
 };
 use hotshot_utils::anytrace::*;
 use sha2::{Digest, Sha256};
-use tokio::task::spawn_blocking;
+use tokio::{sync::mpsc, task::spawn_blocking};
 use tracing::instrument;
 
 use crate::{
     events::HotShotEvent,
     helpers::broadcast_event,
+    stat_collector::BenchmarkEvent,
     vote_collection::{handle_vote, VoteCollectorsMap},
 };
 
@@ -80,6 +81,9 @@ pub struct DaTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Version
 
     /// Lock for a decided upgrade
     pub upgrade_lock: UpgradeLock<TYPES, V>,
+
+    /// The sender for the benchmark events
+    pub stats_tx: mpsc::Sender<BenchmarkEvent>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYPES, I, V> {

@@ -24,11 +24,13 @@ use hotshot_types::{
     utils::{is_epoch_transition, option_epoch_from_block_number},
 };
 use hotshot_utils::anytrace::Result;
+use tokio::sync::mpsc;
 use tracing::{debug, error, info, instrument};
 
 use crate::{
     events::{HotShotEvent, HotShotTaskCompleted},
     helpers::broadcast_event,
+    stat_collector::BenchmarkEvent,
 };
 
 /// Tracks state of a VID task
@@ -62,6 +64,9 @@ pub struct VidTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versio
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+
+    /// The sender for the benchmark events
+    pub stats_tx: mpsc::Sender<BenchmarkEvent>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TYPES, I, V> {

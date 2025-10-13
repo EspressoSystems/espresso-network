@@ -26,6 +26,7 @@ use hotshot_task_impls::{
     network::{NetworkEventTaskState, NetworkMessageTaskState},
     request::NetworkRequestState,
     response::{run_response_task, NetworkResponseState},
+    stat_collector::{BenchmarkEvent, BenchmarkEventCollector},
     stats::StatsTaskState,
     transactions::TransactionTaskState,
     upgrade::UpgradeTaskState,
@@ -42,7 +43,7 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
     },
 };
-use tokio::{spawn, time::sleep};
+use tokio::{spawn, sync::mpsc, time::sleep};
 use vbs::version::{StaticVersionType, Version};
 
 use crate::{
@@ -68,8 +69,9 @@ pub async fn add_request_network_task<
     V: Versions,
 >(
     handle: &mut SystemContextHandle<TYPES, I, V>,
+    stats_tx: mpsc::Sender<BenchmarkEvent>,
 ) {
-    let state = NetworkRequestState::<TYPES, I>::create_from(handle).await;
+    let state = NetworkRequestState::<TYPES, I>::create_from(handle, stats_tx).await;
 
     let task = Task::new(
         state,
@@ -82,6 +84,7 @@ pub async fn add_request_network_task<
 /// Add a task which responds to requests on the network.
 pub fn add_response_task<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
     handle: &mut SystemContextHandle<TYPES, I, V>,
+    stats_tx: mpsc::Sender<BenchmarkEvent>,
 ) {
     let state = NetworkResponseState::<TYPES, V>::new(
         handle.hotshot.consensus(),
@@ -203,6 +206,7 @@ pub fn add_network_event_task<
 >(
     handle: &mut SystemContextHandle<TYPES, I, V>,
     network: Arc<NET>,
+    stats_tx: mpsc::Sender<BenchmarkEvent>,
 ) {
     let network_state: NetworkEventTaskState<_, V, _, _> = NetworkEventTaskState {
         network,
@@ -216,6 +220,7 @@ pub fn add_network_event_task<
         transmit_tasks: BTreeMap::new(),
         epoch_height: handle.epoch_height,
         id: handle.hotshot.id,
+        stats_tx,
     };
     let task = Task::new(
         network_state,
@@ -228,11 +233,13 @@ pub fn add_network_event_task<
 /// Adds consensus-related tasks to a `SystemContextHandle`.
 pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
     handle: &mut SystemContextHandle<TYPES, I, V>,
-) {
-    handle.add_task(ViewSyncTaskState::<TYPES, V>::create_from(handle).await);
-    handle.add_task(VidTaskState::<TYPES, I, V>::create_from(handle).await);
-    handle.add_task(DaTaskState::<TYPES, I, V>::create_from(handle).await);
-    handle.add_task(TransactionTaskState::<TYPES, V>::create_from(handle).await);
+) -> mpsc::Sender<BenchmarkEvent> {
+    let (stats_tx, stats_rx) = mpsc::channel(10_000);
+    BenchmarkEventCollector::new(stats_rx).run();
+    handle.add_task(ViewSyncTaskState::<TYPES, V>::create_from(handle, stats_tx.clone()).await);
+    handle.add_task(VidTaskState::<TYPES, I, V>::create_from(handle, stats_tx.clone()).await);
+    handle.add_task(DaTaskState::<TYPES, I, V>::create_from(handle, stats_tx.clone()).await);
+    handle.add_task(TransactionTaskState::<TYPES, V>::create_from(handle, stats_tx.clone()).await);
 
     {
         let mut upgrade_certificate_lock = handle
@@ -255,7 +262,7 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, 
     // only spawn the upgrade task if we are actually configured to perform an upgrade.
     if V::Base::VERSION < V::Upgrade::VERSION {
         tracing::warn!("Consensus was started with an upgrade configured. Spawning upgrade task.");
-        handle.add_task(UpgradeTaskState::<TYPES, V>::create_from(handle).await);
+        handle.add_task(UpgradeTaskState::<TYPES, V>::create_from(handle, stats_tx.clone()).await);
     }
 
     {
@@ -264,15 +271,25 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, 
             quorum_proposal_recv::QuorumProposalRecvTaskState, quorum_vote::QuorumVoteTaskState,
         };
 
-        handle.add_task(QuorumProposalTaskState::<TYPES, I, V>::create_from(handle).await);
-        handle.add_task(QuorumVoteTaskState::<TYPES, I, V>::create_from(handle).await);
-        handle.add_task(QuorumProposalRecvTaskState::<TYPES, I, V>::create_from(handle).await);
-        handle.add_task(ConsensusTaskState::<TYPES, I, V>::create_from(handle).await);
-        handle.add_task(StatsTaskState::<TYPES>::create_from(handle).await);
+        handle.add_task(
+            QuorumProposalTaskState::<TYPES, I, V>::create_from(handle, stats_tx.clone()).await,
+        );
+        handle.add_task(
+            QuorumVoteTaskState::<TYPES, I, V>::create_from(handle, stats_tx.clone()).await,
+        );
+        handle.add_task(
+            QuorumProposalRecvTaskState::<TYPES, I, V>::create_from(handle, stats_tx.clone()).await,
+        );
+        handle.add_task(
+            ConsensusTaskState::<TYPES, I, V>::create_from(handle, stats_tx.clone()).await,
+        );
+        handle.add_task(StatsTaskState::<TYPES>::create_from(handle, stats_tx.clone()).await);
     }
     add_queue_len_task(handle);
     #[cfg(feature = "rewind")]
-    handle.add_task(RewindTaskState::<TYPES>::create_from(&handle).await);
+    handle.add_task(RewindTaskState::<TYPES>::create_from(&handle, stats_tx.clone()).await);
+
+    stats_tx
 }
 
 /// Creates a monitor for shutdown events.
@@ -385,15 +402,19 @@ where
             epoch_height,
         };
 
-        add_consensus_tasks::<TYPES, I, V>(&mut handle).await;
-        self.add_network_tasks(&mut handle).await;
+        let stats_sender = add_consensus_tasks::<TYPES, I, V>(&mut handle).await;
+        self.add_network_tasks(&mut handle, stats_sender).await;
 
         handle
     }
 
     /// Add byzantine network tasks with the trait
     #[allow(clippy::too_many_lines)]
-    async fn add_network_tasks(&'static mut self, handle: &mut SystemContextHandle<TYPES, I, V>) {
+    async fn add_network_tasks(
+        &'static mut self,
+        handle: &mut SystemContextHandle<TYPES, I, V>,
+        stats_tx: mpsc::Sender<BenchmarkEvent>,
+    ) {
         // channels between the task spawned in this function and the network tasks.
         // with this, we can control exactly what events the network tasks see.
 
@@ -419,8 +440,8 @@ where
         );
 
         // spawn the network tasks with our newly-created channel
-        add_network_message_and_request_receiver_tasks(handle).await;
-        self.add_network_event_tasks(handle);
+        add_network_message_and_request_receiver_tasks(handle, stats_tx).await;
+        self.add_network_event_tasks(handle, stats_tx);
 
         std::mem::swap(
             &mut internal_event_stream,
@@ -543,10 +564,14 @@ where
     }
 
     /// Adds the `NetworkEventTaskState` tasks possibly modifying them as well.
-    fn add_network_event_tasks(&self, handle: &mut SystemContextHandle<TYPES, I, V>) {
+    fn add_network_event_tasks(
+        &self,
+        handle: &mut SystemContextHandle<TYPES, I, V>,
+        stats_tx: mpsc::Sender<BenchmarkEvent>,
+    ) {
         let network = Arc::clone(&handle.network);
 
-        self.add_network_event_task(handle, network);
+        self.add_network_event_task(handle, network, stats_tx);
     }
 
     /// Adds a `NetworkEventTaskState` task. Can be reimplemented to modify its behaviour.
@@ -555,7 +580,7 @@ where
         handle: &mut SystemContextHandle<TYPES, I, V>,
         channel: Arc<<I as NodeImplementation<TYPES>>::Network>,
     ) {
-        add_network_event_task(handle, channel);
+        add_network_event_task(handle, channel, stats_tx);
     }
 }
 
@@ -575,18 +600,20 @@ pub async fn add_network_message_and_request_receiver_tasks<
     V: Versions,
 >(
     handle: &mut SystemContextHandle<TYPES, I, V>,
+    stats_tx: mpsc::Sender<BenchmarkEvent>,
 ) {
     let network = Arc::clone(&handle.network);
 
     add_network_message_task(handle, &network);
 
-    add_request_network_task(handle).await;
-    add_response_task(handle);
+    add_request_network_task(handle, stats_tx).await;
+    add_response_task(handle, stats_tx);
 }
 
 /// Adds the `NetworkEventTaskState` tasks.
 pub fn add_network_event_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
     handle: &mut SystemContextHandle<TYPES, I, V>,
+    stats_tx: mpsc::Sender<BenchmarkEvent>,
 ) {
-    add_network_event_task(handle, Arc::clone(&handle.network));
+    add_network_event_task(handle, Arc::clone(&handle.network), stats_tx);
 }
