@@ -63,6 +63,7 @@ url = { workspace = true }
 vbs = { workspace = true }
 
 [dev-dependencies]
+rstest = { workspace = true }
 sequencer-utils = { path = "../utils", features = ["testing"] }
 test-log = { workspace = true }
 
