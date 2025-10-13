@@ -88,8 +88,6 @@ services:
     depends_on:
       deploy-sequencer-contracts:
         condition: service_completed_successfully
-      deploy-prover-contracts:
-        condition: service_completed_successfully
       sequencer1:
         condition: service_healthy
 
@@ -117,10 +115,6 @@ services:
     depends_on:
       deploy-sequencer-contracts:
         condition: service_completed_successfully
-      deploy-prover-contracts:
-        condition: service_completed_successfully
-      sequencer1:
-        condition: service_healthy
 
   orchestrator:
     image: ghcr.io/espressosystems/espresso-sequencer/orchestrator:${DOCKER_TAG:-main}
@@ -326,7 +320,7 @@ services:
         condition: service_healthy
       marshal-0:
         condition: service_healthy
-      deploy-sequencer-contracts:
+      stake-for-demo:
         condition: service_completed_successfully
 
   sequencer1:
@@ -386,7 +380,7 @@ services:
         condition: service_healthy
       marshal-0:
         condition: service_healthy
-      deploy-sequencer-contracts:
+      stake-for-demo:
         condition: service_completed_successfully
 
   sequencer2:
@@ -438,7 +432,7 @@ services:
         condition: service_healthy
       marshal-0:
         condition: service_healthy
-      deploy-sequencer-contracts:
+      stake-for-demo:
         condition: service_completed_successfully
 
   sequencer3:
@@ -491,7 +485,7 @@ services:
         condition: service_healthy
       marshal-0:
         condition: service_healthy
-      deploy-sequencer-contracts:
+      stake-for-demo:
         condition: service_completed_successfully
 
   sequencer4:
@@ -543,7 +537,7 @@ services:
         condition: service_healthy
       marshal-0:
         condition: service_healthy
-      deploy-sequencer-contracts:
+      stake-for-demo:
         condition: service_completed_successfully
 
   submit-transactions-public:
