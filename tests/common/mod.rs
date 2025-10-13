@@ -66,9 +66,7 @@ impl Default for TestRequirements {
         Self {
             block_height_increment: 10,
             txn_count_increment: 10,
-            // TODO: (MA) can likely be reverted to 60s after merging
-            // https://github.com/EspressoSystems/espresso-network/pull/3639.
-            global_timeout: Duration::from_secs(120),
+            global_timeout: Duration::from_secs(60),
             // TODO: on the CI we are quite resource constraint and for longer runs we do get a few
             // timeouts which lead to occasional drop in block times.
             block_timeout: Duration::from_secs(45),
