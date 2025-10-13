@@ -62,7 +62,7 @@ contract RewardClaimTest is Test {
         uint256 amountToClaim = lifetimeRewards - alreadyClaimed;
 
         vm.prank(user);
-        vm.expectEmit(true, true, true, true);
+        vm.expectEmit();
         emit IRewardClaim.RewardsClaimed(user, amountToClaim);
         rewardClaim.claimRewards(lifetimeRewards, "");
 
