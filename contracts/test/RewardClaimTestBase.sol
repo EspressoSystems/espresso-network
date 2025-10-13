@@ -9,7 +9,7 @@ import "./mocks/LightClientV3Mock.sol";
 import "../src/interfaces/IRewardClaim.sol";
 
 // Conventions:
-// - Always use validateTestCase to validate succesfull claims before fuzzing without changing
+// - Always use `validateTestCase()` to validate successful claims before fuzzing without changing the
 //   state of the test contracts.
 abstract contract RewardClaimTestBase is Test {
     RewardClaim public rewardClaim;
