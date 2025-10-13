@@ -1,4 +1,8 @@
-use alloy::{primitives::Address, providers::Provider, rpc::types::TransactionReceipt};
+use alloy::{
+    network::Ethereum,
+    primitives::Address,
+    providers::{PendingTransactionBuilder, Provider},
+};
 use anyhow::Result;
 use hotshot_contract_adapter::{
     evm::DecodeRevert as _,
@@ -9,31 +13,24 @@ pub async fn claim_withdrawal(
     provider: impl Provider,
     stake_table: Address,
     validator_address: Address,
-) -> Result<TransactionReceipt> {
+) -> Result<PendingTransactionBuilder<Ethereum>> {
     let st = StakeTable::new(stake_table, provider);
-    // See if there are any logs
-    Ok(st
-        .claimWithdrawal(validator_address)
+    st.claimWithdrawal(validator_address)
         .send()
         .await
-        .maybe_decode_revert::<StakeTableErrors>()?
-        .get_receipt()
-        .await?)
+        .maybe_decode_revert::<StakeTableErrors>()
 }
 
 pub async fn claim_validator_exit(
     provider: impl Provider,
     stake_table: Address,
     validator_address: Address,
-) -> Result<TransactionReceipt> {
+) -> Result<PendingTransactionBuilder<Ethereum>> {
     let st = StakeTable::new(stake_table, provider);
-    Ok(st
-        .claimValidatorExit(validator_address)
+    st.claimValidatorExit(validator_address)
         .send()
         .await
-        .maybe_decode_revert::<StakeTableErrors>()?
-        .get_receipt()
-        .await?)
+        .maybe_decode_revert::<StakeTableErrors>()
 }
 
 #[cfg(test)]
@@ -41,7 +38,7 @@ mod test {
     use alloy::primitives::U256;
 
     use super::*;
-    use crate::deploy::TestSystem;
+    use crate::{deploy::TestSystem, receipt::ReceiptExt};
 
     #[tokio::test]
     async fn test_claim_withdrawal() -> Result<()> {
@@ -53,9 +50,10 @@ mod test {
         system.warp_to_unlock_time().await?;
 
         let validator_address = system.deployer_address;
-        let receipt =
-            claim_withdrawal(&system.provider, system.stake_table, validator_address).await?;
-        assert!(receipt.status());
+        let receipt = claim_withdrawal(&system.provider, system.stake_table, validator_address)
+            .await?
+            .assert_success()
+            .await?;
 
         let event = receipt.decoded_log::<StakeTable::Withdrawal>().unwrap();
         assert_eq!(event.amount, amount);
@@ -73,9 +71,10 @@ mod test {
         system.warp_to_unlock_time().await?;
 
         let validator_address = system.deployer_address;
-        let receipt =
-            claim_validator_exit(&system.provider, system.stake_table, validator_address).await?;
-        assert!(receipt.status());
+        let receipt = claim_validator_exit(&system.provider, system.stake_table, validator_address)
+            .await?
+            .assert_success()
+            .await?;
 
         let event = receipt.decoded_log::<StakeTable::Withdrawal>().unwrap();
         assert_eq!(event.amount, amount);

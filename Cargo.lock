@@ -11131,6 +11131,7 @@ dependencies = [
  "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
  "portpicker",
  "predicates",
+ "pretty_assertions",
  "rand 0.8.5",
  "rand_chacha 0.3.1",
  "rstest",
