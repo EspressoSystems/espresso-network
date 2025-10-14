@@ -478,6 +478,32 @@ async fn test_cli_transfer(#[case] version: StakeTableContractVersion) -> Result
     Ok(())
 }
 
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_claim_reward() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
+    let reward_balance = U256::from(1000000);
+
+    let balance_before = system.balance(system.deployer_address).await?;
+
+    let espresso_url = system.setup_reward_claim_mock(reward_balance).await?;
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    let mut cmd = system.cmd(Signer::Mnemonic);
+    cmd.arg("--espresso-url")
+        .arg(espresso_url.to_string())
+        .arg("claim-reward")
+        .assert()
+        .success()
+        .stdout(str::contains("RewardsClaimed"));
+
+    let balance_after = system.balance(system.deployer_address).await?;
+
+    assert_eq!(balance_after, balance_before + reward_balance,);
+
+    Ok(())
+}
+
 #[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_stake_table_full(#[case] version: StakeTableContractVersion) -> Result<()> {
     let system = TestSystem::deploy_version(version).await?;

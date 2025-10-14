@@ -52,6 +52,7 @@ pub struct TestSystem {
     pub deployer_address: Address,
     pub token: Address,
     pub stake_table: Address,
+    pub reward_claim: Option<Address>,
     pub exit_escrow_period: Duration,
     pub rpc_url: Url,
     pub bls_key_pair: BLSKeyPair,
@@ -146,6 +147,10 @@ impl TestSystem {
         let token = contracts
             .address(Contract::EspTokenProxy)
             .expect("EspTokenProxy deployed");
+        let reward_claim = match stake_table_contract_version {
+            StakeTableContractVersion::V1 => None,
+            StakeTableContractVersion::V2 => contracts.address(Contract::RewardClaimProxy),
+        };
 
         let approval_amount = parse_ether("1000000")?;
         // Approve the stake table contract so it can transfer tokens to itself
@@ -165,6 +170,7 @@ impl TestSystem {
             deployer_address,
             token,
             stake_table,
+            reward_claim,
             exit_escrow_period,
             rpc_url,
             bls_key_pair,
