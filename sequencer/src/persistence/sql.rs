@@ -852,7 +852,7 @@ impl Persistence {
                     event: EventType::Decide {
                         leaf_chain: Arc::new(leaf_chain),
                         qc: Arc::new(final_qc),
-                        qc2,
+                        deciding_qc: qc2,
                         block_size: None,
                     },
                 })

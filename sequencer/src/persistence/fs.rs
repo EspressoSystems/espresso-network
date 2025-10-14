@@ -453,7 +453,7 @@ impl Inner {
                     view_number: view,
                     event: EventType::Decide {
                         qc: Arc::new(qc),
-                        qc2,
+                        deciding_qc: qc2,
                         leaf_chain: Arc::new(vec![leaf]),
                         block_size: None,
                     },

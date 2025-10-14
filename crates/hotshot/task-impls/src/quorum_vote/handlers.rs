@@ -98,7 +98,8 @@ pub(crate) async fn handle_quorum_proposal_validated<
     let LeafChainTraversalOutcome {
         new_locked_view_number,
         new_decided_view_number,
-        new_decide_qcs,
+        committing_qc,
+        deciding_qc,
         leaf_views,
         included_txns,
         decided_upgrade_cert,
@@ -232,16 +233,16 @@ pub(crate) async fn handle_quorum_proposal_validated<
         )
         .await;
 
-        // Send an update to everyone saying that we've reached a decide. The QC chain is never none
-        // if we've reached a new decide, so this is safe to unwrap.
-        let new_decide_qcs = new_decide_qcs.unwrap();
+        // Send an update to everyone saying that we've reached a decide. The committing QC is never
+        // none if we've reached a new decide, so this is safe to unwrap.
+        let committing_qc = Arc::new(committing_qc.unwrap());
         broadcast_event(
             Event {
                 view_number: decided_view_number,
                 event: EventType::Decide {
                     leaf_chain: Arc::new(leaf_views.clone()),
-                    qc: Arc::new(new_decide_qcs[0].clone()),
-                    qc2: Some(Arc::new(new_decide_qcs[1].clone())),
+                    qc: committing_qc.clone(),
+                    deciding_qc: deciding_qc.map(Arc::new),
                     block_size: included_txns.map(|txns| txns.len().try_into().unwrap()),
                 },
             },
@@ -253,7 +254,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
             "Successfully sent decide event, leaf views: {:?}, leaf views len: {:?}, qc view: {:?}",
             decided_view_number,
             leaf_views.len(),
-            new_decide_qcs[0].view_number()
+            committing_qc.view_number()
         );
 
         if version >= V::Epochs::VERSION {

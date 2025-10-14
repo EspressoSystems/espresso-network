@@ -77,7 +77,7 @@ impl SequencerPersistence for NoStorage {
         for (leaf_info, qc) in leaves {
             // Insert the deciding QC at the appropriate position, with the last decide event in the
             // chain.
-            let qc2 = if let Some(deciding_qc) = &deciding_qc {
+            let deciding_qc = if let Some(deciding_qc) = &deciding_qc {
                 (deciding_qc.view_number() == qc.view_number() + 1).then_some(deciding_qc.clone())
             } else {
                 None
@@ -89,7 +89,7 @@ impl SequencerPersistence for NoStorage {
                     event: EventType::Decide {
                         leaf_chain: Arc::new(vec![leaf_info.clone()]),
                         qc: Arc::new(qc),
-                        qc2,
+                        deciding_qc,
                         block_size: None,
                     },
                 })

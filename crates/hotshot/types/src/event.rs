@@ -206,7 +206,7 @@ pub enum EventType<TYPES: NodeType> {
         ///
         /// Together with `qc`, this forms a 2-chain, which is sufficient for a light client to
         /// verify that the leaf chain contained in this event is in fact decided.
-        qc2: Option<Arc<QuorumCertificate2<TYPES>>>,
+        deciding_qc: Option<Arc<QuorumCertificate2<TYPES>>>,
         /// Optional information of the number of transactions in the block, for logging purposes.
         block_size: Option<u64>,
     },

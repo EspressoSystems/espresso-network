@@ -1805,7 +1805,7 @@ mod tests {
 
         let EventType::Decide {
             leaf_chain: leaf_chain0,
-            qc2: deciding_qc0,
+            deciding_qc: deciding_qc0,
             ..
         } = &events[0].event
         else {
@@ -1817,7 +1817,7 @@ mod tests {
 
         let EventType::Decide {
             leaf_chain: leaf_chain2,
-            qc2: deciding_qc2,
+            deciding_qc: deciding_qc2,
             ..
         } = &events[1].event
         else {

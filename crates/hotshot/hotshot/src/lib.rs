@@ -514,7 +514,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                                 None,
                             )]),
                             qc: qc.clone(),
-                            qc2: None,
+                            deciding_qc: None,
                             block_size: None,
                         },
                     },

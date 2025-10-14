@@ -388,7 +388,7 @@ impl<TYPES: NodeType<BlockHeader = TestBlockHeader>, V: Versions> TestTaskState
                 EventType::Decide {
                     leaf_chain,
                     qc,
-                    qc2,
+                    deciding_qc,
                     ..
                 },
             view_number,
@@ -406,12 +406,12 @@ impl<TYPES: NodeType<BlockHeader = TestBlockHeader>, V: Versions> TestTaskState
                 timeout_task.abort();
             }
 
-            match qc2 {
-                Some(qc2) => {
+            match deciding_qc {
+                Some(deciding_qc) => {
                     let last_leaf = &leaf_chain[0].leaf;
                     ensure!(qc.view_number == last_leaf.view_number());
                     ensure!(qc.data.leaf_commit == last_leaf.commit());
-                    ensure!(qc2.view_number == qc.view_number + 1);
+                    ensure!(deciding_qc.view_number == qc.view_number + 1);
                 },
                 None => {
                     // Only the genesis decide is special in that it doesn't have a 2-chain of QCs

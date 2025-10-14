@@ -742,7 +742,7 @@ pub trait SequencerPersistence:
         if let EventType::Decide {
             leaf_chain,
             qc,
-            qc2,
+            deciding_qc,
             ..
         } = &event.event
         {
@@ -761,7 +761,7 @@ pub trait SequencerPersistence:
             );
 
             if let Err(err) = self
-                .append_decided_leaves(leaf.view_number(), chain, qc2.clone(), consumer)
+                .append_decided_leaves(leaf.view_number(), chain, deciding_qc.clone(), consumer)
                 .await
             {
                 tracing::error!(
