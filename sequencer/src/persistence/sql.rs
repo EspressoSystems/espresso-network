@@ -2929,7 +2929,7 @@ mod testing {
             #[cfg(feature = "embedded-db")]
             {
                 SqliteOptions {
-                    path: Some(db.path()),
+                    path: db.path(),
                 }
                 .into()
             }
