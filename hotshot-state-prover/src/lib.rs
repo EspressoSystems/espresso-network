@@ -28,6 +28,8 @@ pub mod v2;
 /// Light client V3 prover, where we introduce a new field `auth_root` for contract friendly state verification.
 pub mod v3;
 
+pub mod utils;
+
 #[cfg(test)]
 mod test_utils;
 

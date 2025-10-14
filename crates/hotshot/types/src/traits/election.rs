@@ -253,6 +253,8 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     fn stake_table_hash(&self, _epoch: TYPES::Epoch) -> Option<Commitment<Self::StakeTableHash>> {
         None
     }
+
+    fn add_da_committee(&mut self, _first_epoch: u64, _da_committee: Vec<PeerConfig<TYPES>>) {}
 }
 
 pub fn membership_spawn_add_epoch_root<TYPES: NodeType>(
