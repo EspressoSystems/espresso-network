@@ -291,19 +291,21 @@ pub mod availability_tests {
             }
         }
 
-        // Validate consistency of latest QC chain.
+        // Validate consistency of latest QC chain (only available after epoch upgrade).
         {
             let mut tx = ds.read().await.unwrap();
             let block_height = NodeStorage::block_height(&mut tx).await.unwrap();
-            tracing::info!(block_height, "checking QC chain");
-
             let last_leaf = tx.get_leaf((block_height - 1).into()).await.unwrap();
-            let qc_chain = tx.latest_qc_chain().await.unwrap().unwrap();
 
-            assert_eq!(last_leaf.height(), (block_height - 1) as u64);
-            assert_eq!(qc_chain[0].view_number, last_leaf.leaf().view_number());
-            assert_eq!(qc_chain[0].data.leaf_commit, last_leaf.hash());
-            assert_eq!(qc_chain[1].view_number, qc_chain[0].view_number + 1);
+            if last_leaf.qc().data.epoch.is_some() {
+                tracing::info!(block_height, "checking QC chain");
+                let qc_chain = tx.latest_qc_chain().await.unwrap().unwrap();
+
+                assert_eq!(last_leaf.height(), (block_height - 1) as u64);
+                assert_eq!(qc_chain[0].view_number, last_leaf.leaf().view_number());
+                assert_eq!(qc_chain[0].data.leaf_commit, last_leaf.hash());
+                assert_eq!(qc_chain[1].view_number, qc_chain[0].view_number + 1);
+            }
         }
     }
 
