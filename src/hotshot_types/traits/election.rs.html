@@ -199,16 +199,18 @@
 <a href=#199 id=199 data-nosnippet>199</a>    </span><span class="kw">fn </span>stake_table_hash(<span class="kw-2">&amp;</span><span class="self">self</span>, _epoch: TYPES::Epoch) -&gt; <span class="prelude-ty">Option</span>&lt;Commitment&lt;<span class="self">Self</span>::StakeTableHash&gt;&gt; {
 <a href=#200 id=200 data-nosnippet>200</a>        <span class="prelude-val">None
 <a href=#201 id=201 data-nosnippet>201</a>    </span>}
-<a href=#202 id=202 data-nosnippet>202</a>}
-<a href=#203 id=203 data-nosnippet>203</a>
-<a href=#204 id=204 data-nosnippet>204</a><span class="kw">pub fn </span>membership_spawn_add_epoch_root&lt;TYPES: NodeType&gt;(
-<a href=#205 id=205 data-nosnippet>205</a>    membership: Arc&lt;RwLock&lt;<span class="kw">impl </span>Membership&lt;TYPES&gt; + <span class="lifetime">'static</span>&gt;&gt;,
-<a href=#206 id=206 data-nosnippet>206</a>    epoch: TYPES::Epoch,
-<a href=#207 id=207 data-nosnippet>207</a>    block_header: TYPES::BlockHeader,
-<a href=#208 id=208 data-nosnippet>208</a>) {
-<a href=#209 id=209 data-nosnippet>209</a>    tokio::spawn(<span class="kw">async move </span>{
-<a href=#210 id=210 data-nosnippet>210</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = Membership::&lt;TYPES&gt;::add_epoch_root(membership, epoch, block_header).<span class="kw">await </span>{
-<a href=#211 id=211 data-nosnippet>211</a>            <span class="macro">tracing::error!</span>(<span class="string">"Failed to add epoch root for epoch {epoch}: {e}"</span>);
-<a href=#212 id=212 data-nosnippet>212</a>        }
-<a href=#213 id=213 data-nosnippet>213</a>    });
-<a href=#214 id=214 data-nosnippet>214</a>}</code></pre></div></section></main></body></html>
+<a href=#202 id=202 data-nosnippet>202</a>
+<a href=#203 id=203 data-nosnippet>203</a>    <span class="kw">fn </span>add_da_committee(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _first_epoch: u64, _da_committee: Vec&lt;PeerConfig&lt;TYPES&gt;&gt;) {}
+<a href=#204 id=204 data-nosnippet>204</a>}
+<a href=#205 id=205 data-nosnippet>205</a>
+<a href=#206 id=206 data-nosnippet>206</a><span class="kw">pub fn </span>membership_spawn_add_epoch_root&lt;TYPES: NodeType&gt;(
+<a href=#207 id=207 data-nosnippet>207</a>    membership: Arc&lt;RwLock&lt;<span class="kw">impl </span>Membership&lt;TYPES&gt; + <span class="lifetime">'static</span>&gt;&gt;,
+<a href=#208 id=208 data-nosnippet>208</a>    epoch: TYPES::Epoch,
+<a href=#209 id=209 data-nosnippet>209</a>    block_header: TYPES::BlockHeader,
+<a href=#210 id=210 data-nosnippet>210</a>) {
+<a href=#211 id=211 data-nosnippet>211</a>    tokio::spawn(<span class="kw">async move </span>{
+<a href=#212 id=212 data-nosnippet>212</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = Membership::&lt;TYPES&gt;::add_epoch_root(membership, epoch, block_header).<span class="kw">await </span>{
+<a href=#213 id=213 data-nosnippet>213</a>            <span class="macro">tracing::error!</span>(<span class="string">"Failed to add epoch root for epoch {epoch}: {e}"</span>);
+<a href=#214 id=214 data-nosnippet>214</a>        }
+<a href=#215 id=215 data-nosnippet>215</a>    });
+<a href=#216 id=216 data-nosnippet>216</a>}</code></pre></div></section></main></body></html>
