@@ -10,11 +10,10 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use hotshot::traits::{
-    election::static_committee::StaticCommittee, implementations::MemoryNetwork, NodeImplementation,
-};
+use hotshot::traits::{implementations::MemoryNetwork, NodeImplementation};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
+    membership::{static_committee::StaticStakeTable, strict_membership::StrictMembership},
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
 };
@@ -181,7 +180,7 @@ impl NodeType for MockTypes {
     type Transaction = MockTransaction;
     type InstanceState = TestInstanceState;
     type ValidatedState = TestValidatedState;
-    type Membership = StaticCommittee<Self>;
+    type Membership = StrictMembership<MockTypes, StaticStakeTable<BLSPubKey, SchnorrPubKey>>;
     type BuilderSignatureKey = BLSPubKey;
     type StateSignatureKey = SchnorrPubKey;
 }
@@ -203,7 +202,7 @@ impl Versions for MockVersions {
 /// A type alias for the mock base version
 pub type MockBase = <MockVersions as Versions>::Base;
 
-pub type MockMembership = StaticCommittee<MockTypes>;
+pub type MockMembership = StrictMembership<MockTypes, StaticStakeTable<BLSPubKey, SchnorrPubKey>>;
 pub type MockQuorumProposal = QuorumProposal<MockTypes>;
 pub type MockNetwork = MemoryNetwork<BLSPubKey>;
 
