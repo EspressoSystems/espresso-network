@@ -391,7 +391,6 @@ impl<TYPES: NodeType<BlockHeader = TestBlockHeader>, V: Versions> TestTaskState
                     deciding_qc,
                     ..
                 },
-            view_number,
             ..
         } = message
         {
@@ -414,11 +413,11 @@ impl<TYPES: NodeType<BlockHeader = TestBlockHeader>, V: Versions> TestTaskState
                     ensure!(deciding_qc.view_number == qc.view_number + 1);
                 },
                 None => {
-                    // Only the genesis decide is special in that it doesn't have a 2-chain of QCs
-                    // extending the last decided leaf.
+                    // Once we hit the epoch upgrade, every subsequent decide should come with a QC
+                    // chain proving its own finality.
                     ensure!(
-                        view_number == TYPES::View::genesis(),
-                        "expected 2nd deciding QC for non-genesis decide"
+                        qc.data.epoch.is_none(),
+                        "expected 2nd deciding QC for post-epochs decide"
                     );
                 },
             }
